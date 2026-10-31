@@ -6,7 +6,7 @@ import { readSchemaComparisonTarget } from '../../src/engine/schemaCompare';
 import { compareSchemaSnapshots } from '../../src/engine/schemaCompareProjection';
 import { buildSchemaComparePreview } from '../../src/engine/schemaComparePreview';
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import { identifier, qualified } from '../../src/engine/sql';
 
 // 必须由主智能体先确认开发 Docker 实际连接 Server-200，再显式开启本专项；本文件不执行 Docker。

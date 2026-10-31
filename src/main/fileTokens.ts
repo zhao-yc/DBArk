@@ -18,8 +18,10 @@ export function resolveFileToken(files: ReadonlyMap<string, SelectedFile>, token
 
 /** 旧缺文件标记不能通过漏传字段移除；仅本窗口对应用途的原生选择授权可完成重新配置。 */
 export function confirmConnectionFiles(input: ConnectionProfile, previous: ConnectionProfile | undefined, files: ReadonlyMap<string, SelectedFile>): ConnectionProfile {
-  const pending = new Set<ConnectionFileRequirement>([...previous?.pendingFiles ?? [], ...input.pendingFiles ?? []]);
-  const paths: Record<ConnectionFileRequirement, string | undefined> = { sshPrivateKey: input.ssh?.privateKeyPath, tlsCa: input.tls?.caPath, tlsCert: input.tls?.certPath, tlsKey: input.tls?.keyPath };
+  if (input.dialect === 'sqlite') throw Error('SQLite数据库文件必须通过准确主文档的独立选择授权');
+  const prior = previous?.dialect !== 'sqlite' ? previous : undefined;
+  const pending = new Set<Exclude<ConnectionFileRequirement, 'sqliteDatabase'>>([...prior?.pendingFiles ?? [], ...input.pendingFiles ?? []]);
+  const paths: Record<Exclude<ConnectionFileRequirement, 'sqliteDatabase'>, string | undefined> = { sshPrivateKey: input.ssh?.privateKeyPath, tlsCa: input.tls?.caPath, tlsCert: input.tls?.certPath, tlsKey: input.tls?.keyPath };
   for (const item of pending) {
     const purpose = item === 'sshPrivateKey' || item === 'tlsKey' ? 'key' : 'certificate';
     if (paths[item] && [...files.values()].some(file => file.purpose === purpose && file.path === paths[item] && !file.revokedConnections?.has(input.id))) pending.delete(item);

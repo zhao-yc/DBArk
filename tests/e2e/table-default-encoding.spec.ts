@@ -12,7 +12,7 @@ const target = (context: LiveContext, table: string) => `\`${context.database}\`
 /** 只读取已保存连接的公开TLS概要；CA按既有夹具的realpath与观察连接保持一致。 */
 async function assertSavedTls(context: LiveContext) {
   const profile = await page.evaluate(async id => {
-    const value = (await window.dbark.invoke('connections.list', {})).find(profile => profile.id === id);
+    const value = (await window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))).find(profile => profile.id === id);
     return value ? { host: value.host, port: value.port, tls: value.tls ? { enabled: value.tls.enabled, rejectUnauthorized: value.tls.rejectUnauthorized, caPath: value.tls.caPath } : undefined } : undefined;
   }, context.connectionId);
   if (!profile) throw new Error('本轮保存连接不存在，不能继续默认编码验收');

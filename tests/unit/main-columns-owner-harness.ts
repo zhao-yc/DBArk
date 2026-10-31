@@ -1,9 +1,11 @@
+import { networkBrokerRamPort } from './network-broker-ram-port';
 import { TableFilteredDeleteOwners } from '../../src/main/tableFilteredDeleteOwners';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { vi } from 'vitest';
-import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
+import { ColumnsMainCapabilities, type ColumnsInvocation } from '../../src/main/columnsMainCapabilities';
+import { SqliteConnectionFiles } from '../../src/main/sqliteConnectionFiles';
 import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
 import { extractMainProductionBinding } from './main-production-function';
 import { TablePresetSources } from '../../src/main/tablePresets';
@@ -85,7 +87,7 @@ export function mainColumnsHarness() {
     connectionConfig: { assertAvailable(id?: string) { if (blocked && id === 'trusted') throw Error('连接配置正在保存'); } },
     // 字段用途未登记系统对象链接连接；若显式调用解析，仍由真实resolver拒绝原连接缺失。
     store: { saveTask() {}, connectionRevision: () => revision, queryConnectionExists: (_id: string) => false, resolveConnection: (_id: string): never => { throw Error('字段所有权夹具未登记对象链接连接凭据'); } },
-    broker: { request },
+    broker: networkBrokerRamPort(request),
     taskEvent(event: any) { events.push(event); const value = event.columnPatch ?? event.indexPatch; if (value) progress.set(event.taskId, value); tasks.set(event.taskId, { ...tasks.get(event.taskId), status: event.status }); afterTask?.(); },
   });
   /** 字段夹具不登记文件授权；非本用途端口立即拒绝，导航失效仍执行真实文件来源实现。 */
@@ -98,6 +100,8 @@ export function mainColumnsHarness() {
     connectionRevision: () => revision, assertAvailable: id => context.connectionConfig.assertAvailable(id), shuttingDown: () => context.shuttingDown,
     release: input => request('schema.columns.release', input) });
   context.columnsMain = capabilities;
+  // SQLite文件授权共用真实文档归属；旧网络用例不签发授权，窗口撤销仍调用真实实现。
+  context.sqliteFiles = new SqliteConnectionFiles<ColumnsInvocation>({ assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right) });
   // 原字段测试不登记本用途；若显式调用新命令，仍须走同一真实Main函数和owner检查。
   context.filteredUpdates = new TableFilteredUpdateOwners({
     assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right), revision: () => context.store.connectionRevision(), closing: () => context.shuttingDown,

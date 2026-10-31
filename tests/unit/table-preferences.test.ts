@@ -1,3 +1,4 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { afterEach, describe, expect, it } from 'vitest';
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,7 +9,7 @@ import { LocalStore } from '../../src/main/storage';
 import { publicCommands } from '../../src/shared/commands';
 import { validateCommand } from '../../src/shared/validation';
 import { tablePreferenceBytes, tablePreferencesLimits, tablePreferenceTargetChanged, type TablePreferences } from '../../src/shared/tablePreferences';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 
 const require = createRequire(import.meta.url), wasm = require.resolve('sql.js/dist/sql-wasm.wasm');
 const protector = { available: () => true, encrypt: (value: string) => Buffer.from(value).toString('base64'), decrypt: (value: string) => Buffer.from(value, 'base64').toString() };
@@ -57,7 +58,7 @@ describe('表布局本地持久化', () => {
     store.saveSettings({ ...settings, theme: 'light' }); expect(store.settings()).not.toHaveProperty('tablePreferences'); store.close();
     const restored = await LocalStore.open(file, wasm, protector);
     targets.forEach((value, index) => expect(restored.tablePreferences(value)?.columns.at(-1)?.name).toBe(`位置${index}`));
-    expect(restored.tablePreferences(target)?.columns.slice(0, 3)).toEqual(preferences.columns); expect(restored.connections()).toHaveLength(2);
+    expect(restored.tablePreferences(target)?.columns.slice(0, 3)).toEqual(preferences.columns); expect(restored.connections().map(assertNetworkProfile)).toHaveLength(2);
     expect(restored.settings().theme).toBe('light'); expect(restored.history()).toEqual([]); expect(restored.tasks()).toEqual([]);
     restored.resetTablePreferences(target); expect(restored.tablePreferences(target)).toBeNull(); expect(restored.tablePreferences(targets[1])).not.toBeNull(); restored.close();
   });
@@ -107,9 +108,9 @@ describe('表布局本地持久化', () => {
     expect(() => store.saveTablePreferences({ ...target, preferences: { version: 1, columns: [] } })).toThrow('修改未保存');
     expect(() => store.resetTablePreferences(target)).toThrow('修改未保存'); expect(() => store.deleteConnection(profile.id)).toThrow('修改未保存');
     expect(() => store.saveConnection({ ...profile, host: '新目标', password: '未保存的秘密' })).toThrow('修改未保存');
-    expect(store.tablePreferences(target)).toEqual(preferences); expect(store.resolveConnection(profile.id).password).toBe(profile.password); expect(readFileSync(file).equals(before)).toBe(true);
+    expect(store.tablePreferences(target)).toEqual(preferences); expect(assertNetworkProfile(store.resolveConnection(profile.id)).password).toBe(profile.password); expect(readFileSync(file).equals(before)).toBe(true);
     removeWriteBlocker(file); store.saveSettings({ ...store.settings(), theme: 'light' }); store.close();
-    const restored = await LocalStore.open(file, wasm, protector); expect(restored.tablePreferences(target)).toEqual(preferences); expect(restored.connections()[0].host).toBe(profile.host); restored.close();
+    const restored = await LocalStore.open(file, wasm, protector); expect(restored.tablePreferences(target)).toEqual(preferences); expect(restored.connections().map(assertNetworkProfile)[0].host).toBe(profile.host); restored.close();
   });
   it('目标变化清理当前连接全部布局，认证和外观变化保留，新 ID 不继承', async () => {
     const { store } = await setup(); store.saveTablePreferences({ ...target, preferences }); store.saveTablePreferences({ ...target, table: '第二表', preferences });
@@ -139,7 +140,7 @@ describe('表布局本地持久化', () => {
     const oldRows = snapshot();
     const before = readFileSync(file); mkdirSync(`${file}.tmp`);
     await expect(LocalStore.open(file, wasm, protector)).rejects.toThrow('修改未保存'); expect(readFileSync(file).equals(before)).toBe(true); removeWriteBlocker(file);
-    const restored = await LocalStore.open(file, wasm, protector); expect(restored.resolveConnection(profile.id).password).toBe(profile.password); expect(restored.queries()[0].sql).toBe('SELECT 7'); expect(restored.snippets()[0].sql).toBe('SELECT 8'); expect(restored.settings().theme).toBe('light'); expect(restored.tablePreferences(target)).toBeNull(); restored.close();
+    const restored = await LocalStore.open(file, wasm, protector); expect(assertNetworkProfile(restored.resolveConnection(profile.id)).password).toBe(profile.password); expect(restored.queries()[0].sql).toBe('SELECT 7'); expect(restored.snippets()[0].sql).toBe('SELECT 8'); expect(restored.settings().theme).toBe('light'); expect(restored.tablePreferences(target)).toBeNull(); restored.close();
     expect(snapshot()).toEqual(oldRows);
     const db = new SQL.Database(readFileSync(file)); expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(9); db.close();
   });

@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { ManagedConnection } from '../../src/engine/connection';
 import { parseTableColumnDefinition } from '../../src/engine/tableColumnDefinition';
 const mocks = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn() }));

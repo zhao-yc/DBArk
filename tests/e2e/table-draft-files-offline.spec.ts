@@ -1,6 +1,6 @@
 import { test as baseTest } from '@playwright/test';
 import type { ElectronApplication } from '@playwright/test';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import type { TableDraftDocument, TableDraftPayload } from '../../src/shared/tableDraft';
 
 const listing = process.argv.some(value => value === 'list' || value === '--list' || value.startsWith('--list='));
@@ -107,8 +107,8 @@ function register(): void {
       expect(dirname(resolve(directory))).toBe(resolve(tmpdir())); expect(basename(directory)).toMatch(/^dbark-draft-offline-/);
       const directoryStat = await step(() => lstat(directory)); expect(directoryStat.isDirectory() && !directoryStat.isSymbolicLink()).toBe(true); directoryIdentity = { dev: directoryStat.dev, ino: directoryStat.ino };
       armed = true; await step(() => installAudit(application, profileId));
-      expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]);
-      const savedProfile = await step(() => page.evaluate(profile => window.dbark.invoke('connections.save', profile), profile));
+      expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))).toEqual([]);
+      const savedProfile = await step(() => page.evaluate(profile => window.dbark.invoke('connections.save', profile).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), profile));
       expect(savedProfile).toMatchObject({ id: profileId, host: profile.host, port: 1, user: profile.user });
       expect(savedProfile.password).toBeUndefined(); expect(savedProfile.ssh).toBeUndefined(); expect(savedProfile.tls).toBeUndefined();
 
@@ -140,7 +140,7 @@ function register(): void {
       expect((await step(() => readFile(path))).equals(originalBytes)).toBe(true);
 
       const changed = { ...profile, host: 'dbark-changed-' + nonceHost + '.invalid' };
-      expect(await step(() => page.evaluate(profile => window.dbark.invoke('connections.save', profile), changed))).toMatchObject({ id: profileId, host: changed.host });
+      expect(await step(() => page.evaluate(profile => window.dbark.invoke('connections.save', profile).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), changed))).toMatchObject({ id: profileId, host: changed.host });
       answer = randomUUID(); await step(() => installTableDraftFileAnswer(application, { nonce: answer!, path, mode: 'open' }));
       const rejected = await step(() => page.evaluate(async target => { try { await window.dbark.invoke('tableDraftFiles.open', { target }); return { rejected: false, error: '' }; } catch (reason) { return { rejected: true, error: reason instanceof Error ? reason.message : String(reason) }; } }, target));
       expect(await step(() => finishTableDraftFileAnswer(application, answer!))).toEqual({ calls: 1, originalRestored: true, nativeInputVerified: false }); answer = undefined;

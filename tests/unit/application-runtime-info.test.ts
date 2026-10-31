@@ -33,7 +33,13 @@ it.each(['version','platform','path'])('元信息%s错误保持原对象，不�
 });
 it('452850a原单行app.info及真实凭据尾部保持，不移植R23标记或版本证据',()=>{
   expect(baseline.revision).toBe('452850ab472c028377339c53331e451b949be180');expect(baseline.version).toBe('0.28.0');expect(hash(clause('app.info').getText(tree))).toBe(baseline.appInfoCaseSha256);
-  expect(source).not.toContain('nativeStartupInfoMarker');const desktop=readFileSync(new URL('../e2e/desktop.spec.ts',import.meta.url),'utf8').replaceAll('\r\n','\n');expect(hash(desktop.slice(desktop.indexOf("test('系统加密可用时")))).toBe(baseline.desktopCredentialTailSha256);
+  expect(source).not.toContain('nativeStartupInfoMarker');const desktop=readFileSync(new URL('../e2e/desktop.spec.ts',import.meta.url),'utf8').replaceAll('\r\n','\n');
+  // 连接现在是严格判别联合；仅剥离两处已审网络收窄，原凭据流程仍逐字核对旧基线。
+  const tail = desktop.slice(desktop.indexOf("test('系统加密可用时"));
+  const profileGuard = ".then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })";
+  const profilesGuard = ".then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))";
+  for (const guard of [profileGuard, profilesGuard]) expect(tail.split(guard)).toHaveLength(2);
+  expect(hash(tail.replace(profileGuard, '').replace(profilesGuard, ''))).toBe(baseline.desktopCredentialTailSha256);
 });
 it.each([true,false])('Root28原app.info保持boolean=%s、原同步顺序及一次真实能力调用',available=>{
   const order:string[]=[],native=vi.fn(()=>{order.push('crypto');return available;});const run=main('app.info',{app:{getVersion(){order.push('version');return baseline.version;},getPath(name:string){expect(name).toBe('userData');order.push('path');return'RAM';}},process:{get platform(){order.push('platform');return'darwin';}},safeStorage:{isEncryptionAvailable:native}});

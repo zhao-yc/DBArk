@@ -29,10 +29,10 @@ function register(): void {
   test(title, async ({}, info) => {
     guard(); const original = runtime.ownedDesktopResources(info), { application, page } = original;
     const own = () => { guard(); const current = runtime.ownedDesktopResources(info); if (current.application !== application || current.page !== page || current.closed) throw Error('系统对象链接只读实库原实例归属变化'); };
-    expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]); own();
+    expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })))).toEqual([]); own();
     const connection = await page.evaluate(config => window.dbark.invoke('connections.save', {
       id: '', name: '系统对象链接只读验收', group: '只读系统目录验证', color: '#51bda5', dialect: 'mysql', host: config.host!, port: 13384, user: config.user!, password: config.password, rememberPassword: false
-    }), { host: configuration.host, user: configuration.user, password: configuration.password }); own();
+    }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), { host: configuration.host, user: configuration.user, password: configuration.password }); own();
     expect(connection.rememberPassword).toBe(false);
     // 正常重新加载应用store，禁止直接注入连接状态或调用协议领取接口代替React consumer。
     await page.reload(); own(); await expect(page.locator('.app-statusbar')).toBeVisible(); own();

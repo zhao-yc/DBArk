@@ -1,3 +1,4 @@
+import { networkBrokerRamPort } from './network-broker-ram-port';
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -56,7 +57,7 @@ function fixture() {
     window, rendererURL: frame.url, structureTokens: new Map(), tasks, resultInsertProgress: progress, completionTasks: new Set(), pendingQueryHistory: new Map(), preparingTasks: new Map(), sessions: new Map(), exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), lastStorageWarning: 0,
     tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, tableFilteredExports: { has: () => false }, queryInsertExports: { has: () => false },
     localSearchOperations: new Set(), queryFileOperations: new Set(), shuttingDown: false, rendererSettingsCurrent: true,
-    connectionConfig: { assertAvailable: available }, store: { saveTask, addHistory: history, connectionRevision: () => revision, resolveConnection: (id: string) => { available(id); return profile; } }, broker: { request },
+    connectionConfig: { assertAvailable: available }, store: { saveTask, addHistory: history, connectionRevision: () => revision, resolveConnection: (id: string) => { available(id); return profile; } }, broker: networkBrokerRamPort(request),
   });
   runInContext(ts.transpileModule(productionParts(), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   context.actual.columnsMain.trackWindow(window);

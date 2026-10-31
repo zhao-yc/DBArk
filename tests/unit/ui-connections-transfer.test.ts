@@ -5,7 +5,7 @@ const source: PendingConnectionProfile = { id: 'old-id', name: '源连接', grou
 
 describe('连接概要复制与授权补文件', () => {
   it('复制新表单不携带秘密、旧ID或有效认证路径，保持安全设置', () => {
-    const copy = copyConnectionOverview(source) as PendingConnectionProfile;
+    const copy = copyConnectionOverview(source);
     expect(copy.id).toBe(''); expect(copy.name).toBe('源连接 副本'); expect(copy.rememberPassword).toBe(false);
     for (const field of ['password', 'hasPassword']) expect(Object.hasOwn(copy, field)).toBe(false);
     for (const field of ['password', 'hasPassword', 'passphrase', 'hasPassphrase', 'privateKeyPath']) expect(Object.hasOwn(copy.ssh!, field)).toBe(false);
@@ -15,7 +15,7 @@ describe('连接概要复制与授权补文件', () => {
     expect(JSON.stringify(copy)).not.toContain('secret-'); expect(source.ssh!.privateKeyPath).toBe('C:\\private\\key.pem');
   });
   it('禁用组件仍保留待补文件身份，不因以后启用而丢失验证门槛', () => {
-    const copy = copyConnectionOverview({ ...source, ssh: { ...source.ssh!, enabled: false }, tls: { ...source.tls!, enabled: false } }) as PendingConnectionProfile;
+    const copy = copyConnectionOverview({ ...source, ssh: { ...source.ssh!, enabled: false }, tls: { ...source.tls!, enabled: false } });
     expect(copy.ssh!.enabled).toBe(false); expect(copy.tls!.enabled).toBe(false); expect(copy.pendingFiles).toHaveLength(4);
   });
   it('只有明确授权选择能消除对应标记，其他待补项及验证状态保持', () => {

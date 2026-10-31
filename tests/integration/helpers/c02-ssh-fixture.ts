@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { connect, execute, type ManagedConnection } from '../../../src/engine/connection';
 import { identifier, qualified } from '../../../src/engine/sql';
-import type { ConnectionProfile } from '../../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../../src/shared/contracts';
 import { C02FixtureError, c02Failure, c02Names, c02OwnsTables, c02OwnsUser, cleanupC02, type C02Ownership } from './c02-mtls-policy';
 import { c02SshConfig, c02SshVersion } from './c02-ssh-policy';
 import { c02SshCanonicalPaths } from './c02-ssh-paths';

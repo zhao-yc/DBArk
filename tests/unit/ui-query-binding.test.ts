@@ -1,3 +1,4 @@
+import { queryDialectVm } from '../helpers/queryDialectVm';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -16,7 +17,7 @@ function fixture(tab: Partial<WorkspaceTab> = {}, sessionId = '') {
   const result = { name: '名称', source: { ...current.sourceBinding, id: 'new-source', digest: 'b'.repeat(64), context: { state: 'known', database: null } } };
   const invoke = vi.fn(async (command: string) => command === 'query.completionState' ? { databaseKnown: true, database: null } : result);
   const updateTab = vi.fn(), notify = vi.fn(), workspace = { settings: { tabs: [current] }, setBusy: vi.fn(), updateTab, notify };
-  const context = createContext({ tab: current, busyRef: { current: false }, sessionRef: { current: sessionId }, editor: { current: { getModel: () => ({ getValue: () => '完整 SQL 900719925474099312345' }) } }, connection: { database: '连接默认库' }, useWorkspace: { getState: () => workspace }, invoke, setBusy: vi.fn(), setSave: vi.fn(), flushSettings: vi.fn(async () => {}), rememberDatabase: vi.fn(), savedQueryOriginContext, queryDatabaseFromSession, resolveQueryDatabase, queryBindingZh, queryContextZh, errorMessage: String });
+  const context = createContext({ ...queryDialectVm(),  tab: current, busyRef: { current: false }, sessionRef: { current: sessionId }, editor: { current: { getModel: () => ({ getValue: () => '完整 SQL 900719925474099312345' }) } }, connection: { database: '连接默认库' }, useWorkspace: { getState: () => workspace }, invoke, setBusy: vi.fn(), setSave: vi.fn(), flushSettings: vi.fn(async () => {}), rememberDatabase: vi.fn(), savedQueryOriginContext, queryDatabaseFromSession, resolveQueryDatabase, queryBindingZh, queryContextZh, errorMessage: String });
   runInContext(ts.transpileModule(source + '\nglobalThis.save = saveQuery', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { invoke, updateTab, context, current, save: context.save as (action: 'create' | 'update', name: string) => Promise<void> };
 }

@@ -8,7 +8,7 @@ import { Engine } from '../../../src/engine';
 import { connect, execute, type ManagedConnection } from '../../../src/engine/connection';
 import { identifier, qualified } from '../../../src/engine/sql';
 import { validateCommand } from '../../../src/shared/validation';
-import type { Command, CommandMap, ConnectionProfile, TablePage, TaskEvent } from '../../../src/shared/contracts';
+import type { Command, CommandMap, NetworkConnectionProfile as ConnectionProfile, TablePage, TaskEvent } from '../../../src/shared/contracts';
 import type { TableCopySourceReadResult } from '../../../src/shared/tableCopySource';
 import { cleanupD02Copy, d02CopyNames, d02Fact, d02Failure, d02OwnsTables, D02FixtureError, type D02CopyConfig, type D02Ownership } from './d02-copy-source-policy';
 

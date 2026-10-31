@@ -1,3 +1,4 @@
+import { networkBrokerRamPort } from './network-broker-ram-port';
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { extractMainProductionFunction } from './main-production-function';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
@@ -24,7 +25,7 @@ describe('主进程准备任务的进程退出竞态', () => {
      tableApplyReceipts:undefined,savedQueryPages:undefined,historyPages:undefined,Date, Map, Error, randomUUID: () => 'history', tasks, events,pendingQueryHistory:new Map(), completionTasks:new Set(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), files: new Map(), sessions: new Map([['old-session', { connectionId: 'connection' }]]),
       connectionConfig: { assertAvailable() {} }, resolveFileToken: () => '/selected/result.json',
       store: { saveTask() {}, addHistory() {} }, persistAuxiliary: (action: () => void) => action(), persistedQueryError: () => '脱敏错误',
-      exportReservations: { acquire: () => new Promise<() => void>(resolve => { permit = resolve; }) }, broker: { request },
+      exportReservations: { acquire: () => new Promise<() => void>(resolve => { permit = resolve; }) }, broker: networkBrokerRamPort(request),
       taskEvent(event: TaskEvent) { events.push(event); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },
     });
     runInContext(productionFunctions(), context);

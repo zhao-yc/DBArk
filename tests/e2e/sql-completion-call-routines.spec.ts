@@ -67,7 +67,7 @@ async function verifyCall(info: TestInfo, qualified: boolean) {
     await context.observer.query({ sql: 'CREATE PROCEDURE ' + db + '.' + quotedName + '(' + parameters + ') SQL SECURITY INVOKER UPDATE ' + db + '.q01_call_marker SET ' + update, timeout: 15000 });
     await live.openDatabaseQuery(context.database);
     // 再核产品保存的连接目标，不能将观察连接正确冒充实际UI连接正确。
-    const profile = await desktop.page.evaluate(async id => (await window.dbark.invoke('connections.list', {})).find(item => item.id === id), context.connectionId);
+    const profile = await desktop.page.evaluate(async id => (await window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))).find(item => item.id === id), context.connectionId);
     expect(profile).toBeDefined(); if (!profile) throw Error('缺少本例连接'); assertDefaultEncodingLiveTarget(target, profile);
     const marked = qualified ? 'CALL ' + db + '.`q01.re|suffix`(1, 7)' : 'CALL q01_re|suffix';
     const expected = qualified ? 'CALL ' + db + '.`q01.re$build``quoted`(1, 7)' : 'CALL `q01_rebuild_current`';

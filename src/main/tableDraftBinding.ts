@@ -3,8 +3,11 @@ import type { ConnectionProfile } from '../shared/contracts';
 import { parseTableDraftDocument, parseTableDraftPayload, type TableDraftDocument, type TableDraftPayload, type TableDraftTarget } from '../shared/tableDraft';
 /** 端点摘要仅包含连接目标和登录身份；不输出密码、密钥或证书内容与路径。 */
 export function tableDraftEndpointKey(profile: ConnectionProfile): string {
-  return createHash('sha256').update(JSON.stringify([profile.dialect, profile.host, profile.port, profile.user,
-    !!profile.ssh?.enabled, ...(profile.ssh?.enabled ? [profile.ssh.host, profile.ssh.port, profile.ssh.user, profile.ssh.hostFingerprint ?? ''] : [])])).digest('hex');
+  const target = profile.dialect === 'sqlite'
+    ? [profile.dialect, profile.sqlite.filePath ?? '', profile.sqlite.readOnly, profile.sqlite.busyTimeoutMs]
+    : [profile.dialect, profile.host, profile.port, profile.user,
+      !!profile.ssh?.enabled, ...(profile.ssh?.enabled ? [profile.ssh.host, profile.ssh.port, profile.ssh.user, profile.ssh.hostFingerprint ?? ''] : [])];
+  return createHash('sha256').update(JSON.stringify(target)).digest('hex');
 }
 /** 保存时由主进程绑定当前配置端点，界面不能指定其它端点的摘要。 */
 export function bindTableDraft(payload: TableDraftPayload, profile: ConnectionProfile): TableDraftDocument {

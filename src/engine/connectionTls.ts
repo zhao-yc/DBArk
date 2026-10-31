@@ -1,10 +1,10 @@
 import type { SslOptions } from 'mysql2';
-import type { ConnectionProfile } from '../shared/contracts';
+import type { NetworkConnectionProfile } from '../shared/contracts';
 import { assertTlsPassphrase, tlsCredentialMessages } from '../shared/tlsCredentials';
 
 export type ConnectionTlsOptions = Pick<SslOptions, 'ca' | 'cert' | 'key' | 'passphrase' | 'rejectUnauthorized' | 'verifyIdentity'>;
 /** 原生文件材料与文本口令保持分离；mysql2据此把口令送入Node TLS的真实SecureContext。 */
-export function connectionTlsOptions(config: ConnectionProfile['tls'], material: { ca?: Buffer; cert?: Buffer; key?: Buffer }): ConnectionTlsOptions | undefined {
+export function connectionTlsOptions(config: NetworkConnectionProfile['tls'], material: { ca?: Buffer; cert?: Buffer; key?: Buffer }): ConnectionTlsOptions | undefined {
   assertTlsPassphrase(config?.passphrase);
   return config?.enabled ? { rejectUnauthorized: config.rejectUnauthorized, verifyIdentity: config.rejectUnauthorized, ...material, passphrase: config.passphrase } : undefined;
 }

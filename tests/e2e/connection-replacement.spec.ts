@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { test, expect, desktop, page, dataDir, pageErrors } from './desktop-fixture';
 import { connectionReplacementText as risk } from '../../src/shared/connectionTransferMessages';
 import { connectionsTransferZh as text } from '../../src/renderer/locales/connectionsTransfer.zh-CN';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 
 // 双门默认关闭；本切片只采集定义，不启动Electron，不读取实际数据库环境或认证文件。
 test.skip(process.env.DBARK_E2E !== '1' || process.env.DBARK_C03_REPLACE_UI !== '1', 'C03受控替换正式UI需另行显式授权，默认关闭');
@@ -13,7 +13,7 @@ test.setTimeout(120000);
 /** 合成目标只用于概要，不测试或连接；没有生成、读取真实私钥/证书。 */
 async function seed(name: string, id = '') {
   const profile: ConnectionProfile = { id, name, group: 'C03受控替换验收', color: '#123456', dialect: 'mysql', host: 'old.invalid', port: 3306, user: 'old', rememberPassword: false, password: '仅用于C03验收的合成字符串' };
-  return page.evaluate(value => window.dbark.invoke('connections.save', value), profile);
+  return page.evaluate(value => window.dbark.invoke('connections.save', value).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), profile);
 }
 async function sourceFile() {
   const path = join(dataDir, 'c03-replacement.json');
@@ -46,7 +46,7 @@ test('C03明确选择旧→新目标、风险未齐不可提交，替换后保�
   await expect(modal.getByLabel(text.oldTarget, { exact: true })).toContainText('old.invalid:3306'); await expect(modal.getByLabel(text.newTarget, { exact: true })).toContainText('new.invalid:3307');
   await expect(modal.getByRole('button', { name: text.replaceConfirm, exact: true })).toBeDisabled(); await acknowledge(modal);
   await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: text.replaceConfirm, exact: true })).click(); await expect(modal.locator('.success-box')).toContainText('替换 1');
-  const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {})); expect(connections).toHaveLength(1);
+  const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))); expect(connections).toHaveLength(1);
   expect(connections[0]).toMatchObject({ id: target.id, host: 'new.invalid', hasPassword: false, rememberPassword: false, pendingFiles: ['tlsCa'] });
   expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]); expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]); expect(pageErrors).toEqual([]);
 });
@@ -56,7 +56,7 @@ test('C03目标A→B→A重新选择清除全部确认，不复活旧审阅', as
   await modal.getByRole('combobox', { name: `${text.replaceTarget} 1`, exact: true }).selectOption(b.id); await modal.getByRole('combobox', { name: `${text.replaceTarget} 1`, exact: true }).selectOption(a.id);
   await expect(modal.getByLabel(text.reviewTitle, { exact: true })).toHaveCount(0); await expect(modal.getByRole('checkbox', { name: text.staged, exact: true })).not.toBeChecked();
   await expect(modal.getByRole('button', { name: text.replaceConfirm, exact: true })).toBeDisabled();
-  const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {})); expect(connections.every(profile => profile.host === 'old.invalid' && profile.hasPassword)).toBe(true); expect(pageErrors).toEqual([]);
+  const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))); expect(connections.every(profile => profile.host === 'old.invalid' && profile.hasPassword)).toBe(true); expect(pageErrors).toEqual([]);
 });
 
 test('C03确认后主进程配置修订变化令CAS失败，旧目标和合成凭据保持且不重试', async () => {
@@ -64,6 +64,6 @@ test('C03确认后主进程配置修订变化令CAS失败，旧目标和合成�
   // 通过真实主进程保存另一个配置，只制造并发修订，不篡改业务处理器或渲染结果。
   await seed('C03并发新增'); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: text.replaceConfirm, exact: true })).click();
   await expect(modal.locator('.warning-text')).toContainText([text.fail]); await expect(modal.getByLabel(text.reviewTitle, { exact: true })).toHaveCount(0);
-  const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {})); expect(connections.find(profile => profile.id === target.id)).toMatchObject({ host: 'old.invalid', hasPassword: true });
+  const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))); expect(connections.find(profile => profile.id === target.id)).toMatchObject({ host: 'old.invalid', hasPassword: true });
   expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]); expect(pageErrors).toEqual([]);
 });

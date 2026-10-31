@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Engine as EngineType } from '../../src/engine';
 import type { ManagedConnection } from '../../src/engine/connection';
-import type { ConnectionProfile, QueryOutcome, TableInfo, TablePage } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, QueryOutcome, TableInfo, TablePage } from '../../src/shared/contracts';
 import { copyInsertReplayDatabase, copyInsertReplayEnabled, copyInsertReplayModes, copyInsertReplayProfile, assertCopyInsertReplayTables } from '../helpers/copyInsertReplayPolicy';
 import { cleanupD02Copy, type D02Ownership } from './helpers/d02-copy-source-policy';
 

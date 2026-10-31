@@ -59,7 +59,7 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
   await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });
   await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true })).click();
   await expect(form).toBeHidden();
-  const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
+  const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })));
   const saved = profiles.find(profile => profile.name === connectionName)!;
   const connectionId = saved.id;
   const status = await page.evaluate(id => window.dbark.invoke('connections.open', { id }), connectionId);

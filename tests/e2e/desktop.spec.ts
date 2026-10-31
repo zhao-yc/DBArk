@@ -1,3 +1,4 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { mkdir, readFile, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -14,7 +15,7 @@ test('桌面启动、存储、进程隔离与输入校验', async ({}, testInfo)
   await page.screenshot({ path: testInfo.outputPath('desktop-welcome.png') });
   const status = await page.evaluate(async () => ({ info: await window.dbark.invoke('app.runtimeInfo', {}), hasNode: 'require' in window, settings: await window.dbark.invoke('settings.get', {}) }));
   expect(status.info.version).toBe(sourceVersion); expect(status.hasNode).toBe(false); expect(status.settings.theme).toBe('dark');
-  const connection = await page.evaluate(() => window.dbark.invoke('connections.save', { id: '', name: '自动化测试连接', group: '测试', color: '#40bb99', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'nobody', password: 'temporary-test-password', rememberPassword: false }));
+  const connection = await page.evaluate(() => window.dbark.invoke('connections.save', { id: '', name: '自动化测试连接', group: '测试', color: '#40bb99', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'nobody', password: 'temporary-test-password', rememberPassword: false }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }));
   expect(connection.hasPassword).toBe(true); expect(connection.password).toBeUndefined();
   const error = await page.evaluate(async () => { try { await window.dbark.invoke('query.execute', { sessionId: 'missing', taskId: 'test', sql: 'SELECT 1', maxRows: -1 }); } catch (e) { return (e as Error).message; } });
   expect(error).toContain('参数无效');
@@ -23,7 +24,7 @@ test('桌面启动、存储、进程隔离与输入校验', async ({}, testInfo)
   expect(workerError).toBeTruthy(); expect(workerError).not.toContain('进程已退出');
   const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {})); expect(tasks[0].status).toBe('failed');
   await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible();
-  const restored = await page.evaluate(() => window.dbark.invoke('connections.list', {})); expect(restored[0].name).toBe('自动化测试连接');
+  const restored = await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))); expect(restored[0].name).toBe('自动化测试连接');
   await page.screenshot({ path: testInfo.outputPath('desktop-workbench.png') });
   expect(pageErrors).toEqual([]);
 });
@@ -119,11 +120,11 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await expect(page.locator('.sidebar')).toContainText('离线工作区测试');
   await expect(page.locator('.monaco-editor .view-lines')).toContainText('last_edit_before_quit');
-  const restored = await page.evaluate(async () => ({ settings: await window.dbark.invoke('settings.get', {}), connections: await window.dbark.invoke('connections.list', {}) }));
+  const restored = await page.evaluate(async () => ({ settings: await window.dbark.invoke('settings.get', {}), connections: await window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })) }));
   expect(restored.settings.tabs[0].sql).toBe('SELECT 2 AS last_edit_before_quit;');
   expect(restored.settings.tabs[0].sourceBinding?.id).toBe(saved[0].id);
   expect((await page.evaluate(() => window.dbark.invoke('queries.list', {})))[0].sql).toContain('e2e_value');
-  expect(restored.connections[0].hasPassword).toBe(false);
+  expect(restored.connections.map(assertNetworkProfile)[0].hasPassword).toBe(false);
   await page.screenshot({ path: testInfo.outputPath('desktop-sql.png') });
   expect(pageErrors).toEqual([]);
 });
@@ -150,7 +151,7 @@ test('系统加密可用时密码密文落盘并可重启解密，否则只保�
   const available = await page.evaluate(async () => (await window.dbark.invoke('app.info', {})).encryptionAvailable);
   testInfo.annotations.push({ type: '凭据保护', description: available ? '系统加密可用，验证真实密文及重启解密' : '系统加密不可用，只验证会话保存降级' });
   console.log(available ? '凭据保护：已进入真实系统加密验证分支' : '凭据保护：系统加密不可用，验证仅会话保存');
-  const connection = await page.evaluate(password => window.dbark.invoke('connections.save', { id: '', name: '凭据重启验证', group: '测试', color: '#40bb99', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'nobody', password, rememberPassword: true }), secret);
+  const connection = await page.evaluate(password => window.dbark.invoke('connections.save', { id: '', name: '凭据重启验证', group: '测试', color: '#40bb99', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'nobody', password, rememberPassword: true }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), secret);
   expect(connection.hasPassword).toBe(true); expect(connection.password).toBeUndefined();
   const bytes = await readFile(join(dataDir, 'dbark.sqlite'));
   expect(bytes.includes(Buffer.from(secret, 'utf8'))).toBe(false);
@@ -164,7 +165,7 @@ test('系统加密可用时密码密文落盘并可重启解密，否则只保�
   expect(encrypted).toHaveLength(available ? 1 : 0);
   await quitDesktop();
   await launchDesktop();
-  const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
+  const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })));
   expect(profiles[0].hasPassword).toBe(available);
   if (available) {
     const decrypted = await desktop.evaluate(({ safeStorage }, ciphertext) => safeStorage.decryptString(Buffer.from(ciphertext, 'base64')), encrypted[0]);

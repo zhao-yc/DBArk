@@ -1,10 +1,11 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { Engine } from '../../src/engine';
 import * as connectionDriver from '../../src/engine/connection';
 import { execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier } from '../../src/engine/sql';
-import type { ConnectionProfile, EngineCommand, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, EngineCommand, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import type { CompletionSessionState } from '../../src/shared/sqlCompletion';
 import { queryAnalyzeCapability } from '../../src/shared/queryAnalyze';
 
@@ -86,7 +87,7 @@ class AnalyzeFixture {
     const connect = connectionDriver.connect;
     const spy = vi.spyOn(connectionDriver, 'connect').mockImplementation(async (...args: Parameters<typeof connect>) => {
       this.check(false);
-      const target = args[0];
+      const target = assertNetworkProfile(args[0]);
       if (target.id !== this.profile.id || target.host !== this.profile.host || target.port !== this.profile.port || target.user !== this.profile.user) throw Error('审计拒绝其他连接进入本例');
       const managed = await connect(...args);
       try { this.record(managed, this.observerRequested ? 'observer' : 'product'); }

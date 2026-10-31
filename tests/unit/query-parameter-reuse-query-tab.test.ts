@@ -1,3 +1,4 @@
+import { queryDialectVm } from '../helpers/queryDialectVm';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -45,7 +46,7 @@ function fixture() {
     if (command !== 'query.executeParameterized') throw Error('意外IPC：' + command);
     return (waitForExecution ?? Promise.resolve()).then(() => { if (result instanceof Error) throw result; return result; });
   });
-  const context: any = createContext({ QueryParameterReuseOwner, resolveQueryDatabase, queryDatabaseFromSession, confirmedQueryContinueRange, scriptFailureRanges: { current: new Set() }, failureSource: { current: undefined }, Error, Set, JSON, invoke, tab,
+  const context: any = createContext({ ...queryDialectVm(),  QueryParameterReuseOwner, resolveQueryDatabase, queryDatabaseFromSession, confirmedQueryContinueRange, scriptFailureRanges: { current: new Set() }, failureSource: { current: undefined }, Error, Set, JSON, invoke, tab,
     useWorkspace: { getState: () => workspace }, parameterReuse: { current: null }, parameterReusePort: { current: null },
     alive: { current: true }, closeRequestRef: { current: null }, sessionRef: { current: 's' }, parameterSession: { current: '' }, editor: { current: editor },
     busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, settings: workspace.settings,

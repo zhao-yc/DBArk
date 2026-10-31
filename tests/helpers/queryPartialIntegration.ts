@@ -1,4 +1,4 @@
-import type { ConnectionProfile, QueryOutcome } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, QueryOutcome } from '../../src/shared/contracts';
 import type { ManagedConnection } from '../../src/engine/connection';
 import { qisLifetime, type QisContext } from './queryInsertIntegration';
 import { assertDatabaseEncodingIdentity } from './databaseDefaultEncodingIntegration';

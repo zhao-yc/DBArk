@@ -9,7 +9,7 @@ import { Engine } from '../../src/engine';
 import * as driver from '../../src/engine/connection';
 import { execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier } from '../../src/engine/sql';
-import type { Command, CommandMap, ConnectionProfile, DataRow, TaskEvent } from '../../src/shared/contracts';
+import type { Command, CommandMap, NetworkConnectionProfile as ConnectionProfile, DataRow, TaskEvent } from '../../src/shared/contracts';
 import { fileImportConflictReportSchema, fileImportKeyCatalogSchema, type FileImportConflictSelection } from '../../src/shared/fileImportConflict';
 import type { FileImportResult } from '../../src/shared/sqlFileImport';
 import { observeConflictExecuteCall } from './fileImportConflictDriverObservation';

@@ -1,3 +1,4 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -7,7 +8,7 @@ import initSqlJs from 'sql.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocalStore } from '../../src/main/storage';
 import { ConnectionConfigManager } from '../../src/main/connectionConfig';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 
 const require = createRequire(import.meta.url), folders: string[] = [], stores = new Set<LocalStore>();
 const profile: ConnectionProfile = { id: 'tls', name: '独立口令槽', group: '', color: '#123456', host: 'db.invalid', port: 3306, user: 'test', dialect: 'mysql', rememberPassword: true, password: '数据库测试秘密', ssh: { enabled: false, host: '', port: 22, user: '', passphrase: 'SSH独立测试口令' }, tls: { enabled: true, rejectUnauthorized: true } };
@@ -36,51 +37,51 @@ describe('TLS私钥口令独立槽与兼容保存', () => {
     const f = await fixture(), phrase = '  中文TLS测试口令  ';
     const saved = f.store.saveConnection({ ...profile, tls: { ...profile.tls!, passphrase: phrase, hasPassphrase: false } });
     expect(saved.tls?.hasPassphrase).toBe(true); expect(saved.tls?.passphrase).toBeUndefined();
-    expect(f.store.resolveConnection(profile.id).tls?.passphrase === phrase).toBe(true); expect(f.store.resolveConnection(profile.id).ssh?.passphrase).toBe(profile.ssh?.passphrase);
+    expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase === phrase).toBe(true); expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).ssh?.passphrase).toBe(profile.ssh?.passphrase);
     const disk = await persisted(f.path); expect(disk.names.sort()).toEqual(['password', 'sshPassphrase', 'tlsPassphrase']);
     expect(disk.data.some(value => value.includes(phrase) || value.includes('hasPassphrase') || value.includes('passphrase'))).toBe(false); expect(readFileSync(f.path).includes(Buffer.from(phrase))).toBe(false);
     expect(f.store.history()).toEqual([]); expect(f.store.tasks()).toEqual([]); f.close(f.store);
-    const restored = await f.reopen(); expect(restored.resolveConnection(profile.id).tls?.passphrase === phrase).toBe(true);
+    const restored = await f.reopen(); expect(assertNetworkProfile(restored.resolveConnection(profile.id)).tls?.passphrase === phrase).toBe(true);
   });
   it('旧TLS配置不增加伪已存标记，缺省保留与显式空值清除不影响其它秘密', async () => {
     const f = await fixture(); const legacy = f.store.saveConnection(profile); expect(legacy.tls).toEqual(profile.tls);
     const saved = f.store.saveConnection({ ...legacy, tls: { ...legacy.tls!, passphrase: 'TLS仅此槽' } });
-    f.store.saveConnection({ ...saved, name: '只改名称', tls: { ...saved.tls!, hasPassphrase: false } }); expect(f.store.resolveConnection(profile.id).tls?.passphrase).toBe('TLS仅此槽');
-    const cleared = f.store.saveConnection({ ...f.store.connections()[0], tls: { ...profile.tls!, passphrase: '' } });
-    expect(cleared.tls?.hasPassphrase ?? false).toBe(false); expect(f.store.resolveConnection(profile.id).tls?.passphrase).toBeUndefined();
-    expect(f.store.resolveConnection(profile.id).password).toBe(profile.password); expect(f.store.resolveConnection(profile.id).ssh?.passphrase).toBe(profile.ssh?.passphrase);
-    f.close(f.store); expect((await f.reopen()).resolveConnection(profile.id).tls?.passphrase).toBeUndefined();
+    f.store.saveConnection({ ...saved, name: '只改名称', tls: { ...saved.tls!, hasPassphrase: false } }); expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase).toBe('TLS仅此槽');
+    const cleared = f.store.saveConnection({ ...f.store.connections().map(assertNetworkProfile)[0], tls: { ...profile.tls!, passphrase: '' } });
+    expect(cleared.tls?.hasPassphrase ?? false).toBe(false); expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase).toBeUndefined();
+    expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).password).toBe(profile.password); expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).ssh?.passphrase).toBe(profile.ssh?.passphrase);
+    f.close(f.store); expect(assertNetworkProfile((await f.reopen()).resolveConnection(profile.id)).tls?.passphrase).toBeUndefined();
   });
   it.each([false, true])('系统加密可用=%s时关闭记住或不可用只保留会话内TLS口令', async available => {
     const f = await fixture(available), saved = f.store.saveConnection({ ...profile, tls: { ...profile.tls!, passphrase: '会话TLS测试口令' } });
     if (available) f.store.saveConnection({ ...saved, rememberPassword: false });
-    expect(f.store.resolveConnection(profile.id).tls?.passphrase).toBe('会话TLS测试口令'); expect((await persisted(f.path)).names).not.toContain('tlsPassphrase');
-    f.close(f.store); const restored = await f.reopen(); expect(restored.resolveConnection(profile.id).tls?.passphrase).toBeUndefined(); expect(restored.connections()[0].tls?.hasPassphrase ?? false).toBe(false);
+    expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase).toBe('会话TLS测试口令'); expect((await persisted(f.path)).names).not.toContain('tlsPassphrase');
+    f.close(f.store); const restored = await f.reopen(); expect(assertNetworkProfile(restored.resolveConnection(profile.id)).tls?.passphrase).toBeUndefined(); expect(restored.connections().map(assertNetworkProfile)[0].tls?.hasPassphrase ?? false).toBe(false);
   });
   it('磁盘写入失败回滚TLS槽，后续保存及重启不夹带失败口令', async () => {
     const f = await fixture(), original = '原TLS测试口令'; const saved = f.store.saveConnection({ ...profile, tls: { ...profile.tls!, passphrase: original } });
     mkdirSync(f.path + '.tmp'); expect(() => f.store.saveConnection({ ...saved, tls: { ...saved.tls!, passphrase: '不得夹带的新口令' } })).toThrow('修改未保存');
-    expect(f.store.resolveConnection(profile.id).tls?.passphrase).toBe(original); rmSync(f.path + '.tmp', { recursive: true });
-    f.store.saveSettings(f.store.settings()); f.close(f.store); expect((await f.reopen()).resolveConnection(profile.id).tls?.passphrase).toBe(original);
+    expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase).toBe(original); rmSync(f.path + '.tmp', { recursive: true });
+    f.store.saveSettings(f.store.settings()); f.close(f.store); expect(assertNetworkProfile((await f.reopen()).resolveConnection(profile.id)).tls?.passphrase).toBe(original);
   });
   it('保护器异常不回显TLS口令，也不把失败值落入profile或已有槽', async () => {
     const f = await fixture(); f.store.saveConnection(profile); const secret = '不得出现在错误的TLS测试值'; const original = f.protector.encrypt;
     f.protector.encrypt = value => { if (value === secret) throw new Error(secret); return original(value); };
     let message = ''; try { f.store.saveConnection({ ...profile, tls: { ...profile.tls!, passphrase: secret } }); } catch (error) { message = String(error); }
-    expect(message).toContain('TLS 私钥口令加密保存失败'); expect(message.includes(secret)).toBe(false); expect(f.store.resolveConnection(profile.id).tls?.passphrase).toBeUndefined();
+    expect(message).toContain('TLS 私钥口令加密保存失败'); expect(message.includes(secret)).toBe(false); expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase).toBeUndefined();
   });
   it('TLS口令重填和清除经过原引擎保存保护，拒绝时保留旧值，缺省显示修改不重连', async () => {
     const f = await fixture(); f.store.saveConnection({ ...profile, tls: { ...profile.tls!, passphrase: '原TLS测试值' } });
     const request = vi.fn(async (_command: string, _input?: unknown) => undefined), manager = new ConnectionConfigManager(f.store, { request });
-    await manager.save({ ...f.store.connections()[0], name: '展示名称' }); expect(request).not.toHaveBeenCalled();
-    request.mockRejectedValueOnce(Error('仍有原会话')); await expect(manager.save({ ...f.store.connections()[0], tls: { ...profile.tls!, passphrase: '新TLS测试值' } })).rejects.toThrow('仍有原会话');
-    expect(f.store.resolveConnection(profile.id).tls?.passphrase).toBe('原TLS测试值');
-    await manager.save({ ...f.store.connections()[0], tls: { ...profile.tls!, passphrase: '' } }); expect(request.mock.calls.map(call => call[0])).toEqual(['__connections.prepareSave', '__connections.prepareSave']); expect(f.store.resolveConnection(profile.id).tls?.passphrase).toBeUndefined();
+    await manager.save({ ...f.store.connections().map(assertNetworkProfile)[0], name: '展示名称' }); expect(request).not.toHaveBeenCalled();
+    request.mockRejectedValueOnce(Error('仍有原会话')); await expect(manager.save({ ...f.store.connections().map(assertNetworkProfile)[0], tls: { ...profile.tls!, passphrase: '新TLS测试值' } })).rejects.toThrow('仍有原会话');
+    expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase).toBe('原TLS测试值');
+    await manager.save({ ...f.store.connections().map(assertNetworkProfile)[0], tls: { ...profile.tls!, passphrase: '' } }); expect(request.mock.calls.map(call => call[0])).toEqual(['__connections.prepareSave', '__connections.prepareSave']); expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase).toBeUndefined();
   });
   it('删除连接清除独立TLS槽；直接存储入口同样拒绝越界秘密且保持旧配置', async () => {
     const f = await fixture(); const saved = f.store.saveConnection({ ...profile, tls: { ...profile.tls!, passphrase: '待删除TLS测试值' } });
     expect(() => f.store.saveConnection({ ...saved, tls: { ...saved.tls!, passphrase: 'x'.repeat(1025) } })).toThrow('不能超过');
-    expect(f.store.resolveConnection(profile.id).tls?.passphrase).toBe('待删除TLS测试值');
-    f.store.deleteConnection(profile.id); expect(f.store.connections()).toEqual([]); expect((await persisted(f.path)).names).toEqual([]);
+    expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).tls?.passphrase).toBe('待删除TLS测试值');
+    f.store.deleteConnection(profile.id); expect(f.store.connections().map(assertNetworkProfile)).toEqual([]); expect((await persisted(f.path)).names).toEqual([]);
   });
 });

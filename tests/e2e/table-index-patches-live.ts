@@ -84,7 +84,7 @@ async function tasks() { return page.evaluate(async () => (await window.dbark.in
 async function indexDatabase(body: (context: LiveContext) => Promise<void>, info: TestInfo) {
   const input = liveTarget();
   await isolatedDatabase(async context => {
-    const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
+    const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })));
     const profile = profiles.find(profile => profile.id === context.connectionId); if (!profile) throw Error('缺少本例实际保存连接');
     assertDefaultEncodingLiveTarget(input, profile);
     const [actual] = await context.observer.query<RowDataPacket[]>('SELECT @@version AS version');

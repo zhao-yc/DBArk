@@ -30,13 +30,13 @@ describe('数据库进程普通退出与显式强退', () => {
     const { child, broker, failed } = fixture(), pending = broker.close(); child.emit('exit', 1); await expect(pending).rejects.toThrow('执行进程已退出'); expect(failed).toHaveBeenCalledOnce(); expect(child.kill).not.toHaveBeenCalled();
   });
   it('强制终止只能由独立显式入口触发，不重发shutdown或数据库命令', async () => {
-    const { child, broker, respond, failed } = fixture(); const pending = broker.close(); respond('资源未知'); await expect(pending).rejects.toThrow('资源未知'); expect(child.kill).not.toHaveBeenCalled(); broker.forceClose(); expect(child.kill).toHaveBeenCalledOnce(); expect(child.postMessage).toHaveBeenCalledOnce(); expect(failed).not.toHaveBeenCalled();
+    const { child, broker, respond, failed } = fixture(); const pending = broker.close(); respond('资源未知'); await expect(pending).rejects.toThrow('资源未知'); expect(child.kill).not.toHaveBeenCalled(); await broker.forceClose(); expect(child.kill).toHaveBeenCalledOnce(); expect(child.postMessage).toHaveBeenCalledOnce(); expect(failed).not.toHaveBeenCalled();
   });
   it('kill明确失败不能假报退出成功，仍可重试', async () => {
-    const { child, broker, respond } = fixture(); child.kill.mockReturnValueOnce(false); const pending = broker.close(); respond(); await expect(pending).rejects.toThrow('未能终止'); child.kill.mockReturnValueOnce(false); expect(() => broker.forceClose()).toThrow('强制退出未能');
+    const { child, broker, respond } = fixture(); child.kill.mockReturnValueOnce(false); const pending = broker.close(); respond(); await expect(pending).rejects.toThrow('未能终止'); child.kill.mockReturnValueOnce(false); await expect(broker.forceClose()).rejects.toThrow('强制退出未能');
   });
   it('没有引擎时退出不会为收尾临时启动新的进程', async () => {
-    const broker = new EngineBroker(vi.fn(), vi.fn()); await broker.close(); broker.forceClose(); expect(ports.fork).not.toHaveBeenCalled();
+    const broker = new EngineBroker(vi.fn(), vi.fn()); await broker.close(); await broker.forceClose(); expect(ports.fork).not.toHaveBeenCalled();
   });
 });
 

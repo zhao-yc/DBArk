@@ -7,7 +7,7 @@ import ExcelJS from 'exceljs';
 import { Engine } from '../../src/engine';
 import { closeMysqlConnection, connect, execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier, qualified } from '../../src/engine/sql';
-import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import { generatedWarningCreateSql, generatedWarningTableName, probeGeneratedColumnWarning, type GeneratedWarningProbe } from './file-import-generated-warning.fixture';
 import { timestampWarningCreateSql, timestampWarningTableName, timestampWarningSafeValue, timestampWarningOverflowValue, probeTimestampRangeWarning, type TimestampWarningProbe } from './file-import-timestamp-warning.fixture';
 

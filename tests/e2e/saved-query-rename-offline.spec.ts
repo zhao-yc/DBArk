@@ -104,7 +104,7 @@ function register(): void {
       expect(await records()).toEqual([]); expect((await settings()).tabs).toEqual([]);
       // 仅使用正式Main准备合成配置，不声称连接表单、建库、保存查询表单或SQL执行验收。
       const prepared = await step(() => page.evaluate(async input => {
-        const profile = await window.dbark.invoke('connections.save', { id: 'rename-offline-profile', name: '重命名离线配置', dialect: 'mysql', host: 'never.invalid', port: 1, user: 'offline-only', group: '', color: '#456789', database: '配置默认库', rememberPassword: false });
+        const profile = await window.dbark.invoke('connections.save', { id: 'rename-offline-profile', name: '重命名离线配置', dialect: 'mysql', host: 'never.invalid', port: 1, user: 'offline-only', group: '', color: '#456789', database: '配置默认库', rememberPassword: false }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; });
         const original = await window.dbark.invoke('queries.create', { name: input.originalName, connectionId: profile.id, context: { state: 'known', database: '原查询库' }, sql: input.sql });
         const other = await window.dbark.invoke('queries.create', { name: input.renamedName, connectionId: profile.id, context: { state: 'known', database: null }, sql: input.otherSql });
         const initial = await window.dbark.invoke('queries.organizationGet', {}), created = await window.dbark.invoke('queries.organizationApply', { expectedRevision: initial.revision, operation: { kind: 'create', name: '原查询归属组', parentId: null } });
@@ -125,7 +125,7 @@ function register(): void {
       // 正式连接保存准备可能启动utility；旁观只从准备/reload/正文就绪后的实际UI阶段开始。
       await installAudit();
       const baselineSettings = await settings(), baselineRecords = await records(), baselineGroups = organization(await groups()), baselineModel = await model();
-      const baselineProfiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(baselineProfiles).toEqual([prepared.profile]);
+      const baselineProfiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })))); expect(baselineProfiles).toEqual([prepared.profile]);
       expect(baselineSettings.tabs).toEqual(prepared.settings.tabs); expect(baselineSettings.activeTabId).toBe('rename-bound-open'); expect(baselineModel.value).toBe(openedSql.replaceAll('\r\n', baselineModel.eol));
       const before = baselineRecords.find(query => query.id === prepared.original.source.id)!, control = baselineRecords.find(query => query.id === prepared.other.source.id)!;
       expect(before).toMatchObject({ name: originalName, sql, connectionId: prepared.profile.id, database: '原查询库', databaseContext: { state: 'known', database: '原查询库' } }); expect(control).toMatchObject({ name: renamedName, sql: otherSql });
@@ -146,7 +146,7 @@ function register(): void {
       const { name: _oldName, updatedAt: _oldTime, ...oldFields } = before, { name: _newName, updatedAt: _newTime, ...newFields } = after;
       expect(after.name).toBe(renamedName); expect(newFields).toEqual(oldFields); expect(Date.parse(after.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt));
       expect(changedRecords.find(query => query.id === control.id)).toEqual(control); expect(changedRecords.filter(query => query.name === renamedName)).toHaveLength(2); expect(organization(await groups())).toEqual(baselineGroups);
-      expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(baselineProfiles);
+      expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))).toEqual(baselineProfiles);
       const renamedEntry = await sourceEntry(before.id); expect(renamedEntry.groupId).toBe(prepared.groupId); expect(renamedEntry.digest).not.toBe(entry.digest);
       expect((await settings()).tabs).toEqual(baselineSettings.tabs); expect((await settings()).activeTabId).toBe(baselineSettings.activeTabId);
       // 两项真实CAS拒绝只尝试旧摘要，本地失败不可改写SQL、名称或已打开标签。
@@ -162,7 +162,7 @@ function register(): void {
       await step(() => page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; })); await step(() => page.reload());
       await step(() => expect(page.locator('.query-tab:visible .sql-editor-wrap > [aria-busy]')).toHaveAttribute('aria-busy', 'false'));
       expect(await records()).toEqual(changedRecords); expect(organization(await groups())).toEqual(baselineGroups); expect((await sourceEntry(before.id)).groupId).toBe(prepared.groupId);
-      expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(baselineProfiles);
+      expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))).toEqual(baselineProfiles);
       const restoredSettings = await settings(); expect(restoredSettings.tabs).toEqual(baselineSettings.tabs); expect(restoredSettings.activeTabId).toBe(baselineSettings.activeTabId);
       const restoredModel = await model(); expect(restoredModel.value).toBe(baselineModel.value); expect(restoredModel.eol).toBe(baselineModel.eol);
       await openList(); await step(() => expect(card()).toHaveCount(1)); await step(() => expect(card().locator('strong')).toHaveText(renamedName));

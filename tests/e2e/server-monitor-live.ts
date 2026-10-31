@@ -46,7 +46,7 @@ export function registerServerMonitorUi(binding: ServerMonitorUiTarget) {
       await observe(() => expect(form.getByLabel(zh.connections.text016,{exact:true})).not.toBeChecked());
       // 不点击测试连接、不额外connections.open；第一个真实监控任务负责受管建连。
       await observe(() => form.getByRole('button',{name:zh.connections.text036,exact:true}).click()); await observe(() => expect(form).toBeHidden());
-      const profiles = await observe(() => page.evaluate(() => window.dbark.invoke('connections.list',{}))), profile = profiles.length === 1 ? profiles[0] : undefined;
+      const profiles = await observe(() => page.evaluate(() => window.dbark.invoke('connections.list',{}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })))), profile = profiles.length === 1 ? profiles[0] : undefined;
       expect(Boolean(profile && profile.name === connectionName && profile.host === binding.target.host && profile.port === binding.target.port && profile.user === binding.target.user && !profile.database && profile.rememberPassword === false && profile.password === undefined && profile.hasPassword === Boolean(binding.target.password) && !profile.ssh?.enabled && !profile.tls?.enabled)).toBe(true);
       const before = await observe(() => page.evaluate(async () => ({ tabs:(await window.dbark.invoke('settings.get',{})).tabs, history:await window.dbark.invoke('history.list',{}) })));
       expect(before.tabs.some(tab => tab.kind === 'query')).toBe(false);

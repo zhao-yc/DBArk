@@ -33,6 +33,7 @@ import { TableApplyReceipts } from './tableApplyReceipts';
 import { TableFilteredExportOwners, type TableFilteredExportMainLease } from './tableFilteredExportOwners';
 import { tableFilteredExportText } from '../shared/tableFilteredExport';
 import { EngineBroker } from './broker';
+import { SqliteConnectionFiles } from './sqliteConnectionFiles';
 import { ColumnsMainCapabilities, type ColumnsInvocation } from './columnsMainCapabilities';
 import { TableChecksMainCapabilities, tableChecksFailureProgress, type TableChecksInvocation } from './tableChecksMainCapabilities';
 import { ResultInsertOwners } from './resultInsertOwners';
@@ -115,6 +116,7 @@ const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 // 字段令牌只绑定真实IPC文档；回收仍使用原引擎精确release，不扩其他结构业务。
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
+const sqliteFiles = new SqliteConnectionFiles<ColumnsInvocation>({ assert: owner => { columnsMain.assertCapturedOwner(owner); if (shuttingDown) throw Error('客户端正在退出，不能选择SQLite数据库文件'); }, same: (left, right) => columnsMain.sharesDocumentOwner(left, right) });
 const tableChecksMain = new TableChecksMainCapabilities(structureTokens, { assertOwner: owner => columnsMain.assertCapturedOwner(owner), sameOwner: (left, right) => columnsMain.sharesDocumentOwner(left, right), revision: () => store.connectionRevision(), available: id => connectionConfig.assertAvailable(id), closing: () => shuttingDown, release: input => broker.request('schema.tableChecks.release', input) });
 // 系统输入只进入单槽队列；原连接和对象由正式元数据服务核验，不执行链接中的 SQL。
 const externalObjectUris = new ExternalObjectUris<ColumnsInvocation>({
@@ -435,6 +437,7 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
 
 /** 文件只能来自用户打开/保存对话框；数据库进程收到的是主进程解析后的实际路径。 */
 async function chooseFile(input: any): Promise<{ token: string; name: string } | null> {
+  if (input.purpose === 'sqlite-database') throw Error('SQLite文件选择必须绑定准确原文档');
   const filters = input.format ? [{ name: `${String(input.format).toUpperCase()} 文件`, extensions: [input.format] }, { name: '所有文件', extensions: ['*'] }] : [{ name: '所有文件', extensions: ['*'] }];
   let filePath: string | undefined;
   if (input.purpose === 'export' || input.purpose === 'connection-export') {
@@ -447,6 +450,17 @@ async function chooseFile(input: any): Promise<{ token: string; name: string } |
   if (!filePath) return null;
   const token = randomUUID(); files.set(token, { path: filePath, purpose: input.purpose, format: input.format });
   return { token, name: basename(filePath) };
+}
+
+/** 原生选择前后核同一文档，SQLite令牌只在独立能力表中，不能由通用路径接口解出。 */
+async function chooseSqliteFile(owner: MainInvocation | undefined, connectionId: string) {
+  columnsMain.assertCapturedOwner(owner);
+  return queryFileOperation(async () => {
+    columnsMain.assertCapturedOwner(owner);
+    const result = await dialog.showOpenDialog(window!, { title: '选择SQLite数据库文件', properties: ['openFile'], filters: [{ name: 'SQLite数据库', extensions: ['sqlite', 'sqlite3', 'db', 'db3'] }, { name: '所有文件', extensions: ['*'] }] });
+    columnsMain.assertCapturedOwner(owner);
+    return result.canceled || !result.filePaths[0] ? null : sqliteFiles.register(owner!, result.filePaths[0], connectionId);
+  });
 }
 
 /** SQL结果文件选择绑定本主文档和准确预览；原生对话框等待中撤销的映射不能领取迟到令牌。 */
@@ -972,7 +986,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       { const result = store.applyConnectionOrganization(input); resultInserts.observe(); filteredUpdates.observe(); filteredDeletes.observe(); if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe(); return result; }
     case 'connections.save': {
       // 保留原保存检查：被拒绝的配置修改不得先取消任务；成功保存后才撤销本片旧修订能力。
-      const saved=await connectionConfig.save(confirmConnectionFiles(input,store.connections().find(profile=>profile.id===input.id),files));
+      const previous = store.connections().find(profile => profile.id === input.id);
+      const candidate = input.dialect === 'sqlite' ? sqliteFiles.confirm(input, previous, columns!) : confirmConnectionFiles(input, previous, files);
+      const guard = input.dialect === 'sqlite' ? () => { sqliteFiles.confirm(input, previous, columns!); } : undefined;
+      const saved=await connectionConfig.save(candidate, guard);
       resultInserts.observe(); filteredUpdates.observe(); filteredDeletes.observe();
       if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe();
       if([...tasks.values()].some(task=>task.kind==='query.exportStream'&&task.status==='running'))queryInsertExports.invalidateAll();
@@ -988,7 +1005,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
     case 'connections.test': {
       const previous = store.connections().find(profile => profile.id === input.id);
-      input = { ...input, pendingFiles: [...new Set([...previous?.pendingFiles ?? [], ...input.pendingFiles ?? []])] };
+      if (previous && (previous.dialect === 'sqlite') !== (input.dialect === 'sqlite')) throw Error('已保存连接不能在SQLite与网络数据库之间切换，请另建连接');
+      input = input.dialect === 'sqlite' ? sqliteFiles.confirm(input, previous, columns!) : { ...input, pendingFiles: [...new Set([...(previous?.dialect !== 'sqlite' ? previous?.pendingFiles : undefined) ?? [], ...input.pendingFiles ?? []])] };
       assertConnectionReady(input); input = store.resolveConnection(input.id, input as ConnectionProfile); break;
     }
     case 'connections.close': {
@@ -1059,7 +1077,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'metadata.routineInvocation':
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
-    case 'files.choose': return input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
+    case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
     case 'table.exportFiltered':
@@ -1266,7 +1284,7 @@ async function createWindow(): Promise<void> {
   window.webContents.session.setPermissionCheckHandler(() => false);
   window.once('ready-to-show', () => window?.show());
   window.on('close', event => { if (!shutdownComplete) { event.preventDefault(); app.quit(); } });
-  window.on('closed', () => { applicationMenu?.invalidate(); window = undefined; resultSqlPreviews.clear(); files.clear(); });
+  window.on('closed', () => { applicationMenu?.invalidate(); window = undefined; resultSqlPreviews.clear(); files.clear(); sqliteFiles.clear(); });
   await window.loadURL(rendererURL);
 }
 
@@ -1307,7 +1325,7 @@ app.on('before-quit', event => {
       await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
       await cancelFileImportPreflights();
       await Promise.allSettled([...queryFileOperations]);
-      try { broker?.forceClose(); } catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
+      try { await broker?.forceClose(); } catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
       externalObjectUris.close(); shutdownComplete = true; app.quit();
     } else { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); }
@@ -1322,10 +1340,10 @@ function engineExited(): void {
   filteredDeletes.engineExited();
   tableApplyReceipts?.interrupt();
   // 本地保存查询的匹配线程独立于数据库工具进程，不能被数据库进程退出误判为失败。
-  for (const preparing of preparingTasks.values()) preparing.failure = '数据库进程已退出，准备任务已停止；尚未发送用户 SQL，原目标文件保持不变';
-  sessions.clear();
+  for (const preparing of preparingTasks.values()) if (!preparing.connectionIds?.some(id => broker.isSqliteConnection(id))) preparing.failure = '数据库进程已退出，准备任务已停止；尚未发送用户 SQL，原目标文件保持不变';
+  for (const id of sessions.keys()) if (!broker.isSqliteSession(id)) sessions.delete(id);
   structureTokens.clear();
-  for (const task of tasks.values()) if (task.status === 'running'&&!task.kind.startsWith('search.savedQueries')) {
+  for (const task of tasks.values()) if (task.status === 'running'&&!task.kind.startsWith('search.savedQueries')&&!broker.isSqliteTask(task.id)) {
     const preparing = preparingTasks.has(task.id);
     if (task.kind.startsWith('table.filteredDelete.')) {
       const last = filteredDeleteProgress.get(task.id), applying = task.kind === 'table.filteredDelete.apply' && !preparing;
@@ -1372,7 +1390,7 @@ else {
     const wasm = app.isPackaged ? join(process.resourcesPath, 'sql-wasm.wasm') : require.resolve('sql.js/dist/sql-wasm.wasm');
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
     tableApplyReceipts = new TableApplyReceipts(store, () => persistAuxiliary(() => { throw Error('提交记录保存失败'); }));
-    broker = new EngineBroker(engineTaskEvent, engineExited);
+    broker = new EngineBroker(engineTaskEvent, engineExited, id => store.connections().find(profile => profile.id === id));
     connectionConfig = new ConnectionConfigManager(store, broker, {
       /** 主进程会话与尚未投递的长任务也必须为空；真实引擎继续检查建连、事务和独立任务。 */
       assertIdle: ids => {
@@ -1380,6 +1398,7 @@ else {
       },
       revokeFiles: ids => {
         revokeConnectionFiles(ids, files);
+        sqliteFiles.revokeConnections(ids);
         for (const [token, value] of structureTokens) if (ids.includes(value.connectionId)) structureTokens.delete(token);
       },
     });
@@ -1451,6 +1470,7 @@ else {
         }
         if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
+        if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
         if (payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);

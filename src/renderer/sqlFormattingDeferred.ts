@@ -1,3 +1,4 @@
+import { sqliteZh } from './locales/sqlite.zh-CN';
 import type * as monaco from 'monaco-editor';
 import { formatSqlEditor, prepareSqlFormattingRoles, type FormattingPreferences } from './sqlFormatting';
 import { readSqlKeywordCase, sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
@@ -33,7 +34,7 @@ export class DeferredUpperSqlFormatting {
     if (!editor || !model || model.isDisposed() || editor.getRawOptions().readOnly) throw Error(text.unavailable);
     if (model.getValueLength() > sqlKeywordRoleLimits.sourceUnits) throw Error(text.limited);
     this.#editor = editor; this.#model = model; this.#version = model.getVersionId(); this.#sql = model.getValue(); this.#selection = selectionKey(editor);
-    this.#preferences = { tabSize: preferences.tabSize, insertSpaces: preferences.insertSpaces, keywordCase };
+    this.#preferences = { tabSize: preferences.tabSize, insertSpaces: preferences.insertSpaces, keywordCase, dialect: preferences.dialect };
     const revoke = () => { this.#valid = false; };
     try {
       this.#subscriptions.push(editor.onDidChangeModel(revoke));
@@ -55,7 +56,7 @@ export class DeferredUpperSqlFormatting {
   async run(): Promise<boolean> {
     if (this.#started) throw Error(text.unavailable); this.#started = true; let failed = false, original: unknown;
     try {
-      this.#assert(); await (this.ports.prepare ?? prepareSqlFormattingRoles)(); this.#assert();
+      this.#assert(); if (this.#preferences.dialect === 'sqlite') throw Error(sqliteZh.formatCaseUnavailable); await (this.ports.prepare ?? prepareSqlFormattingRoles)(); this.#assert();
       this.#release(); this.#assert(); return formatSqlEditor(this.#editor, this.#preferences);
     } catch (reason) { failed = true; original = reason; throw reason; }
     finally { try { this.dispose(); } catch (cleanup) { if (failed) throw new AggregateError([original, cleanup], text.failed, { cause: original }); throw cleanup; } }

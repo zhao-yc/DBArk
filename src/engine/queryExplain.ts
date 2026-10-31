@@ -1,15 +1,15 @@
-import type { ConnectionStatus, QueryOutcome, QueryResult } from '../shared/contracts';
+import type { NetworkConnectionStatus, QueryOutcome, QueryResult } from '../shared/contracts';
 import type { SqlLexicalMode } from '../shared/queryParameters';
 import { explainLimits, parseExplainPlan, type ExplainPlan } from '../shared/explain';
 import { splitSql } from './sql';
 
 export interface ExplainContext {
-  status: ConnectionStatus; mode: SqlLexicalMode;
+  status: NetworkConnectionStatus; mode: SqlLexicalMode;
   run(sql: string): Promise<QueryResult[]>;
   check(): void; reusable(): boolean;
 }
 /** 版本来自真实连接握手；未知版本采取文本模式，绝不暗建连接探测。 */
-export function explainCapability(status: ConnectionStatus): boolean {
+export function explainCapability(status: NetworkConnectionStatus): boolean {
   const version = /^(\d+)\.(\d+)/.exec(status.version.replace(/^5\.5\.5-/, ''));
   if (!version) return false;
   const major = Number(version[1]), minor = Number(version[2]);

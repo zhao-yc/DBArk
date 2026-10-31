@@ -60,15 +60,23 @@ export type CellValue = string | number | boolean | null | { type: 'binary'; bas
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
 
-export interface ConnectionProfile {
+export interface NetworkConnectionProfile {
   id: string; name: string; group: string; color: string; dialect: 'mysql' | 'mariadb';
   host: string; port: number; user: string; database?: string;
-  pendingFiles?: ConnectionFileRequirement[];
+  pendingFiles?: Exclude<ConnectionFileRequirement, 'sqliteDatabase'>[];
   password?: string; rememberPassword?: boolean; hasPassword?: boolean;
   ssh?: { enabled: boolean; host: string; port: number; user: string; password?: string; hasPassword?: boolean; privateKeyPath?: string; passphrase?: string; hasPassphrase?: boolean; hostFingerprint?: string };
   tls?: { enabled: boolean; rejectUnauthorized: boolean; caPath?: string; certPath?: string; keyPath?: string; passphrase?: string; hasPassphrase?: boolean };
 }
-export interface ConnectionStatus { version: string; dialect: 'mysql' | 'mariadb'; connectionId?: number; }
+/** SQLite 只持有本机文件配置，不伪造网络地址或认证字段；令牌仅供Main本次选择授权。 */
+export interface SqliteConnectionProfile {
+  id: string; name: string; group: string; color: string; dialect: 'sqlite';
+  sqlite: { filePath?: string; fileName?: string; fileToken?: string; readOnly: boolean; busyTimeoutMs: number };
+  pendingFiles?: ('sqliteDatabase')[];
+}
+export type ConnectionProfile = NetworkConnectionProfile | SqliteConnectionProfile;
+export interface NetworkConnectionStatus { version: string; dialect: 'mysql' | 'mariadb'; connectionId?: number; }
+export type ConnectionStatus = NetworkConnectionStatus | { version: string; dialect: 'sqlite' };
 /** 内部配置检查仅由主进程调用，不加入渲染进程可访问的 CommandMap/参数白名单。 */
 export type EngineCommand = Command | '__connections.prepareSave';
 export interface DatabaseObject { name: string; kind: ObjectKind; }
@@ -268,7 +276,7 @@ export interface CommandMap {
   'schema.foreignKeys.preview': { input: TableForeignKeyPreviewInput; output: TableForeignKeyPreviewOutput };
   'schema.foreignKeys.apply': { input: TableForeignKeyApplyInput; output: TableForeignKeyApplyOutput };
   'schema.foreignKeys.release': { input: TableForeignKeyReleaseInput; output: void };
-  'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query' | 'connection-import' | 'connection-export'; format?: string; suggestedName?: string; resultSqlPreviewId?: string; queryInsertExport?: true }; output: FileChoice | null };
+  'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query' | 'connection-import' | 'connection-export' | 'sqlite-database'; format?: string; suggestedName?: string; resultSqlPreviewId?: string; queryInsertExport?: true; /** 仅SQLite选择，令牌绑定本表单准确连接ID。 */ sqliteConnectionId?: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
   'excel.sheets': { input: { fileToken: string; taskId: string }; output: ExcelSheet[] };
   'excel.preview': { input: { fileToken: string; taskId: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol }; output: ExcelSheetPreview };

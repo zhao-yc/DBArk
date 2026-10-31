@@ -1,5 +1,7 @@
 # SQLite 查询会话合同适配
 
+后续已经接入[原连接与查询工作区](sqlite-workspace-20261031.md)；下文保留本适配层最初轮次的范围和证据。
+
 ## 已实现
 
 `src/main/sqliteQuerySession.ts` 将 Main 已持有的准确原生 driver 适配到现有 `query.execute` 输入、`TaskEvent` 和 `QueryOutcome`。复用原查询页消费的数据形状，没有新增 SQL 编辑器或渲染 IPC，也没有开放 SQLite 用户入口。

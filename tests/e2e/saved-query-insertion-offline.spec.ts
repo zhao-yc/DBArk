@@ -26,12 +26,12 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
   const searchSql = "-- 未绑定来源：不需要选择打开连接\n-- " + 'y'.repeat(650) + "\nSELECT :search_id, '中文🚢', '${1:原文}';\n-- SAVED_INSERT_SQL_ONLY_完整尾部";
   try {
     check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']);
-    expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]);
+    expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))).toEqual([]);
     expect((await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})))).tabs).toEqual([]);
     // 正式Main本地配置准备；不冒称连接表单、新建查询UI或重启恢复验收。
     const prepared = await step(() => page.evaluate(async input => {
       const profiles = [];
-      for (const [id, name, host] of [['saved-insert-target', '插入原连接', 'offline-target.example.invalid'], ['saved-insert-other', '保存来源其它连接', 'offline-source.example.invalid']]) profiles.push(await window.dbark.invoke('connections.save', { id, name, group: '保存查询插入离线', color: '#456789', dialect: 'mysql', host, port: 3306, user: 'offline-only', database: '配置默认库', rememberPassword: false }));
+      for (const [id, name, host] of [['saved-insert-target', '插入原连接', 'offline-target.example.invalid'], ['saved-insert-other', '保存来源其它连接', 'offline-source.example.invalid']]) profiles.push(await window.dbark.invoke('connections.save', { id, name, group: '保存查询插入离线', color: '#456789', dialect: 'mysql', host, port: 3306, user: 'offline-only', database: '配置默认库', rememberPassword: false }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }));
       const original = await window.dbark.invoke('queries.create', { name: '原来源绑定查询', connectionId: profiles[0].id, context: { state: 'known', database: '原查询库' }, sql: input.originalSql });
       const list = await window.dbark.invoke('queries.create', { name: '跨连接保存脚本', connectionId: profiles[1].id, context: { state: 'known', database: '保存来源库' }, sql: input.listSql });
       const search = await window.dbark.invoke('queries.create', { name: '未绑定保存脚本', context: { state: 'known', database: null }, sql: input.searchSql });

@@ -124,7 +124,7 @@ function register(): void {
       const initial = await persisted(); expect(initial.settings.tabs).toEqual([]); expect(initial.history).toEqual([]); expect(initial.queries).toEqual([]); expect(initial.tasks).toEqual([]); privateLedger(initial);
       // Main仅准备自己的临时profile和一个无默认库查询；密码remember=false只进RAM，不声称连接表单验收。
       await step(() => page.evaluate(async value => {
-        const profile = await window.dbark.invoke('connections.save', { id: value.profileId, name: '参数复用合成profile', dialect: 'mysql', host: value.host, port: 13384, user: value.user, password: value.password, rememberPassword: false, group: '', color: '#345678' });
+        const profile = await window.dbark.invoke('connections.save', { id: value.profileId, name: '参数复用合成profile', dialect: 'mysql', host: value.host, port: 13384, user: value.user, password: value.password, rememberPassword: false, group: '', color: '#345678' }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; });
         if (profile.rememberPassword !== false || profile.password !== undefined || profile.database !== undefined) throw Error('参数复用配置秘密或默认库不符');
         const settings = await window.dbark.invoke('settings.get', {}); await window.dbark.invoke('settings.save', { ...settings, activeTabId: value.tabId, tabs: [{ id: value.tabId, kind: 'query', title: '参数复用合成查询', connectionId: profile.id, databaseContext: { state: 'known', database: null }, sql: value.template }] });
       }, { profileId, tabId, template, host: fixed.DBARK_TEST_HOST!, user: fixed.DBARK_TEST_USER!, password: fixed.DBARK_TEST_PASSWORD! }));

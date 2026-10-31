@@ -11,7 +11,7 @@ const sqlWasmFile = createRequire(__filename).resolve('sql.js/dist/sql-wasm.wasm
 const preferences: TablePreferences = { version: 1, columns: [{ name: 'constructor', hidden: true, width: 64 }, { name: '__proto__', hidden: false, width: 320 }, { name: '主键', hidden: true, width: 2000 }] };
 /** 创建不可连接的本地配置；布局 IPC 不得尝试查询这个端口或生成 SQL 任务。 */
 async function offlineConnection() {
-  return page.evaluate(() => window.dbark.invoke('connections.save', { id: '', name: '离线表偏好', group: '验收', color: '#40bb99', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'offline', rememberPassword: false }));
+  return page.evaluate(() => window.dbark.invoke('connections.save', { id: '', name: '离线表偏好', group: '验收', color: '#40bb99', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'offline', rememberPassword: false }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }));
 }
 /** 所有保存和读取经过真实 preload、主进程校验和 SQLite，不替换 IPC。 */
 async function save(target: TablePreferenceTarget, value = preferences) { return page.evaluate(input => window.dbark.invoke('table.preferences.save', input), { ...target, preferences: value }); }
@@ -51,8 +51,8 @@ test('非法偏好跨 IPC 被拒绝且不落盘，认证外观保留而改目标
   }, { target, preferences });
   expect(rejected).toHaveLength(3); expect(rejected.every(message => message.includes('参数无效'))).toBe(true); expect(await get(target)).toEqual(preferences);
   const bytes = await readFile(join(dataDir, 'dbark.sqlite')); for (const forbidden of ['不应落盘的筛选秘密', '不应落盘的单元格秘密']) expect(bytes.includes(Buffer.from(forbidden))).toBe(false);
-  const renamed = await page.evaluate(input => window.dbark.invoke('connections.save', { ...input, name: '已重命名', password: '仅会话轮换密码', rememberPassword: false }), connection); expect(await get(target)).toEqual(preferences);
-  await page.evaluate(input => window.dbark.invoke('connections.save', { ...input, host: 'localhost' }), renamed); expect(await get(target)).toBeNull();
+  const renamed = await page.evaluate(input => window.dbark.invoke('connections.save', { ...input, name: '已重命名', password: '仅会话轮换密码', rememberPassword: false }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), connection); expect(await get(target)).toEqual(preferences);
+  await page.evaluate(input => window.dbark.invoke('connections.save', { ...input, host: 'localhost' }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), renamed); expect(await get(target)).toBeNull();
   await save(target); await page.evaluate(id => window.dbark.invoke('connections.delete', { id }), connection.id);
   await expect(get(target)).rejects.toThrow('连接不存在'); await expect(save(target)).rejects.toThrow('连接不存在');
   await expectOfflineOnly();
@@ -64,12 +64,12 @@ test('真实写盘失败不会丢失布局，修复后保存设置及重启不�
   try {
     await expect(save(target, { version: 1, columns: [] })).rejects.toThrow('修改未保存');
     await expect(page.evaluate(input => window.dbark.invoke('table.preferences.reset', input), target)).rejects.toThrow('修改未保存');
-    await expect(page.evaluate(input => window.dbark.invoke('connections.save', { ...input, host: '另一目标' }), connection)).rejects.toThrow('修改未保存');
+    await expect(page.evaluate(input => window.dbark.invoke('connections.save', { ...input, host: '另一目标' }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), connection)).rejects.toThrow('修改未保存');
     expect(await get(target)).toEqual(preferences);
   } finally { await rmdir(blocker); }
   await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click(); await quitDesktop(); await launchDesktop();
   expect(await get(target)).toEqual(preferences);
-  expect((await page.evaluate(() => window.dbark.invoke('connections.list', {})))[0].host).toBe(connection.host); await expectOfflineOnly();
+  expect((await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))[0].host).toBe(connection.host); await expectOfflineOnly();
 });
 
 test('现库降级至版本2后启动补建偏好和回执表至schema9，既有查询片段设置原样保留', async () => {

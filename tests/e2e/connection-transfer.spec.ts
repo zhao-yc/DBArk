@@ -1,9 +1,10 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { clickSidebarAction, sidebarMenuItem } from './sidebar-menu';
 import { mkdir, open, readFile, readdir, rmdir, writeFile } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { join } from 'node:path';
-import type { ConnectionProfile, FileChoice } from '../../src/shared/contracts';
-import type { ConnectionImportApply, ConnectionTransferDocument, ExportedConnectionProfile } from '../../src/shared/connectionTransfer';
+import type { NetworkConnectionProfile as ConnectionProfile, FileChoice } from '../../src/shared/contracts';
+import type { ConnectionImportApply, ConnectionTransferDocument, ExportedNetworkConnectionProfile as ExportedConnectionProfile } from '../../src/shared/connectionTransfer';
 import { test as desktopTest, expect, desktop, page, dataDir, pageErrors, closed, launchDesktop, quitDesktopDiagnosed as quitDesktop } from './desktop-fixture';
 import { enabled as liveEnabled, environment } from './live-helpers';
 
@@ -61,8 +62,8 @@ async function chooseNative(mode: 'open' | 'save', file?: string) {
   }, { mode, file });
 }
 /** 种子经真实存储 IPC 建立；刷新页面只让侧栏读取种子，不展开或连接目标。 */
-async function seed(input: ConnectionProfile) { return page.evaluate(value => window.dbark.invoke('connections.save', value), input); }
-async function list() { return page.evaluate(() => window.dbark.invoke('connections.list', {})); }
+async function seed(input: ConnectionProfile) { return page.evaluate(value => window.dbark.invoke('connections.save', value).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), input); }
+async function list() { return page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))); }
 async function reloadWorkspace() { await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible(); }
 /** UI 模式和文件选择保持用户实际顺序；不绕过预览直接发路径给业务接口。 */
 async function transfer(mode: 'export' | 'import') {
@@ -204,10 +205,10 @@ test.describe('离线连接概要复制与迁移', () => {
     const valid = { format: 'DBArk-connections', version: 1, connections: [exported(traffic.port)] };
     const invalid: unknown[] = [
       { ...valid, version: 99 }, { ...valid, extra: true },
-      { ...valid, connections: [{ ...valid.connections[0], password: '禁止导入的秘密字段' }] },
-      { ...valid, connections: [{ ...valid.connections[0], hasPassword: true }] },
-      { ...valid, connections: [{ ...valid.connections[0], ssh: { enabled: true, host: '127.0.0.1', port: traffic.port, user: 'ssh_user', privateKeyFileName: join(dataDir, '禁止绝对路径.key') } }] },
-      { ...valid, connections: [valid.connections[0], valid.connections[0]] },
+      { ...valid, connections: [{ ...valid.connections.map(assertNetworkProfile)[0], password: '禁止导入的秘密字段' }] },
+      { ...valid, connections: [{ ...valid.connections.map(assertNetworkProfile)[0], hasPassword: true }] },
+      { ...valid, connections: [{ ...valid.connections.map(assertNetworkProfile)[0], ssh: { enabled: true, host: '127.0.0.1', port: traffic.port, user: 'ssh_user', privateKeyFileName: join(dataDir, '禁止绝对路径.key') } }] },
+      { ...valid, connections: [valid.connections.map(assertNetworkProfile)[0], valid.connections.map(assertNetworkProfile)[0]] },
       { ...valid, connections: Array.from({ length: 501 }, (_, index) => exported(traffic.port, `too-many-${index}`)) },
     ];
     for (const [index, document] of invalid.entries()) {

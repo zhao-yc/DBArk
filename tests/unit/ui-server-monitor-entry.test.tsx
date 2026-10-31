@@ -1,6 +1,6 @@
 import { act } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import { monitorDeferred, monitorSnapshot } from '../fixtures/server-monitor';
 import { serverMonitorZhCN as t } from '../../src/renderer/serverMonitorZh';

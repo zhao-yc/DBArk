@@ -1,3 +1,4 @@
+import { assertNetworkProfile, assertNetworkExportedProfile } from '../helpers/assertNetworkProfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -8,9 +9,9 @@ import { LocalStore } from '../../src/main/storage';
 import { ConnectionConfigManager } from '../../src/main/connectionConfig';
 import { ConnectionTransfer } from '../../src/main/connectionTransfer';
 import { confirmConnectionFiles, revokeConnectionFiles, type SelectedFile } from '../../src/main/fileTokens';
-import { connectionReplacementAcknowledgements, exportConnectionProfile, importReplacementProfile, type ConnectionImportApply, type ConnectionImportDecision, type ExportedConnectionProfile } from '../../src/shared/connectionTransfer';
+import { connectionReplacementAcknowledgements, exportConnectionProfile, importReplacementProfile, type ConnectionImportApply, type ConnectionImportDecision, type ExportedNetworkConnectionProfile as ExportedConnectionProfile } from '../../src/shared/connectionTransfer';
 import { validateCommand } from '../../src/shared/validation';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 
 const require = createRequire(import.meta.url), wasm = require.resolve('sql.js/dist/sql-wasm.wasm');
 const original: ConnectionProfile = { id: 'target-a', name: '原目标A', group: '旧分组', color: '#123456', dialect: 'mysql', host: 'old.invalid', port: 3306, user: 'old', rememberPassword: true, password: '合成数据库凭据', ssh: { enabled: true, host: 'old-jump.invalid', port: 22, user: 'old-ssh', password: '合成SSH凭据', passphrase: '合成SSH口令', privateKeyPath: 'C:\\合成路径\\ssh.key', hostFingerprint: 'SHA256:old' }, tls: { enabled: true, rejectUnauthorized: true, caPath: 'C:\\合成路径\\ca.pem', certPath: 'C:\\合成路径\\cert.pem', keyPath: 'C:\\合成路径\\client.key', passphrase: '合成TLS口令' } };
@@ -45,14 +46,14 @@ function reviewInput(previewToken: string, decisions = [replacement()]): Connect
 describe('C03明确配对与本地原子替换', () => {
   it('明确替换相同端点也强制清秘密和文件授权，不因transport相同保留旧认证', async () => {
     const value = await preview([exportConnectionProfile(original)]), input = reviewInput(value.previewToken, [replacement(original.id)]);
-    const result = await transfer.applyBatch(input); expect(result.replaced).toBe(1); expect(result.connections.find(profile => profile.id === original.id)!.host).toBe(original.host);
-    expect(store.resolveConnection(original.id).password).toBeUndefined(); expect(store.resolveConnection(original.id).ssh?.password).toBeUndefined(); expect(request.mock.calls[0][1].transportChanged).toBe(true); expect(files.get('old-key')?.revokedConnections?.has(original.id)).toBe(true);
+    const result = await transfer.applyBatch(input); expect(result.replaced).toBe(1); expect(result.connections.map(assertNetworkProfile).find(profile => profile.id === original.id)!.host).toBe(original.host);
+    expect(assertNetworkProfile(store.resolveConnection(original.id)).password).toBeUndefined(); expect(assertNetworkProfile(store.resolveConnection(original.id)).ssh?.password).toBeUndefined(); expect(request.mock.calls[0][1].transportChanged).toBe(true); expect(files.get('old-key')?.revokedConnections?.has(original.id)).toBe(true);
   });
 
   it('第二目标活动检查失败也不提交第一目标或新增，不自动取消且释放整批锁', async () => {
     const value = await preview([incoming(), incoming('source-b'), incoming('source-add')]), input = reviewInput(value.previewToken, [replacement(), replacement('source-b', 'target-b'), { sourceId: 'source-add', action: 'add' }]);
     const before = readFileSync(file), revision = store.connectionRevision(); request.mockResolvedValueOnce(undefined).mockRejectedValueOnce(Error('第二目标仍有打开的会话'));
-    await expect(transfer.applyBatch(input)).rejects.toThrow('打开的会话'); expect(readFileSync(file)).toEqual(before); expect(store.connectionRevision()).toBe(revision); expect(store.connections()).toHaveLength(2); expect(store.resolveConnection(original.id).password).toBe(original.password);
+    await expect(transfer.applyBatch(input)).rejects.toThrow('打开的会话'); expect(readFileSync(file)).toEqual(before); expect(store.connectionRevision()).toBe(revision); expect(store.connections().map(assertNetworkProfile)).toHaveLength(2); expect(assertNetworkProfile(store.resolveConnection(original.id)).password).toBe(original.password);
     expect(request.mock.calls.map(([command]) => command)).toEqual(['__connections.prepareSave', '__connections.prepareSave']); expect(() => manager.assertAvailable('target-a')).not.toThrow(); expect(() => manager.assertAvailable('target-b')).not.toThrow();
   });
 
@@ -60,7 +61,7 @@ describe('C03明确配对与本地原子替换', () => {
     // 补一个未来秘密槽，并把已知槽转入会话；同一目标同时存在持久与会话命名空间。
     store.close(); const SQL = await initSqlJs({ locateFile: () => wasm }), database = new SQL.Database(readFileSync(file));
     database.run('INSERT INTO secrets VALUES (?,?,?)', [original.id, 'future-secret-slot', '合成密文']); writeFileSync(file, database.export()); database.close();
-    store = await LocalStore.open(file, wasm, protector); store.saveConnection({ ...store.connections()[0], rememberPassword: false });
+    store = await LocalStore.open(file, wasm, protector); store.saveConnection({ ...store.connections().map(assertNetworkProfile)[0], rememberPassword: false });
     store.saveQuery({ id: 'query', connectionId: original.id, name: '旧查询', sql: 'SELECT 1', updatedAt: '合成时间' });
     store.addHistory({ id: 'history', connectionId: original.id, sql: 'SELECT 2', startedAt: '合成时间', elapsedMs: 1, success: true });
     store.saveTablePreferences({ connectionId: original.id, database: '旧库', table: '旧表', preferences: { version: 1, columns: [{ name: 'x', hidden: true }] } });
@@ -70,14 +71,14 @@ describe('C03明确配对与本地原子替换', () => {
     const decisions: ConnectionImportDecision[] = [replacement(), { sourceId: 'source-add', action: 'add' }, { sourceId: 'source-skip', action: 'skip' }];
     const input = reviewInput(value.previewToken, decisions), revision = store.connectionRevision(); decrypt.mockClear();
     const result = await transfer.applyBatch(input); expect(result).toMatchObject({ added: 1, replaced: 1, skipped: 1, replacementIds: [original.id] }); expect(store.connectionRevision()).toBe(revision + 1);
-    const replaced = store.resolveConnection(original.id); expect(replaced).toMatchObject({ id: original.id, host: 'new.invalid', rememberPassword: false, pendingFiles: ['sshPrivateKey', 'tlsCa', 'tlsCert', 'tlsKey'] });
+    const replaced = assertNetworkProfile(store.resolveConnection(original.id)); expect(replaced).toMatchObject({ id: original.id, host: 'new.invalid', rememberPassword: false, pendingFiles: ['sshPrivateKey', 'tlsCa', 'tlsCert', 'tlsKey'] });
     expect(replaced.password).toBeUndefined(); expect(replaced.ssh?.password).toBeUndefined(); expect(replaced.ssh?.passphrase).toBeUndefined(); expect(replaced.tls?.passphrase).toBeUndefined();
     expect(replaced.ssh?.privateKeyPath).toBeUndefined(); expect(replaced.tls?.caPath).toBeUndefined(); expect(replaced.tls?.certPath).toBeUndefined(); expect(replaced.tls?.keyPath).toBeUndefined();
     expect(decrypt).not.toHaveBeenCalled(); expect(store.queries()).toEqual(beforeQueries); expect(store.history()).toEqual(beforeHistory); expect(store.tablePreferences({ connectionId: original.id, database: '旧库', table: '旧表' })).toEqual(beforeLayout);
     const persisted = new SQL.Database(readFileSync(file)); expect(persisted.exec("SELECT COUNT(*) FROM secrets WHERE connection_id='target-a'")[0].values[0][0]).toBe(0); persisted.close();
     expect(request.mock.calls.map(([command]) => command)).toEqual(['__connections.prepareSave']);
     expect(request.mock.calls[0][1]).toEqual({ id: original.id, profile: importReplacementProfile(incoming(), exportConnectionProfile(original)), transportChanged: true });
-    const pendingInput = { ...result.connections.find(item => item.id === original.id)!, ssh: { ...replaced.ssh!, privateKeyPath: original.ssh!.privateKeyPath }, tls: { ...replaced.tls!, caPath: original.tls!.caPath } };
+    const pendingInput = { ...result.connections.map(assertNetworkProfile).find(item => item.id === original.id)!, ssh: { ...replaced.ssh!, privateKeyPath: original.ssh!.privateKeyPath }, tls: { ...replaced.tls!, caPath: original.tls!.caPath } };
     expect(confirmConnectionFiles(pendingInput, replaced, files).pendingFiles).toHaveLength(4);
     expect(files.get('old-key')?.revokedConnections?.has('target-b')).not.toBe(true);
     files.set('fresh-key', { path: original.ssh!.privateKeyPath!, purpose: 'key' });
@@ -86,19 +87,19 @@ describe('C03明确配对与本地原子替换', () => {
   });
 
   it('源ID/名称/端点相同也只提示，add永不隐式覆盖；审阅过replace再改add不复用旧目标绑定', async () => {
-    const value = await preview([exportConnectionProfile(original)]), before = store.resolveConnection(original.id);
+    const value = await preview([exportConnectionProfile(original)]), before = assertNetworkProfile(store.resolveConnection(original.id));
     expect(value.entries[0].matches[0].reasons).toEqual(['id', 'name', 'target']);
     transfer.review({ previewToken: value.previewToken, decisions: [replacement(original.id)] });
     const result = await transfer.applyBatch({ previewToken: value.previewToken, decisions: [{ sourceId: original.id, action: 'add' }], allowIncomplete: true });
-    expect(result.added).toBe(1); expect(result).not.toHaveProperty('replaced'); expect(result.connections.at(-1)!.id).not.toBe(original.id); expect(store.resolveConnection(original.id)).toEqual(before); expect(request).not.toHaveBeenCalled();
+    expect(result.added).toBe(1); expect(result).not.toHaveProperty('replaced'); expect(result.connections.map(assertNetworkProfile).at(-1)!.id).not.toBe(original.id); expect(assertNetworkProfile(store.resolveConnection(original.id))).toEqual(before); expect(request).not.toHaveBeenCalled();
   });
 
   it('旧概要/返回对象/源文件修改不改变审阅绑定；最终CAS不接受A→B→A', async () => {
     const value = await preview(), input = reviewInput(value.previewToken);
-    value.entries[0].profile.host = 'tampered.invalid'; writeFileSync(source, '{}');
-    const review = transfer.review({ previewToken: value.previewToken, decisions: [replacement()] }); review.entries[0].profile.host = 'other-tampered.invalid'; review.entries[0].previous!.host = 'wrong-old.invalid';
-    const result = await transfer.applyBatch({ ...input, confirmationToken: review.confirmationToken }); expect(result.connections.find(profile => profile.id === original.id)!.host).toBe('new.invalid');
-    const next = await preview(), stale = reviewInput(next.previewToken); const saved = store.connections().find(profile => profile.id === original.id)!;
+    assertNetworkExportedProfile(value.entries[0].profile).host = 'tampered.invalid'; writeFileSync(source, '{}');
+    const review = transfer.review({ previewToken: value.previewToken, decisions: [replacement()] }); assertNetworkExportedProfile(review.entries[0].profile).host = 'other-tampered.invalid'; assertNetworkExportedProfile(review.entries[0].previous).host = 'wrong-old.invalid';
+    const result = await transfer.applyBatch({ ...input, confirmationToken: review.confirmationToken }); expect(result.connections.map(assertNetworkProfile).find(profile => profile.id === original.id)!.host).toBe('new.invalid');
+    const next = await preview(), stale = reviewInput(next.previewToken); const saved = store.connections().map(assertNetworkProfile).find(profile => profile.id === original.id)!;
     store.saveConnection({ ...saved, name: '中间变化' }); store.saveConnection(saved);
     await expect(transfer.applyBatch(stale)).rejects.toThrow('配置已变化'); await expect(transfer.applyBatch(stale)).rejects.toThrow('预览已失效');
   });
@@ -140,13 +141,13 @@ describe('C03明确配对与本地原子替换', () => {
 
   it('磁盘失败整批回滚概要/持久及会话秘密/版本，之后保存不夹带失败新增，旧令牌不可重放', async () => {
     const value = await preview([incoming(), incoming('source-add')]), input = reviewInput(value.previewToken, [replacement(), { sourceId: 'source-add', action: 'add' }]);
-    const before = readFileSync(file), publicBefore = store.connections(), revision = store.connectionRevision();
+    const before = readFileSync(file), publicBefore = store.connections().map(assertNetworkProfile), revision = store.connectionRevision();
     mkdirSync(file + '.tmp');
     await expect(transfer.applyBatch(input)).rejects.toThrow('修改未保存');
-    expect(readFileSync(file)).toEqual(before); expect(store.connections()).toEqual(publicBefore); expect(store.connectionRevision()).toBe(revision); expect(store.resolveConnection(original.id).password).toBe(original.password); expect(store.resolveConnection('target-b').password).toBe(original.password);
+    expect(readFileSync(file)).toEqual(before); expect(store.connections().map(assertNetworkProfile)).toEqual(publicBefore); expect(store.connectionRevision()).toBe(revision); expect(assertNetworkProfile(store.resolveConnection(original.id)).password).toBe(original.password); expect(assertNetworkProfile(store.resolveConnection('target-b')).password).toBe(original.password);
     expect(files.get('old-key')?.revokedConnections).toBeUndefined(); expect(() => manager.assertAvailable(original.id)).not.toThrow();
     await expect(transfer.applyBatch(input)).rejects.toThrow('预览已失效');
-    rmdirSync(file + '.tmp'); store.saveSettings(store.settings()); expect(store.connections()).toHaveLength(2);
+    rmdirSync(file + '.tmp'); store.saveSettings(store.settings()); expect(store.connections().map(assertNetworkProfile)).toHaveLength(2);
   });
 
   it('全部目标先占锁；跨进程等待期间同目标保存被拒，其他连接修改令CAS失败而不重试', async () => {
@@ -154,9 +155,9 @@ describe('C03明确配对与本地原子替换', () => {
     let finish!: () => void; request.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
     const applying = transfer.applyBatch(input);
     expect(() => manager.assertAvailable('target-a')).toThrow('正在保存'); expect(() => manager.assertAvailable('target-b')).toThrow('正在保存');
-    await expect(manager.save({ ...store.connections()[0], host: 'concurrent.invalid' })).rejects.toThrow('正在保存');
+    await expect(manager.save({ ...store.connections().map(assertNetworkProfile)[0], host: 'concurrent.invalid' })).rejects.toThrow('正在保存');
     store.saveConnection({ ...original, id: 'unrelated', host: 'unrelated.invalid', password: '' }); finish();
-    await expect(applying).rejects.toThrow('配置已变化'); expect(store.connections().find(profile => profile.id === original.id)!.host).toBe('old.invalid'); expect(request).toHaveBeenCalledOnce();
+    await expect(applying).rejects.toThrow('配置已变化'); expect(store.connections().map(assertNetworkProfile).find(profile => profile.id === original.id)!.host).toBe('old.invalid'); expect(request).toHaveBeenCalledOnce();
     expect(() => manager.assertAvailable(original.id)).not.toThrow(); await expect(transfer.applyBatch(input)).rejects.toThrow('预览已失效');
   });
 
@@ -171,7 +172,7 @@ describe('C03明确配对与本地原子替换', () => {
   it('检查等待期间过期、旧概要不符及缺少替换屏障均不写入', async () => {
     const value = await preview(), input = reviewInput(value.previewToken); let finish!: () => void;
     request.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; })); const applying = transfer.applyBatch(input); now += 10 * 60 * 1000; finish();
-    await expect(applying).rejects.toThrow('确认已失效'); expect(store.connections()[0].host).toBe('old.invalid');
+    await expect(applying).rejects.toThrow('确认已失效'); expect(store.connections().map(assertNetworkProfile)[0].host).toBe('old.invalid');
     expect(() => store.importConnections([incoming()], true, { expectedRevision: store.connectionRevision(), replacements: [{ sourceId: 'source-a', targetId: original.id, previous: { ...exportConnectionProfile(original), host: 'stale.invalid' } }] })).toThrow('旧概要');
     transfer = new ConnectionTransfer(store); const plain = await preview(), noGuard = reviewInput(plain.previewToken); await expect(transfer.applyBatch(noGuard)).rejects.toThrow('主进程活动检查');
   });

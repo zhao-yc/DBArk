@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { checkServerIdentity, createSecureContext, type TLSSocket } from 'node:tls';
 import { connect, execute, type ManagedConnection } from '../../../src/engine/connection';
 import { identifier, qualified } from '../../../src/engine/sql';
-import type { ConnectionProfile } from '../../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../../src/shared/contracts';
 import { C02FixtureError, c02Config, c02Failure, c02Names, c02OpenSslCommands, c02OwnsTables, c02OwnsUser, c02UiEnabled, cleanupC02, type C02CertificatePaths, type C02Config, type C02Ownership } from './c02-mtls-policy';
 
 type Row = Record<string, unknown>;

@@ -83,7 +83,7 @@ async function offlineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner
       }
     }
   });
-  const profiles = await run.step(owner, () => page.evaluate(() => window.dbark.invoke('connections.list', {})));
+  const profiles = await run.step(owner, () => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))));
   expect(profiles).toHaveLength(1); expect(profiles[0]).toMatchObject({ host: '127.0.0.1', port: 1, user: 'offline', rememberPassword: false }); expect(Boolean(profiles[0].hasPassword || profiles[0].ssh?.enabled || profiles[0].tls?.enabled)).toBe(false);
   await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => run.assert(owner))).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
   await run.step(owner, () => expect(query.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 })); await run.step(owner, async () => (await navigationMenuItem(query, { name: zh.app.text053, exact: true }, () => run.assert(owner))).click()); await run.step(owner, () => expect(query).toBeHidden());

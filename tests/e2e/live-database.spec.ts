@@ -21,11 +21,11 @@ async function verifyConnectionChangeGuard(database: string, connectionName: str
   await expect(form).toBeVisible();
   await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '取消', exact: true })).click();
   const ipc = await page.evaluate(async id => {
-    const before = (await window.dbark.invoke('connections.list', {})).find(profile => profile.id === id)!;
+    const before = (await window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))).find(profile => profile.id === id)!;
     let error = '';
-    try { await window.dbark.invoke('connections.save', { ...before, host: '127.0.0.1', port: 1 }); }
+    try { await window.dbark.invoke('connections.save', { ...before, host: '127.0.0.1', port: 1 }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }); }
     catch (reason) { error = reason instanceof Error ? reason.message : String(reason); }
-    const after = (await window.dbark.invoke('connections.list', {})).find(profile => profile.id === id)!;
+    const after = (await window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))).find(profile => profile.id === id)!;
     return { error, unchanged: before.host === after.host && before.port === after.port && before.name === after.name };
   }, connectionId);
   expect(ipc.error).toContain('先关闭相关标签页');
@@ -240,7 +240,7 @@ test.describe('远程真实数据库桌面工作流', () => {
       await page.screenshot({ path: testInfo.outputPath('live-query.png') });
       const encryptionAvailable = await page.evaluate(async () => (await window.dbark.invoke('app.info', {})).encryptionAvailable);
       await quitDesktop(); await launchDesktop();
-      const restored = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
+      const restored = await page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })));
       expect(restored[0].hasPassword).toBe(encryptionAvailable);
       await page.locator('.connection-row').hover();
       await clickSidebarAction(page.locator('.connection-row').filter({ has: page.getByRole('button', { name: renamedConnection, exact: true }) }), { name: `编辑连接 ${renamedConnection}`, exact: true });

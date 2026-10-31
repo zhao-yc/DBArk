@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import { connect, execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier, qualified } from '../../src/engine/sql';
-import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { TableColumnGetOutput, TableColumnPreviewOutput } from '../../src/shared/tableColumnPatches';
 import type { TableIndexGetOutput, TableIndexPreviewOutput } from '../../src/shared/tableIndexTasks';
 import type { IndexPatch } from '../../src/shared/tableIndexPatches';

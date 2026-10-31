@@ -4,6 +4,8 @@
 
 DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式，使用独立的界面与实现。当前开发范围为 Windows 和 macOS 客户端。
 
+当前开发源码还提供 [SQLite 文件连接与原查询工作区](docs/development/sqlite-workspace-20261031.md)：现存文件、默认只读、表／视图查询草稿及事务控制。表格编辑、结构设计、导入和完整导出仍待接入；这项能力不属于下列已发布安装包。
+
 ## 下载
 
 在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.x` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。

@@ -1,3 +1,4 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
@@ -5,7 +6,7 @@ import { join } from 'node:path';
 import initSqlJs, { type Database } from 'sql.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocalStore } from '../../src/main/storage';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import { connectionOrganizationApplySchema, connectionOrganizationDefaultColor, connectionOrganizationGetSchema, connectionOrganizationLimits, type ConnectionOrganizationApply } from '../../src/shared/connectionOrganization';
 import { connectionOrganizationZh as text } from '../../src/shared/connectionOrganization.zh-CN';
 import { validateCommand } from '../../src/shared/validation';
@@ -32,7 +33,7 @@ async function fixture(available = true) {
 async function persisted(path: string) {
   const SQL = await initSqlJs({ locateFile: () => wasm }), db = new SQL.Database(readFileSync(path));
   try {
-    const profiles = db.exec('SELECT id,data FROM connections ORDER BY rowid')[0]?.values.map(row => ({ id: String(row[0]), value: JSON.parse(String(row[1])) as ConnectionProfile })) ?? [];
+    const profiles = db.exec('SELECT id,data FROM connections ORDER BY rowid')[0]?.values.map(row => ({ id: String(row[0]), value: assertNetworkProfile(JSON.parse(String(row[1]))) })) ?? [];
     const secrets = db.exec('SELECT connection_id,name,value FROM secrets ORDER BY connection_id,name')[0]?.values ?? [];
     const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name<>'connections' ORDER BY name")[0]?.values.flat().map(String) ?? [];
     const untouched = tables.map(name => [name, db.exec(`SELECT * FROM "${name.replaceAll('"', '""')}" ORDER BY rowid`)]);
@@ -87,48 +88,48 @@ describe('真实SQLite元数据事务、凭据保持与重启', () => {
   it('整批只改原JSON的group/color，一次revision++；密文/transport/其它表字节摘要不变', async () => {
     const f = await fixture(), before = await persisted(f.path), revision = f.store.connectionRevision(), save = vi.spyOn(f.store, 'saveConnection'), resolve = vi.spyOn(f.store, 'resolveConnection');
     const result = f.store.applyConnectionOrganization(input(f.store, { group: '  新分组😀  ', color: '#AABBCC' })), after = await persisted(f.path);
-    expect(result.revision).toBe(revision + 1); expect(f.store.connectionRevision()).toBe(revision + 1); expect(result.connections.map(item => [item.id, item.group, item.color])).toEqual([['a', '  新分组😀  ', '#AABBCC'], ['b', '  新分组😀  ', '#AABBCC']]);
+    expect(result.revision).toBe(revision + 1); expect(f.store.connectionRevision()).toBe(revision + 1); expect(result.connections.map(assertNetworkProfile).map(item => [item.id, item.group, item.color])).toEqual([['a', '  新分组😀  ', '#AABBCC'], ['b', '  新分组😀  ', '#AABBCC']]);
     expect(after.secretCount).toBe(8); expect(after.secretDigest).toBe(before.secretDigest); expect(after.untouchedDigest).toBe(before.untouchedDigest);
     for (let index = 0; index < before.profiles.length; index++) { const { group: _group, color: _color, ...previous } = before.profiles[index].value, { group: _nextGroup, color: _nextColor, ...next } = after.profiles[index].value; expect(next).toEqual(previous); }
     expect(save).not.toHaveBeenCalled(); expect(resolve).not.toHaveBeenCalled(); noCrypto(f);
     const publicText = JSON.stringify(result); for (const secret of [profile.password!, profile.ssh!.password!, profile.ssh!.passphrase!, profile.tls!.passphrase!]) { expect(publicText.includes(secret)).toBe(false); expect(readFileSync(f.path).includes(Buffer.from(secret))).toBe(false); }
-    expect(result.connections.every(item => item.password === undefined && item.ssh?.password === undefined && item.ssh?.passphrase === undefined && item.tls?.passphrase === undefined)).toBe(true); expect(result.connections.every(item => item.hasPassword && item.ssh?.hasPassword && item.ssh.hasPassphrase && item.tls?.hasPassphrase)).toBe(true);
+    expect(result.connections.map(assertNetworkProfile).every(item => item.password === undefined && item.ssh?.password === undefined && item.ssh?.passphrase === undefined && item.tls?.passphrase === undefined)).toBe(true); expect(result.connections.map(assertNetworkProfile).every(item => item.hasPassword && item.ssh?.hasPassword && item.ssh.hasPassphrase && item.tls?.hasPassphrase)).toBe(true);
   });
   it('真实关闭重开后分组/重置颜色保持，原四类凭据仍能解密，概要不回传秘密', async () => {
     const f = await fixture(), before = await persisted(f.path); f.store.applyConnectionOrganization(input(f.store, { group: '', color: null })); f.close(f.store);
     const store = await f.reopen(), snapshot = store.connectionOrganization(), disk = await persisted(f.path);
-    expect(snapshot.connections.map(item => [item.group, item.color])).toEqual([['', connectionOrganizationDefaultColor], ['', connectionOrganizationDefaultColor]]); expect(disk.secretDigest).toBe(before.secretDigest);
-    const resolved = store.resolveConnection('a'); expect(resolved.password === profile.password).toBe(true); expect(resolved.ssh?.password === profile.ssh?.password).toBe(true); expect(resolved.ssh?.passphrase === profile.ssh?.passphrase).toBe(true); expect(resolved.tls?.passphrase === profile.tls?.passphrase).toBe(true);
-    expect(snapshot.connections[0].password).toBeUndefined();
+    expect(snapshot.connections.map(assertNetworkProfile).map(item => [item.group, item.color])).toEqual([['', connectionOrganizationDefaultColor], ['', connectionOrganizationDefaultColor]]); expect(disk.secretDigest).toBe(before.secretDigest);
+    const resolved = assertNetworkProfile(store.resolveConnection('a')); expect(resolved.password === profile.password).toBe(true); expect(resolved.ssh?.password === profile.ssh?.password).toBe(true); expect(resolved.ssh?.passphrase === profile.ssh?.passphrase).toBe(true); expect(resolved.tls?.passphrase === profile.tls?.passphrase).toBe(true);
+    expect(snapshot.connections.map(assertNetworkProfile)[0].password).toBeUndefined();
   });
   it('系统加密不可用或解密函数会抛错时仍能整理，连available都不调用', async () => {
     const f = await fixture(), before = await persisted(f.path); f.available(false); f.protector.decrypt.mockImplementation(() => { throw Error('禁止解密'); });
-    const result = f.store.applyConnectionOrganization(input(f.store, { group: '离线整理' })); expect(result.connections.every(item => item.group === '离线整理' && item.hasPassword)).toBe(true); noCrypto(f); expect((await persisted(f.path)).secretDigest).toBe(before.secretDigest);
+    const result = f.store.applyConnectionOrganization(input(f.store, { group: '离线整理' })); expect(result.connections.map(assertNetworkProfile).every(item => item.group === '离线整理' && item.hasPassword)).toBe(true); noCrypto(f); expect((await persisted(f.path)).secretDigest).toBe(before.secretDigest);
   });
   it('未记住的会话秘密原样保留，整理不让秘密意外落盘，重启后仍不恢复会话秘密', async () => {
     const f = await fixture(false); f.store.applyConnectionOrganization(input(f.store, { color: null })); noCrypto(f); const disk = await persisted(f.path); expect(disk.secretCount).toBe(0);
-    const resolved = f.store.resolveConnection('a'); expect(resolved.password === profile.password).toBe(true); expect(resolved.tls?.passphrase === profile.tls?.passphrase).toBe(true); f.close(f.store);
-    const restored = await f.reopen(); expect(restored.connectionOrganization().connections.every(item => !item.hasPassword)).toBe(true); expect(restored.resolveConnection('a').password).toBeUndefined();
+    const resolved = assertNetworkProfile(f.store.resolveConnection('a')); expect(resolved.password === profile.password).toBe(true); expect(resolved.tls?.passphrase === profile.tls?.passphrase).toBe(true); f.close(f.store);
+    const restored = await f.reopen(); expect(restored.connectionOrganization().connections.map(assertNetworkProfile).every(item => !item.hasPassword)).toBe(true); expect(assertNetworkProfile(restored.resolveConnection('a')).password).toBeUndefined();
   });
   it('只改颜色不覆盖原分组，只改空分组不覆盖颜色；请求原值也只推进一次修订', async () => {
     const f = await fixture(), current = f.store.connectionRevision();
-    const colored = f.store.applyConnectionOrganization(input(f.store, { color: '#123456' }, ['a'])); expect(colored.revision).toBe(current + 1); expect(colored.connections[0].group).toBe('原组'); expect(colored.connections[1].color).toBe('#abcdef');
-    const grouped = f.store.applyConnectionOrganization(input(f.store, { group: '' }, ['b'])); expect(grouped.revision).toBe(current + 2); expect(grouped.connections[1].group).toBe(''); expect(grouped.connections[1].color).toBe('#abcdef'); noCrypto(f);
+    const colored = f.store.applyConnectionOrganization(input(f.store, { color: '#123456' }, ['a'])); expect(colored.revision).toBe(current + 1); expect(colored.connections.map(assertNetworkProfile)[0].group).toBe('原组'); expect(colored.connections.map(assertNetworkProfile)[1].color).toBe('#abcdef');
+    const grouped = f.store.applyConnectionOrganization(input(f.store, { group: '' }, ['b'])); expect(grouped.revision).toBe(current + 2); expect(grouped.connections.map(assertNetworkProfile)[1].group).toBe(''); expect(grouped.connections.map(assertNetworkProfile)[1].color).toBe('#abcdef'); noCrypto(f);
   });
   it('相同显示名称仍按精确ID整理，原型同名ID也不被当成对象属性', async () => {
     const f = await fixture(); f.store.saveConnection({ ...profile, id: '__proto__', name: '同名连接' }); f.store.saveConnection({ ...profile, id: 'constructor', name: '同名连接' }); f.clear();
-    const result = f.store.applyConnectionOrganization(input(f.store, { group: '特殊ID组' }, ['__proto__', 'constructor'])); expect(result.connections.filter(item => item.group === '特殊ID组').map(item => item.id)).toEqual(['__proto__', 'constructor']); expect(result.connections.find(item => item.id === 'a')?.group).toBe('原组'); noCrypto(f);
+    const result = f.store.applyConnectionOrganization(input(f.store, { group: '特殊ID组' }, ['__proto__', 'constructor'])); expect(result.connections.map(assertNetworkProfile).filter(item => item.group === '特殊ID组').map(item => item.id)).toEqual(['__proto__', 'constructor']); expect(result.connections.map(assertNetworkProfile).find(item => item.id === 'a')?.group).toBe('原组'); noCrypto(f);
   });
 });
 
 describe('CAS、未知目标和真实失败原子性', () => {
   it('分组ABA回到原字面也不能复活旧CAS，单项连接保存/凭据修改同样撤销旧修订', async () => {
     const f = await fixture(), old = input(f.store); f.store.applyConnectionOrganization(input(f.store, { group: '中间组' })); f.store.applyConnectionOrganization(input(f.store, { group: '原组' }));
-    expect(() => f.store.applyConnectionOrganization(old)).toThrow(text.stale); const second = input(f.store); f.store.saveConnection({ ...f.store.connections()[0], password: '只用于撤销CAS的新测试密码' }); expect(() => f.store.applyConnectionOrganization(second)).toThrow(text.stale);
+    expect(() => f.store.applyConnectionOrganization(old)).toThrow(text.stale); const second = input(f.store); f.store.saveConnection({ ...f.store.connections().map(assertNetworkProfile)[0], password: '只用于撤销CAS的新测试密码' }); expect(() => f.store.applyConnectionOrganization(second)).toThrow(text.stale);
   });
   it('删除/重建同ID不会复活旧CAS，当前修订含未知ID则整批已知目标也不动', async () => {
     const f = await fixture(), old = input(f.store); f.store.deleteConnection('b'); expect(() => f.store.applyConnectionOrganization(old)).toThrow(text.stale);
-    const before = readFileSync(f.path), revision = f.store.connectionRevision(); expect(() => f.store.applyConnectionOrganization(input(f.store, { group: '不能部分保存' }, ['a', 'b']))).toThrow(text.missing); expect(readFileSync(f.path)).toEqual(before); expect(f.store.connectionRevision()).toBe(revision); expect(f.store.connections()[0].group).toBe('原组');
+    const before = readFileSync(f.path), revision = f.store.connectionRevision(); expect(() => f.store.applyConnectionOrganization(input(f.store, { group: '不能部分保存' }, ['a', 'b']))).toThrow(text.missing); expect(readFileSync(f.path)).toEqual(before); expect(f.store.connectionRevision()).toBe(revision); expect(f.store.connections().map(assertNetworkProfile)[0].group).toBe('原组');
     f.store.saveConnection({ ...profile, id: 'b' }); expect(() => f.store.applyConnectionOrganization(old)).toThrow(text.stale);
   });
   it('实际SQLite第二行触发器失败，第一行更新也回滚，磁盘与修订不推进', async () => {
@@ -141,15 +142,15 @@ describe('CAS、未知目标和真实失败原子性', () => {
     for (const available of [true, false]) {
       const f = await fixture(available), before = readFileSync(f.path), original = f.store.connectionOrganization(), disk = await persisted(f.path); mkdirSync(f.path + '.tmp');
       expect(() => f.store.applyConnectionOrganization(input(f.store, { group: '不得保存', color: null }))).toThrow('修改未保存'); expect(f.store.connectionOrganization()).toEqual(original); expect(readFileSync(f.path)).toEqual(before); noCrypto(f); expect((await persisted(f.path)).secretDigest).toBe(disk.secretDigest);
-      rmdirSync(f.path + '.tmp'); f.store.saveSettings(f.store.settings()); const resolved = f.store.resolveConnection('a'); expect(resolved.password === profile.password).toBe(true); expect(resolved.tls?.passphrase === profile.tls?.passphrase).toBe(true);
-      f.close(f.store); const restored = await f.reopen(); expect(restored.connections().map(item => item.group)).toEqual(['原组', '另一组']); expect(restored.connectionOrganization().connections.map(item => item.color)).toEqual(['#123456', '#abcdef']);
+      rmdirSync(f.path + '.tmp'); f.store.saveSettings(f.store.settings()); const resolved = assertNetworkProfile(f.store.resolveConnection('a')); expect(resolved.password === profile.password).toBe(true); expect(resolved.tls?.passphrase === profile.tls?.passphrase).toBe(true);
+      f.close(f.store); const restored = await f.reopen(); expect(restored.connections().map(assertNetworkProfile).map(item => item.group)).toEqual(['原组', '另一组']); expect(restored.connectionOrganization().connections.map(assertNetworkProfile).map(item => item.color)).toEqual(['#123456', '#abcdef']);
     }
   });
   it('真实1000目标一次事务完整保存，Get不截断总连接，第1001个未选中项不变', async () => {
     const f = await fixture(), db = database(f.store); db.run('BEGIN'); const insert = db.prepare('INSERT INTO connections VALUES (?,?)');
     try { for (let index = 0; index < 1001; index++) { const item = { id: `批量${index}`, name: '同名', group: '原组', color: '#123456', dialect: 'mysql', host: 'offline.invalid', port: 3306, user: '' }; insert.run([item.id, JSON.stringify(item)]); } db.run('COMMIT'); } finally { insert.free(); }
     f.store.saveSettings(f.store.settings()); const ids = Array.from({ length: 1000 }, (_, index) => `批量${index}`), revision = f.store.connectionRevision();
-    const result = f.store.applyConnectionOrganization(input(f.store, { group: '千项组' }, ids)); expect(result.revision).toBe(revision + 1); expect(result.connections).toHaveLength(1003); expect(result.connections.filter(item => item.group === '千项组')).toHaveLength(1000); expect(result.connections.find(item => item.id === '批量1000')?.group).toBe('原组');
+    const result = f.store.applyConnectionOrganization(input(f.store, { group: '千项组' }, ids)); expect(result.revision).toBe(revision + 1); expect(result.connections).toHaveLength(1003); expect(result.connections.map(assertNetworkProfile).filter(item => item.group === '千项组')).toHaveLength(1000); expect(result.connections.map(assertNetworkProfile).find(item => item.id === '批量1000')?.group).toBe('原组');
     const before = readFileSync(f.path); expect(() => f.store.applyConnectionOrganization(input(f.store, { group: '越界' }, [...ids, '批量1000']))).toThrow(); expect(readFileSync(f.path)).toEqual(before); expect(f.store.connectionRevision()).toBe(revision + 1); noCrypto(f);
   });
   it('最后安全修订成功一次后不能再写成不安全整数', async () => {

@@ -12,7 +12,7 @@ let compiled: Promise<string> | undefined;
 function compile(): Promise<string> {
   return compiled ??= build({ entryPoints: [resolve('src/renderer/components/Sidebar.tsx')], write: false, bundle: true, format: 'cjs', platform: 'node', jsx: 'automatic', plugins: [{ name: '侧栏纯组件测试端口', setup(builder) {
     builder.onLoad({ filter: /[\\/]Sidebar\.tsx$/ }, async args => ({ contents: await readFile(args.path, 'utf8') + '\nexport { ConnectionNode, DatabaseNode, completionServerFacts, beginSidebarConnectionEnd };', loader: 'tsx' }));
-    for (const [pattern, path] of [[/^react$/, 'react'], [/^react\/jsx-runtime$/, 'jsx'], [/^lucide-react$/, 'icons'], [/^\.\.\/lib$/, 'lib'], [/^\.\.\/store$/, 'store'], [/^\.\/(?:Workbench|ui|SidebarContextMenu)$/, 'ui']] as const) builder.onResolve({ filter: pattern }, () => ({ path, namespace: 'sidebar-test' }));
+    for (const [pattern, path] of [[/^react$/, 'react'], [/^react\/jsx-runtime$/, 'jsx'], [/^lucide-react$/, 'icons'], [/^\.{1,2}\/lib$/, 'lib'], [/^\.{1,2}\/store$/, 'store'], [/^\.\/(?:Workbench|ui|SidebarContextMenu)$/, 'ui']] as const) builder.onResolve({ filter: pattern }, () => ({ path, namespace: 'sidebar-test' }));
     builder.onLoad({ filter: /.*/, namespace: 'sidebar-test' }, args => ({ contents: ({
       react: 'export const useState=(...a)=>globalThis.host.state(...a),useRef=(...a)=>globalThis.host.ref(...a),useEffect=(...a)=>globalThis.host.effect(...a);',
       jsx: 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";',

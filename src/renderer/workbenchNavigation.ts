@@ -1,3 +1,4 @@
+import { openSqliteObject } from './sqliteNavigation';
 import { tableRenameZh } from './locales/tableRename.zh-CN';
 import type { TableRenameTarget } from '../shared/tableRename';
 import { zh } from './locales/zh-CN';
@@ -50,6 +51,7 @@ export function createWorkbenchNavigation(openDefinition: (target: WorkbenchDefi
       const workspace = useWorkspace.getState();
       workspace.select({ connectionId: resolved.connectionId, database: resolved.database });
       if (resolved.kind === 'database') workspace.openTab({ kind: 'query', title: zh.common.unnamedQuery, connectionId: resolved.connectionId, database: resolved.database, sql: '' });
+      else if (openSqliteObject(resolved.connectionId, resolved.database, { name: resolved.name, kind: resolved.kind })) { /* SQLite 对象由原查询标签接续。 */ }
       else if (resolved.kind === 'table' || resolved.kind === 'view') workspace.openTab({ kind: 'table', title: resolved.name, connectionId: resolved.connectionId, database: resolved.database, table: resolved.name });
       else openDefinition({ connectionId: resolved.connectionId, database: resolved.database, object: { kind: resolved.kind, name: resolved.name }, readOnly: true });
       return true;

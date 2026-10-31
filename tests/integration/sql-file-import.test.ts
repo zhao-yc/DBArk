@@ -9,7 +9,7 @@ import { Engine } from '../../src/engine';
 import * as driver from '../../src/engine/connection';
 import { execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier } from '../../src/engine/sql';
-import type { Command, CommandMap, ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
+import type { Command, CommandMap, NetworkConnectionProfile as ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import { sqlFileImportReceiptSchema, type FileImportResult, type SqlFileImportReceipt } from '../../src/shared/sqlFileImport';
 
 const streams = vi.hoisted(() => ({ watch: undefined as ((path: unknown, source: ReadStream) => void) | undefined }));

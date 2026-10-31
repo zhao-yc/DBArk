@@ -4,7 +4,9 @@ import { savedQueryOriginContext, type QuerySourceBinding } from '../shared/quer
 
 /** 仅对公开路由配置计算身份，不解密、读取或返回数据库/SSH 密码及证书内容。 */
 export function queryConnectionDigest(profile: ConnectionProfile): string {
-  const target = [profile.id, profile.dialect, profile.host, profile.port, profile.user, profile.database ?? null,
+  const target = profile.dialect === 'sqlite'
+    ? [profile.id, profile.dialect, profile.sqlite.filePath ?? '', profile.sqlite.readOnly, profile.sqlite.busyTimeoutMs, [...profile.pendingFiles ?? []].sort()]
+    : [profile.id, profile.dialect, profile.host, profile.port, profile.user, profile.database ?? null,
     [...profile.pendingFiles ?? []].sort(), profile.ssh?.enabled ?? false, profile.ssh?.host ?? '', profile.ssh?.port ?? 22,
     profile.ssh?.user ?? '', profile.ssh?.privateKeyPath ?? '', profile.ssh?.hostFingerprint ?? '',
     profile.tls?.enabled ?? false, profile.tls?.rejectUnauthorized ?? true, profile.tls?.caPath ?? '', profile.tls?.certPath ?? '', profile.tls?.keyPath ?? ''];

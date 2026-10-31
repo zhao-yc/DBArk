@@ -1,3 +1,4 @@
+import { connectionOverview } from '../sqliteWorkspace';
 import { useEffect, useRef, useState } from 'react';
 import type { DatabaseCreateGetOutput, DatabaseCreatePreviewOutput, DatabaseCreateProgress, DatabaseCreateApplyOutput } from '../../shared/databaseCreate';
 import { databaseCreateAcknowledgements, databaseCreateSelection, validateDatabaseCreateName } from '../../shared/databaseCreate';
@@ -28,7 +29,7 @@ interface Props { connectionId: string; onClose(): void; onApplied(): void; onDi
 /** 一窗固定连接与修订；目录只读、配对受控、预览只读，必须明确确认且最多执行一次。 */
 export function DatabaseCreateDialog({ connectionId, onClose, onApplied, onDirtyChange, services = databaseCreateServices }: Props) {
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0), profile = useWorkspace(state => state.connections.find(value => value.id === connectionId));
-  const fixed = useRef({ connectionId, version, label: profile ? `${profile.name} · ${profile.host}:${profile.port}` : connectionId });
+  const fixed = useRef({ connectionId, version, label: profile ? `${profile.name} · ${connectionOverview(profile)}` : connectionId });
   const service = useRef(services); service.current = services;
   const callbacks = useRef({ onClose, onApplied, onDirtyChange }); callbacks.current = { onClose, onApplied, onDirtyChange };
   const fence = useRef(new IndexRequestFence()), alive = useRef(true), consumedRef = useRef(false), progress = useRef<DatabaseCreateProgress | null>(null);

@@ -46,7 +46,7 @@ export function registerTableDropUiTests() {
     assertTableDropLiveTarget({ host: environment.DBARK_TEST_HOST, port: environment.DBARK_TEST_PORT, tlsFlag: environment.DBARK_TEST_TLS, caPath: environment.DBARK_TEST_CA });
     await isolatedDatabase(async context => {
       owner.assertCurrent();
-      const profiles = await page(owner).evaluate(() => window.dbark.invoke('connections.list', {})); owner.assertCurrent();
+      const profiles = await page(owner).evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))); owner.assertCurrent();
       const profile = profiles.find(value => value.id === context.connectionId); if (!profile) throw Error('未找到本轮保存连接');
       assertTableDropLiveTarget({ host: environment.DBARK_TEST_HOST, port: environment.DBARK_TEST_PORT, tlsFlag: environment.DBARK_TEST_TLS, caPath: environment.DBARK_TEST_CA }, profile);
       const [facts] = await observe(owner, () => context.observer.query<RowDataPacket[]>('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid')); owner.assertCurrent();

@@ -1,0 +1,87 @@
+name: SQLite原工作区源码验收
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sqlite-workspace.yml'
+      - 'src/**'
+      - 'tests/e2e/**'
+      - 'tests/helpers/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'tsconfig*.json'
+      - '*.config.*'
+  pull_request:
+    paths:
+      - '.github/workflows/sqlite-workspace.yml'
+      - 'src/**'
+      - 'tests/e2e/**'
+      - 'tests/helpers/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'tsconfig*.json'
+      - '*.config.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 每轮独立保留真实终态；后来push或手动运行不取消旧轮现场。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  sqlite-workspace:
+    name: SQLite原工作区 · ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows x64
+            artifact: Windows-x64
+          - os: macos-latest
+            label: macOS arm64
+            artifact: macOS-arm64
+          - os: macos-15-intel
+            label: macOS x64
+            artifact: macOS-x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 启用项目声明的pnpm版本
+        run: corepack enable
+      - name: 按锁文件安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 安装Electron运行时
+        run: pnpm exec install-electron
+      - name: 构建当前源码
+        run: pnpm build
+      - name: 单次运行SQLite原工作区真实专项
+        # 120秒由spec自身保持；单worker、零重试且不采集trace。
+        run: pnpm exec playwright test tests/e2e/sqlite-workspace-native.spec.ts --workers=1 --retries=0 --trace=off "--reporter=list,json" --output=test-results/sqlite-workspace
+        env:
+          DBARK_INTEGRATION_ENABLED: '0'
+          DBARK_SQLITE_WORKSPACE_NATIVE_TEST: '1'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/sqlite-workspace/report.json
+      - name: 始终保留本轮SQLite专项原始记录
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SQLite原工作区-${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/sqlite-workspace/
+          if-no-files-found: warn

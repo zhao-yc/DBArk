@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Engine } from '../../src/engine';
 import { connect, execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier, qualified, stringLiteral } from '../../src/engine/sql';
-import type { ConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import type { CompletionSessionState } from '../../src/shared/sqlCompletion';
 import { queryDatabaseFromSession } from '../../src/shared/queryContext';
 

@@ -1,4 +1,4 @@
-import type { ConnectionStatus } from '../shared/contracts';
+import type { NetworkConnectionStatus } from '../shared/contracts';
 import {
   parseQueryTransactionBoolean, parseQueryTransactionIsolation, queryTransactionSettingsSnapshotSchema,
   queryTransactionSettingsSql, queryTransactionSettingsVariables,
@@ -6,7 +6,7 @@ import {
 } from '../shared/queryTransactionSettings';
 
 export interface QueryTransactionSettingsContext {
-  status: Pick<ConnectionStatus, 'dialect' | 'version'>;
+  status: Pick<NetworkConnectionStatus, 'dialect' | 'version'>;
   physicalId(): number | undefined;
   query(sql: string, onSend?: () => void, onAcknowledged?: (result: { rows: unknown; fields: readonly { name: string }[] }) => void): Promise<{ rows: unknown; fields: readonly { name: string }[] }>;
   protocolState(): { known: boolean; broken: boolean; serverStatus?: number };

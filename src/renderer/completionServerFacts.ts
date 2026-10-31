@@ -39,7 +39,7 @@ export class CompletionServerFacts {
     let facts: CompletionServerFactsValue | undefined;
     try {
       const dialect = status?.dialect, version = status?.version;
-      if ((dialect === 'mysql' || dialect === 'mariadb') && typeof version === 'string' && version.length > 0 && version.length <= maximumVersionUnits && version.trim().length > 0) facts = Object.freeze({ dialect, version });
+      if ((dialect === 'mysql' || dialect === 'mariadb' || dialect === 'sqlite') && typeof version === 'string' && version.length > 0 && version.length <= maximumVersionUnits && version.trim().length > 0) facts = Object.freeze({ dialect, version });
     } catch { /* 非法字段读取与非法返回值同样不产生事实；不读取其它配置或认证字段。 */ }
     // 字段读取也可能触发调用方代码；提交前重核身份，不能让清除或替换后的旧结果复活。
     if (this.#current(ticket) !== entry || entry.facts) return false;

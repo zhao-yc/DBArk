@@ -1,3 +1,4 @@
+import { connectionOverview } from '../sqliteWorkspace';
 import { useEffect, useRef, useState } from 'react';
 import { tableCreateConfirmation, tableCreateDraftSchema, tableCreateHasPrefix, tableCreateHasGenerated, tableCreateRequiredAcknowledgements, type TableCreateDraft, type TableCreateApplyOutput, type TableCreateGetOutput, type TableCreatePreviewOutput, type TableCreateProgress } from '../../shared/tableCreate';
 import { generatedColumnAcknowledgement } from '../../shared/tableGeneratedColumn';
@@ -20,7 +21,7 @@ export interface TableCreateConfirmationProps { connectionId: string; design: Ta
 /** 只接管现有设计器的确认阶段；原字段/索引/FK表单及已有表修改无需复制或更换生成器。 */
 export function TableCreateConfirmation({ connectionId, design, columnEncodingCatalogDigest, invalidated = false, isParentCurrent, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0), profile = useWorkspace(state => state.connections.find(value => value.id === connectionId));
-  const fixed = useRef({ connectionId, version, design: structuredClone(design), key: JSON.stringify(design), columnEncodingCatalogDigest, label: profile ? `${profile.name} · ${profile.host}:${profile.port}` : connectionId });
+  const fixed = useRef({ connectionId, version, design: structuredClone(design), key: JSON.stringify(design), columnEncodingCatalogDigest, label: profile ? `${profile.name} · ${connectionOverview(profile)}` : connectionId });
   const requiredAcknowledgements = useRef(Object.freeze(tableCreateRequiredAcknowledgements(fixed.current.design))).current;
   // 固定本次接受的父租约函数；函数内部活读origin/lifetime，不改领后续父上下文。
   const parentCurrent = useRef(isParentCurrent);

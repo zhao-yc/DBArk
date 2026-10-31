@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import { publicCommands } from '../../src/shared/commands';
 import { validateCommand } from '../../src/shared/validation';
 import { bindTableDraft, assertTableDraftBinding, tableDraftEndpointKey } from '../../src/main/tableDraftBinding';

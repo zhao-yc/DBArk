@@ -1,6 +1,7 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { act, StrictMode } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import { connectionOrganizationApplySchema, connectionOrganizationDefaultColor, connectionOrganizationGetSchema, type ConnectionOrganizationSnapshot } from '../../src/shared/connectionOrganization';
 import { connectionOrganizationZh as text } from '../../src/shared/connectionOrganization.zh-CN';
 import { ConnectionOrganizationDialog } from '../../src/renderer/components/ConnectionOrganizationDialog';
@@ -38,7 +39,7 @@ async function mount(options: { source?: ConnectionOrganizationSnapshot; strict?
     if (command === 'connections.organizationApply') {
       const checked = connectionOrganizationApplySchema.parse(input); if (options.apply) return options.apply(checked);
       if (checked.expectedRevision !== server.revision) throw Error(text.stale);
-      const ids = new Set(checked.ids); server = { revision: server.revision + 1, connections: server.connections.map(connection => ids.has(connection.id) ? { ...connection, ...(checked.changes.group === undefined ? {} : { group: checked.changes.group }), ...(checked.changes.color === undefined ? {} : { color: checked.changes.color ?? connectionOrganizationDefaultColor }) } : connection) };
+      const ids = new Set(checked.ids); server = { revision: server.revision + 1, connections: server.connections.map(assertNetworkProfile).map(connection => ids.has(connection.id) ? { ...connection, ...(checked.changes.group === undefined ? {} : { group: checked.changes.group }), ...(checked.changes.color === undefined ? {} : { color: checked.changes.color ?? connectionOrganizationDefaultColor }) } : connection) };
       return structuredClone(server);
     }
     throw Error('禁止外界或会话命令：' + command);
@@ -90,12 +91,12 @@ it('分组与颜色分别显式修改，重置颜色提交null而非覆盖transp
   const f = await mount(); await check(text.select('c0')); await check(text.editColor); await check(text.resetColor); await click(text.preview);
   expect(node(text.previewRow('c0')).querySelectorAll('td').map(value => value.textContent)).toEqual(['第一连接', text.groupDisplay(''), text.groupDisplay(''), '#abcdef', connectionOrganizationDefaultColor]);
   await click(text.startApply); expect(f.requests('connections.organizationApply')[0][1]).toEqual({ expectedRevision: 7, ids: ['c0'], changes: { color: null } });
-  expect(f.server().connections[0].ssh).toEqual(f.server().connections[1].ssh); expect(f.server().connections[0].group).toBe('');
+  expect(f.server().connections.map(assertNetworkProfile)[0].ssh).toEqual(f.server().connections.map(assertNetworkProfile)[1].ssh); expect(f.server().connections.map(assertNetworkProfile)[0].group).toBe('');
 });
 
 it('成功只发布完整公开快照，父层更新连接后原版本标签busy选择和会话相关对象保持', async () => {
   const f = await mount(); await ready(); await click(text.startApply); expect(f.onApplied).toHaveBeenCalledOnce();
-  const next = f.onApplied.mock.calls[0][0]; expect(next.revision).toBe(8); expect(next.connections[0].group).toBe('目标分组'); expect(next.connections[0].ssh?.hasPassphrase).toBe(true); expect(next.connections[0].tls?.hasPassphrase).toBe(true);
+  const next = f.onApplied.mock.calls[0][0]; expect(next.revision).toBe(8); expect(next.connections.map(assertNetworkProfile)[0].group).toBe('目标分组'); expect(next.connections.map(assertNetworkProfile)[0].ssh?.hasPassphrase).toBe(true); expect(next.connections.map(assertNetworkProfile)[0].tls?.hasPassphrase).toBe(true);
   expect(useWorkspace.getState().connections).toBe(next.connections); expect(useWorkspace.getState().connectionVersions).toBe(f.versions); expect(useWorkspace.getState().settings.tabs).toBe(f.tabs); expect(useWorkspace.getState().activeJobs).toBe(f.activeJobs); expect(useWorkspace.getState().selection).toBe(f.selection);
   expect(f.invoke.mock.calls.map(call => call[0])).toEqual(['connections.organizationGet', 'connections.organizationApply']); expect(f.onClose).not.toHaveBeenCalled(); expect(button(text.startApply).disabled).toBe(true);
 });
@@ -129,8 +130,8 @@ it('关闭读取等待立即撤销owner，迟到Get不能发布也不更新父�
 
 it('StrictMode旧Get迟到不能覆盖新owner已读取列表', async () => {
   const first = deferred(), second = deferred(), f = await mount({ strict: true, get: count => count === 1 ? first.promise : second.promise }); expect(f.requests('connections.organizationGet')).toHaveLength(2);
-  const newer = fixture(); newer.revision = 9; newer.connections[0].name = '新owner名称'; await act(async () => second.resolve(newer)); expect(document.body.textContent).toContain('新owner名称');
-  const older = fixture(); older.connections[0].name = '旧owner名称'; await act(async () => first.resolve(older)); expect(document.body.textContent).not.toContain('旧owner名称'); await ready(); await click(text.startApply); expect(f.requests('connections.organizationApply')[0][1].expectedRevision).toBe(9);
+  const newer = fixture(); newer.revision = 9; newer.connections.map(assertNetworkProfile)[0].name = '新owner名称'; await act(async () => second.resolve(newer)); expect(document.body.textContent).toContain('新owner名称');
+  const older = fixture(); older.connections.map(assertNetworkProfile)[0].name = '旧owner名称'; await act(async () => first.resolve(older)); expect(document.body.textContent).not.toContain('旧owner名称'); await ready(); await click(text.startApply); expect(f.requests('connections.organizationApply')[0][1].expectedRevision).toBe(9);
 });
 
 it('CAS失败不自动重放，必须刷新并按新revision重新预览', async () => {
@@ -147,7 +148,7 @@ it('未知写结果失败同样撤销预览并锁刷新，旧回调不能重放�
 it('写pending禁用关闭及所有草稿，旧输入与双击确认不能追加写或清锁', async () => {
   const held = deferred(), f = await mount({ apply: () => held.promise }); await ready(); const oldApply = props(button(text.startApply)).onClick, oldGroup = props(node(text.group)).onChange, oldClose = props(button(text.close)).onClick;
   await click(text.startApply); expect(button(text.close).disabled).toBe(true); expect(node(text.group).disabled).toBe(true); await act(async () => { oldApply(); oldGroup({ target: { value: '误改' } }); oldClose(); }); expect(f.onClose).not.toHaveBeenCalled(); expect(f.requests('connections.organizationApply')).toHaveLength(1);
-  const next = fixture(); next.revision = 8; next.connections[0].group = '目标分组'; await act(async () => held.resolve(next)); expect(f.onApplied).toHaveBeenCalledOnce(); expect(node(text.group).value).toBe('目标分组'); expect(button(text.close).disabled).toBe(false);
+  const next = fixture(); next.revision = 8; next.connections.map(assertNetworkProfile)[0].group = '目标分组'; await act(async () => held.resolve(next)); expect(f.onApplied).toHaveBeenCalledOnce(); expect(node(text.group).value).toBe('目标分组'); expect(button(text.close).disabled).toBe(false);
 });
 
 it('卸载后写结果迟到不发布父快照、不调关闭，也不再重放请求', async () => {
@@ -156,7 +157,7 @@ it('卸载后写结果迟到不发布父快照、不调关闭，也不再重放�
 });
 
 it('刷新保留仍存在的隐藏选择，明确提示移除已删除目标，不使用旧预览', async () => {
-  const f = await mount(); await check(text.select('c0')); await check(text.select('c1')); await input(text.search, '连接2'); const next = fixture(); next.revision = 8; next.connections = next.connections.filter(connection => connection.id !== 'c1'); f.replace(next); await click(text.refresh);
+  const f = await mount(); await check(text.select('c0')); await check(text.select('c1')); await input(text.search, '连接2'); const next = fixture(); next.revision = 8; next.connections = next.connections.map(assertNetworkProfile).filter(connection => connection.id !== 'c1'); f.replace(next); await click(text.refresh);
   expect(document.body.textContent).toContain(text.selectionRemoved(1)); expect(document.body.textContent).toContain(text.selectedSummary(1, 2)); await group('刷新后'); await click(text.preview); expect(node(text.previewRow('c0'))).toBeDefined();
 });
 
@@ -172,10 +173,10 @@ it('已消费事件不勾选或改草稿，取消修改项后旧字段事件不�
 
 it('公开概要的认证存在标记保留，回包和apply均无秘密明文或认证写入字段', async () => {
   const f = await mount(); await ready(); await click(text.startApply); const applied = f.onApplied.mock.calls[0][0]; expect(JSON.stringify(applied)).not.toMatch(/"password"|"passphrase"/); expect(JSON.stringify(f.requests('connections.organizationApply')[0][1])).not.toMatch(/ssh|tls|password|host|port|user/);
-  expect(document.body.textContent).not.toContain('C:/公开路径'); expect(document.body.textContent).not.toContain('公开用户名'); expect(applied.connections[0].hasPassword).toBe(true);
+  expect(document.body.textContent).not.toContain('C:/公开路径'); expect(document.body.textContent).not.toContain('公开用户名'); expect(applied.connections.map(assertNetworkProfile)[0].hasPassword).toBe(true);
 });
 
 it('坏Get明文秘密及访问器回包完整拒绝，getter不执行也不泄漏到DOM或父层', async () => {
-  const bad = fixture(), getter = vi.fn(() => '秘密'); Object.defineProperty(bad.connections[0], 'password', { enumerable: true, get: getter }); const f = await mount({ get: async () => bad });
+  const bad = fixture(), getter = vi.fn(() => '秘密'); Object.defineProperty(bad.connections.map(assertNetworkProfile)[0], 'password', { enumerable: true, get: getter }); const f = await mount({ get: async () => bad });
   expect(getter).not.toHaveBeenCalled(); expect(document.querySelector('[role="alert"]')).not.toBeNull(); expect(document.body.textContent).not.toContain('秘密'); expect(f.onApplied).not.toHaveBeenCalled(); expect(button(text.preview).disabled).toBe(true);
 });

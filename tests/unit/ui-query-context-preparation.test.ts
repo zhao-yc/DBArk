@@ -1,3 +1,4 @@
+import { queryDialectVm } from '../helpers/queryDialectVm';
 import {readFileSync} from 'node:fs';
 import {createContext,runInContext} from 'node:vm';
 import ts from 'typescript';
@@ -15,7 +16,7 @@ function fixture(){
   const source=readFileSync(new URL('../../src/renderer/components/QueryTab.tsx',import.meta.url),'utf8'),file=ts.createSourceFile('QueryTab.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),names=new Set(['runQuery','runStreamExport','clearFailureSource','prepareExecutionContext','cancelCurrentQuery','invalidateResultSelection']),functions:string[]=[];
   function visit(node:ts.Node){if(ts.isFunctionDeclaration(node)&&node.name&&names.has(node.name.text))functions.push(node.getText(file));ts.forEachChild(node,visit);}visit(file);if(functions.length!==6)throw Error('生产准备函数入口改变');
   const invoke=vi.fn(async(_command:string,_input?:unknown)=>({results:[]})),flushSettings=vi.fn(async()=>{}),ensureSession=vi.fn(async()=>'session'),rememberDatabase=vi.fn(),handleQueryError=vi.fn(async(_reason:unknown)=>{});let serial=0;
-  const context=createContext({snapshotOperation:{current:null},resultInsertRef:{current:null},resultInsertActivity:{current:0},resultSelection:selection.resultSelection,failureSource:{current:undefined},
+  const context=createContext({ ...queryDialectVm(), snapshotOperation:{current:null},resultInsertRef:{current:null},resultInsertActivity:{current:0},resultSelection:selection.resultSelection,failureSource:{current:undefined},
     // 只补齐真实初始详情控制器和React状态端口，不替换生产失效/执行函数。
     rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),
     // 对应未打开筛选面板的真实初始引用，不替换原撤销函数或投递断言。
@@ -39,7 +40,7 @@ function newQueryDirectoryFixture(){
   if(!component)throw Error('生产新建查询入口改变');visit(component);if(effects.length!==1)throw Error('生产新建查询effect数量改变');
   const opened=valueGate<ConnectionStatus>(),directory=valueGate<string[]>(),cache=new CompletionServerFacts(),workspace={connectionVersions:{c:0} as Record<string,number>};
   const invoke=vi.fn((command:string,_input:unknown)=>{if(command==='connections.open')return opened.pending;if(command==='metadata.databases')return directory.pending;throw Error('非预期RAM命令');});
-  const setDatabases=vi.fn(),setBusy=vi.fn(),setError=vi.fn(),context=createContext({connectionId:'c',completionServerFacts:cache,useWorkspace:{getState:()=>workspace},invoke,setDatabases,setBusy,setError,errorMessage:(reason:unknown)=>reason instanceof Error?reason.message:String(reason)});
+  const setDatabases=vi.fn(),setBusy=vi.fn(),setError=vi.fn(),context=createContext({ ...queryDialectVm(), connectionId:'c',completionServerFacts:cache,useWorkspace:{getState:()=>workspace},invoke,setDatabases,setBusy,setError,errorMessage:(reason:unknown)=>reason instanceof Error?reason.message:String(reason)});
   runInContext(ts.transpileModule('globalThis.cleanup=('+effects[0].getText(file)+')();',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   return{opened,directory,cache,workspace,invoke,setDatabases,setBusy,setError,cleanup:context.cleanup as()=>void};
 }

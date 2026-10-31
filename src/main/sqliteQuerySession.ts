@@ -25,7 +25,7 @@ export class SqliteQuerySession {
   private closing?: Promise<void>;
   private terminalNotificationFailed = false;
 
-  constructor(readonly connectionId: string, private readonly driver: SqliteDriverSession, private readonly emit: (event: TaskEvent) => void, sessionId = randomUUID()) {
+  constructor(readonly connectionId: string, private readonly driver: SqliteDriverSession, private readonly emit: (event: TaskEvent) => void, sessionId: string = randomUUID()) {
     if (!connectionId || !sessionId || !driver.isUsable || driver.isBusy) throw Error('SQLite查询会话必须绑定已就绪的准确物理连接');
     this.sessionId = sessionId;
   }

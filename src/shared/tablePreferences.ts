@@ -75,7 +75,9 @@ export function validateTablePreferenceBudget(otherCount: number, otherBytes: nu
 
 /** 仅目标或登录身份变化清理布局；密码、证书、密钥路径轮换和显示项变化保留布局。 */
 export function tablePreferenceTargetChanged(previous: ConnectionProfile, next: ConnectionProfile): boolean {
-  const target = (profile: ConnectionProfile): unknown[] => [profile.dialect, profile.host, profile.port, profile.user,
+  const target = (profile: ConnectionProfile): unknown[] => profile.dialect === 'sqlite'
+    ? [profile.dialect, profile.sqlite.filePath ?? '', profile.sqlite.readOnly, profile.sqlite.busyTimeoutMs]
+    : [profile.dialect, profile.host, profile.port, profile.user,
     profile.ssh?.enabled ?? false, ...(profile.ssh?.enabled ? [profile.ssh.host, profile.ssh.port, profile.ssh.user, profile.ssh.hostFingerprint ?? ''] : [])];
   return JSON.stringify(target(previous)) !== JSON.stringify(target(next));
 }

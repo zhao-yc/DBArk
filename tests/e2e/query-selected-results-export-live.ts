@@ -60,7 +60,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       await observe(() => expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 }));
       await observe(async () => (await navigationMenuItem(form, { name: zh.connections.text036, exact: true }, () => binding.assertCurrent())).click());
       await observe(() => expect(form).toBeHidden());
-      const profiles = await observe(() => page.evaluate(() => window.dbark.invoke('connections.list', {})));
+      const profiles = await observe(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))));
       const profile = profiles.length === 1 ? profiles[0] : undefined;
       // 布尔断言不把认证、服务器UUID或整个连接记录输出到失败差异中。
       // hasPassword同时表示RAM凭据；关闭持久保存后，非空密码仍需留在本例内存供真实查询建连。

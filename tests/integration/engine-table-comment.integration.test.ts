@@ -11,7 +11,7 @@ import { Engine } from '../../src/engine';
 import { connect, execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier, stringLiteral } from '../../src/engine/sql';
 import { readTableCommentDefinition } from '../../src/engine/tableCommentSql';
-import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { TableCommentGetOutput, TableCommentPreviewOutput } from '../../src/shared/tableComment';
 
 // 默认关闭；本文件不读凭据文件、不创建账户、不修改全局，不自动探测私有服务器。

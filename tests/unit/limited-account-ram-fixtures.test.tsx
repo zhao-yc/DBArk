@@ -49,7 +49,7 @@ function ramStore() {
   const source = ts.createSourceFile('storage.ts', readFileSync(new URL('../../src/main/storage.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
   const names = ['readSecret', 'hasSecret', 'putSecret', 'connections', 'saveConnection'];
   const methods: string[] = [];
-  const visit = (node: ts.Node) => { if (ts.isMethodDeclaration(node) && names.includes(node.name.getText(source))) methods.push(node.getText(source)); ts.forEachChild(node, visit); };
+  const visit = (node: ts.Node) => { if (ts.isMethodDeclaration(node) && !!node.body && names.includes(node.name.getText(source))) methods.push(node.getText(source)); ts.forEachChild(node, visit); };
   visit(source); expect(methods).toHaveLength(names.length);
   const compiled = ts.transpile(`class RamStore { ${methods.join('\n')} }; RamStore`, { target: ts.ScriptTarget.ES2022 });
   const Store = runInNewContext(compiled, { structuredClone, assertTlsPassphrase, randomUUID: () => '仅RAM合成连接', tablePreferenceTargetChanged: () => { throw Error('本片不允许编辑既有连接'); } });

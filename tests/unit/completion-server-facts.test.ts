@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ConnectionStatus } from '../../src/shared/contracts';
+import type { NetworkConnectionStatus as ConnectionStatus } from '../../src/shared/contracts';
 import { CompletionServerFacts, completionServerFacts, type CompletionServerFactsTicket } from '../../src/renderer/completionServerFacts';
 
 /** 仅构造已完成建连状态，不模拟网络；测试直接安排缓存生命周期的真实同步时序。 */

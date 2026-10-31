@@ -1,4 +1,4 @@
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import { emptyDefaultGuard } from './tableCreateEmptyDefault';
 
 export const qisGate = 'DBARK_QUERY_INSERT_INTEGRATION_ENABLED';

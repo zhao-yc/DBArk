@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Engine } from '../../src/engine';
 import { connect, execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier, qualified } from '../../src/engine/sql';
-import type { ConnectionProfile, RowChange, TablePage } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, RowChange, TablePage } from '../../src/shared/contracts';
 
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBARK_BIT_PRECISION_INTEGRATION_ENABLED === '1';
 const database = 'dbark_bitparam_' + randomUUID().replaceAll('-', '').slice(0, 12);

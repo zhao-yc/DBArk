@@ -98,7 +98,7 @@ async function restorePassword(run: EditorIndentNativeRun, owner: IndentNativeOw
 }
 /** 只读真实概要，证明两代ID相同、没有持久密码、SSH或TLS。 */
 async function profile(run: EditorIndentNativeRun, owner: IndentNativeOwner, binding: QueryResultColumnsUiTarget, available: boolean): Promise<string> {
-  const profiles = await step(run, owner, () => owner.page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const value = profiles[0];
+  const profiles = await step(run, owner, () => owner.page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })))); expect(profiles).toHaveLength(1); const value = profiles[0];
   expect(Boolean(value.name === connectionName && value.host === binding.target.host && value.port === 13384 && value.user === binding.target.user && value.rememberPassword === false && value.password === undefined && Boolean(value.hasPassword) === (available && Boolean(binding.target.password)) && !value.database && !value.tls?.enabled && !value.ssh?.enabled)).toBe(true); return value.id;
 }
 /** SQL全部来自真实Monaco输入；读取Main设置仅用于捕获准确tabId。 */

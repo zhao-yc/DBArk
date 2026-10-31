@@ -10,7 +10,7 @@ import { Engine } from '../../src/engine';
 import * as driver from '../../src/engine/connection';
 import { execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier } from '../../src/engine/sql';
-import type { ConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import { queryStreamExportLimits as limits, type QueryStreamExportOutput } from '../../src/shared/queryStreamExport';
 import { requireQ05IsolatedPort } from '../../scripts/q05-isolated-port.mjs';
 

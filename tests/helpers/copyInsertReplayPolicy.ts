@@ -1,4 +1,4 @@
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import { assertDefaultEncodingLiveTarget } from './tableDefaultEncodingTarget';
 
 export const copyInsertReplayModes = [

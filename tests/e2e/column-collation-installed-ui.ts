@@ -48,7 +48,7 @@ export function registerColumnCollationInstalledUi(binding: ColumnCollationInsta
       const remember=connection.getByRole('checkbox',{name:zh.connections.text016,exact:true});await step(()=>remember.uncheck());await step(()=>expect(remember).not.toBeChecked());
       // 不点测试连接，不导入SSH或证书；密码只供本轮内存使用，明确不保存密码。
       await step(()=>connection.getByRole('button',{name:zh.connections.text036,exact:true}).click());await step(()=>expect(connection).toBeHidden());
-      const profiles=await step(()=>page.evaluate(()=>window.dbark.invoke('connections.list',{})));expect(profiles).toHaveLength(1);const profile=profiles[0];
+      const profiles=await step(()=>page.evaluate(()=>window.dbark.invoke('connections.list',{}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))));expect(profiles).toHaveLength(1);const profile=profiles[0];
       expect(profile).toMatchObject({name,host:target.host,port:target.port,dialect:'mysql',user:target.user,database:target.database,rememberPassword:false});expect(profile.id).toBeTruthy();expect(profile.ssh?.enabled??false).toBe(false);expect(profile.tls?.enabled??false).toBe(false);
 
       // 真实对象树进入实际表页，再从表页工具栏进入字段差异，不直接请求schema.columns.apply。

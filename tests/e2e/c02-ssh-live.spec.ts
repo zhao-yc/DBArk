@@ -43,7 +43,7 @@ async function choose(scope: C02Desktop, form: Locator, button: string, inputNam
 /** 只返回概要存在性/身份匹配布尔值及公开ID，不返回秘密或完整连接对象。 */
 async function overview(scope: C02Desktop, lease: C02SshLease) {
   return scope.page.evaluate(async input => {
-    const rows = (await window.dbark.invoke('connections.list', {})).filter(profile => profile.name === input.name), profile = rows[0], ssh = profile?.ssh;
+    const rows = (await window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))).filter(profile => profile.name === input.name), profile = rows[0], ssh = profile?.ssh;
     return { id: rows.length === 1 ? profile.id : '', publicOnly: rows.length === 1 && !Object.hasOwn(profile, 'password') && !!ssh && !Object.hasOwn(ssh, 'password') && !Object.hasOwn(ssh, 'passphrase'),
       hasPassword: profile?.hasPassword === true, noSshSecrets: ssh?.hasPassword !== true && ssh?.hasPassphrase !== true,
       correctSsh: ssh?.enabled === true && ssh.host === input.ssh.host && ssh.port === input.ssh.port && ssh.user === input.ssh.user && ssh.privateKeyPath === input.ssh.privateKeyPath && ssh.hostFingerprint === input.ssh.hostFingerprint };

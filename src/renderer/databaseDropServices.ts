@@ -1,3 +1,4 @@
+import { connectionDatabase } from './sqliteWorkspace';
 import { databaseDropZh } from './locales/databaseDrop.zh-CN';
 import type { DatabaseDropTarget } from '../shared/databaseDrop';
 import type { WorkspaceTab } from './store';
@@ -17,7 +18,7 @@ export function assertDatabaseDropTargetAvailable(target: DatabaseDropTarget, wo
     // 任意同连接查询可能使用跨库SQL，活动任务和事务不能仅凭标签默认库排除。
     if (tab.kind === 'query') {
       if (own(workspace.activeJobs) || own(workspace.dirtyTabs)) throw new Error(databaseDropZh.busyQuery);
-      const context = resolveQueryDatabase(tab.database, tab.databaseContext, workspace.connections.find(value => value.id === target.connectionId)?.database);
+      const context = resolveQueryDatabase(tab.database, tab.databaseContext, connectionDatabase(workspace.connections.find(value => value.id === target.connectionId)));
       if (context.state === 'unknown') throw new Error(databaseDropZh.unknownQuery);
     } else if (tab.database === target.database) {
       if (own(workspace.activeJobs)) throw new Error(databaseDropZh.busyTable);

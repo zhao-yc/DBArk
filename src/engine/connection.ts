@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import mysql, { type Connection, type ConnectionOptions, type FieldPacket } from 'mysql2';
 import { Client as SshClient, type ClientChannel } from 'ssh2';
-import type { ConnectionProfile, ConnectionStatus } from '../shared/contracts';
+import type { ConnectionProfile, NetworkConnectionProfile, NetworkConnectionStatus } from '../shared/contracts';
 import { sqlExecutableWords } from '../shared/queryParameters';
 import {initialCompletionDatabase,observeCompletionDatabase,invalidateCompletionDatabase,type CompletionDatabaseState,type SessionStatePacket} from './completionSession';
 import {SessionObjects} from './sessionObjects';
@@ -13,8 +13,8 @@ import { ConnectionResourceOwner, type ConnectionResourceRecovery } from './conn
 
 export interface ManagedConnection {
   connection: Connection;
-  profile: ConnectionProfile;
-  status: ConnectionStatus;
+  profile: NetworkConnectionProfile;
+  status: NetworkConnectionStatus;
   broken: boolean;
   /** 模式和事务来自初始读取及后续协议状态包；undefined 表示无法可靠判断。 */
   sqlMode?: string;
@@ -153,7 +153,9 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
 }
 
 /** 建立数据库连接前完成 SSH 主机校验和 TLS 文件加载；任何阶段失败都会释放隧道。 */
-export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.database, signal?: AbortSignal, onResources?: (resources: ConnectionResourceRecovery) => void): Promise<ManagedConnection> {
+export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.dialect === 'sqlite' ? undefined : profile.database, signal?: AbortSignal, onResources?: (resources: ConnectionResourceRecovery) => void): Promise<ManagedConnection> {
+  // SQLite由独立文件驱动处理，必须在分配任何MySQL/SSH/TLS资源前拒绝误路由。
+  if (profile.dialect === 'sqlite') throw new Error('SQLite连接不能交给MySQL网络驱动');
   assertConnectionReady(profile);
   assertTlsPassphrase(profile.tls?.passphrase);
   let ssh: SshClient | undefined;

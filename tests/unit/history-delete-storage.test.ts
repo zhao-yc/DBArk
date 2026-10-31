@@ -1,3 +1,4 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -8,7 +9,7 @@ import type { Database } from 'sql.js';
 import { LocalStore } from '../../src/main/storage';
 import { historyDeleteByteTotal, historyDeleteReferences } from '../../src/main/historyDeleteStorage';
 import { historyDeleteLimits, type HistoryDeleteReference } from '../../src/shared/historyDelete';
-import type { ConnectionProfile, HistoryEntry } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, HistoryEntry } from '../../src/shared/contracts';
 
 const wasm = createRequire(import.meta.url).resolve('sql.js/dist/sql-wasm.wasm');
 const directories: string[] = [], stores = new Set<LocalStore>();
@@ -120,9 +121,9 @@ describe('真实SQLite的历史删除与持久化', () => {
     mkdirSync(f.file + '.tmp');
     expect(() => f.store.deleteHistorySnapshot(revision, references(f.store), () => {})).toThrow('修改未保存');
     expect(readFileSync(f.file)).toEqual(before); expect(f.store.historyPageRevision()).toBe(revision); expect(f.store.history()).toHaveLength(3); expect(unrelated(f.store)).toBe(other);
-    expect(f.store.resolveConnection(profile.id).password === profile.password).toBe(true);
+    expect(assertNetworkProfile(f.store.resolveConnection(profile.id)).password === profile.password).toBe(true);
     rmdirSync(f.file + '.tmp'); f.store.saveSettings(f.store.settings()); f.close(f.store); const reopened = await f.open(); expect(reopened.history()).toHaveLength(3);
-    if (available) expect(reopened.resolveConnection(profile.id).password === profile.password).toBe(true);
+    if (available) expect(assertNetworkProfile(reopened.resolveConnection(profile.id)).password === profile.password).toBe(true);
   });
   it.each([1, 2, 3, 4, 5, 6, 7])('归属或期限在第%s次检查失效时没有发布，rename前失败也回退已COMMIT内存', async failAt => {
     const f = await fixture(), refs = references(f.store), before = readFileSync(f.file), revision = f.store.historyPageRevision(); let checks = 0;

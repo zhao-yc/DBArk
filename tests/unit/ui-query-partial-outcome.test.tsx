@@ -1,3 +1,4 @@
+import { queryDialectVm } from '../helpers/queryDialectVm';
 import { act, useEffect, useMemo, useRef, useState } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
@@ -67,7 +68,7 @@ let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 beforeAll(async () => {
   doc = memoryDocument(); const create = doc.createElement.bind(doc); doc.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node; }; ({ createRoot } = await import('react-dom/client'));
-  const context: any = createContext({ snapshotOperation: { current: null }, exports: {}, useEffect, useMemo, useRef, useState, captureQueryFailureSource, QueryPartialOutcomeNotice, ErrorBox, zh, formatText, exportableQueryResult, snapshotQueryResult, queryResultFilteredSortView, document: doc, window, Error, Play: () => null, Pin: () => null, Download: () => null, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止载入其他QueryTab依赖'); } });
+  const context: any = createContext({ ...queryDialectVm(),  snapshotOperation: { current: null }, exports: {}, useEffect, useMemo, useRef, useState, captureQueryFailureSource, QueryPartialOutcomeNotice, ErrorBox, zh, formatText, exportableQueryResult, snapshotQueryResult, queryResultFilteredSortView, document: doc, window, Error, Play: () => null, Pin: () => null, Download: () => null, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止载入其他QueryTab依赖'); } });
   runInContext(ts.transpileModule(harnessCode + '\nglobalThis.Harness=Harness;', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context); Harness = context.Harness;
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; doc.body.textContent = ''; });

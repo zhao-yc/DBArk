@@ -18,7 +18,7 @@ import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { tablePageExportZh as tableText } from '../locales/tablePageExport.zh-CN';
 
 /** 仅处理打开时的已返回/勾选快照，SQL目标全部显式填写；不访问连接或重新执行查询。 */
-export function ResultExportDialog({ result, tabId, selected = false, scope = 'query', onClose }: { result: ResultExportData; tabId: string; selected?: boolean; scope?: 'query' | 'table'; onClose(): void }) {
+export function ResultExportDialog({ result, tabId, selected = false, scope = 'query', allowSql = true, onClose }: { result: ResultExportData; tabId: string; selected?: boolean; scope?: 'query' | 'table'; allowSql?: boolean; onClose(): void }) {
   const fixed = useRef(result), alive = useRef(true), invalid = useRef(false), revision = useRef(0);
   if (result !== fixed.current) invalid.current = true;
   const data = useMemo(() => resultExportData(fixed.current), []), columns = useMemo(() => resultExportColumns(data.columns), [data]);
@@ -66,7 +66,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   }, [preview]);
   /** Main计算完整快照摘要，展示同一生成器的有界真实SQL；迟到预览只释放自己。 */
   async function prepare(ticket: number) {
-    if (!current(ticket) || busyRef.current || prepareRef.current || config.current.format !== 'sql') return;
+    if (!allowSql || !current(ticket) || busyRef.current || prepareRef.current || config.current.format !== 'sql') return;
     ticket = ++revision.current;
     const chosen = config.current; prepareRef.current = true; setPreparing(true); setError('');
     try {
@@ -80,7 +80,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   }
   /** 原生保存选择与准确预览绑定，映射变更期间返回的旧选择不能发布。 */
   async function chooseFile(ticket: number) {
-    if (!current(ticket) || busyRef.current || pickRef.current || config.current.format === 'sql' && !validPreview()) return;
+    if (!current(ticket) || busyRef.current || pickRef.current || config.current.format === 'sql' && (!allowSql || !validPreview())) return;
     if (config.current.format === 'xlsx') { try { assertResultExcelData(data); } catch (reason) { report(reason); return; } }
     ticket = ++revision.current;
     const chosen = config.current, lease = previewRef.current; pickRef.current = true; setPicking(true);
@@ -95,7 +95,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   async function execute(ticket: number) {
     if (!current(ticket) || !fileRef.current || busyRef.current || pickRef.current || prepareRef.current || consumed.current) return;
     const chosen = config.current, lease = previewRef.current;
-    if (chosen.format === 'sql' && (!validPreview() || chosen.confirmation !== `${chosen.target.database}.${chosen.target.table}` || !chosen.acknowledged)) return;
+    if (chosen.format === 'sql' && (!allowSql || !validPreview() || chosen.confirmation !== `${chosen.target.database}.${chosen.target.table}` || !chosen.acknowledged)) return;
     // 写任务入口再核整份Excel约束，固定编码不依赖先前文本格式或DOM禁用状态。
     if (chosen.format === 'xlsx') { try { assertResultExcelData(data); } catch (reason) { report(reason); return; } }
     busyRef.current = true; consumed.current = true; setBusy(true); setError(''); const id = uid(); activeTask.current = id; setTaskId(id); useWorkspace.getState().setBusy(tabId, true);
@@ -110,12 +110,12 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   }
   /** 写入与原子替换等待期间不关闭；其余关闭先完成精确能力释放。 */
   async function close() { if (busyRef.current) return; revision.current++; if (previewRef.current) releases.current.add(previewRef.current.previewId); previewRef.current = null; fileRef.current = null; setPreview(null); setFile(null); try { await drain(); if (alive.current) onClose(); } catch (reason) { report(reason); } }
-  const sqlReady = format !== 'sql' || !!preview && validPreview() && confirmation === `${target.database}.${target.table}` && acknowledged;
+  const sqlReady = format !== 'sql' || allowSql && !!preview && validPreview() && confirmation === `${target.database}.${target.table}` && acknowledged;
   return <Modal title={scope === 'table' ? selected ? tableText.selected : tableText.page : selected ? zh.resultExport.selectedTitle : zh.resultExport.title} wide onClose={() => void close()}><div className="modal-content">
     <div className="info-strip">{scope === 'table' ? (selected ? tableText.selectedRows : tableText.pageRows)(data.rows.length) : formatText(selected ? zh.resultExport.selectedRows : zh.resultExport.returnedRows, data.rows.length)}</div>
     {data.truncated && <p className="warning-text">{zh.resultExport.truncated}</p>}
     <div className="form-grid">
-      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && ['csv','json','sql','xlsx'].includes(value)) change(renderedRevision, () => { setFormat(value as typeof format); if (value === 'xlsx') setEncoding('utf8'); }); }}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">INSERT SQL</option><option value="xlsx">{excelText.format}</option></select></Field>
+      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && (allowSql ? ['csv','json','sql','xlsx'] : ['csv','json','xlsx']).includes(value)) change(renderedRevision, () => { setFormat(value as typeof format); if (value === 'xlsx') setEncoding('utf8'); }); }}><option value="csv">CSV</option><option value="json">JSON</option>{allowSql && <option value="sql">INSERT SQL</option>}<option value="xlsx">{excelText.format}</option></select></Field>
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={format === 'xlsx' ? 'utf8' : encoding} disabled={busy || format === 'xlsx'} onChange={event => { const value = event.target.value; if (config.current.format !== 'xlsx' && value !== encoding && ['utf8','utf16le','gb18030'].includes(value)) change(renderedRevision, () => setEncoding(value as typeof encoding)); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>
       {format === 'sql' && <><Field label={sqlText.database}><input aria-label={sqlText.database} value={target.database} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, database: event.target.value }))}/></Field><Field label={sqlText.table}><input aria-label={sqlText.table} value={target.table} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, table: event.target.value }))}/></Field></>}
       {format === 'csv' && <CsvExportDelimiterField value={csvDelimiter} disabled={busy} onChange={value => { if (value !== csvDelimiter) change(renderedRevision, () => setCsvDelimiter(value)); }}/>}

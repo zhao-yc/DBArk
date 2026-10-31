@@ -1,3 +1,4 @@
+import { queryDialectVm } from '../helpers/queryDialectVm';
 import { act, useState, type ReactNode } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
@@ -25,7 +26,7 @@ if (!option || !functions.has('runQuery') || !functions.has('execute')) throw Er
 function execution(outcome: QueryOutcome = { results: [], elapsedMs: 1 }) {
   const invoke = vi.fn(async () => outcome), ensureSession = vi.fn(async () => '原会话'), errors = vi.fn(async () => {});
   const workspace = { setBusy: vi.fn(), setDirty: vi.fn() }, scriptFailureRanges = { current: new Set<QueryFailure>() }, failureSource = { current: undefined as any };
-  const context: any = createContext({ Error, Set, confirmedQueryContinueRange, invoke, ensureSession, continueOnError: false, collectWarnings: false, scriptFailureRanges, failureSource,
+  const context: any = createContext({ ...queryDialectVm(),  Error, Set, confirmedQueryContinueRange, invoke, ensureSession, continueOnError: false, collectWarnings: false, scriptFailureRanges, failureSource,
     busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, parameterSession: { current: '原会话' }, settings: { resultLimit: 25 }, tab: { id: '原标签' },
     useWorkspace: { getState: () => workspace }, handleQueryError: errors, clearFailureSource: vi.fn(), invalidateResultSelection: vi.fn(), prepareExecutionContext: vi.fn(async () => {}), uid: () => '本次任务',
     setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),
@@ -56,7 +57,7 @@ const failure = (ordinal: number, message = '数据库错误'): QueryFailure & {
 function report(errors = [failure(2), failure(4)]): NonNullable<QueryOutcome['scriptReport']> { return { mode: 'continue-on-error', statementsAttempted: 5, statementsCompleted: 3, reachedEnd: true, errors }; }
 
 it('正式选项默认未勾选，运行与参数表单期间锁定，并显示诊断与写入提示', async () => {
-  const port = { busy: false, parameters: false }, context: any = createContext({ exports: {}, useState, port, queryContinueOnErrorZh: t, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('控件端口禁止额外依赖'); } });
+  const port = { busy: false, parameters: false }, context: any = createContext({ ...queryDialectVm(),  exports: {}, useState, port, queryContinueOnErrorZh: t, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('控件端口禁止额外依赖'); } });
   runInContext(ts.transpileModule(`function Controls(){const [continueOnError,setContinueOnError]=useState(false),busy=port.busy,busyRef={current:busy},parameterSource=port.parameters?'模板':null;return ${option};}globalThis.Controls=Controls;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
   const Controls = context.Controls; await mount(<Controls/>); const input = document.querySelector('input')!;
   expect(input.checked).toBe(false); expect(input.disabled).toBe(false); expect(input.parentNode!.getAttribute('title')).toContain('包括写操作'); expect(input.parentNode!.getAttribute('title')).toContain('ROW_COUNT()');

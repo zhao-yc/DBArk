@@ -18,7 +18,7 @@ import initSqlJs, { type Database, type SqlValue } from 'sql.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
+import type { AppSettings, ConnectionProfile, NetworkConnectionProfile, SqliteConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
 import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
@@ -202,25 +202,38 @@ export class LocalStore {
 
   /** 返回界面的连接配置只携带是否存在凭据的标记。 */
   connections(): ConnectionProfile[] {
-    return this.records<ConnectionProfile>('SELECT data FROM connections ORDER BY rowid').map(profile => ({ ...profile, hasPassword: this.hasSecret(profile.id, 'password'), ssh: profile.ssh ? { ...profile.ssh, hasPassword: this.hasSecret(profile.id, 'sshPassword'), hasPassphrase: this.hasSecret(profile.id, 'sshPassphrase') } : undefined,
+    return this.records<ConnectionProfile>('SELECT data FROM connections ORDER BY rowid').map(profile => {
+      // SQLite没有秘密槽或凭据标记，历史临时选择令牌也不能重新交给界面。
+      if (profile.dialect === 'sqlite') { const next = structuredClone(profile); delete next.sqlite.fileToken; return next; }
+      return ({ ...profile, hasPassword: this.hasSecret(profile.id, 'password'), ssh: profile.ssh ? { ...profile.ssh, hasPassword: this.hasSecret(profile.id, 'sshPassword'), hasPassphrase: this.hasSecret(profile.id, 'sshPassphrase') } : undefined,
       // 旧TLS概要在没有新秘密时保持原形状，存在标记只由主进程秘密槽计算。
-      ...(profile.tls && this.hasSecret(profile.id, 'tlsPassphrase') ? { tls: { ...profile.tls, hasPassphrase: true } } : {}) }));
+      ...(profile.tls && this.hasSecret(profile.id, 'tlsPassphrase') ? { tls: { ...profile.tls, hasPassphrase: true } } : {}) });
+    });
   }
 
   /** 把连接与秘密分开存储，保存失败时恢复两者原始状态。 */
+  saveConnection(input: NetworkConnectionProfile): NetworkConnectionProfile;
+  saveConnection(input: SqliteConnectionProfile): SqliteConnectionProfile;
+  saveConnection(input: ConnectionProfile): ConnectionProfile;
   saveConnection(input: ConnectionProfile): ConnectionProfile {
-    assertTlsPassphrase(input.tls?.passphrase);
+    if (input.dialect !== 'sqlite') assertTlsPassphrase(input.tls?.passphrase);
     const profile = structuredClone({ ...input, id: input.id || randomUUID() });
     const previous = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [profile.id])[0];
-    const remember = profile.rememberPassword === true;
+    if (previous && (previous.dialect === 'sqlite') !== (profile.dialect === 'sqlite')) throw new Error('不能更改已有连接的数据库类型，请另建连接');
     this.mutate(() => {
-      this.putSecret(profile.id, 'password', profile.password, remember);
-      this.putSecret(profile.id, 'sshPassword', profile.ssh?.password, remember);
-      this.putSecret(profile.id, 'sshPassphrase', profile.ssh?.passphrase, remember);
-      this.putSecret(profile.id, 'tlsPassphrase', profile.tls?.passphrase, remember);
-      delete profile.password; delete profile.hasPassword;
-      if (profile.ssh) { delete profile.ssh.password; delete profile.ssh.passphrase; delete profile.ssh.hasPassword; delete profile.ssh.hasPassphrase; }
-      if (profile.tls) { delete profile.tls.passphrase; delete profile.tls.hasPassphrase; }
+      if (profile.dialect === 'sqlite') {
+        // Main已经兑换文件授权；持久记录只保存路径与模式，不保存临时令牌。
+        delete profile.sqlite.fileToken;
+      } else {
+        const remember = profile.rememberPassword === true;
+        this.putSecret(profile.id, 'password', profile.password, remember);
+        this.putSecret(profile.id, 'sshPassword', profile.ssh?.password, remember);
+        this.putSecret(profile.id, 'sshPassphrase', profile.ssh?.passphrase, remember);
+        this.putSecret(profile.id, 'tlsPassphrase', profile.tls?.passphrase, remember);
+        delete profile.password; delete profile.hasPassword;
+        if (profile.ssh) { delete profile.ssh.password; delete profile.ssh.passphrase; delete profile.ssh.hasPassword; delete profile.ssh.hasPassphrase; }
+        if (profile.tls) { delete profile.tls.passphrase; delete profile.tls.hasPassphrase; }
+      }
       // 更换数据库目标时与连接配置一起提交；磁盘失败不能先丢失原布局。
       if (previous && tablePreferenceTargetChanged(previous, profile)) this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [profile.id]);
       this.db.run('INSERT INTO connections VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [profile.id, JSON.stringify(profile)]);
@@ -499,10 +512,14 @@ export class LocalStore {
   }
 
   /** 明文只在主进程与数据库执行进程间传递，不交给渲染进程。 */
+  resolveConnection(id: string, overrides: NetworkConnectionProfile): NetworkConnectionProfile;
+  resolveConnection(id: string, overrides: SqliteConnectionProfile): SqliteConnectionProfile;
+  resolveConnection(id: string, overrides?: ConnectionProfile): ConnectionProfile;
   resolveConnection(id: string, overrides?: ConnectionProfile): ConnectionProfile {
     const stored = this.connections().find(x => x.id === id);
     const profile = overrides ?? stored;
     if (!profile) throw new Error('连接不存在，请重新选择连接');
+    if (profile.dialect === 'sqlite') return structuredClone(profile);
     assertTlsPassphrase(profile.tls?.passphrase);
     return { ...profile, password: profile.password ?? this.readSecret(id, 'password'), ssh: profile.ssh ? { ...profile.ssh, password: profile.ssh.password ?? this.readSecret(id, 'sshPassword'), passphrase: profile.ssh.passphrase ?? this.readSecret(id, 'sshPassphrase') } : undefined,
       ...(profile.tls ? { tls: { ...profile.tls, passphrase: profile.tls.passphrase ?? this.readSecret(id, 'tlsPassphrase') } } : {}) };

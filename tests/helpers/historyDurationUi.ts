@@ -1,3 +1,4 @@
+import { assertNetworkProfile } from './assertNetworkProfile';
 import { win32 } from 'node:path';
 import type { HistoryEntry } from '../../src/shared/contracts';
 
@@ -230,7 +231,7 @@ export function registerHistoryDurationNative(): void {
       const reopened = await bare(() => LocalStore.open(copy, wasm, protector));
       try {
         clock.assertCurrent(); expect(reopened.history()).toHaveLength(58); expect(reopened.tasks()).toEqual([]); expect(reopened.settings().tabs).toEqual([]);
-        expect(reopened.connections().map(value => ({ id: value.id, host: value.host, port: value.port, hasPassword: value.hasPassword }))).toEqual([{ id: historyDurationSourceA, host: 'never-connect.invalid', port: 1, hasPassword: false }, { id: historyDurationSourceB, host: 'never-connect.invalid', port: 1, hasPassword: false }]);
+        expect(reopened.connections().map(assertNetworkProfile).map(value => ({ id: value.id, host: value.host, port: value.port, hasPassword: value.hasPassword }))).toEqual([{ id: historyDurationSourceA, host: 'never-connect.invalid', port: 1, hasPassword: false }, { id: historyDurationSourceB, host: 'never-connect.invalid', port: 1, hasPassword: false }]);
         for (const expected of expectedRaw!) { clock.assertCurrent(); expect(digest(reopened.historyRaw(expected.id)!)).toBe(expected.sha256); }
       } finally { reopened.close(); }
       const bytesAfter = await bare(() => fs.readFile(sqlite)), statAfter = await bare(() => fs.lstat(sqlite));

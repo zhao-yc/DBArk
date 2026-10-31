@@ -1,3 +1,4 @@
+import { assertNetworkProfile, assertNetworkExportedProfile } from '../helpers/assertNetworkProfile';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { connect } from '../../src/engine/connection';
 import { assertConnectionReady, connectionTransferDocumentSchema, connectionTransferLimits, copyConnectionProfile, exportConnectionProfile, type ConnectionImportPreview } from '../../src/shared/connectionTransfer';
 import { validateCommand } from '../../src/shared/validation';
 import { publicCommands } from '../../src/shared/commands';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 
 const require = createRequire(import.meta.url), wasm = require.resolve('sql.js/dist/sql-wasm.wasm');
 const original: ConnectionProfile = { id: '__proto__', name: '生产只读概要', group: '分组', color: '#123456', host: 'db.example', port: 3306, user: 'user', dialect: 'mysql', database: '资料库', password: '数据库秘密', rememberPassword: true, ssh: { enabled: true, host: 'ssh.example', port: 22, user: 'ssh', password: 'SSH秘密', passphrase: '私钥口令', privateKeyPath: 'C:\\private\\id_ed25519', hostFingerprint: 'SHA256:测试固定指纹' }, tls: { enabled: true, rejectUnauthorized: true, caPath: '/private/ca.pem', certPath: '/private/client.pem', keyPath: '/private/client.key' } };
@@ -39,34 +40,34 @@ function decisions(value: ConnectionImportPreview) { return value.entries.map(en
 
 describe('无秘密连接交换', () => {
   it('概要白名单复制和真实导出均无秘密、存在标记及生效路径，也不调用解密器', async () => {
-    const copy = copyConnectionProfile(store.connections()[0]);
+    const copy = copyConnectionProfile(store.connections().map(assertNetworkProfile)[0]);
     expect(copy).toMatchObject({ id: '', rememberPassword: false, pendingFiles: ['sshPrivateKey', 'tlsCa', 'tlsCert', 'tlsKey'], ssh: { enabled: true, hostFingerprint: original.ssh!.hostFingerprint }, tls: { enabled: true, rejectUnauthorized: true } });
     expect(copy.ssh).not.toHaveProperty('privateKeyPath'); expect(copy.tls).not.toHaveProperty('caPath');
     expect(await transfer.exportFile(source, [original.id])).toEqual({ count: 1 });
     const content = readFileSync(source, 'utf8');
     for (const forbidden of ['数据库秘密', 'SSH秘密', '私钥口令', 'hasPassword', 'hasPassphrase', 'rememberPassword', 'privateKeyPath', 'caPath', 'C:', '/private/']) expect(content).not.toContain(forbidden);
-    expect(JSON.parse(content).connections[0].ssh.privateKeyFileName).toBe('id_ed25519'); expect(decrypt).not.toHaveBeenCalled();
+    expect(assertNetworkExportedProfile(JSON.parse(content).connections[0]).ssh!.privateKeyFileName).toBe('id_ed25519'); expect(decrypt).not.toHaveBeenCalled();
   });
   it('重复身份只提示，确认新增全新 ID；原连接秘密、表偏好和全局设置均保持', async () => {
     store.saveTablePreferences({ connectionId: original.id, database: '库', table: '表', preferences: { version: 1, columns: [{ name: 'id', hidden: true }] } });
-    const settings = store.settings(), before = store.connections(); const value = await preview();
+    const settings = store.settings(), before = store.connections().map(assertNetworkProfile); const value = await preview();
     expect(value.entries[0].matches[0].reasons).toEqual(['id', 'name', 'target']);
     const result = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true });
-    expect(result).toMatchObject({ added: 1, skipped: 0 }); const added = result.connections.at(-1)!; expect(added.id).not.toBe(original.id); expect(added.rememberPassword).toBe(false);
-    expect(store.connections()[0]).toEqual(before[0]); expect(store.tablePreferences({ connectionId: added.id, database: '库', table: '表' })).toBeNull(); expect(store.settings()).toEqual(settings);
-    expect(store.resolveConnection(added.id).password).toBeUndefined(); expect(store.resolveConnection(added.id).ssh?.password).toBeUndefined(); expect(store.resolveConnection(original.id).password).toBe(original.password);
+    expect(result).toMatchObject({ added: 1, skipped: 0 }); const added = result.connections.map(assertNetworkProfile).at(-1)!; expect(added.id).not.toBe(original.id); expect(added.rememberPassword).toBe(false);
+    expect(store.connections().map(assertNetworkProfile)[0]).toEqual(before[0]); expect(store.tablePreferences({ connectionId: added.id, database: '库', table: '表' })).toBeNull(); expect(store.settings()).toEqual(settings);
+    expect(assertNetworkProfile(store.resolveConnection(added.id)).password).toBeUndefined(); expect(assertNetworkProfile(store.resolveConnection(added.id)).ssh?.password).toBeUndefined(); expect(assertNetworkProfile(store.resolveConnection(original.id)).password).toBe(original.password);
     expect(() => transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true })).toThrow('预览已失效');
   });
   it('不可变预览不信任返回对象或再次修改的文件，跳过不会触发写盘', async () => {
-    const value = await preview(); value.entries[0].profile.host = 'attacker.example'; writeFileSync(source, '{}');
-    const result = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true }); expect(result.connections.at(-1)!.host).toBe(original.host);
+    const value = await preview(); assertNetworkExportedProfile(value.entries[0].profile).host = 'attacker.example'; writeFileSync(source, '{}');
+    const result = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true }); expect(result.connections.map(assertNetworkProfile).at(-1)!.host).toBe(original.host);
     const next = await preview(), bytes = readFileSync(file), revision = store.connectionRevision();
-    expect(transfer.apply({ previewToken: next.previewToken, decisions: [{ sourceId: original.id, action: 'skip' }] })).toEqual({ connections: store.connections(), added: 0, skipped: 1 });
+    expect(transfer.apply({ previewToken: next.previewToken, decisions: [{ sourceId: original.id, action: 'skip' }] })).toEqual({ connections: store.connections().map(assertNetworkProfile), added: 0, skipped: 1 });
     expect(readFileSync(file)).toEqual(bytes); expect(store.connectionRevision()).toBe(revision);
   });
   it('配置、密码和删除变更使快照失效；失败确认、重复决策和过期令牌不能重放', async () => {
     for (const update of [{ name: '已修改名称' }, { password: '新会话密码' }]) {
-      const value = await preview(); store.saveConnection({ ...store.connections()[0], ...update });
+      const value = await preview(); store.saveConnection({ ...store.connections().map(assertNetworkProfile)[0], ...update });
       expect(() => transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true })).toThrow('配置已变化');
       expect(() => transfer.apply({ previewToken: value.previewToken, decisions: decisions(value) })).toThrow('预览已失效');
     }
@@ -85,16 +86,16 @@ describe('无秘密连接交换', () => {
     }
     writeFileSync(source, Buffer.from([0xff, 0xfe])); await expect(transfer.preview(source)).rejects.toThrow('UTF-8');
     writeFileSync(source, Buffer.alloc(connectionTransferLimits.fileBytes + 1)); await expect(transfer.preview(source)).rejects.toThrow('2 MiB');
-    expect(store.connections()).toHaveLength(1);
+    expect(store.connections().map(assertNetworkProfile)).toHaveLength(1);
   });
   it('批次磁盘失败保留内存、原文件、凭据和版本，确认令牌消费且之后保存不夹带失败新增', async () => {
     const value = await preview([exportConnectionProfile(original), { ...exportConnectionProfile(original), id: '第二个' }]), before = readFileSync(file), revision = store.connectionRevision();
     const blocker = join(verifiedDirectory(), 'local.sqlite.tmp'); mkdirSync(blocker);
     expect(() => transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true })).toThrow('修改未保存');
-    expect(store.connections()).toHaveLength(1); expect(readFileSync(file)).toEqual(before); expect(store.connectionRevision()).toBe(revision); expect(store.resolveConnection(original.id).password).toBe(original.password);
+    expect(store.connections().map(assertNetworkProfile)).toHaveLength(1); expect(readFileSync(file)).toEqual(before); expect(store.connectionRevision()).toBe(revision); expect(assertNetworkProfile(store.resolveConnection(original.id)).password).toBe(original.password);
     expect(() => transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true })).toThrow('预览已失效');
     if (lstatSync(blocker).isSymbolicLink() || realpathSync(blocker) !== join(realpathSync(verifiedDirectory()), 'local.sqlite.tmp')) throw new Error('拒绝清理非本例故障目录'); rmdirSync(blocker);
-    store.saveSettings(store.settings()); expect(store.connections()).toHaveLength(1);
+    store.saveSettings(store.settings()); expect(store.connections().map(assertNetworkProfile)).toHaveLength(1);
   });
   it('导出原子替换失败保原件并清临时文件，失败不留下目标锁', async () => {
     writeFileSync(source, '原文件'); const broken = new ConnectionTransfer(store, Date.now, { ...nativeAtomicFileIO, rename: async () => { throw new Error('注入替换失败'); } });
@@ -103,10 +104,10 @@ describe('无秘密连接交换', () => {
   });
   it('待认证文件必须显式暂存，重启保留；禁用区域不阻连接但重新开启仍阻止', async () => {
     let value = await preview(); expect(() => transfer.apply({ previewToken: value.previewToken, decisions: decisions(value) })).toThrow('明确确认暂存');
-    value = await preview(); const added = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true }).connections.at(-1)!;
+    value = await preview(); const added = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true }).connections.map(assertNetworkProfile).at(-1)!;
     expect(() => assertConnectionReady(added)).toThrow('重新选择'); await expect(connect(added)).rejects.toThrow('重新选择');
     const disabled = { ...added, ssh: { ...added.ssh!, enabled: false }, tls: { ...added.tls!, enabled: false } }; expect(() => assertConnectionReady(disabled)).not.toThrow(); expect(disabled.pendingFiles).toHaveLength(4);
-    store.close(); store = await LocalStore.open(file, wasm, protector); expect(store.connections().find(profile => profile.id === added.id)?.pendingFiles).toEqual(added.pendingFiles);
+    store.close(); store = await LocalStore.open(file, wasm, protector); expect(store.connections().map(assertNetworkProfile).find(profile => profile.id === added.id)?.pendingFiles).toEqual(added.pendingFiles);
   });
   it('只有适当用途的本窗口路径授权清除旧缺文件标记，漏传标记和手输 basename 无效', () => {
     const copy = copyConnectionProfile(original), input = { ...copy, pendingFiles: undefined, tls: { ...copy.tls!, caPath: 'ca.pem' } };
@@ -126,9 +127,9 @@ describe('无秘密连接交换', () => {
     expect(() => resolveFileToken(files, 'special', 'connection-export', 'json')).toThrow('未授权');
   });
   it('已暂存配置再次导出保留认证要求，不能丢标记后误用系统 CA', async () => {
-    const value = await preview(); const added = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true }).connections.at(-1)!;
+    const value = await preview(); const added = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true }).connections.map(assertNetworkProfile).at(-1)!;
     await transfer.exportFile(source, [added.id]); const document = connectionTransferDocumentSchema.parse(JSON.parse(readFileSync(source, 'utf8')));
-    const cloned = copyConnectionProfile(added); expect(cloned.pendingFiles).toEqual(added.pendingFiles); expect(document.connections[0].tls?.caFileName).toBeTruthy();
+    const cloned = copyConnectionProfile(added); expect(cloned.pendingFiles).toEqual(added.pendingFiles); expect(document.connections.map(assertNetworkExportedProfile)[0].tls?.caFileName).toBeTruthy();
   });
   it('schema3 升4保留每张表和凭据；迁移磁盘失败不修改旧文件', async () => {
     store.saveQuery({ id: 'q', name: '查询', sql: 'SELECT 1', updatedAt: '2026-01-01' }); store.saveSnippet({ id: 's', name: '片段', group: '', description: '', sql: 'SELECT 2', updatedAt: '2026-01-01' });
@@ -140,12 +141,12 @@ describe('无秘密连接交换', () => {
     await expect(LocalStore.open(file, wasm, protector)).rejects.toThrow('修改未保存'); expect(readFileSync(file)).toEqual(before);
     if (lstatSync(blocker).isSymbolicLink() || realpathSync(blocker) !== join(realpathSync(verifiedDirectory()), 'local.sqlite.tmp')) throw new Error('拒绝清理非本例故障目录'); rmdirSync(blocker);
     store = await LocalStore.open(file, wasm, protector); const migrated = new SQL.Database(readFileSync(file));
-    expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(9); for (const [name, rows] of expected) expect(migrated.exec(`SELECT * FROM ${name}`)).toEqual(rows); migrated.close(); expect(store.resolveConnection(original.id).password).toBe(original.password);
+    expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(9); for (const [name, rows] of expected) expect(migrated.exec(`SELECT * FROM ${name}`)).toEqual(rows); migrated.close(); expect(assertNetworkProfile(store.resolveConnection(original.id)).password).toBe(original.password);
   });
   it('预算边界允许完整 500 条和恰好 2 MiB 文件，第五份预览淘汰最旧令牌', async () => {
     const profiles = Array.from({ length: 500 }, (_, index) => ({ ...exportConnectionProfile(original), id: String(index) }));
     const value = await preview(profiles); expect(value.entries).toHaveLength(500);
-    const result = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true }); expect(result.added).toBe(500); expect(new Set(result.connections.map(profile => profile.id)).size).toBe(501);
+    const result = transfer.apply({ previewToken: value.previewToken, decisions: decisions(value), allowIncomplete: true }); expect(result.added).toBe(500); expect(new Set(result.connections.map(assertNetworkProfile).map(profile => profile.id)).size).toBe(501);
     const content = JSON.stringify({ format: 'DBArk-connections', version: 1, connections: [exportConnectionProfile(original)] }); writeFileSync(source, content + ' '.repeat(connectionTransferLimits.fileBytes - Buffer.byteLength(content)));
     const first = await transfer.preview(source); for (let index = 0; index < 4; index++) await transfer.preview(source);
     expect(() => transfer.apply({ previewToken: first.previewToken, decisions: decisions(first) })).toThrow('预览已失效');

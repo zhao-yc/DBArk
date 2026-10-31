@@ -7,4 +7,4 @@ export interface CompletionColumnDetails{type:string;nullable:boolean;defaultVal
 export interface CompletionMetadataEntry{name:string;kind:'database'|'table'|'view'|'function'|'procedure'|'column';dataType?:string;visible?:boolean;sessionObject?:'temporary'|'unconfirmed';details?:CompletionColumnDetails}
 export interface CompletionMetadataOutput{entries:CompletionMetadataEntry[];incomplete:boolean;sessionUncertain?:boolean}
 /** null表示已确认无默认库；databaseKnown=false时不携带过期名称。模式缺省表示待确认。 */
-export interface CompletionSessionState{database?:string|null;databaseKnown:boolean;ansiQuotes?:boolean;noBackslashEscapes?:boolean;dialect?:'mysql'|'mariadb';serverVersion?:string;objectsRevision?:number;broken:boolean;busy:boolean}
+export interface CompletionSessionState{database?:string|null;databaseKnown:boolean;ansiQuotes?:boolean;noBackslashEscapes?:boolean;dialect?:'mysql'|'mariadb'|'sqlite';serverVersion?:string;objectsRevision?:number;broken:boolean;busy:boolean}

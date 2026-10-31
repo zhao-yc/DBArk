@@ -9,14 +9,14 @@ import { ActionMenu, ActionMenuSection } from './ActionMenu';
 import { AdaptiveToolbar } from './AdaptiveToolbar';
 
 /** 模块工具栏只组织既有命令；对象类别独立使用树上下文，页面命令由当前标签注册。 */
-export function NavigationToolbar({ onBrowse, onQueries, onHistory, objectTarget, connectionsAvailable, runningCount }: {
-  onBrowse(category: ObjectCategory): void; onQueries(): void; onHistory(): void; objectTarget: string; connectionsAvailable: boolean; runningCount: number;
+export function NavigationToolbar({ onBrowse, onQueries, onHistory, objectTarget, connectionsAvailable, runningCount, sqliteObjects = false }: {
+  onBrowse(category: ObjectCategory): void; onQueries(): void; onHistory(): void; objectTarget: string; connectionsAvailable: boolean; runningCount: number; sqliteObjects?: boolean;
 }) {
   const commands = useUiCommands(), revision = commands.snapshot.revision;
   const current = () => uiCommands.getSnapshot().revision === revision;
   const command = (id: UiCommandId) => <button key={id} disabled={!commands.enabled(id)} aria-pressed={id === 'focus-mode' || id === 'editor-word-wrap' ? commands.checked(id) : undefined} onClick={() => commands.run(id)}>{uiCommandLabels[id]}</button>;
   const connectionActions = <>{command('new-connection')}{command('connections-organize')}{command('connections-transfer')}</>;
-  const otherActions = <>{(['trigger', 'event'] as const).map(kind => <button key={kind} disabled={!connectionsAvailable} onClick={() => onBrowse(kind)}>{text.categories[kind]}</button>)}</>;
+  const otherActions = <>{(['trigger', 'event'] as const).filter(kind => !sqliteObjects || kind === 'trigger').map(kind => <button key={kind} disabled={!connectionsAvailable} onClick={() => onBrowse(kind)}>{text.categories[kind]}</button>)}</>;
   const queryActions = <><button onClick={onQueries}>{text.savedQueries}</button><button onClick={onHistory}>{text.queryHistory}</button>{command('new-query')}</>;
   const toolActions = <><ActionMenuSection label="数据库工具">{command('schema-compare')}{command('server-monitor')}{command('structure-search')}</ActionMenuSection>
     <ActionMenuSection label="离线快照">{command('explain-snapshot')}{command('result-snapshot')}</ActionMenuSection>
@@ -29,7 +29,7 @@ export function NavigationToolbar({ onBrowse, onQueries, onHistory, objectTarget
       { key: 'new-query', content: <button className="module-button" disabled={!commands.enabled('new-query')} onClick={() => commands.run('new-query')}><FileCode2/><span>{uiCommandLabels['new-query']}</span></button> },
       { key: 'table', content: browse('table', text.table, <Table2/>) },
       { key: 'view', content: browse('view', text.view, <Blocks/>) },
-      { key: 'routine', content: browse('routine', text.routine, <Workflow/>) },
+      ...(sqliteObjects ? [] : [{ key: 'routine', content: browse('routine', text.routine, <Workflow/>) }]),
       { key: 'other', content: <ActionMenu className="module-menu" label={text.other} icon={<FolderOpen/>} contextKey={String(revision)} isCurrent={current}>{otherActions}</ActionMenu>, overflow: <ActionMenuSection label={text.other}>{otherActions}</ActionMenuSection> },
       { key: 'query', content: <ActionMenu className="module-menu" label={text.query} icon={<FileCode2/>} contextKey={String(revision)} isCurrent={current}>{queryActions}</ActionMenu>, overflow: <ActionMenuSection label={text.query}>{queryActions}</ActionMenuSection> },
       { key: 'tools', content: <ActionMenu className="module-menu" label={text.tools} icon={<Wrench/>} contextKey={String(revision)} isCurrent={current}>{toolActions}</ActionMenu>, overflow: toolActions }

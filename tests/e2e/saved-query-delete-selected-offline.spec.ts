@@ -91,7 +91,7 @@ function register(): void {
       expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); expect(await records()).toEqual([]); expect((await settings()).tabs).toEqual([]);
       // 27条合成记录只通过正式Main准备；分页目标必须从真实返回值取得，不猜创建顺序或时间戳。
       const prepared = await step(() => page.evaluate(async () => {
-        const profile = await window.dbark.invoke('connections.save', { id: 'delete-selected-offline-profile', name: '批量删除离线配置', dialect: 'mysql', host: 'never.invalid', port: 1, user: 'offline-only', group: '', color: '#456789', database: '配置默认库', rememberPassword: false });
+        const profile = await window.dbark.invoke('connections.save', { id: 'delete-selected-offline-profile', name: '批量删除离线配置', dialect: 'mysql', host: 'never.invalid', port: 1, user: 'offline-only', group: '', color: '#456789', database: '配置默认库', rememberPassword: false }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; });
         const created: { source: import('../../src/shared/queryBinding').QuerySourceBinding; name: string; sql: string }[] = [];
         for (let index = 0; index < 27; index++) {
           const name = index % 2 ? '同名保存查询🚢' : '保存查询' + index;
@@ -135,7 +135,7 @@ function register(): void {
       const targetIds = prepared.targets.map(target => target.query.id), targets = new Set(targetIds), expectedRecords = baselineRecords.filter(query => !targets.has(query.id));
       const expectedMembers = prepared.members.filter(member => !targets.has(member.queryId)).map(member => [member.queryId, member.groupId]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
       const expectedGroups = { ...baselineGroups, totalCount: 25, groups: baselineGroups.groups.map(group => ({ ...group, count: group.count - prepared.targets.filter(target => target.groupId === group.id).length, totalCount: group.totalCount - prepared.targets.filter(target => target.groupId === group.id).length })) };
-      const baselineProfiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(baselineProfiles).toEqual([prepared.profile]);
+      const baselineProfiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; })))); expect(baselineProfiles).toEqual([prepared.profile]);
       await openList();
       const card = (target: (typeof prepared.targets)[number]) => list().locator('article.history-card').filter({ has: page.locator('pre').filter({ hasText: target.sqlPreview.split(/\r?\n/)[0] }) });
       const verifyCard = async (target: (typeof prepared.targets)[number]) => { await step(() => expect(card(target)).toHaveCount(1)); await step(() => expect(card(target).locator('strong')).toHaveText(target.query.name)); await step(() => expect(card(target).locator('pre')).toHaveText(target.sqlPreview + (target.previewTruncated ? '…' : ''))); };
@@ -160,14 +160,14 @@ function register(): void {
       for (const target of prepared.targets) await step(() => expect(page.evaluate(input => window.dbark.invoke('queries.updateSource', input), { source: target.binding, content: { name: target.query.name, connectionId: prepared.profile.id, context: target.binding.context, sql: "SELECT '旧来源不得重建';" } })).rejects.toThrow());
       expect(sortRecords(await records())).toEqual(expectedRecords); expect(organization(await groups())).toEqual(expectedGroups);
       await step(() => list().getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(list()).toBeHidden());
-      expect(await model()).toEqual(baselineModels); expect((await settings()).tabs).toEqual(baselineSettings.tabs); expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(baselineProfiles);
+      expect(await model()).toEqual(baselineModels); expect((await settings()).tabs).toEqual(baselineSettings.tabs); expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))).toEqual(baselineProfiles);
       expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); await quit();
       check(); const restarted = await desktop.restartOwnedDesktop(info); application = restarted.application; page = restarted.page; child = application.process(); closed = false; check(); await installAudit();
       await step(() => page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; })); await step(() => page.reload());
       await step(() => expect(page.locator('.query-tab .sql-editor-wrap > [aria-busy="false"]')).toHaveCount(2));
       expect(sortRecords(await records())).toEqual(expectedRecords); expect(organization(await groups())).toEqual(expectedGroups); expect((await settings()).tabs).toEqual(baselineSettings.tabs); expect((await settings()).activeTabId).toBe(baselineSettings.activeTabId);
       expect((await model()).map(({ value, eol }) => ({ value, eol }))).toEqual(baselineModels.map(({ value, eol }) => ({ value, eol })));
-      expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(baselineProfiles);
+      expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))).toEqual(baselineProfiles);
       await openList(); await step(() => expect(list().locator('article.history-card')).toHaveCount(25)); for (const target of prepared.targets) await step(() => expect(card(target)).toHaveCount(0));
       await step(() => list().getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(list()).toBeHidden());
       expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); await quit();

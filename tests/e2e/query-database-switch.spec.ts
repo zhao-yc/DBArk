@@ -133,7 +133,7 @@ function register(): void {
     }
     try {
       expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); resourceNames();
-      const empty = await step(() => page.evaluate(async () => ({ connections: (await window.dbark.invoke('connections.list', {})).length, settings: await window.dbark.invoke('settings.get', {}), ledger: [(await window.dbark.invoke('tasks.list', {})).length, (await window.dbark.invoke('history.list', {})).length] })));
+      const empty = await step(() => page.evaluate(async () => ({ connections: (await window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))).length, settings: await window.dbark.invoke('settings.get', {}), ledger: [(await window.dbark.invoke('tasks.list', {})).length, (await window.dbark.invoke('history.list', {})).length] })));
       expect(empty.connections).toBe(0); expect(empty.settings.tabs).toEqual([]); expect(empty.ledger).toEqual([0, 0]);
       // 仅空工作台启用现有Monaco官方全局观察API，之后不再reload或替换模型。
       await step(() => page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; })); await step(() => page.reload());
@@ -151,7 +151,7 @@ function register(): void {
       }
       // 准备专用临时profile/settings，口令remember=false只进RAM；不声称连接表单验收。
       await step(() => page.evaluate(async value => {
-        const profile = await window.dbark.invoke('connections.save', { id: value.profileId, name: '切库专项临时连接', dialect: 'mysql', host: value.host, port: 13384, user: value.user, password: value.password, rememberPassword: false, database: value.a, group: '', color: '#345678' });
+        const profile = await window.dbark.invoke('connections.save', { id: value.profileId, name: '切库专项临时连接', dialect: 'mysql', host: value.host, port: 13384, user: value.user, password: value.password, rememberPassword: false, database: value.a, group: '', color: '#345678' }).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; });
         if (profile.rememberPassword !== false || profile.password !== undefined) throw Error('切库临时profile口令策略不符');
         const settings = await window.dbark.invoke('settings.get', {}); await window.dbark.invoke('settings.save', { ...settings, activeTabId: value.tabId, tabs: [{ id: value.tabId, kind: 'query', title: '切库专项查询', connectionId: profile.id, database: value.a, databaseContext: { state: 'known', database: value.a }, sql: value.sql }] });
       }, { profileId, tabId, a, sql, host: fixed.DBARK_TEST_HOST!, user: fixed.DBARK_TEST_USER!, password: fixed.DBARK_TEST_PASSWORD! }));

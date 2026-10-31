@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, vi } from 'vitest';
 import type { ManagedConnection } from '../../src/engine/connection';
-import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
+import type { ConnectionProfile, NetworkConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { IndexPatch } from '../../src/shared/tableIndexPatches';
 import type { TableIndexGetOutput, TableIndexPreviewOutput } from '../../src/shared/tableIndexTasks';
 import { assertFixedPrefixBudgetPreview, assertFixedPrefixBudgetSubParts, assertFixedPrefixModes, assertPrefixReleased, bindFixedPrefixTarget, finishFixedPrefix, isPrefixDuplicate, watchPrefixConnection, type FixedPrefixCase, type FixedPrefixOwner, type PrefixConnectionFact } from '../helpers/indexFixedPrefixCore';
@@ -16,13 +16,14 @@ export async function runFixedPrefixCase(kind: FixedPrefixCase, owner: FixedPref
   const target = binding.target, connectionId = randomUUID(), schema = 'dbark_fixed_prefix_' + randomUUID().replaceAll('-', ''), table = 'prefix_core';
   try {
   const quoted = '`' + schema + '`.`' + table + '`';
-  const profile: ConnectionProfile = { id: connectionId, name: '固定前缀本例连接', group: '', color: '#123456', dialect: target.dialect, host: target.host, port: target.port, user: target.user, password: target.password,
+  const profile: NetworkConnectionProfile = { id: connectionId, name: '固定前缀本例连接', group: '', color: '#123456', dialect: target.dialect, host: target.host, port: target.port, user: target.user, password: target.password,
     ...(target.tls ? { tls: { enabled: true, rejectUnauthorized: true, caPath: target.ca } } : {}) };
   /** 原始配置与每次实际交给connect的profile精确一致，不能只核profile.id。 */
-  const assertProfile = (actual: ConnectionProfile) => {
+  function assertProfile(actual: ConnectionProfile): asserts actual is NetworkConnectionProfile {
     owner.check();
+    if (actual.dialect === 'sqlite') throw Error('前缀case收到SQLite，停止网络专项');
     if (actual.id !== connectionId || actual.host !== target.host || actual.port !== target.port || actual.dialect !== target.dialect || actual.user !== target.user || actual.password !== target.password || actual.ssh || (target.tls ? actual.tls?.enabled !== true || actual.tls.rejectUnauthorized !== true || actual.tls.caPath !== target.ca || actual.tls.certPath || actual.tls.keyPath : actual.tls !== undefined)) throw Error('前缀case实际连接与本轮显式profile不一致');
-  };
+  }
   assertProfile(profile);
   // 仅显式开启后才导入真实连接实现；不读.env，不配置SSH，不提供默认认证。
   const connectionModule = await owner.run(() => import('../../src/engine/connection'));

@@ -15,8 +15,8 @@ export function sameCompletionState(left:CompletionSessionState,right:Completion
 
 /** 物理会话事实始终优先；断开、繁忙或未知版本不能借用另一连接轮次的能力。 */
 export function completionContextCapabilities(state?:CompletionSessionState,opened?:Readonly<Pick<ConnectionStatus,'dialect'|'version'>>):CompletionScopeCapabilities{
-  if(state)return state.busy||state.broken?{lateralDerivedTables:false,windowFunctions:false,insertRowAliases:false}:completionCapabilitiesForServer(state.dialect,state.serverVersion);
-  return completionCapabilitiesForServer(opened?.dialect,opened?.version);
+  if(state)return state.dialect==='sqlite'||state.busy||state.broken?{lateralDerivedTables:false,windowFunctions:false,insertRowAliases:false}:completionCapabilitiesForServer(state.dialect,state.serverVersion);
+  return opened?.dialect==='sqlite'?{lateralDerivedTables:false,windowFunctions:false,insertRowAliases:false}:completionCapabilitiesForServer(opened?.dialect,opened?.version);
 }
 /** 初始标签库仅用于尚无查询会话的草稿；已存在会话必须采用其缓存快照。 */
 export function resolveCompletionContext(initialDatabase:string|undefined,state?:CompletionSessionState,draftDatabaseUnknown=false):{database?:string;mode:CompletionLexicalMode;databaseUnknown:boolean;available:boolean;reason?:'busy'|'broken'}{

@@ -1,3 +1,4 @@
+import { queryDialectVm } from '../helpers/queryDialectVm';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -35,7 +36,7 @@ function fixture() {
   let serial = 0;
   // 对应真实组件的useRef：复制/格式化尚未发起，模型挂载标记初始false，仍执行真实接管函数。
   // 未打开结果写入用途的真实初始引用，不替换原执行函数或断言。
-  const port = createContext({ snapshotOperation: { current: null }, continueOnError: false, collectWarnings: false, resultInsertRef: { current: null }, resultInsertActivity: { current: 0 }, duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection, captureQueryFailureSource, failureSource: { current: undefined }, parameterFailureSource: { current: undefined }, alive: { current: true }, closeRequestRef: { current: undefined }, refreshFailureSource: vi.fn(),
+  const port = createContext({ ...queryDialectVm(),  snapshotOperation: { current: null }, continueOnError: false, collectWarnings: false, resultInsertRef: { current: null }, resultInsertActivity: { current: 0 }, duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection, captureQueryFailureSource, failureSource: { current: undefined }, parameterFailureSource: { current: undefined }, alive: { current: true }, closeRequestRef: { current: undefined }, refreshFailureSource: vi.fn(),
     // 与真实组件初始useRef一致：尚未打开行详情，但真实失效函数仍撤销控制器并清空两个React状态。
     rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(),
     // 对应新增确认入口的真实初始useRef；本组未打开实际分析，但模型替换仍执行原回调。
@@ -97,14 +98,24 @@ describe('真实QueryTab当前语句异步意图', () => {
 describe('真实按钮和Monaco动作接线', () => {
   it('按钮与新回调都调用当前语句入口，原回调保持选区优先', () => {
     let button = false, callback = false, original = false;
+    /** 新方言守卫只对 SQLite 关闭回调，网络分支继续核原箭头与原执行入口。 */
+    function attributeValue(attr: ts.JsxAttribute): string | undefined {
+      if (attr.name.getText(tree) !== 'onExecuteCurrent') return attr.initializer?.getText(tree);
+      const value = attr.initializer;
+      expect(value && ts.isJsxExpression(value) && value.expression && ts.isConditionalExpression(value.expression)).toBe(true);
+      if (!value || !ts.isJsxExpression(value) || !value.expression || !ts.isConditionalExpression(value.expression)) throw Error('当前语句方言守卫缺失');
+      expect(value.expression.condition.getText(tree)).toBe('sqlite');
+      expect(value.expression.whenTrue.getText(tree)).toBe('undefined');
+      return '{' + value.expression.whenFalse.getText(tree) + '}';
+    }
     function inspect(node: ts.Node) {
       if (ts.isJsxOpeningElement(node)) {
-        const props = new Map(node.attributes.properties.filter(ts.isJsxAttribute).map(attr => [attr.name.getText(tree), attr.initializer?.getText(tree)]));
+        const props = new Map(node.attributes.properties.filter(ts.isJsxAttribute).map(attr => [attr.name.getText(tree), attributeValue(attr)]));
         if (node.tagName.getText(tree) === 'button' && props.get('aria-label') === '{currentStatementZh.action}') { expect(props.get('onClick')).toBe('{() => void executeCurrentStatement()}'); expect(props.get('disabled')).toBe('{busy || !connection}'); button = true; }
         if (node.tagName.getText(tree) === 'SqlEditor' && props.has('onExecuteCurrent')) { callback = props.get('onExecuteCurrent') === '{() => void executeCurrentStatement()}'; original = props.get('onExecute') === '{() => void execute()}'; }
       }
       if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(tree) === 'SqlEditor') {
-        const props = new Map(node.attributes.properties.filter(ts.isJsxAttribute).map(attr => [attr.name.getText(tree), attr.initializer?.getText(tree)]));
+        const props = new Map(node.attributes.properties.filter(ts.isJsxAttribute).map(attr => [attr.name.getText(tree), attributeValue(attr)]));
         if (props.has('onExecuteCurrent')) { callback = props.get('onExecuteCurrent') === '{() => void executeCurrentStatement()}'; original = props.get('onExecute') === '{() => void execute()}'; }
       }
       node.forEachChild(inspect);
@@ -132,7 +143,7 @@ describe('真实按钮和Monaco动作接线', () => {
       };
     }
     // 本例只核对原快捷键；正文桥接的真实生命周期由专用组件测试覆盖。
-    const port = createContext({ monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, bindEditorIndentation, editorIndentationOptions, optionsRef: { current: { tabSize: 4, insertSpaces: true } }, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first } });
+    const port = createContext({ ...queryDialectVm(),  monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, bindEditorIndentation, editorIndentationOptions, optionsRef: { current: { tabSize: 4, insertSpaces: true } }, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first } });
     runInContext(ts.transpileModule('globalThis.mounted=' + mounted, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port); const firstEditor = actionEditor(); port.mounted(firstEditor.editor); firstEditor.changeModel();
     expect(actions.map(action => [action.id, action.keybindings[0]])).toEqual([['dbark-run', 2051], ['dbark-run-current', 3075]]); port.currentRunRef.current = latest; actions[1].run(); actions[0].run(); expect(latest).toHaveBeenCalledOnce(); expect(first).not.toHaveBeenCalled(); expect(original).toHaveBeenCalledOnce();
     actions.length = 0; port.currentRunRef.current = undefined; const nextEditor = actionEditor(); port.mounted(nextEditor.editor); nextEditor.changeModel(); expect(actions.map(action => action.id)).toEqual(['dbark-run']);

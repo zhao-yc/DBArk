@@ -1,5 +1,6 @@
 import type * as monaco from 'monaco-editor';
 import { format, formatDialect, mysql } from 'sql-formatter';
+import { sqliteZh } from './locales/sqlite.zh-CN';
 import { completionLimits } from '../shared/sqlCompletion';
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 import { editorIndentationOptions } from '../shared/editorIndentation';
@@ -10,7 +11,7 @@ let preparedRoles: RoleModule | undefined;
 /** 仅显式大写/小写入口调用；模块加载成功前上层必须保留原模型/选区/owner，默认入口不调用。 */
 export async function prepareSqlFormattingRoles(): Promise<void> { preparedRoles = await import('./sqlFormattingRoles'); }
 
-export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; }
+export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; dialect?: 'mysql' | 'sqlite'; }
 type FormatterToken = Parameters<NonNullable<typeof mysql.tokenizerOptions.postProcess>>[0][number];
 // 只列正式词法类型，不维护关键字单词表；函数/数据类型/变量/参数/标识符均不在其中。
 const keywordTypes = new Set<string>(['RESERVED_KEYWORD', 'RESERVED_KEYWORD_PHRASE', 'RESERVED_SET_OPERATION', 'RESERVED_CLAUSE', 'RESERVED_SELECT', 'RESERVED_JOIN', 'CASE', 'END', 'WHEN', 'ELSE', 'THEN', 'LIMIT', 'BETWEEN', 'AND', 'OR', 'XOR']);
@@ -22,17 +23,19 @@ const word = (char: string) => /[A-Za-z0-9_$\u0080-\uffff]/.test(char);
 const fail = (): never => { throw new Error(text.unsafe); };
 
 /** 有界词法校验只用于确认排版未改变原始token，不把它当作SQL语法解析或执行器。 */
-function atoms(source: string, ansiQuotes: boolean, noBackslashEscapes: boolean): Atom[] {
+function atoms(source: string, ansiQuotes: boolean, noBackslashEscapes: boolean, sqlite = false): Atom[] {
   const out: Atom[] = []; let i = 0, depth = 0;
   while (i < source.length) {
     if (whitespace(source[i])) { i++; continue; }
     const start = i, char = source[i], next = source[i + 1]; let kind = 'symbol';
-    if (char === '#' || char === '-' && next === '-' && /[\x00-\x20\x7f]/.test(source[i + 2] ?? ' ')) {
+    if (!sqlite && char === '#' || char === '-' && next === '-' && (sqlite || /[\x00-\x20\x7f]/.test(source[i + 2] ?? ' '))) {
       kind = 'comment'; while (i < source.length && !/[\r\n]/.test(source[i])) i++;
     } else if (char === '/' && next === '*') {
       // 可执行注释及提示器具有独立语法；不能由普通formatter猜测其含义。
       if (/^(?:!|M!|\+)/i.test(source.slice(i + 2))) fail();
       const close = source.indexOf('*/', i + 2); if (close < 0) fail(); i = close + 2; kind = 'comment';
+    } else if (sqlite && char === '[') {
+      const close = source.indexOf(']', i + 1); if (close < 0) fail(); i = close + 1; kind = 'identifier';
     } else if (char === "'" || char === '"' || char === '`') {
       const identifier = char === '`' || char === '"' && ansiQuotes; kind = identifier ? 'identifier' : 'string'; i++; let closed = false;
       while (i < source.length) {
@@ -94,7 +97,8 @@ function keywordCaseFormatting(source: string, start: number, end: number, origi
 export function planSqlFormatting(source: string, start: number, end: number, eol: string = '\n', indentation: FormattingPreferences = {}): { start: number; end: number; text: string } | null {
   if (source.length > completionLimits.sourceUnits) throw new Error(text.limited);
   if (source.includes('\0') || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > source.length || !['\n', '\r\n'].includes(eol)) fail();
-  const scans = [false, true].flatMap(ansi => [false, true].map(escapes => ({ ansi, escapes, tokens: atoms(source, ansi, escapes) })));
+  const sqlite = indentation.dialect === 'sqlite';
+  const scans = sqlite ? [{ ansi: true, escapes: true, tokens: atoms(source, true, true, true) }] : [false, true].flatMap(ansi => [false, true].map(escapes => ({ ansi, escapes, tokens: atoms(source, ansi, escapes) })));
   for (const { tokens } of scans) if (tokens.some(token => start > token.start && start < token.end || end > token.start && end < token.end)) throw new Error(text.selection);
   if (source[start - 1] === '\r' && source[start] === '\n' || source[end - 1] === '\r' && source[end] === '\n') throw new Error(text.selection);
   const original = source.slice(start, end), leading = /^[\t\n\r\f ]*/.exec(original)![0], trailing = /[\t\n\r\f ]*$/.exec(original)![0];
@@ -103,20 +107,22 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
   // 仅显式格式化时使用当前缩进；更改偏好本身从不改写SQL。
   const options = editorIndentationOptions(indentation.tabSize, indentation.insertSpaces);
   const keywordCase = readSqlKeywordCase(indentation.keywordCase);
+  // SQLite 尚无名称角色证明，显式大小写转换必须拒绝，不能借用 MySQL 解析器猜名称。
+  if (sqlite && keywordCase !== 'preserve') throw Error(sqliteZh.formatCaseUnavailable);
   if (keywordCase !== 'preserve' && (source.length > sqlKeywordRoleLimits.sourceUnits || scans[0].tokens.length > sqlKeywordRoleLimits.tokens)) throw Error(text.limited);
   try {
     if (keywordCase !== 'preserve') {
       const roles = preparedRoles; if (!roles) throw Error(text.unavailable);
       ({ formatted, eligible } = keywordCaseFormatting(source, start, end, original, options, keywordCase, roles.sqlFormattingNameRanges(source)));
     }
-    else formatted = format(original.trim(), { language: 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
+    else formatted = format(original.trim(), { language: sqlite ? 'sqlite' : 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
     formatted = formatted.trim().replace(/\r?\n/g, eol);
   }
   catch { throw new Error(text.failed); }
   const replacement = leading + formatted + trailing, next = source.slice(0, start) + replacement + source.slice(end);
   if (next.length > completionLimits.sourceUnits) throw new Error(text.limited);
   for (const scan of scans) {
-    const after = atoms(next, scan.ansi, scan.escapes); if (after.length !== scan.tokens.length) fail(); let range = 0;
+    const after = atoms(next, scan.ansi, scan.escapes, sqlite); if (after.length !== scan.tokens.length) fail(); let range = 0;
     for (let index = 0; index < scan.tokens.length; index++) {
       const before = scan.tokens[index], value = after[index];
       if (before.kind !== value.kind || before.gapSensitive !== value.gapSensitive) fail();

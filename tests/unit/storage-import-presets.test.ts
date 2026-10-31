@@ -1,3 +1,4 @@
+import { assertNetworkProfile } from '../helpers/assertNetworkProfile';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -102,7 +103,7 @@ describe('导入配置真实SQLite、CAS及隔离', () => {
     const before = await otherTables(file), revisions = [store.connectionRevision(), store.historyPageRevision(), store.snippetRevision()];
     const saved = store.saveImportPreset({ ...packet(store.importPresets()), name: '仅配置', configuration: configuration() }); store.deleteImportPreset({ ...packet(saved), id: saved.entries[0].id });
     expect(await otherTables(file)).toEqual(before); expect([store.connectionRevision(), store.historyPageRevision(), store.snippetRevision()]).toEqual(revisions); expect(protector.decrypt).not.toHaveBeenCalled();
-    expect(store.resolveConnection('synthetic').password).toBe('仅本例内存');
+    expect(assertNetworkProfile(store.resolveConnection('synthetic')).password).toBe('仅本例内存');
   });
 });
 

@@ -28,7 +28,7 @@ import { validateExcelMapping } from '../shared/excelTransfer';
 import { validateLosslessImport } from './losslessImport';
 import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
-import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
+import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, NetworkConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
 import { connectionTransportChanged } from '../shared/connectionProfile';
 import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type SqlLexicalMode } from '../shared/queryParameters';
 import { canonicalReference, validateReferenceValues } from '../shared/references';
@@ -140,7 +140,7 @@ export class Engine {
   private readonly importInspections = new ImportFileInspectTasks(event => this.emit(event));
   private readonly excelConnecting = new Map<string, { connectionId: string; controller: AbortController; done: Promise<void> }>();
   private readonly conflictImports = new Map<string, ConflictImportLease>();
-  private readonly profiles = new Map<string, ConnectionProfile>();
+  private readonly profiles = new Map<string, NetworkConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, RunningTask>();
   private readonly insertConfirmations=new QueryInsertConfirmations();
@@ -209,10 +209,12 @@ export class Engine {
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
+    // 网络引擎只接受网络配置；跨进程误路由不能缓存SQLite身份或进入mysql2。
+    if (command !== '__connections.prepareSave' && (input.dialect === 'sqlite' || [input.profile, input.sourceProfile, input.targetProfile].some(profile => profile?.dialect === 'sqlite'))) throw new Error('SQLite连接不能交给MySQL网络引擎');
     if (this.closing && command !== 'table.filteredDelete.release' && command !== 'table.filteredUpdate.release' && command !== 'result.insertRelease' && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release' && command !== 'schema.tableChecks.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
     switch (command) {
       case 'table.filteredDelete.preview': case 'table.filteredDelete.apply': {
-        const profile = input.profile as ConnectionProfile | undefined;
+        const profile = input.profile as NetworkConnectionProfile | undefined;
         if (!profile || profile.id !== input.connectionId || !Number.isSafeInteger(input.connectionRevision) || input.connectionRevision < 0) throw Error('主进程未提供可信删除连接及修订');
         if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
         const { profile: _profile, connectionRevision, ...request } = input;
@@ -220,7 +222,7 @@ export class Engine {
       }
       case 'table.filteredDelete.release': return this.tableFilteredDeletes.release(tableFilteredDeleteReleaseInputSchema.parse(input));
       case 'table.filteredUpdate.preview': case 'table.filteredUpdate.apply': {
-        const profile = input.profile as ConnectionProfile | undefined;
+        const profile = input.profile as NetworkConnectionProfile | undefined;
         if (!profile || profile.id !== input.connectionId || !Number.isSafeInteger(input.connectionRevision) || input.connectionRevision < 0) throw Error('主进程未提供可信填充连接及修订');
         if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
         const { profile: _profile, connectionRevision, ...request } = input;
@@ -228,7 +230,7 @@ export class Engine {
       }
       case 'table.filteredUpdate.release': return this.tableFilteredUpdates.release(tableFilteredUpdateReleaseInputSchema.parse(input));
       case 'result.insertPreview': case 'result.insertApply': {
-        const profile = input.profile as ConnectionProfile | undefined;
+        const profile = input.profile as NetworkConnectionProfile | undefined;
         if (!profile || profile.id !== input.connectionId) throw Error('主进程未提供可信结果写入连接');
         if (!Number.isSafeInteger(input.connectionRevision) || input.connectionRevision < 0) throw Error('结果写入缺少可信连接修订');
         if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
@@ -256,11 +258,11 @@ export class Engine {
         return;
       }
       case 'connections.test': return this.withConnectionUse(input.id, async () => {
-        const managed = await connect(input as ConnectionProfile);
+        const managed = await connect(input as NetworkConnectionProfile);
         try { return managed.status; } finally { await managed.close(); }
       });
       case 'connections.open': return this.withConnectionUse(input.id, async () => {
-        const profile = input.profile as ConnectionProfile | undefined;
+        const profile = input.profile as NetworkConnectionProfile | undefined;
         if (!profile || profile.id !== input.id) throw new Error('主进程未提供有效连接配置');
         const managed = await connect(profile);
         try { this.profiles.set(profile.id, profile); return managed.status; } finally { await managed.close(); }
@@ -334,7 +336,7 @@ export class Engine {
           undefined, '读取服务器监控', true, () => ({}));
       }
       case 'search.structure':case 'search.structureContinue':{
-        const profile=input.profile as ConnectionProfile|undefined;
+        const profile=input.profile as NetworkConnectionProfile|undefined;
         if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效搜索连接配置');
         if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
         const run=<T>(action:(managed:ManagedConnection,control:Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>)=>Promise<T>)=>this.withIndependentTask(input.connectionId,input.taskId,action,undefined,'搜索结构',true);
@@ -363,7 +365,7 @@ export class Engine {
         if(!this.dataSearches.assertOwner(input))return;await this.cancelTask(input.taskId);return this.dataSearches.release(input);
       case 'metadata.completion': {
         // 主进程注入保存配置即可启动可取消短读，不额外开一次不可取消的测试连接。
-        const profile=input.profile as ConnectionProfile|undefined;
+        const profile=input.profile as NetworkConnectionProfile|undefined;
         if(profile){if(profile.id!==input.connectionId)throw new Error('补全连接配置目标不符');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);}
         // 补全结果也须等待原流真实关闭，不能在 QUIT 回调先到时被资源确认门拒绝。
         return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>completionMetadata(managed,input as CompletionMetadataInput,control),undefined,'读取补全元数据',true);
@@ -764,7 +766,7 @@ export class Engine {
   }
 
   /** 只读取已经由主进程解密并成功打开的连接配置，不接受界面任意凭据。 */
-  private profile(id: string): ConnectionProfile {
+  private profile(id: string): NetworkConnectionProfile {
     const profile = this.profiles.get(id);
     if (!profile) throw new Error('请先打开数据库连接');
     return profile;

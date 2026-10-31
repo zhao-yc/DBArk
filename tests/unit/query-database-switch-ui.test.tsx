@@ -1,3 +1,4 @@
+import { queryDialectVm } from '../helpers/queryDialectVm';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -57,7 +58,7 @@ function fixture(){
     }
     throw Error('意外IPC：'+command);
   });
-  const context:any=createContext({QueryDatabaseSwitchIntent,queryDatabaseFromSession,queryDatabasePatch,queryDatabaseSwitchZh:t,queryContextZh,JSON,Error,invoke,tab,
+  const context:any=createContext({ ...queryDialectVm(), QueryDatabaseSwitchIntent,queryDatabaseFromSession,queryDatabasePatch,queryDatabaseSwitchZh:t,queryContextZh,JSON,Error,invoke,tab,
     useWorkspace:{getState:()=>workspace,subscribe:(fn:()=>void)=>{changed.add(fn);return()=>changed.delete(fn);}},
     acquireWorkspaceBusy:()=>{if(workspace.activeJobs.q)throw Error('其他作业');const generation=++jobSequence;workspace.activeJobs={q:true};notify();let live=true;return{owns:()=>live&&generation===jobSequence&&workspace.activeJobs.q===true,release:()=>{if(!live||generation!==jobSequence)return false;live=false;workspace.activeJobs={q:false};notify();return true;}};},
     flushSettings:flush,uid:()=>`switch-${++sequence}`,errorMessage:(error:any)=>error?.message??String(error),document,

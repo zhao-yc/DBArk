@@ -1,3 +1,4 @@
+import { networkBrokerRamPort } from './network-broker-ram-port';
 import { extractMainProductionFunction } from './main-production-function';
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
@@ -18,7 +19,7 @@ function harness() {
   const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
-     tableApplyReceipts: undefined, SavedQuerySearchCancelled, savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, tasks, pendingQueryHistory: new Map(), completionTasks: new Set(), structureTokens: tokens, structureProgress: progress, shuttingDown: false, preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(), connectionConfig: { assertAvailable() {} }, store: { saveTask() {}, connectionRevision: () => 7 }, broker: { request },
+     tableApplyReceipts: undefined, SavedQuerySearchCancelled, savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, tasks, pendingQueryHistory: new Map(), completionTasks: new Set(), structureTokens: tokens, structureProgress: progress, shuttingDown: false, preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(), connectionConfig: { assertAvailable() {} }, store: { saveTask() {}, connectionRevision: () => 7 }, broker: networkBrokerRamPort(request),
     taskEvent(event: TaskEvent) { events.push(event); if (event.tableAutoIncrement) progress.set(event.taskId, event.tableAutoIncrement); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },
   });
   runInContext(ts.transpileModule(dispatch + exit + '\nglobalThis.handlers={dispatch,engineExited};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);

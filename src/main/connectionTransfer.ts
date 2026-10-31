@@ -11,7 +11,9 @@ interface Snapshot { expires: number; revision: number; profiles: ExportedConnec
 export interface ConnectionReplacementGuard { replace<T>(targets: readonly ConnectionProfile[], expectedRevision: number, commit: () => T): Promise<T>; }
 
 /** 只按公开服务器路由提示潜在重复；匹配从不用于覆盖或复用已有身份。 */
-function target(profile: ExportedConnectionProfile): string {
+function target(profile: ExportedConnectionProfile): string | undefined {
+  // 文件名提示不能证明两个本机文件是同一目标，SQLite只按ID或显示名称提示重复。
+  if (profile.dialect === 'sqlite') return undefined;
   return JSON.stringify([profile.dialect, profile.host, profile.port, profile.user, profile.database ?? '', profile.ssh?.enabled ?? false, profile.ssh?.host ?? '', profile.ssh?.port ?? 22, profile.ssh?.user ?? '']);
 }
 
@@ -68,8 +70,8 @@ export class ConnectionTransfer {
     this.previews.set(token, { expires, revision: this.store.connectionRevision(), profiles: structuredClone(document.connections) });
     return { previewToken: token, expiresAt: new Date(expires).toISOString(), entries: document.connections.map(profile => ({
       sourceId: profile.id, profile,
-      warnings: ['不包含数据库密码、SSH 密码或私钥口令；导入后请核对目标并补充认证', ...(importConnectionProfile(profile, '').pendingFiles?.length ? ['认证文件仅有文件名提示，必须重新选择本机文件并保存后才能连接'] : [])],
-      matches: stored.flatMap(existing => { const reasons: ('id' | 'name' | 'target')[] = []; if (existing.id === profile.id) reasons.push('id'); if (existing.name === profile.name) reasons.push('name'); if (target(existing) === target(profile)) reasons.push('target'); return reasons.length ? [{ id: existing.id, name: existing.name, reasons }] : []; }),
+      warnings: profile.dialect === 'sqlite' ? ['数据库文件只保留文件名提示，必须重新选择本机SQLite文件并保存后才能连接'] : ['不包含数据库密码、SSH 密码或私钥口令；导入后请核对目标并补充认证', ...(importConnectionProfile(profile, '').pendingFiles?.length ? ['认证文件仅有文件名提示，必须重新选择本机文件并保存后才能连接'] : [])],
+      matches: stored.flatMap(existing => { const reasons: ('id' | 'name' | 'target')[] = []; if (existing.id === profile.id) reasons.push('id'); if (existing.name === profile.name) reasons.push('name'); if (target(profile) !== undefined && target(existing) === target(profile)) reasons.push('target'); return reasons.length ? [{ id: existing.id, name: existing.name, reasons }] : []; }),
     })) };
   }
 
@@ -92,6 +94,7 @@ export class ConnectionTransfer {
     const replacements = decisions.flatMap(decision => {
       if (decision.action !== 'replace') return [];
       const previous = stored.get(decision.targetId); if (!previous) throw new Error(messages.missing);
+      if ((snapshot.profiles.find(profile => profile.id === decision.sourceId)?.dialect === 'sqlite') !== (previous.dialect === 'sqlite')) throw new Error('不能将已有连接替换为其他数据库类型，请另建连接');
       return [{ sourceId: decision.sourceId, targetId: decision.targetId, previous: structuredClone(previous) }];
     });
     if (!replacements.length) throw new Error(messages.decision);

@@ -1,4 +1,4 @@
-import type { ConnectionProfile } from './contracts';
+import type { ConnectionProfile, NetworkConnectionProfile } from './contracts';
 
 export const connectionUriLimits = { units: 16 * 1024, password: 4096 } as const;
 export const connectionUriErrors = {
@@ -6,7 +6,7 @@ export const connectionUriErrors = {
   options: '连接URI不接受查询参数或片段。请在表单中明确配置SSH／TLS，不会忽略这些选项。',
   budget: '连接URI或解码字段超出长度限制。',
 } as const;
-export type ConnectionUriTarget = Pick<ConnectionProfile, 'dialect' | 'host' | 'port' | 'user' | 'password' | 'database'>;
+export type ConnectionUriTarget = Pick<NetworkConnectionProfile, 'dialect' | 'host' | 'port' | 'user' | 'password' | 'database'>;
 /** 组件只解码一次；无效UTF-8、NUL和孤立代理项拒绝，错误不回显URI或秘密。 */
 function decode(value: string): string {
   try {
@@ -41,9 +41,9 @@ export function parseConnectionUri(raw: string): ConnectionUriTarget {
   const database = match[3] && match[3] !== '/' ? decode(match[3].slice(1)) : undefined;
   if (database && /[\u0000-\u001f\u007f/\\]/u.test(database)) throw Error(connectionUriErrors.invalid);
   if (host.length > 512 || user.length > 256 || password.length > connectionUriLimits.password || (database?.length ?? 0) > 256) throw Error(connectionUriErrors.budget);
-  return { dialect: match[1].toLowerCase() as ConnectionProfile['dialect'], host, port, user, password, ...(database ? { database } : {}) };
+  return { dialect: match[1].toLowerCase() as NetworkConnectionProfile['dialect'], host, port, user, password, ...(database ? { database } : {}) };
 }
 /** 新连接只保留名称分组颜色和新编号；不把复制来源的SSH、TLS、秘密标记或待补文件带往新目标。 */
-export function connectionProfileFromUri(current: ConnectionProfile, raw: string): ConnectionProfile {
+export function connectionProfileFromUri(current: ConnectionProfile, raw: string): NetworkConnectionProfile {
   return { id: current.id, name: current.name, group: current.group, color: current.color, ...parseConnectionUri(raw), rememberPassword: false };
 }

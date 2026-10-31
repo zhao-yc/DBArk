@@ -1,4 +1,4 @@
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import { qisLifetime, qisUsingHandle } from './queryInsertIntegration';
 
 export const qcsvGate = 'DBARK_QUERY_CSV_INTEGRATION_ENABLED';

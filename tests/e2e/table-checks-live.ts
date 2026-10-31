@@ -9,7 +9,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { test, expect, ownedDesktopResources, retainOwnedDesktopResources, confirmOwnedDesktopExit, dataDir, pageErrors } from './desktop-fixture';
 import { bindEditorIndentNativeCase } from './editor-indentation-native-gate';
 import { connect, type ManagedConnection } from '../../src/engine/connection';
-import type { ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
 import type { TableCheckChange, TableCheckGetOutput, TableCheckPreviewOutput, TableCheckApplyOutput } from '../../src/shared/tableChecks';
 import { tableCheckMessages } from '../../src/shared/tableChecks';
 import { tableChecksZh as text } from '../../src/renderer/locales/tableChecks.zh-CN';
@@ -129,7 +129,7 @@ export function registerTableChecksNative(): void {
       expect(baselineRows.find(row => row.id === '2')).toEqual({ id: '2', amount: null, note: '', payload: null }); const precise = baselineRows.find(row => row.id === '18446744073709551615')!; expect(precise.amount).toBe('12345678901234567890.1234567890'); expect(precise.note).toBeNull(); expect(typeof precise.payload).toBe('string'); expect(precise.payload).toMatch(/"wide"\s*:\s*18446744073709551615/); expect(precise.payload).toContain('合成');
       expect((await read(sql.checks, [resource.database])).map(row => row.name).sort()).toEqual([...resource.subject.initialCheckNames].sort());
       // 准备真实保存配置，秘密仅传原Main并保留会话；此步不冒称连接表单/CA选择器验收。
-      const savedProfile = await step(() => page.evaluate(profile => window.dbark.invoke('connections.save', profile), { ...profile, id: 'checks-app-' + resource.ownerNonce, name: 'CHECK本例' })); expect(savedProfile.rememberPassword).toBe(false); expect(savedProfile.password).toBeUndefined();
+      const savedProfile = await step(() => page.evaluate(profile => window.dbark.invoke('connections.save', profile).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), { ...profile, id: 'checks-app-' + resource.ownerNonce, name: 'CHECK本例' })); expect(savedProfile.rememberPassword).toBe(false); expect(savedProfile.password).toBeUndefined();
       // 重新加载只为正式App读取本地保存配置；不是用重载绕过产品数据或定义读取。
       await step(() => page.reload()); const currentFrame = page.mainFrame(); if (currentFrame !== frame) throw Error('CHECK准备reload改变Playwright原mainFrame身份');
       const node = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: savedProfile.name, exact: true }) }); await step(() => node.getByRole('button', { name: savedProfile.name, exact: true }).click()); const databaseRow = node.locator('.database-row').filter({ has: page.getByRole('button', { name: resource.database, exact: true }) }); await step(() => databaseRow.getByRole('button', { name: resource.database, exact: true }).click()); await step(() => expect(databaseRow.getByRole('button', { name: resource.database, exact: true })).toHaveAttribute('aria-expanded', 'true'));

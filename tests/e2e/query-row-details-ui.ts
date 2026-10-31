@@ -94,7 +94,7 @@ export function registerQueryRowDetailsUi(binding: QueryRowDetailsUiBinding) {
       await step(() => connection.getByLabel(zh.connections.text012, { exact: true }).fill(target.database));
       // 不点连接测试，不导入证书/SSH；本例凭据只进入strict owner所属的临时安装配置。
       await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
-      const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})));
+      const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))));
       expect(profiles).toHaveLength(1); const profile = profiles[0];
       expect(profile).toMatchObject({ name: connectionName, host: target.host, port: target.port, dialect: 'mysql', user: target.user, database: target.database });
       expect(profile.id).toBeTruthy(); expect(profile.ssh?.enabled ?? false).toBe(false); expect(profile.tls?.enabled ?? false).toBe(false);

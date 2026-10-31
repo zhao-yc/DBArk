@@ -1,3 +1,4 @@
+import { queryDialectVm } from '../helpers/queryDialectVm';
 import { act, useState, type ReactNode } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
@@ -16,7 +17,7 @@ const functions = new Map<string, string>(); let option = '', parameterExecute =
 function inspect(node: ts.Node) {
   if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node.getText(file));
   if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === 'label' && node.getText(file).includes('aria-label={queryWarningsZh.option}')) option = node.getText(file);
-  if (ts.isBinaryExpression(node) && node.left.getText(file) === 'collectWarnings' && ts.isJsxElement(node.right) && node.right.openingElement.tagName.getText(file) === 'aside') notice = node.getText(file);
+  if (ts.isBinaryExpression(node) && node.left.getText(file) === '!sqlite && collectWarnings' && ts.isJsxElement(node.right) && node.right.openingElement.tagName.getText(file) === 'aside') notice = node.getText(file);
   if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'QueryParametersDialog') {
     const attribute = node.attributes.properties.find(item => ts.isJsxAttribute(item) && item.name.getText(file) === 'onExecute') as ts.JsxAttribute;
     if (attribute.initializer && ts.isJsxExpression(attribute.initializer)) parameterExecute = attribute.initializer.expression!.getText(file);
@@ -28,7 +29,7 @@ if (!option || !notice || !parameterExecute || !functions.has('runQuery')) throw
 
 function execution(outcome: QueryOutcome = { results: [], elapsedMs: 1 }) {
   const invoke = vi.fn(async () => outcome), ensureSession = vi.fn(async () => '原会话'), setOutcome = vi.fn(), clearFailureSource = vi.fn();
-  const context: any = createContext({ Error, Set, invoke, ensureSession, setOutcome, clearFailureSource, collectWarnings: false, continueOnError: false, warningsResultSource: { current: null },
+  const context: any = createContext({ ...queryDialectVm(),  Error, Set, invoke, ensureSession, setOutcome, clearFailureSource, collectWarnings: false, continueOnError: false, warningsResultSource: { current: null },
     parameterReuse: { current: null }, parameterReusePort: { current: null }, parameterReuseOwner: () => ({ begin: () => null }),
     busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, parameterSession: { current: '原会话' }, parameterFailureSource: { current: undefined }, parameterContinueOnError: { current: false }, parameterCollectWarnings: { current: false }, parameterSource: null,
     settings: { resultLimit: 20 }, tab: { id: '原标签' }, useWorkspace: { getState: () => ({ setBusy: vi.fn(), setDirty: vi.fn() }) },
@@ -73,7 +74,7 @@ function ownerFixture() {
 }
 
 it('正式采集控件默认关闭，运行和参数表单期间锁定，提示ROW_COUNT而不泛称FOUND_ROWS会改变', async () => {
-  const port = { busy: false, parameters: false }, commonJs = { exports: {} }, context: any = createContext({ exports: commonJs.exports, module: commonJs, useState, port, queryWarningsZh: t, require: () => jsxRuntime });
+  const port = { busy: false, parameters: false }, commonJs = { exports: {} }, context: any = createContext({ ...queryDialectVm(),  exports: commonJs.exports, module: commonJs, useState, port, queryWarningsZh: t, require: () => jsxRuntime });
   runInContext(ts.transpileModule(`function Controls(){const [collectWarnings,setCollectWarnings]=useState(false),busy=port.busy,busyRef={current:busy},parameterSource=port.parameters?'模板':null;return <>${option}{${notice}}</>;}globalThis.Controls=Controls;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
   const Controls = context.Controls; await mount(<Controls/>); const input = document.querySelector('input')!;
   expect(input.checked).toBe(false); expect(input.parentNode!.getAttribute('title')).toContain('改变后续 ROW_COUNT()'); expect(input.parentNode!.getAttribute('title')).not.toContain('FOUND_ROWS');

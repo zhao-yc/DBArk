@@ -1,3 +1,4 @@
+import { connectionOverview } from '../sqliteWorkspace';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConnectionProfile } from '../../shared/contracts';
 import { connectionOrganizationApplySchema, connectionOrganizationDefaultColor, connectionOrganizationLimits, type ConnectionOrganizationApply, type ConnectionOrganizationSnapshot } from '../../shared/connectionOrganization';
@@ -94,7 +95,7 @@ export function ConnectionOrganizationDialog({ onClose, onApplied }: Props) {
     return () => { alive.current = false; lifecycle.current++; active.current = undefined; previewRef.current = undefined; };
   }, []);
 
-  const filtered = useMemo(() => { const query = search.toLowerCase(); return loaded?.connections.filter(connection => [connection.id, connection.name, connection.group, connection.host].some(value => typeof value === 'string' && value.toLowerCase().includes(query))) ?? []; }, [loaded, search]);
+  const filtered = useMemo(() => { const query = search.toLowerCase(); return loaded?.connections.filter(connection => [connection.id, connection.name, connection.group, connectionOverview(connection)].some(value => typeof value === 'string' && value.toLowerCase().includes(query))) ?? []; }, [loaded, search]);
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize)), visiblePage = Math.min(page, pages), visible = filtered.slice((visiblePage - 1) * pageSize, visiblePage * pageSize);
   const previewPages = Math.max(1, Math.ceil((preview?.rows.length ?? 0) / pageSize)), currentPreviewPage = Math.min(previewPage, previewPages);
   const previewRows = preview?.rows.slice((currentPreviewPage - 1) * pageSize, currentPreviewPage * pageSize) ?? [];

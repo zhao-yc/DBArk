@@ -94,7 +94,7 @@ export async function createConnection(scope: C02Desktop, lease: C02MtlSLease, r
 /** 只把公开 ID 和存在性布尔值带出渲染进程，不向渲染进程注入预期口令，也不返回完整概要。 */
 export async function overview(scope: C02Desktop, name: string): Promise<{ id: string; publicOnly: boolean; hasPassword: boolean; hasTlsPassphrase: boolean }> {
   return scope.page.evaluate(async connectionName => {
-    const matches = (await window.dbark.invoke('connections.list', {})).filter(profile => profile.name === connectionName), profile = matches[0];
+    const matches = (await window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))).filter(profile => profile.name === connectionName), profile = matches[0];
     return { id: matches.length === 1 ? profile.id : '', publicOnly: matches.length === 1 && !Object.hasOwn(profile, 'password') && !!profile.tls && !Object.hasOwn(profile.tls, 'passphrase'), hasPassword: profile?.hasPassword === true, hasTlsPassphrase: profile?.tls?.hasPassphrase === true };
   }, name);
 }
