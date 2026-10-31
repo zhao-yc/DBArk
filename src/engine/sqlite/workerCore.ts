@@ -150,7 +150,7 @@ export class SqliteWorkerCore {
       const schema = opened.prepare('PRAGMA main.schema_version').get(); if (!schema || typeof Object.values(schema)[0] !== 'number') throw invalid();
       const versionRow = opened.prepare('SELECT sqlite_version() AS version').get();
       if (!versionRow || typeof versionRow.version !== 'string' || versionRow.version.length > 100) throw invalid();
-      if (options.readOnly) {
+      {
         const encoding = Object.values(opened.prepare('PRAGMA encoding').get() ?? {})[0];
         const label = encoding === 'UTF-8' ? 'utf-8' : encoding === 'UTF-16le' ? 'utf-16le' : encoding === 'UTF-16be' ? 'utf-16be' : undefined;
         if (!label) throw invalid();
@@ -161,7 +161,7 @@ export class SqliteWorkerCore {
             if (typeof text !== 'string' || !(bytes instanceof Uint8Array) || decoder.decode(bytes) !== text) throw Error('文本原字节与原文不一致');
             return text;
           } catch {
-            const failure = new DriverFailure('SQLITE_TEXT_ENCODING_UNREPRESENTABLE', 'SQLite源TEXT包含无效编码或无法无损表示的文本，完整导出已停止，原目标文件保持不变');
+            const failure = new DriverFailure('SQLITE_TEXT_ENCODING_UNREPRESENTABLE', 'SQLite源TEXT包含无效编码或无法无损表示的文本，本次操作已停止');
             if (this.active) this.active.fault = failure;
             throw failure;
           }
@@ -177,7 +177,7 @@ export class SqliteWorkerCore {
         return constants.SQLITE_DENY;
       });
       this.db = opened; this.readOnly = options.readOnly; opened = undefined;
-      this.port.send({ kind: 'opened', id, version: versionRow.version, transaction: this.transaction(), readOnly: options.readOnly });
+      this.port.send({ kind: 'opened', id, version: versionRow.version, transaction: this.transaction(), readOnly: options.readOnly, identity: { path, device: before.dev.toString(), inode: before.ino.toString() } });
     } catch (error) {
       try { opened?.close(); } catch {}
       this.failure(id, error instanceof DriverFailure ? error : new DriverFailure('SQLITE_OPEN_FAILED', 'SQLite文件打开失败或当前运行时不支持所需原生能力'));

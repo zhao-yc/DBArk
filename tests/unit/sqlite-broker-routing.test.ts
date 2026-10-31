@@ -25,6 +25,21 @@ function fixture() {
 }
 beforeEach(() => { vi.clearAllMocks(); ports.sqlite.mockReset().mockResolvedValue('sqlite'); ports.close.mockReset().mockResolvedValue(undefined); ports.force.mockReset().mockResolvedValue(undefined); });
 
+it.each(['sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release'])('%s只有令牌也准确路由原SQLite账本，拒绝不加载网络驱动', async command => {
+  const { broker, profiles } = fixture(); profiles.length = 0;
+  const input = command.endsWith('preview') ? { snapshotId: '原页令牌', taskId: '新任务', changes: [] } : { previewId: '原预览令牌' };
+  const failure = Error('原SQLite能力已失效'); ports.sqlite.mockRejectedValueOnce(failure);
+  await expect(broker.request(command, input)).rejects.toBe(failure);
+  expect(ports.sqlite).toHaveBeenCalledExactlyOnceWith(command, input); expect(ports.fork).not.toHaveBeenCalled();
+});
+it('收尾期间只允许准确SQLite能力释放，新预览和提交仍被屏障拒绝', async () => {
+  const { broker } = fixture(); let finish!: () => void; ports.close.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+  const pending = broker.close(), input = { snapshotId: '待释放原页' };
+  await expect(broker.request('sqlite.tableEdit.release', input)).resolves.toBe('sqlite');
+  for (const command of ['sqlite.tableEdit.preview', 'sqlite.tableEdit.apply']) await expect(broker.request(command, { previewId: '旧预览' })).rejects.toThrow('正在收尾');
+  expect(ports.sqlite).toHaveBeenCalledExactlyOnceWith('sqlite.tableEdit.release', input); expect(ports.fork).not.toHaveBeenCalled(); finish(); await pending;
+});
+
 it.each([
   ['metadata.objects', { connectionId: 'file', database: 'main' }],
   ['sqlite.tableExport', { connectionId: 'file', taskId: 'export-all' }],

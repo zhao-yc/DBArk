@@ -4,6 +4,7 @@ import { editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } fr
 import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
 import { editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { zh } from './locales/zh-CN';
+import { sqliteWriteFactMessage, sqliteWriteFactSchema } from '../shared/sqliteWriteFact';
 import { create } from 'zustand';
 import type { AppSettings, ConnectionProfile, TaskEvent, TaskRecord } from '../shared/contracts';
 import { errorMessage, invoke, uid } from './lib';
@@ -216,6 +217,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (state.queryFileTasks[event.taskId]?.running === false) return {};
     const previous = state.tasks.find(task => task.id === event.taskId);
     const task: TaskRecord = { id: event.taskId, kind: previous?.kind ?? (event.queryFileSource ? queryFilesZh.taskTitle : zh.workspace.text001), startedAt: previous?.startedAt ?? new Date().toISOString(), ...previous, status: event.status, progress: event.progress, message: event.queryFileSource ? queryFilesZh.taskPhases[event.queryFileSource.phase] : event.message };
+    if (event.sqliteWrite) {
+      const fact = sqliteWriteFactSchema.safeParse(event.sqliteWrite);
+      if (fact.success && (!previous?.sqliteWrite?.commitAcknowledged || fact.data.operationId === previous.sqliteWrite.operationId && fact.data.commitAcknowledged)) { task.sqliteWrite = fact.data; task.kind = 'sqlite.tableEdit.apply'; }
+    }
+    if (task.sqliteWrite?.commitAcknowledged) { task.status = 'completed'; task.progress = 100; task.message = sqliteWriteFactMessage(task.sqliteWrite); }
     const value = event.queryFileSource, queryFileTasks = { ...state.queryFileTasks };
     // 未持有本窗口操作租约的文件事件也明确分类，但不能借普通SQL取消命令获取取消权。
     if (value) queryFileTasks[event.taskId] = { taskId: event.taskId, tabId: value.tabId, operation: value.operation, phase: value.phase, bytesProcessed: value.bytesProcessed, ...(value.totalBytes === undefined ? {} : { totalBytes: value.totalBytes }), wrote: value.wrote, cancellable: false, running: event.status === 'running', committed: value.wrote !== 'no' || ['replacing', 'verifying', 'recording'].includes(value.phase), cancelState: 'denied', status: event.status, progress: event.progress, message: task.message, startedAt: task.startedAt };

@@ -9,6 +9,8 @@ import { readSqliteTablePage, SqliteTableBrowseCancelled } from './sqliteTableBr
 import { sqliteTableExportSchema, type SqliteTableExportOutput } from '../shared/sqliteTableExport';
 import { SqliteTableExportFile, prepareSqliteTableExport, type SqliteTableExportRequest } from './sqliteTableExport';
 import type { AtomicFileIO } from '../engine/atomicFile';
+import { SqliteTableEdits, applySqliteTableEdit, sqliteEditNotSent, type SqliteEditApplyRequest, type SqliteEditClaim } from './sqliteTableEdit';
+import type { SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
 
 interface Resource { transport: SqliteProcessTransport; driver?: SqliteDriverSession; }
 interface Connection {
@@ -31,8 +33,10 @@ interface ExportTask extends Omit<BrowseTask, 'kind'> {
   committing: boolean; retainedDestination: boolean; rows: number;
 }
 interface FinishedExportTask { kind: 'export-finished'; active?: undefined; }
-type ReadTask = BrowseTask | ExportTask;
-type Task = QueryTask | BrowseTask | FinishedBrowseTask | ExportTask | FinishedExportTask;
+interface EditTask extends Omit<BrowseTask, 'kind'> { kind: 'edit'; committing: boolean; input: SqliteEditApplyRequest; claim: SqliteEditClaim; }
+interface FinishedEditTask { kind: 'edit-finished' | 'edit-preview-finished'; active?: undefined; }
+type ReadTask = BrowseTask | ExportTask | EditTask;
+type Task = QueryTask | BrowseTask | FinishedBrowseTask | ExportTask | FinishedExportTask | EditTask | FinishedEditTask;
 export interface SqliteRuntimeOptions {
   emit: (event: TaskEvent) => void;
   resolveProfile: (id: string) => SqliteConnectionProfile | undefined;
@@ -61,6 +65,7 @@ export class SqliteRuntime {
   private stopping = false;
   private closeWork?: Promise<void>;
   private forceWork?: Promise<void>;
+  private readonly edits = new SqliteTableEdits();
 
   constructor(private readonly options: SqliteRuntimeOptions) {}
 
@@ -198,7 +203,7 @@ export class SqliteRuntime {
         void resource.transport.exited.then(() => this.retireBrowse(input.taskId, task), () => {});
       });
       this.browseCheck(task);
-      value = await readSqliteTablePage(task.driver, input, { check: () => this.browseCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; } });
+      value = await readSqliteTablePage(task.driver, input, { check: () => this.browseCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; }, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { check: () => this.browseCheck(task), beginCleanup: () => {}, cleanupFailed: reason => { task.cleanupFailure = reason; } }) });
     } catch (reason) {
       failed = true; failure = reason;
       if (task.driver && !task.driver.isUsable && !task.driver.isClosed) this.block(task.connection, reason);
@@ -218,6 +223,7 @@ export class SqliteRuntime {
       failure = failed ? new AggregateError([failure, reason], 'SQLite表浏览未完成且原资源退出未确认', { cause: failure }) : reason; failed = true;
     }
     if (failed) {
+      if (value?.edit?.kind === 'editable') this.edits.release({ snapshotId: value.edit.snapshotId });
       const nativeCancelled = failure instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(failure.code);
       const openingCancelled = task.cancelled && failure instanceof SqliteDriverError && failure.sessionClosed && failure.code === 'SQLITE_PROCESS_EXIT';
       const cancelled = !task.cleanupFailure && !task.cancelFailure && (failure instanceof SqliteTableBrowseCancelled || task.boundaryCancelled || nativeCancelled || openingCancelled);
@@ -240,7 +246,7 @@ export class SqliteRuntime {
   /** 取消意图先同步登记，随后取消原driver并等原任务rollback/close；历史编号不会影响后继读取。 */
   private cancelBrowse(task: ReadTask): Promise<void> {
     if (task.cancelWork) return task.cancelWork;
-    if (task.kind === 'export' && task.committing) return task.active?.then(() => {}, () => {}) ?? Promise.resolve();
+    if ((task.kind === 'export' || task.kind === 'edit') && task.committing) return task.active?.then(() => {}, () => {}) ?? Promise.resolve();
     if (!task.active) { task.cancelled = true; return Promise.resolve(); }
     task.cancelled = true;
     const work = (async () => {
@@ -330,6 +336,48 @@ export class SqliteRuntime {
     throw failure;
   }
 
+  /** 已领取写预览的生命周期与准确driver归同一任务，COMMIT边界后不以取消/断连强杀原进程。 */
+  private tableEditApply(source: unknown): Promise<SqliteTableEditOutcome> {
+    const input = source as SqliteEditApplyRequest;
+    if (!input || typeof input.operationId !== 'string' || !input.operationId || typeof input.assertCurrent !== 'function' || typeof input.recordWriteFact !== 'function') return Promise.reject(Error('SQLite表格写入缺少Main同步提交事实能力'));
+    if (this.tasks.has(input.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
+    const { operationId: _operation, assertCurrent: _assert, recordWriteFact: _record, ...publicInput } = input;
+    const claim = this.edits.claim(publicInput), connection = this.connections.get(claim.snapshot.target.connectionId);
+    if (!connection) {
+      const outcome = sqliteEditNotSent(claim, input, 'SQLite原连接已关闭'); this.edits.settle(claim, outcome.outcome); this.tasks.set(input.taskId, { kind: 'edit-finished' });
+      try { this.options.emit({ taskId: input.taskId, status: 'failed', progress: 0, message: outcome.message }); } catch { /* 原not-sent事实不被通知异常覆盖。 */ }
+      return Promise.resolve(outcome);
+    }
+    const task: EditTask = { kind: 'edit', connection, input, claim, committing: false, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
+    const work = this.track(connection, () => this.editApply(task)); task.active = work;
+    const retire = () => { task.active = undefined; this.retireEdit(input.taskId, task); }; void work.then(retire, retire); return work;
+  }
+  /** 编辑终态不保留整页原数据或回调；未确认exit仍保持准确进程强引用与关闭屏障。 */
+  private retireEdit(id: string, task: EditTask): void { if (!task.active && (!task.resource || !task.connection.resources.has(task.resource)) && this.tasks.get(id) === task) this.tasks.set(id, { kind: 'edit-finished' }); }
+  private editCheck(task: EditTask): void { if (!task.committing) { this.browseCheck(task); task.input.assertCurrent(); } }
+  /** 执行失败也交付结构化结果；只有未知资源保守阻新建，提交ACK永远优先于后续清理错误。 */
+  private async editApply(task: EditTask): Promise<SqliteTableEditOutcome> {
+    let outcome: SqliteTableEditOutcome | undefined;
+    try {
+      this.options.emit({ taskId: task.input.taskId, status: 'running', progress: 0, message: '正在提交SQLite表格草稿；原值及SQL不进入任务概要' }); this.editCheck(task);
+      const current = this.profile(this.options.resolveProfile(task.claim.snapshot.target.connectionId));
+      if (current.sqlite.readOnly || !sameTarget(task.claim.snapshot.profile, current)) throw Error('SQLite连接配置已变化，原写入未发送');
+      task.driver = await this.driver(task.connection, current, false, resource => { task.resource = resource; void resource.transport.exited.then(() => this.retireEdit(task.input.taskId, task), () => {}); });
+      this.editCheck(task);
+      outcome = await applySqliteTableEdit(task.driver, task.claim, task.input, { check: () => this.editCheck(task), beginCommit: () => { this.editCheck(task); task.committing = true; }, beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; } });
+    } catch (reason) { outcome = sqliteEditNotSent(task.claim, task.input, reason instanceof Error ? reason.message : 'SQLite修改未发送'); }
+    this.edits.settle(task.claim, outcome.outcome);
+    if (task.driver) {
+      task.cleaning = true;
+      try { await task.driver.close(); }
+      catch (reason) { task.cleanupFailure = reason; outcome.cleanupWarning = true; if (!task.driver.isClosed) this.block(task.connection, reason); }
+    }
+    if (task.resource && task.connection.resources.has(task.resource)) { const reason = Error('SQLite表格修改原进程退出尚未确认'); this.block(task.connection, reason); task.cleanupFailure = reason; outcome.cleanupWarning = true; }
+    const cancelled = task.cancelled && !task.cleanupFailure && outcome.outcome !== 'unknown' && outcome.outcome !== 'committed';
+    try { this.options.emit({ taskId: task.input.taskId, status: outcome.outcome === 'committed' ? 'completed' : cancelled ? 'cancelled' : 'failed', progress: outcome.outcome === 'committed' ? 100 : 0, rows: outcome.fact.appliedRows, message: outcome.message }); } catch { /* 不覆盖原COMMIT/ROLLBACK事实，原批次绝不重放。 */ }
+    return outcome;
+  }
+
   /** 仅列出已经接入原工作区的命令；其余命令在SQLite终点明确拒绝。 */
   async request(command: string, input: any): Promise<any> {
     switch (command) {
@@ -352,7 +400,7 @@ export class SqliteRuntime {
         const changed = input.transportChanged || connection && (!connection.profile || !sameTarget(connection.profile, next));
         if (!connection || !changed) return;
         if (connection.closing || connection.blocked || connection.pending.size || connection.resources.size || connection.files.size || [...this.sessions.values()].some(session => session.connection === connection)) throw Error('SQLite连接仍有打开的会话、运行操作或未确认资源；请先显式关闭标签并断开连接，现有任务未取消');
-        this.connections.delete(input.id); return;
+        this.edits.releaseConnection(input.id); this.connections.delete(input.id); return;
       }
       case 'connections.close': return this.closeConnection(input.id);
       case 'sessions.open': {
@@ -380,13 +428,19 @@ export class SqliteRuntime {
       case 'query.transaction': { const session = this.session(input.sessionId, input.action === 'rollback'); return this.sessionOperation(session, () => session.query.transaction(input)); }
       case 'query.cancel': {
         const task = this.tasks.get(input.taskId);
-        if (task?.active && (task.kind === 'browse' || task.kind === 'export')) return this.cancelBrowse(task);
+        if (task?.active && (task.kind === 'browse' || task.kind === 'export' || task.kind === 'edit')) return this.cancelBrowse(task);
         if (task?.active && task.kind === 'query') try { await task.session.query.cancel(input.taskId); }
         catch (reason) { if (!task.session.driver.isUsable && !task.session.driver.isClosed) this.block(task.session.connection, reason); throw reason; }
         return;
       }
       case 'sqlite.tablePage': return this.tablePage(input);
       case 'sqlite.tableExport': return this.tableExport(input);
+      case 'sqlite.tableEdit.preview': {
+        if (this.stopping || this.tasks.has(input.taskId)) throw Error('SQLite正在退出或任务编号已经使用');
+        this.tasks.set(input.taskId, { kind: 'edit-preview-finished' }); return this.edits.preview(input);
+      }
+      case 'sqlite.tableEdit.apply': return this.tableEditApply(input);
+      case 'sqlite.tableEdit.release': return this.edits.release(input);
       case 'metadata.databases': return this.metadata(input, async () => ['main']);
       case 'metadata.objects': return this.metadata(input, async driver => {
         const rows = await this.rows(driver, "SELECT name,type FROM main.sqlite_schema WHERE type IN ('table','view','trigger') AND substr(name,1,7) <> 'sqlite_' ORDER BY type,name LIMIT 10001");
@@ -422,8 +476,9 @@ export class SqliteRuntime {
     const connection = this.connections.get(id); if (!connection) return Promise.resolve();
     if (connection.closeWork) return connection.closeWork;
     connection.closing = true;
+    this.edits.releaseConnection(id);
     const work = (async () => {
-      const browse = [...this.tasks.values()].filter((task): task is ReadTask => (task.kind === 'browse' || task.kind === 'export') && task.connection === connection && !!task.active);
+      const browse = [...this.tasks.values()].filter((task): task is ReadTask => (task.kind === 'browse' || task.kind === 'export' || task.kind === 'edit') && task.connection === connection && !!task.active);
       const browseDrivers = new Set(browse.map(task => task.driver));
       const cancelled = await Promise.allSettled([...browse.map(task => this.cancelBrowse(task)), ...[...connection.resources].filter(resource => resource.driver?.isBusy && !browseDrivers.has(resource.driver)).map(resource => resource.driver!.cancel())]);
       await Promise.allSettled([...connection.pending]);
@@ -449,9 +504,11 @@ export class SqliteRuntime {
     if (this.forceWork) return this.forceWork;
     this.stopping = true;
     const work = (async () => {
-      for (const task of this.tasks.values()) if ((task.kind === 'browse' || task.kind === 'export' && !task.committing) && task.active) task.cancelled = true;
+      for (const task of this.tasks.values()) if ((task.kind === 'browse' || (task.kind === 'export' || task.kind === 'edit') && !task.committing) && task.active) task.cancelled = true;
+      for (const id of this.connections.keys()) this.edits.releaseConnection(id);
+      const committing = new Set([...this.tasks.values()].filter((task): task is EditTask => task.kind === 'edit' && task.committing && !!task.active).map(task => task.resource));
       const resources = [...this.connections.values()].flatMap(connection => { connection.closing = true; return [...connection.resources]; });
-      for (const resource of resources) try { resource.transport.terminate(); } catch { /* 仍等待真实exit，终止调用异常不能跳过其它句柄。 */ }
+      for (const resource of resources) if (!committing.has(resource)) try { resource.transport.terminate(); } catch { /* 仍等待真实exit，终止调用异常不能跳过其它句柄。 */ }
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([Promise.all(resources.map(resource => resource.transport.exited)), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(Error('SQLite强退尚未确认全部进程退出，保留准确句柄')), sqliteDriverLimits.exitTimeoutMs); timer.unref(); })]);

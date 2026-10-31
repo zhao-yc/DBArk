@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { sqliteDriverLimits as limits, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse } from './protocol';
+import { sqliteDriverLimits as limits, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
 
 /** 进程中断只证明连接已释放；事务/提交结果未知时不能伪造ROLLBACK成功。 */
 export class SqliteDriverError extends Error {
@@ -45,6 +45,7 @@ export class SqliteDriverSession {
   private failure?: { message: string; code: string };
   private transactionValue: boolean | null = null;
   private versionValue = '';
+  private identityValue?: SqliteFileIdentity;
 
   private constructor(private readonly transport: SqliteProcessTransport, private readonly options: SqliteOpenOptions) {
     this.unsubscribe = transport.onMessage(message => this.receive(message));
@@ -80,6 +81,8 @@ export class SqliteDriverSession {
   get isBusy(): boolean { return !!this.active; }
   /** 流式全量读取不能被读写会话借用以绕过普通查询预算。 */
   get readOnly(): boolean { return this.options.readOnly; }
+  /** 返回副本防调用方改写，旧无身份协议只允许原查询，不能签发编辑能力。 */
+  get identity(): SqliteFileIdentity | undefined { return this.identityValue ? { ...this.identityValue } : undefined; }
   private error(message: string, code: string, completed = this.active?.results.length ?? 0, results: readonly SqliteStatementResult[] = this.active?.results ?? []): SqliteDriverError { return new SqliteDriverError(message, code, this.exited ? null : this.transactionValue, completed, this.exited, results); }
 
   /** 同一物理连接不并行执行；每个批次等消费者完成后才确认，不无限积压结果。 */
@@ -138,6 +141,8 @@ export class SqliteDriverSession {
       if (message.kind === 'ready') { if (this.openSent) throw Error('重复SQLite启动消息'); this.openSent = true; this.transport.send({ kind: 'open', id: this.openId, options: this.options }); return; }
       if (message.kind === 'opened') {
         if (message.id !== this.openId || this.opened || message.readOnly !== this.options.readOnly || typeof message.version !== 'string') throw Error('SQLite打开回执不匹配');
+        if (message.identity && (typeof message.identity.path !== 'string' || !message.identity.path || !/^[0-9]+$/.test(message.identity.device) || !/^[0-9]+$/.test(message.identity.inode))) throw Error('SQLite打开文件身份无效');
+        this.identityValue = message.identity ? { ...message.identity } : undefined;
         this.opened = true; this.versionValue = message.version; this.transactionValue = message.transaction; this.openResult.resolve(); return;
       }
       if (message.kind === 'failed' && message.id === this.openId && !this.opened) { this.openResult.reject(this.error(message.message, message.code)); return; }

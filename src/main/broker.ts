@@ -43,7 +43,10 @@ export class EngineBroker {
 
   /** 以独立编号关联响应；发送失败立即清理等待记录。 */
   request(command: string, input: unknown): Promise<any> {
+    // 编辑能力由原SQLite账本解析目标；公共输入没有连接ID，释放也必须能越过退出屏障。
+    if (command === 'sqlite.tableEdit.release') return this.sqlite.request(command, input);
     if (this.closePending && !['query.cancel', 'sessions.close', 'connections.close', 'query.sessionState', 'query.completionState'].includes(command)) return Promise.reject(Error('数据库执行进程正在收尾，不能开始新操作'));
+    if (command === 'sqlite.tableEdit.preview' || command === 'sqlite.tableEdit.apply') return this.sqlite.request(command, input);
     const value = input as { id?: string; connectionId?: string; sessionId?: string; taskId?: string; dialect?: string; profile?: ConnectionProfile; sourceProfile?: ConnectionProfile; targetProfile?: ConnectionProfile; source?: { connectionId?: string }; target?: { connectionId?: string } } | null;
     const sqlite = value && (value.dialect === 'sqlite' || [value.profile, value.sourceProfile, value.targetProfile].some(profile => profile?.dialect === 'sqlite')
       || value.sessionId && this.isSqliteSession(value.sessionId) || value.taskId && this.isSqliteTask(value.taskId)

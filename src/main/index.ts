@@ -36,6 +36,10 @@ import { EngineBroker } from './broker';
 import { SqliteConnectionFiles } from './sqliteConnectionFiles';
 import { assertSqliteExportDestination } from './sqliteExportDestination';
 import { sqliteTableExportMessages } from '../shared/sqliteTableExport';
+import { SqliteTableEditOwners, type SqliteEditLease } from './sqliteTableEditOwners';
+import { SqliteWriteRecords } from './sqliteWriteRecords';
+import { sqliteTableEditMessages, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
+import { sqliteWriteFactMessage } from '../shared/sqliteWriteFact';
 import { ColumnsMainCapabilities, type ColumnsInvocation } from './columnsMainCapabilities';
 import { TableChecksMainCapabilities, tableChecksFailureProgress, type TableChecksInvocation } from './tableChecksMainCapabilities';
 import { ResultInsertOwners } from './resultInsertOwners';
@@ -173,6 +177,14 @@ const tableFilteredExports = new TableFilteredExportOwners({
   assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
   stop: async taskId => { const preparing = preparingTasks.get(taskId); if (preparing) { preparing.cancelled = true; return; } await broker.request('query.cancel', { taskId }); },
 });
+const sqliteEdits = new SqliteTableEditOwners({
+  assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
+  revision: () => store.connectionRevision(), available: id => connectionConfig.assertAvailable(id), closing: () => shuttingDown,
+  epoch: id => { let value = tableValueOptionsConnectionOwners.get(id); if (!value) { value = {}; tableValueOptionsConnectionOwners.set(id, value); } return value; },
+  release: async input => { await broker.request('sqlite.tableEdit.release', input); },
+  stop: async taskId => { const preparing = preparingTasks.get(taskId); if (preparing) { preparing.cancelled = true; return; } await broker.request('query.cancel', { taskId }); },
+});
+const sqliteWrites = new SqliteWriteRecords({ task: id => tasks.get(id), replace: value => { tasks.set(value.id, value); }, save: value => store.saveTask(value), notify: value => taskEvent({ taskId: value.id, status: value.status, progress: value.progress, message: value.message }) });
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
 type MainInvocation = ColumnsInvocation & { tableChecksRequest?: TableChecksInvocation; databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 数据库属性能力也绑定真实文档；连接修订只由Main捕获，不接受渲染进程注入。 */
@@ -424,10 +436,13 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
   const structure = event.tableCreate ?? event.tableCopyData ?? event.tableCopyStructure ?? event.databaseDrop ?? event.databaseDefaultEncoding ?? event.databaseCreate ?? event.tableDrop ?? event.tableTruncate ?? event.tableAutoIncrement ?? event.tableRename ?? event.tableDefaultEncoding ?? event.tableChecks ?? event.tableComment ?? event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
   if (structure) structureProgress.set(event.taskId, { ...structure });
   const current = tasks.get(event.taskId);
+  if (current?.sqliteWrite) event = { ...event, sqliteWrite: structuredClone(current.sqliteWrite) };
+  if (current?.sqliteWrite?.commitAcknowledged) event = { ...event, status: 'completed', progress: 100, message: sqliteTableEditMessages.committed };
+  if (current?.kind === 'sqlite.tableEdit.apply') sqliteEdits.observe();
   if (current?.kind === 'table.exportFiltered' || current?.kind === 'sqlite.tableExport') tableFilteredExports.observe(event.taskId);
   if (current) {
     // 服务器错误可能回显已绑定值；参数查询的失败细节仅送给当前界面，不写入磁盘任务记录。
-    const message = persistedTaskMessage(current.kind, event);
+    const message = current.kind === 'sqlite.tableEdit.apply' && current.sqliteWrite ? sqliteWriteFactMessage(current.sqliteWrite) : persistedTaskMessage(current.kind, event);
     const record = { ...current, status: event.status, progress: event.progress, message, finishedAt: event.status === 'running' ? undefined : new Date().toISOString() };
     tasks.set(event.taskId, record);
     if (event.status !== 'running' || Date.now() - (lastPersist.get(event.taskId) ?? 0) > 1000) {
@@ -751,6 +766,16 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       }
     }, releasing);
   }
+  // 编辑能力释放不受保存锁和退出锁影响；只撤销准确来源，不取消已经发送的写入。
+  if (command === 'sqlite.tableEdit.release') return sqliteEdits.release(columns!, input);
+  const sqlitePreview = command === 'sqlite.tableEdit.preview' ? sqliteEdits.preview(columns!, input.snapshotId) : undefined;
+  const sqliteApplySource = command === 'sqlite.tableEdit.apply' ? sqliteEdits.lookup(columns!, input.previewId) : undefined;
+  let sqlitePage: ReturnType<SqliteTableEditOwners['page']> | undefined;
+  let sqliteClaim: ReturnType<SqliteTableEditOwners['claim']> | undefined;
+  let sqliteWriteOperation: ReturnType<SqliteWriteRecords['begin']> | undefined;
+  let sqliteEditLease: SqliteEditLease | undefined;
+  /** 未接入编辑用途的旧RAM端口不登记能力；实际Main总持有真实协调器。 */
+  const observeSqliteEdits = () => { if (typeof sqliteEdits !== 'undefined') sqliteEdits.observe(); };
   // 既有任务中心仍发送query.cancel；本地文件任务只在当前Main中精确撤销。
   if (command === 'query.cancel' && tasks.get(input.taskId)?.kind.startsWith('queryFileSources.')) {
     columnsMain.assertCapturedOwner(columns);
@@ -772,7 +797,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'schema.tableChecks.release') return tableChecksMain.release(checkRequest!, input);
   // 纯能力释放先同步撤销父及关联预览，退出/保存锁不得阻止精确回收。
   if (command === 'schema.columns.release') return columnsMain.release(columnRequest!, input);
-  const requestConnectionId = structureToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
+  const requestConnectionId = sqlitePreview?.target.connectionId ?? sqliteApplySource?.target.connectionId ?? structureToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
   // 切库只绑定Main已登记的原会话，不能借缺失会话或客户端连接字段走新连接。
   const databaseSwitchSession = command === 'query.databaseSwitch' ? sessions.get(input.sessionId) : undefined;
   if (command === 'query.databaseSwitch') {
@@ -951,6 +976,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if (tasks.get(input.taskId)?.kind === 'sqlite.tableEdit.apply' && sqliteEdits.owns(input.taskId)) return sqliteEdits.cancel(input.taskId, columns!);
       if (typeof historyDelete !== 'undefined' && historyDelete?.owns(input.taskId)) return historyDelete.cancel(input.taskId, columns!);
       if (['table.exportFiltered', 'sqlite.tableExport'].includes(tasks.get(input.taskId)?.kind ?? '') && tableFilteredExports.has(input.taskId)) return tableFilteredExports.cancel(input.taskId, columns!);
       if(columns&&tasks.get(input.taskId)?.kind==='query.exportStream')queryInsertExports.assertOwned(input.taskId,columns);
@@ -976,7 +1002,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'connections.importPreview': return queryFileOperation(() => connectionTransfer.preview(resolveFileToken(files, input.fileToken, 'connection-import', 'json')));
     case 'connections.importReview': if (shuttingDown) throw new Error('客户端正在退出，不能导入连接'); return connectionTransfer.review(input);
     case 'connections.importReviewRelease': return connectionTransfer.releaseReview(input);
-    case 'connections.importApply': return queryFileOperation(async () => { try { return await connectionTransfer.applyBatch(input); } finally { resultInserts.observe(); filteredUpdates.observe(); filteredDeletes.observe(); if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe(); } });
+    case 'connections.importApply': return queryFileOperation(async () => { try { return await connectionTransfer.applyBatch(input); } finally { resultInserts.observe(); filteredUpdates.observe(); filteredDeletes.observe(); if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe(); observeSqliteEdits(); } });
     case 'connections.organizationGet':
       if (shuttingDown) throw Error('客户端正在退出，不能读取连接整理');
       return store.connectionOrganization();
@@ -986,7 +1012,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       for (const id of input.ids) connectionConfig.assertAvailable(id);
       // INSERT 导出能力绑定全局修订；等原请求 finally 释放账本后才允许整理，不主动取消导出。
       if ([...tasks.values()].some(task => task.kind === 'query.exportStream' && queryInsertExports.has(task.id))) throw Error(connectionOrganizationZh.busyExport);
-      { const result = store.applyConnectionOrganization(input); resultInserts.observe(); filteredUpdates.observe(); filteredDeletes.observe(); if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe(); return result; }
+      { const result = store.applyConnectionOrganization(input); resultInserts.observe(); filteredUpdates.observe(); filteredDeletes.observe(); if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe(); observeSqliteEdits(); return result; }
     case 'connections.save': {
       // 保留原保存检查：被拒绝的配置修改不得先取消任务；成功保存后才撤销本片旧修订能力。
       const previous = store.connections().find(profile => profile.id === input.id);
@@ -994,14 +1020,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const guard = input.dialect === 'sqlite' ? () => { sqliteFiles.confirm(input, previous, columns!); } : undefined;
       const saved=await connectionConfig.save(candidate, guard);
       resultInserts.observe(); filteredUpdates.observe(); filteredDeletes.observe();
-      if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe();
+      if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe(); observeSqliteEdits();
       if([...tasks.values()].some(task=>task.kind==='query.exportStream'&&task.status==='running'))queryInsertExports.invalidateAll();
       return saved;
     }
     case 'connections.delete': {
       resultInserts.invalidateConnection(input.id); filteredUpdates.invalidateConnection(input.id); filteredDeletes.invalidateConnection(input.id);
       const owner = {}; tableValueOptionsConnectionOwners.set(input.id, owner); tableValueOptionsClosing.set(input.id, owner);
-      if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe();
+      if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe(); observeSqliteEdits();
       try { await broker.request('connections.close', input); store.deleteConnection(input.id); return; }
       finally { if (tableValueOptionsClosing.get(input.id) === owner) tableValueOptionsClosing.delete(input.id); }
     }
@@ -1009,6 +1035,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (shuttingDown) throw Error('客户端正在退出，不能开始SQLite表浏览');
       connectionConfig.assertAvailable(input.connectionId);
       if (store.connections().find(profile => profile.id === input.connectionId)?.dialect !== 'sqlite') throw Error('SQLite表浏览需要当前已保存的SQLite文件连接');
+      if (input.editing === true) sqlitePage = sqliteEdits.page(columns!, input);
+      break;
+    }
+    case 'sqlite.tableEdit.preview':
+    case 'sqlite.tableEdit.apply': {
+      if (shuttingDown) throw Error('客户端正在退出，不能开始SQLite表格修改');
+      if (store.connections().find(profile => profile.id === requestConnectionId)?.dialect !== 'sqlite') throw Error('SQLite表格修改需要当前已保存的文件连接');
       break;
     }
     case 'sqlite.tableExport': {
@@ -1032,7 +1065,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'connections.close': {
       resultInserts.invalidateConnection(input.id); filteredUpdates.invalidateConnection(input.id); filteredDeletes.invalidateConnection(input.id);
       const owner = {}; tableValueOptionsConnectionOwners.set(input.id, owner); tableValueOptionsClosing.set(input.id, owner);
-      if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe();
+      if ([...tasks.values()].some(task => ['table.exportFiltered', 'sqlite.tableExport'].includes(task.kind) && task.status === 'running')) tableFilteredExports.observe(); observeSqliteEdits();
       for (const [id, session] of sessions) if (session.connectionId === input.id) sessions.delete(id);
       for (const [token, value] of structureTokens) if (value.connectionId === input.id) structureTokens.delete(token);
       try { return await broker.request(command, input); }
@@ -1144,6 +1177,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let sentToEngine = false;
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
   try {
+    if (sqliteApplySource) {
+      sqliteClaim = sqliteEdits.claim(columns!, input.previewId);
+      const counts = sqliteClaim.counts, write = sqliteWriteOperation = sqliteWrites.begin(taskId!, sqliteClaim.target, counts.insert + counts.update + counts.delete);
+      sqliteEditLease = sqliteEdits.begin(taskId!, columns!, sqliteClaim.check);
+      input = { ...input, operationId: write.operationId, assertCurrent: sqliteClaim.check, recordWriteFact: write.record };
+    }
     if (tableFilteredExport) filteredExportLease = tableFilteredExports.begin(taskId!, columns!, assertTableFilteredExportCurrent);
     if(command==='query.exportStream'&&input.format==='sql')input={...input,filePath:queryInsertExports.begin(input,columns)};
     if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
@@ -1177,9 +1216,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     if (taskId) preparingTasks.delete(taskId);
     filteredExportLease?.beforeSend();
+    sqliteEditLease?.beforeSend(); sqlitePreview?.check();
     if (tableFilteredExport) tableFilteredExportSubmitted = true;
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
+    if (sqlitePage) result = await sqlitePage.accept(result);
+    if (sqlitePreview) result = await sqlitePreview.accept(result);
+    if (sqliteClaim) {
+      result = sqliteWrites.outcome(taskId!, result);
+      await sqliteEditLease?.release(); sqliteClaim.finish(result.outcome);
+      const priorStatus = tasks.get(taskId!)?.status;
+      // 展示通道可能已随窗口关闭；原事务事实仍须通过本次响应交付，不能诱发重复提交。
+      try { taskEvent({ taskId: taskId!, status: result.outcome === 'committed' ? 'completed' : priorStatus === 'cancelled' ? 'cancelled' : 'failed', progress: result.outcome === 'committed' ? 100 : 0, message: result.message }); }
+      catch { result = { ...result, cleanupWarning: true }; }
+    }
     // 专用回包必须确认实际库及原任务；错误ACK不能进入通用completed分支。
     if (command === 'query.databaseSwitch') {
       try { assertQueryDatabaseSwitchOutput(result, input); }
@@ -1236,6 +1286,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: !queryFailure, ...(queryFailure ? { error: persistedQueryError(command, queryFailure.message) } : {}) }));
     return command === 'table.apply' ? { ...result, ...tableApplyReceipts.finish(taskId!) } : result;
   } catch (error) {
+    if (sqliteClaim && taskId) {
+      let fact = tasks.get(taskId)?.sqliteWrite;
+      if (fact && !fact.commitAcknowledged && sentToEngine && fact.phase !== 'rolled-back') {
+        try { sqliteWriteOperation?.record({ ...fact, phase: 'unknown', commitAcknowledged: false, rollbackAcknowledged: false }); } catch { /* 内存保留原事实；本地落盘异常不能触发重放。 */ }
+        fact = tasks.get(taskId)?.sqliteWrite;
+      }
+      if (fact) {
+        const outcome: SqliteTableEditOutcome = { operationId: fact.operationId, target: { ...fact.target }, outcome: fact.commitAcknowledged ? 'committed' : fact.rollbackAcknowledged ? 'rolled-back' : !sentToEngine ? 'not-sent' : 'unknown', counts: { ...sqliteClaim.counts }, fact, message: sqliteWriteFactMessage(fact), cleanupWarning: true };
+        sqliteClaim.finish(outcome.outcome);
+        try { taskEvent({ taskId, status: fact.commitAcknowledged ? 'completed' : 'failed', progress: fact.commitAcknowledged ? 100 : 0, message: outcome.message }); } catch { /* 原回执优先，展示失败仅保留现有cleanupWarning。 */ }
+        return outcome;
+      }
+    }
     if (filteredExportLease) try { await filteredExportLease.failed(error); } catch (failure) { error = failure; }
     if (command === 'table.apply' && taskId && !sentToEngine) tableApplyReceipts.notDispatched(taskId);
     if (command === 'table.apply' && taskId && tableApplyReceipts.confirmed(taskId)) {
@@ -1247,7 +1310,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableChecks' ? 'tableChecks' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId), ...(structurePurpose === 'tableChecks' ? tableChecksFailureProgress(sentToEngine && command === structurePrefix + 'apply', structureProgress.get(taskId)) : {}) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  } finally { if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
+  } finally { if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
 }
 
 /** 菜单模板只接纳固定命令，执行资格由当前文档的准确修订决定。 */
@@ -1475,6 +1538,8 @@ else {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
+        const sqliteEditRequest = payload.command.startsWith('sqlite.tableEdit.') || payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' && 'editing' in payload.input && payload.input.editing === true || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind === 'sqlite.tableEdit.apply';
+        if (sqliteEditRequest) columns = columnsMain.capture(event);
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['table.exportFiltered', 'sqlite.tableExport'].includes(tasks.get(payload.input.taskId)?.kind ?? '') && tableFilteredExports.has(payload.input.taskId);

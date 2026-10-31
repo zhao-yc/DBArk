@@ -5,6 +5,9 @@ export { isUiCommandInvocation } from './uiCommandIds';
 export const publicCommands: Record<Command, true> = {
   'sqlite.tablePage': true,
   'sqlite.tableExport': true,
+  'sqlite.tableEdit.preview': true,
+  'sqlite.tableEdit.apply': true,
+  'sqlite.tableEdit.release': true,
   'app.menuState': true,
   'files.preflight': true,
   'tableDraftFiles.open': true, 'tableDraftFiles.save': true, 'table.draftVerify': true,

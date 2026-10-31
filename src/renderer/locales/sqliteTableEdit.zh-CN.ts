@@ -1,0 +1,22 @@
+/** SQLite 表格草稿、明确提交与未知结果的集中中文文案。 */
+export const sqliteTableEditZh = {
+  grid: 'SQLite 表格编辑', editable: '可编辑快照：修改先保存在本地草稿，预览后明确集中提交；不使用查询标签事务。',
+  add: '新增 SQLite 记录', remove: '删除 SQLite 当前行', editRow: '编辑 SQLite 当前行', editCell: '编辑 SQLite 单元格',
+  undo: '撤销 SQLite 草稿', redo: '重做 SQLite 草稿', discard: '放弃 SQLite 草稿', preview: '预览 SQLite 修改',
+  previewTitle: '预览 SQLite 集中修改', confirmation: '确认提交 SQLite 集中修改', submit: '提交 SQLite 修改', closePreview: '关闭 SQLite 修改预览',
+  saveInput: '保存 SQLite 本地草稿', cancelInput: '取消 SQLite 字段编辑', inputHint: '文本及 JSON 作为文本保存；整数保留 64 位原文，实数必须有限，二进制填写完整十六进制字节。新增未勾选字段使用数据库默认值；生成列不能修改。',
+  generated: '生成列（不可修改）', omitted: '默认值（省略）', deleted: '本地待删除', inserted: '本地待新增',
+  stale: '原 SQLite 页或连接已变化，草稿仍保留，但提交权已撤销。请保留所需内容或明确放弃后重新读取；不会自动重放。',
+  expired: 'SQLite 编辑快照已超过 30 分钟。草稿仍保留，请核对并明确放弃后重新读取；不会自动重放。',
+  unknown: 'SQLite 提交结果未知，请先核对原数据库。原批次已锁定，禁止重复提交；草稿仍保留。',
+  confirmDiscard: '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。',
+  confirmDelete: '将当前记录标记为本地待删除？只有预览并明确提交后才会修改数据库。',
+  previewHint: '以下 SQL 仅为原快照的集中修改预览。只有点击提交才会在独立事务中执行；任一记录冲突将整批回滚。',
+  working: '正在处理 SQLite 修改，请等待原操作结束；关闭预览不会取消已发送的提交。', stop: '停止 SQLite 修改任务',
+  stopped: '原 SQLite 预览任务已停止，草稿保留；提交结果仍以原操作真实回执为准。',
+  readonly: '当前连接或对象只能只读浏览。', noDraft: '没有 SQLite 本地修改', invalid: 'SQLite 编辑快照或提交回执无效，未授予写入能力。',
+  kinds: { text: '文本 / JSON 文本', integer: '整数（64 位）', real: '实数（有限）', blob: '二进制（十六进制）', null: 'NULL' },
+  type: (name: string) => 'SQLite 字段 ' + name + ' 类型', value: (name: string) => 'SQLite 字段 ' + name + ' 值', include: (name: string) => '写入 SQLite 字段 ' + name,
+  select: (row: number) => '选择 SQLite 第 ' + row + ' 行',
+  counts: (insert: number, update: number, remove: number) => '本地草稿：新增 ' + insert + ' 行，修改 ' + update + ' 行，删除 ' + remove + ' 行',
+};

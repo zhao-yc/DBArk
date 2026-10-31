@@ -4,11 +4,18 @@ import { sqliteTableBrowseLimits as limits, sqliteTablePageSchema, type SqliteTa
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteColumn, SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
+import type { SqliteTableEditPage } from '../shared/sqliteTableEdit';
+
+export interface SqliteEditReadPlan {
+  project?: (column: string) => string; extraColumn?: string;
+  capture(rows: SqliteValue[][]): SqliteTableEditPage;
+}
 
 export interface SqliteTableBrowseControl {
   check(): void;
   beginCleanup(): void;
   cleanupFailed(reason: unknown): void;
+  prepareEdit?(catalogue: SqliteTableCatalogue, driver: SqliteDriverSession): Promise<SqliteEditReadPlan>;
 }
 
 /** 本地边界取消只中止本次只读快照，不可冒充原生强退或退出确认。 */
@@ -55,7 +62,7 @@ export function buildSqliteTableSelect(source: SqliteTablePageInput, columns: re
 }
 
 export interface SqliteTableCatalogue {
-  kind: 'table' | 'view'; columns: SqliteTableColumn[]; schemaSql: string; schemaKey: string;
+  kind: 'table' | 'view'; columns: SqliteTableColumn[]; schemaSql: string; schemaKey: string; xinfo: SqliteValue[][];
 }
 /** 精确SQL原文和按cid顺序的完整xinfo共同签名，包括隐藏/生成列及默认值，不能只比显示列名。 */
 export function sqliteTableSchemaKey(schemaSql: string, xinfo: readonly (readonly SqliteValue[])[]): string {
@@ -88,23 +95,26 @@ export async function readSqliteTableCatalogue(driver: SqliteDriverSession, tabl
     if (hidden !== '1') columns.push({ name: row[1], declaredType: row[2], ...(['2', '3'].includes(hidden!) ? { generated: true } : {}) });
   }
   if (!columns.length) throw Error('SQLite表没有可浏览列或列目录超过预算');
-  return { kind: objects[0][1] as 'table' | 'view', columns, schemaSql: objects[0][2], schemaKey: sqliteTableSchemaKey(objects[0][2], catalogue) };
+  return { kind: objects[0][1] as 'table' | 'view', columns, schemaSql: objects[0][2], schemaKey: sqliteTableSchemaKey(objects[0][2], catalogue), xinfo: catalogue };
 }
 
 /** BEGIN后的首个目录读取固定本页快照；元数据、筛选排序和行读取全部使用同一个只读物理连接。 */
 export async function readSqliteTablePage(driver: SqliteDriverSession, source: SqliteTablePageInput, control: SqliteTableBrowseControl): Promise<SqliteTablePage> {
   const input = sqliteTablePageSchema.parse(source), started = performance.now();
-  let page: SqliteTablePage | undefined, failed = false, failure: unknown;
+  let page: SqliteTablePage | undefined, failed = false, failure: unknown, editPlan: SqliteEditReadPlan | undefined, originalRows: SqliteValue[][] = [];
   try {
     control.check(); await driver.execute('BEGIN'); control.check();
-    const { kind, columns, schemaKey } = await readSqliteTableCatalogue(driver, input.table, control);
-    const request = buildSqliteTableSelect(input, columns);
+    const catalogue = await readSqliteTableCatalogue(driver, input.table, control), { kind, columns, schemaKey } = catalogue;
+    editPlan = input.editing && control.prepareEdit ? await control.prepareEdit(catalogue, driver) : undefined;
+    const request = buildSqliteTableSelect(input, columns, undefined, false, editPlan?.project), extra = editPlan?.extraColumn ? 1 : 0;
+    if (editPlan?.extraColumn) request.sql = 'SELECT ' + editPlan.extraColumn + ' AS "__dbark_edit_locator", ' + request.sql.slice(7);
     const values = await rows(driver, request.sql, request.parameters, input.limit + 1, control, actual => {
-      if (actual.length !== columns.length || actual.some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');
+      if (actual.length !== columns.length + extra || actual.slice(extra).some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');
     });
+    originalRows = values.slice(0, input.limit);
     const result: QueryResult = {
       columns: columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' })),
-      rows: values.slice(0, input.limit).map(row => {
+      rows: originalRows.map(original => { const row = original.slice(extra);
         if (row.length !== columns.length) throw Error('SQLite实际结果行与本页列目录不一致');
         return Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)])) as DataRow;
       }), truncated: false, elapsedMs: 0, statement: request.sql,
@@ -123,5 +133,6 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
   if (failed) throw failure;
   control.check(); page!.result.elapsedMs = performance.now() - started;
   if (Buffer.byteLength(JSON.stringify(page!.result)) > limits.resultBytes) throw Error('SQLite表浏览结果对象超过16MiB预算，请减少每页行数或缩小范围');
+  if (editPlan) page!.edit = editPlan.capture(originalRows);
   return page!;
 }

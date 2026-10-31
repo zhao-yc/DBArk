@@ -25,7 +25,7 @@ export const sqliteTableFilterSchema = z.object({
 export const sqliteTablePageSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.literal('main'), table: name, taskId: z.string().min(1).max(200),
   offset: z.number().int().min(0).max(sqliteTableBrowseLimits.offset), limit: z.number().int().min(1).max(sqliteTableBrowseLimits.pageSize),
-  mode: z.enum(['and', 'or']), filters: z.array(sqliteTableFilterSchema).max(sqliteTableBrowseLimits.filters),
+  mode: z.enum(['and', 'or']), filters: z.array(sqliteTableFilterSchema).max(sqliteTableBrowseLimits.filters), editing: z.boolean().optional(),
   sort: z.array(z.object({ column: name, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
 }).strict().superRefine((input, context) => {
   if (new Set(input.sort.map(sort => sort.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: '排序列不能重复' });
@@ -35,6 +35,8 @@ export type SqliteTableFilter = z.infer<typeof sqliteTableFilterSchema>;
 export type SqliteTablePageInput = z.infer<typeof sqliteTablePageSchema>;
 export interface SqliteTableColumn { name: string; declaredType: string; generated?: boolean; }
 export interface SqliteTablePage {
+  /** 仅显式可编辑页请求签发，任意SQL结果和原只读页不获得写入能力。 */
+  edit?: import('./sqliteTableEdit').SqliteTableEditPage;
   /** 原目录定义及完整列事实摘要，导出前须在准确只读快照重新核对。 */
   schemaKey: string;
   target: { connectionId: string; database: 'main'; table: string; kind: 'table' | 'view' };
