@@ -1,4 +1,5 @@
 import type { DataRow, QueryResult } from '../shared/contracts';
+import { createHash } from 'node:crypto';
 import { sqliteTableBrowseLimits as limits, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteColumn, SqliteValue } from '../engine/sqlite/protocol';
@@ -16,7 +17,7 @@ export class SqliteTableBrowseCancelled extends Error {
 }
 
 /** 对已从准确快照目录取得的名称逐个转义，不接收任意SQL表达式。 */
-function quote(name: string): string { return '"' + name.replaceAll('"', '""') + '"'; }
+export function quoteSqliteIdentifier(name: string): string { return '"' + name.replaceAll('"', '""') + '"'; }
 
 /** 类型参数先规范化成driver合同，整数不经Number，REAL负零不丢失。 */
 function operand(value: NonNullable<SqliteTableFilter['value']>): SqliteValue {
@@ -29,10 +30,13 @@ function operand(value: NonNullable<SqliteTableFilter['value']>): SqliteValue {
 }
 
 /** 每列都来自真实元数据白名单；运算符固定，所有筛选值及分页数字均使用typed绑定。 */
-export function buildSqliteTableSelect(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[]): { sql: string; parameters: SqliteValue[] } {
+export function buildSqliteTableSelect(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected?: readonly string[], complete = false, project?: (qualifiedColumn: string) => string): { sql: string; parameters: SqliteValue[] } {
   const input = sqliteTablePageSchema.parse(source), names = new Set(columns.map(column => column.name));
   if (!columns.length || columns.length > limits.columns || names.size !== columns.length) throw Error('SQLite表没有可浏览列或列目录超过预算');
-  const field = (name: string) => { if (!names.has(name)) throw Error('SQLite筛选或排序列已不存在，请刷新表结构'); return quote(name); };
+  const alias = project ? '"__dbark_source"' : undefined;
+  const field = (name: string) => { if (!names.has(name)) throw Error('SQLite筛选或排序列已不存在，请刷新表结构'); return (alias ? alias + '.' : '') + quoteSqliteIdentifier(name); };
+  const output = selected ?? columns.map(column => column.name);
+  if (!output.length || output.length > limits.columns || new Set(output).size !== output.length) throw Error('SQLite导出列为空、重复或超过预算');
   const parameters: SqliteValue[] = [];
   const operators = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' } as const;
   const filters = input.filters.map(filter => {
@@ -44,10 +48,18 @@ export function buildSqliteTableSelect(source: SqliteTablePageInput, columns: re
     return '(typeof(' + column + ') = ? AND ' + comparison + ')';
   });
   const order = input.sort.map(sort => field(sort.column) + (sort.direction === 'asc' ? ' ASC' : ' DESC'));
-  parameters.push({ type: 'integer', value: String(input.limit + 1) }, { type: 'integer', value: String(input.offset) });
-  return { sql: 'SELECT ' + columns.map(column => quote(column.name)).join(', ') + ' FROM "main".' + quote(input.table)
+  if (!complete) parameters.push({ type: 'integer', value: String(input.limit + 1) }, { type: 'integer', value: String(input.offset) });
+  return { sql: 'SELECT ' + output.map(name => project ? project(field(name)) + ' AS ' + quoteSqliteIdentifier(name) : field(name)).join(', ') + ' FROM "main".' + quoteSqliteIdentifier(input.table) + (alias ? ' AS ' + alias : '')
     + (filters.length ? ' WHERE ' + filters.join(input.mode === 'and' ? ' AND ' : ' OR ') : '')
-    + (order.length ? ' ORDER BY ' + order.join(', ') : '') + ' LIMIT ? OFFSET ?', parameters };
+    + (order.length ? ' ORDER BY ' + order.join(', ') : '') + (complete ? '' : ' LIMIT ? OFFSET ?'), parameters };
+}
+
+export interface SqliteTableCatalogue {
+  kind: 'table' | 'view'; columns: SqliteTableColumn[]; schemaSql: string; schemaKey: string;
+}
+/** 精确SQL原文和按cid顺序的完整xinfo共同签名，包括隐藏/生成列及默认值，不能只比显示列名。 */
+export function sqliteTableSchemaKey(schemaSql: string, xinfo: readonly (readonly SqliteValue[])[]): string {
+  return createHash('sha256').update(JSON.stringify({ schemaSql, xinfo })).digest('hex');
 }
 
 /** 单条查询只收完整结果；截断不能伪造目录完整、页尾或没有下一页。 */
@@ -63,22 +75,29 @@ async function rows(driver: SqliteDriverSession, sql: string, parameters: Sqlite
   return values;
 }
 
+/** 调用方已BEGIN；精确目录和完整xinfo属于同一物理读快照，导出和分页共享来源指纹。 */
+export async function readSqliteTableCatalogue(driver: SqliteDriverSession, table: string, control: SqliteTableBrowseControl): Promise<SqliteTableCatalogue> {
+  const objects = await rows(driver, "SELECT name,type,sql FROM main.sqlite_schema WHERE name = ? COLLATE BINARY AND type IN ('table','view') LIMIT 2", [table], 2, control);
+  if (objects.length !== 1 || objects[0][0] !== table || !['table', 'view'].includes(String(objects[0][1])) || typeof objects[0][2] !== 'string') throw Error('SQLite目标表或视图已不存在，请刷新对象目录');
+  const catalogue = await rows(driver, 'SELECT cid,name,type,"notnull",dflt_value,pk,hidden FROM pragma_table_xinfo(?, \'main\') ORDER BY cid LIMIT ?', [table, { type: 'integer', value: String(limits.columns + 1) }], limits.columns + 1, control);
+  if (!catalogue.length || catalogue.length > limits.columns) throw Error('SQLite表没有可浏览列或列目录超过预算');
+  const columns: SqliteTableColumn[] = [];
+  for (const row of catalogue) {
+    const hidden = row[6] && typeof row[6] === 'object' && row[6].type === 'integer' ? row[6].value : undefined;
+    if (row.length !== 7 || typeof row[1] !== 'string' || !row[1] || row[1].includes('\0') || typeof row[2] !== 'string' || !['0', '1', '2', '3'].includes(hidden ?? '')) throw Error('SQLite真实列目录无效，请刷新表结构');
+    if (hidden !== '1') columns.push({ name: row[1], declaredType: row[2], ...(['2', '3'].includes(hidden!) ? { generated: true } : {}) });
+  }
+  if (!columns.length) throw Error('SQLite表没有可浏览列或列目录超过预算');
+  return { kind: objects[0][1] as 'table' | 'view', columns, schemaSql: objects[0][2], schemaKey: sqliteTableSchemaKey(objects[0][2], catalogue) };
+}
+
 /** BEGIN后的首个目录读取固定本页快照；元数据、筛选排序和行读取全部使用同一个只读物理连接。 */
 export async function readSqliteTablePage(driver: SqliteDriverSession, source: SqliteTablePageInput, control: SqliteTableBrowseControl): Promise<SqliteTablePage> {
   const input = sqliteTablePageSchema.parse(source), started = performance.now();
   let page: SqliteTablePage | undefined, failed = false, failure: unknown;
   try {
     control.check(); await driver.execute('BEGIN'); control.check();
-    const objects = await rows(driver, "SELECT name,type FROM main.sqlite_schema WHERE name = ? COLLATE BINARY AND type IN ('table','view') LIMIT 2", [input.table], 2, control);
-    if (objects.length !== 1 || objects[0][0] !== input.table || !['table', 'view'].includes(String(objects[0][1]))) throw Error('SQLite目标表或视图已不存在，请刷新对象目录');
-    const kind = objects[0][1] as 'table' | 'view';
-    const catalogue = await rows(driver, "SELECT name,type,hidden FROM pragma_table_xinfo(?, 'main') WHERE hidden IN (0,2,3) ORDER BY cid LIMIT ?", [input.table, { type: 'integer', value: String(limits.columns + 1) }], limits.columns + 1, control);
-    if (!catalogue.length || catalogue.length > limits.columns) throw Error('SQLite表没有可浏览列或列目录超过预算');
-    const columns = catalogue.map(row => {
-      const hidden = row[2] && typeof row[2] === 'object' && row[2].type === 'integer' ? row[2].value : undefined;
-      if (row.length !== 3 || typeof row[0] !== 'string' || !row[0] || row[0].includes('\0') || typeof row[1] !== 'string' || !['0', '2', '3'].includes(hidden ?? '')) throw Error('SQLite真实列目录无效，请刷新表结构');
-      return { name: row[0], declaredType: row[1] };
-    });
+    const { kind, columns, schemaKey } = await readSqliteTableCatalogue(driver, input.table, control);
     const request = buildSqliteTableSelect(input, columns);
     const values = await rows(driver, request.sql, request.parameters, input.limit + 1, control, actual => {
       if (actual.length !== columns.length || actual.some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');
@@ -90,7 +109,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
         return Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)])) as DataRow;
       }), truncated: false, elapsedMs: 0, statement: request.sql,
     };
-    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, result, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit };
+    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit };
   } catch (reason) { failed = true; failure = reason; }
   // 即使边界取消也只回滚本次独立只读快照，绝不借用户查询标签的事务。
   control.beginCleanup();

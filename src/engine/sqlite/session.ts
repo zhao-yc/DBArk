@@ -15,6 +15,7 @@ export interface SqliteExecuteOptions extends Partial<SqliteExecutionOptions> {
   onStatement?(statement: { index: number; sql: string; columns: SqliteColumn[] }): void | Promise<void>;
   onBatch?(batch: { index: number; rows: SqliteValue[][] }): void | Promise<void>;
 }
+export interface SqliteStreamReadOptions extends Pick<SqliteExecuteOptions, 'parameters' | 'onStatement' | 'onBatch'> { batchRows?: number; }
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 type Terminal = Extract<SqliteWorkerResponse, { kind: 'completed' | 'failed' | 'cancelled' }>;
 interface Operation {
@@ -77,10 +78,21 @@ export class SqliteDriverSession {
   /** 未确认退出的失效会话也不能接收SQL，不能只依据isClosed判断还能执行。 */
   get isUsable(): boolean { return this.opened && !this.exited && !this.invalid && !this.closing; }
   get isBusy(): boolean { return !!this.active; }
+  /** 流式全量读取不能被读写会话借用以绕过普通查询预算。 */
+  get readOnly(): boolean { return this.options.readOnly; }
   private error(message: string, code: string, completed = this.active?.results.length ?? 0, results: readonly SqliteStatementResult[] = this.active?.results ?? []): SqliteDriverError { return new SqliteDriverError(message, code, this.exited ? null : this.transactionValue, completed, this.exited, results); }
 
   /** 同一物理连接不并行执行；每个批次等消费者完成后才确认，不无限积压结果。 */
   execute(sql: string, options: SqliteExecuteOptions = {}): Promise<SqliteExecutionResult> {
+    return this.start(sql, options, false);
+  }
+  /** 私有导出通道只允许物理只读会话，消费者必须逐批完成，不能积攒全表结果。 */
+  streamRead(sql: string, options: SqliteStreamReadOptions): Promise<SqliteExecutionResult> {
+    if (!this.options.readOnly || typeof options.onBatch !== 'function') return Promise.reject(this.error('SQLite完整流读取必须使用独立物理只读会话和批次消费者', 'SQLITE_STREAM_REQUIRES_READONLY'));
+    return this.start(sql, { ...options, maxRows: 1, maxBytes: 1 }, true);
+  }
+  /** 普通查询继续原100万行/32MiB门槛，流读取不接受其预算覆盖值。 */
+  private start(sql: string, options: SqliteExecuteOptions, stream: boolean): Promise<SqliteExecutionResult> {
     if (!this.opened || this.exited || this.invalid || this.closing || this.active) return Promise.reject(this.error('SQLite会话未就绪或已有运行任务', 'SQLITE_SESSION_UNAVAILABLE'));
     const configured: SqliteExecutionOptions = { maxRows: options.maxRows ?? 1000, batchRows: options.batchRows ?? 200, maxBytes: options.maxBytes ?? limits.resultBytes };
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > limits.sqlBytes || !Number.isInteger(configured.maxRows) || configured.maxRows < 1 || configured.maxRows > limits.rows || !Number.isInteger(configured.batchRows) || configured.batchRows < 1 || configured.batchRows > limits.batchRows || !Number.isInteger(configured.maxBytes) || configured.maxBytes < 1 || configured.maxBytes > limits.resultBytes) return Promise.reject(this.error('SQLite执行参数超出预算', 'SQLITE_INPUT_LIMIT'));
@@ -88,7 +100,9 @@ export class SqliteDriverSession {
     // 无取消调用时也保留原生终态错误的处理端；execute仍通过自己的Promise报告失败。
     void operation.nativeDone.promise.catch(() => {});
     this.active = operation;
-    try { this.transport.send({ kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), options: configured }); }
+    try { this.transport.send(stream
+      ? { kind: 'streamRead', id: operation.id, sql, parameters: options.parameters ?? [], options: { batchRows: configured.batchRows } }
+      : { kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), options: configured }); }
     catch { void this.breakSession('SQLite请求未能投递，未重试', 'SQLITE_SEND_FAILED'); }
     return operation.result.promise;
   }

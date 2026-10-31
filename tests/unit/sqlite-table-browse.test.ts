@@ -157,7 +157,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     const profile = fixture(); let changed = false;
     const { app } = runtime(profile, () => transport((message, forward, record) => {
       const current = record.sent.filter((sent): sent is Extract<SqliteWorkerRequest, { kind: 'execute' }> => sent.kind === 'execute').at(-1);
-      if (!changed && message.kind === 'batch' && current?.sql.includes('SELECT name,type FROM main.sqlite_schema')) { disk(profile, db => db.exec('ALTER TABLE mix ADD COLUMN added_later TEXT')); changed = true; }
+      if (!changed && message.kind === 'batch' && current?.sql.includes('SELECT name,type,sql FROM main.sqlite_schema')) { disk(profile, db => db.exec('ALTER TABLE mix ADD COLUMN added_later TEXT')); changed = true; }
       forward();
     }));
     const user = await app.request('sessions.open', { connectionId: profile.id });
@@ -232,7 +232,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
   it.each(['opening', 'schema', 'catalogue', 'select', 'rollback'] as const)('%s边界取消只作用准确任务，原driver收尾后先发布cancelled再拒绝，旧编号不取消后继读取', async phase => {
     const profile = fixture(), reached = deferred<void>(), nextReached = deferred<void>(); let paused = false, holdNext = false, release!: () => void, releaseNext!: () => void;
     const { app, events } = runtime(profile, () => transport((message, forward) => {
-      const match = phase === 'opening' ? message.kind === 'opened' : message.kind === 'statement' && (phase === 'schema' ? message.sql.includes('SELECT name,type FROM main.sqlite_schema') : phase === 'catalogue' ? message.sql.includes('pragma_table_xinfo') : phase === 'select' ? message.sql.startsWith('SELECT "id"') : message.sql === 'ROLLBACK');
+      const match = phase === 'opening' ? message.kind === 'opened' : message.kind === 'statement' && (phase === 'schema' ? message.sql.includes('SELECT name,type,sql FROM main.sqlite_schema') : phase === 'catalogue' ? message.sql.includes('pragma_table_xinfo') : phase === 'select' ? message.sql.startsWith('SELECT "id"') : message.sql === 'ROLLBACK');
       if (!paused && match) { paused = true; release = forward; reached.resolve(); }
       else if (holdNext && message.kind === 'statement' && message.sql.startsWith('SELECT "id"')) { holdNext = false; releaseNext = forward; nextReached.resolve(); }
       else forward();

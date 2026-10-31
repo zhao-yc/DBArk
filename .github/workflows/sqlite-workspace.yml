@@ -80,6 +80,8 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/sqlite-workspace/report.json
       - name: 单次运行SQLite只读表分页筛选排序专项
         run: node scripts/sqlite-workspace-ci.mjs table
+      - name: 单次运行SQLite完整流式导出专项
+        run: node scripts/sqlite-workspace-ci.mjs export
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -88,4 +90,5 @@ jobs:
           path: |
             test-results/sqlite-workspace/
             test-results/sqlite-table-browse/
+            test-results/sqlite-table-export/
           if-no-files-found: warn

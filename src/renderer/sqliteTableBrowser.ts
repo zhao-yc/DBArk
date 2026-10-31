@@ -19,6 +19,7 @@ export function sqliteTableDraft(scope: Pick<SqliteTableScope, 'connectionId' | 
 }
 /** 回包必须对应准确目标与窗口，原值按导出合同检查，不能把错页或超限行交给网格。 */
 export function assertSqliteTablePage(page: SqliteTablePage, input: SqliteTablePageInput): void {
+  if (typeof page?.schemaKey !== 'string' || !/^[a-f0-9]{64}$/.test(page.schemaKey) || page.columns?.some(column => column.generated !== undefined && typeof column.generated !== 'boolean')) throw Error(text.invalidPage);
   if (!page || page.target?.connectionId !== input.connectionId || page.target.database !== input.database || page.target.table !== input.table || !['table', 'view'].includes(page.target.kind) || page.offset !== input.offset || page.limit !== input.limit || typeof page.hasMore !== 'boolean' || !Array.isArray(page.columns) || page.columns.length > sqliteTableBrowseLimits.columns || !page.result || !Array.isArray(page.result.columns) || page.columns.length !== page.result.columns.length || page.result.rows.length > input.limit || page.columns.some((column, index) => typeof column.name !== 'string' || typeof column.declaredType !== 'string' || page.result.columns[index]?.name !== column.name)) throw Error(text.invalidPage);
   validateResultExportData(resultExportData(page.result));
 }

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ResultExportData } from '../../shared/contracts';
 import { sqliteTableBrowseLimits } from '../../shared/sqliteTableBrowse';
-import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
+import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab, type WorkspaceBusyLease } from '../store';
 import { invoke, uid, errorMessage } from '../lib';
 import { resultExportData } from '../resultExport';
 import { SqliteTableBrowser, sqliteTableDraft, type SqliteTableQuery, type SqliteTableView, type SqliteFilterDraft, type SqliteSortDraft } from '../sqliteTableBrowser';
@@ -10,9 +10,14 @@ import { sqliteZh } from '../locales/sqlite.zh-CN';
 import { openSqliteSelect } from '../sqliteNavigation';
 import { useUiCommandScope } from '../uiCommands';
 import { ResultsGrid } from './ResultsGrid';
+import { SqliteTableExportDialog } from './SqliteTableExportDialog';
+import { SqliteTableExportIntent } from '../sqliteTableExportUi';
+import { sqliteTableExportZh as exportText } from '../locales/sqliteTableExport.zh-CN';
 import { ResultExportDialog } from './ResultExportDialog';
 import { Empty, ErrorBox, Spinner } from './ui';
 import '../sqliteTableBrowse.css';
+
+interface FullExportOwner { intent: SqliteTableExportIntent; acquiring: boolean; lease?: WorkspaceBusyLease; }
 
 /** 初次请求只读取无条件第一页，不恢复未明确应用的草稿条件。 */
 const initialQuery = (): SqliteTableQuery => ({ limit: 100, mode: 'and', filters: [], sort: [] });
@@ -27,12 +32,13 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   const [filters, setFilters] = useState<SqliteFilterDraft[]>([]), [sort, setSort] = useState<SqliteSortDraft[]>([]), [validation, setValidation] = useState('');
   const [exportData, setExportData] = useState<ResultExportData | null>(null);
   const applied = useRef(initialQuery());
+  const [fullExport, setFullExport] = useState<FullExportOwner | null>(null), fullExportRef = useRef<FullExportOwner | null>(null);
   const [controller] = useState(() => new SqliteTableBrowser({
     scope: () => {
       const current = latest.current, workspace = useWorkspace.getState(), present = workspace.settings.tabs.find(item => item.id === current.tab.id), connection = workspace.connections.find(item => item.id === current.tab.connectionId);
       return { tab: present, profile: connection, connectionId: current.tab.connectionId, database: current.tab.database, table: current.tab.table, version: workspace.connectionVersions[current.tab.connectionId] ?? 0, present: present === current.tab && present?.kind === 'table', active: current.active && workspace.settings.activeTabId === current.tab.id, sqlite: connection?.dialect === 'sqlite' };
     },
-    acquire: () => acquireWorkspaceBusy(latest.current.tab.id), read: input => invoke('sqlite.tablePage', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: setView, subscribe: changed => useWorkspace.subscribe(changed),
+    acquire: () => acquireWorkspaceBusy(latest.current.tab.id), read: input => invoke('sqlite.tablePage', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: next => { fullExportRef.current?.intent.current(); setView(next); }, subscribe: changed => useWorkspace.subscribe(changed),
   }));
   useEffect(() => { controller.activate(); return () => controller.dispose(); }, [controller]);
   const target = useRef({ profile, version, connectionId: tab.connectionId, database: tab.database, table: tab.table });
@@ -43,7 +49,8 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
     if (changed) { applied.current = initialQuery(); setLimit(100); setMode('and'); setFilters([]); setSort([]); setValidation(''); }
     if (active) void controller.load(applied.current, 0); else controller.observe();
   }, [controller, active, profile, version, tab.connectionId, tab.database, tab.table]);
-  useLayoutEffect(() => { controller.observe(); });
+  useLayoutEffect(() => { controller.observe(); fullExportRef.current?.intent.observe([view.page, applied.current, tab, profile, version, active]); });
+  useEffect(() => { const stop = useWorkspace.subscribe(() => fullExportRef.current?.intent.current()); return () => { stop(); fullExportRef.current?.intent.invalidate(); }; }, []);
   const page = view.page, names = view.columns.map(column => column.name), invalidTarget = profile?.dialect !== 'sqlite' || tab.database !== 'main' || !tab.table;
   /** 操作读取同步目标和占用，旧按钮与隐藏标签不得开始新读取。 */
   function available(): boolean { const workspace = useWorkspace.getState(); return active && !invalidTarget && workspace.settings.tabs.find(item => item.id === tab.id) === tab && workspace.settings.activeTabId === tab.id && workspace.connections.find(item => item.id === tab.connectionId) === profile && (workspace.connectionVersions[tab.connectionId] ?? 0) === version && (!workspace.activeJobs[tab.id] || view.busy) && !document.querySelector('[role="dialog"], [role="alertdialog"]'); }
@@ -57,6 +64,29 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   function read(offset: number) { if (available()) { setValidation(''); void controller.load(applied.current, offset); } }
   /** 导出只冻结当前页原值；不读取全表，不生成 MySQL INSERT SQL。 */
   function exportPage() { if (!page || !available() || !controller.pageCurrent(page)) return; try { setExportData(resultExportData(structuredClone(page.result))); } catch (reason) { setValidation(errorMessage(reason)); } }
+  /** 全量导出只捕获准确当前页的元数据与已应用条件，不取尚未应用的表单草稿。 */
+  function openAllExport() {
+    if (!page || !available() || !controller.pageCurrent(page) || fullExportRef.current) return;
+    try {
+      const query = applied.current; let owner!: FullExportOwner;
+      const intent = new SqliteTableExportIntent(page, query, [page, query, tab, profile, version, active], () => {
+        const now = useWorkspace.getState();
+        return latest.current.active && latest.current.tab === tab && now.settings.activeTabId === tab.id && now.settings.tabs.find(item => item.id === tab.id) === tab && now.connections.find(item => item.id === tab.connectionId) === profile && (now.connectionVersions[tab.connectionId] ?? 0) === version && applied.current === query && controller.pageCurrent(page) && (!now.activeJobs[tab.id] || owner.acquiring || owner.lease?.owns() === true);
+      });
+      owner = { intent, acquiring: false }; if (!intent.current()) throw Error(exportText.stale);
+      fullExportRef.current = owner; setFullExport(owner); setValidation('');
+    } catch (reason) { setValidation(errorMessage(reason)); }
+  }
+  /** chooser及流式请求分别取得准确作业租约；自身同步占用不使来源自失效，旧收尾不清他人作业。 */
+  function fullExportActivity(owner: FullExportOwner, delta: 1 | -1) {
+    if (delta === 1) {
+      if (fullExportRef.current !== owner || owner.lease || !owner.intent.current()) throw Error(exportText.stale);
+      owner.acquiring = true;
+      try { owner.lease = acquireWorkspaceBusy(tab.id); } finally { owner.acquiring = false; }
+    } else { const lease = owner.lease; owner.lease = undefined; lease?.release(); }
+  }
+  /** 对话框已等待原操作及取消确认收尾，关闭只撤销本次意图，不提前释放运行中的资源。 */
+  function closeAllExport(owner: FullExportOwner) { owner.intent.invalidate(); if (fullExportRef.current === owner) { fullExportRef.current = null; setFullExport(null); } }
   /** 条件编辑只更新本地草稿，不附带任何读取。 */
   function updateFilter(id: string, patch: Partial<SqliteFilterDraft>) { setFilters(values => values.map(value => value.id === id ? { ...value, ...patch } : value)); }
   /** NULL 去掉值，包含固定文本；无效的类型比较由严格合同在应用前拒绝。 */
@@ -67,7 +97,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   const fieldOptions = view.columns.map((column, index) => <option key={index} value={column.name}>{column.name} · {column.declaredType || text.dynamic}</option>);
   return <div className="workspace-tab table-tab sqlite-table-tab" aria-label={text.title} data-readonly="true">
     <div className="context-bar"><span className="connection-dot" style={{ background: profile?.color }}/><strong>{profile?.name ?? tab.connectionId}</strong><span>/</span><span>{tab.database}</span><span>/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">SQLite · {text.title}</span></div>
-    <div className="toolbar"><button aria-label={text.refresh} disabled={!active || invalidTarget || !!exportData || externalBusy && !view.busy} onClick={() => read(page?.offset ?? 0)}>{text.refresh}</button><button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button><button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button><button aria-label={sqliteZh.selectQuery} disabled={invalidTarget || view.busy || externalBusy} onClick={() => { if (available()) openSqliteSelect(tab.connectionId, tab.database!, { name: tab.table!, kind: page?.target.kind ?? 'table' }); }}>{sqliteZh.selectQuery}</button><button aria-label={text.export} disabled={!page || view.busy || externalBusy} onClick={exportPage}>{text.export}</button></div>
+    <div className="toolbar"><button aria-label={text.refresh} disabled={!active || invalidTarget || !!exportData || externalBusy && !view.busy} onClick={() => read(page?.offset ?? 0)}>{text.refresh}</button><button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button><button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button><button aria-label={sqliteZh.selectQuery} disabled={invalidTarget || view.busy || externalBusy} onClick={() => { if (available()) openSqliteSelect(tab.connectionId, tab.database!, { name: tab.table!, kind: page?.target.kind ?? 'table' }); }}>{sqliteZh.selectQuery}</button><button aria-label={text.export} disabled={!page || view.busy || externalBusy} onClick={exportPage}>{text.export}</button><button aria-label={exportText.entry} disabled={!page || view.busy || externalBusy || !!fullExport} onClick={openAllExport}>{exportText.entry}</button></div>
     <p className="sqlite-browse-hint">{text.readonly}</p>
     {conditions && <div className="sqlite-browse-conditions"><p className="muted small">{text.typesHint}</p><fieldset aria-label={text.filters}><legend>{text.filters}</legend><select aria-label={text.mode} value={mode} onChange={event => setMode(event.target.value as 'and' | 'or')}><option value="and">AND</option><option value="or">OR</option></select><button disabled={!names.length || filters.length >= sqliteTableBrowseLimits.filters} onClick={() => setFilters(values => values.length >= sqliteTableBrowseLimits.filters ? values : [...values, { id: uid(), column: names[0], operator: 'eq', kind: 'text', value: '' }])}>{text.addFilter}</button>
       {filters.map((filter, index) => <div className="sqlite-browse-rule" key={filter.id}><select aria-label={text.filterColumn(index + 1)} value={filter.column} onChange={event => updateFilter(filter.id, { column: event.target.value })}>{fieldOptions}</select><select aria-label={text.filterOperator(index + 1)} value={filter.operator} onChange={event => changeOperator(filter.id, event.target.value as SqliteFilterDraft['operator'])}>{Object.entries(text.operators).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>{!['isNull', 'notNull'].includes(filter.operator) && <><select aria-label={text.filterKind(index + 1)} value={filter.kind} onChange={event => updateFilter(filter.id, { kind: event.target.value as SqliteFilterDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind} disabled={filter.operator === 'contains' && kind !== 'text' || kind === 'blob' && !['eq', 'ne'].includes(filter.operator)}>{label}</option>)}</select><input aria-label={text.filterValue(index + 1)} value={filter.value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => updateFilter(filter.id, { value: event.target.value })}/></>}<button aria-label={text.removeFilter(index + 1)} onClick={() => setFilters(values => values.filter(value => value.id !== filter.id))}>×</button></div>)}</fieldset>
@@ -76,6 +106,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
     <ErrorBox message={invalidTarget ? text.unsupported : validation || view.error}/>
     <div className="sqlite-browse-result">{view.busy ? <div className="empty"><Spinner text={view.stopping ? text.stopping : text.loading}/></div> : page ? <ResultsGrid columns={page.result.columns} rows={page.result.rows} selectionScope={page} isCurrent={() => controller.pageCurrent(page) && available() && !externalBusy} binaryFileActions={false}/> : <Empty title={text.noPage}/>}</div>
     <div className="tab-status"><button aria-label={text.first} disabled={view.busy || !page || page.offset === 0 || externalBusy} onClick={() => read(0)}>{text.first}</button><button aria-label={text.previous} disabled={view.busy || !page || page.offset === 0 || externalBusy} onClick={() => read(Math.max(0, page!.offset - page!.limit))}>{text.previous}</button><button aria-label={text.next} disabled={view.busy || !page?.hasMore || externalBusy || page.offset + page.limit > sqliteTableBrowseLimits.offset} onClick={() => read(page!.offset + page!.limit)}>{text.next}</button><span>{page ? text.page(page.offset, page.result.rows.length, page.hasMore) : ''}</span><span className="grow"/><small title={text.noCount}>{text.noCount}</small></div>
+    {fullExport && <SqliteTableExportDialog intent={fullExport.intent} onActivity={delta => fullExportActivity(fullExport, delta)} onClose={() => closeAllExport(fullExport)} onCleanupError={message => useWorkspace.getState().notify(message, true)} onCommitted={output => useWorkspace.getState().notify(exportText.committedChanged(output.rows))}/>}
     {exportData && <ResultExportDialog result={exportData} tabId={tab.id} scope="table" allowSql={false} onClose={() => setExportData(null)}/>}
   </div>;
 }

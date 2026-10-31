@@ -3,7 +3,7 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const cases = Object.freeze({ workspace: ['sqlite-workspace-native.spec.ts', 'sqlite-workspace'], table: ['sqlite-table-browse-native.spec.ts', 'sqlite-table-browse'] });
+const cases = Object.freeze({ workspace: ['sqlite-workspace-native.spec.ts', 'sqlite-workspace', 'DBARK_SQLITE_WORKSPACE_NATIVE_TEST'], table: ['sqlite-table-browse-native.spec.ts', 'sqlite-table-browse', 'DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST'], export: ['sqlite-table-export-native.spec.ts', 'sqlite-table-export', 'DBARK_SQLITE_TABLE_EXPORT_NATIVE_TEST'] });
 
 /** 离线子进程不继承runner预装数据库/SSH认证，也不继承用户数据路径、可执行文件或模块注入。 */
 export function sqliteOfflineEnvironment(parent, kind) {
@@ -14,7 +14,7 @@ export function sqliteOfflineEnvironment(parent, kind) {
     if (value !== undefined) env[key] = value;
   }
   env.DBARK_INTEGRATION_ENABLED = '0';
-  env[kind === 'workspace' ? 'DBARK_SQLITE_WORKSPACE_NATIVE_TEST' : 'DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST'] = '1';
+  env[cases[kind][2]] = '1';
   env.PLAYWRIGHT_JSON_OUTPUT_NAME = join(root, 'test-results', cases[kind][1], 'report.json');
   return { env, dropped: dropped.sort() };
 }
@@ -27,7 +27,7 @@ export function sqliteOfflineCommand(kind) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length !== 1 || !Object.hasOwn(cases, args[0])) throw Error('用法：node scripts/sqlite-workspace-ci.mjs workspace|table');
+  if (args.length !== 1 || !Object.hasOwn(cases, args[0])) throw Error('用法：node scripts/sqlite-workspace-ci.mjs workspace|table|export');
   const { env, dropped } = sqliteOfflineEnvironment(process.env, args[0]);
   // 只记录字段名；runner认证值、路径值和口令从不输出。
   console.log('SQLite离线源码子进程已移除环境字段：' + (dropped.join('、') || '无'));

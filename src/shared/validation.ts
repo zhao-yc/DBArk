@@ -1,4 +1,5 @@
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
+import { sqliteTableExportSchema } from './sqliteTableExport';
 import { tableCheckGetSchema, tableCheckPreviewSchema, tableCheckApplySchema, tableCheckReleaseSchema } from './tableChecks';
 import { uiMenuStateSchema, objectCategories, assertObjectBrowserTabs } from './uiCommands';
 import { tableFilteredDeletePreviewInputSchema, tableFilteredDeleteApplyInputSchema, tableFilteredDeleteReleaseInputSchema } from './tableFilteredDelete';
@@ -196,6 +197,7 @@ const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
 
 export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tablePage': sqliteTablePageSchema,
+  'sqlite.tableExport': sqliteTableExportSchema,
   'app.menuState': uiMenuStateSchema,
   'result.insertPreview': resultInsertPreviewInputSchema,
   'result.insertApply': resultInsertApplyInputSchema,

@@ -3,7 +3,7 @@ import { mainColumnsHarness } from './main-columns-owner-harness';
 
 const profile = { id: 'sqlite-file', name: '本例文件', group: '', color: '#123456', dialect: 'sqlite', sqlite: { filePath: '仅作已存概要，不打开文件', readOnly: true, busyTimeoutMs: 1000 } };
 const input = { connectionId: profile.id, database: 'main', table: 'subject', taskId: 'read-page', offset: 0, limit: 10, mode: 'and', filters: [], sort: [] };
-const page = { target: { connectionId: profile.id, database: 'main', table: 'subject', kind: 'table' }, columns: [], result: { columns: [], rows: [], elapsedMs: 0, truncated: false, statement: '' }, offset: 0, limit: 10, hasMore: false };
+const page = { schemaKey: 'a'.repeat(64), target: { connectionId: profile.id, database: 'main', table: 'subject', kind: 'table' }, columns: [], result: { columns: [], rows: [], elapsedMs: 0, truncated: false, statement: '' }, offset: 0, limit: 10, hasMore: false };
 
 /** 经过正式IPC校验与Main分派；只替换数据库执行边界，不打开本机文件或网络连接。 */
 describe('SQLite表页Main任务边界', () => {

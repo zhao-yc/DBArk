@@ -33,8 +33,10 @@ export const sqliteTablePageSchema = z.object({
 });
 export type SqliteTableFilter = z.infer<typeof sqliteTableFilterSchema>;
 export type SqliteTablePageInput = z.infer<typeof sqliteTablePageSchema>;
-export interface SqliteTableColumn { name: string; declaredType: string; }
+export interface SqliteTableColumn { name: string; declaredType: string; generated?: boolean; }
 export interface SqliteTablePage {
+  /** 原目录定义及完整列事实摘要，导出前须在准确只读快照重新核对。 */
+  schemaKey: string;
   target: { connectionId: string; database: 'main'; table: string; kind: 'table' | 'view' };
   columns: SqliteTableColumn[];
   result: QueryResult;

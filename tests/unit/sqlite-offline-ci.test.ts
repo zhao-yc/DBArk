@@ -11,10 +11,17 @@ describe('SQLite独立源码CI的原生门与环境隔离', () => {
     expect(result.env.PLAYWRIGHT_JSON_OUTPUT_NAME.replaceAll('\\', '/')).toMatch(/\/test-results\/sqlite-workspace\/report\.json$/);
     expect(result.dropped).toContain('PGPASSWORD'); expect(JSON.stringify(result)).not.toContain('合成PG秘密');
   });
-  it.each(['workspace', 'table'])('%s仅发固定spec、单worker、零重试、trace关闭；不覆盖原120秒或提供认证参数', kind => {
+  it.each([
+    ['workspace', 'sqlite-workspace-native.spec.ts', 'sqlite-workspace', 'DBARK_SQLITE_WORKSPACE_NATIVE_TEST'],
+    ['table', 'sqlite-table-browse-native.spec.ts', 'sqlite-table-browse', 'DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST'],
+    ['export', 'sqlite-table-export-native.spec.ts', 'sqlite-table-export', 'DBARK_SQLITE_TABLE_EXPORT_NATIVE_TEST']
+  ])('%s仅发固定spec、单worker、零重试、trace关闭；不覆盖原120秒或提供认证参数', (kind, spec, output, gate) => {
     const args: string[] = sqliteOfflineCommand(kind); expect(args).toContain('--workers=1'); expect(args).toContain('--retries=0'); expect(args).toContain('--trace=off'); expect(args).toContain('--reporter=list,json');
     expect(args.some(value => /timeout|password|executable-path|grep|repeat-each/.test(value))).toBe(false);
-    const { env } = sqliteOfflineEnvironment({}, kind); expect(env.DBARK_INTEGRATION_ENABLED).toBe('0'); expect(env[kind === 'workspace' ? 'DBARK_SQLITE_WORKSPACE_NATIVE_TEST' : 'DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST']).toBe('1');
+    expect(args).toContain('tests/e2e/' + spec); expect(args).toContain('--output=test-results/' + output);
+    const { env } = sqliteOfflineEnvironment({ DBARK_SQLITE_WORKSPACE_NATIVE_TEST: '1', DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST: '1', DBARK_SQLITE_TABLE_EXPORT_NATIVE_TEST: '1' }, kind); expect(env.DBARK_INTEGRATION_ENABLED).toBe('0'); expect(env[gate]).toBe('1');
+    expect(Object.keys(env).filter(key => key.endsWith('_NATIVE_TEST'))).toEqual([gate]);
+    expect(env.PLAYWRIGHT_JSON_OUTPUT_NAME.replaceAll('\\', '/')).toContain('/test-results/' + output + '/report.json');
   });
   it('未知类型和路径不能改写固定专项入口', () => { for (const value of ['installed', '../外部', '', '__proto__']) { expect(() => sqliteOfflineCommand(value)).toThrow(); expect(() => sqliteOfflineEnvironment({}, value)).toThrow(); } });
 });
