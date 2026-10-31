@@ -62,3 +62,39 @@ Windows 本机回退验证：类型检查、46 项镜像／清理租约单元测
 
 同一运行的 Windows 旧连接迁移退出失败另见[原件诊断](windows-quit-ci-20261027.md)，
 不得将整个运行计为通过。新查询警告功能不属于 `197ef4eb`；本条亦不代表它已通过 Mac。
+
+## 20261026.0455.2 镜像原件与准入
+
+`2856343193c12503843fa53f55ad1b6fb6bfa220` 的
+[run 41201964649](https://github.com/zhao-yc/DBArk/actions/runs/41201964649)／arm64 job
+`124539365897` 实际运行在 `macos26 / 20261026.0455.2`。runner 头部、原
+`context.log` 和同 job 的完整只读枚举一致确认 macOS 26.6.2／25G83、原生 arm64，
+`translationObservation` 为 `translated=false`、`rawValue=0`，未使用 Rosetta。
+
+原[显示租约附件 13042812854](https://github.com/zhao-yc/DBArk/actions/runs/41201964649/artifacts/13042812854)
+ZIP 为 3001 字节，SHA-256 为
+`8d8c509b1bbe1bf975d960fd984ea110da1d056c9487d378acac252601b7b80f`。
+本地原 ZIP 大小和摘要与上传日志一致，全部 7 个条目逐项核对解压长度及 CRC32 通过。
+从原 ZIP 提取的 `preflight/inventory.json` 原字节保存为
+`tests/fixtures/macos-display-20261026.0455.2.json`，共 5057 字节，SHA-256 为
+`4cc3845bbc1abce3336afb1c158b6688c3698e8bef71add420e95bf526151ece`。
+
+结构比较确认完整 JSON 仅 `context.imageVersion` 与 `20261021.0445.8` 夹具不同：
+一个非镜像主屏、scale1，当前 mode3 为 1024×768，可见区域 (0,63,1024,674)，
+全部 12 个模式的 ID、顺序、像素、逻辑、比例、刷新率及 ioFlags 逐项相同。
+原遮挡预算为宽 0、高 94 点；按原 1440×1050 可见余量门槛，仍仅提出
+mode9／1600×1200，估计可见 1600×1106。1920×1080 扣除 94 点后高度仅 986，
+仍不能代替 mode9。
+
+该 job 的 keeper 在首次只读快照时因未登记镜像拒绝，退出码 78，未生成 plan；
+原 native／file CLI 结果均为空，installed 的 plan、journal 和 receipt 均未生成。
+显示模式配置和产品原生流程尚未启动，失败原件保留，不计入产品专项通过或失败数。
+
+据此仅在 Swift 与 JS 精确版本列表加入 `20261026.0455.2`，保留两个旧版准入，
+新增真实夹具摘要、mode9 候选及 `.3`／`-extra` 版本拒绝检查，新旧夹具均保留
+未知缩放和缺失 mode9 的拒绝检查。工作流、1400×1000 客户区、1440×1050 可见余量、
+600 秒非续期租约、`forSession`、原生断言及退出前恢复规则均保持。
+Windows 本机回退的镜像／清理租约单元 50 项，以及带准确新原件 SHA 的纯策略／协议
+49 项串行通过。首次纯策略命令因缺少必填 SHA 在入口拒绝，原日志保留；补齐准确参数后
+通过，没有改变脚本门槛。新镜像上的实际切换、原 native／owner／file 证明及
+keeper 退出前恢复仍未验，只读枚举和离线检查不能代替这些证明。本次不发布。

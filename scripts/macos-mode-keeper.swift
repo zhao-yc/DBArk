@@ -84,8 +84,8 @@ func snapshot(requireCorrespondence: Bool = true) throws -> (data: [String: Any]
     let currentData = try mode(current), modesData = try modes.map(mode)
     let correspondence = frame.width == CGFloat(currentData["logicalWidth"] as! Int) && frame.height == CGFloat(currentData["logicalHeight"] as! Int)
     guard !requireCorrespondence || correspondence else { throw NSError(domain: "模式与点坐标对应未知", code: 1) }
-    // 20261021版本已由同job完整只读原件审阅；其它镜像仍须重新采集，不作通配准入。
-    guard environment["ImageOS"] == "macos26", ["20261013.0424.1", "20261021.0445.8"].contains(environment["ImageVersion"] ?? "") else { throw NSError(domain: "原镜像已变化，须先重新枚举审阅", code: 1) }
+    // 列出的版本均已由同job完整只读原件审阅；其它镜像仍须重新采集，不作通配准入。
+    guard environment["ImageOS"] == "macos26", ["20261013.0424.1", "20261021.0445.8", "20261026.0455.2"].contains(environment["ImageVersion"] ?? "") else { throw NSError(domain: "原镜像已变化，须先重新枚举审阅", code: 1) }
     let data: [String: Any] = ["context": ["architecture": "arm64", "imageOS": environment["ImageOS"]!, "imageVersion": environment["ImageVersion"]!], "displays": [["displayID": display, "mainDisplay": true, "mirrored": false, "framePoints": rectangle(frame), "visibleFramePoints": rectangle(visible), "backingScaleFactor": scale, "currentMode": currentData, "availableModeCount": modes.count, "availableModes": modesData]]]
     return (data, display, current, modes)
 }

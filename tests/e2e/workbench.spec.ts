@@ -102,6 +102,6 @@ test('收藏与虚拟分组真实增删改序、链接复制、失效连接及�
   await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 680));
   await page.keyboard.press(`${modifier}+Shift+L`); await expect(page.locator('.sidebar-container')).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath('workbench-focus-minimum.png') });
-  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '退出专注模式', exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '专注模式', exact: true })).click();
   await expect(page.locator('.sidebar-container')).toBeVisible();
 });
