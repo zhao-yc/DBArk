@@ -34,7 +34,8 @@ test.beforeEach(async () => {
   app = await electron.launch({ args: ['tests/fixtures/page-find-replace/electron.cjs'], env, chromiumSandbox: true });
   const ownStartup=startup;startupProcess=app.process();startupProcess.stdout?.on('data',value=>captureStartup(ownStartup,'stdout',value));startupProcess.stderr?.on('data',value=>captureStartup(ownStartup,'stderr',value));
   page = await app.firstWindow();startupPage=page; page.on('pageerror', reason => errors.push(reason.message));
-  await expect(page.getByRole('button', { name: text.find, exact: true })).toBeEnabled({ timeout: 30000 });
+  await expect(page.locator('.table-tab .results-grid [role="row"][aria-rowindex="2"]')).toBeVisible({ timeout: 30000 });
+  await expect((await (await import('./navigation-menu')).navigationMenuItem(page, { name: text.find, exact: true }))).toBeEnabled({ timeout: 30000 });
 });
 test.afterEach(async ({},info) => {
   if(info.status!==info.expectedStatus){

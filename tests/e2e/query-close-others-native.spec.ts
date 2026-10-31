@@ -44,6 +44,27 @@ function desktop(info: TestInfo) {
   if (owner.closed) throw Error('本例桌面已关闭，禁止继续操作');
   return { runtime, ...owner };
 }
+/** 关闭其他查询现位于真实原生窗口菜单；只消费本例准确App的生产MenuItem。 */
+function closeOthersMenu(info: TestInfo) {
+  const owner = desktop(info);
+  const current = () => { const actual = desktop(info); if (actual.application !== owner.application || actual.page !== owner.page) throw Error('关闭其他查询所属窗口已变化'); };
+  return {
+    async enabled(): Promise<boolean> {
+      current();
+      const enabled = await owner.application.evaluate(({ Menu, BrowserWindow }) => BrowserWindow.getAllWindows().length === 1 && Menu.getApplicationMenu()?.getMenuItemById('close-other-queries')?.enabled === true);
+      current(); return enabled;
+    },
+    async click(): Promise<void> {
+      current();
+      await owner.application.evaluate(({ Menu, BrowserWindow }) => {
+        const item = Menu.getApplicationMenu()?.getMenuItemById('close-other-queries'), windows = BrowserWindow.getAllWindows();
+        if (!item || !item.enabled || windows.length !== 1) throw Error('准确关闭其他查询原生命令当前不可用');
+        item.click(item, windows[0], {} as Electron.KeyboardEvent);
+      });
+      current();
+    },
+  };
+}
 /** 只读真实持久化设置；不接触store、Monaco模型或内部handler。 */
 async function settings(info: TestInfo) {
   const value = await desktop(info).page.evaluate(() => window.dbark.invoke('settings.get', {})); desktop(info); return value;
@@ -220,12 +241,12 @@ test('保留C：取消全部保留；再发A直接关闭后真实推进B，B取�
   try {
     expect(trace).toBe('off'); expect(screenshot).toBe('off'); expect(video).toBe('off');
     const { a, b, c, records } = await threeDrafts(info), { page } = desktop(info);
-    const others = (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: close.others, exact: true }));
+    const others = closeOthersMenu(info);
     await others.click(); desktop(info);
     await (await navigationMenuItem((await closeDialog(info, a)), { name: close.cancel, exact: true })).click(); desktop(info);
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect((await settings(info)).tabs).toEqual([a, b, c]); expect((await settings(info)).activeTabId).toBe(c.id); expect(await queries(info)).toEqual(records);
-    await expect(others).toBeEnabled(); await others.click(); desktop(info);
+    await expect.poll(() => others.enabled()).toBe(true); await others.click(); desktop(info);
     await (await navigationMenuItem((await closeDialog(info, a)), { name: close.discard, exact: true })).click(); desktop(info);
     // 7142cb0原红必须在这里失败，不能因已知缺陷跳过真正出现B的断言。
     const second = await closeDialog(info, b);
@@ -250,7 +271,7 @@ test('来源CAS冲突：首个A保存失败仍可另存关闭，但B不自动推
     expect((await settings(info)).tabs).toEqual([a, b, c]);
     const observedTargets = [a, b, c].map(({ id, title }) => ({ id, title }));
     await observeCloseDialogs(info, observedTargets);
-    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: close.others, exact: true })).click(); desktop(info);
+    await closeOthersMenu(info).click(); desktop(info);
     await (await navigationMenuItem((await closeDialog(info, a)), { name: close.save, exact: true })).click(); desktop(info);
     const save = page.getByRole('dialog', { name: binding.title, exact: true }); await expect(save).toBeVisible();
     const nameBefore = await save.getByLabel(binding.name, { exact: true }).inputValue();

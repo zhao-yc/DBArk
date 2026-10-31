@@ -20,7 +20,7 @@ async function update(value:{id:string;name:string;connectionId:string;sql:strin
 async function save(value:Partial<SavedQuery>&{id:string;name:string;sql:string}){await page.evaluate(value=>window.dbark.invoke('queries.save',{updatedAt:'',...value}),value);}
 async function connection(name:string){return page.evaluate(name=>window.dbark.invoke('connections.save',{id:'',name,group:'',color:'#123456',dialect:'mysql',host:'127.0.0.1',port:1,user:'offline',database:'配置默认库'}),name);}
 /** 从实际历史面板切换，初次进入保存列表只请求首批概要。 */
-async function open(){await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), {name:'历史与查询',exact:true})).click();await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'保存的查询',exact:true})).click();await expect(dialog().getByRole('button',{name:'刷新到第一页',exact:true})).toBeEnabled();}
+async function open(){await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), {name:'已保存查询',exact:true})).click();await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'保存的查询',exact:true})).click();await expect(dialog().getByRole('button',{name:'刷新到第一页',exact:true})).toBeEnabled();}
 async function search(text:string){await dialog().getByLabel('搜索名称或完整SQL',{exact:true}).fill(text);await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'搜索保存查询',exact:true})).click();await expect(dialog().getByRole('button',{name:'刷新到第一页',exact:true})).toBeEnabled();}
 
 test('58条保存查询分三批且只保留当前概要，正文尾部搜索、空命中续页及输入校验不执行SQL',async({},info)=>{

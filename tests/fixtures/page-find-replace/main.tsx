@@ -25,6 +25,8 @@ Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string
 Object.defineProperty(window, '__pageFindCalls', { value: calls });
 useWorkspace.setState({ ready: true, connections: [{ id: 'offline', name: '离线数据夹具', host: '127.0.0.1', port: 1, user: 'offline', group: '', color: '#123456', dialect: 'mysql' }] });
 const tab: WorkspaceTab = { id: 'offline-table', kind: 'table', connectionId: 'offline', database: info.database, table: info.name, title: info.name };
+// 原页夹具发布准确活动标签；不绕过生产菜单的工作区身份核验。
+useWorkspace.setState({ settings: { ...useWorkspace.getState().settings, tabs: [tab], activeTabId: tab.id } });
 /** 夹具提供外部结构刷新和连接版本变化，以验证正在查找及预览的生命周期。 */
 function Fixture() {
   const [refresh, setRefresh] = useState(0);

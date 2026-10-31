@@ -64,7 +64,7 @@ async function settings(owner: Owner) { return owner.page.evaluate(() => window.
 async function activeSql(owner: Owner) { const state = await settings(owner); return state.tabs.find(tab => tab.id === state.activeTabId)?.sql; }
 /** 沿实际命令栏打开设置，存储、preload、IPC和所有编辑器仍使用产品实现。 */
 async function dialog(owner: Owner) {
-  await (await (await import('./navigation-menu')).navigationMenuItem(owner.page.locator('.navigation-toolbar'), { name: '编辑器字号', exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(owner.page.locator('.navigation-toolbar'), { name: '编辑器字体', exact: true })).click();
   return owner.page.getByRole('dialog', { name: 'SQL 编辑器字号', exact: true });
 }
 /** 仅观察真实Monaco绘制层；不替换updateOptions、模型或撤销操作。 */
@@ -114,11 +114,12 @@ test('字号及换行热更新保留正文与撤销，SQLite落盘并在独立�
     modal = await dialog(first); await modal.getByLabel('字号（px）', { exact: true }).fill('20'); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '保存字号', exact: true })).click();
     await expect(modal).toBeHidden(); await expect.poll(() => settings(first).then(value => value.editorFontSize)).toBe(20);
     // 用实际长行绘制证明换行开关，而不是只读aria属性或模拟Monaco回包。
-    const wrap = first.page.locator('.navigation-toolbar').getByRole('button', { name: '自动换行', exact: true });
-    await expect(wrap).toHaveAttribute('aria-pressed', 'true'); await expect.poll(() => editor.locator('.view-line').count()).toBeGreaterThan(2);
-    await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'false'); await expect(editor.locator('.view-line')).toHaveCount(2);
-    await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'true'); await expect.poll(() => editor.locator('.view-line').count()).toBeGreaterThan(2);
-    await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'false'); await expect(editor.locator('.view-line')).toHaveCount(2);
+    // 动作点击会关闭真实菜单；每次读状态或再次点击都重新取得本次菜单项。
+    const wrap = async () => (await import('./navigation-menu')).navigationMenuItem(first.page.locator('.navigation-toolbar'), { name: '自动换行', exact: true });
+    await expect(await wrap()).toHaveAttribute('aria-pressed', 'true'); await expect.poll(() => editor.locator('.view-line').count()).toBeGreaterThan(2);
+    await (await wrap()).click(); await expect(await wrap()).toHaveAttribute('aria-pressed', 'false'); await expect(editor.locator('.view-line')).toHaveCount(2);
+    await (await wrap()).click(); await expect(await wrap()).toHaveAttribute('aria-pressed', 'true'); await expect.poll(() => editor.locator('.view-line').count()).toBeGreaterThan(2);
+    await (await wrap()).click(); await expect(await wrap()).toHaveAttribute('aria-pressed', 'false'); await expect(editor.locator('.view-line')).toHaveCount(2);
     expect(await editor.evaluate((element, original) => element === original, originalNode)).toBe(true);
     expect((await style(first)).fontSize).toBe('20px');
     await editor.getByRole('textbox').focus(); await first.page.keyboard.press(`${modifier}+z`); await expect.poll(() => activeSql(first)).toBe(undoBaseline);
@@ -133,7 +134,7 @@ test('字号及换行热更新保留正文与撤销，SQLite落盘并在独立�
     const second = await launch(directory, owners);
     await expect(second.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox')).toBeEditable();
     await expect.poll(() => style(second).then(value => value.fontSize)).toBe('20px');
-    await expect(second.page.locator('.navigation-toolbar').getByRole('button', { name: '自动换行', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(await (await import('./navigation-menu')).navigationMenuItem(second.page.locator('.navigation-toolbar'), { name: '自动换行', exact: true })).toHaveAttribute('aria-pressed', 'false');
     await expect(second.page.locator('.query-tab:visible .monaco-editor .view-line')).toHaveCount(2);
     expect(await activeSql(second)).toBe(sql + appended); expect((await settings(second)).tabs).toEqual(before.tabs);
     expect(await second.page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);

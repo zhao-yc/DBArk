@@ -15,7 +15,7 @@ async function seed() {
 }
 /** 按实际分页列表打开完整原文，必须新建查询标签而不执行。 */
 async function openSource(name = '源查询') {
-  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '历史与查询', exact: true })).click();
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '执行历史', exact: true })).click();
   const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true });
   await (await navigationMenuItem(dialog, { name: '保存的查询', exact: true })).click();
   const row = dialog.locator('.history-card').filter({ has: page.getByText(name, { exact: true }) });

@@ -66,7 +66,7 @@ test('收藏与虚拟分组真实增删改序、链接复制、失效连接及�
   const snapshot = await read();
   await (await (await import('./navigation-menu')).navigationMenuItem(manager(), { name: '关闭对话框', exact: true })).click();
   await expect(page.getByRole('region', { name: '对象收藏', exact: true }).getByRole('button', { name: /^打开对象：诊断表 ·/ })).toBeVisible();
-  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '进入专注模式', exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '专注模式', exact: true })).click();
   await expect(page.locator('.sidebar-container')).toBeHidden();
   await expect.poll(async () => (await read()).document.focusMode).toBe(true);
   await quitDesktop(); await launchDesktop();

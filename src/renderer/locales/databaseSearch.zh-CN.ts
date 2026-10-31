@@ -3,7 +3,7 @@ export const databaseSearchZh={
   entry:'全库搜索',title:'全库搜索：结构名称',connection:'连接',databases:'数据库范围（每行一个）',
   dataMode:'搜索数据',savedQueries:'搜索保存查询',
   searchIn:'搜索内容',names:'结构名称',definitions:'定义正文',definitionsTitle:'全库搜索：定义正文',wholeDefinition:'整个定义相等',definitionLocation:'命中位置',
-  definitionHint:'搜索当前账号可见对象的 SHOW CREATE 定义，最多 2 MiB／对象，每页检查 10 个；不读取表数据。不可读或超限对象计为失败。',
+  definitionHint:'搜索当前账号可见对象的 SHOW CREATE 定义，最多 2 MiB／对象，每页最多检查10个对象；不读取表数据。不可读或超限对象计为失败。',
   definitionMatch:(characters:number)=>`定义正文（${characters}字符）`,definitionCount:(count:number)=>` 已检查定义 ${count}。`,definitionsDone:'已完成所选可见对象的定义搜索。',
   databaseHint:'搜索当前账号可见的结构名称，最多 32 个数据库，不读取表数据。',
   pattern:'搜索文字',mode:'匹配方式',modes:{contains:'包含文字',whole:'完整名称',prefix:'前缀',regexp:'服务器正则'},

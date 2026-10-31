@@ -28,6 +28,8 @@ Object.defineProperty(window, 'dbark', { value: { invoke: async (command: string
 Object.defineProperty(window, '__binaryCalls', { value: calls });
 useWorkspace.setState({ ready: true, connections: [{ id: 'offline', name: '二进制离线夹具', host: '127.0.0.1', port: 1, user: 'offline', group: '', color: '#123456', dialect: 'mysql' }] });
 const tab: WorkspaceTab = { id: 'binary-table', kind: 'table', title: '二进制表', connectionId: 'offline', database: '离线', table: '二进制表' };
+// 独立组件仍属于真实活动工作区，菜单owner必须对应传入的同一tab对象。
+useWorkspace.setState({ settings: { ...useWorkspace.getState().settings, tabs: [tab], activeTabId: tab.id } });
 /** 结构/连接通知和结果刷新提供真实组件失效场景，不直接操作编辑器内部状态。 */
 function Fixture() { const [mode, setMode] = useState('table'), [refresh, setRefresh] = useState(0), [rows, setRows] = useState(data); return <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}><nav><button onClick={() => setMode('table')}>表数据</button><button onClick={() => setMode('query')}>SQL只读结果</button><button onClick={() => setRefresh(value => value + 1)}>夹具结构变化</button><button onClick={() => useWorkspace.getState().invalidateConnection('offline')}>夹具连接变化</button><button onClick={() => setRows(structuredClone(data))}>夹具结果刷新</button></nav><div style={{ flex: 1, minHeight: 0 }}>{mode === 'table' ? <TableTab tab={tab} refreshVersion={refresh} refreshAutomatically={false} onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}} onTableRename={() => {}} onTableAutoIncrement={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/> : <ResultsGrid columns={resultColumns} rows={rows}/>}</div></div>; }
 createRoot(document.getElementById('root')!).render(<Fixture/>);
