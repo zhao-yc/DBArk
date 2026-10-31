@@ -33,6 +33,7 @@ import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResu
 import { importPresetDocumentSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, importPresetText, type ImportPresetDocument, type ImportPresetSnapshot, type ImportPresetSaveInput, type ImportPresetDeleteInput } from '../shared/importPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 import { savedQueryRenameSchema, savedQueryRenameZh } from '../shared/savedQueryRename';
+import { savedQueryDuplicateSchema, savedQueryDuplicateZh } from '../shared/savedQueryDuplicate';
 import { savedQueryDeleteSelectedLimits, savedQueryDeleteSelectedSchema, savedQueryDeleteSelectedZh } from '../shared/savedQueryDeleteSelected';
 import { parseHistoryRecord } from './historyPageMatch';
 import { historyDeleteText, type HistoryDeleteReference } from '../shared/historyDelete';
@@ -633,6 +634,22 @@ export class LocalStore {
       this.db.run('UPDATE queries SET data=?,updated_at=? WHERE id=?', [JSON.stringify(query), query.updatedAt, input.id]);
     });
     // 原子落盘成功后才改变搜索/分页/组织CAS；失败由mutate恢复原内存及磁盘。
+    this.queryRevisionValue++;
+  }
+  /** 原记录及组织版本在一次本地事务复核；新编号只INSERT，副本不绑定任何打开的编辑器。 */
+  duplicateQueryChecked(raw: unknown): void {
+    const input = savedQueryDuplicateSchema.parse(raw), id = randomUUID();
+    this.mutate(() => {
+      if (input.expectedRevision !== this.queryOrganizationRevision()) throw Error(savedQueryDuplicateZh.stale);
+      const previous = this.querySearchRaw(input.id);
+      if (previous === undefined) throw Error(savedQueryDuplicateZh.missing);
+      if (createHash('sha256').update(previous).digest('hex') !== input.digest) throw Error(savedQueryDuplicateZh.stale);
+      const current = parseSavedQueryRecord(input.id, previous);
+      const query = parseSavedQueryRecord(id, JSON.stringify({ ...current, id, name: input.name, updatedAt: new Date().toISOString() }));
+      this.db.run('INSERT INTO queries VALUES (?,?,?)', [id, JSON.stringify(query), query.updatedAt]);
+      // 成员关系和正文同事务发布，不产生半完成副本或覆盖原分组。
+      this.db.run('INSERT INTO saved_query_memberships (query_id,group_id) SELECT ?,group_id FROM saved_query_memberships WHERE query_id=?', [id, input.id]);
+    });
     this.queryRevisionValue++;
   }
   /** 来源身份只读取当前连接的公开路由字段，不通过 resolveConnection 解密凭据。 */

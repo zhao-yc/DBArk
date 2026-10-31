@@ -201,6 +201,7 @@ export interface CommandMap {
   'queries.pageRelease':{input:{cursor:string};output:void};
   'queries.deleteChecked':{input:{id:string;digest:string};output:void};
   'queries.renameChecked':{input:import('./savedQueryRename').SavedQueryRenameInput;output:void};
+  'queries.duplicateChecked':{input:import('./savedQueryDuplicate').SavedQueryDuplicateInput;output:void};
   'queries.deleteSelectedChecked':{input:import('./savedQueryDeleteSelected').SavedQueryDeleteSelectedInput;output:import('./savedQueryDeleteSelected').SavedQueryDeleteSelectedResult};
   'search.structureContinue':{input:StructureSearchContinue;output:StructureSearchPage};
   'search.release':{input:{connectionId:string;cursor:string};output:void};

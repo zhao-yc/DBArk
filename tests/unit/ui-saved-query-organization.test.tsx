@@ -5,6 +5,7 @@ import { SavedQueryOrganizationEditor } from '../../src/renderer/components/Save
 import { savedQueryOrganizationZh as text } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { savedQueryPagesZh as pageText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
 import { savedQueryRenameZh as renameText } from '../../src/shared/savedQueryRename';
+import { savedQueryDuplicateZh as duplicateText } from '../../src/shared/savedQueryDuplicate';
 import { savedQueryDeleteSelectedZh as deleteText } from '../../src/shared/savedQueryDeleteSelected';
 import type { SavedQueryOrganizationSnapshot } from '../../src/shared/savedQueryOrganization';
 import { planSavedQueryGroups, summarizeSavedQueryOrganization } from '../../src/shared/savedQueryOrganization';
@@ -49,6 +50,38 @@ const calls = (f: ReturnType<typeof fixture>, command: string) => f.request.mock
 /** 取React实际附着的旧回调，避免移除节点不冒泡造成假阳性。 */
 function callback(node: any, event: string) { const key = Object.keys(node).find(name => name.startsWith('__reactProps$')); if (!key || typeof node[key][event] !== 'function') throw Error('React真实事件端口不存在'); return node[key][event] as (event?: any) => void; }
 
+it('真实列表复制仅提交原摘要、组织代次及名称，保留原选择和编辑区', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (command, value) => command === 'queries.duplicateChecked' ? undefined : normal(command, value));
+  await mount(f); await check(text.select('查询0')); await click(duplicateText.rename);
+  expect(calls(f, 'queries.duplicateChecked')).toHaveLength(0); expect(field(duplicateText.newName).value).toBe('查询0（副本）');
+  const old = callback(button(duplicateText.confirm), 'onClick'); await click(duplicateText.confirm); await act(async () => old());
+  expect(calls(f, 'queries.duplicateChecked').map(call => call[1])).toEqual([{ id: 'q0', digest: '0'.repeat(64), expectedRevision: 'a'.repeat(64), name: '查询0（副本）' }]);
+  expect(calls(f, 'queries.page')).toHaveLength(2); expect(calls(f, 'queries.organizationGet')).toHaveLength(2);
+  expect(doc.body.textContent).toContain(duplicateText.renamed); expect(doc.body.textContent).toContain(text.selected(1, 0));
+  expect(openTab).not.toHaveBeenCalled();
+  expect(f.request.mock.calls.some(call => ['queries.read', 'queries.readText', 'queries.save', 'queries.renameChecked', 'query.execute'].includes(call[0]))).toBe(false);
+});
+it('复制取消和Escape只关闭名称面板，旧确认无权创建副本', async () => {
+  const f = fixture(); await mount(f); await click(duplicateText.rename);
+  const old = callback(button(duplicateText.confirm), 'onClick');
+  await act(async () => doc.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' })));
+  expect(doc.querySelector('[aria-label="' + duplicateText.newName + '"]')).toBeNull(); expect(f.onClose).not.toHaveBeenCalled();
+  await click(duplicateText.rename); await act(async () => old()); await click(duplicateText.cancel);
+  expect(calls(f, 'queries.duplicateChecked')).toHaveLength(0); expect(calls(f, 'queries.pageRelease')).toHaveLength(0);
+});
+it('复制成功后刷新失败保留真实成功提示，不重放；原页禁止继续修改', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!; let committed = false;
+  f.request.mockImplementation(async (command, value) => {
+    if (command === 'queries.duplicateChecked') { committed = true; return; }
+    if (committed && command === 'queries.organizationGet') throw Error('本例刷新失败');
+    return normal(command, value);
+  });
+  await mount(f); await click(duplicateText.rename); const old = callback(button(duplicateText.confirm), 'onClick');
+  await click(duplicateText.confirm); await act(async () => old());
+  expect(calls(f, 'queries.duplicateChecked')).toHaveLength(1); expect(doc.body.textContent).toContain(duplicateText.refreshRequired);
+  expect(doc.querySelectorAll('button').filter(node => node.textContent === duplicateText.rename).every(node => node.disabled)).toBe(true);
+});
 it('跨页所选完整预览后单次批删，只提交两个原引用并释放旧cursor刷新第一页', async () => {
   const f = fixture(), normal = f.request.getMockImplementation()!;
   f.request.mockImplementation(async (command, value) => command === 'queries.deleteSelectedChecked' ? { deleted: value.queries.length } : normal(command, value));

@@ -46,6 +46,7 @@ import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareRele
 import { querySaveContentSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
 import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
 import { savedQueryRenameSchema } from './savedQueryRename';
+import { savedQueryDuplicateSchema } from './savedQueryDuplicate';
 import { savedQueryDeleteSelectedSchema } from './savedQueryDeleteSelected';
 import{historyPageInputSchema,historyReadSchema,historyErrorReadSchema}from'./historyPages';
 import { historyDeletePreviewInputSchema, historyDeleteApplyInputSchema, historyDeleteReleaseInputSchema } from './historyDelete';
@@ -217,6 +218,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,'queries.readText':savedQueryReadTextSchema,
   'queries.page':savedQueryPageInputSchema,'queries.pageContinue':savedQueryPageNextSchema,'queries.pageRelease':savedQueryPageReleaseSchema,'queries.deleteChecked':savedQueryDeleteCheckedSchema,
   'queries.renameChecked': savedQueryRenameSchema,
+  'queries.duplicateChecked': savedQueryDuplicateSchema,
   'queries.deleteSelectedChecked': savedQueryDeleteSelectedSchema,
   'search.structureContinue':structureSearchContinueSchema,
   'search.release':structureSearchReleaseSchema,

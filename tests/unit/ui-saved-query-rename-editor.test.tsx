@@ -2,6 +2,7 @@ import { act, StrictMode } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { SavedQueryRenameEditor, type SavedQueryRenameOrigin } from '../../src/renderer/components/SavedQueryRenameEditor';
 import { savedQueryRenameZh as text } from '../../src/shared/savedQueryRename';
+import { savedQueryDuplicateZh as duplicateText } from '../../src/shared/savedQueryDuplicate';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
@@ -21,9 +22,9 @@ afterEach(async () => { if (root) await act(async () => root!.unmount()); root =
 afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
 
 /** 只建立原名称/摘要与回调；名称合法性始终由真实共享schema和组件处理。 */
-async function mount(strict = false) {
+async function mount(strict = false, mode: 'rename' | 'duplicate' = 'rename') {
   const origin: SavedQueryRenameOrigin = { id: '原查询', digest: 'a'.repeat(64), name: '原始名称' }, confirm = vi.fn(), cancel = vi.fn(), parentKey = vi.fn();
-  let current = { origin, busy: false }; const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
+  let current = { origin, busy: false, mode }; const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
   const render = () => {
     const view = <div role="dialog" aria-label="原父列表" onKeyDown={parentKey}><SavedQueryRenameEditor {...current} onConfirm={confirm} onCancel={cancel}/></div>;
     root!.render(strict ? <StrictMode>{view}</StrictMode> : view);
@@ -40,6 +41,18 @@ async function rename(value: string): Promise<void> { const node = input(); expe
 async function click(label: string): Promise<void> { const node = button(label); expect(node.disabled).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 async function key(value: string, extra: Record<string, unknown> = {}): Promise<MemoryEvent> { const event = Object.assign(new MemoryEvent('keydown'), { key: value }, extra); await act(async () => input().dispatchEvent(event)); return event; }
 
+it('复制默认后缀可直接确认，同名也允许创建独立记录；同步双击只提交一次', async () => {
+  const f = await mount(true, 'duplicate'), field = document.querySelector('[aria-label="' + duplicateText.newName + '"]')!;
+  expect(field.value).toBe('原始名称（副本）'); expect(group().getAttribute('aria-label')).toBe(duplicateText.rename);
+  await act(async () => { field.value = f.origin.name; field.dispatchEvent(new MemoryEvent('input')); });
+  const confirm = callback(button(duplicateText.confirm), 'onClick');
+  await act(async () => { confirm(); confirm(); }); expect(f.confirm).toHaveBeenCalledExactlyOnceWith(f.origin.name);
+});
+it('复制模式切到改名再切回不能复活旧确认', async () => {
+  const f = await mount(false, 'duplicate'), old = callback(button(duplicateText.confirm), 'onClick');
+  await f.render({ mode: 'rename' }); await f.render({ mode: 'duplicate' });
+  await act(async () => old()); expect(f.confirm).not.toHaveBeenCalled(); expect(button(duplicateText.confirm).disabled).toBe(true);
+});
 it('显示原名及准确输入合同，原名不变不提交；Unicode与首尾空白原样提交', async () => {
   const f = await mount(); expect(group().getAttribute('aria-label')).toBe(text.rename); expect(document.body.textContent).toContain(f.origin.name); expect(document.body.textContent).toContain(text.hint); expect(input().getAttribute('maxLength') ?? input().getAttribute('maxlength')).toBe('256');
   expect(input().value).toBe(f.origin.name); expect(button(text.confirm).disabled).toBe(true); await key('Enter'); expect(f.confirm).not.toHaveBeenCalled();
