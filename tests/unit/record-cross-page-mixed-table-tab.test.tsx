@@ -47,6 +47,8 @@ function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraft
   const gate = new RecordPageNavigation(), reset = vi.fn(), select = vi.fn((_: string, activate: () => void) => { activate(); return true; });
   let sequence = 0;
   const context = createContext({
+    // 勾选转入用途在本组未打开；保留原blocked/load/reloadBlocked的真实可空初值。
+    rowTransferDialog: null, rowTransferIntent: { current: null }, rowTransferSource: { current: null },
     // JOIN对话框是新增的真实blocked依赖；旧跨页场景保持未打开的生产初值。
     foreignKeyJoinDialog: null,
     // 提取的真实选择/load及blocked表达式引用这些意图；旧跨页场景均未打开，保持生产初值。

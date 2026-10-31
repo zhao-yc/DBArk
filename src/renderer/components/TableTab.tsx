@@ -26,6 +26,10 @@ import { validateFilterGroup } from '../../shared/filtering';
 import { snapshotTablePageExport } from '../tablePageExport';
 import { tablePageExportZh as pageExportText } from '../locales/tablePageExport.zh-CN';
 import { ResultExportDialog } from './ResultExportDialog';
+import { ResultInsertDialog } from './ResultInsertDialog';
+import { ResultInsertSourceIntent } from '../resultInsertUi';
+import { createTableRowTransfer } from '../tableRowTransfer';
+import { tableRowTransferZh as rowTransferText } from '../locales/tableRowTransfer.zh-CN';
 import { TableFilteredExportDialog } from './TableFilteredExportDialog';
 import { TableFilteredExportIntent } from '../tableFilteredExportUi';
 import { tableFilteredExportZh } from '../locales/tableFilteredExport.zh-CN';
@@ -158,6 +162,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [selectedFilter, setSelectedFilter] = useState<TableSelectedFilterLease | null>(null), selectedFilterRef = useRef(selectedFilter);
   const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
   const [pageExport, setPageExport] = useState<{ data: ResultExportData; selected: boolean } | null>(null), pageExportRef = useRef(pageExport);
+  const [rowTransferDialog, setRowTransferDialog] = useState<ResultInsertSourceIntent | null>(null), rowTransferIntent = useRef<ResultInsertSourceIntent | null>(null);
+  const rowTransferSource = useRef<object | null>(null), rowTransferEnvironment = useRef<unknown[]>([]);
+  const rowTransferBusy = useRef<{ lease?: WorkspaceBusyLease; acquiring: boolean; releasing: boolean } | null>(null);
   const [filteredExportDialog, setFilteredExportDialog] = useState<TableFilteredExportIntent | null>(null), filteredExportIntent = useRef<TableFilteredExportIntent | null>(null);
   const [filteredUpdateDialog, setFilteredUpdateDialog] = useState<TableFilteredUpdateIntent | null>(null), filteredUpdateIntent = useRef<TableFilteredUpdateIntent | null>(null);
   const [filteredDeleteDialog, setFilteredDeleteDialog] = useState<TableFilteredDeleteIntent | null>(null), filteredDeleteIntent = useRef<TableFilteredDeleteIntent | null>(null);
@@ -166,7 +173,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const foreignKeyJoinBusy = useRef<{ lease?: WorkspaceBusyLease; acquiring: boolean; releasing: boolean } | null>(null);
   const [filteredSelectDialog, setFilteredSelectDialog] = useState<TableFilteredSelectIntent | null>(null), filteredSelectIntent = useRef<TableFilteredSelectIntent | null>(null), filteredSelectPage = useRef<TableFilteredSelectPage | null>(null);
   /** 所有已应用条件/排序均同时回到第一页；在排队渲染前撤销旧loaded来源，堵住同事件旧按钮。 */
-  function setPageIndex(next: number | ((current: number) => number)): void { filteredSelectIntent.current?.invalidate(); filteredSelectPage.current = null; setPageIndexState(next); }
+  function setPageIndex(next: number | ((current: number) => number)): void { rowTransferIntent.current?.invalidate(); filteredSelectIntent.current?.invalidate(); filteredSelectPage.current = null; setPageIndexState(next); }
   const [sortPanel, setSortPanel] = useState<TableSortLease | null>(null), sortPanelRef = useRef(sortPanel);
   const tableReadAction = useRef<object | null>(null), tableReadRender = {};
   /** 只发布已提交渲染的快捷动作；卸载、隐藏恢复或后继渲染不能复活旧按钮回调。 */
@@ -174,7 +181,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [selectedRows, setSelectedRowsState] = useState<ReadonlySet<string>>(new Set());
   const selectedRowsRef = useRef(selectedRows);
   /** 勾选状态同步发布，旧回调也只能读取当前选择。 */
-  function setSelectedRows(value: ReadonlySet<string>) { batchFillIntent.current?.invalidate(); if (selectedFilterRef.current) selectedFilterRef.current.invalid = true; selectedRowsRef.current = value; setSelectedRowsState(value); }
+  function setSelectedRows(value: ReadonlySet<string>) { rowTransferIntent.current?.invalidate(); batchFillIntent.current?.invalidate(); if (selectedFilterRef.current) selectedFilterRef.current.invalid = true; selectedRowsRef.current = value; setSelectedRowsState(value); }
   const copiedDraftIds = useRef(new Set<string>()); const [duplicateNotice, setDuplicateNotice] = useState('');
   const [copyPending, setCopyPending] = useState(false); const copyPendingRef = useRef(false);
   const insertCopyBlockedRef = useRef(false);
@@ -193,6 +200,12 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     // 导出自己的chooser/任务会占用标签；该忙碌位不撤销自身，原标签与连接变化仍同步作废。
     const exportIdentity = (state: ReturnType<typeof useWorkspace.getState>) => JSON.stringify([state.settings.activeTabId, state.settings.tabs.find(item => item.id === tab.id), state.connectionVersions[tab.connectionId] ?? 0, state.connections.find(item => item.id === tab.connectionId)]);
     return useWorkspace.subscribe((state, previous) => {
+      if (state.settings.activeTabId !== previous.settings.activeTabId || state.settings.tabs.find(item => item.id === tab.id) !== previous.settings.tabs.find(item => item.id === tab.id) || state.connections.find(item => item.id === tab.connectionId) !== previous.connections.find(item => item.id === tab.connectionId) || state.connectionVersions[tab.connectionId] !== previous.connectionVersions[tab.connectionId]) rowTransferIntent.current?.invalidate();
+      if (state.activeJobs !== previous.activeJobs && (state.activeJobs[tab.id] || previous.activeJobs[tab.id])) {
+        const own = rowTransferBusy.current;
+        const ownTransition = own?.acquiring && !previous.activeJobs[tab.id] && state.activeJobs[tab.id] || own?.releasing && previous.activeJobs[tab.id] && !state.activeJobs[tab.id];
+        if (!ownTransition && !own?.lease?.owns()) rowTransferIntent.current?.invalidate();
+      }
       if (state.settings.activeTabId !== previous.settings.activeTabId || state.settings.tabs.find(item => item.id === tab.id) !== previous.settings.tabs.find(item => item.id === tab.id) || state.connections.find(item => item.id === tab.connectionId) !== previous.connections.find(item => item.id === tab.connectionId) || state.connectionVersions[tab.connectionId] !== previous.connectionVersions[tab.connectionId] || state.settings.resultLimit !== previous.settings.resultLimit) foreignKeyJoinIntent.current?.invalidate();
       if (state.activeJobs !== previous.activeJobs && (state.activeJobs[tab.id] || previous.activeJobs[tab.id])) {
         const own = foreignKeyJoinBusy.current;
@@ -241,7 +254,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   /** 同步发布布局草稿，跨标签结构操作不能在React效果到来前抢先丢弃设置。 */
   function setPreferencesDirty(dirty: boolean) { setPreferencesDirtyState(dirty); useWorkspace.getState().setTableLayoutDraft(tab.id, dirty); }
   const preferenceLifecycle = useRef(0); const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; childReferenceIntent.current?.invalidate(); tableStatisticsIntent.current?.invalidate(); tableValueOptionsIntent.current?.invalidate(); filteredExportIntent.current?.invalidate(); filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate(); filteredSelectIntent.current?.invalidate(); filteredSelectPage.current = null; pageExportRef.current = null; queryTemplateRef.current = null; sortPanelRef.current = null; preferenceLifecycle.current++; useWorkspace.getState().setTableLayoutDraft(tab.id, false); }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; rowTransferIntent.current?.invalidate(); rowTransferSource.current = null; childReferenceIntent.current?.invalidate(); tableStatisticsIntent.current?.invalidate(); tableValueOptionsIntent.current?.invalidate(); filteredExportIntent.current?.invalidate(); filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate(); filteredSelectIntent.current?.invalidate(); filteredSelectPage.current = null; pageExportRef.current = null; queryTemplateRef.current = null; sortPanelRef.current = null; preferenceLifecycle.current++; useWorkspace.getState().setTableLayoutDraft(tab.id, false); }; }, []);
   const rowsRef = useRef(rows); rowsRef.current = rows;
   const history = useRef(new DraftHistory()).current;
   const historyEnvironment = useRef<unknown[]>([]);
@@ -258,6 +271,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const selectionRef = useRef(selection); selectionRef.current = selection;
   /** 所有入口同步替换同一页草稿引用，避免一次事件轮次内的迟到回调覆盖更新。 */
   function setRows(value: DraftRow[] | ((current: DraftRow[]) => DraftRow[]), mode: 'record' | 'replace' | 'replay' = 'record') {
+    rowTransferIntent.current?.invalidate();
     childReferenceIntent.current?.invalidate();
     tableStatisticsIntent.current?.invalidate(); tableValueOptionsIntent.current?.invalidate();
     filteredExportIntent.current?.invalidate();
@@ -274,7 +288,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     rowsRef.current = next; setRowsState(next); useWorkspace.getState().setDirty(tab.id, collectChanges(next).length > 0 || inputDirtyRef.current);
   }
   const applyingRef = useRef(applying); applyingRef.current = applying;
-  const blocked = busy || referenceBusy || !!foreignKeyJoinDialog || !!childReferenceDialog || !!tableStatisticsDialog || !!tableValueOptionsDialog || !!filteredExportDialog || !!filteredUpdateDialog || !!filteredDeleteDialog || !!filteredSelectDialog || applying || preferencesPending || previewing || !!preview || copyPending; const blockedRef = useRef(blocked); blockedRef.current = blocked;
+  const blocked = busy || referenceBusy || !!rowTransferDialog || !!foreignKeyJoinDialog || !!childReferenceDialog || !!tableStatisticsDialog || !!tableValueOptionsDialog || !!filteredExportDialog || !!filteredUpdateDialog || !!filteredDeleteDialog || !!filteredSelectDialog || applying || preferencesPending || previewing || !!preview || copyPending; const blockedRef = useRef(blocked); blockedRef.current = blocked;
   const changes = useMemo(() => collectChanges(rows), [rows]);
   const loadGeneration = useRef(0);
   const recordPages = useRef(new RecordPageNavigation()).current;
@@ -414,7 +428,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     restoreGridFocus(false);
   }
   /** 布局即时生效但明确保持未保存状态，异步读取不能覆盖用户刚调整的布局。 */
-  function updatePreferences(next: TablePreferences) { if (preferencesLock.current) return; layoutRevision.current++; preferencesRef.current = next; setPreferences(next); setPreferencesDirty(true); setPreferencesError(''); }
+  function updatePreferences(next: TablePreferences) { if (preferencesLock.current) return; rowTransferIntent.current?.invalidate(); layoutRevision.current++; preferencesRef.current = next; setPreferences(next); setPreferencesDirty(true); setPreferencesError(''); }
   /** 成功返回后才显示已保存，失败保持本页布局并报告未持久化。 */
   async function savePreferences(reset = false) {
     if (preferencesLock.current) return; preferencesLock.current = true; setPreferencesPending(true); setPreferencesError(''); useWorkspace.getState().setBusy(tab.id, true);
@@ -454,6 +468,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   /** 每次加载分配代次，旧请求迟到时不能覆盖新页面或当前编辑状态。 */
   const load = useCallback(async () => {
+    rowTransferIntent.current?.invalidate();
     history.clear();
     const generation = ++loadGeneration.current; blockedRef.current = true;
     filteredSelectIntent.current?.invalidate(); filteredSelectPage.current = null;
@@ -550,7 +565,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || applyingRef.current || preferencesLock.current || copyPendingRef.current);
   }
   function reloadBlocked():boolean {
-    return !!(blockedRef.current||showPreferences||document.querySelector('[role="dialog"]')||referenceCount.current>0||referenceDialog);
+    return !!(rowTransferSource.current||blockedRef.current||showPreferences||document.querySelector('[role="dialog"]')||referenceCount.current>0||referenceDialog);
   }
   /** 同一个丢稿确认入口在确认前后核原来源；confirm期间的导航或ABA不能授权后继页。 */
   function confirmPageReload(guard: () => boolean = () => !reloadBlocked()): boolean {
@@ -738,6 +753,53 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     lease.invalid = true; lease.dialogs.dispose(); selectedFilterRef.current = null; presetUiEpoch.current++; setSelectedFilter(null);
   }
   const pageExportAvailable = !restoredDraftView && !blocked && !preferencesLoading && !externalStale && !gridEditing && !record.dirty && !record.pending && !changes.length && !!info && !!page && !!visibleKeys.length;
+  // 只观察来源变更；本窗口自己的忙态不改变原数据来源，也不能借此豁免其它作业。
+  const rowTransferValues = [...filteredExportValues, selectedRows, visibleKeys, layoutRevision.current, record.dirty, record.pending, gridEditing, restoredDraftView];
+  if (rowTransferValues.length !== rowTransferEnvironment.current.length || rowTransferValues.some((value, index) => value !== rowTransferEnvironment.current[index])) {
+    rowTransferIntent.current?.invalidate(); rowTransferEnvironment.current = rowTransferValues;
+  }
+  const rowTransferAvailable = pageExportAvailable && !!connection && selectedRows.size > 0 && filteredUpdateReadReady();
+  /** 原页勾选只冻结一次；空选择、旧页或任何草稿都不能回退为整表/整页写入。 */
+  function openRowTransfer(): void {
+    const source = filteredSelectPage.current, state = useWorkspace.getState();
+    if (tableReadAction.current !== tableReadRender || !rowTransferAvailable || rowTransferSource.current || !filteredUpdateReadReady(source) || reloadBlocked() || activeGridEditor.current || record.hasInput() || collectChanges(rowsRef.current).length || state.settings.tabs.find(item => item.id === tab.id) !== tab || state.activeJobs[tab.id] || state.connections.find(item => item.id === tab.connectionId) !== connection) return;
+    const token = {}, originalRows = rowsRef.current, originalSelected = selectedRowsRef.current, profile = connection, version = connectionVersion, layout = layoutRevision.current, environment = rowTransferEnvironment.current, owner = uid();
+    rowTransferSource.current = token;
+    try {
+      const intent = createTableRowTransfer(source.page, originalRows, visibleKeys, originalSelected, owner, () => {
+        const now = useWorkspace.getState(), own = rowTransferBusy.current, dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+        return mounted.current && rowTransferSource.current === token && rowTransferEnvironment.current === environment && filteredUpdateReadReady(source)
+          && now.settings.activeTabId === tab.id && now.settings.tabs.find(item => item.id === tab.id) === tab
+          && now.connections.find(item => item.id === tab.connectionId) === profile && (now.connectionVersions[tab.connectionId] ?? 0) === version
+          && rowsRef.current === originalRows && selectedRowsRef.current === originalSelected && layoutRevision.current === layout
+          && !activeGridEditor.current && !recordControllerRef.current?.hasInput() && !collectChanges(rowsRef.current).length
+          && !preferencesLock.current && !loadingCount.current && !applyingRef.current && !previewingRef.current && !copyPendingRef.current
+          && (!now.activeJobs[tab.id] || !!own?.acquiring || !!own?.lease?.owns())
+          && (dialogs.length === 0 || dialogs.length === 1 && !!dialogs[0].querySelector(`[data-result-insert-owner="${owner}"]`));
+      });
+      rowTransferIntent.current = intent; insertCopyBlockedRef.current = true; blockedRef.current = true; setRowTransferDialog(intent); setError('');
+    } catch (reason) { if (rowTransferSource.current === token) rowTransferSource.current = null; setError(errorMessage(reason)); }
+  }
+  /** 仅本次operation可持有自己的busy世代；旧释放不能清除后继工作区作业。 */
+  const rowTransferActivity = useCallback((delta: 1 | -1) => {
+    if (delta === 1) {
+      if (rowTransferBusy.current || referenceCount.current || useWorkspace.getState().activeJobs[tab.id]) throw Error(rowTransferText.hint);
+      const own = { lease: undefined as WorkspaceBusyLease | undefined, acquiring: true, releasing: false }; rowTransferBusy.current = own;
+      try { own.lease = acquireWorkspaceBusy(tab.id); referenceCount.current++; setReferenceBusy(true); }
+      catch (reason) { rowTransferBusy.current = null; rowTransferIntent.current?.invalidate(); throw reason; }
+      finally { own.acquiring = false; }
+    } else {
+      const own = rowTransferBusy.current; if (!own) return; own.releasing = true;
+      if (!own.lease?.release()) rowTransferIntent.current?.invalidate();
+      if (rowTransferBusy.current === own) rowTransferBusy.current = null;
+      referenceCount.current = Math.max(0, referenceCount.current - 1); if (mounted.current) setReferenceBusy(referenceCount.current > 0);
+    }
+  }, [tab.id]);
+  /** 原预览和取消收尾结束后才关闭；保留源页、勾选和其它标签，不自动刷新或提交。 */
+  function closeRowTransfer(intent: ResultInsertSourceIntent): void {
+    if (rowTransferIntent.current !== intent) return;
+    intent.invalidate(); rowTransferIntent.current = null; rowTransferSource.current = null; setRowTransferDialog(null);
+  }
   const filteredExportAvailable = !restoredDraftView && !blocked && !externalStale && !gridEditing && !record.hasInput() && !preferencesPending && !!connection && !!info && !!page && ['table', 'view'].includes(info.objectKind ?? '');
   /** 独立全量入口冻结已应用服务器条件和原页身份，保留本地数据草稿，不借用当前页样本。 */
   function openFilteredExport(): void {
@@ -1312,10 +1374,11 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button aria-label={filteredDeleteText.entry} title={filteredDeleteText.scope} disabled={!filteredDeleteAvailable} onClick={openFilteredDelete}>{filteredDeleteText.entry}</button>
 <button aria-label={tableFilteredExportZh.entry} title={tableFilteredExportZh.scope} disabled={!filteredExportAvailable} onClick={openFilteredExport}>{tableFilteredExportZh.entry}</button>
 <button title={pageExportText.hint} disabled={!pageExportAvailable} onClick={() => exportTablePage(false)}>{pageExportText.page}</button>
-<button title={pageExportText.hint} disabled={!pageExportAvailable || !selectedRows.size} onClick={() => exportTablePage(true)}>{pageExportText.selected}</button></ActionMenuSection>
+<button title={pageExportText.hint} disabled={!pageExportAvailable || !selectedRows.size} onClick={() => exportTablePage(true)}>{pageExportText.selected}</button><button aria-label={rowTransferText.entry} title={rowTransferText.hint} disabled={!rowTransferAvailable} onClick={openRowTransfer}>{rowTransferText.entry}</button></ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.danger}>{onTableDrop && <button title={tableDropZh.title} aria-label={tableDropZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableDrop(); }}>{tableDropZh.title}</button>}
 {onTableTruncate && <button title={tableTruncateZh.title} aria-label={tableTruncateZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableTruncate(); }}>{tableTruncateZh.title}</button>}</ActionMenuSection>
   </>}/>{preferencesDirty && <span className="muted small">{tableGridZh.unsaved}</span>}{showFilter && <TableFilterPanel seed={cellFilterSeed} columns={info?.columns.map(column => column.name) ?? []} filters={filters} mode={filterMode} disabled={blocked || !!filterGroups} onFiltersChange={changeFilters} onModeChange={changeFilterMode}><TablePresetPanel target={base} connectionVersion={connectionVersion} refreshVersion={refreshVersion} columns={info?.columns.map(column=>column.name)??[]} configuration={{filters,filterMode,...(filterGroup?{filterGroup}:{}),sort}} disabled={blocked||externalStale||!info||!!activeGridEditor.current||!!filterGroups} beforeApply={preparePresetApply} onApply={applyNamedPreset}/></TableFilterPanel>}{filterGroup && <p className="filter-value-hint" aria-label={groupText.structure}>{tableFilterGroupSummary(filterGroup)}</p>}{selectedFilter && <TableSelectedFilterPanel proposal={selectedFilter.proposal} isCurrent={() => selectedFilterCurrent(selectedFilter)} onApply={() => applySelectedFilter(selectedFilter)} onClose={() => closeSelectedFilter(selectedFilter)}/>}{filterGroups && <TableFilterGroupsDialog filters={filterGroups.filters} mode={filterGroups.mode} initial={filterGroups.initial} isCurrent={() => filterGroupsCurrent(filterGroups)} onApply={next => applyFilterGroups(filterGroups, next)} onClose={() => closeFilterGroups(filterGroups)}/ >}{sortPanel && <TableSortPanel columns={sortPanel.columns} initial={sortPanel.sort} isCurrent={() => sortPanelCurrent(sortPanel)} onApply={next => applySortPanel(sortPanel, next)} onClose={() => closeSortPanel(sortPanel)}/>}{showFind && <PageFindPanel focusRequest={findFocus} rows={rows} keys={visibleKeys} info={info} generation={pageFindGeneration()} disabled={blocked || record.dirty || externalStale} replaceDisabled={!editable} onJump={jumpToMatch} getSelectionToken={() => selectionRef.current} onApply={applyPagePlan} onFilter={() => setShowFilter(true)}/>}{externalStale && <div className="info-strip">{columnPatchZh.staleTable}</div>}<ErrorBox message={error || references.error || preferencesError}/>{history.notice && <div className="info-strip" role="status">{history.notice}</div>}{duplicateNotice && <div className="info-strip" role="status">{duplicateNotice}{copyPending && <button onClick={() => { invalidateCopyRead(); setDuplicateNotice(recordCopySourceZh.cancelling); }}>{recordCopySourceZh.cancel}</button>}</div>}{info && !editable && <div className="info-strip">{recordReadonlyReason({ ...getRecordContext(), busy: false })}</div>}<div className="table-record-layout"><div className="table-grid-wrap">{busy && <div className="loading-overlay"><Spinner/></div>}<DataGrid<DraftRow, unknown, string> ref={grid} aria-label={tableGridZh.grid} onColumnResize={(column, width) => { if (!blocked && visibleKeys.includes(column.key)) { try { updatePreferences(changeTablePreference(preferencesRef.current, column.key, { width })); } catch (reason) { setPreferencesError(errorMessage(reason)); } } }} onColumnsReorder={(source, target) => { if (!blocked) updatePreferences(moveTableColumn(preferencesRef.current, source, target)); }} className={`results-grid rdg-${settings.theme}`} columns={columns} rows={rows} rowHeight={32} headerRowHeight={42} rowKeyGetter={row => row.id} rowClass={row => row.deleted ? 'row-deleted' : row.inserted ? 'row-inserted' : !rowEqual(row.original!, row.data) ? 'row-modified' : undefined} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onRowsChange={changeRows} onActivePositionChange={({ row, column }) => selectCurrentCell(row, column?.key)} onCellClick={({ row, column }) => { recordPages.cancel(); selectCurrentCell(row, column.key); }} onCellDoubleClick={({ row, column }, event) => { if (!blocked && isBinaryCell(ownCell(row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)) { event.preventGridDefault(); record.openCell(row.id, column.key); } }} sortColumns={sort.map(item => ({ columnKey: item.column, direction: item.direction }))} onSortColumnsChange={next => { if (tableReadAction.current !== tableReadRender) return; try { const checked = tableSortFromGrid(next, sort, info?.columns.map(column => column.name) ?? []); if (canReload()) { setSort(checked); setPageIndex(1); } } catch (reason) { setError(errorMessage(reason)); } }} onCellCopy={copyCells} onCellPaste={pasteClipboard} onCellKeyDown={(args, event) => { recordPages.cancel(); handleGridKeyDown(args, event); }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} pageNavigation={{ previous: !restoredDraftView && pageIndex > 1 && (rows.length === 0 || !!record.draft), next: !restoredDraftView && !!page?.hasMore && pageIndex < maxTablePage && !!record.draft, message: recordPageMessage.revision === recordPages.revision ? recordPageMessage.text : '', onNavigate: navigateRecordPage }} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div><div className="table-action-bar"><span className={changes.length ? 'warning-text' : 'muted'}>{changes.length ? formatText(zh.table.text015, changes.length) : formatText(zh.table.text016, page?.rows.length ?? 0)}</span>{record.dirty && <span className="warning-text">{recordViewZh.inputDirty}</span>}{(changes.length > 0 || record.dirty) && <><button disabled={blocked} onClick={() => { if (canReload()) void load(); }}><Undo2 size={13}/>{zh.table.text018}</button><button className="primary" disabled={blocked} onClick={() => void makePreview()}><Save size={13}/>{zh.table.text019}</button></>}<span className="grow"/><label className="inline-field">{zh.table.text020}<select aria-label={zh.table.text021} value={pageSize} disabled={blocked || restoredDraftView} onChange={event => { if (canReload()) { setPageIndex(1); setPageSize(Number(event.target.value)); useWorkspace.getState().updateSettings({ pageSize: Number(event.target.value) }); } }}>{[50, 100, 200, 500, 1000].map(size => <option key={size}>{size}</option>)}</select>{zh.table.text022}</label><form className="page-jump" title={zh.table.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}><input aria-label={zh.table.pageJumpLabel} inputMode="numeric" value={pageJump} disabled={blocked || restoredDraftView} onChange={event => setPageJump(event.target.value)}/><button type="submit" disabled={blocked || restoredDraftView}>{zh.table.pageJump}</button></form><button className="icon-button" aria-label={zh.common.pagePrevious} disabled={restoredDraftView || pageIndex === 1 || blocked} onClick={() => { if (canReload()) setPageIndex(current => current - 1); }}><ChevronLeft size={16}/></button><span>{restoredDraftView ? savedDraftText.restoredScope : <>{zh.table.text023}{pageIndex}{zh.table.text024}</>}</span><button className="icon-button" aria-label={zh.common.pageNext} disabled={restoredDraftView || !page?.hasMore || blocked || pageIndex >= maxTablePage} onClick={() => { if (canReload()) setPageIndex(current => current + 1); }}><ChevronRight size={16}/></button></div>
+    {rowTransferDialog && <ResultInsertDialog intent={rowTransferDialog} sourceMode="table-selection" onActivity={rowTransferActivity} onClose={() => closeRowTransfer(rowTransferDialog)} onCommitted={output => useWorkspace.getState().notify(rowTransferText.committed(output.rows))} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
     {pageExport && <ResultExportDialog result={pageExport.data} tabId={tab.id} scope="table" selected={pageExport.selected} onClose={() => { if (pageExportRef.current === pageExport) { pageExportRef.current = null; setPageExport(null); } }}/>}
     {queryTemplate && <TableQueryTemplateDialog info={queryTemplate.info} limit={queryTemplate.limit} isCurrent={() => queryTemplateCurrent(queryTemplate)} onOpen={(sql, kind, options) => openGeneratedQuery(queryTemplate, sql, kind, options)} onClose={() => closeQueryTemplate(queryTemplate)}/>}
     {filteredSelectDialog && <TableQueryTemplateDialog info={filteredSelectDialog.info} limit={filteredSelectDialog.limit} readScope={filteredSelectDialog.readScope} isCurrent={() => filteredSelectDialog.current()} onOpen={(sql, kind, options) => openFilteredSelectQuery(filteredSelectDialog, sql, kind, options)} onClose={() => closeFilteredSelect(filteredSelectDialog)}/>}

@@ -66,6 +66,8 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
     setRowsState, setError: vi.fn(), setCopyPending: vi.fn(), setDuplicateNotice: vi.fn(), setSelectedRows: vi.fn(), setSelection: vi.fn(), setExternalStale: vi.fn(), setBusy: vi.fn(), setInfo: vi.fn(), setPage: vi.fn(), restoredDraftView, setRestoredDraftView: vi.fn(),
     recordReadonlyReason, recordTargetKey, tableCopyMetadataKey, recordCopyMetadataReason, recordCopySourceReady, recordDuplicateReadonlyReason, duplicateRecordDraft, beginRecordCopyRead, consumeRecordCopyRead, collectChanges, errorMessage, formatText, recordDuplicateZh, recordCopySourceZh, recordViewZh,
   });
+  // 本组不打开勾选转入窗口，仅补齐原setRows/load读取的可空来源意图。
+  port.rowTransferIntent = { current: null };
   // 缺省平铺与实际分组都由同一load读取；同步范围引用模拟组件本轮渲染。
   port.filterGroup = filterGroup; port.recordPageScopeRef.current.value.filterGroup = filterGroup;
   if (filterGroup) {
