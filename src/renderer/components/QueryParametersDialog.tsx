@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, Play, Trash2 } from 'lucide-react';
-import { queryParameterTypes, validateQueryParameters, type QueryParameter, type QueryParameterNames, type QueryParameterType } from '../../shared/queryParameters';
+import { queryParameterTypes, validateQueryParametersForInfo, type QueryParameter, type QueryParameterNames, type QueryParameterType } from '../../shared/queryParameters';
+import { queryParameterInfo } from '../queryParameterReuse';
 import { errorMessage } from '../lib';
 import { zh } from '../locales/zh-CN';
 import { parameterZh as text } from '../locales/queryParameters.zh-CN';
@@ -68,7 +69,8 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
     const generation = ++loadGeneration.current, action = revokeFrame();
     loadingRef.current = true; setLoading(true); setError(''); setInfo(null); ready.current = false;
     try {
-      const next = await loader.current(); if (loadGeneration.current !== generation || !actionCurrent(action)) return;
+      const raw = await loader.current(); if (loadGeneration.current !== generation || !actionCurrent(action)) return;
+      const next = queryParameterInfo(raw);
       let available = !!reuse && reuseCurrent() && reuse.has(next); if (loadGeneration.current !== generation || !actionCurrent(action)) return;
       if (reuse && !reuseCurrent()) available = false;
       if (loadGeneration.current !== generation || !actionCurrent(action)) return;
@@ -89,7 +91,7 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
     let handedOff = false, action: object | undefined;
     try {
       const parameters = rows.map(row => row.parameter.type === 'null' ? { name: row.parameter.name, type: 'null' as const } : { ...row.parameter });
-      validateQueryParameters(parameters, info?.maxDecimalScale ?? 30, info?.allowTimeEndpointFraction ?? false);
+      validateQueryParametersForInfo(parameters, info!);
       ready.current = false; action = revokeFrame();
       if (!actionCurrent(action)) return;
       if (rememberRef.current) {
@@ -116,7 +118,7 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
       if (!actionCurrent(action, true)) return;
       const values = reuse.read(info); if (!actionCurrent(action, true)) return;
       if (!values) { setReusable(false); setError(reuseText.missing); return; }
-      validateQueryParameters(values, info.maxDecimalScale, info.allowTimeEndpointFraction);
+      validateQueryParametersForInfo(values, info);
       const next = values.map(parameter => ({ id: ++sequence.current, parameter: { ...parameter }, manual: !info.names.includes(parameter.name) }));
       if (!actionCurrent(action, true)) return;
       setRows(next); setError(''); setNotice(reuseText.filled);
@@ -147,17 +149,17 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
   }
   /** 新的有效取消可关闭失效表单；旧渲染或卸载后的取消不能关闭后继弹窗。 */
   function close(): void { if (!alive.current || live.current !== ticket || closing.current) return; closing.current = true; ready.current = false; revokeFrame(); onClose(); }
-  const hint = (type: QueryParameterType) => type === 'boolean' ? text.booleanHint : type === 'binary' ? text.binaryHint : type === 'date' ? text.dateHint : type === 'datetime' ? text.datetimeHint : type === 'time' ? text.timeHint : type === 'integer' || type === 'decimal' ? text.numericHint : text.textHint;
+  const hint = (type: QueryParameterType) => type === 'boolean' ? text.booleanHint : type === 'binary' ? text.binaryHint : type === 'date' ? text.dateHint : type === 'datetime' ? text.datetimeHint : type === 'time' ? text.timeHint : info?.dialect === 'sqlite' && type === 'integer' ? text.sqliteIntegerHint : info?.dialect === 'sqlite' && type === 'decimal' ? text.sqliteDecimalHint : type === 'integer' || type === 'decimal' ? text.numericHint : text.textHint;
   return <Modal title={text.title} wide onClose={close}>
-    <div className="modal-content parameter-content"><UsageHelp><p>{text.hint}</p><p>{text.dateNote}</p>{reuse && <p>{reuseText.hint}</p>}</UsageHelp><p className="muted small">{reuse ? reuseText.privacy : text.privacy}</p>
+    <div className="modal-content parameter-content"><UsageHelp><p>{text.hint}</p><p>{info?.dialect === 'sqlite' ? text.sqliteDateNote : text.dateNote}</p>{reuse && <p>{reuseText.hint}</p>}</UsageHelp><p className="muted small">{reuse ? reuseText.privacy : text.privacy}</p>{info?.dialect === 'sqlite' && <><p className="warning-text" role="note" aria-label={text.sqliteTypeTitle}>{text.sqliteTypeHint}</p><p className="muted small">{text.sqliteNamesHint}</p></>}
       {reuse && <section aria-label={reuseText.title}><p>{reuseText.overwrite}</p><label><input type="checkbox" checked={remember} disabled={loading || !info} onChange={event => changeRemember(event.target.checked)}/>{reuseText.remember}</label><div className="parameter-actions"><button type="button" disabled={loading || !info || !reusable} onClick={fillPrevious}>{reuseText.fill}</button><button type="button" disabled={loading || !info || !reusable && !remember} onClick={forgetPrevious}>{reuseText.forget}</button></div>{notice && <p role="status">{notice}</p>}</section>}
-      <h3>{text.source}</h3>{source.length > 65536 && <p className="warning-text">{text.sourceTruncated}</p>}<SqlEditor value={source.slice(0, 65536)} readOnly height={160}/>
-      <div className="parameter-actions">{loading ? <Spinner text={text.namesLoading}/> : !rows.length && <span className="muted small">{text.noParameters}</span>}<span className="grow"/><button disabled={loading} onClick={() => void reload()}>{text.retry}</button><button disabled={loading || rows.length >= 200} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.length >= 200 ? previous : [...previous, { id: ++sequence.current, parameter: { name: '', type: 'text', value: '' }, manual: true }]); }}><Plus size={13}/>{text.add}</button></div>
+      <h3>{text.source}</h3>{source.length > 65536 && <p className="warning-text">{text.sourceTruncated}</p>}<SqlEditor value={source.slice(0, 65536)} dialect={info?.dialect} readOnly height={160}/>
+      <div className="parameter-actions">{loading ? <Spinner text={text.namesLoading}/> : !rows.length && <span className="muted small">{info?.dialect === 'sqlite' ? text.sqliteNoParameters : text.noParameters}</span>}<span className="grow"/><button disabled={loading} onClick={() => void reload()}>{text.retry}</button><button disabled={loading || rows.length >= 200} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.length >= 200 ? previous : [...previous, { id: ++sequence.current, parameter: { name: '', type: 'text', value: '' }, manual: true }]); }}><Plus size={13}/>{text.add}</button></div>
       {!!info?.warnings?.length && <div className="info-strip">{text.namesDynamic}<ul>{info.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
       <div className="parameter-list">{rows.map(row => <div className="parameter-row" key={row.id}>
-        <Field label={`${text.name} ${row.id}`}><input readOnly={!row.manual} disabled={loading} maxLength={64} value={row.parameter.name} onChange={event => update(row.id, { name: event.target.value })}/></Field>
-        <Field label={`${text.type} ${row.parameter.name || row.id}`}><select disabled={loading} value={row.parameter.type} onChange={event => update(row.id, { type: event.target.value as QueryParameterType, value: event.target.value === 'null' ? undefined : row.parameter.value ?? '' })}>{queryParameterTypes.map(type => <option value={type} key={type}>{text[type]}</option>)}</select></Field>
-        <Field label={`${text.value} ${row.parameter.name || row.id}`}><textarea disabled={loading || row.parameter.type === 'null'} value={row.parameter.value ?? ''} maxLength={65536} rows={2} placeholder={row.parameter.type === 'null' ? 'NULL' : hint(row.parameter.type)} onChange={event => update(row.id, { value: event.target.value })}/></Field>
+        <Field label={`${text.name} ${row.id}`}><input aria-label={`${text.name} ${row.id}`} readOnly={!row.manual} disabled={loading} maxLength={64} value={row.parameter.name} onChange={event => update(row.id, { name: event.target.value })}/></Field>
+        <Field label={`${text.type} ${row.parameter.name || row.id}`}><select aria-label={`${text.type} ${row.parameter.name || row.id}`} disabled={loading} value={row.parameter.type} onChange={event => update(row.id, { type: event.target.value as QueryParameterType, value: event.target.value === 'null' ? undefined : row.parameter.value ?? '' })}>{queryParameterTypes.map(type => <option value={type} key={type}>{text[type]}</option>)}</select></Field>
+        <Field label={`${text.value} ${row.parameter.name || row.id}`}><textarea aria-label={`${text.value} ${row.parameter.name || row.id}`} disabled={loading || row.parameter.type === 'null'} value={row.parameter.value ?? ''} maxLength={65536} rows={2} placeholder={row.parameter.type === 'null' ? 'NULL' : hint(row.parameter.type)} onChange={event => update(row.id, { value: event.target.value })}/></Field>
         {row.manual && <button className="icon-button" disabled={loading} aria-label={`${text.remove} ${row.id}`} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.filter(item => item.id !== row.id)); }}><Trash2 size={13}/></button>}
       </div>)}</div><ErrorBox message={error}/>
     </div><footer className="modal-footer"><button onClick={close}>{zh.common.cancel}</button><span className="grow"/><button className="primary" disabled={loading || !info || !ready.current || invalid.current || closing.current} onClick={execute}><Play size={14}/>{submitLabel ?? text.execute}</button></footer>

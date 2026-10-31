@@ -67,6 +67,7 @@ import { FILTER_LIMITS, validateFilterGroup, assertFilterGroupInput, filterGroup
 import { tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, tablePresetApplySchema } from './tablePresets';
 import { queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema } from './queryResultPresets';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
+import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
 import { queryStreamExportLimits } from './queryStreamExport';
@@ -138,10 +139,11 @@ export const connectionSchema = z.discriminatedUnion('dialect', [networkConnecti
 }).strict()]);
 const target = { connectionId: id, database: name, table: name };
 const changes = z.array(z.discriminatedUnion('kind', [z.object({ kind: z.literal('insert'), values: row }).strict(), z.object({ kind: z.literal('update'), before: row, values: row }).strict(), z.object({ kind: z.literal('delete'), before: row }).strict()])).min(1).max(5000);
-/** IPC 允许当前两类驱动的最大尺度；实际执行还须按绑定会话的能力再校验。 */
+/** 公共IPC只准入已支持驱动的严格值集合；实际执行仍按绑定会话重新核对，调用方不能指定方言绕过校验。 */
 const queryParameters = z.array(z.object({ name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/), type: z.enum(queryParameterTypes), value: z.string().max(65536).optional() }).strict()).max(200).superRefine((input, context) => {
+  if (new Set(input.map(parameter => parameter.name)).size !== input.length) { context.addIssue({ code: 'custom', message: '查询参数名称重复' }); return; }
   try { validateQueryParameters(input, 38, true); }
-  catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '查询参数无效' }); }
+  catch { try { validateSqliteQueryParameters(input); } catch { context.addIssue({ code: 'custom', message: '查询参数值或整组预算无效' }); } }
 });
 const index = z.object({ name, unique: z.boolean(), columns: z.array(name).min(1) }).strict();
 const foreignKey = z.object({ name, columns: z.array(name).min(1), referencedDatabase: name, referencedTable: name, referencedColumns: z.array(name).min(1), onUpdate: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']), onDelete: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']) }).strict();

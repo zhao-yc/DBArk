@@ -25,7 +25,7 @@ export class QueryParameterReuseCandidate {
     try {
       const current = reader(), params = cache.read(lease, info);
       if (!current || !params || !current.scope.sessionId || current.databaseKnown !== true || typeof current.databaseKey !== 'string' || !current.databaseKey || !current.formIdentity || typeof current.formIdentity !== 'object') { cache.setOptIn(lease, false); return null; }
-      const copiedInfo: QueryParameterNames = { names: [...info.names], warnings: [], noBackslashEscapes: info.noBackslashEscapes, ansiQuotes: info.ansiQuotes, ...(info.ansiQuotesKnown === undefined ? {} : { ansiQuotesKnown: info.ansiQuotesKnown }), ...(info.noBackslashEscapesKnown === undefined ? {} : { noBackslashEscapesKnown: info.noBackslashEscapesKnown }), maxDecimalScale: info.maxDecimalScale, allowTimeEndpointFraction: info.allowTimeEndpointFraction };
+      const copiedInfo: QueryParameterNames = { names: [...info.names], warnings: [], noBackslashEscapes: info.noBackslashEscapes, ansiQuotes: info.ansiQuotes, ...(info.ansiQuotesKnown === undefined ? {} : { ansiQuotesKnown: info.ansiQuotesKnown }), ...(info.noBackslashEscapesKnown === undefined ? {} : { noBackslashEscapesKnown: info.noBackslashEscapesKnown }), maxDecimalScale: info.maxDecimalScale, allowTimeEndpointFraction: info.allowTimeEndpointFraction, ...(info.dialect === undefined ? {} : { dialect: info.dialect }) };
       candidate = new QueryParameterReuseCandidate(cache, { ...current, scope: { ...current.scope } }, copiedInfo, params, reader, now);
       if (!cache.setOptIn(lease, false) || !candidate.observe()) { candidate.dispose(); return null; }
       return candidate;

@@ -2,13 +2,16 @@ import { closeSync, fstatSync, openSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { constants, DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
-import { sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteColumn, type SqliteExecutionOptions, type SqliteOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { copySqliteNamedParameters, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteColumn, type SqliteExecutionOptions, type SqliteOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { queryParameterLimits } from '../../shared/queryParameters';
+import { sqliteNamedParameterNames } from './parameters';
 
 interface Port { send(message: SqliteWorkerResponse): void; exit(code: number): void; }
 interface Execution { id: string; cancelled: boolean; fault?: DriverFailure; waiting?: { frame: number; resolve(): void }; results: SqliteStatementResult[]; bytes: number; }
 class DriverFailure extends Error { constructor(readonly code: string, message: string) { super(message); } }
 const invalid = () => new DriverFailure('SQLITE_INVALID_REQUEST', 'SQLite请求格式、预算或生命周期无效');
 const cancelled = () => new DriverFailure('SQLITE_CANCELLED', 'SQLite任务已请求取消');
+const invalidNamedParameters = () => new DriverFailure('SQLITE_NAMED_PARAMETERS_INVALID', 'SQLite整组命名绑定、名称集合或参数预算无效，尚未执行任何用户语句');
 const validUnicode = (value: string) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 const unicode = (value: string) => !value.includes('\0') && validUnicode(value);
 const integer = (value: unknown, minimum: number, maximum: number): value is number => Number.isSafeInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
@@ -50,6 +53,21 @@ function parameter(value: unknown): SQLInputValue {
     const bytes = Buffer.from(value.base64, 'base64'); if (bytes.length > limits.valueBytes || bytes.toString('base64') !== value.base64) throw invalid(); return bytes;
   }
   throw invalid();
+}
+
+/** 整个模板与整组值在任何user prepare前复核；只用原生绑定，参数绝不拼入SQL或错误正文。 */
+function namedParameters(sql: string, input: unknown): Record<string, SQLInputValue> {
+  try {
+    const source = copySqliteNamedParameters(input), names = sqliteNamedParameterNames(sql).map(name => ':' + name), keys = Object.keys(source);
+    if (names.length > queryParameterLimits.names || names.length !== keys.length || names.some(name => !Object.hasOwn(source, name))) throw invalidNamedParameters();
+    const bound = Object.create(null) as Record<string, SQLInputValue>; let total = 0;
+    for (const key of keys) {
+      const value = parameter(source[key]), bytes = value === null ? 0 : typeof value === 'string' ? Buffer.byteLength(value) : value instanceof Uint8Array ? value.byteLength : Buffer.byteLength(Object.is(value, -0) ? '-0' : String(value));
+      if (bytes > queryParameterLimits.valueBytes || total + bytes > queryParameterLimits.totalBytes) throw invalidNamedParameters();
+      total += bytes; bound[key] = value;
+    }
+    return bound;
+  } catch { throw invalidNamedParameters(); }
 }
 
 /** 按运行时存储值编码，不根据列亲和性猜测TEXT、INTEGER、REAL或BLOB。 */
@@ -212,6 +230,8 @@ export class SqliteWorkerCore {
       if (stream && !this.readOnly) throw new DriverFailure('SQLITE_STREAM_REQUIRES_READONLY', 'SQLite完整流读取只允许物理只读连接');
       if (typeof sql !== 'string' || !unicode(sql) || Buffer.byteLength(sql) > limits.sqlBytes || !object(options) || !integer(options.batchRows, 1, limits.batchRows)
         || !stream && (!integer(options.maxRows, 1, limits.rows) || !integer(options.maxBytes, 1, limits.resultBytes))) throw invalid();
+      if (stream && Object.hasOwn(request, 'namedParameters') || request.namedParameters !== undefined && request.parameters !== undefined) throw invalidNamedParameters();
+      const named = request.namedParameters === undefined ? undefined : namedParameters(sql, request.namedParameters);
       if (request.parameters !== undefined && (!Array.isArray(request.parameters) || request.parameters.length > limits.columns)) throw invalid();
       const parameters = request.parameters?.map(parameter);
       if (parameters && parameters.reduce<number>((bytes, value) => bytes + (typeof value === 'string' ? Buffer.byteLength(value) : value instanceof Uint8Array ? value.byteLength : 16), 0) > limits.resultBytes) throw invalid();
@@ -224,7 +244,7 @@ export class SqliteWorkerCore {
         if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
         offset = skipTrivia(sql, offset + prefix.length);
         if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');
-        const result = await this.statement(active, statement, prefix, parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream);
+        const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream);
         active.results.push(result); this.port.send({ kind: 'statementEnd', id: active.id, result });
         // 包括零行DDL和控制语句；脚本不能靠连续同步语句饿死父端取消消息。
         await this.yield(active);
@@ -242,8 +262,9 @@ export class SqliteWorkerCore {
   }
 
   /** 结果达到预算后仍drain原语句，避免RETURNING写入因提前return而只执行一部分。 */
-  private async statement(active: Execution, statement: StatementSync, sql: string, parameters: SQLInputValue[], options: SqliteExecutionOptions, stream = false): Promise<SqliteStatementResult> {
+  private async statement(active: Execution, statement: StatementSync, sql: string, parameters: SQLInputValue[] | Record<string, SQLInputValue>, options: SqliteExecutionOptions, stream = false): Promise<SqliteStatementResult> {
     statement.setReadBigInts(true); statement.setReturnArrays(true);
+    if (!Array.isArray(parameters)) { statement.setAllowBareNamedParameters(false); statement.setAllowUnknownNamedParameters(true); }
     const columns = statement.columns(); if (columns.length > limits.columns) throw invalid();
     const before = this.changes(), index = active.results.length;
     await this.sendFrame(active, { kind: 'statement', index, sql, columns });
@@ -254,7 +275,7 @@ export class SqliteWorkerCore {
       await this.sendFrame(active, { kind: 'batch', index, rows: output }); await this.yield(active);
     };
     try {
-      iterator = statement.iterate(...parameters) as unknown as Iterator<unknown[]>;
+      iterator = (Array.isArray(parameters) ? statement.iterate(...parameters) : statement.iterate(parameters)) as unknown as Iterator<unknown[]>;
       while (true) {
         this.check(active); const item = iterator.next(); if (item.done) break;
         if (!Array.isArray(item.value) || item.value.length !== columns.length) throw invalid();

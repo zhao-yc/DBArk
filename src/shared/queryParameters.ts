@@ -1,9 +1,11 @@
+import { validateSqliteQueryParameters } from './sqliteQueryParameters';
+
 /** 参数只代表 SQL 值，不能代替数据库、表、字段等标识符。 */
 export const queryParameterTypes = ['text', 'integer', 'decimal', 'boolean', 'date', 'datetime', 'time', 'binary', 'null'] as const;
 export type QueryParameterType = typeof queryParameterTypes[number];
 export interface QueryParameter { name: string; type: QueryParameterType; value?: string; }
 export interface SqlLexicalMode { noBackslashEscapes: boolean; ansiQuotes: boolean; ansiQuotesKnown?: boolean; noBackslashEscapesKnown?: boolean; }
-export interface QueryParameterNames extends SqlLexicalMode { names: string[]; warnings: string[]; maxDecimalScale: 30 | 38; allowTimeEndpointFraction: boolean; }
+export interface QueryParameterNames extends SqlLexicalMode { names: string[]; warnings: string[]; maxDecimalScale: 30 | 38; allowTimeEndpointFraction: boolean; dialect?: 'mysql' | 'mariadb' | 'sqlite'; }
 export const queryParameterLimits = { names: 200, occurrences: 100000, valueBytes: 64 * 1024, totalBytes: 1024 * 1024, sqlBytes: 20 * 1024 * 1024 } as const;
 const encoder = new TextEncoder();
 
@@ -69,6 +71,29 @@ export function validateQueryParameters(parameters: QueryParameter[], maxDecimal
     if (bytes > queryParameterLimits.totalBytes) throw new Error('参数值合计不能超过 1 MiB');
   }
   return values;
+}
+
+/** 只按可信识别元数据选择验证器；旧无dialect输出保持原MySQL字面量语义。 */
+export function validateQueryParametersForInfo(parameters: readonly QueryParameter[], info: Pick<QueryParameterNames, 'dialect' | 'maxDecimalScale' | 'allowTimeEndpointFraction'> & { names?: readonly string[] }): void {
+  if (!info || typeof info !== 'object' || Array.isArray(info) || ![Object.prototype, null].includes(Object.getPrototypeOf(info))) throw Error('查询参数类型元数据无效');
+  for (const key of Reflect.ownKeys(info)) { const descriptor = Object.getOwnPropertyDescriptor(info, key); if (typeof key !== 'string' || !['names', 'warnings', 'dialect', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'maxDecimalScale', 'allowTimeEndpointFraction'].includes(key) || !descriptor || !descriptor.enumerable || !('value' in descriptor)) throw Error('查询参数类型元数据无效'); }
+  const dialect = Object.getOwnPropertyDescriptor(info, 'dialect');
+  if (dialect && (!dialect.enumerable || !('value' in dialect) || !['mysql', 'mariadb', 'sqlite'].includes(dialect.value))) throw Error('查询参数方言元数据无效');
+  if (dialect?.value === 'sqlite') {
+    const values = validateSqliteQueryParameters(parameters), names = Object.getOwnPropertyDescriptor(info, 'names');
+    if (names) {
+      if (!names.enumerable || !('value' in names) || !Array.isArray(names.value)) throw Error('SQLite参数名称元数据无效');
+      const length = Object.getOwnPropertyDescriptor(names.value, 'length');
+      if (!length || !('value' in length) || !Number.isInteger(length.value) || length.value < 0 || length.value > queryParameterLimits.names || Reflect.ownKeys(names.value).length !== length.value + 1) throw Error('SQLite参数名称元数据无效');
+      const expected = new Set<string>();
+      for (let index = 0; index < length.value; index++) { const descriptor = Object.getOwnPropertyDescriptor(names.value, String(index)); if (!descriptor || !descriptor.enumerable || !('value' in descriptor) || typeof descriptor.value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(descriptor.value) || expected.has(descriptor.value)) throw Error('SQLite参数名称元数据无效'); expected.add(descriptor.value); }
+      if (values.size !== expected.size || [...expected].some(name => !values.has(name))) throw Error('SQLite参数值必须与已识别名称完整匹配，不能缺项或添加额外参数');
+    }
+    return;
+  }
+  const scale = Object.getOwnPropertyDescriptor(info, 'maxDecimalScale'), endpoint = Object.getOwnPropertyDescriptor(info, 'allowTimeEndpointFraction');
+  if (!scale || !('value' in scale) || ![30, 38].includes(scale.value) || !endpoint || !('value' in endpoint) || typeof endpoint.value !== 'boolean') throw Error('查询参数类型元数据无效');
+  validateQueryParameters([...parameters], scale.value, endpoint.value);
 }
 
 export interface NamedParameterToken { name: string; start: number; end: number; }

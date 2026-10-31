@@ -175,9 +175,12 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     for (let index = 0, count = await step(() => triggers.count()); index < count; index++) {
       const trigger = triggers.nth(index); if (await step(() => trigger.isDisabled())) continue;
       await step(() => trigger.click());
-      for (const label of [queryAnalyzeZh.open, queryTransactionSettingsZh.open, queryDatabaseSwitchZh.open, zh.query.text014]) await step(() => expect(page.getByRole('menuitem', { name: label, exact: true })).toHaveCount(0));
+      for (const label of [queryAnalyzeZh.open, queryTransactionSettingsZh.open, queryDatabaseSwitchZh.open]) await step(() => expect(page.getByRole('button', { name: label, exact: true })).toHaveCount(0));
       await step(() => page.keyboard.press('Escape'));
     }
+    // 已接入的计划入口应真实可见；仅打开菜单检查，不执行未授权的计划SQL。
+    await step(async () => expect(await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(query(), { name: zh.query.text014, exact: true }, check)).toBeEnabled());
+    await step(() => page.keyboard.press('Escape'));
 
     stage = '原Monaco键盘执行精度及二进制'; await execute(precisionSql, 1);
     const grid = query().getByRole('grid'); await step(() => expect(grid).toBeVisible());
@@ -193,8 +196,8 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     const committedDisk = [...baselineDisk, { id: 20, note: '明确提交🚢' }]; expect(disk()).toEqual(committedDisk);
     await write(restoredSql); const persisted = await settings(), firstHistory = await history(), firstTasks = await tasks(), firstFacts = await step(audit);
     expect(firstFacts.executions).toBe(3); expect(firstFacts.denied).toEqual([]); expect(firstFacts.forks.length).toBeGreaterThan(0); expect(firstFacts.forks.every(path => /(?:^|[\\/])sqliteWorker\.cjs$/.test(path))).toBe(true); expect(runtime.pageErrors).toEqual([]);
-    await step(() => expect.poll(async () => (await audit()).pending).toBe(0));
-    await step(() => application.evaluate(() => (globalThis as any).__sqliteWorkspaceNative.restore()), true); armed = false;
+    // 检查pending与撤观察器放在同一Main同步回合，不能让400ms防抖保存插进两次evaluate之间。
+    await step(() => expect.poll(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteWorkspaceNative?: { pending: number; check(): void; restore(): void } }).__sqliteWorkspaceNative; if (!state) throw Error('原SQLite观察器已失效'); state.check(); if (state.pending !== 0) return false; state.restore(); return true; })).toBe(true), true); armed = false;
     stage = '首owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); const firstPid = originalProcess.pid;
     stage = '同profile严格owned重启'; await runtime.restartOwnedDesktop(info); owner = runtime.ownedDesktopResources(info); application = owner.application; page = owner.page; originalProcess = application.process(); closed = false; check(); expect(originalProcess.pid).not.toBe(firstPid);
     await arm(profile.id); armed = true;
@@ -206,8 +209,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     const secondFacts = await step(audit); expect(secondFacts.executions).toBe(1); expect(secondFacts.pickerCalls).toBe(0); expect(secondFacts.denied).toEqual([]); expect(secondFacts.forks.every(path => /(?:^|[\\/])sqliteWorker\.cjs$/.test(path))).toBe(true); expect(runtime.pageErrors).toEqual([]);
     // 仅成功完成态手动截图，画面只包含本例合成数据；自动trace/screenshot/video始终关闭。
     await step(async () => info.attach('SQLite原工作区完成态', { body: await page.screenshot(), contentType: 'image/png' }));
-    await step(() => expect.poll(async () => (await audit()).pending).toBe(0));
-    await step(() => application.evaluate(() => (globalThis as any).__sqliteWorkspaceNative.restore()), true); armed = false;
+    await step(() => expect.poll(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteWorkspaceNative?: { pending: number; check(): void; restore(): void } }).__sqliteWorkspaceNative; if (!state) throw Error('原SQLite观察器已失效'); state.check(); if (state.pending !== 0) return false; state.restore(); return true; })).toBe(true), true); armed = false;
     stage = '次owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0);
     await info.attach('SQLite原工作区原生事实与边界', { body: JSON.stringify({ platform: process.platform, pickerCalls: firstFacts.pickerCalls, pickerScope: '仅替换本例Main showOpenDialog返回准确临时路径，未验证操作系统原生对话框输入', firstFacts, secondFacts, exactSqlExecutions: 4, generatedSelectNeverExecuted: true, independentReadonlyDiskObserved: true, rollbackPreservedOriginalRows: true, committedInsertReadAfterRestart: true, sameProfileDraftRestoredWithoutExecution: true, firstPid, secondPid: originalProcess.pid, firstExitCode: 0, secondExitCode: originalProcess.exitCode, observationScope: '每次App首窗口就绪后安装观察器至退出前撤销；启动就绪前不冒称已观察fork', automaticTrace: false, automaticScreenshot: false, video: false, systemClipboardOperations: 0, unverified: ['操作系统原生文件对话框输入', '长查询停止与失效会话（core真实子进程单测另验）', '只读连接拒写（core真实磁盘单测另验）', '其它操作系统', '非本轮实际启动产物'] }), contentType: 'application/json' });
     completed = { directory, database, platform: process.platform, firstPid, secondPid: originalProcess.pid };

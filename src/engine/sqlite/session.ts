@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { sqliteDriverLimits as limits, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
+import { copySqliteNamedParameters, sqliteDriverLimits as limits, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
 
 /** 进程中断只证明连接已释放；事务/提交结果未知时不能伪造ROLLBACK成功。 */
 export class SqliteDriverError extends Error {
@@ -12,6 +12,7 @@ export class SqliteDriverError extends Error {
 }
 export interface SqliteExecuteOptions extends Partial<SqliteExecutionOptions> {
   parameters?: SqliteValue[];
+  namedParameters?: Record<string, SqliteValue>;
   onStatement?(statement: { index: number; sql: string; columns: SqliteColumn[] }): void | Promise<void>;
   onBatch?(batch: { index: number; rows: SqliteValue[][] }): void | Promise<void>;
 }
@@ -91,6 +92,7 @@ export class SqliteDriverSession {
   }
   /** 私有导出通道只允许物理只读会话，消费者必须逐批完成，不能积攒全表结果。 */
   streamRead(sql: string, options: SqliteStreamReadOptions): Promise<SqliteExecutionResult> {
+    if (Object.hasOwn(options, 'namedParameters')) return Promise.reject(this.error('SQLite完整流读取不接受命名脚本绑定', 'SQLITE_NAMED_PARAMETERS_INVALID'));
     if (!this.options.readOnly || typeof options.onBatch !== 'function') return Promise.reject(this.error('SQLite完整流读取必须使用独立物理只读会话和批次消费者', 'SQLITE_STREAM_REQUIRES_READONLY'));
     return this.start(sql, { ...options, maxRows: 1, maxBytes: 1 }, true);
   }
@@ -99,13 +101,19 @@ export class SqliteDriverSession {
     if (!this.opened || this.exited || this.invalid || this.closing || this.active) return Promise.reject(this.error('SQLite会话未就绪或已有运行任务', 'SQLITE_SESSION_UNAVAILABLE'));
     const configured: SqliteExecutionOptions = { maxRows: options.maxRows ?? 1000, batchRows: options.batchRows ?? 200, maxBytes: options.maxBytes ?? limits.resultBytes };
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > limits.sqlBytes || !Number.isInteger(configured.maxRows) || configured.maxRows < 1 || configured.maxRows > limits.rows || !Number.isInteger(configured.batchRows) || configured.batchRows < 1 || configured.batchRows > limits.batchRows || !Number.isInteger(configured.maxBytes) || configured.maxBytes < 1 || configured.maxBytes > limits.resultBytes) return Promise.reject(this.error('SQLite执行参数超出预算', 'SQLITE_INPUT_LIMIT'));
+    let namedParameters: Record<string, SqliteValue> | undefined;
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(options, 'namedParameters');
+      if (descriptor && !('value' in descriptor) || !descriptor && 'namedParameters' in options) throw Error('SQLite命名绑定必须是自有数据字段');
+      if (descriptor?.value !== undefined) { if (stream || options.parameters !== undefined) throw Error('SQLite命名与位置绑定不能混用'); namedParameters = copySqliteNamedParameters(descriptor.value); }
+    } catch { return Promise.reject(this.error('SQLite命名参数映射或绑定模式无效，本次未发送SQL', 'SQLITE_NAMED_PARAMETERS_INVALID')); }
     const operation: Operation = { id: randomUUID(), options, result: deferred(), nativeDone: deferred(), results: [], delivery: Promise.resolve(), frame: 0, index: -1, cancelRequested: false };
     // 无取消调用时也保留原生终态错误的处理端；execute仍通过自己的Promise报告失败。
     void operation.nativeDone.promise.catch(() => {});
     this.active = operation;
     try { this.transport.send(stream
       ? { kind: 'streamRead', id: operation.id, sql, parameters: options.parameters ?? [], options: { batchRows: configured.batchRows } }
-      : { kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), options: configured }); }
+      : { kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), ...(namedParameters === undefined ? {} : { namedParameters }), options: configured }); }
     catch { void this.breakSession('SQLite请求未能投递，未重试', 'SQLITE_SEND_FAILED'); }
     return operation.result.promise;
   }

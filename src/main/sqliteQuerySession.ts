@@ -3,13 +3,16 @@ import type { CellValue, CommandMap, DataRow, QueryOutcome, QueryResult, TaskEve
 import type { CompletionSessionState } from '../shared/sqlCompletion';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteDriverLimits, type SqliteCancellation, type SqliteStatementResult, type SqliteValue } from '../engine/sqlite/protocol';
-import { currentSqliteStatement } from '../engine/sqlite/currentStatement';
+import { currentSqliteStatement, sqliteStatementRanges } from '../engine/sqlite/currentStatement';
 import { sqliteExplainSource } from '../engine/sqlite/explainSource';
 import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
+import { sqliteNamedParameterNames } from '../engine/sqlite/parameters';
+import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
 
 type ExecuteInput = CommandMap['query.execute']['input'];
 type ExplainInput = CommandMap['query.explain']['input'];
-interface RunOptions { single: boolean; sourceRange?: { start: number; end: number }; explainView?: 'tree' | 'table'; }
+type ParameterInput = CommandMap['query.executeParameterized']['input'];
+interface RunOptions { single: boolean; sourceRange?: { start: number; end: number }; explainView?: 'tree' | 'table'; namedParameters?: Record<string, SqliteValue>; parameterRanges?: { start: number; end: number }[]; }
 type SessionState = CommandMap['query.sessionState']['output'];
 type TransactionInput = CommandMap['query.transaction']['input'];
 export type SqliteCompletionState = Omit<CompletionSessionState, 'dialect'> & { dialect: 'sqlite' };
@@ -71,6 +74,25 @@ export class SqliteQuerySession {
     return this.run({ ...input, maxRows: Math.min(input.maxRows, 1000) }, source.sql, { single: true, sourceRange: source.sourceRange, explainView: input.format === 'text' ? 'table' : 'tree' });
   }
 
+  /** 参数识别只用SQLite完整词法与原会话身份；不prepare用户模板、不建立任务或读取MySQL模式。 */
+  parameterNames(input: CommandMap['query.parameterNames']['input']): CommandMap['query.parameterNames']['output'] {
+    this.available(input.sessionId);
+    return { dialect: 'sqlite', names: sqliteNamedParameterNames(input.sql), warnings: [], noBackslashEscapes: true, ansiQuotes: true, noBackslashEscapesKnown: true, ansiQuotesKnown: true, maxDecimalScale: 38, allowTimeEndpointFraction: true };
+  }
+
+  /** 全组值及完整脚本先验证，再原生绑定；所有前序结果及事务均归原物理会话，不重放部分写入。 */
+  async executeParameterized(input: ParameterInput): Promise<QueryOutcome> {
+    this.available(input.sessionId);
+    if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000) throw Error('SQLite参数查询请求或结果预算无效');
+    if (input.continueOnError === true || input.collectWarnings === true) throw Error('SQLite参数查询不支持遇错继续或MySQL警告采集，本次未发送SQL');
+    const names = sqliteNamedParameterNames(input.sql), values = validateSqliteQueryParameters(input.parameters);
+    if (values.size !== names.length || names.some(name => !values.has(name))) throw Error('SQLite参数必须准确覆盖模板全部名称，不接受缺少或额外的参数');
+    const namedParameters: Record<string, SqliteValue> = Object.create(null);
+    for (const name of names) namedParameters[':' + name] = values.get(name)!;
+    const parameterRanges = sqliteStatementRanges(input.sql).map(range => ({ start: range.start, end: range.end }));
+    return this.run(input, input.sql, { single: false, namedParameters, parameterRanges });
+  }
+
   /** 查询与计划共用同一active任务、ACK、预算、原生终态和通知失效保护，不能绕开会话忙态或重放。 */
   private async run(input: Pick<ExecuteInput, 'taskId' | 'maxRows'>, sql: string, options: RunOptions): Promise<QueryOutcome> {
     const operation: Execution = { taskId: input.taskId, results: [], started: performance.now(), rows: 0 };
@@ -100,6 +122,7 @@ export class SqliteQuerySession {
         maxRows: input.maxRows, batchRows: 200, maxBytes: 16 * 1024 * 1024,
         // 空绑定数组显式启用原worker的原生单完整语句复核；词法定位错误也不能偷偷step第二句。
         ...(options.single ? { parameters: [] } : {}),
+        ...(options.namedParameters ? { namedParameters: options.namedParameters } : {}),
         onStatement: statement => {
           if (statement.index !== operation.results.length) throw Error('SQLite结果集顺序与原任务不匹配');
           if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
@@ -134,9 +157,10 @@ export class SqliteQuerySession {
         : reason instanceof Error ? reason.message : 'SQLite查询失败';
       terminalEvent({ status: cancelled ? 'cancelled' : 'failed', progress: 0, message });
       // 只返回原生确认完成的前序结果；失败语句的部分流式行不能冒充完整结果。
-      if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || options.single && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
+      if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || options.namedParameters && reason.code === 'SQLITE_NAMED_PARAMETERS_INVALID' || options.single && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
         if (reason.completedResults.length !== reason.completedStatements) throw Error('SQLite失败回执缺少前序完整结果，不能发布成功摘要');
-        return { results: complete(reason.completedResults), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(options.sourceRange ? { sourceRange: { ...options.sourceRange } } : {}) } };
+        const sourceRange = options.sourceRange ?? options.parameterRanges?.[reason.completedStatements];
+        return { results: complete(reason.completedResults), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) } };
       }
       throw reason;
     } finally { if (this.active === operation) this.active = undefined; }

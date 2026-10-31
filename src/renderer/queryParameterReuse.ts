@@ -1,4 +1,4 @@
-import { queryParameterLimits, validateQueryParameters, type QueryParameter, type QueryParameterNames } from '../shared/queryParameters';
+import { queryParameterLimits, validateQueryParametersForInfo, type QueryParameter, type QueryParameterNames } from '../shared/queryParameters';
 
 /** 父级同步读取真实来源；rangeIdentity须包含全篇标识或选区起止基址，不含active/busy/modal。 */
 export interface QueryParameterReuseScope {
@@ -49,18 +49,22 @@ function snapshotScope(raw: unknown): QueryParameterReuseScope {
   for (const key of ['savedSourceIdentity', 'fileSourceIdentity', 'defaultDatabaseIdentity']) if (value[key] !== null && (!value[key] || typeof value[key] !== 'object')) throw Error('参数暂存来源无效');
   return value as unknown as QueryParameterReuseScope;
 }
-/** 当前词法和服务端类型能力必须重新确认；诊断文案不进入暂存副本。 */
-function metadata(raw: unknown): Metadata {
-  const value = data(raw, ['names', 'warnings', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'maxDecimalScale', 'allowTimeEndpointFraction']);
+/** 表单和RAM复用共用严格元数据快照，不读取getter，不把未知方言当成MySQL。 */
+export function queryParameterInfo(raw: unknown): QueryParameterNames {
+  const value = data(raw, ['names', 'warnings', 'noBackslashEscapes', 'ansiQuotes', 'ansiQuotesKnown', 'noBackslashEscapesKnown', 'maxDecimalScale', 'allowTimeEndpointFraction', 'dialect']);
   const names = array(value.names, queryParameterLimits.names);
   if (names.some(name => typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) || new Set(names).size !== names.length) throw Error('参数暂存元数据无效');
   for (const key of ['noBackslashEscapes', 'ansiQuotes', 'allowTimeEndpointFraction']) if (typeof value[key] !== 'boolean') throw Error('参数暂存元数据无效');
   for (const key of ['ansiQuotesKnown', 'noBackslashEscapesKnown']) if (value[key] !== undefined && typeof value[key] !== 'boolean') throw Error('参数暂存元数据无效');
   if (value.maxDecimalScale !== 30 && value.maxDecimalScale !== 38) throw Error('参数暂存元数据无效');
+  if (Object.hasOwn(value, 'dialect') && !['mysql', 'mariadb', 'sqlite'].includes(value.dialect as string)) throw Error('参数暂存方言元数据无效');
+  if (value.dialect === 'sqlite' && (value.noBackslashEscapes !== true || value.ansiQuotes !== true || value.ansiQuotesKnown !== true || value.noBackslashEscapesKnown !== true || value.maxDecimalScale !== 38 || value.allowTimeEndpointFraction !== true)) throw Error('SQLite参数元数据无效');
   // warnings只显示在原参数表单，不缓存；即使不匹配文案也不接受访问器或稀疏结构。
-  if (array(value.warnings, queryParameterLimits.names).some(warning => typeof warning !== 'string')) throw Error('参数暂存元数据无效');
-  return { names: names as string[], noBackslashEscapes: value.noBackslashEscapes as boolean, ansiQuotes: value.ansiQuotes as boolean, ...(value.ansiQuotesKnown === undefined ? {} : { ansiQuotesKnown: value.ansiQuotesKnown as boolean }), ...(value.noBackslashEscapesKnown === undefined ? {} : { noBackslashEscapesKnown: value.noBackslashEscapesKnown as boolean }), maxDecimalScale: value.maxDecimalScale, allowTimeEndpointFraction: value.allowTimeEndpointFraction as boolean };
+  const warnings = array(value.warnings, queryParameterLimits.names); if (warnings.some(warning => typeof warning !== 'string')) throw Error('参数暂存元数据无效');
+  return { names: names as string[], warnings: warnings as string[], noBackslashEscapes: value.noBackslashEscapes as boolean, ansiQuotes: value.ansiQuotes as boolean, ...(value.ansiQuotesKnown === undefined ? {} : { ansiQuotesKnown: value.ansiQuotesKnown as boolean }), ...(value.noBackslashEscapesKnown === undefined ? {} : { noBackslashEscapesKnown: value.noBackslashEscapesKnown as boolean }), maxDecimalScale: value.maxDecimalScale, allowTimeEndpointFraction: value.allowTimeEndpointFraction as boolean, ...(Object.hasOwn(value, 'dialect') ? { dialect: value.dialect as QueryParameterNames['dialect'] } : {}) };
 }
+/** 诊断文案只显示在原表单，不进入缓存或元数据指纹；dialect必须进入指纹。 */
+function metadata(raw: unknown): Metadata { const { warnings: _warnings, ...info } = queryParameterInfo(raw); return info; }
 /** 完整保留识别项及动态手动项，再沿真实九类型和总预算准入，不强转原值。 */
 function parameters(raw: unknown, info: Metadata): QueryParameter[] {
   const result = array(raw, queryParameterLimits.names).map(item => {
@@ -69,7 +73,7 @@ function parameters(raw: unknown, info: Metadata): QueryParameter[] {
     return { name: value.name, type: value.type, ...(Object.hasOwn(value, 'value') ? { value: value.value } : {}) } as QueryParameter;
   });
   // 动态脚本允许手工补充未识别名称；保留整组原顺序，仍须覆盖全部已识别名称。
-  validateQueryParameters(result, info.maxDecimalScale, info.allowTimeEndpointFraction);
+  validateQueryParametersForInfo(result, info);
   const supplied = new Set(result.map(parameter => parameter.name));
   if (info.names.some(name => !supplied.has(name))) throw Error('参数暂存元数据不匹配');
   return result;

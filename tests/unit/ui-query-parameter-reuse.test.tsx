@@ -57,9 +57,9 @@ function ramPort(parameters: QueryParameter[] | null = [{ name: 'value', type: '
   };
   return { port, order, listeners, setCurrent: (value: boolean) => { current = value; emit(); }, allowStage: (value: boolean) => { stageAllowed = value; }, replace: (value: QueryParameter[] | null) => { available = value ? copy(value) : null; emit(); } };
 }
-async function mount(options: { pending?: ReturnType<typeof deferred<QueryParameterNames>>; port?: ReturnType<typeof ramPort>; initial?: QueryParameter[]; source?: string } = {}) {
+async function mount(options: { pending?: ReturnType<typeof deferred<QueryParameterNames>>; info?: QueryParameterNames; port?: ReturnType<typeof ramPort>; initial?: QueryParameter[]; source?: string } = {}) {
   const capability = options.port ?? ramPort(), onExecute = vi.fn((parameters: QueryParameter[]) => { capability.order.push('execute'); }), onClose = vi.fn();
-  const loadNames = vi.fn(() => options.pending?.promise ?? Promise.resolve(names()));
+  const loadNames = vi.fn(() => options.pending?.promise ?? Promise.resolve(options.info ?? names()));
   let props: Parameters<typeof Dialog>[0] = { source: options.source ?? 'SELECT :value', loadNames, onExecute, onClose, reuse: capability.port, initialParameters: options.initial ?? [] };
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
   const render = () => root!.render(<Dialog {...props}/>); await act(async () => render());
@@ -230,5 +230,28 @@ describe('参数复用正式表单真实React RAM（非Monaco/IPC/SQL验收）',
     const event = Object.assign(new MemoryEvent('keydown'), shortcut); Object.assign(event, { stopImmediatePropagation: () => { event.cancelBubble = true; } });
     try { await act(async () => { rowNodes()[0].querySelector('textarea')!.dispatchEvent(event); }); expect(event.defaultPrevented).toBe(true); expect(parent).not.toHaveBeenCalled(); expect(f.onExecute).not.toHaveBeenCalled(); expect(f.port.stage).not.toHaveBeenCalled(); }
     finally { document.removeEventListener('keydown', parent); }
+  });
+});
+
+const sqliteNames = (list = ['value']): QueryParameterNames => ({ names: list, dialect: 'sqlite', warnings: [], noBackslashEscapes: true, ansiQuotes: true, ansiQuotesKnown: true, noBackslashEscapesKnown: true, maxDecimalScale: 38, allowTimeEndpointFraction: true });
+describe('SQLite 原参数表单真实React RAM', () => {
+  it('九类型沿SQLite dispatch本地验证，日期0001及38位decimal不降级MySQL，亲和提示始终可见', async () => {
+    const parameters: QueryParameter[] = [{ name: 'text', type: 'text', value: "中文🧭\0'" }, { name: 'integer', type: 'integer', value: '-9223372036854775808' }, { name: 'decimal', type: 'decimal', value: '0.' + '1'.repeat(38) }, { name: 'boolean', type: 'boolean', value: 'false' }, { name: 'date', type: 'date', value: '0001-01-01' }, { name: 'datetime', type: 'datetime', value: '0004-02-29 23:59:59.123456' }, { name: 'time', type: 'time', value: '-838:59:59.999999' }, { name: 'binary', type: 'binary', value: '00ffA1' }, { name: 'nil', type: 'null' }];
+    const f = await mount({ info: sqliteNames(parameters.map(p => p.name)), initial: parameters, source: 'SELECT ' + parameters.map(p => ':' + p.name).join(', ') });
+    expect(document.querySelector('[aria-label="' + text.sqliteTypeTitle + '"]')!.textContent).toBe(text.sqliteTypeHint); expect(document.body.textContent).toContain(text.sqliteNamesHint); expect(document.body.textContent).toContain(text.sqliteDateNote); expect(f.onExecute).not.toHaveBeenCalled(); await click(text.execute); expect(f.onExecute).toHaveBeenCalledExactlyOnceWith(parameters); expect(f.port.stage).not.toHaveBeenCalled();
+  });
+  it('SQLite extra/重复/越界本地拒绝，保留表单与输入，零stage及真实onExecute', async () => {
+    const f = await mount({ info: sqliteNames(), initial: [{ name: 'value', type: 'integer', value: '9223372036854775808' }, { name: 'extra', type: 'null' }] }); await check(true); await click(text.execute); expect(f.onExecute).not.toHaveBeenCalled(); expect(f.port.stage).not.toHaveBeenCalled(); expect(formValues()[0].value).toBe('9223372036854775808');
+    await changeValue(0, '9223372036854775807'); await click(text.execute); expect(f.onExecute).not.toHaveBeenCalled(); expect(f.port.stage).not.toHaveBeenCalled(); expect(document.body.textContent).toContain('完整匹配');
+    const extra = rowNodes()[1].querySelector('input')!; await act(async () => callback(extra, 'onChange')({ target: { value: 'value' } })); await click(text.execute); expect(f.onExecute).not.toHaveBeenCalled(); expect(f.port.stage).not.toHaveBeenCalled(); expect(document.body.textContent).toContain('重复');
+  });
+  it('显式fill只恢复SQLite原typed副本，不识别或执行；勾选后先stage再交接一次', async () => {
+    const parameters: QueryParameter[] = [{ name: 'value', type: 'date', value: '0001-01-01' }], f = await mount({ info: sqliteNames(), port: ramPort(parameters) }); const before = f.loadNames.mock.calls.length; await click(reuseText.fill); expect(formValues()[0]).toMatchObject({ type: 'date', value: '0001-01-01' }); expect(f.loadNames).toHaveBeenCalledTimes(before); expect(f.onExecute).not.toHaveBeenCalled(); expect(checkbox().checked).toBe(false); await check(true); await click(text.execute); expect(f.order).toEqual(['stage', 'execute']); expect(f.port.stage).toHaveBeenCalledWith(sqliteNames(), parameters); expect(f.onExecute).toHaveBeenCalledExactlyOnceWith(parameters);
+  });
+  it('未知/访问器dialect元数据在任何字段或reuse.has读取前拒绝，不降级网络验证', async () => {
+    const getter = vi.fn(() => 'sqlite'), metadata = sqliteNames(); Object.defineProperty(metadata, 'dialect', { enumerable: true, get: getter }); const f = await mount({ info: metadata }); expect(getter).not.toHaveBeenCalled(); expect(f.port.has).not.toHaveBeenCalled(); expect(f.onExecute).not.toHaveBeenCalled(); expect(button(text.execute).disabled).toBe(true);
+  });
+  it('SQLite输入值有效也不能通过旧source闭包或取消后的窗口自动提交', async () => {
+    const f = await mount({ info: sqliteNames(), initial: [{ name: 'value', type: 'date', value: '0001-01-01' }] }), old = callback(button(text.execute)); await f.render({ source: 'SELECT :other' }); await act(async () => old()); expect(f.onExecute).not.toHaveBeenCalled(); expect(f.port.stage).not.toHaveBeenCalled(); await click('取消'); expect(f.onClose).toHaveBeenCalledOnce(); await act(async () => old()); expect(f.onExecute).not.toHaveBeenCalled();
   });
 });
