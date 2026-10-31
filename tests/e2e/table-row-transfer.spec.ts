@@ -58,7 +58,7 @@ function register(): void {
       const identity = (identityRows as import('mysql2').RowDataPacket[])[0]; expect(identity.uuid).toBe(env.DBARK_TEST_EXPECTED_SERVER_UUID); expect(Number(identity.port)).toBe(3306);
       const before = await read(sourceDatabase); expect(before).toHaveLength(3); expect(await read(targetDatabase)).toEqual([]);
       await step(() => page.evaluate(async ({ sourceId, targetId, sourceDatabase, targetDatabase, host, user, password }) => {
-        for (const [id, database, name] of [[sourceId, sourceDatabase, '复制来源隔离连接'], [targetId, targetDatabase, '明确目标隔离连接']]) await window.dbark.invoke('connections.save', { id, name, group: '', color: '', dialect: 'mysql', host, port: 13384, user, password, database, rememberPassword: false });
+        for (const [id, database, name] of [[sourceId, sourceDatabase, '复制来源隔离连接'], [targetId, targetDatabase, '明确目标隔离连接']]) await window.dbark.invoke('connections.save', { id, name, group: '', color: '#52c5a2', dialect: 'mysql', host, port: 13384, user, password, database, rememberPassword: false });
         const settings = await window.dbark.invoke('settings.get', {});
         await window.dbark.invoke('settings.save', { ...settings, activeTabId: 'row-transfer-table', pageSize: 50, tabs: [{ id: 'row-transfer-table', kind: 'table', title: '合成来源表', connectionId: sourceId, database: sourceDatabase, table: 'subject' }] });
       }, { sourceId, targetId, sourceDatabase, targetDatabase, host: env.DBARK_TEST_HOST!, user: env.DBARK_TEST_USER!, password: env.DBARK_TEST_PASSWORD! }));
