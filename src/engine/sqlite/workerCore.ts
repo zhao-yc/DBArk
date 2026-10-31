@@ -27,7 +27,7 @@ function readablePragma(first: string | null, second: string | null): boolean {
 /** 仅跳过SQLite明确的空白、分号和注释；语句边界始终由原生prepare/sourceSQL决定。 */
 function skipTrivia(sql: string, offset = 0): number {
   while (offset < sql.length) {
-    if (/[ \t\r\n\v\f;]/.test(sql[offset])) { offset++; continue; }
+    if (/[ \t\r\n\f;]/.test(sql[offset])) { offset++; continue; }
     if (sql.startsWith('--', offset)) { const end = sql.indexOf('\n', offset + 2); offset = end < 0 ? sql.length : end + 1; continue; }
     if (sql.startsWith('/*', offset)) { const end = sql.indexOf('*/', offset + 2); offset = end < 0 ? sql.length : end + 2; continue; }
     break;

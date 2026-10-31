@@ -3,6 +3,7 @@ import type { CellValue, CommandMap, DataRow, QueryOutcome, QueryResult, TaskEve
 import type { CompletionSessionState } from '../shared/sqlCompletion';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteDriverLimits, type SqliteCancellation, type SqliteStatementResult, type SqliteValue } from '../engine/sqlite/protocol';
+import { currentSqliteStatement } from '../engine/sqlite/currentStatement';
 
 type ExecuteInput = CommandMap['query.execute']['input'];
 type SessionState = CommandMap['query.sessionState']['output'];
@@ -52,7 +53,9 @@ export class SqliteQuerySession {
   async execute(input: ExecuteInput): Promise<QueryOutcome> {
     this.available(input.sessionId);
     if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || typeof input.sql !== 'string' || Buffer.byteLength(input.sql) > sqliteDriverLimits.sqlBytes || !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > sqliteDriverLimits.rows) throw Error('SQLite查询请求或结果预算无效');
-    if (input.currentStatement !== undefined || input.continueOnError === true || input.collectWarnings === true) throw Error('SQLite当前语句定位、遇错继续和MySQL警告采集尚未接入，本次没有发送SQL');
+    if (input.continueOnError === true || input.collectWarnings === true) throw Error('SQLite遇错继续和MySQL警告采集尚未接入，本次没有发送SQL');
+    const selected = input.currentStatement === undefined ? undefined : currentSqliteStatement(input.sql, input.currentStatement.offset);
+    if (input.currentStatement !== undefined && !selected) throw Error('SQLite光标位置没有可执行的当前语句，本次没有发送SQL');
     const operation: Execution = { taskId: input.taskId, results: [], started: performance.now(), rows: 0 };
     let resultLimitReached = false;
     this.active = operation;
@@ -76,8 +79,10 @@ export class SqliteQuerySession {
     };
     try {
       event({ executionDatabase: { state: 'known', database: 'main' } });
-      const outcome = await this.driver.execute(input.sql, {
+      const outcome = await this.driver.execute(selected?.sql ?? input.sql, {
         maxRows: input.maxRows, batchRows: 200, maxBytes: 16 * 1024 * 1024,
+        // 空绑定数组显式启用原worker的原生单完整语句复核；词法定位错误也不能偷偷step第二句。
+        ...(selected ? { parameters: [] } : {}),
         onStatement: statement => {
           if (statement.index !== operation.results.length) throw Error('SQLite结果集顺序与原任务不匹配');
           if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
@@ -107,9 +112,9 @@ export class SqliteQuerySession {
       const cancelled = reason instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(reason.code);
       terminalEvent({ status: cancelled ? 'cancelled' : 'failed', progress: 0, message: reason instanceof Error ? reason.message : 'SQLite查询失败' });
       // 只返回原生确认完成的前序结果；失败语句的部分流式行不能冒充完整结果。
-      if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
+      if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || selected && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
         if (reason.completedResults.length !== reason.completedStatements) throw Error('SQLite失败回执缺少前序完整结果，不能发布成功摘要');
-        return { results: complete(reason.completedResults), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message: reason.message } };
+        return { results: complete(reason.completedResults), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message: reason.message, ...(selected ? { sourceRange: { start: selected.start, end: selected.end } } : {}) } };
       }
       throw reason;
     } finally { if (this.active === operation) this.active = undefined; }
