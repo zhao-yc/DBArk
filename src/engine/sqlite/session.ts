@@ -3,7 +3,12 @@ import { sqliteDriverLimits as limits, type SqliteCancellation, type SqliteColum
 
 /** 进程中断只证明连接已释放；事务/提交结果未知时不能伪造ROLLBACK成功。 */
 export class SqliteDriverError extends Error {
-  constructor(message: string, readonly code: string, readonly transaction: boolean | null, readonly completedStatements: number, readonly sessionClosed: boolean) { super(message); this.name = 'SqliteDriverError'; }
+  readonly completedResults: readonly Readonly<SqliteStatementResult>[];
+  constructor(message: string, readonly code: string, readonly transaction: boolean | null, readonly completedStatements: number, readonly sessionClosed: boolean, results: readonly SqliteStatementResult[] = []) {
+    super(message); this.name = 'SqliteDriverError';
+    // 前序完整结果属于原执行事实；失败后仍须提供截断/变更量，不能只凭语句数猜测成功。
+    this.completedResults = Object.freeze(results.map(result => Object.freeze({ ...result })));
+  }
 }
 export interface SqliteExecuteOptions extends Partial<SqliteExecutionOptions> {
   parameters?: SqliteValue[];
@@ -69,8 +74,10 @@ export class SqliteDriverSession {
   get version(): string { return this.versionValue; }
   get transaction(): boolean | null { return this.transactionValue; }
   get isClosed(): boolean { return this.exited; }
+  /** 未确认退出的失效会话也不能接收SQL，不能只依据isClosed判断还能执行。 */
+  get isUsable(): boolean { return this.opened && !this.exited && !this.invalid && !this.closing; }
   get isBusy(): boolean { return !!this.active; }
-  private error(message: string, code: string, completed = this.active?.results.length ?? 0): SqliteDriverError { return new SqliteDriverError(message, code, this.exited ? null : this.transactionValue, completed, this.exited); }
+  private error(message: string, code: string, completed = this.active?.results.length ?? 0, results: readonly SqliteStatementResult[] = this.active?.results ?? []): SqliteDriverError { return new SqliteDriverError(message, code, this.exited ? null : this.transactionValue, completed, this.exited, results); }
 
   /** 同一物理连接不并行执行；每个批次等消费者完成后才确认，不无限积压结果。 */
   execute(sql: string, options: SqliteExecuteOptions = {}): Promise<SqliteExecutionResult> {
@@ -153,9 +160,9 @@ export class SqliteDriverSession {
       if (this.active !== operation) return;
       this.active = undefined;
       const terminal = operation.terminal!;
-      if (operation.consumerError) operation.result.reject(this.error(operation.consumerError.message, 'SQLITE_CONSUMER_FAILED', operation.results.length));
+      if (operation.consumerError) operation.result.reject(this.error(operation.consumerError.message, 'SQLITE_CONSUMER_FAILED', operation.results.length, operation.results));
       else if (terminal.kind === 'completed') operation.result.resolve(terminal.result);
-      else operation.result.reject(this.error(terminal.kind === 'cancelled' ? 'SQLite查询已取消' : terminal.message, terminal.kind === 'cancelled' ? 'SQLITE_CANCELLED' : terminal.code, terminal.completedStatements));
+      else operation.result.reject(this.error(terminal.kind === 'cancelled' ? 'SQLite查询已取消' : terminal.message, terminal.kind === 'cancelled' ? 'SQLITE_CANCELLED' : terminal.code, terminal.completedStatements, operation.results));
     });
   }
   private failUnconfirmed(operation: Operation, reason: unknown): void {

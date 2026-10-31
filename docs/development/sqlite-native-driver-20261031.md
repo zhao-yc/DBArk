@@ -1,5 +1,7 @@
 # SQLite 原生驱动基础
 
+后续补齐[原查询会话合同适配](sqlite-query-session-20261031.md)，并将 ATTACH／DETACH 的文件能力限制扩展到读写连接；用户界面仍未开放。下文保留最初基础轮次的证据，不与后续结果合并成客户端已支持。
+
 ## 本轮范围
 
 新增 `src/engine/sqlite/` 原生文件驱动、Main 的准确进程账本及独立构建入口。每个物理连接使用一个 utility process，采用 Electron 内置 `node:sqlite`；用户数据库不经过配置库的 sql.js，也不整库载入内存。

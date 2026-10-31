@@ -149,8 +149,9 @@ export class SqliteWorkerCore {
       const versionRow = opened.prepare('SELECT sqlite_version() AS version').get();
       if (!versionRow || typeof versionRow.version !== 'string' || versionRow.version.length > 100) throw invalid();
       // 读写连接也须在原生prepare之前拦截副作用PRAGMA；多句参数检查和消费者ACK都发生得更晚。
-      // 只读文件模式之外再限制TEMP写入和ATTACH，不能让其它数据库文件绕过只读边界。
+      // 所有连接只拥有Main选中的单个磁盘库；ATTACH/DETACH及VACUUM INTO不能另取文件能力。
       opened.setAuthorizer((action, first, second) => {
+        if (action === constants.SQLITE_ATTACH || action === constants.SQLITE_DETACH) return constants.SQLITE_DENY;
         if (action === constants.SQLITE_PRAGMA) return readablePragma(first, second) ? constants.SQLITE_OK : constants.SQLITE_DENY;
         if (!options.readOnly) return constants.SQLITE_OK;
         if ([constants.SQLITE_READ, constants.SQLITE_SELECT, constants.SQLITE_FUNCTION, constants.SQLITE_RECURSIVE, constants.SQLITE_TRANSACTION, constants.SQLITE_SAVEPOINT].includes(action)) return constants.SQLITE_OK;

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fork, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -64,7 +64,9 @@ describe('SQLite真实磁盘原生驱动与进程生命周期', () => {
   });
   it('首错停止保留实际事务，独立连接不可见；ROLLBACK显式完成后COMMIT变化量为0', async () => {
     const { path } = fixture(), session = await open(path);
-    await expect(session.execute("BEGIN; INSERT INTO subject VALUES(1,'第一条'); INSERT INTO subject VALUES(1,'冲突'); INSERT INTO subject VALUES(2,'不得执行')")).rejects.toMatchObject({ completedStatements: 2, transaction: true, sessionClosed: false });
+    const failure = await session.execute("BEGIN; INSERT INTO subject VALUES(1,'第一条'); INSERT INTO subject VALUES(1,'冲突'); INSERT INTO subject VALUES(2,'不得执行')").then(() => { throw Error('冲突脚本不得成功'); }, reason => { expect(reason).toBeInstanceOf(SqliteDriverError); return reason as SqliteDriverError; });
+    expect(failure).toMatchObject({ completedStatements: 2, transaction: true, sessionClosed: false, completedResults: [{ index: 0, rows: 0, changes: '0', truncated: false, transaction: true }, { index: 1, rows: 0, changes: '1', truncated: false, transaction: true }] });
+    expect(Object.isFrozen(failure.completedResults)).toBe(true); expect(failure.completedResults.every(Object.isFrozen)).toBe(true);
     expect(session.transaction).toBe(true); expect(diskCount(path).count).toBe(0);
     expect((await collect(session, 'SELECT count(*) FROM subject')).rows).toEqual([[{ type: 'integer', value: '1' }]]);
     const rollback = await session.execute('ROLLBACK'); expect(rollback.transaction).toBe(false); expect(rollback.statements[0].changes).toBe('0');
@@ -73,12 +75,43 @@ describe('SQLite真实磁盘原生驱动与进程生命周期', () => {
   it('各会话临时表隔离；只读模式拒绝写入/ATTACH/危险PRAGMA，缺文件不创建', async () => {
     const { path, directory } = fixture(), first = await open(path), second = await open(path);
     await first.execute('CREATE TEMP TABLE marker(n); INSERT INTO marker VALUES(1)'); await expect(second.execute('SELECT * FROM marker')).rejects.toBeInstanceOf(SqliteDriverError);
-    const readonly = await open(path, true), bytes = readFileSync(path), attached = join(directory, 'other.sqlite');
+    const readonly = await open(path, true), bytes = readFileSync(path), attached = join(directory, 'other.sqlite'), vacuum = join(directory, 'readonly-vacuum.sqlite');
     await readonly.execute('BEGIN; SELECT * FROM subject; ROLLBACK');
-    for (const sql of ["INSERT INTO subject VALUES(4,'拒绝')", "ATTACH DATABASE '" + attached.replaceAll("'", "''") + "' AS other", 'PRAGMA writable_schema=ON']) await expect(readonly.execute(sql)).rejects.toBeInstanceOf(SqliteDriverError);
+    for (const sql of ["INSERT INTO subject VALUES(4,'拒绝')", "ATTACH DATABASE '" + attached.replaceAll("'", "''") + "' AS other", 'DETACH DATABASE main', "VACUUM INTO '" + vacuum.replaceAll("'", "''") + "'", 'PRAGMA writable_schema=ON']) await expect(readonly.execute(sql)).rejects.toBeInstanceOf(SqliteDriverError);
     await readonly.close(); expect(readFileSync(path)).toEqual(bytes);
     const missing = join(directory, 'missing.sqlite'); await expect(open(missing)).rejects.toBeInstanceOf(SqliteDriverError);
-    const { existsSync } = await import('node:fs'); expect(existsSync(missing)).toBe(false); expect(existsSync(attached)).toBe(false);
+    expect(existsSync(missing)).toBe(false); expect(existsSync(attached)).toBe(false); expect(existsSync(vacuum)).toBe(false);
+  });
+  it('读写连接拒绝ATTACH/DETACH和VACUUM INTO，未创建目标且主库、事务及外键保持', async () => {
+    const { path, directory } = fixture(), session = await open(path);
+    const attached = join(directory, '未授权附加.sqlite'), vacuum = join(directory, '未授权导出.sqlite');
+    // 两个目标均由本例独占临时目录生成；不接触用户文件，也不接受仅在事务中失败的VACUUM伪证明。
+    const quote = (value: string) => "'" + value.replaceAll("'", "''") + "'";
+    await session.execute("INSERT INTO subject VALUES(1,'原主库'); CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(pid INTEGER REFERENCES parent(id))");
+    for (const sql of [`ATTACH DATABASE ${quote(attached)} AS other`, 'DETACH DATABASE main']) {
+      await expect(session.execute(sql)).rejects.toMatchObject({ code: 'SQLITE_NATIVE_23', completedStatements: 0, transaction: false, sessionClosed: false });
+      expect(existsSync(attached)).toBe(false);
+    }
+    await expect(session.execute(`VACUUM INTO ${quote(vacuum)}`)).rejects.toMatchObject({ completedStatements: 0, transaction: false, sessionClosed: false });
+    expect(existsSync(vacuum)).toBe(false);
+    expect((await collect(session, 'PRAGMA database_list')).rows.map(row => row[1])).toEqual(['main']);
+    expect((await collect(session, 'SELECT id,note FROM subject')).rows).toEqual([[{ type: 'integer', value: '1' }, '原主库']]);
+    expect(diskCount(path)).toEqual({ count: 1, integrity: 'ok' });
+    await session.execute("BEGIN; INSERT INTO subject VALUES(2,'仅事务内可见')");
+    for (const sql of [`ATTACH DATABASE ${quote(attached)} AS other`, 'DETACH DATABASE main']) {
+      await expect(session.execute(sql)).rejects.toMatchObject({ code: 'SQLITE_NATIVE_23', completedStatements: 0, transaction: true, sessionClosed: false });
+      expect(session.transaction).toBe(true);
+    }
+    expect((await collect(session, 'SELECT count(*) FROM subject')).rows).toEqual([[{ type: 'integer', value: '2' }]]);
+    expect(diskCount(path)).toEqual({ count: 1, integrity: 'ok' });
+    expect((await collect(session, 'PRAGMA foreign_keys')).rows).toEqual([[{ type: 'integer', value: '1' }]]);
+    await expect(session.execute('INSERT INTO child VALUES(999)')).rejects.toMatchObject({ completedStatements: 0, transaction: true, sessionClosed: false });
+    await session.execute('INSERT INTO parent VALUES(7); INSERT INTO child VALUES(7); ROLLBACK');
+    expect(session.transaction).toBe(false);
+    expect((await collect(session, 'SELECT count(*) FROM parent UNION ALL SELECT count(*) FROM child')).rows).toEqual([[{ type: 'integer', value: '0' }], [{ type: 'integer', value: '0' }]]);
+    expect((await collect(session, 'PRAGMA foreign_keys')).rows).toEqual([[{ type: 'integer', value: '1' }]]);
+    expect(diskCount(path)).toEqual({ count: 1, integrity: 'ok' });
+    expect(existsSync(attached)).toBe(false); expect(existsSync(vacuum)).toBe(false);
   });
   it('逐批ACK保持背压，达到行/字节限制只截断传输而非整库加载，RETURNING仍完整提交', async () => {
     const { path } = fixture(), session = await open(path), first = deferred<void>(), resume = deferred<void>(); let batches = 0, returned = 0;
