@@ -1,4 +1,5 @@
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
+import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from './sqliteImportSource';
 import { sqliteTableCreatePreviewSchema, sqliteTableCreateApplySchema, sqliteTableCreateReleaseSchema } from './sqliteTableCreate';
 import { sqliteTableImportInspectSchema, sqliteTableImportPreviewSchema, sqliteTableImportApplySchema, sqliteTableImportReleaseSchema } from './sqliteTableImport';
 import { sqliteTableExportSchema } from './sqliteTableExport';
@@ -213,6 +214,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableImport.preview': sqliteTableImportPreviewSchema,
   'sqlite.tableImport.apply': sqliteTableImportApplySchema,
   'sqlite.tableImport.release': sqliteTableImportReleaseSchema,
+  'sqlite.importSource.inspect': sqliteImportSourceInspectSchema,
+  'sqlite.importSource.release': sqliteImportSourceReleaseSchema,
   'app.menuState': uiMenuStateSchema,
   'result.insertPreview': resultInsertPreviewInputSchema,
   'result.insertApply': resultInsertApplyInputSchema,

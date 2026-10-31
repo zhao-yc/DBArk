@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
+import { SqliteImportSourceMain } from './sqliteImportSourceMain';
 import type { ColumnsInvocation } from './columnsMainCapabilities';
 import type { SelectedFile } from './fileTokens';
 import type { SqliteConnectionProfile, TaskEvent, TaskRecord } from '../shared/contracts';
@@ -14,10 +15,10 @@ interface Ports {
   request(command: string, input: unknown): Promise<unknown>;
   task(id: string): TaskRecord | undefined; replace(task: TaskRecord): void; save(task: TaskRecord): void; event(event: TaskEvent): void;
 }
-interface Source { owner: ColumnsInvocation; revision: number; epoch: object; profile: string; target: SqliteEditTarget; expires: number; revoked: boolean; fileToken: string; file: SelectedFile; fileKey: string; format: string; source?: { sha256: string; bytes: number }; records?: number; cancelled?(): boolean; }
+interface Source { sourceId?: string; owner: ColumnsInvocation; revision: number; epoch: object; profile: string; target: SqliteEditTarget; expires: number; revoked: boolean; fileToken: string; file: SelectedFile; fileKey: string; format: string; source?: { sha256: string; bytes: number }; records?: number; cancelled?(): boolean; }
 interface Inspection extends Source { id: string; }
 interface Preview extends Source { id: string; inspectionId: string; confirmation: string; records: number; }
-interface Operation { owner: ColumnsInvocation; cancelled: boolean; sent: boolean; check(): void; stop?: Promise<void>; settled: Promise<void>; settle(): void; }
+interface Operation { owner: ColumnsInvocation; inspection?: Inspection; cancelled: boolean; sent: boolean; check(): void; stop?: Promise<void>; settled: Promise<void>; settle(): void; }
 /** Main仅比较固定来源和摘要，不将样本、映射、SQL或字段值留在能力表。 */
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const profileKey = (profile: SqliteConnectionProfile) => digest([profile.id, profile.sqlite.filePath, profile.sqlite.readOnly, profile.sqlite.busyTimeoutMs, profile.pendingFiles]);
@@ -31,7 +32,20 @@ export class SqliteTableImportMain {
   private readonly operations = new Map<string, Operation>();
   private readonly watched = new WeakSet<object>();
   private readonly publications = new WeakMap<object, { owner: ColumnsInvocation; check(): void }>();
-  constructor(private readonly ports: Ports) {}
+  private readonly sources: SqliteImportSourceMain;
+  constructor(private readonly ports: Ports) {
+    this.sources = new SqliteImportSourceMain(ports, {
+      assertOwner: (owner, id) => { for (const source of [...this.inspections.values(), ...this.previews.values()]) if (source.sourceId === id && !ports.same(source.owner, owner)) throw Error(stale); },
+      release: id => this.releaseSource(id),
+      cancelClaim: id => { const operation = this.operations.get(id); return operation ? this.stop(id, operation) : Promise.resolve(); },
+    });
+  }
+  /** 明确撤销只回收未领取目标能力，不把metadata释放当作事务取消。 */
+  private async releaseSource(id: string): Promise<void> {
+    const targets = [...this.inspections.values()].filter(source => source.sourceId === id);
+    const previews = [...this.previews.values()].filter(source => source.sourceId === id);
+    await Promise.all([...targets.map(source => this.discard('inspection', source)), ...previews.map(source => this.discard('preview', source))]);
+  }
 
   /** TTL限制领取，不限制已经开始的长任务；其它身份和退出门持续复核。 */
   private valid(source: Source, claimed = false): void {
@@ -48,14 +62,23 @@ export class SqliteTableImportMain {
   private discard(kind: 'inspection' | 'preview', source: Inspection | Preview): Promise<void> {
     const map = kind === 'inspection' ? this.inspections : this.previews;
     if (map.get(source.id) !== source) return Promise.resolve(); source.revoked = true; map.delete(source.id);
-    if (kind === 'inspection') for (const preview of this.previews.values()) if (preview.inspectionId === source.id) { preview.revoked = true; this.previews.delete(preview.id); }
+    if (kind === 'inspection') {
+      for (const preview of this.previews.values()) if (preview.inspectionId === source.id) { preview.revoked = true; this.previews.delete(preview.id); }
+      // 只取消仍在预检的原引用；已领取writer不在此引用表，不把撤元数据当回滚。
+      for (const [id, operation] of this.operations) if (operation.inspection === source) void this.stop(id, operation).catch(() => {});
+    }
     return this.ports.request('sqlite.tableImport.release', { [kind === 'inspection' ? 'inspectionId' : 'previewId']: source.id }).then(() => {});
   }
   /** profile ABA、文件令牌替换及原文档变化使旧能力永久失效。 */
   observe(): void {
+    this.sources.observe();
     for (const [kind, map] of [['inspection', this.inspections], ['preview', this.previews]] as const) for (const source of map.values()) {
       // 自然TTL只回收自己的领取能力；runtime也按独立TTL回收，不能级联撤销更新的子预览。
-      if (source.expires <= Date.now()) { map.delete(source.id); continue; }
+      if (source.expires <= Date.now()) {
+        // 领取资格已过期，但在途预检的归属和明确撤权入口须保留到原承诺settle。
+        if (kind !== 'inspection' || ![...this.operations.values()].some(operation => operation.inspection === source)) map.delete(source.id);
+        continue;
+      }
       try { this.valid(source); } catch { void this.discard(kind, source).catch(() => {}); }
     }
     for (const [id, operation] of this.operations) try { operation.check(); } catch { void this.stop(id, operation).catch(() => {}); }
@@ -90,16 +113,23 @@ export class SqliteTableImportMain {
   }
   /** 原请求与取消都settle后才释放Main占用；数据库最终关闭另走原账本。 */
   private async finish(taskId: string, operation: Operation): Promise<void> {
-    try { await operation.stop; } finally { if (this.operations.get(taskId) === operation) this.operations.delete(taskId); operation.settle(); }
+    try { await operation.stop; } finally {
+      if (this.operations.get(taskId) === operation) this.operations.delete(taskId);
+      const inspection = operation.inspection;
+      if (inspection && inspection.expires <= Date.now() && this.inspections.get(inspection.id) === inspection && ![...this.operations.values()].some(value => value.inspection === inspection)) this.inspections.delete(inspection.id);
+      operation.settle();
+    }
   }
   /** 公共取消必须属于同一原文档。 */
-  owns(taskId: string): boolean { return this.operations.has(taskId); }
+  owns(taskId: string): boolean { return this.operations.has(taskId) || this.sources.owns(taskId); }
   async cancel(owner: ColumnsInvocation, taskId: string): Promise<void> {
+    if (this.sources.owns(taskId)) return this.sources.cancel(owner, taskId);
     this.ports.assert(owner); const operation = this.operations.get(taskId);
     if (!operation || !this.ports.same(operation.owner, owner)) throw Error(stale); await this.stop(taskId, operation);
   }
   /** 正常或强制退出均先观察原Main承诺，不能在提交边界关闭配置文件。 */
   async drain(): Promise<void> {
+    await this.sources.drain();
     const operations = [...this.operations.entries()];
     await Promise.allSettled([...this.inspections.values()].map(source => this.discard('inspection', source)).concat([...this.previews.values()].map(source => this.discard('preview', source))));
     await Promise.allSettled(operations.map(([id, operation]) => this.stop(id, operation)));
@@ -115,7 +145,12 @@ export class SqliteTableImportMain {
   }
   /** 完整文件检查仅发布有界样本，持久任务不含文件名、摘要、值或路径。 */
   private async inspect(owner: ColumnsInvocation, input: SqliteTableImportInspectInput): Promise<SqliteTableImportInspectOutput> {
-    const source = this.source(owner, input), operation = this.operation(owner, input.taskId, () => this.valid(source)); source.cancelled = () => operation.cancelled;
+    const source = this.source(owner, input), lease = this.sources.bind(owner, input); let claiming = !!lease;
+    if (input.sourceId) source.sourceId = input.sourceId;
+    let operation: Operation;
+    try { operation = this.operation(owner, input.taskId, () => { this.valid(source); if (claiming) lease?.check(); }); }
+    catch (reason) { lease?.release(); throw reason; }
+    source.cancelled = () => operation.cancelled;
     let output: SqliteTableImportInspectOutput | undefined, accepted: Inspection | undefined, receivedId: string | undefined;
     try {
       this.start(input.taskId, 'sqlite.tableImport.inspect'); operation.check(); operation.sent = true;
@@ -125,6 +160,7 @@ export class SqliteTableImportMain {
       output = sqliteTableImportInspectionSchema.parse(received);
       operation.check(); const expires = Date.parse(output.expiresAt);
       if (!sameTarget(output.target, source.target) || !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + limits.previewLifetimeMs + 5000 || this.inspections.has(output.inspectionId) || this.inspections.size >= limits.previews) throw Error(stale);
+      lease?.accept(output); claiming = false;
       accepted = { ...source, id: output.inspectionId, expires, records: output.records, source: output.source }; this.inspections.set(output.inspectionId, accepted);
       this.publications.set(output, { owner, check: operation.check });
       this.ports.event({ taskId: input.taskId, status: 'completed', progress: 100, message: sqliteImportTaskMessage('sqlite.tableImport.inspect', 'completed') }); return output;
@@ -132,13 +168,14 @@ export class SqliteTableImportMain {
       if (accepted) await this.discard('inspection', accepted).catch(() => {});
       else if (receivedId && !this.inspections.has(receivedId)) await this.ports.request('sqlite.tableImport.release', { inspectionId: receivedId }).catch(() => {});
       this.ports.event({ taskId: input.taskId, status: operation.cancelled ? 'cancelled' : 'failed', progress: 0, message: sqliteImportTaskMessage('sqlite.tableImport.inspect', 'failed') }); throw reason;
-    } finally { await this.finish(input.taskId, operation); }
+    } finally { claiming = false; lease?.release(); await this.finish(input.taskId, operation); }
   }
   /** 映射预检必须耗尽原文件；只接收同目标、同摘要、同记录总数的预览。 */
   private async preview(owner: ColumnsInvocation, input: SqliteTableImportPreviewInput): Promise<SqliteTableImportPreviewOutput> {
     this.ports.assert(owner); const source = this.inspections.get(input.inspectionId);
     if (!source || !this.ports.same(source.owner, owner)) throw Error(stale); this.valid(source);
-    const operation = this.operation(owner, input.taskId, () => this.valid(source, true)); let output: SqliteTableImportPreviewOutput | undefined, accepted: Preview | undefined, receivedId: string | undefined;
+    const operation = this.operation(owner, input.taskId, () => this.valid(source, true)); operation.inspection = source;
+    let output: SqliteTableImportPreviewOutput | undefined, accepted: Preview | undefined, receivedId: string | undefined;
     try {
       this.start(input.taskId, 'sqlite.tableImport.preview'); operation.check(); operation.sent = true;
       const received = await this.ports.request('sqlite.tableImport.preview', { ...input, assertCurrent: operation.check });
@@ -192,6 +229,7 @@ export class SqliteTableImportMain {
       await this.ports.request('sqlite.tableImport.release', { previewId: source.id }).catch(() => {});
       // runtime在已提交/未知后撤销整个原来源，Main必须同步撤旧检查及其它未领取子预览。
       if (result?.outcome === 'committed' || result?.outcome === 'unknown') {
+        if (source.sourceId) try { await this.sources.retire(source.sourceId); } catch { result = { ...result, cleanupWarning: true }; }
         const inspection = this.inspections.get(source.inspectionId);
         if (inspection) try { await this.discard('inspection', inspection); } catch { result = { ...result, cleanupWarning: true }; }
         else for (const child of this.previews.values()) if (child.inspectionId === source.inspectionId) try { await this.discard('preview', child); } catch { result = { ...result, cleanupWarning: true }; }
@@ -203,6 +241,7 @@ export class SqliteTableImportMain {
   }
   /** IPC最终同步发布门守住检查/预览完成后的取消与导航窗口。 */
   assertPublication(owner: ColumnsInvocation, value: unknown, command: string): void {
+    if (command === 'sqlite.importSource.inspect') return this.sources.assertPublication(owner, value);
     const publication = value && typeof value === 'object' ? this.publications.get(value) : undefined;
     if (!publication || !this.ports.same(publication.owner, owner)) throw Error(stale);
     this.publications.delete(value as object);
@@ -216,6 +255,7 @@ export class SqliteTableImportMain {
   }
   /** 内部调用同样严格校验公开合同，私有路径和回调只在Main注入。 */
   async request(owner: ColumnsInvocation, command: string, input: unknown): Promise<unknown> {
+    if (command.startsWith('sqlite.importSource.')) return this.sources.request(owner, command, input);
     switch (command) {
       case 'sqlite.tableImport.inspect': return this.inspect(owner, sqliteTableImportInspectSchema.parse(input));
       case 'sqlite.tableImport.preview': return this.preview(owner, sqliteTableImportPreviewSchema.parse(input));

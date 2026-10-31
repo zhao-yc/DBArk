@@ -49,3 +49,7 @@ WIN11-TEST 本轮不可达且未派发任务，按既有授权使用本机 Windo
 最终私有原件在 `.cache/sqlite-table-import-20261101/`：`build18.log`、`unit-full22.log`、`native19.log`／`native-workspace20.log`／`native-create21.log`、对应 `*-results/report.json`、三份 `*-independent-audit.json` 及 `verified-source-manifest.json`，不入库。源码指纹覆盖 3,109 文件，Main sourcemap 的 213 个项目源文本与当前文件逐一相符。Root 独审脚本最初误置两条 CSV 的预期顺序，按原主键排序纠正对照并保留原脚本，产品、原测试和产物未改。
 
 本增量仅覆盖 SQLite 现有普通表的插入式 CSV／JSON 导入，入口位于表页。先建表再导入是两个明确操作；原生工具菜单的 SQLite 导入入口、导入为新表向导、按键更新／跳过、XLSX、SQL 文件专用导入任务、百万行性能和系统交互继续分别推进。R02／F01 保持部分完成；新提交的 Mac 两架构及安装结果另记，暂不创建正式 Release。
+
+## 后续开发
+
+[SQLite 导入为新表](sqlite-import-new-table-20261101.md)已接入原数据库菜单、对象列表和正式设计器，表页原生工具菜单也接入现有表导入；建表和导入保持两次明确事务。该轮同时补齐跨自然 TTL 的在途预检明确释放保护。上文为现有表导入提交时的历史交付边界，新一轮验证、失败原件和平台范围以新专项记录为准。

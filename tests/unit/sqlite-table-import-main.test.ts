@@ -195,3 +195,37 @@ it.each(['tasks', 'completion', 'savedQuery', 'historyPages', 'historyDelete'])(
 it('生产分派对新导入编号只调用原协调器，release无需编号且不受他任务占用', async () => {
   const f = productionDispatch('completion'); await f.run('sqlite.tableImport.inspect', { taskId: 'fresh' }); await f.run('sqlite.tableImport.release', { inspectionId: 'owned' }); expect(f.request.mock.calls.map(call => call[1])).toEqual(['sqlite.tableImport.inspect', 'sqlite.tableImport.release']);
 });
+
+
+it('父检查自然TTL移表后显式release仍撤在途预检，晚回不能重新签发可提交能力', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); const f = fixture(), inspected = await f.inspect(), original = f.request.getMockImplementation()!;
+  vi.setSystemTime(Date.now() + 299999); let resume!: (value: SqliteTableImportPreviewOutput) => void;
+  const delayed = new Promise<SqliteTableImportPreviewOutput>(resolve => { resume = resolve; });
+  f.request.mockImplementation(async (command, input) => command === 'sqlite.tableImport.preview' ? delayed : original(command, input));
+  const pending = f.preview(inspected.inspectionId, 'ttl-held-preview'), rejected = expect(pending).rejects.toThrow();
+  vi.setSystemTime(Date.now() + 2); f.main.observe(); expect(f.main.owns('ttl-held-preview')).toBe(true);
+  // 独立自然TTL不提前中断原扫描，但显式释放必须撤销仍被该扫描强引用的父检查。
+  expect(f.request.mock.calls.filter(([command]) => command === 'sqlite.tableImport.release')).toHaveLength(0);
+  await f.main.request(f.owner, 'sqlite.tableImport.release', { inspectionId: inspected.inspectionId });
+  const late: SqliteTableImportPreviewOutput = await original('sqlite.tableImport.preview', { inspectionId: inspected.inspectionId, mapping: clone(mapping), assertCurrent() {} });
+  if (!late.ok) throw Error('夹具必须给出有界成功预检回包以验证Main拒绝晚发布'); resume(late); await rejected;
+  expect(() => f.main.assertPublication(f.owner, late, 'sqlite.tableImport.preview')).toThrow();
+  await expect(f.apply(late.previewId, 'ttl-released-cannot-apply')).rejects.toThrow(); expect(f.tasks.has('ttl-released-cannot-apply')).toBe(false);
+  expect(f.request.mock.calls.some(([command, input]) => command === 'sqlite.tableImport.release' && input.previewId === late.previewId)).toBe(true);
+  expect(f.request.mock.calls.filter(([command]) => command === 'sqlite.tableImport.apply')).toHaveLength(0); expect(f.main.owns('ttl-held-preview')).toBe(false);
+});
+
+it('父检查自然TTL移表后其它文档不能释放在途预检，原owner仍可正常发布及明确提交', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); const f = fixture(), inspected = await f.inspect(), original = f.request.getMockImplementation()!;
+  vi.setSystemTime(Date.now() + 299999); let resume!: (value: SqliteTableImportPreviewOutput) => void;
+  const delayed = new Promise<SqliteTableImportPreviewOutput>(resolve => { resume = resolve; });
+  f.request.mockImplementation(async (command, input) => command === 'sqlite.tableImport.preview' ? delayed : original(command, input));
+  const pending = f.preview(inspected.inspectionId, 'ttl-owner-held-preview'); vi.setSystemTime(Date.now() + 2); f.main.observe();
+  const foreign = { owner: { document: {}, contents: new EventEmitter() } } as ColumnsInvocation;
+  await expect(f.main.request(foreign, 'sqlite.tableImport.release', { inspectionId: inspected.inspectionId })).rejects.toThrow();
+  expect(f.main.owns('ttl-owner-held-preview')).toBe(true); expect(f.request.mock.calls.filter(([command]) => command === 'sqlite.tableImport.release' || command === 'query.cancel')).toHaveLength(0);
+  const late: SqliteTableImportPreviewOutput = await original('sqlite.tableImport.preview', { inspectionId: inspected.inspectionId, mapping: clone(mapping), assertCurrent() {} });
+  if (!late.ok) throw Error('夹具预检必须成功'); resume(late); const output = await pending; if (!output.ok) throw Error('其它文档释放不能撤原owner预检');
+  f.main.assertPublication(f.owner, output, 'sqlite.tableImport.preview'); expect((await f.apply(output.previewId, 'ttl-original-owner-apply')).outcome).toBe('committed');
+  expect(f.request.mock.calls.filter(([command]) => command === 'sqlite.tableImport.apply')).toHaveLength(1);
+});

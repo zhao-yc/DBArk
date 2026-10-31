@@ -1,0 +1,4 @@
+.sqlite-import-new-table .sqlite-source-columns { display: flex; flex-wrap: wrap; gap: 8px 16px; max-height: 220px; overflow: auto; }
+.sqlite-import-new-table .sqlite-source-columns label { display: inline-flex; align-items: center; gap: 6px; }
+.sqlite-import-new-table .sqlite-source-sample { max-height: 240px; overflow: auto; }
+.sqlite-import-new-table .sqlite-source-sample td { max-width: 280px; white-space: pre-wrap; overflow-wrap: anywhere; }

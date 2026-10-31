@@ -8,10 +8,11 @@ import { navigationZh as text } from '../locales/navigation.zh-CN';
 import { SidebarTreeRow } from './SidebarContextMenu';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import '../navigation.css';
+import { importNewTableZh } from '../locales/importNewTable.zh-CN';
 
-interface Props { tab: WorkspaceTab; active: boolean; refreshVersion: number; onOpen(object: DatabaseObject): void; onNewTable(): void; actions(object: DatabaseObject, refresh: () => void): ReactNode; }
+interface Props { tab: WorkspaceTab; active: boolean; refreshVersion: number; onOpen(object: DatabaseObject): void; onNewTable(): void; onImportNewTable?(): void; actions(object: DatabaseObject, refresh: () => void): ReactNode; }
 /** 目录标签只读取元数据，固定行高虚拟滚动，不取得查询会话或自动执行用户SQL。 */
-export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable, actions }: Props) {
+export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable, onImportNewTable, actions }: Props) {
   const workspace = useWorkspace();
   const profile = workspace.connections.find(item => item.id === tab.connectionId), version = workspace.connectionVersions[tab.connectionId] ?? 0;
   const [objects, setObjects] = useState<DatabaseObject[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -79,7 +80,7 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
   };
   return <div className="workspace-tab object-browser" aria-label={text.objects}>
     <div className="object-browser-header"><Database size={16}/><strong title={`${profile?.name ?? tab.connectionId} / ${tab.database}`}>{profile?.name ?? tab.connectionId} / {tab.database}</strong><span className="grow"/>
-      {category === 'table' && <button disabled={busy || !profile || profile.dialect === 'sqlite' && tab.database !== 'main'} onClick={() => { if (contextCurrent() && (profile?.dialect !== 'sqlite' || tab.database === 'main')) onNewTable(); }}>{text.newTable}</button>}<button disabled={busy || !profile} onClick={() => { if (contextCurrent()) reload(); }}><RefreshCw size={13}/>{text.refresh}</button></div>
+      {category === 'table' && <button disabled={busy || !profile || profile.dialect === 'sqlite' && tab.database !== 'main'} onClick={() => { if (contextCurrent() && (profile?.dialect !== 'sqlite' || tab.database === 'main')) onNewTable(); }}>{text.newTable}</button>}{category === 'table' && onImportNewTable && <button disabled={busy || !profile || profile.dialect === 'sqlite' && (tab.database !== 'main' || profile.sqlite.readOnly)} onClick={() => { if (contextCurrent() && (profile?.dialect !== 'sqlite' || tab.database === 'main' && !profile.sqlite.readOnly)) onImportNewTable(); }}>{importNewTableZh.title}</button>}<button disabled={busy || !profile} onClick={() => { if (contextCurrent()) reload(); }}><RefreshCw size={13}/>{text.refresh}</button></div>
     <div className="object-browser-filter"><select aria-label={text.type} value={category} onChange={event => { if (contextCurrent()) useWorkspace.getState().updateTab(tab.id, { objectCategory: event.target.value as ObjectCategory }); }}>
       {objectCategories.filter(kind => profile?.dialect !== 'sqlite' || kind === 'table' || kind === 'view' || kind === 'trigger').map(kind => <option key={kind} value={kind}>{text.categories[kind]}</option>)}</select>
       <input aria-label={text.search} placeholder={text.search} value={search} onChange={event => setSearch(event.target.value)}/>{busy && <Spinner/>}</div>

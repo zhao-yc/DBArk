@@ -15,6 +15,8 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.tableImport.preview': true,
   'sqlite.tableImport.apply': true,
   'sqlite.tableImport.release': true,
+  'sqlite.importSource.inspect': true,
+  'sqlite.importSource.release': true,
   'app.menuState': true,
   'files.preflight': true,
   'tableDraftFiles.open': true, 'tableDraftFiles.save': true, 'table.draftVerify': true,

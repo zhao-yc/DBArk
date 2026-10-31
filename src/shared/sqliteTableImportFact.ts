@@ -4,6 +4,7 @@ import { sqliteImportWriteFactSchema } from './sqliteTableImport';
 
 /** 导入任务概要固定脱敏，不使用文件名、路径、内容、映射、SQL或驱动原错。 */
 export function sqliteImportTaskMessage(kind: string, status: TaskRecord['status']): string {
+  if (kind.startsWith('sqlite.importSource.')) return status === 'running' ? '正在完整检查SQLite新表导入来源；尚未创建表或写入，路径、样本和摘要不保存到任务概要。' : status === 'completed' ? 'SQLite新表导入来源已完整检查；尚未创建表或写入，来源能力不随任务恢复。' : 'SQLite新表导入来源检查未交付；尚未创建表或写入，不会自动重试。';
   if (kind === 'sqlite.tableImport.inspect') return status === 'running' ? '正在完整检查SQLite导入来源；样本和文件内容不保存到任务概要。' : status === 'completed' ? 'SQLite导入来源已完整检查，尚未写入。' : 'SQLite导入来源检查未交付，尚未写入。';
   if (kind === 'sqlite.tableImport.preview') return status === 'running' ? '正在按字段映射预检完整文件；尚未写入SQLite。' : status === 'completed' ? 'SQLite导入预检通过，等待准确目标确认；尚未写入。' : 'SQLite导入预检未通过或未交付，尚未写入。';
   return status === 'running' ? '正在执行SQLite整文件导入事务；行值和SQL不保存到任务概要。' : 'SQLite导入事务尚未取得可信确认，请核对原库；不会自动重放。';
@@ -16,6 +17,8 @@ export function sqliteImportFactMessage(fact: SqliteWriteFact): string {
 export function recoverSqliteImportTask(task: TaskRecord): TaskRecord {
   const keys = new Set(['id', 'kind', 'status', 'progress', 'message', 'startedAt', 'finishedAt']);
   const safe = Object.fromEntries(Object.entries(task).filter(([key]) => keys.has(key))) as TaskRecord;
+  // 来源检查不领写事实，异常退出仅结束只读任务；样本、摘要、路径和原错误不能随任务恢复。
+  if (task.kind === 'sqlite.importSource.inspect') return { ...safe, status: task.status === 'running' ? 'failed' : task.status, ...(task.status === 'running' ? { finishedAt: task.finishedAt ?? new Date().toISOString() } : {}), message: sqliteImportTaskMessage(task.kind, task.status === 'running' ? 'failed' : task.status) };
   const parsed = sqliteImportWriteFactSchema.safeParse(task.sqliteWrite);
   if (!parsed.success) return { ...safe, status: 'failed', finishedAt: task.finishedAt ?? new Date().toISOString(), message: 'SQLite上次导入回执无法核验，请核对原库；不会自动重放。' };
   const original = parsed.data, fact: SqliteWriteFact = ['writing', 'commit-pending'].includes(original.phase) ? { ...original, phase: 'unknown', commitAcknowledged: false, rollbackAcknowledged: false } : original;

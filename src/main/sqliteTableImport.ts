@@ -13,7 +13,10 @@ export interface SqliteTableImportPreviewRequest extends SqliteTableImportPrevie
 export interface SqliteTableImportApplyRequest extends SqliteTableImportApplyInput { operationId: string; assertCurrent(): void; recordWriteFact(fact: SqliteImportWriteFact): void; }
 export interface SqliteTableImportControl extends SqliteTableBrowseControl { signal: AbortSignal; progress(records: number): void; }
 export interface SqliteTableImportApplyControl extends SqliteTableImportControl { beginCommit(): void; }
-interface SourceIdentity { device: string; inode: string; size: string; modified: string; changed: string; }
+export interface SqliteImportFileIdentity { device: string; inode: string; size: string; modified: string; changed: string; }
+type SourceIdentity = SqliteImportFileIdentity;
+export type SqliteImportFileInput = Pick<SqliteTableImportInspectRequest, 'fileToken' | 'taskId' | 'format' | 'encoding' | 'csvDelimiter' | 'csvHasHeader' | 'filePath'>;
+export interface SqliteImportFileScan { source: SqliteTableImportInspectOutput['source']; records: number; sourceColumns: string[]; sample: DataRow[]; sampleOmitted: boolean; }
 export interface SqliteImportTarget {
   target: SqliteTableImportInspectOutput['target']; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
   schemaVersion: string; catalogue: SqliteTableCatalogue; columns: SqliteTableImportColumn[]; strict: boolean;
@@ -77,17 +80,22 @@ export async function verifySqliteImportTarget(driver: SqliteDriverSession, insp
 }
 /** DB已正常关闭后才扫源文件，长文件检查不会持有数据库读锁。 */
 export async function inspectSqliteImportFile(input: SqliteTableImportInspectRequest, target: SqliteImportTarget, expected: SourceIdentity, control: SqliteTableImportControl): Promise<Omit<SqliteImportInspection, 'id' | 'expires' | 'bytes'>> {
-  await assertSqliteImportSource(input.filePath, target.profile, control, expected);
+  const scanned = await inspectSqliteImportRecords(input, target.profile, expected, control);
+  const { assertCurrent: _owner, ...file } = input;
+  return { ...target, file: structuredClone(file), fileIdentity: expected, ...scanned };
+}
+/** 共享严格原字节扫描，只读来源能力和最终目标检查沿同一reader及样本预算。 */
+export async function inspectSqliteImportRecords(input: SqliteImportFileInput, profile: SqliteConnectionProfile, expected: SourceIdentity, control: SqliteTableImportControl): Promise<SqliteImportFileScan> {
+  await assertSqliteImportSource(input.filePath, profile, control, expected);
   const inspected = await inspectImportFile({ fileToken: input.fileToken, taskId: input.taskId, format: input.format, encoding: input.encoding, ...(input.csvDelimiter === undefined ? {} : { csvDelimiter: input.csvDelimiter }), ...(input.csvHasHeader === undefined ? {} : { csvHasHeader: input.csvHasHeader }), filePath: input.filePath, strictEncoding: true }, control.check, progress => { control.check(); if (progress.records > limits.records) throw Error('SQLite导入文件超过记录预算'); control.progress(progress.records); }, control.signal);
-  control.check(); await assertSqliteImportSource(input.filePath, target.profile, control, expected);
+  control.check(); await assertSqliteImportSource(input.filePath, profile, control, expected);
   if (inspected.records > limits.records || inspected.columns.length > limits.sourceColumns) throw Error('SQLite导入文件记录或源列目录超过预算');
   const sample: DataRow[] = []; let sampleBytes = 2;
   for (const row of inspected.rows) {
     const size = Buffer.byteLength(JSON.stringify(row)); const valid = Object.values(row).every(cell => typeof cell !== 'string' || Buffer.byteLength(cell) <= limits.sourceValueBytes && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(cell)) && Object.values(row).every(cell => !cell || typeof cell !== 'object' || cell.base64.length <= 4 * Math.ceil(limits.valueBytes / 3));
     if (valid && sample.length < limits.sampleRows && sampleBytes + size + (sample.length ? 1 : 0) <= limits.sampleBytes) { sampleBytes += size + (sample.length ? 1 : 0); sample.push(structuredClone(row)); }
   }
-  const { assertCurrent: _owner, ...file } = input;
-  return { ...target, file: structuredClone(file), fileIdentity: expected, source: inspected.source, records: inspected.records, sourceColumns: inspected.columns, sample, sampleOmitted: inspected.records > sample.length };
+  return { source: inspected.source, records: inspected.records, sourceColumns: inspected.columns, sample, sampleOmitted: inspected.records > sample.length };
 }
 
 /** 仅有界诊断穿过公共边界，不把第三方错误、文件行值或路径带入任务概要。 */
@@ -115,16 +123,43 @@ export async function previewSqliteImport(inspection: SqliteImportInspection, in
 /** 来源和预检能力独立TTL，已claim任务只持准确强引用，不再因TTL中断其原事务。 */
 export class SqliteTableImports {
   private readonly inspections = new Map<string, SqliteImportInspection>(); private readonly previews = new Map<string, SqliteImportClaim>(); private bytes = 0;
+  private readonly pendingInspections = new Map<SqliteImportInspection, number>();
+  private readonly revokedInspections = new WeakSet<SqliteImportInspection>();
   private dropPreview(id: string): void { const value = this.previews.get(id); if (value) { this.bytes -= value.bytes; this.previews.delete(id); } }
-  private dropInspection(id: string, children: boolean): void { if (children) for (const value of this.previews.values()) if (value.inspection.id === id) this.dropPreview(value.id); const value = this.inspections.get(id); if (value) { this.bytes -= value.bytes; this.inspections.delete(id); } }
+  /** 自然TTL仅移除新领取资格；显式撤销必须同时命中仍在扫描、已不在领取Map里的准确对象。 */
+  private dropInspection(id: string, children: boolean): void {
+    const value = this.inspections.get(id);
+    if (children) {
+      if (value) this.revokedInspections.add(value);
+      for (const pending of this.pendingInspections.keys()) if (pending.id === id) this.revokedInspections.add(pending);
+      for (const preview of this.previews.values()) if (preview.inspection.id === id) this.dropPreview(preview.id);
+    }
+    if (value) { if (!this.pendingInspections.has(value)) this.bytes -= value.bytes; this.inspections.delete(id); }
+  }
+  /** 过期但仍在途的快照继续占原64个/64MiB预算，不能以TTL删除Map来隐去强引用的成本。 */
+  private inspectionCount(): number { let count = this.inspections.size; for (const value of this.pendingInspections.keys()) if (this.inspections.get(value.id) !== value) count++; return count; }
   private prune(): void { for (const value of this.previews.values()) if (value.expires <= Date.now()) this.dropPreview(value.id); for (const value of this.inspections.values()) if (value.expires <= Date.now()) this.dropInspection(value.id, false); }
   publish(value: Omit<SqliteImportInspection, 'id' | 'expires' | 'bytes'>): SqliteTableImportInspectOutput {
-    this.prune(); const bytes = Buffer.byteLength(JSON.stringify(value)); if (this.inspections.size >= limits.inspections || this.bytes + bytes > limits.previewBytes) throw Error('SQLite导入来源预算已满，请释放旧来源');
+    this.prune(); const bytes = Buffer.byteLength(JSON.stringify(value)); if (this.inspectionCount() >= limits.inspections || this.bytes + bytes > limits.previewBytes) throw Error('SQLite导入来源预算已满，请释放旧来源');
     const inspection = { ...value, id: randomUUID(), expires: Date.now() + limits.previewLifetimeMs, bytes }; this.inspections.set(inspection.id, inspection); this.bytes += bytes;
     return { inspectionId: inspection.id, target: { ...inspection.target }, source: { ...inspection.source }, sourceColumns: [...inspection.sourceColumns], sample: structuredClone(inspection.sample), sampleOmitted: inspection.sampleOmitted, records: inspection.records, columns: structuredClone(inspection.columns), strict: inspection.strict, readOnly: inspection.profile.sqlite.readOnly, expiresAt: new Date(inspection.expires).toISOString() };
   }
   inspection(id: string): SqliteImportInspection { this.prune(); const value = this.inspections.get(id); if (!value) throw Error(text.stale); return value; }
+  /** 只读预检保留到原Promise终态；已claim writer不登记于此，不把metadata释放当成事务取消。 */
+  retainInspection(inspection: SqliteImportInspection): { check(): void; release(): void } {
+    if (this.revokedInspections.has(inspection)) throw Error(text.stale);
+    this.pendingInspections.set(inspection, (this.pendingInspections.get(inspection) ?? 0) + 1); let released = false;
+    return {
+      check: () => { if (released || this.revokedInspections.has(inspection)) throw Error(text.stale); },
+      release: () => {
+        if (released) return; released = true; const count = this.pendingInspections.get(inspection)!;
+        if (count > 1) this.pendingInspections.set(inspection, count - 1);
+        else { this.pendingInspections.delete(inspection); if (this.inspections.get(inspection.id) !== inspection) this.bytes -= inspection.bytes; }
+      },
+    };
+  }
   publishPreview(inspection: SqliteImportInspection, checked: Awaited<ReturnType<typeof previewSqliteImport>>): SqliteTableImportPreviewOutput {
+    if (this.revokedInspections.has(inspection)) throw Error(text.stale);
     const common = { inspectionId: inspection.id, target: { ...inspection.target }, source: { ...inspection.source }, records: inspection.records, report: checked.report, warnings: [text.source, text.triggers] };
     if (!checked.plan) return { ok: false, ...common };
     this.prune(); const bytes = Buffer.byteLength(JSON.stringify({ inspection, sql: checked.plan.sql, mapping: checked.plan.mapping })); if (this.previews.size >= limits.previews || this.bytes + bytes > limits.previewBytes) throw Error('SQLite导入预检预算已满，请释放旧来源');
@@ -133,7 +168,9 @@ export class SqliteTableImports {
   }
   claim(input: SqliteTableImportApplyInput): SqliteImportClaim { this.prune(); const value = this.previews.get(input.previewId); if (!value) throw Error(text.stale); this.dropPreview(value.id); return { ...value, confirmed: value.confirmation === input.confirmation }; }
   release(input: SqliteTableImportReleaseInput): void { if (input.previewId) this.dropPreview(input.previewId); if (input.inspectionId) this.dropInspection(input.inspectionId, true); }
-  releaseConnection(id: string): void { for (const value of this.inspections.values()) if (value.target.connectionId === id) this.dropInspection(value.id, true); for (const value of this.previews.values()) if (value.inspection.target.connectionId === id) this.dropPreview(value.id); }
+  /** 来源显式释放或写批终态级联未领取能力；已claim writer仍持原快照，不冒充事务取消。 */
+  releaseSource(id: string): void { for (const value of new Set([...this.inspections.values(), ...this.pendingInspections.keys()])) if (value.file.sourceId === id) this.dropInspection(value.id, true); for (const value of this.previews.values()) if (value.inspection.file.sourceId === id) this.dropPreview(value.id); }
+  releaseConnection(id: string): void { for (const value of new Set([...this.inspections.values(), ...this.pendingInspections.keys()])) if (value.target.connectionId === id) this.dropInspection(value.id, true); for (const value of this.previews.values()) if (value.inspection.target.connectionId === id) this.dropPreview(value.id); }
   settle(value: SqliteImportClaim, outcome: SqliteTableImportOutcome['outcome']): void { if (outcome === 'committed' || outcome === 'unknown') this.dropInspection(value.inspection.id, true); }
 }
 

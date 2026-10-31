@@ -17,7 +17,7 @@ export const sqliteTableCreateServices: SqliteTableCreateServices = {
   release: input => invoke('sqlite.tableCreate.release', input), cancel: taskId => invoke('query.cancel', { taskId }),
 };
 interface Props {
-  connectionId: string; database: string; unsupportedSeed?: boolean; invalidated?: boolean; isParentCurrent?(): boolean;
+  connectionId: string; database: string; initialDesign?: SqliteTableCreateDesign; unsupportedSeed?: boolean; invalidated?: boolean; isParentCurrent?(): boolean;
   onClose(): void; onCreated?(result: SqliteTableCreateOutcome, version: number): void; onDirtyChange?(dirty: boolean): void;
   services?: SqliteTableCreateServices;
 }
@@ -28,13 +28,15 @@ const emptyDesign = (): SqliteTableCreateDesign => ({ name: '', columns: [{ name
 function moved<T>(items: T[], index: number, delta: -1 | 1): T[] { const next = [...items], to = index + delta; if (to >= 0 && to < next.length) [next[index], next[to]] = [next[to], next[index]]; return next; }
 
 /** SQLite新表独立设计器：本地草稿→真实只读预览→单次明确提交，不使用MySQL元数据或SQL执行器。 */
-export function SqliteTableCreateDialog({ connectionId, database, unsupportedSeed = false, invalidated = false, isParentCurrent, onClose, onCreated, onDirtyChange, services = sqliteTableCreateServices }: Props) {
+export function SqliteTableCreateDialog({ connectionId, database, initialDesign, unsupportedSeed = false, invalidated = false, isParentCurrent, onClose, onCreated, onDirtyChange, services = sqliteTableCreateServices }: Props) {
   const profile = useWorkspace(state => state.connections.find(value => value.id === connectionId)), version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
-  const fixed = useRef({ connectionId, database, profile, version, unsupportedSeed, parent: isParentCurrent, services, onClose, onCreated, onDirtyChange, busyKey: 'sqlite-table-create:' + uid() }).current;
-  const closeSourceRef = useRef({ connectionId, database, profile, version, unsupportedSeed, invalidated });
-  if (closeSourceRef.current.connectionId !== connectionId || closeSourceRef.current.database !== database || closeSourceRef.current.profile !== profile || closeSourceRef.current.version !== version || closeSourceRef.current.unsupportedSeed !== unsupportedSeed || closeSourceRef.current.invalidated !== invalidated) closeSourceRef.current = { connectionId, database, profile, version, unsupportedSeed, invalidated };
+  const fixed = useRef({ connectionId, database, profile, version, initialDesign, unsupportedSeed, parent: isParentCurrent, services, onClose, onCreated, onDirtyChange, busyKey: 'sqlite-table-create:' + uid() }).current;
+  const closeSourceRef = useRef({ connectionId, database, profile, version, initialDesign, isParentCurrent, unsupportedSeed, invalidated });
+  if (closeSourceRef.current.connectionId !== connectionId || closeSourceRef.current.database !== database || closeSourceRef.current.profile !== profile || closeSourceRef.current.version !== version || closeSourceRef.current.initialDesign !== initialDesign || closeSourceRef.current.isParentCurrent !== isParentCurrent || closeSourceRef.current.unsupportedSeed !== unsupportedSeed || closeSourceRef.current.invalidated !== invalidated) closeSourceRef.current = { connectionId, database, profile, version, initialDesign, isParentCurrent, unsupportedSeed, invalidated };
   const closeSource = closeSourceRef.current, sourceEpoch = useRef(0), observed = useRef({ profile, version });
-  const [design, setDesign] = useState(emptyDesign), live = useRef(design); live.current = design;
+  // 正式SQLite草案只接受共享设计合同；解析会复制数据，不把父级可变对象作为编辑模型。
+  const seed = useRef(initialDesign === undefined ? undefined : sqliteTableCreateDesignSchema.safeParse(initialDesign)).current;
+  const [design, setDesign] = useState(() => seed?.success ? seed.data : emptyDesign()), live = useRef(design); live.current = design;
   const initial = useRef(JSON.stringify(design)).current;
   const [preview, setPreview] = useState<SqliteTableCreatePreviewOutput>(), accepted = useRef<SqliteTableCreatePreviewOutput | undefined>(undefined);
   const [confirmation, setConfirmation] = useState(''), confirmationRef = useRef(confirmation); confirmationRef.current = confirmation;
@@ -44,7 +46,7 @@ export function SqliteTableCreateDialog({ connectionId, database, unsupportedSee
   const lifetime = useRef<object | null>(null), operation = useRef<Operation | undefined>(undefined), previews = useRef(new Set<string>()), releasing = useRef(new Map<string, Promise<void>>());
   const renderTicket = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; }; });
-  if (fixed.connectionId !== connectionId || fixed.database !== database || fixed.profile !== profile || fixed.version !== version || fixed.unsupportedSeed !== unsupportedSeed || fixed.services !== services || invalidated) invalid.current = true;
+  if (fixed.connectionId !== connectionId || fixed.database !== database || fixed.profile !== profile || fixed.version !== version || fixed.initialDesign !== initialDesign || fixed.parent !== isParentCurrent || fixed.unsupportedSeed !== unsupportedSeed || fixed.services !== services || invalidated || seed && !seed.success) invalid.current = true;
 
   /** 固定原连接对象及修订，父租约首次失效后永久撤权；自己的modal不视为外来modal。 */
   function sourceCurrent(): boolean {

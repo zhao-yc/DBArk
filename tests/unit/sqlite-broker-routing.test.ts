@@ -37,6 +37,16 @@ it('收尾中的导入只能释放准确能力，文件检查/预检/提交不�
   expect(ports.sqlite).toHaveBeenCalledTimes(1); expect(ports.fork).not.toHaveBeenCalled(); finish(); await closing;
 });
 
+it.each(['sqlite.importSource.inspect', 'sqlite.importSource.release'])('%s始终交原SQLite来源账本，缺连接/拒绝不能回退网络', async command => {
+  const { broker, profiles } = fixture(); profiles.length = 0; const input = { sourceId: '原无表来源', taskId: '原来源任务' }, failure = Error('原SQLite来源已撤销');
+  ports.sqlite.mockRejectedValueOnce(failure); await expect(broker.request(command, input)).rejects.toBe(failure); expect(ports.sqlite).toHaveBeenCalledExactlyOnceWith(command, input); expect(ports.fork).not.toHaveBeenCalled();
+});
+it('无表来源release能越关闭屏障，inspect不能借释放路径启动新检查', async () => {
+  const { broker } = fixture(); let finish!: () => void; ports.close.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; })); const closing = broker.close();
+  await expect(broker.request('sqlite.importSource.release', { sourceId: '原来源' })).resolves.toBe('sqlite'); await expect(broker.request('sqlite.importSource.inspect', { taskId: '不得启动' })).rejects.toThrow('正在收尾');
+  expect(ports.sqlite).toHaveBeenCalledExactlyOnceWith('sqlite.importSource.release', { sourceId: '原来源' }); expect(ports.fork).not.toHaveBeenCalled(); finish(); await closing;
+});
+
 it.each(['sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release'])('%s只有令牌也准确路由原SQLite账本，拒绝不加载网络驱动', async command => {
   const { broker, profiles } = fixture(); profiles.length = 0;
   const input = command.endsWith('preview') ? { snapshotId: '原页令牌', taskId: '新任务', changes: [] } : { previewId: '原预览令牌' };

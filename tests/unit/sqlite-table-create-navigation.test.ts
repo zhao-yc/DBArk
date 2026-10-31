@@ -46,10 +46,19 @@ it('原数据库右键新建表真实按钮开放SQLite main，错误库明确�
 });
 
 it('对象浏览table分类真实新建按钮沿原context门，SQLite只允许main，view分类不冒充新建已有表', () => {
-  const file = source('components/ObjectBrowser.tsx'); const expressions = nodes(file, (node): node is ts.JsxExpression => ts.isJsxExpression(node) && !!node.expression && node.expression.getText(file).startsWith("category === 'table' &&")); expect(expressions).toHaveLength(1);
+  const file = source('components/ObjectBrowser.tsx'); const expressions = nodes(file, (node): node is ts.JsxExpression => ts.isJsxExpression(node) && !!node.expression && node.expression.getText(file).startsWith("category === 'table' &&") && node.expression.getText(file).includes("onNewTable()")); expect(expressions).toHaveLength(1);
   const onNewTable = vi.fn(), contextCurrent = vi.fn(() => true);
   const render = (database: string, category = 'table') => evaluate('globalThis.button=' + expressions[0].expression!.getText(file), { category, profile: { dialect: 'sqlite' }, tab: { database }, busy: false, contextCurrent, onNewTable, text: navigationZh }).button;
   const main = render('main'); expect(main.props.disabled).toBe(false); main.props.onClick(); expect(onNewTable).toHaveBeenCalledOnce();
   const wrong = render('foo'); expect(wrong.props.disabled).toBe(true); wrong.props.onClick(); expect(onNewTable).toHaveBeenCalledOnce();
   contextCurrent.mockReturnValue(false); main.props.onClick(); expect(onNewTable).toHaveBeenCalledOnce(); expect(render('main', 'view')).toBe(false);
+});
+
+it('对象列表的新表导入独立入口核main、原页面及只读边界，view不显示入口', () => {
+  const file = source('components/ObjectBrowser.tsx'), expressions = nodes(file, (node): node is ts.JsxExpression => ts.isJsxExpression(node) && !!node.expression && node.expression.getText(file).startsWith("category === 'table' &&") && node.expression.getText(file).includes('onImportNewTable()')); expect(expressions).toHaveLength(1);
+  const onImportNewTable = vi.fn(), contextCurrent = vi.fn(() => true);
+  const render = (database: string, category = 'table', readOnly = false) => evaluate('globalThis.button=' + expressions[0].expression!.getText(file), { category, profile: { dialect: 'sqlite', sqlite: { readOnly } }, tab: { database }, busy: false, contextCurrent, onImportNewTable, importNewTableZh: { title: '导入为新表' } }).button;
+  const main = render('main'); expect(main.props.disabled).toBe(false); main.props.onClick(); expect(onImportNewTable).toHaveBeenCalledOnce();
+  for (const blocked of [render('attached'), render('main', 'table', true)]) { expect(blocked.props.disabled).toBe(true); blocked.props.onClick(); expect(onImportNewTable).toHaveBeenCalledOnce(); }
+  contextCurrent.mockReturnValue(false); main.props.onClick(); expect(onImportNewTable).toHaveBeenCalledOnce(); expect(render('main', 'view')).toBe(false);
 });

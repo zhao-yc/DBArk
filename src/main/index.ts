@@ -461,6 +461,7 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
   // 新建表事件的类别和回执只从本Main已登记任务取出，不能由utility进度补造。
   const { sqliteWrite: _untrustedWrite, sqliteImportOperation: _untrustedImportOperation, sqliteCreate: _untrustedCreate, sqliteCreateOperation: _untrustedCreateOperation, ...ordinaryEvent } = event; event = ordinaryEvent;
   if (current?.kind === 'sqlite.tableCreate.preview' || current?.kind === 'sqlite.tableCreate.apply') event = { ...event, sqliteCreateOperation: current.kind === 'sqlite.tableCreate.preview' ? 'preview' : 'apply' };
+  if (current?.kind === 'sqlite.importSource.inspect') event = { ...event, sqliteImportOperation: 'source' };
   if (current?.kind.startsWith('sqlite.tableImport.')) event = { ...event, sqliteImportOperation: current.kind === 'sqlite.tableImport.inspect' ? 'inspect' : current.kind === 'sqlite.tableImport.preview' ? 'preview' : 'apply' };
   if (current?.sqliteWrite) event = { ...event, sqliteWrite: structuredClone(current.sqliteWrite) };
   if (current?.sqliteCreate) event = { ...event, sqliteCreate: structuredClone(current.sqliteCreate) };
@@ -649,12 +650,12 @@ async function runTableFilteredDelete(command: 'table.filteredDelete.preview' | 
 }
 
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
-  if (command.startsWith('sqlite.tableImport.')) {
+  if (command.startsWith('sqlite.tableImport.') || command.startsWith('sqlite.importSource.')) {
     const id = input.taskId;
     if (id && (tasks.has(id) || completionTasks.has(id) || savedQueryPages?.owns(id) || historyPages?.owns(id) || historyDelete?.owns(id))) throw Error('任务编号已使用，请重新发起操作');
     return sqliteTableImports.request(columns!, command, input);
   }
-  if (command === 'query.cancel' && tasks.get(input.taskId)?.kind.startsWith('sqlite.tableImport.') && sqliteTableImports.owns(input.taskId)) return sqliteTableImports.cancel(columns!, input.taskId);
+  if (command === 'query.cancel' && (tasks.get(input.taskId)?.kind.startsWith('sqlite.tableImport.') || tasks.get(input.taskId)?.kind === 'sqlite.importSource.inspect') && sqliteTableImports.owns(input.taskId)) return sqliteTableImports.cancel(columns!, input.taskId);
   if (command.startsWith('sqlite.tableCreate.')) {
     // 同步沿原全局编号门，不能与搜索、历史或补全的在途任务复用编号。
     const id = input.taskId;
@@ -1602,7 +1603,7 @@ else {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
-        const sqliteImportRequest = payload.command.startsWith('sqlite.tableImport.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && !!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.tableImport.') && sqliteTableImports.owns(payload.input.taskId);
+        const sqliteImportRequest = payload.command.startsWith('sqlite.tableImport.') || payload.command.startsWith('sqlite.importSource.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && (!!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.tableImport.') || tasks.get(payload.input.taskId)?.kind === 'sqlite.importSource.inspect') && sqliteTableImports.owns(payload.input.taskId);
         if (sqliteImportRequest) columns = columnsMain.capture(event);
         const sqliteCreateRequest = payload.command.startsWith('sqlite.tableCreate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && !!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.tableCreate.') && sqliteTableCreates.owns(payload.input.taskId);
         if (sqliteCreateRequest) columns = columnsMain.capture(event);
@@ -1689,7 +1690,7 @@ else {
             try { resultInserts.assertPublication(result, columns!); }
             catch (error) { await resultInserts.rejectPublication(result, columns!); throw error; }
           }
-          if (sqliteImportRequest) { columnsMain.assertCapturedOwner(columns); if (payload.command === 'sqlite.tableImport.inspect' || payload.command === 'sqlite.tableImport.preview') sqliteTableImports.assertPublication(columns!, result, payload.command); }
+          if (sqliteImportRequest) { columnsMain.assertCapturedOwner(columns); if (payload.command === 'sqlite.tableImport.inspect' || payload.command === 'sqlite.tableImport.preview' || payload.command === 'sqlite.importSource.inspect') sqliteTableImports.assertPublication(columns!, result, payload.command); }
           if (sqliteCreateRequest) { columnsMain.assertCapturedOwner(columns); if (payload.command === 'sqlite.tableCreate.preview') sqliteTableCreates.assertPublication(columns!, result); }
           return { ok: true, result };
         } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation);if(trackedFileOperation)queryFileOperations.delete(operation); }

@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TableCreateApplyOutput } from '../../shared/tableCreate';
+import type { SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
+import { SqliteImportNewTableDialog, type SqliteImportNewTableServices } from './SqliteImportNewTableDialog';
 import { csvImportDelimiters, type CsvImportDelimiter } from '../../shared/csvImport';
 import { ImportNewTableController, type ImportNewTableServices } from '../importNewTableUi';
 import { cellPreview, invoke, uid } from '../lib';
@@ -12,7 +14,9 @@ import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 export interface ImportNewTableDialogProps {
   connectionId: string; database: string; onClose(): void;
   onCreated?(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void;
+  onSqliteCreated?(result: SqliteTableCreateOutcome, version: number): void;
   services?: ImportNewTableServices;
+  sqliteServices?: SqliteImportNewTableServices;
 }
 /** 文件仅经主进程签发能力，完整扫描沿真实受限命令与原task取消。 */
 export const importNewTableServices: ImportNewTableServices = {
@@ -20,7 +24,17 @@ export const importNewTableServices: ImportNewTableServices = {
 };
 
 /** 正式设计器和正式导入器各自保留事务/资源所有权，向导只在原关闭回应后切换阶段。 */
-export function ImportNewTableDialog({ connectionId, database, onClose, onCreated, onDirtyChange, services = importNewTableServices }: ImportNewTableDialogProps) {
+export function ImportNewTableDialog(props: ImportNewTableDialogProps) {
+  // 初次保存概要决定真实引擎；后续profile变更只撤权，不把已开向导偷偷换成另一实现。
+  const original = useRef({ profile: useWorkspace.getState().connections.find(value => value.id === props.connectionId), version: useWorkspace.getState().connectionVersions[props.connectionId] ?? 0, connectionId: props.connectionId, database: props.database, dead: false }).current;
+  if (original.connectionId !== props.connectionId || original.database !== props.database) original.dead = true;
+  const current = useMemo(() => () => { const state = useWorkspace.getState(); if (state.connections.find(value => value.id === original.connectionId) !== original.profile || (state.connectionVersions[original.connectionId] ?? 0) !== original.version) original.dead = true; return !original.dead; }, [original]);
+  if (original.profile?.dialect === 'sqlite') return <SqliteImportNewTableDialog connectionId={props.connectionId} database={props.database} isParentCurrent={current} onClose={props.onClose} onSqliteCreated={props.onSqliteCreated} onDirtyChange={props.onDirtyChange} services={props.sqliteServices}/>;
+  return <NetworkImportNewTableDialog {...props}/>;
+}
+
+/** 原网络向导保留完整行为，SQLite仅在外层按初始saved方言分派。 */
+function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreated, onDirtyChange, services = importNewTableServices }: ImportNewTableDialogProps) {
   const origin = useRef({ connectionId, database, services, version: useWorkspace.getState().connectionVersions[connectionId] ?? 0, connection: useWorkspace.getState().connections.find(value => value.id === connectionId), invalid: false }).current;
   const callbacks = useRef({ onClose, onCreated, onDirtyChange }); callbacks.current = { onClose, onCreated, onDirtyChange };
   const [, render] = useState(0), committed = useRef<object | undefined>(undefined);
