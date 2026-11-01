@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from 'react';
-import { DataGrid, SelectColumn, renderCheckbox, type Column } from 'react-data-grid';
+import { DataGrid, SelectColumn, renderCheckbox, type Column, type DataGridHandle } from 'react-data-grid';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteTableEditZh as text } from '../locales/sqliteTableEdit.zh-CN';
@@ -9,10 +9,12 @@ import { sqliteTableRangePasteZh as rangeText } from '../locales/sqliteTableRang
 import type { SqlitePasteAnchor } from '../sqliteTableRangePaste';
 import '../sqliteTableClipboard.css';
 
-interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; }
+export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
+interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; findHit?: SqliteTableFindGridHit; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell }: Props) {
+export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, findHit }: Props) {
   const ticket = {}, committed = useRef<object | undefined>(undefined);
+  const grid = useRef<DataGridHandle | null>(null), handledFind = useRef<string | undefined>(undefined);
   const source = useRef({ page, rows, identity: {} }); if (source.current.page !== page || source.current.rows !== rows) source.current = { page, rows, identity: {} };
   const owner = source.current, [, selectionChanged] = useState(0), [error, setError] = useState('');
   const selection = useRef<{ owner: typeof owner; ids: ReadonlySet<string>; revision: object }>({ owner, ids: new Set(), revision: {} });
@@ -28,6 +30,15 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   useEffect(() => { notifyAnchor(activeCell.current.value); });
   useEffect(() => () => { if (notified.current !== undefined) { notified.current = undefined; try { notifyRef.current?.(undefined); } catch { /* 旧组件卸载不得向其它目标补发动作。 */ } } }, []);
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = undefined; }; });
+  /** 父layout提交票据后才导航；一次token只滚动一次，焦点请求走RDG真实活动格API。 */
+  useEffect(() => {
+    const hit = findHit, handle = grid.current;
+    if (!hit || handledFind.current === hit.id || hit.page !== page || hit.rows !== rows || !rows.includes(hit.row) || hit.row.deleted || !Number.isInteger(hit.column) || hit.column < 0 || hit.column >= page.columns.length || disabled || !baseCurrent(hit.row) || !noModal() || !handle?.element || !handle.element.ownerDocument.contains(handle.element)) return;
+    handledFind.current = hit.id;
+    const position = { rowIdx: rows.indexOf(hit.row), idx: hit.column + 2 };
+    handle.scrollToCell(position);
+    if (hit.focus && baseCurrent(hit.row) && !disabled && noModal() && grid.current?.element === handle.element) handle.setActivePosition(position, { shouldFocus: true });
+  }, [findHit, owner, disabled]);
   /** 虚拟行复用不授予旧对象权限；复制同样检查原页和准确rows，不能从当前选中名称猜数据。 */
   function baseCurrent(row?: SqliteDraftRow): boolean { try { return committed.current === ticket && source.current === owner && isCurrent() && (!row || rows.includes(row)); } catch { return false; } }
   function localCurrent(): boolean { return committed.current === ticket && source.current === owner && selection.current.revision === selectionTicket && activeCell.current.revision === anchorTicket; }
@@ -49,7 +60,12 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   function inputTarget(event: ClipboardEvent<HTMLDivElement>): boolean { const node = event.target as HTMLElement | null; return !!node && (node.isContentEditable || ['TEXTAREA', 'SELECT'].includes(node.tagName) || node.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes((node as HTMLInputElement).type)); }
   const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...page.columns.map((column, index): Column<SqliteDraftRow> => ({
     key: 'c' + index, name: column.name + (column.generated ? ' · ' + text.generated : ''), width: 180, resizable: true,
-    renderCell: ({ row }) => { const value = row.values[index]; return <span title={value === undefined ? text.omitted : value.kind === 'null' ? 'NULL' : value.value}>{value === undefined ? text.omitted : value.kind === 'null' ? 'NULL' : value.kind.toUpperCase() + ' · ' + value.value}</span>; },
+    renderCell: ({ row }) => {
+      const value = row.values[index], matched = findHit?.page === page && findHit.rows === rows && findHit.row === row && findHit.column === index && !row.deleted;
+      const raw = value === undefined ? text.omitted : value.kind === 'null' ? 'NULL' : value.value, range = matched ? findHit.range : undefined;
+      const precise = range && Number.isInteger(range.start) && Number.isInteger(range.end) && range.start >= 0 && range.end >= range.start && range.end <= raw.length;
+      return <span title={raw} className={matched ? 'sqlite-find-hit' : undefined} data-sqlite-find-current={matched ? 'true' : undefined}>{value && value.kind !== 'null' ? value.kind.toUpperCase() + ' · ' : ''}{precise ? <>{raw.slice(0, range.start)}<mark className="sqlite-find-range">{raw.slice(range.start, range.end) || '\u200b'}</mark>{raw.slice(range.end)}</> : raw}</span>;
+    },
   }))];
   /** F2和双击只打开本地typed编辑，不直接投递写入。 */
   function edit(row: SqliteDraftRow, key: string): void { const column = Number(key.slice(1)); if (current(row) && !disabled && !row.deleted && /^c\d+$/.test(key) && page.columns[column] && !page.columns[column].generated) onEdit(row, column); }
@@ -76,7 +92,7 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
     if (!rows.includes(anchor.row) || anchor.row.deleted || !page.columns[anchor.column] || page.columns[anchor.column].generated || page.edit.columns[anchor.column]?.generated) { setError(rangeText.stale); return; }
     try { onPaste(event.clipboardData, anchor); setError(''); } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeText.invalid); }
   }
-  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<DataGrid<SqliteDraftRow, unknown, string> aria-label={text.grid} className="results-grid" columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={32} headerRowHeight={42}
+  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} className="results-grid" columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={32} headerRowHeight={42}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={ids => { if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return; selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} }; selectionChanged(value => value + 1); }}
     rowClass={row => row.deleted ? 'row-deleted' : row.index === undefined ? 'row-inserted' : undefined}

@@ -1,0 +1,11 @@
+.sqlite-table-find{flex-shrink:0;border-bottom:1px solid var(--line);padding:6px 10px;background:var(--surface);max-height:45%;overflow:auto}
+.sqlite-table-find-fields,.sqlite-table-find-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0}
+.sqlite-table-find .field{margin:0;min-width:110px}.sqlite-table-find .field>span{font-size:10px}.sqlite-table-find input:not([type=checkbox]){height:27px;min-width:130px}
+.sqlite-table-find button{font-size:11px;min-height:27px;padding:3px 7px}.sqlite-table-find label{font-size:11px}
+.sqlite-table-find-status{font-size:11px;overflow-wrap:anywhere}.sqlite-table-find-current pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:72px;overflow:auto}
+.sqlite-table-find-preview{max-height:50vh;overflow:auto}.sqlite-table-find-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto}
+.sqlite-table-find-preview table{width:100%;table-layout:fixed}.sqlite-table-find-preview td{vertical-align:top;overflow-wrap:anywhere}
+
+/* 命中仅使用内描边和主题色，不改变网格单元格尺寸。 */
+.results-grid .sqlite-find-hit{background:var(--accent-bg);box-shadow:inset 0 0 0 2px var(--accent)}
+.results-grid mark.sqlite-find-range{color:var(--text);background:var(--accent-bg);outline:1px solid var(--accent);outline-offset:-1px}

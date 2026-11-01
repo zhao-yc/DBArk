@@ -32,7 +32,8 @@ describe('SQLite独立源码CI的原生门与环境隔离', () => {
     ['table-rebuild', 'sqlite-table-rebuild-native.spec.ts', 'sqlite-table-rebuild', 'DBARK_SQLITE_TABLE_REBUILD_NATIVE_TEST'],
     ['clipboard', 'sqlite-table-clipboard-native.spec.ts', 'sqlite-table-clipboard', 'DBARK_SQLITE_TABLE_CLIPBOARD_NATIVE_TEST'],
     ['range-paste', 'sqlite-table-range-paste-native.spec.ts', 'sqlite-table-range-paste', 'DBARK_SQLITE_TABLE_RANGE_PASTE_NATIVE_TEST'],
-    ['table-reorder', 'sqlite-table-reorder-native.spec.ts', 'sqlite-table-reorder', 'DBARK_SQLITE_TABLE_REORDER_NATIVE_TEST']
+    ['table-reorder', 'sqlite-table-reorder-native.spec.ts', 'sqlite-table-reorder', 'DBARK_SQLITE_TABLE_REORDER_NATIVE_TEST'],
+    ['table-find', 'sqlite-table-find-native.spec.ts', 'sqlite-table-find', 'DBARK_SQLITE_TABLE_FIND_NATIVE_TEST']
   ])('%s仅发固定spec、单worker、零重试、trace关闭；不覆盖原120秒或提供认证参数', (kind, spec, output, gate) => {
     const args: string[] = sqliteOfflineCommand(kind); expect(args).toContain('--workers=1'); expect(args).toContain('--retries=0'); expect(args).toContain('--trace=off'); expect(args).toContain('--reporter=list,json');
     expect(args.some(value => /timeout|password|executable-path|grep|repeat-each/.test(value))).toBe(false);

@@ -141,6 +141,9 @@ jobs:
       - name: 单次运行SQLite实际列顺序重建专项
         if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs table-reorder
+      - name: 单次运行SQLite当前页查找替换专项
+        if: matrix.suite == 'management'
+        run: node scripts/sqlite-workspace-ci.mjs table-find
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -168,4 +171,5 @@ jobs:
             test-results/sqlite-table-clipboard/
             test-results/sqlite-table-range-paste/
             test-results/sqlite-table-reorder/
+            test-results/sqlite-table-find/
           if-no-files-found: warn

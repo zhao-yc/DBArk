@@ -122,6 +122,42 @@ export class SqliteTableEditor {
     const changes = sqliteDraftChanges(this.page, next); if (changes.length) sqliteTableEditPreviewSchema.parse({ snapshotId, taskId: 'sqlite-range-paste-validation', changes });
     current(); if (!changedCells) return 0; this.replace(next); return changedCells;
   }
+  /** 查找替换只暂存准确before的TEXT格；全组及最终草稿预算通过后一次发布，任何失败不产生半批修改。 */
+  replaceTextCells(patches: readonly { rowId: string; column: number; before: string; after: string }[]): number {
+    if (!this.canEdit() || this.page.edit?.kind !== 'editable') throw Error(this.message || text.stale);
+    const edit = this.page.edit, original = this.rows, past = this.past, pastLength = past.length, future = this.future, futureLength = future.length, preview = this.previewValue, snapshotId = edit.snapshotId, schemaKey = this.page.schemaKey, width = this.page.columns.length;
+    if (!width || width > 1024 || edit.columns.length !== width || edit.columns.some((item, index) => item.name !== this.page.columns[index].name || item.generated !== !!this.page.columns[index].generated)) throw Error(text.invalid);
+    const signature = JSON.stringify([edit.snapshotId, edit.expiresAt, edit.columns, this.page.columns]);
+    const current = () => { if (!this.canEdit() || this.page.edit !== edit || edit.snapshotId !== snapshotId || this.page.schemaKey !== schemaKey || JSON.stringify([edit.snapshotId, edit.expiresAt, edit.columns, this.page.columns]) !== signature || this.rows !== original || this.past !== past || past.length !== pastLength || this.future !== future || future.length !== futureLength || this.previewValue !== preview) throw Error(this.message || text.stale); };
+    const input = appendArray(patches, 1, sqliteTableEditLimits.cells), rows = new Map<string, number>();
+    for (let index = 0; index < original.length; index++) { const row = original[index]; if (typeof row.id !== 'string' || !row.id.length || rows.has(row.id)) throw Error(text.invalid); rows.set(row.id, index); }
+    const copied: { index: number; column: number; before: string; after: string }[] = [], coordinates = new Set<string>(); let units = 0;
+    for (let index = 0; index < input.length; index++) {
+      const raw: unknown = Object.getOwnPropertyDescriptor(input, String(index))!.value;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw) || ![Object.prototype, null].includes(Object.getPrototypeOf(raw))) throw Error(text.invalid);
+      const names = ['rowId', 'column', 'before', 'after'] as const, keys = Reflect.ownKeys(raw); if (keys.length !== names.length || keys.some(key => typeof key !== 'string' || !names.includes(key as typeof names[number]))) throw Error(text.invalid);
+      const values = Object.create(null) as Record<typeof names[number], unknown>;
+      for (const name of names) { const field = Object.getOwnPropertyDescriptor(raw, name); if (!field?.enumerable || !('value' in field)) throw Error(text.invalid); values[name] = field.value; }
+      const { rowId, column, before, after } = values;
+      if (typeof rowId !== 'string' || !rowId.length || typeof column !== 'number' || !Number.isInteger(column) || column < 0 || column >= width || typeof before !== 'string' || typeof after !== 'string') throw Error(text.invalid);
+      const position = rows.get(rowId); if (position === undefined) throw Error(text.invalid); const row = original[position], cell = row.values[column], coordinate = position + ':' + column;
+      if (coordinates.has(coordinate) || row.deleted || row.values.length !== width || row.index !== undefined && (!Number.isInteger(row.index) || row.index < 0 || row.index >= edit.rows.length) || edit.columns[column].generated || cell?.kind !== 'text' || cell.value !== before) throw Error(text.invalid);
+      coordinates.add(coordinate);
+      // 原TEXT可能大于新输入门；noop原样保留，缩短替换只对新after计预算，不能拒绝合法的大原文来源。
+      if (before !== after) { units += edit.columns[column].name.length + after.length; if (after.length > sqliteTableEditLimits.valueUnits || units > sqliteTableEditLimits.inputUnits) throw Error(text.invalid); sqliteEditValueSchema.parse({ kind: 'text', value: after }); }
+      copied.push({ index: position, column, before, after });
+    }
+    current(); const next = [...original]; let changedCells = 0;
+    for (const patch of copied) {
+      if (patch.before === patch.after) continue;
+      const row = original[patch.index], source = row.index === undefined ? undefined : edit.rows[row.index][patch.column], value = source?.kind === 'text' && source.value === patch.after ? structuredClone(source) : { kind: 'text' as const, value: patch.after };
+      if (next[patch.index] === row) next[patch.index] = { ...row, values: [...row.values] };
+      next[patch.index].values[patch.column] = value; changedCells++;
+    }
+    current(); if (!changedCells) return 0;
+    const changes = sqliteDraftChanges(this.page, next); if (changes.length) sqliteTableEditPreviewSchema.parse({ snapshotId, taskId: 'sqlite-text-replace-validation', changes });
+    current(); this.replace(next); return changedCells;
+  }
   save(rowId: string, values: (SqliteOriginalValue | undefined)[]): void {
     if (!this.canEdit() || this.page.edit?.kind !== 'editable') return;
     const row = this.rows.find(row => row.id === rowId); if (!row || row.deleted || values.length !== this.page.edit.columns.length) return;
