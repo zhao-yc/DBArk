@@ -139,7 +139,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
 }
 
 /** 校验CREATE归属与原生列顺序；仅接受普通main表，不接收CTAS、虚拟表和多语句。 */
-function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; columns: ColumnDefinition[] } {
+function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; bodyStart: number; columns: ColumnDefinition[] } {
   const parts = tokenize(input.tableSql); let index = 0;
   if (!word(parts[index++], 'CREATE') || !word(parts[index++], 'TABLE')) throw invalid();
   let tableToken = parts[index++];
@@ -162,7 +162,8 @@ function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; co
   if (symbol(parts[index], ';')) index++;
   if (index !== parts.length || columns.length !== input.columns.length || !columns.length) throw invalid();
   for (let ordinal = 0; ordinal < columns.length; ordinal++) if (columns[ordinal].name !== input.columns[ordinal].name || columns[ordinal].hidden !== input.columns[ordinal].hidden) throw invalid();
-  return { table: { start: tableToken.start, end: tableToken.end }, columns };
+  // native DROP首列会移除其name至下一列name前的全部文字；原leading trivia须置于私有列之前。
+  return { table: { start: tableToken.start, end: tableToken.end }, bodyStart: parts[open + 1].start, columns };
 
   /** 表级约束原样保留；它们不能被当成与原生列目录同名的可编辑字段。 */
   function consume(segment: Token[]): void {
@@ -174,6 +175,22 @@ function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; co
 
 /** 输出仅是候选CREATE。调用方仍须native验证结构、完整复制核对、外键及真实事务ACK才能提交。 */
 export function compileSqliteTableRebuildDefinition(input: SqliteTableRebuildDefinitionInput): SqliteTableRebuildDefinition {
+  return compileDefinition(input);
+}
+
+export interface SqliteTableRebuildCopyDefinition extends SqliteTableRebuildDefinition { ordinalColumn: string; ordinalIndex: string; createOrdinalIndexSql: string; removeOrdinalSql: string[]; }
+/** 私有复制阶段额外加入逐行编号；不进入公开字段设计，提交前须移除并核对准确最终结构。 */
+export function compileSqliteTableRebuildCopyDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn: string): SqliteTableRebuildCopyDefinition {
+  if (ordinalColumn.length !== 54 || !/^__dbark_rebuild_order_[a-f0-9]{32}$/.test(ordinalColumn) || input.columns.some(column => fold(column.name) === ordinalColumn)) throw invalid();
+  const ordinalIndex = '__dbark_rebuild_order_index_' + ordinalColumn.slice(-32), compiled = compileDefinition(input, ordinalColumn);
+  return { ...compiled, ordinalColumn, ordinalIndex,
+    createOrdinalIndexSql: 'CREATE UNIQUE INDEX "main".' + quote(ordinalIndex) + ' ON ' + quote(input.candidateName) + '(' + quote(ordinalColumn) + ')',
+    removeOrdinalSql: ['DROP INDEX "main".' + quote(ordinalIndex), 'ALTER TABLE "main".' + quote(input.candidateName) + ' DROP COLUMN ' + quote(ordinalColumn)],
+  };
+}
+
+/** 普通候选与带私有编号候选共享同一跨度编译，不复制或重新实现默认值/约束解析。 */
+function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn?: string): SqliteTableRebuildDefinition {
   if (!input.table || !validText(input.table) || /^sqlite_/i.test(input.table) || input.candidateName.length !== 48 || !/^__dbark_rebuild_[a-f0-9]{32}$/.test(input.candidateName) || fold(input.table) === input.candidateName || !input.columns.length || input.columns.length > limits.columns || !input.changes.length || input.changes.length > limits.changes) throw invalid();
   if (new Set(input.columns.map(column => fold(column.name))).size !== input.columns.length || input.columns.some(column => !column.name || !validText(column.name) || ![0, 2, 3].includes(column.hidden))) throw invalid();
   const source = definition(input), columns = new Map(source.columns.map((column, index) => [fold(column.name), { definition: column, hidden: input.columns[index].hidden }]));
@@ -183,6 +200,7 @@ export function compileSqliteTableRebuildDefinition(input: SqliteTableRebuildDef
   function add(edit: Span & { sql: string; order?: number }): void {
     addedBytes += encoder.encode(edit.sql).length; if (addedBytes > limits.sqlBytes) throw invalid(); edits.push(edit);
   }
+  if (ordinalColumn) add({ start: source.bodyStart, end: source.bodyStart, sql: quote(ordinalColumn) + ' INTEGER NOT NULL, ' });
   for (const change of input.changes) {
     const key = fold(change.column), column = columns.get(key);
     if (!column || changed.has(key) || change.declaredType === undefined && change.default === undefined) throw invalid(); changed.add(key);

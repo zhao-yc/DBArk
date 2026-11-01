@@ -2,7 +2,8 @@ import { closeSync, fstatSync, openSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { constants, DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
-import { copySqliteNamedParameters, copySqliteCreateGuard, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteWorkerOpenOptions, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteWorkerOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, compareSqliteRebuildTables, SqliteRebuildComparisonError } from './rebuildComparison';
 import { queryParameterLimits } from '../../shared/queryParameters';
 import { sqliteNamedParameterNames } from './parameters';
 
@@ -88,6 +89,8 @@ export class SqliteWorkerCore {
   private closing = false;
   private closingId?: string;
   private readOnly = false;
+  private rebuildWriter = false;
+  private restoringRebuildFlags = false;
   private guardedCreate?: { owner: Execution; guard: SqliteCreateGuard; matched: boolean };
   constructor(private readonly port: Port) {}
 
@@ -114,16 +117,20 @@ export class SqliteWorkerCore {
       return;
     }
     if (request.kind === 'open') { this.open(request.id, request.options); return; }
-    if (request.kind === 'execute' || request.kind === 'streamRead') {
+    if (request.kind === 'execute' || request.kind === 'streamRead' || request.kind === 'rebuildCompare') {
       if (!this.db) { this.failure(request.id, new DriverFailure('SQLITE_NOT_OPEN', 'SQLite会话尚未打开')); return; }
       // 帧属于本次执行；父端每个新operation从0等待，旧执行ACK仍按id隔离。
       this.frame = 0;
       const active: Execution = { id: request.id, cancelled: false, results: [], bytes: 0 }; this.active = active;
-      void this.execute(active, request).catch(() => { this.port.exit(1); }); return;
+      void (request.kind === 'rebuildCompare' ? this.rebuildCompare(active, request) : this.execute(active, request)).catch(() => { this.port.exit(1); }); return;
     }
     if (request.kind === 'close') {
+      if (this.rebuildWriter && this.transaction()) { this.failure(request.id, new DriverFailure('SQLITE_REBUILD_TRANSACTION_ACTIVE', 'SQLite重建事务尚未明确收束，正常关闭被拒绝；请先显式ROLLBACK或COMMIT')); return; }
       this.closing = true;
-      try { this.db?.close(); this.db = undefined; this.closingId = request.id; this.port.send({ kind: 'closed', id: request.id }); }
+      try {
+        if (this.rebuildWriter) this.restoreRebuildFlags();
+        this.db?.close(); this.db = undefined; this.closingId = request.id; this.port.send({ kind: 'closed', id: request.id, ...(this.rebuildWriter ? { rebuildRestored: true as const } : {}) });
+      }
       catch { this.closing = false; this.failure(request.id, new DriverFailure('SQLITE_CLOSE_FAILED', 'SQLite会话关闭未确认')); }
       return;
     }
@@ -147,24 +154,29 @@ export class SqliteWorkerCore {
   }
 
   /** 只接受现存绝对普通文件；URI mode=rw/ro禁止SQLite默认的缺文件自动创建。 */
-  private open(id: string, options: SqliteOpenOptions): void {
+  private open(id: string, rawOptions: SqliteWorkerOpenOptions): void {
     if (this.db) { this.failure(id, invalid()); return; }
     let descriptor: number | undefined, opened: DatabaseSync | undefined;
     try {
+      const options = copySqliteWorkerOpenOptions(rawOptions), rebuild = options.mode === 'table-rebuild';
       if (!object(options) || typeof options.path !== 'string' || !unicode(options.path) || !isAbsolute(options.path) || typeof options.readOnly !== 'boolean' || !integer(options.busyTimeoutMs, 0, 5000)) throw invalid();
       const path = realpathSync.native(options.path); descriptor = openSync(path, options.readOnly ? 'r' : 'r+');
       const before = fstatSync(descriptor, { bigint: true }); if (!before.isFile()) throw invalid();
       const uri = pathToFileURL(path); uri.searchParams.set('mode', options.readOnly ? 'ro' : 'rw');
-      opened = new DatabaseSync(uri.href, { readOnly: options.readOnly, timeout: options.busyTimeoutMs, allowExtension: false, enableForeignKeyConstraints: true, enableDoubleQuotedStringLiterals: false, defensive: true });
+      opened = new DatabaseSync(uri.href, { readOnly: options.readOnly, timeout: options.busyTimeoutMs, allowExtension: false, enableForeignKeyConstraints: !rebuild, enableDoubleQuotedStringLiterals: false, defensive: true });
       const after = statSync(path, { bigint: true }); if (!after.isFile() || before.dev !== after.dev || before.ino !== after.ino) throw invalid();
       opened.enableLoadExtension(false); opened.enableDefensive(true);
       opened.limits.length = Math.min(opened.limits.length, limits.valueBytes);
       opened.limits.sqlLength = Math.min(opened.limits.sqlLength, limits.sqlBytes);
-      opened.limits.column = Math.min(opened.limits.column, limits.columns);
+      // private候选额外ordinal及window复制的隐藏投影留原生余量，公开结果列仍由statement保持1024门槛。
+      const nativeColumnLimit = rebuild ? limits.columns * 2 + 2 : limits.columns;
+      opened.limits.column = Math.min(opened.limits.column, nativeColumnLimit);
       opened.limits.variableNumber = Math.min(opened.limits.variableNumber, limits.columns);
-      if (!integer(opened.limits.length, 1, limits.valueBytes) || !integer(opened.limits.sqlLength, 1, limits.sqlBytes) || !integer(opened.limits.column, 1, limits.columns)) throw invalid();
-      opened.exec('PRAGMA foreign_keys=ON');
-      const foreignKeys = opened.prepare('PRAGMA foreign_keys').get(); if (!foreignKeys || Object.values(foreignKeys)[0] !== 1) throw invalid();
+      if (!integer(opened.limits.length, 1, limits.valueBytes) || !integer(opened.limits.sqlLength, 1, limits.sqlBytes) || !integer(opened.limits.column, 1, nativeColumnLimit)) throw invalid();
+      // 唯一私有模式在安装通用authorizer之前设置固定值；不向普通execute开放任何PRAGMA setter。
+      opened.exec(rebuild ? 'PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=ON' : 'PRAGMA foreign_keys=ON');
+      const foreignKeys = opened.prepare('PRAGMA foreign_keys').get(); if (!foreignKeys || Object.values(foreignKeys)[0] !== (rebuild ? 0 : 1)) throw invalid();
+      if (rebuild && Object.values(opened.prepare('PRAGMA legacy_alter_table').get() ?? {})[0] !== 1) throw invalid();
       // 强制读取真实主库头；只读取sqlite_version常量不能替代文件格式验证。
       const schema = opened.prepare('PRAGMA main.schema_version').get(); if (!schema || typeof Object.values(schema)[0] !== 'number') throw invalid();
       const versionRow = opened.prepare('SELECT sqlite_version() AS version').get();
@@ -190,17 +202,30 @@ export class SqliteWorkerCore {
       // 所有连接只拥有Main选中的单个磁盘库；ATTACH/DETACH及VACUUM INTO不能另取文件能力。
       opened.setAuthorizer((action, first, second, database, source) => {
         if (action === constants.SQLITE_ATTACH || action === constants.SQLITE_DETACH) return constants.SQLITE_DENY;
-        if (action === constants.SQLITE_PRAGMA) return readablePragma(first, second) ? constants.SQLITE_OK : constants.SQLITE_DENY;
+        if (action === constants.SQLITE_PRAGMA) {
+          const restoring = this.restoringRebuildFlags && rebuild && source === null && (first === 'foreign_keys' && second === 'ON' || first === 'legacy_alter_table' && second === 'OFF');
+          return restoring || readablePragma(first, second) ? constants.SQLITE_OK : constants.SQLITE_DENY;
+        }
         if (options.readOnly && ![constants.SQLITE_READ, constants.SQLITE_SELECT, constants.SQLITE_FUNCTION, constants.SQLITE_RECURSIVE, constants.SQLITE_TRANSACTION, constants.SQLITE_SAVEPOINT].includes(action)) return constants.SQLITE_DENY;
         if (this.guardedCreate) return this.authorizeCreate(action, first, second, database, source);
         return constants.SQLITE_OK;
       });
-      this.db = opened; this.readOnly = options.readOnly; opened = undefined;
-      this.port.send({ kind: 'opened', id, version: versionRow.version, transaction: this.transaction(), readOnly: options.readOnly, identity: { path, device: before.dev.toString(), inode: before.ino.toString() } });
+      this.db = opened; this.readOnly = options.readOnly; this.rebuildWriter = rebuild; opened = undefined;
+      this.port.send({ kind: 'opened', id, version: versionRow.version, transaction: this.transaction(), readOnly: options.readOnly, identity: { path, device: before.dev.toString(), inode: before.ino.toString() }, ...(rebuild ? { mode: 'table-rebuild' as const } : {}) });
     } catch (error) {
       try { opened?.close(); } catch {}
       this.failure(id, error instanceof DriverFailure ? error : new DriverFailure('SQLITE_OPEN_FAILED', 'SQLite文件打开失败或当前运行时不支持所需原生能力'));
     } finally { if (descriptor !== undefined) { try { closeSync(descriptor); } catch { this.port.exit(1); } } }
+  }
+
+  /** 正常关闭前恢复保护必须位于事务外；恢复失败不发送closed，更不冒充COMMIT/ROLLBACK。 */
+  private restoreRebuildFlags(): void {
+    if (!this.db || this.transaction()) throw new DriverFailure('SQLITE_REBUILD_TRANSACTION_ACTIVE', 'SQLite重建事务尚未明确收束');
+    this.restoringRebuildFlags = true;
+    try {
+      this.db.exec('PRAGMA legacy_alter_table=OFF; PRAGMA foreign_keys=ON');
+      if (Object.values(this.db.prepare('PRAGMA legacy_alter_table').get() ?? {})[0] !== 0 || Object.values(this.db.prepare('PRAGMA foreign_keys').get() ?? {})[0] !== 1) throw invalid();
+    } finally { this.restoringRebuildFlags = false; }
   }
 
   /** CREATE的原生action才证明准确对象与ON关系；不从SQL正文正则推断触发器归属。 */
@@ -223,7 +248,7 @@ export class SqliteWorkerCore {
   }
 
   /** 每个帧先登记原序号再发送，ACK或取消只唤醒本帧；唤醒后重新核验取消状态。 */
-  private async sendFrame(active: Execution, body: { kind: 'statement'; index: number; sql: string; columns: SqliteColumn[] } | { kind: 'batch'; index: number; rows: SqliteValue[][] }): Promise<void> {
+  private async sendFrame(active: Execution, body: { kind: 'statement'; index: number; sql: string; columns: SqliteColumn[] } | { kind: 'batch'; index: number; rows: SqliteValue[][] } | { kind: 'rebuildProgress'; comparedRows: string; columnGroups: number }): Promise<void> {
     this.check(active); const frame = ++this.frame;
     await new Promise<void>((resolve, reject) => {
       active.waiting = { frame, resolve };
@@ -240,6 +265,24 @@ export class SqliteWorkerCore {
   private changes(): bigint {
     const query = this.db!.prepare('SELECT total_changes()'); query.setReadBigInts(true); query.setReturnArrays(true);
     const row = query.get() as unknown; if (!Array.isArray(row) || typeof row[0] !== 'bigint') throw invalid(); return row[0];
+  }
+
+  /** 只在私有writer真实事务内比较，无任意SQL、用户值或累计结果预算旁路。 */
+  private async rebuildCompare(active: Execution, request: Extract<SqliteWorkerRequest, { kind: 'rebuildCompare' }>): Promise<void> {
+    try {
+      if (!this.rebuildWriter || this.readOnly) throw new DriverFailure('SQLITE_REBUILD_COMPARE_MODE', 'SQLite完整重建比较只允许独立重建writer');
+      if (!this.transaction()) throw new DriverFailure('SQLITE_REBUILD_COMPARE_TRANSACTION', 'SQLite重建比较要求原writer处于明确事务');
+      if (Reflect.ownKeys(request).length !== 3 || !['kind', 'id', 'input'].every(key => { const descriptor = Object.getOwnPropertyDescriptor(request, key); return !!descriptor && descriptor.enumerable && 'value' in descriptor; })) throw new DriverFailure('SQLITE_REBUILD_COMPARE_INPUT', 'SQLite重建比较请求格式无效');
+      const input = copySqliteRebuildComparisonInput(Object.getOwnPropertyDescriptor(request, 'input')!.value), columnGroups = Math.ceil(input.columns.length / 256);
+      this.check(active);
+      const result = copySqliteRebuildComparisonResult(await compareSqliteRebuildTables(this.db!, input, { check: () => this.check(active), yield: () => this.yield(active), progress: async comparedRows => { await this.sendFrame(active, { kind: 'rebuildProgress', comparedRows, columnGroups }); await this.yield(active); } }));
+      this.check(active); if (!this.transaction() || result.columnGroups !== columnGroups) throw new DriverFailure('SQLITE_REBUILD_COMPARE_RESULT', 'SQLite完整比较分组或原事务状态无效');
+      this.port.send({ kind: 'completed', id: active.id, result: { statements: [], transaction: true, comparison: result } });
+    } catch (error) {
+      if (active.fault) this.failure(active.id, active.fault);
+      else if (active.cancelled && !this.closing) this.port.send({ kind: 'cancelled', id: active.id, transaction: this.transaction(), completedStatements: 0 });
+      else if (!this.closing) this.failure(active.id, error instanceof DriverFailure ? error : new DriverFailure(error instanceof SqliteRebuildComparisonError ? error.code : 'SQLITE_REBUILD_COMPARE_FAILED', 'SQLite完整重建比较未通过，未发送提交；原事务仍须明确收束'));
+    } finally { active.waiting = undefined; if (this.active === active) this.active = undefined; }
   }
 
   /** 在任何用户step前完成参数和单语句约束；脚本每条仅消费原生确认的准确前缀。 */

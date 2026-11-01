@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { copySqliteNamedParameters, copySqliteCreateGuard, sqliteDriverLimits as limits, type SqliteCreateGuard, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
+import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteOpenOptions, sqliteDriverLimits as limits, type SqliteCreateGuard, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteWorkerOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
+import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, type SqliteRebuildComparisonInput, type SqliteRebuildComparisonResult } from './rebuildComparison';
 
 /** 进程中断只证明连接已释放；事务/提交结果未知时不能伪造ROLLBACK成功。 */
 export class SqliteDriverError extends Error {
@@ -27,6 +28,7 @@ interface Operation {
   results: SqliteStatementResult[]; delivery: Promise<void>; frame: number; index: number;
   cancelRequested: boolean; cancelPromise?: Promise<SqliteCancellation>; timer?: ReturnType<typeof setTimeout>;
   terminal?: Terminal; finishing?: boolean; consumerError?: Error;
+  comparison?: { columnGroups: number; comparedRows: bigint; onProgress?(progress: { comparedRows: string; columnGroups: number }): void | Promise<void> };
 }
 
 /** 一个真实SQLite物理连接对应一个由Main持有的进程；不重连、不重放SQL。 */
@@ -50,7 +52,7 @@ export class SqliteDriverSession {
   private versionValue = '';
   private identityValue?: SqliteFileIdentity;
 
-  private constructor(private readonly transport: SqliteProcessTransport, private readonly options: SqliteOpenOptions) {
+  private constructor(private readonly transport: SqliteProcessTransport, private readonly options: SqliteWorkerOpenOptions) {
     this.unsubscribe = transport.onMessage(message => this.receive(message));
     this.exit = transport.exited.then(result => {
       this.exited = true; this.opened = false; this.transactionValue = null; this.unsubscribe();
@@ -70,8 +72,15 @@ export class SqliteDriverSession {
 
   /** 文件能力由Main确认后注入；worker仍执行现存普通文件与URI mode=rw/ro检查。 */
   static async open(create: () => SqliteProcessTransport, options: SqliteOpenOptions): Promise<SqliteDriverSession> {
-    if (!options.path || options.path.includes('\0') || typeof options.readOnly !== 'boolean' || !Number.isInteger(options.busyTimeoutMs) || options.busyTimeoutMs < 0 || options.busyTimeoutMs > 5000) throw Error('SQLite连接参数无效');
-    const session = new SqliteDriverSession(create(), { ...options });
+    return this.openOwned(create, copySqliteOpenOptions(options));
+  }
+  /** 独立writer固定保护模式；调用方不能通过普通options选择或覆盖私有开关。 */
+  static async openRebuild(create: () => SqliteProcessTransport, options: SqliteOpenOptions): Promise<SqliteDriverSession> {
+    const normal = copySqliteOpenOptions(options); if (normal.readOnly) throw Error('SQLite重建writer不能以只读模式打开');
+    return this.openOwned(create, { ...normal, mode: 'table-rebuild' });
+  }
+  private static async openOwned(create: () => SqliteProcessTransport, options: SqliteWorkerOpenOptions): Promise<SqliteDriverSession> {
+    const session = new SqliteDriverSession(create(), options);
     try { await session.openResult.promise; return session; }
     catch (reason) { await session.terminate(); throw reason; }
     finally { clearTimeout(session.openTimer); }
@@ -84,6 +93,8 @@ export class SqliteDriverSession {
   get isBusy(): boolean { return !!this.active; }
   /** 流式全量读取不能被读写会话借用以绕过普通查询预算。 */
   get readOnly(): boolean { return this.options.readOnly; }
+  /** 只表示这条独立连接的固定打开模式，不授权普通会话或原查询事务。 */
+  get isRebuildWriter(): boolean { return this.options.mode === 'table-rebuild'; }
   /** 返回副本防调用方改写，旧无身份协议只允许原查询，不能签发编辑能力。 */
   get identity(): SqliteFileIdentity | undefined { return this.identityValue ? { ...this.identityValue } : undefined; }
   private error(message: string, code: string, completed = this.active?.results.length ?? 0, results: readonly SqliteStatementResult[] = this.active?.results ?? []): SqliteDriverError { return new SqliteDriverError(message, code, this.exited ? null : this.transactionValue, completed, this.exited, results); }
@@ -91,6 +102,22 @@ export class SqliteDriverSession {
   /** 同一物理连接不并行执行；每个批次等消费者完成后才确认，不无限积压结果。 */
   execute(sql: string, options: SqliteExecuteOptions = {}): Promise<SqliteExecutionResult> {
     return this.start(sql, options, false);
+  }
+  /** 完整比较不走公共行/结果字节上限，输入没有SQL，进度帧仍由原消费者确认及取消框架约束。 */
+  rebuildCompare(input: SqliteRebuildComparisonInput, options: { onProgress?(progress: { comparedRows: string; columnGroups: number }): void | Promise<void> } = {}): Promise<SqliteRebuildComparisonResult> {
+    if (!this.opened || this.exited || this.invalid || this.closing || this.active) return Promise.reject(this.error('SQLite会话未就绪或已有运行任务', 'SQLITE_SESSION_UNAVAILABLE'));
+    if (!this.isRebuildWriter || this.options.readOnly) return Promise.reject(this.error('SQLite完整重建比较只允许独立重建writer', 'SQLITE_REBUILD_COMPARE_MODE'));
+    if (this.transactionValue !== true) return Promise.reject(this.error('SQLite重建比较要求原writer已明确BEGIN事务', 'SQLITE_REBUILD_COMPARE_TRANSACTION'));
+    let copied: SqliteRebuildComparisonInput, onProgress: NonNullable<Operation['comparison']>['onProgress'];
+    try {
+      copied = copySqliteRebuildComparisonInput(input);
+      if (!options || typeof options !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(options)) || Reflect.ownKeys(options).some(key => key !== 'onProgress')) throw Error('进度回调无效');
+      const descriptor = Object.getOwnPropertyDescriptor(options, 'onProgress'); if (descriptor && (!('value' in descriptor) || descriptor.value !== undefined && typeof descriptor.value !== 'function')) throw Error('进度回调无效'); onProgress = descriptor?.value;
+    } catch { return Promise.reject(this.error('SQLite重建比较内部输入无效，本次未发送', 'SQLITE_REBUILD_COMPARE_INPUT')); }
+    const operation: Operation = { id: randomUUID(), options: {}, result: deferred(), nativeDone: deferred(), results: [], delivery: Promise.resolve(), frame: 0, index: -1, cancelRequested: false, comparison: { columnGroups: Math.ceil(copied.columns.length / 256), comparedRows: 0n, onProgress } };
+    void operation.nativeDone.promise.catch(() => {}); this.active = operation;
+    try { this.transport.send({ kind: 'rebuildCompare', id: operation.id, input: copied }); } catch { void this.breakSession('SQLite重建比较未能投递，未重试', 'SQLITE_SEND_FAILED'); }
+    return operation.result.promise.then(result => copySqliteRebuildComparisonResult(result.comparison));
   }
   /** 私有导出通道只允许物理只读会话，消费者必须逐批完成，不能积攒全表结果。 */
   streamRead(sql: string, options: SqliteStreamReadOptions): Promise<SqliteExecutionResult> {
@@ -161,7 +188,7 @@ export class SqliteDriverSession {
       if (this.exited || this.invalid || !message || typeof message !== 'object') return;
       if (message.kind === 'ready') { if (this.openSent) throw Error('重复SQLite启动消息'); this.openSent = true; this.transport.send({ kind: 'open', id: this.openId, options: this.options }); return; }
       if (message.kind === 'opened') {
-        if (message.id !== this.openId || this.opened || message.readOnly !== this.options.readOnly || typeof message.version !== 'string') throw Error('SQLite打开回执不匹配');
+        if (message.id !== this.openId || this.opened || message.readOnly !== this.options.readOnly || typeof message.version !== 'string' || message.mode !== this.options.mode || this.isRebuildWriter && message.transaction !== false) throw Error('SQLite打开回执不匹配');
         if (message.identity && (typeof message.identity.path !== 'string' || !message.identity.path || !/^[0-9]+$/.test(message.identity.device) || !/^[0-9]+$/.test(message.identity.inode))) throw Error('SQLite打开文件身份无效');
         this.identityValue = message.identity ? { ...message.identity } : undefined;
         this.opened = true; this.versionValue = message.version; this.transactionValue = message.transaction; this.openResult.resolve(); return;
@@ -169,11 +196,21 @@ export class SqliteDriverSession {
       if (message.kind === 'failed' && message.id === this.openId && !this.opened) { this.openResult.reject(this.error(message.message, message.code)); return; }
       if (message.kind === 'closed') {
         if (message.id !== this.closeId || !this.closeResult) throw Error('SQLite关闭回执不匹配');
+        if (this.isRebuildWriter ? message.rebuildRestored !== true : 'rebuildRestored' in message) throw Error('SQLite重建关闭缺少原保护恢复确认');
         this.transport.send({ kind: 'closeAck', id: message.id }); this.closeResult.resolve(); this.closeResult = undefined; return;
+      }
+      if (message.kind === 'failed' && message.id === this.closeId && this.closeResult) {
+        this.transactionValue = message.transaction; const pending = this.closeResult; this.closeResult = undefined; pending.reject(this.error(message.message, message.code)); return;
       }
       const operation = this.active;
       if (!operation || !('id' in message) || message.id !== operation.id || operation.terminal) return;
-      if (message.kind === 'statement' || message.kind === 'batch') {
+      if (message.kind === 'rebuildProgress') {
+        const comparison = operation.comparison;
+        if (!comparison || message.frame !== operation.frame + 1 || message.columnGroups !== comparison.columnGroups || typeof message.comparedRows !== 'string' || !/^(?:0|[1-9][0-9]{0,19})$/.test(message.comparedRows)) throw Error('SQLite重建比较进度不属于原操作');
+        const rows = BigInt(message.comparedRows); if (rows < comparison.comparedRows || rows > 9223372036854775807n * BigInt(comparison.columnGroups)) throw Error('SQLite重建比较进度计数倒退或溢出'); comparison.comparedRows = rows; operation.frame = message.frame;
+        operation.delivery = operation.delivery.then(async () => { if (!this.invalid && this.active === operation && !operation.cancelRequested && !operation.terminal) await comparison.onProgress?.({ comparedRows: message.comparedRows, columnGroups: message.columnGroups }); }).catch(reason => { operation.consumerError = reason instanceof Error ? reason : Error('SQLite重建进度消费者失败'); this.requestCancel(operation); }).finally(() => { if (!this.invalid && this.active === operation && !operation.terminal && !this.exited) try { this.transport.send({ kind: 'ack', id: operation.id, frame: message.frame }); } catch { void this.breakSession('SQLite重建进度确认无法投递', 'SQLITE_SEND_FAILED'); } });
+      } else if (message.kind === 'statement' || message.kind === 'batch') {
+        if (operation.comparison) throw Error('SQLite重建比较不能携带SQL或用户结果值');
         if (message.frame !== operation.frame + 1 || message.kind === 'statement' && (message.index !== operation.results.length || operation.index !== operation.results.length - 1) || message.kind === 'batch' && (message.index < 0 || message.index !== operation.index || message.index !== operation.results.length)) throw Error('SQLite结果批次顺序无效');
         operation.frame = message.frame; if (message.kind === 'statement') operation.index = message.index;
         operation.delivery = operation.delivery.then(async () => {
@@ -184,9 +221,15 @@ export class SqliteDriverSession {
           if (!this.invalid && this.active === operation && !operation.terminal && !this.exited) try { this.transport.send({ kind: 'ack', id: operation.id, frame: message.frame }); } catch { void this.breakSession('SQLite批次确认无法投递', 'SQLITE_SEND_FAILED'); }
         });
       } else if (message.kind === 'statementEnd') {
+        if (operation.comparison) throw Error('SQLite重建比较不能冒充执行DDL');
         if (message.result.index !== operation.results.length || message.result.index !== operation.index) throw Error('SQLite语句完成顺序无效');
         operation.results.push(message.result); this.transactionValue = message.result.transaction;
       } else if (message.kind === 'completed' || message.kind === 'failed' || message.kind === 'cancelled') {
+        if (message.kind === 'completed') {
+          if (operation.comparison) {
+            const result = copySqliteRebuildComparisonResult(message.result.comparison); if (message.result.transaction !== true || message.result.statements.length || result.columnGroups !== operation.comparison.columnGroups || BigInt(result.verifiedRows) * BigInt(result.columnGroups) !== operation.comparison.comparedRows) throw Error('SQLite重建完整计数、分组或事务终态不一致'); message.result.comparison = result;
+          } else if ('comparison' in message.result) throw Error('SQLite普通执行不能携带重建比较事实');
+        }
         if (message.kind === 'completed' ? JSON.stringify(message.result.statements) !== JSON.stringify(operation.results) : message.completedStatements !== operation.results.length) throw Error('SQLite完成回执与已收语句不一致');
         operation.nativeDone.resolve({ mode: message.kind === 'cancelled' ? 'cooperative' : 'finished', sessionClosed: false, transaction: message.kind === 'completed' ? message.result.transaction : message.transaction, resources: 'confirmed' });
         operation.terminal = message; this.transactionValue = message.kind === 'completed' ? message.result.transaction : message.transaction; this.finish(operation);
@@ -230,6 +273,7 @@ export class SqliteDriverSession {
   close(): Promise<void> {
     if (this.closing) return this.closing;
     if (this.active && !this.invalid) return Promise.reject(this.error('SQLite查询仍在执行，请先等待或明确取消', 'SQLITE_SESSION_BUSY'));
+    if (this.isRebuildWriter && this.isUsable && this.transactionValue !== false) return Promise.reject(this.error('SQLite重建事务尚未明确收束，请先显式ROLLBACK或COMMIT再关闭', 'SQLITE_REBUILD_TRANSACTION_ACTIVE'));
     const work = (async () => {
       if (this.exited) return;
       if (this.invalid) { await this.terminate(); return; }
@@ -240,7 +284,7 @@ export class SqliteDriverSession {
         await Promise.race([acknowledgement.promise, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(Error('SQLite正常关闭尚未确认，保留连接')), limits.exitTimeoutMs); timer.unref(); })]);
         const result = await this.waitForExit(); if (result.code !== 0) throw this.error('SQLite关闭后的进程退出异常', 'SQLITE_CLOSE_UNCONFIRMED');
       } catch (reason) {
-        this.invalid = true; if (this.closeResult === acknowledgement) this.closeResult = undefined;
+        if (!(reason instanceof SqliteDriverError && reason.code === 'SQLITE_REBUILD_TRANSACTION_ACTIVE')) this.invalid = true; if (this.closeResult === acknowledgement) this.closeResult = undefined;
         throw reason;
       } finally { clearTimeout(timer); }
     })();
