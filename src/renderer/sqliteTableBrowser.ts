@@ -4,7 +4,7 @@ import { resultExportData } from './resultExport';
 import { sqliteTableBrowseZh as text } from './locales/sqliteTableBrowse.zh-CN';
 
 export type SqliteTableQuery = Pick<SqliteTablePageInput, 'limit' | 'mode' | 'filters' | 'sort'>;
-export interface SqliteFilterDraft { id: string; column: string; operator: SqliteTableFilter['operator']; kind: NonNullable<SqliteTableFilter['value']>['kind']; value: string; secondValue?: string; values?: string[]; enabled?: boolean; }
+export interface SqliteFilterDraft { id: string; column: string; operator: SqliteTableFilter['operator']; kind: NonNullable<SqliteTableFilter['value']>['kind']; value: string; secondValue?: string; values?: string[]; selectedValues?: import('../shared/sqliteTableBrowse').SqliteFilterSelection[]; enabled?: boolean; }
 export interface SqliteSortDraft { id: string; column: string; direction: 'asc' | 'desc'; }
 export interface SqliteTableScope { tab: unknown; profile: unknown; connectionId: string; database?: string; table?: string; version: number; schemaRevision?: number; present: boolean; active: boolean; sqlite: boolean; editing?: boolean; }
 interface BusyLease { owns(): boolean; release(): boolean; }
@@ -14,7 +14,7 @@ interface Operation { generation: number; scope: SqliteTableScope; input: Sqlite
 /** 条件编辑只生成严格合同，NULL 不带值；不猜测列亲和性，也不执行 SQL。 */
 export function sqliteTableDraft(scope: Pick<SqliteTableScope, 'connectionId' | 'database' | 'table'>, limit: number, mode: 'and' | 'or', filters: readonly SqliteFilterDraft[], sort: readonly SqliteSortDraft[]): SqliteTableQuery {
   const input = sqliteTablePageSchema.parse({ ...scope, taskId: 'sqlite-form-validation', offset: 0, limit, mode,
-    filters: filters.map(filter => ({ column: filter.column, operator: filter.operator, ...(filter.enabled === undefined ? {} : { enabled: filter.enabled }), ...(['in', 'notIn'].includes(filter.operator) ? { values: (filter.values ?? [filter.value]).map(value => ({ kind: filter.kind, value })) } : ['isNull', 'notNull'].includes(filter.operator) ? {} : { value: { kind: filter.kind, value: filter.value } }), ...(['between', 'notBetween'].includes(filter.operator) ? { secondValue: { kind: filter.kind, value: filter.secondValue ?? '' } } : {}) })), sort: sort.map(({ column, direction }) => ({ column, direction })) });
+    filters: filters.map(filter => ({ column: filter.column, operator: filter.operator, ...(filter.enabled === undefined ? {} : { enabled: filter.enabled }), ...(['oneOf', 'notOneOf'].includes(filter.operator) ? { selectedValues: filter.selectedValues } : ['in', 'notIn'].includes(filter.operator) ? { values: (filter.values ?? [filter.value]).map(value => ({ kind: filter.kind, value })) } : ['isNull', 'notNull'].includes(filter.operator) ? {} : { value: { kind: filter.kind, value: filter.value } }), ...(['between', 'notBetween'].includes(filter.operator) ? { secondValue: { kind: filter.kind, value: filter.secondValue ?? '' } } : {}) })), sort: sort.map(({ column, direction }) => ({ column, direction })) });
   return { limit: input.limit, mode: input.mode, filters: input.filters, sort: input.sort };
 }
 /** 回包必须对应准确目标与窗口，原值按导出合同检查，不能把错页或超限行交给网格。 */

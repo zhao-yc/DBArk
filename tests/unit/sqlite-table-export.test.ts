@@ -93,6 +93,13 @@ async function completed(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite完整导出真实只读流、原子文件与精度回放', () => {
+  it.each(['oneOf', 'notOneOf'] as const)('%s混合原类型集合沿完整流输出，包含NULL并保整数/二进制及源文件', async operator => {
+    const profile = fixture(), { app } = runtime(profile), source = await page(app, profile), before = await hash(profile.sqlite.filePath!);
+    const input = request(profile, source, { filters: [{ column: 'value', operator, selectedValues: [{ kind: 'integer', value: '9223372036854775807' }, { kind: 'null' }, { kind: 'blob', value: '0102' }] }] });
+    const expected = operator === 'oneOf' ? ['1', '5', '6'] : ['2', '3', '4', '7', '8', '9']; expect(await app.request('sqlite.tableExport', input)).toEqual({ rows: expected.length, fileCommitted: true });
+    const rows = JSON.parse(readFileSync(input.filePath, 'utf8')); expect(rows.map((row: { id: string }) => row.id)).toEqual(expected); if (operator === 'oneOf') { expect(rows[0].value).toBe('9223372036854775807'); expect(rows[1].value).toBe(null); }
+    await completed(processes.at(-1)!); expect(await hash(profile.sqlite.filePath!)).toBe(before);
+  });
   it.each([
     ['notContains', '号', ['1', '4', '5', '6', '7', '8', '9']], ['startsWith', '中文', ['1']], ['notStartsWith', '中文', ['2', '3', '4', '5', '6', '7', '8', '9']],
     ['endsWith', '\0字符', ['7']], ['notEndsWith', '\0字符', ['1', '2', '3', '4', '5', '6', '8', '9']],

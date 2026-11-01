@@ -40,10 +40,11 @@ afterEach(async context => {
 afterAll(() => { if (!retained) removeDirectory(bundleDirectory); });
 
 /** 无亲和性的value列真实混合五种存储类型，含64位上下界及Unicode/引号/空字符原文。 */
-function fixture(): SqliteConnectionProfile {
+function fixture(encoding: 'UTF-8' | 'UTF-16le' | 'UTF-16be' = 'UTF-8'): SqliteConnectionProfile {
   const directory = mkdtempSync(join(tmpdir(), 'dbark-sqlite-browse-')); directories.push(directory);
   const path = join(directory, 'sample.sqlite'), db = new DatabaseSync(path);
   try {
+    db.exec("PRAGMA encoding='" + encoding + "'");
     db.exec('PRAGMA journal_mode=WAL; CREATE TABLE mix(id INTEGER PRIMARY KEY,value,group_name TEXT,rank INTEGER,doubled INTEGER GENERATED ALWAYS AS (id*2) VIRTUAL,stored INTEGER GENERATED ALWAYS AS (id+100) STORED); CREATE VIEW mix_view AS SELECT * FROM mix; CREATE TABLE "引号""船🚢"("字段""甲" TEXT); INSERT INTO "引号""船🚢" VALUES(\'Unicode中文🚢\');');
     const insert = db.prepare('INSERT INTO mix(id,value,group_name,rank) VALUES(?,?,?,?)');
     for (const [id, value, group, rank] of [
@@ -133,6 +134,42 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     for (const id of ['第一页', '第二页', '最后页', '空页']) expect(taskState(app, id)).toEqual({ kind: 'browse-finished' });
   });
 
+  it('不同值使用独立真实只读快照，原类型/NULL/精度、搜索及混合勾选补集均一致', async () => {
+    const profile = fixture(), { app } = runtime(profile), original = await page(app, input(profile, '候选源结构'));
+    const request = { connectionId: profile.id, database: 'main', table: 'mix', column: 'value', schemaKey: original.schemaKey, taskId: '原类型候选', mode: 'and', filters: [], search: '' };
+    const output = await app.request('sqlite.valueOptions', request);
+    expect(output.request).toEqual(request); expect(output.truncated).toBe(false); expect(output.values).toHaveLength(10); expect(output.values.every((option: { count: string }) => option.count === '1')).toBe(true);
+    expect(output.values.map((option: { value: unknown }) => option.value)).toEqual(expect.arrayContaining([{ kind: 'integer', value: '9223372036854775807' }, { kind: 'integer', value: '-9223372036854775808' }, { kind: 'text', value: '9223372036854775807' }, { kind: 'blob', value: '00ff' }, { kind: 'null' }, { kind: 'text', value: '空\0字符' }]));
+    const selectedValues = [{ kind: 'integer' as const, value: '9223372036854775807' }, { kind: 'text' as const, value: '9223372036854775807' }, { kind: 'null' as const }, { kind: 'blob' as const, value: '00ff' }];
+    expect(ids(await page(app, input(profile, '混合类型包含', { limit: 100, filters: [{ column: 'value', operator: 'oneOf', selectedValues }] })))).toEqual(['1', '4', '5', '6']);
+    expect(ids(await page(app, input(profile, '混合类型排除', { limit: 100, filters: [{ column: 'value', operator: 'notOneOf', selectedValues }] })))).toEqual(['2', '3', '7', '8', '9', '10']);
+    const search = await app.request('sqlite.valueOptions', { ...request, taskId: '全表原文搜索', search: '%_' }); expect(search.values).toEqual([{ value: { kind: 'text', value: '50%_中文🚢' }, count: '1' }]);
+    await expect(app.request('sqlite.valueOptions', { ...request, taskId: '过期结构候选', schemaKey: '0'.repeat(64) })).rejects.toThrow('结构');
+    for (const record of processes) {
+      const queries = record.sent.filter((message): message is Extract<SqliteWorkerRequest, { kind: 'execute' }> => message.kind === 'execute'), groups = queries.filter(query => query.sql.includes('GROUP BY'));
+      if (!groups.length) { await closedRead(record); continue; }
+      expect(await record.exited).toEqual({ code: 0, signal: null }); expect(record.kills).toBe(0); expect(record.sent.find(message => message.kind === 'open')).toMatchObject({ options: { readOnly: true } });
+      expect(queries[0].sql).toBe('BEGIN'); expect(queries.at(-1)?.sql).toBe('ROLLBACK'); expect(groups).toHaveLength(1); expect(groups[0].sql).toMatch(/GROUP BY typeof\(.+LIMIT 501$/); expect(groups[0].sql).toContain('count(*)');
+    }
+  });
+  it('500+1不同值有界，搜索仍扫描完整集合，原排序规则分组且无穷REAL保持原值', async () => {
+    const profile = fixture(); disk(profile, db => {
+      db.exec('CREATE TABLE choices(id INTEGER PRIMARY KEY,v COLLATE NOCASE)'); const insert = db.prepare('INSERT INTO choices(v) VALUES(?)');
+      for (let index = 0; index < 601; index++) insert.run('g' + String(index).padStart(4, '0')); insert.run('g0600'); insert.run('A'); insert.run('a'); insert.run(null); db.exec('INSERT INTO choices(v) VALUES(1e999)');
+    });
+    const { app } = runtime(profile), original = await page(app, input(profile, '候选上限结构', { table: 'choices' })), request = { connectionId: profile.id, database: 'main', table: 'choices', column: 'v', schemaKey: original.schemaKey, mode: 'and', filters: [], search: '', taskId: '候选上限' };
+    const first = await app.request('sqlite.valueOptions', request); expect(first.values).toHaveLength(500); expect(first.truncated).toBe(true); expect(first.values).toContainEqual({ value: { kind: 'null' }, count: '1' }); expect(first.values).toContainEqual({ value: { kind: 'real', value: 'Infinity' }, count: '1' }); expect(first.values.filter((option: { value: { value?: string } }) => option.value.value === 'A' || option.value.value === 'a')).toHaveLength(1); expect(first.values.find((option: { count: string }) => option.count === '2')).toMatchObject({ count: '2' });
+    const beyond = await app.request('sqlite.valueOptions', { ...request, taskId: '第601组搜索', search: 'g0600' }); expect(beyond.values).toEqual([{ value: { kind: 'text', value: 'g0600' }, count: '2' }]); expect(beyond.truncated).toBe(false);
+    for (const record of processes) { expect(await record.exited).toEqual({ code: 0, signal: null }); expect(record.kills).toBe(0); }
+  });
+  it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s候选保真实NUL/BOM/Unicode；坏编码代表值明确拒绝，不发布替代字符', async encoding => {
+    const profile = fixture(encoding); disk(profile, db => { db.exec('CREATE TABLE encoded_values(id INTEGER PRIMARY KEY,v TEXT)'); const insert = db.prepare('INSERT INTO encoded_values(v) VALUES(?)'); insert.run('前\0🚢后'); insert.run('\uFEFF真实BOM'); });
+    const { app } = runtime(profile), original = await page(app, input(profile, '编码候选结构', { table: 'encoded_values', sort: [] })), request = { connectionId: profile.id, database: 'main', table: 'encoded_values', column: 'v', schemaKey: original.schemaKey, mode: 'and', filters: [], search: '', taskId: '原文候选' };
+    const exact = await app.request('sqlite.valueOptions', request); expect(exact.values).toEqual(expect.arrayContaining([{ value: { kind: 'text', value: '前\0🚢后' }, count: '1' }, { value: { kind: 'text', value: '\uFEFF真实BOM' }, count: '1' }]));
+    const bytes = encoding === 'UTF-8' ? '80' : encoding === 'UTF-16le' ? '00d8' : 'd800'; disk(profile, db => db.exec("INSERT INTO encoded_values(v) VALUES(CAST(X'" + bytes + "' AS TEXT))"));
+    await expect(app.request('sqlite.valueOptions', { ...request, taskId: '坏编码候选' })).rejects.toThrow(/编码|无损|TEXT/);
+    for (const record of processes) { expect(await record.exited).toEqual({ code: 0, signal: null }); expect(record.kills).toBe(0); }
+  });
   it('真实worker文本首尾和排除匹配保NUL与通配原文，不纳入NULL或其它存储类型', async () => {
     const profile = fixture(), { app } = runtime(profile); let serial = 0;
     for (const [operator, value, expected] of [
@@ -273,6 +310,14 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     expect(taskState(app, '准确取消')).toEqual({ kind: 'browse-finished' }); expect(taskState(app, '后继分页')).toEqual({ kind: 'browse-finished' });
   });
 
+  it('不同值真实阻塞分组准确取消，原用户事务仍打开，任务退出后保留编号墓碑', async () => {
+    const profile = fixture(); disk(profile, db => db.exec('CREATE VIEW values_expensive AS WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x AS value FROM n'));
+    const reached = deferred<void>(), { app, events } = runtime(profile, () => transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.includes('GROUP BY typeof(')) reached.resolve(); }));
+    const original = await page(app, input(profile, '阻塞候选原结构', { table: 'values_expensive', sort: [] })), user = await app.request('sessions.open', { connectionId: profile.id }); await app.request('query.transaction', { ...user, action: 'begin' });
+    const reading = app.request('sqlite.valueOptions', { connectionId: profile.id, database: 'main', table: 'values_expensive', column: 'value', schemaKey: original.schemaKey, taskId: '原分组取消', mode: 'and', filters: [], search: '' }).catch(reason => reason);
+    await reached.promise; await delay(50); await app.request('query.cancel', { taskId: '原分组取消' }); expect(await reading).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(processes[2].kills).toBe(1); expect(processes[1].kills).toBe(0); expect(taskState(app, '原分组取消')).toEqual({ kind: 'browse-finished' });
+    expect(await app.request('query.sessionState', user)).toEqual({ transactionOpen: true, transactionKnown: true, broken: false }); await app.request('query.transaction', { ...user, action: 'rollback' }); await app.close();
+  });
   it('真实阻塞聚合可准确强取消，只读分页关闭不会取消用户标签事务或另一个物理会话', async () => {
     const profile = fixture(); disk(profile, db => db.exec('CREATE VIEW expensive AS WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) AS total FROM n'));
     const reached = deferred<void>(); const { app, events } = runtime(profile, () => transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.startsWith('SELECT "total"')) reached.resolve(); }));

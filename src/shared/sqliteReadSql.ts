@@ -19,6 +19,11 @@ function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn
     // 停用仍经过完整合同和字段白名单，不可借停用绕过名称、值格式或全组预算。
     if (filter.enabled === false) return [];
     if (filter.operator === 'isNull' || filter.operator === 'notNull') return [column + (filter.operator === 'isNull' ? ' IS NULL' : ' IS NOT NULL')];
+    // 混合类型集合是一条完整条件；NOT取整个集合补集，保留未选择的NULL及其它类型。
+    if (filter.operator === 'oneOf' || filter.operator === 'notOneOf') {
+      const choices = filter.selectedValues!.map(value => value.kind === 'null' ? column + ' IS NULL' : '(typeof(' + column + ') = ' + render({ kind: 'storage-type', value: value.kind }) + ' AND ' + column + ' IS ' + render({ kind: 'operand', value }) + ')');
+      return [(filter.operator === 'notOneOf' ? 'NOT ' : '') + '(' + choices.join(' OR ') + ')'];
+    }
     // 同型列表仍限制真实存储类型，NOT IN不把NULL或另一类型当成普通不等值。
     if (filter.operator === 'in' || filter.operator === 'notIn') {
       const values = filter.values!, kind = values[0].kind, type = render({ kind: 'storage-type', value: kind === 'blob' ? 'blob' : kind });

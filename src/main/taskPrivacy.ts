@@ -12,6 +12,7 @@ import { sqliteTableEditMessages } from '../shared/sqliteTableEdit';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command === 'sqlite.valueOptions') return event.status === 'completed' ? 'SQLite不同值读取完成；条件、搜索和候选值未保存。' : event.status === 'running' ? '正在读取SQLite不同值；原值仅留在当前窗口。' : 'SQLite不同值读取未完成；条件、搜索、候选值及错误原文未保存。';
   if (command.startsWith('sqlite.objects.')) return sqliteObjectsTaskMessage(command, event.status);
   if (command.startsWith('sqlite.tableMaintenance.')) return sqliteTableMaintenanceTaskMessage(command, event.status);
   if (command.startsWith('sqlite.tableRename.')) return sqliteTableRenameTaskMessage(command, event.status);
