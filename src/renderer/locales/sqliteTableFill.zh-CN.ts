@@ -1,0 +1,21 @@
+/** 勾选行填充只创建本地typed草稿；不存在读取原行或直接写库的入口。 */
+export const sqliteTableFillZh = {
+  entry: '填充 SQLite 勾选记录…', title: '填充 SQLite 勾选记录',
+  include: (name: string) => '填充 SQLite 字段 ' + name,
+  type: (name: string) => 'SQLite 填充 ' + name + ' 类型',
+  value: (name: string) => 'SQLite 填充 ' + name + ' 值',
+  save: '暂存 SQLite 批量填充', cancel: '取消 SQLite 批量填充',
+  count: (count: number) => '将填充 ' + count + ' 条勾选记录',
+  selectedFields: (count: number) => '已选择 ' + count + ' 个填充字段',
+  changed: (count: number) => '已暂存 ' + count + ' 个单元格填充',
+  hint: '仅对本次勾选记录暂存所选字段，默认不选择任何字段。不读取或展示原行值，不直接写入数据库；最终仍须预览 SQL 并明确提交，整批填充可一次撤销。',
+  allNewHint: '全部为本地新增草稿，可明确选择 DEFAULT 省略字段；DEFAULT 与 NULL、空字符串不同。',
+  existingHint: '包含已存在记录，不能用 DEFAULT 批量更新；请明确选择文本、整数、有限实数、二进制或 NULL。',
+  generatedHint: '生成字段不参加填充。未勾选的字段保持各行原值。',
+  kinds: { text: '文本 / JSON 文本', integer: '整数（64 位）', real: '实数（有限）', blob: '二进制（十六进制）', null: 'NULL', default: 'DEFAULT（新增草稿省略）' },
+  invalid: '填充字段或类型值无效，未暂存任何修改；请核对整数范围、有限实数及完整十六进制字节。',
+  stale: '原勾选记录、页面或操作来源已变化，无法暂存本次填充；输入已保留，不会自动重试。',
+  empty: '请至少勾选一个要填充的字段。',
+  budget: '所选字段与勾选行数的组合超过 SQLite 批量字段或文本预算，未暂存任何修改。',
+  readonly: '当前页面没有可写字段，不能进行批量填充。',
+} as const;

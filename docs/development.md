@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 高频编辑新增[勾选记录多字段填充](development/sqlite-table-fill-20261101.md)：当前页准确勾选、多字段显式typed输入、单次原子暂存及一步撤销；生成列排除，DEFAULT仅全新增草稿可选，最终仍须原SQL预览和集中提交。验证与未验范围见专项记录，暂不发布。
+
 SQLite 高频查询新增[元数据补全](development/sqlite-completion-20261101.md)：独立 SQLite 分析 Worker、表／视图／字段与别名、明确输出的 CTE／派生表，原物理会话临时命名空间及未提交 DDL 保持。新 IPC 仅传标识符，取消不回滚用户事务；验证及未支持语法见专项记录，Mac／安装另验，暂不发布。
 
 W02新增[系统对象链接入口](development/external-object-uris-20261027.md)：有界单实例队列、真实文档及连接修订租约、受限IPC、模态等待与原工作区导航；Windows安装脚本和macOS包声明分别接线。WIN11-TEST类型、123项定向、构建及1个正式事件/真实副实例离线整例通过，原失败与边界见[验收记录](../tests/integration/acceptance-external-object-uris-20261027.md)；系统注册、冷启动及实库成功导航须另取原生证据，暂不发布。

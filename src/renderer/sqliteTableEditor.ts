@@ -1,6 +1,7 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteEditValueSchema, sqliteTableEditPreviewSchema, sqliteTableEditLimits, type SqliteOriginalValue, type SqliteTableChange, type SqliteTableEditPreview, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
 import { sqliteTableEditZh as text } from './locales/sqliteTableEdit.zh-CN';
+import { prepareSqliteFill, sqliteFillSourceCurrent, type SqliteFillField, type SqliteFillSource } from './sqliteTableFill';
 
 export interface SqliteDraftRow { id: string; index?: number; values: (SqliteOriginalValue | undefined)[]; deleted: boolean; }
 export interface SqliteEditView { page: SqliteTablePage; rows: SqliteDraftRow[]; dirty: boolean; busy: boolean; valid: boolean; unknown: boolean; undo: boolean; redo: boolean; message: string; preview?: SqliteTableEditPreview; taskId?: string; }
@@ -195,6 +196,52 @@ export class SqliteTableEditor {
     const changes = sqliteDraftChanges(this.page, next);
     if (changes.length && !sqliteTableEditPreviewSchema.safeParse({ snapshotId, taskId: 'sqlite-remove-selected-validation', changes }).success) throw Error(text.bulkDeleteLimit);
     current(); this.replace(next); return selected.size;
+  }
+  /** 多字段统一填充只暂存当前准确勾选行；整批校验后一次发布，同值不清预览或消耗undo。 */
+  fillRows(rowIds: readonly string[], fields: readonly SqliteFillField[]): number {
+    if (!this.canEdit() || this.page.edit?.kind !== 'editable') throw Error(this.message || text.stale);
+    const ids = appendArray(rowIds, 0, 1500), rawFields = appendArray(fields, 0, 1024);
+    // 完整扇出先界定再读取来源或typed值；空请求不签能力、不发布状态，也不消耗原预览。
+    if (ids.length * rawFields.length > sqliteTableEditLimits.cells) throw Error(text.invalid);
+    if (!ids.length || !rawFields.length) return 0;
+    const edit = this.page.edit, original = this.rows, past = this.past, pastLength = past.length, future = this.future, futureLength = future.length, preview = this.previewValue, input = this.input, baseline = edit.rows, snapshotId = edit.snapshotId, width = this.page.columns.length;
+    appendArray(original, 0, 1500);
+    const liveRow = original.find(row => Object.getOwnPropertyDescriptor(row, 'deleted')?.value === false); if (!liveRow) throw Error(text.invalid);
+    const source: SqliteFillSource = prepareSqliteFill(this.page, original, [liveRow]);
+    // source先证明自有data，再读取row/values引用，禁止校验前触发来源中的getter。
+    const signature = JSON.stringify([this.page.target, this.page.schemaKey, edit.snapshotId, edit.expiresAt, this.page.columns, edit.columns, edit.locator]), rowRefs = original.map(row => ({ row, values: row.values }));
+    const current = () => { if (!this.canEdit() || this.page.edit !== edit || edit.rows !== baseline || edit.snapshotId !== snapshotId || this.rows !== original || this.past !== past || past.length !== pastLength || this.future !== future || future.length !== futureLength || this.previewValue !== preview || this.input !== input || JSON.stringify([this.page.target, this.page.schemaKey, edit.snapshotId, edit.expiresAt, this.page.columns, edit.columns, edit.locator]) !== signature || original.length !== rowRefs.length || rowRefs.some((item, index) => original[index] !== item.row || item.row.values !== item.values) || source && !sqliteFillSourceCurrent(source, this.page, original)) throw Error(this.message || text.stale); };
+    const rows = new Map<string, SqliteDraftRow>(), selected = new Set<string>();
+    for (const row of original) { if (typeof row.id !== 'string' || !row.id || rows.has(row.id)) throw Error(text.invalid); rows.set(row.id, row); }
+    for (let i = 0; i < ids.length; i++) { const id: unknown = Object.getOwnPropertyDescriptor(ids, String(i))!.value; if (typeof id !== 'string' || !id || selected.has(id) || !rows.has(id) || rows.get(id)!.deleted) throw Error(text.invalid); selected.add(id); }
+    const targets = original.filter(row => selected.has(row.id)), allNew = targets.every(row => row.index === undefined), columns = new Set<number>(), copied: SqliteFillField[] = []; let units = 0;
+    for (let i = 0; i < rawFields.length; i++) {
+      const raw: unknown = Object.getOwnPropertyDescriptor(rawFields, String(i))!.value;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw) || ![Object.prototype, null].includes(Object.getPrototypeOf(raw))) throw Error(text.invalid);
+      const keys = Reflect.ownKeys(raw); if (keys.length !== 2 || !keys.includes('column') || !keys.includes('value')) throw Error(text.invalid);
+      const columnField = Object.getOwnPropertyDescriptor(raw, 'column'), valueField = Object.getOwnPropertyDescriptor(raw, 'value'); if (!columnField?.enumerable || !('value' in columnField) || !valueField?.enumerable || !('value' in valueField)) throw Error(text.invalid);
+      const column: unknown = columnField.value, value: unknown = valueField.value;
+      if (typeof column !== 'number' || !Number.isInteger(column) || column < 0 || column >= width || columns.has(column) || edit.columns[column].generated || value === undefined && !allNew) throw Error(text.invalid);
+      columns.add(column); const plain = value === undefined ? undefined : appendValue(value);
+      units += edit.columns[column].name.length + (typeof plain?.value === 'string' ? plain.value.length : 0); if (units > sqliteTableEditLimits.inputUnits) throw Error(text.invalid);
+      copied.push({ column, value: plain === undefined ? undefined : sqliteEditValueSchema.parse(plain) });
+    }
+    current(); if (!targets.length || !copied.length) return 0;
+    const next = [...original]; let changedCells = 0;
+    for (let index = 0; index < original.length; index++) {
+      const row = original[index]; if (!selected.has(row.id)) continue;
+      for (const field of copied) {
+        if (sameDraftValue(row.values[field.column], field.value)) continue;
+        if (next[index] === row) next[index] = { ...row, values: [...row.values] };
+        const before = row.index === undefined ? undefined : edit.rows[row.index][field.column];
+        // 恢复原值时保原属性序，避免sqliteDraftChanges把等值对象误当成一次更新。
+        next[index].values[field.column] = sameDraftValue(before, field.value) ? before === undefined ? undefined : structuredClone(before) : field.value === undefined ? undefined : { ...field.value };
+        changedCells++;
+      }
+    }
+    current(); if (!changedCells) return 0;
+    const changes = sqliteDraftChanges(this.page, next); if (changes.length) sqliteTableEditPreviewSchema.parse({ snapshotId, taskId: 'sqlite-fill-validation', changes });
+    current(); this.replace(next); return changedCells;
   }
   undo(): void { if (!this.canEdit() || !this.past.length) return; this.invalidatePreview(); this.future.push(this.rows); this.rows = this.past.pop()!; this.emit(); }
   redo(): void { if (!this.canEdit() || !this.future.length) return; this.invalidatePreview(); this.past.push(this.rows); this.rows = this.future.pop()!; this.emit(); }
