@@ -43,3 +43,10 @@ SQLite 已有字段类型／默认值、列重排、约束重建设计及完整�
 ## 冻结源与交付核对
 
 源码产品在 `build-06` 后未再修改。构建候选 `774a2884b89b98af183abd17453f513848d8802d2f7dfed70bce438ebafdeb29` 后仅调整入口测试 RAM 端口，并提前清除两份新增测试的文件末空行；EOF 前后 TypeScript 编译 JS 完全相同，原字节和摘要保留。最终候选 `614c7a0d2a0f6aae9b67bafe06e4e8835911838ac3854412f8105169136d38b0` 共 3180 个源／测试／脚本／工作流输入；228 份 Main sourcemap 源逐字匹配当前产品，bundle／map 与原窗口构建一致。最终完整单元使用最终测试源，不以中间 174／137 项结果替代。
+
+
+## 后续三平台源码复验
+
+准确提交 `9a9abb9fc6611e3d207612893d8fcf875df6a2d0` 的[SQLite源码 CI](https://github.com/zhao-yc/DBArk/actions/runs/41264887275)现已终态 success：Windows x64、macOS arm64／x64 各 15 份报告、20 项通过，零失败／跳过／flaky／重试。Root 下载三份原始 artifact ZIP，逐份核对 workflow SHA、API 大小及 SHA256 digest；逐报告核状态，并独立复核新增 rename 三例的原 SQL／BEGIN IMMEDIATE／真实 COMMIT 或 ROLLBACK statementEnd ACK、close／closed／closeAck、worker exit、精确原行和定义、FK／序列、真实往返和菜单展开零请求，以及重启不重放。每平台三份准确清理回执均由原测试机 stat 核零，不以本机 exists 推断远程目录。
+
+原件位于忽略目录 `.cache/sqlite-table-maintenance-20261101/ci-9a-02-artifact-*.zip`，15 报告汇总及 `root-prior-rename-*-audit.json` 各自保留。上述只覆盖该准确提交的源码，不代替本轮清空／删除或安装验收；通用客户端 CI 的打包／安装作业仍按准确编号单独观察，不据其总状态泛化未运行的专项。

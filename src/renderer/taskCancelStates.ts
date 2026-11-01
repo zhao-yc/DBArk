@@ -1,3 +1,4 @@
+import { sqliteTableMaintenanceFactSchema, type SqliteTableMaintenanceFact } from '../shared/sqliteTableMaintenance';
 import { sqliteTableRenameFactSchema, type SqliteTableRenameFact } from '../shared/sqliteTableRename';
 import { sqliteColumnsFactSchema, type SqliteColumnsFact } from '../shared/sqliteColumns';
 import type { TaskEvent } from '../shared/contracts';
@@ -9,6 +10,12 @@ import { sqliteTableCreateFactSchema, type SqliteTableCreateFact } from '../shar
 import { sqliteIndexesFactSchema, type SqliteIndexesFact } from '../shared/sqliteIndexes';
 
 /** 字段DDL使用独立严格事实；COMMIT可能发送或未知时不再授予取消。 */
+/** 清空／删除表采用自己的严格事务事实，COMMIT边界及未知结果不再授权取消。 */
+export function sqliteTableMaintenanceCancelLocked(fact?: SqliteTableMaintenanceFact): boolean {
+  const parsed = sqliteTableMaintenanceFactSchema.safeParse(fact);
+  return parsed.success && (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown');
+}
+
 export function sqliteTableRenameCancelLocked(fact?: SqliteTableRenameFact): boolean {
   const parsed = sqliteTableRenameFactSchema.safeParse(fact);
   return parsed.success && (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown');
@@ -81,7 +88,7 @@ export class TaskCancelStates {
     const entry = this.entries.get(event.taskId); if (!this.active || !entry) return;
     if (event.status !== 'running') { entry.state = 'finished'; entry.locked = true; }
     else if (!entry.locked) {
-      if (event.tableApply?.evidence.commitMayHaveBeenSent || sqliteTableRenameCancelLocked(event.sqliteTableRename) || sqliteColumnsCancelLocked(event.sqliteColumns) || sqliteIndexesCancelLocked(event.sqliteIndexes) || sqliteTableCreateCancelLocked(event.sqliteCreate) || sqliteWriteCancelLocked(event.sqliteWrite, event.sqliteImportOperation === 'apply')) { entry.state = 'confirming'; entry.locked = true; }
+      if (event.tableApply?.evidence.commitMayHaveBeenSent || sqliteTableMaintenanceCancelLocked(event.sqliteTableMaintenance) || sqliteTableRenameCancelLocked(event.sqliteTableRename) || sqliteColumnsCancelLocked(event.sqliteColumns) || sqliteIndexesCancelLocked(event.sqliteIndexes) || sqliteTableCreateCancelLocked(event.sqliteCreate) || sqliteWriteCancelLocked(event.sqliteWrite, event.sqliteImportOperation === 'apply')) { entry.state = 'confirming'; entry.locked = true; }
       else entry.state = 'checking';
     }
     entry.version = ++this.clock;

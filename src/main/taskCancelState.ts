@@ -5,6 +5,8 @@ import type { TaskCancelSnapshot, TaskCancelState } from '../shared/taskCancelSt
 export function taskCancelSnapshot(taskIds: string[], tasks: ReadonlyMap<string, TaskRecord>, tableApplyState: (id: string, operationId: string | undefined) => TaskCancelState): TaskCancelSnapshot {
   return [...new Set(taskIds)].map(taskId => {
     const task = tasks.get(taskId);
+    const maintenance = task?.kind === 'sqlite.tableMaintenance.apply' ? task.sqliteTableMaintenance : undefined;
+    const confirmingMaintenance = maintenance && (maintenance.phase === 'commit-pending' || maintenance.phase === 'unknown' || maintenance.commitMayHaveBeenSent && !maintenance.commitAcknowledged && !maintenance.rollbackAcknowledged);
     const rename = task?.kind === 'sqlite.tableRename.apply' ? task.sqliteTableRename : undefined;
     const confirmingRename = rename && (rename.phase === 'commit-pending' || rename.phase === 'unknown' || rename.commitMayHaveBeenSent && !rename.commitAcknowledged && !rename.rollbackAcknowledged);
     const columns = task?.kind === 'sqlite.columns.apply' ? task.sqliteColumns : undefined;
@@ -15,7 +17,7 @@ export function taskCancelSnapshot(taskIds: string[], tasks: ReadonlyMap<string,
     const imported = task?.kind === 'sqlite.tableImport.apply' ? task.sqliteWrite : undefined;
     const confirmingImport = imported && (imported.phase === 'commit-pending' || imported.phase === 'unknown' || imported.commitMayHaveBeenSent && !imported.commitAcknowledged && !imported.rollbackAcknowledged);
     const confirmingCreate = create && (create.phase === 'commit-pending' || create.phase === 'unknown' || create.commitMayHaveBeenSent && !create.commitAcknowledged && !create.rollbackAcknowledged);
-    const state = !task ? 'checking' : task.status !== 'running' || rename?.commitAcknowledged || rename?.rollbackAcknowledged || columns?.commitAcknowledged || columns?.rollbackAcknowledged || indexes?.commitAcknowledged || indexes?.rollbackAcknowledged || create?.commitAcknowledged || create?.rollbackAcknowledged || imported?.commitAcknowledged || imported?.rollbackAcknowledged ? 'finished' : confirmingCreate || confirmingImport || confirmingIndexes || confirmingColumns || confirmingRename ? 'confirming' : task.kind === 'table.apply' ? tableApplyState(taskId, task.tableApplyReceiptId) : 'allowed';
+    const state = !task ? 'checking' : task.status !== 'running' || maintenance?.commitAcknowledged || maintenance?.rollbackAcknowledged || rename?.commitAcknowledged || rename?.rollbackAcknowledged || columns?.commitAcknowledged || columns?.rollbackAcknowledged || indexes?.commitAcknowledged || indexes?.rollbackAcknowledged || create?.commitAcknowledged || create?.rollbackAcknowledged || imported?.commitAcknowledged || imported?.rollbackAcknowledged ? 'finished' : confirmingCreate || confirmingImport || confirmingIndexes || confirmingColumns || confirmingRename || confirmingMaintenance ? 'confirming' : task.kind === 'table.apply' ? tableApplyState(taskId, task.tableApplyReceiptId) : 'allowed';
     return { taskId, state };
   });
 }

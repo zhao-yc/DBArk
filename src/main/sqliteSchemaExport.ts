@@ -66,6 +66,9 @@ function definition(sql: string, kind: 'table' | 'view' | 'index' | 'trigger', e
   return kind === 'table' && parts.some(part => word(part, 'AUTOINCREMENT'));
 }
 
+/** 维护操作复用同一DDL归属及词法校验，引用名、文本和注释中的AUTOINCREMENT不授予重置序列能力。 */
+export function sqliteTableHasAutoincrement(sql: string, table: string): boolean { return definition(sql, 'table', table, table); }
+
 /** 元数据同样不允许截断；不会把有界目录不足当成完整结构。 */
 async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maximum: number, control: SqliteTableBrowseControl): Promise<SqliteValue[][]> {
   control.check(); const result: SqliteValue[][] = [];

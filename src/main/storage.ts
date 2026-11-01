@@ -1,3 +1,4 @@
+import { recoverSqliteTableMaintenanceTask } from '../shared/sqliteTableMaintenanceFact';
 import { recoverSqliteTableRenameTask } from '../shared/sqliteTableRenameFact';
 import { recoverSqliteIndexesTask } from '../shared/sqliteIndexesFact';
 import { recoverSqliteColumnsTask } from '../shared/sqliteColumnsFact';
@@ -142,6 +143,11 @@ export class LocalStore {
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
     }
     // 表重命名只恢复最小事实；新名、目录、导航身份和原ALTER不会成为重放任务。
+    // 表清空／删除仅恢复最小原生事务事实，不恢复预览、目录或写入能力。
+    for (const task of this.tasks()) if (task.kind.startsWith('sqlite.tableMaintenance.')) {
+      const restored = recoverSqliteTableMaintenanceTask(task);
+      if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
+    }
     for (const task of this.tasks()) if (task.kind.startsWith('sqlite.tableRename.')) {
       const restored = recoverSqliteTableRenameTask(task);
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);

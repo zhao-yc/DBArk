@@ -1,3 +1,4 @@
+import { SqliteTableMaintenanceMain } from '../../src/main/sqliteTableMaintenanceMain';
 import { SqliteTableRenameMain } from '../../src/main/sqliteTableRenameMain';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
@@ -46,4 +47,10 @@ export function emptySqliteColumnsMain(): SqliteColumnsMain {
 export function emptySqliteTableRenameMain(): SqliteTableRenameMain {
   const unexpected = () => { throw Error('旧退出夹具未登记SQLite表重命名操作'); };
   return new SqliteTableRenameMain({ assert: unexpected, same: unexpected, revision: () => 0, epoch: () => ({}), available: unexpected, closing: () => false, profile: () => undefined, request: async () => unexpected(), task: () => undefined, replace: unexpected, save: unexpected, event: unexpected });
+}
+
+/** 原退出场景没有表维护，仍执行真实协调器的空账本drain。 */
+export function emptySqliteTableMaintenanceMain(): SqliteTableMaintenanceMain {
+  const unexpected = () => { throw Error('旧退出夹具未登记SQLite表维护操作'); };
+  return new SqliteTableMaintenanceMain({ assert: unexpected, same: unexpected, revision: () => 0, epoch: () => ({}), available: unexpected, closing: () => false, profile: () => undefined, request: async () => unexpected(), task: () => undefined, replace: unexpected, save: unexpected, event: unexpected });
 }

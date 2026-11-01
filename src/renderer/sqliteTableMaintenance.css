@@ -1,0 +1,4 @@
+.sqlite-table-maintenance pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.sqlite-table-maintenance .sqlite-table-maintenance-scroll { max-height: 240px; overflow: auto; }
+.sqlite-table-maintenance td { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sqlite-table-maintenance [aria-label="SQLite 维护风险确认"] { display: grid; gap: 8px; margin: 12px 0; }

@@ -1,3 +1,4 @@
+import { sqliteTableMaintenanceTaskMessage } from '../shared/sqliteTableMaintenanceFact';
 import { sqliteTableRenameTaskMessage } from '../shared/sqliteTableRenameFact';
 import { sqliteColumnsTaskMessage } from '../shared/sqliteColumnsFact';
 import { sqliteImportTaskMessage } from '../shared/sqliteTableImportFact';
@@ -9,6 +10,7 @@ import { sqliteTableEditMessages } from '../shared/sqliteTableEdit';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command.startsWith('sqlite.tableMaintenance.')) return sqliteTableMaintenanceTaskMessage(command, event.status);
   if (command.startsWith('sqlite.tableRename.')) return sqliteTableRenameTaskMessage(command, event.status);
   if (command.startsWith('sqlite.columns.')) return sqliteColumnsTaskMessage(command, event.status);
   if (command.startsWith('sqlite.indexes.')) return sqliteIndexesTaskMessage(command, event.status);
