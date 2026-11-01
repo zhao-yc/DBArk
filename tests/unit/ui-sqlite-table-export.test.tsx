@@ -43,9 +43,9 @@ afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object
 const source = (): SqliteTablePage => ({ schemaKey: 'a'.repeat(64), target: { connectionId: 'c', database: 'main', table: 'subject', kind: 'table' }, columns: [{ name: 'id', declaredType: 'INTEGER', generated: false }, { name: 'g', declaredType: 'INTEGER', generated: true }], result: { columns: [{ key: 'c0', name: 'id', type: 'SQLITE' }, { key: 'c1', name: 'g', type: 'SQLITE' }], rows: [], truncated: false, elapsedMs: 1, statement: '只读页合成来源' }, offset: 0, limit: 100, hasMore: true });
 /** 原chooser、导出及取消分别由各自Promise驱动，进度事件不能伪造完整落盘。 */
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
-async function mount(override: Partial<SqliteTableExportServices> = {}, objectKind: 'table' | 'view' = 'table', definition: SqliteTablePage = source()) {
+async function mount(override: Partial<SqliteTableExportServices> = {}, objectKind: 'table' | 'view' = 'table', definition: SqliteTablePage = source(), filters?: SqliteTableQuery['filters']) {
   let allowed = true; const info = definition; info.target.kind = objectKind;
-  const applied: SqliteTableQuery = { limit: 100, mode: 'and', filters: [{ column: 'id', operator: 'gte', value: { kind: 'integer', value: '9007199254740993' } }], sort: [{ column: 'id', direction: 'desc' }] };
+  const applied: SqliteTableQuery = { limit: 100, mode: 'and', filters: filters ?? [{ column: 'id', operator: 'gte', value: { kind: 'integer', value: '9007199254740993' } }], sort: [{ column: 'id', direction: 'desc' }] };
   const intent = new SqliteTableExportIntent(info, applied, [], () => allowed);
   const choose = vi.fn(async (_input: Parameters<SqliteTableExportServices['choose']>[0]): Promise<FileChoice | null> => ({ token: 'file-token', name: 'synthetic.csv' })), execute = vi.fn(async (_input: Parameters<SqliteTableExportServices['execute']>[0]): Promise<SqliteTableExportOutput> => ({ rows: 1105, fileCommitted: true })), cancel = vi.fn(async (_id: string) => undefined), listeners = new Set<(event: TaskEvent) => void>();
   const services: SqliteTableExportServices = { choose, execute, cancel, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, ...override };
@@ -191,4 +191,12 @@ describe('SQLite SQL 结构内容真实React RAM及原异步归属', () => {
   it('view仅结构可保存SQL，返回交换格式时不夹带sqlContent且恢复合理列', async () => {
     const execute = vi.fn(async (_input: Parameters<SqliteTableExportServices['execute']>[0]): Promise<SqliteTableExportOutput> => ({ rows: 0, fileCommitted: true })); await mount({ execute }, 'view'); await change(text.format, 'sql'); expect(select(text.sqlContent).value).toBe('structure'); expect(execute).not.toHaveBeenCalled(); await chooseFile(); await click(text.start); expect(execute).toHaveBeenCalledOnce(); expect(execute.mock.calls[0][0]).toMatchObject({ sqlContent: 'structure', columns: [] }); await change(text.format, 'json'); expect(orderedFields()).toEqual(['id', 'g']); await chooseFile(); await click(text.start); expect(execute).toHaveBeenCalledTimes(2); expect(Object.hasOwn(execute.mock.calls[1][0], 'sqlContent')).toBe(false); expect(execute.mock.calls[1][0].columns).toEqual(['id', 'g']);
   });
+});
+
+it('导出摘要显示停用原条件，全部停用明确提示没有筛选而不删除原值', async () => {
+  await mount({}, 'table', source(), [{ column: 'id', operator: 'gte', enabled: false, value: { kind: 'integer', value: '9007199254740993' } }]);
+  expect(document.body.textContent).toContain('已启用 0 / 1 条筛选');
+  expect(document.body.textContent).toContain('[已停用] id');
+  expect(document.body.textContent).toContain('9007199254740993');
+  expect(document.body.textContent).toContain('没有已启用的筛选，将读取所有记录。');
 });

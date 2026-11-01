@@ -14,12 +14,14 @@ function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn
   const output = selected ?? columns.map(column => column.name);
   if (!output.length || output.length > limits.columns || new Set(output).size !== output.length) throw Error('SQLite导出列为空、重复或超过预算');
   const operators = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' } as const;
-  const filters = input.filters.map(filter => {
+  const filters = input.filters.flatMap(filter => {
     const column = field(filter.column);
-    if (filter.operator === 'isNull' || filter.operator === 'notNull') return column + (filter.operator === 'isNull' ? ' IS NULL' : ' IS NOT NULL');
+    // 停用仍经过完整合同和字段白名单，不可借停用绕过名称、值格式或全组预算。
+    if (filter.enabled === false) return [];
+    if (filter.operator === 'isNull' || filter.operator === 'notNull') return [column + (filter.operator === 'isNull' ? ' IS NULL' : ' IS NOT NULL')];
     const value = filter.value!, type = render({ kind: 'storage-type', value: value.kind === 'blob' ? 'blob' : value.kind }), operand = render({ kind: 'operand', value });
     const comparison = filter.operator === 'contains' ? 'instr(' + column + ', ' + operand + ') > 0' : column + ' ' + operators[filter.operator] + ' ' + operand;
-    return '(typeof(' + column + ') = ' + type + ' AND ' + comparison + ')';
+    return ['(typeof(' + column + ') = ' + type + ' AND ' + comparison + ')'];
   });
   const order = input.sort.map(sort => field(sort.column) + (sort.direction === 'asc' ? ' ASC' : ' DESC'));
   const pagination = complete ? explicitLimit === undefined ? '' : ' LIMIT ' + render({ kind: 'count', value: explicitLimit }) : ' LIMIT ' + render({ kind: 'count', value: input.limit + 1 }) + ' OFFSET ' + render({ kind: 'count', value: input.offset });

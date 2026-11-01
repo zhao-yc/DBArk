@@ -15,7 +15,7 @@ const operand = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('blob'), value: z.string().max(sqliteTableBrowseLimits.valueUnits).regex(/^(?:[0-9a-fA-F]{2})*$/, '二进制条件填写完整十六进制字节') }).strict(),
 ]);
 export const sqliteTableFilterSchema = z.object({
-  column: name, operator: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'isNull', 'notNull']), value: operand.optional(),
+  column: name, operator: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'isNull', 'notNull']), value: operand.optional(), enabled: z.boolean().optional(),
 }).strict().superRefine((filter, context) => {
   const nullCheck = filter.operator === 'isNull' || filter.operator === 'notNull';
   if (nullCheck ? filter.value !== undefined : filter.value === undefined) context.addIssue({ code: 'custom', message: 'NULL条件不带值，其余条件必须明确类型和值' });

@@ -93,6 +93,15 @@ async function completed(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite完整导出真实只读流、原子文件与精度回放', () => {
+  it.each([true, false])('启用子集=%s：完整流导出忽略停用条件，精度与源文件保持且utility正常退出', async active => {
+    const profile = fixture(), { app } = runtime(profile), source = await page(app, profile), before = await hash(profile.sqlite.filePath!);
+    const input = request(profile, source, { filters: [{ column: 'value', operator: 'eq', enabled: false, value: { kind: 'integer', value: '9223372036854775807' } }, { column: 'id', operator: 'lte', enabled: active, value: { kind: 'integer', value: '2' } }] });
+    expect(await app.request('sqlite.tableExport', input)).toEqual({ rows: active ? 2 : 9, fileCommitted: true });
+    const rows = JSON.parse(readFileSync(input.filePath, 'utf8'));
+    expect(rows.map((row: { id: string }) => row.id)).toEqual(Array.from({ length: active ? 2 : 9 }, (_, i) => String(i + 1)));
+    expect(rows[0].value).toBe('9223372036854775807'); expect(rows[1].value).toBe('-9223372036854775808');
+    await completed(processes.at(-1)!); expect(await hash(profile.sqlite.filePath!)).toBe(before);
+  });
   it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s沿typed筛选/排序/选择列顺序流式输出，源库字节不变，DB正常exit先于prepare/commit', async format => {
     const profile = fixture(), { app, events } = runtime(profile), source = await page(app, profile), before = await hash(profile.sqlite.filePath!);
     const columns = format === 'xlsx' ? ['number_text', 'payload', 'id'] : ['note', 'id', 'value', 'payload', 'number_text'];

@@ -203,6 +203,23 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await controls(true); await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await filter(2, 'id', 'gte', 'integer', '30'); await step(() => table().getByLabel('SQLite 筛选关系', { exact: true }).selectOption('and')); await apply([]);
     await controls(true); await step(() => table().getByLabel('SQLite 筛选关系', { exact: true }).selectOption('or')); await apply([2, 30, 31, 32, 33]);
     expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ mode: 'or', filters: [{ column: 'mixed', operator: 'eq', value: { kind: 'text', value: '2' } }, { column: 'id', operator: 'gte', value: { kind: 'integer', value: '30' } }] });
+    stage = '筛选单条与全部启停保原值，未Apply零读取且Apply从首页重读';
+    await controls(true); const beforeToggle = (await step(audit)).pages.length;
+    await step(() => table().getByLabel('启用 SQLite 筛选 1', { exact: true }).uncheck());
+    await step(() => table().getByLabel('SQLite 筛选 1 条件值', { exact: true }).fill('保留停用值'));
+    await step(() => expect(table().getByLabel('启用 SQLite 筛选 1', { exact: true })).not.toBeChecked());
+    expect((await step(audit)).pages.length).toBe(beforeToggle); await apply([30, 31, 32, 33, 34]);
+    expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 0, filters: [{ column: 'mixed', enabled: false, value: { kind: 'text', value: '保留停用值' } }, { column: 'id', value: { kind: 'integer', value: '30' } }] });
+    await controls(true); const beforeAll = (await step(audit)).pages.length;
+    await step(() => table().getByRole('button', { name: '全部停用 SQLite 筛选', exact: true }).click());
+    await step(() => expect(table().getByText('已启用 0 / 2 条筛选', { exact: true })).toBeVisible());
+    await step(async () => info.attach('SQLite全部停用筛选表单', { body: await page.screenshot(), contentType: 'image/png' }));
+    expect((await step(audit)).pages.length).toBe(beforeAll); await apply([1, 2, 3, 4, 5]);
+    expect((await step(audit)).pages.at(-1)?.request.filters).toEqual([{ column: 'mixed', operator: 'eq', enabled: false, value: { kind: 'text', value: '保留停用值' } }, { column: 'id', operator: 'gte', enabled: false, value: { kind: 'integer', value: '30' } }]);
+    await controls(true); await step(() => table().getByLabel('SQLite 筛选 1 条件值', { exact: true }).fill('2'));
+    await step(() => table().getByRole('button', { name: '全部启用 SQLite 筛选', exact: true }).click());
+    await step(() => expect(table().getByLabel('启用 SQLite 筛选 1', { exact: true })).toBeChecked());
+    await step(() => expect(table().getByLabel('启用 SQLite 筛选 2', { exact: true })).toBeChecked()); await apply([2, 30, 31, 32, 33]);
     stage = '多列排序方向及优先级'; await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 2', exact: true }).click()); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByRole('button', { name: '删除 SQLite 排序 1', exact: true }).click());
     for (const [index, column, direction] of [[1, 'bucket', 'asc'], [2, 'rank_num', 'desc'], [3, 'id', 'asc']] as const) { await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel(`SQLite 排序 ${index} 字段`, { exact: true }).selectOption(column)); await step(() => table().getByLabel(`SQLite 排序 ${index} 方向`, { exact: true }).selectOption(direction)); }
     await apply(expectedSort([{ key: 'bucket', direction: 'asc' }, { key: 'rank', direction: 'desc' }, { key: 'id', direction: 'asc' }]));
