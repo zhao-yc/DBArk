@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from 'react';
-import { DataGrid, SelectColumn, renderCheckbox, type Column, type DataGridHandle } from 'react-data-grid';
+import { DataGrid, SelectColumn, renderCheckbox, type Column, type DataGridHandle, type SortColumn } from 'react-data-grid';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteTableEditZh as text } from '../locales/sqliteTableEdit.zh-CN';
@@ -8,11 +8,12 @@ import { encodeSqliteClipboard, writeSqliteClipboardData } from '../sqliteTableC
 import { sqliteTableRangePasteZh as rangeText } from '../locales/sqliteTableRangePaste.zh-CN';
 import type { SqlitePasteAnchor } from '../sqliteTableRangePaste';
 import '../sqliteTableClipboard.css';
+import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; findHit?: SqliteTableFindGridHit; }
+interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; findHit?: SqliteTableFindGridHit; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, findHit }: Props) {
+export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, findHit, sort, onSortChange }: Props) {
   const ticket = {}, committed = useRef<object | undefined>(undefined);
   const grid = useRef<DataGridHandle | null>(null), handledFind = useRef<string | undefined>(undefined);
   const source = useRef({ page, rows, identity: {} }); if (source.current.page !== page || source.current.rows !== rows) source.current = { page, rows, identity: {} };
@@ -59,7 +60,7 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   /** 输入控件保留自己的剪贴板语义，不截获文字编辑器、搜索框或其它模态的copy/paste。 */
   function inputTarget(event: ClipboardEvent<HTMLDivElement>): boolean { const node = event.target as HTMLElement | null; return !!node && (node.isContentEditable || ['TEXTAREA', 'SELECT'].includes(node.tagName) || node.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes((node as HTMLInputElement).type)); }
   const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...page.columns.map((column, index): Column<SqliteDraftRow> => ({
-    key: 'c' + index, name: column.name + (column.generated ? ' · ' + text.generated : ''), width: 180, resizable: true,
+    key: 'c' + index, name: column.name + (column.generated ? ' · ' + text.generated : ''), width: 180, resizable: true, sortable: !!onSortChange && !disabled,
     renderCell: ({ row }) => {
       const value = row.values[index], matched = findHit?.page === page && findHit.rows === rows && findHit.row === row && findHit.column === index && !row.deleted;
       const raw = value === undefined ? text.omitted : value.kind === 'null' ? 'NULL' : value.value, range = matched ? findHit.range : undefined;
@@ -92,7 +93,8 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
     if (!rows.includes(anchor.row) || anchor.row.deleted || !page.columns[anchor.column] || page.columns[anchor.column].generated || page.edit.columns[anchor.column]?.generated) { setError(rangeText.stale); return; }
     try { onPaste(event.clipboardData, anchor); setError(''); } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeText.invalid); }
   }
-  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} className="results-grid" columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={32} headerRowHeight={42}
+  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className="results-grid" columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={32} headerRowHeight={42}
+    sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={ids => { if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return; selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} }; selectionChanged(value => value + 1); }}
     rowClass={row => row.deleted ? 'row-deleted' : row.index === undefined ? 'row-inserted' : undefined}

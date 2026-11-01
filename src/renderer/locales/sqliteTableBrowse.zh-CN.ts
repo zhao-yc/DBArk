@@ -14,4 +14,6 @@ export const sqliteTableBrowseZh = {
   page: (offset: number, rows: number, more: boolean) => '行偏移 ' + offset + ' · 本页 ' + rows + ' 行 · ' + (more ? '还有下一页' : '已到末页'),
   operators: { eq: '等于', ne: '不等于', gt: '大于', gte: '大于等于', lt: '小于', lte: '小于等于', contains: '包含文本', isNull: '为空', notNull: '非空' },
   kinds: { text: '文本', integer: '整数', real: '实数', blob: '二进制（十六进制）' }, ascending: '升序', descending: '降序', dynamic: '动态类型',
+  headerHint: '点击列头在升序、降序和不排序间切换；Ctrl／⌘＋点击追加排序列。立即按已应用的筛选和每页条数读取第一页；尚未应用的筛选草稿保留。',
+  headerInvalid: 'SQLite列头排序与当前页字段不匹配或超过八列，未改变当前页。',
 };

@@ -130,6 +130,21 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     if (value !== undefined) await step(() => table().getByLabel(`SQLite 筛选 ${index} 条件值`, { exact: true }).fill(value));
     expect((await step(audit)).pages.length).toBe(before);
   };
+  type HeaderSort = { column: 'id' | 'bucket' | 'rank_num' | 'nullable' | 'exact_int'; direction: 'asc' | 'desc' };
+  /** 独立只读SQLite求准确排序期望，BIGINT/NULL不经Number或客户端比较器。 */
+  const nativeIds = (sort: HeaderSort[], offset = 0, limit = 5): number[] => {
+    check(); const columns = new Set(['id', 'bucket', 'rank_num', 'nullable', 'exact_int']); if (!sort.length || sort.some(rule => !columns.has(rule.column) || !['asc', 'desc'].includes(rule.direction))) throw Error('本例排序观察越界');
+    const db = new DatabaseSync(database, { readOnly: true }); try { return db.prepare('SELECT id FROM "浏览""航船🚢" ORDER BY ' + sort.map(rule => '"' + rule.column + '" ' + rule.direction.toUpperCase()).join(',') + ' LIMIT ? OFFSET ?').all(limit, offset).map(row => Number(row.id)); } finally { db.close(); check(); }
+  };
+  /** 点真实可见列头一次，只接纳一份服务端请求；Ctrl/Meta沿RDG原生多列操作。 */
+  const headerSort = async (column: HeaderSort['column'], sort: HeaderSort[], expected?: number[], multi = false) => {
+    await controls(false); const grid = table().getByRole('grid'), position = ['id', 'bucket', 'rank_num', 'note', 'mixed', 'nullable', 'payload', 'exact_int'].indexOf(column);
+    await step(() => (require('./sqlite-grid-navigation') as typeof import('./sqlite-grid-navigation')).revealSqliteEditColumn(page, grid, position, check));
+    const header = grid.getByRole('columnheader').filter({ hasText: new RegExp('^' + column) }); await step(() => expect(header).toHaveCount(1)); const before = (await step(audit)).pages.length;
+    await step(() => header.click({ modifiers: multi ? [process.platform === 'darwin' ? 'Meta' : 'Control'] : [] }));
+    await step(() => expect.poll(async () => { const pages = (await audit()).pages; return pages.length === before + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true));
+    const fact = (await step(audit)).pages.at(-1)!; expect(fact.failure).toBeUndefined(); expect(fact.request).toMatchObject({ table: tableName, offset: 0, limit: 5, mode: 'and', filters: [] }); expect(fact.request.sort).toEqual(sort); pageRows(fact.reply); await step(() => expect(grid).toBeVisible()); if (expected) await expectIds(expected); return fact;
+  };
   try {
     check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); expect(basename(directory)).toMatch(/^dbark-e2e-/);
     expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]); expect((await settings()).tabs).toEqual([]); expect(await tasks()).toEqual([]); expect(await history()).toEqual([]);
@@ -159,6 +174,25 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await controls(true); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5'));
     // 分页断言由明确唯一id排序保证，不把未指定排序的扫描顺序当作跨版本合同。
     await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
+    stage = '只读真实列头即时排序、分页沿服务端全表且ASC/DESC/移除循环';
+    await headerSort('id', [{ column: 'id', direction: 'desc' }], [34, 33, 32, 31, 30]);
+    const headerNext = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: 'SQLite 下一页', exact: true }).click()); await step(() => expect.poll(async () => { const pages = (await audit()).pages; return pages.length === headerNext + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true)); await expectIds([29, 28, 27, 26, 25]); expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 5, limit: 5, sort: [{ column: 'id', direction: 'desc' }] });
+    await headerSort('id', []); await headerSort('id', [{ column: 'id', direction: 'asc' }], [1, 2, 3, 4, 5]);
+    stage = 'Ctrl或Meta追加优先级，精确BIGINT与NULL排序交真实SQLite并同步排序表单';
+    await headerSort('exact_int', [{ column: 'exact_int', direction: 'asc' }]);
+    const preciseAscending: HeaderSort[] = [{ column: 'exact_int', direction: 'asc' }, { column: 'id', direction: 'asc' }]; await headerSort('id', preciseAscending, nativeIds(preciseAscending), true);
+    await controls(true); await step(() => expect(table().getByLabel('SQLite 排序 1 字段', { exact: true })).toHaveValue('exact_int')); await step(() => expect(table().getByLabel('SQLite 排序 2 字段', { exact: true })).toHaveValue('id')); await controls(false);
+    const preciseDescending: HeaderSort[] = [{ column: 'exact_int', direction: 'desc' }, { column: 'id', direction: 'asc' }]; await headerSort('exact_int', preciseDescending, nativeIds(preciseDescending), true); await step(() => table().getByRole('grid').evaluate(element => { element.scrollLeft = element.scrollWidth; })); await step(() => expect(table().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible());
+    await headerSort('exact_int', [{ column: 'id', direction: 'asc' }], [1, 2, 3, 4, 5], true);
+    await headerSort('nullable', [{ column: 'nullable', direction: 'asc' }]); const nullsAscending: HeaderSort[] = [{ column: 'nullable', direction: 'asc' }, { column: 'id', direction: 'asc' }]; await headerSort('id', nullsAscending, nativeIds(nullsAscending), true);
+    const nullsDescending: HeaderSort[] = [{ column: 'nullable', direction: 'desc' }, { column: 'id', direction: 'asc' }]; await headerSort('nullable', nullsDescending, nativeIds(nullsDescending), true); await headerSort('nullable', [{ column: 'id', direction: 'asc' }], [1, 2, 3, 4, 5], true);
+    stage = '未应用filter/mode/limit保持草稿，列头只沿applied，明确Apply后才生效';
+    await controls(true); await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await filter(1, 'id', 'gte', 'integer', '30'); await step(() => table().getByLabel('SQLite 筛选关系', { exact: true }).selectOption('or')); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('3')); await controls(false);
+    await headerSort('id', [{ column: 'id', direction: 'desc' }], [34, 33, 32, 31, 30]); await controls(true); await step(() => expect(table().getByLabel('SQLite 筛选 1 条件值', { exact: true })).toHaveValue('30')); await step(() => expect(table().getByLabel('SQLite 筛选关系', { exact: true })).toHaveValue('or')); await step(() => expect(table().getByLabel('SQLite 每页条数', { exact: true })).toHaveValue('3')); await step(() => expect(table().getByLabel('SQLite 排序 1 方向', { exact: true })).toHaveValue('desc')); await apply([34, 33, 32]);
+    expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 0, limit: 3, mode: 'or', filters: [{ column: 'id', operator: 'gte', value: { kind: 'integer', value: '30' } }], sort: [{ column: 'id', direction: 'desc' }] });
+    const draftNext = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: 'SQLite 下一页', exact: true }).click()); await step(() => expect.poll(async () => { const pages = (await audit()).pages; return pages.length === draftNext + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true)); await expectIds([31, 30]); expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 3, limit: 3, mode: 'or' });
+    // 回原明确已应用状态，原分页、typed筛选和排序表单回归全部继续执行。
+    await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByLabel('SQLite 筛选关系', { exact: true }).selectOption('and')); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
     // 右侧原列通过真实水平滚动显露，不能以虚拟网格尚未挂载的单元格冒称可见。
     await step(() => table().getByRole('grid').evaluate(element => { element.scrollLeft = element.scrollWidth; }));
     await step(() => expect(table().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible()); await step(() => expect(table().getByRole('grid').getByText('0x00ff', { exact: true })).toBeVisible()); await step(() => expect(table().getByRole('grid').getByText('0xff00', { exact: true })).toBeVisible()); await step(() => expect(table().getByRole('grid').locator('.null-value')).toHaveCount(3));
@@ -204,7 +238,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(async () => info.attach('SQLite分页表格完成态', { body: await page.screenshot(), contentType: 'image/png' }));
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: { restore(): void } }).__sqliteTableBrowseNative; if (!state) throw Error('原观察器已失效'); state.restore(); }), true); armed = false;
     stage = '第二owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0);
-    await info.attach('SQLite表浏览原始请求回包与完成边界', { body: JSON.stringify({ platform: process.platform, rawDatabase: database, canonicalDatabaseBeforePicker: canonicalDatabase, firstPid, secondPid: originalProcess.pid, firstFacts, secondFacts, firstTasks, originalRows: baseline, finalRows: disk(), sourceRows: 34, userSqlExecutions: 0, userTransactions: 0, systemClipboardOperations: 0, generatedSelectNeverExecuted: true, sameProfileTableTabRestored: true, firstExitCode: 0, secondExitCode: originalProcess.exitCode, pickerScope: '只替换本例Main文件picker准确返回路径，未验证操作系统原生对话框输入', observationScope: '每次首窗口就绪后安装观察器至退出前撤销；重启初始读取不冒称已观察', automaticRetry: false, automaticTrace: false }), contentType: 'application/json' });
+    await info.attach('SQLite表浏览原始请求回包与完成边界', { body: JSON.stringify({ platform: process.platform, rawDatabase: database, canonicalDatabaseBeforePicker: canonicalDatabase, firstPid, secondPid: originalProcess.pid, firstFacts, secondFacts, firstTasks, originalRows: baseline, finalRows: disk(), sourceRows: 34, realHeaderServerSort: true, headerCycleAndPlatformMultisortChecked: true, headerUsesAppliedFiltersModeAndLimit: true, unsubmittedDraftKeptUntilApply: true, userSqlExecutions: 0, userTransactions: 0, systemClipboardOperations: 0, generatedSelectNeverExecuted: true, sameProfileTableTabRestored: true, firstExitCode: 0, secondExitCode: originalProcess.exitCode, pickerScope: '只替换本例Main文件picker准确返回路径，未验证操作系统原生对话框输入', observationScope: '每次首窗口就绪后安装观察器至退出前撤销；重启初始读取不冒称已观察', automaticRetry: false, automaticTrace: false }), contentType: 'application/json' });
     completed = { directory, database, platform: process.platform, firstPid, secondPid: originalProcess.pid };
   } catch (reason) {
     runtime.retainOwnedDesktopResources(info);
