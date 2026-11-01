@@ -26,10 +26,13 @@ export const sqliteTableCreateDefaultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('blob'), value: z.string().max(sqliteTableCreateLimits.valueBytes * 2).refine(value => value.length <= sqliteTableCreateLimits.valueBytes * 2 && value.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(value), 'SQLite二进制默认值须为不超过64KiB的完整Hex字节') }).strict(),
 ]);
 export type SqliteTableCreateDefault = z.infer<typeof sqliteTableCreateDefaultSchema>;
+/** 新建表和原生ADD共用受限列定义；调用方另行检查各ALTER动作的原生限制。 */
+export const sqliteTableCreateColumnSchema = z.object({ name: identifier, declaredType, nullable: z.boolean(), default: sqliteTableCreateDefaultSchema, collation: z.enum(['BINARY', 'NOCASE', 'RTRIM']).optional() }).strict();
+export type SqliteTableCreateColumn = z.infer<typeof sqliteTableCreateColumnSchema>;
 const parts = z.array(identifier).min(1).max(sqliteTableCreateLimits.parts);
 const designShape = z.object({
   name: objectName,
-  columns: z.array(z.object({ name: identifier, declaredType, nullable: z.boolean(), default: sqliteTableCreateDefaultSchema, collation: z.enum(['BINARY', 'NOCASE', 'RTRIM']).optional() }).strict()).min(1).max(sqliteTableCreateLimits.columns),
+  columns: z.array(sqliteTableCreateColumnSchema).min(1).max(sqliteTableCreateLimits.columns),
   primaryKey: z.array(identifier).max(sqliteTableCreateLimits.parts), autoIncrement: z.boolean(),
   indexes: z.array(z.object({ name: objectName, unique: z.boolean(), columns: z.array(z.object({ name: identifier, order: z.enum(['asc', 'desc']) }).strict()).min(1).max(sqliteTableCreateLimits.parts) }).strict()).max(sqliteTableCreateLimits.indexes),
   foreignKeys: z.array(z.object({ name: identifier, columns: parts, referencedTable: identifier, referencedColumns: parts, onDelete: z.enum(sqliteTableCreateActions), onUpdate: z.enum(sqliteTableCreateActions), deferred: z.boolean() }).strict()).max(sqliteTableCreateLimits.foreignKeys),
@@ -139,13 +142,20 @@ function defaultSql(value: SqliteTableCreateDefault): string | undefined {
     case 'integer': return BigInt(value.value).toString(); case 'real': return /[.eE]/.test(value.value) ? value.value : value.value + '.0'; case 'blob': return "X'" + value.value + "'";
   }
 }
+/** 默认值仅由严格typed分支构造，不能传入任意SQL表达式。 */
+export function buildSqliteTableCreateDefault(input: SqliteTableCreateDefault): string | undefined { return defaultSql(sqliteTableCreateDefaultSchema.parse(input)); }
+/** 保持新建表既有引用及默认值字节语义，不加入主键或任何额外约束。 */
+export function buildSqliteTableCreateColumn(input: SqliteTableCreateColumn): string {
+  const column = sqliteTableCreateColumnSchema.parse(input), value = defaultSql(column.default);
+  return `${quote(column.name)} ${quote(column.declaredType)}${column.nullable ? '' : ' NOT NULL'}${column.collation ? ' COLLATE ' + column.collation : ''}${value === undefined ? '' : ' DEFAULT ' + value}`;
+}
 /** 预览及运行时冲突检测共用准确计划名；不包含SQLite自动索引或任何隐含对象。 */
 export function sqliteTableCreatePlannedNames(input: SqliteTableCreateDesign): { table: string; indexes: string[] } { const design = sqliteTableCreateDesignSchema.parse(input); return { table: design.name, indexes: design.indexes.map(index => index.name) }; }
 /** 唯一DDL构造器；返回原执行SQL及SQLite去掉main限定后的精确sqlite_schema预期。 */
 export function buildSqliteTableCreate(input: SqliteTableCreateDesign): { sql: string[]; storedSql: { type: 'table' | 'index'; name: string; sql: string }[] } {
   const design = sqliteTableCreateDesignSchema.parse(input), columns = new Map(design.columns.map(column => [fold(column.name), column.name]));
   const local = (name: string) => { const actual = columns.get(fold(name)); if (!actual) throw Error('SQLite设计字段已失效'); return quote(actual); };
-  const entries = design.columns.map(column => { const value = defaultSql(column.default); return `${quote(column.name)} ${quote(column.declaredType)}${column.nullable ? '' : ' NOT NULL'}${column.collation ? ' COLLATE ' + column.collation : ''}${value === undefined ? '' : ' DEFAULT ' + value}${design.autoIncrement && fold(column.name) === fold(design.primaryKey[0]) ? ' PRIMARY KEY AUTOINCREMENT' : ''}`; });
+  const entries = design.columns.map(column => buildSqliteTableCreateColumn(column) + (design.autoIncrement && fold(column.name) === fold(design.primaryKey[0]) ? ' PRIMARY KEY AUTOINCREMENT' : ''));
   if (!design.autoIncrement && design.primaryKey.length) entries.push('PRIMARY KEY (' + design.primaryKey.map(local).join(', ') + ')');
   for (const key of design.foreignKeys) entries.push(`CONSTRAINT ${quote(key.name)} FOREIGN KEY (${key.columns.map(local).join(', ')}) REFERENCES ${quote(key.referencedTable)} (${key.referencedColumns.map(name => fold(key.referencedTable) === fold(design.name) ? local(name) : quote(name)).join(', ')}) ON DELETE ${key.onDelete} ON UPDATE ${key.onUpdate}${key.deferred ? ' DEFERRABLE INITIALLY DEFERRED' : ''}`);
   const suffix = [design.strict ? 'STRICT' : '', design.withoutRowid ? 'WITHOUT ROWID' : ''].filter(Boolean).join(', '), body = `${quote(design.name)} (${entries.join(', ')})${suffix ? ' ' + suffix : ''}`;

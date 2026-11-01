@@ -23,8 +23,8 @@ function readablePragma(first: string | null, second: string | null): boolean {
   const name = first?.toLowerCase();
   if (!name) return false;
   if (['table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list', 'integrity_check', 'quick_check', 'foreign_key_check'].includes(name)) return true;
-  // FTS5读取正文会在内部读取data_version；只允许无赋值形式，不扩大任何写授权。
-  return second === null && ['database_list', 'table_list', 'collation_list', 'compile_options', 'foreign_keys', 'query_only', 'schema_version', 'data_version', 'user_version', 'page_count', 'page_size', 'freelist_count', 'encoding', 'journal_mode'].includes(name);
+  // FTS5的data_version和ALTER保护模式均只允许无赋值读取，不扩大任何PRAGMA写授权。
+  return second === null && ['database_list', 'table_list', 'collation_list', 'compile_options', 'foreign_keys', 'query_only', 'legacy_alter_table', 'schema_version', 'data_version', 'user_version', 'page_count', 'page_size', 'freelist_count', 'encoding', 'journal_mode'].includes(name);
 }
 
 /** 仅跳过SQLite明确的空白、分号和注释；语句边界始终由原生prepare/sourceSQL决定。 */

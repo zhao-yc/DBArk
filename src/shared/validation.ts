@@ -1,3 +1,4 @@
+import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsApplySchema, sqliteColumnsReleaseSchema } from './sqliteColumns';
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from './sqliteImportSource';
 import { sqliteIndexesInspectSchema, sqliteIndexesPreviewSchema, sqliteIndexesApplySchema, sqliteIndexesReleaseSchema } from './sqliteIndexes';
@@ -217,6 +218,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableImport.release': sqliteTableImportReleaseSchema,
   'sqlite.importSource.inspect': sqliteImportSourceInspectSchema,
   'sqlite.importSource.release': sqliteImportSourceReleaseSchema,
+  'sqlite.columns.inspect': sqliteColumnsInspectSchema,
+  'sqlite.columns.preview': sqliteColumnsPreviewSchema,
+  'sqlite.columns.apply': sqliteColumnsApplySchema,
+  'sqlite.columns.release': sqliteColumnsReleaseSchema,
   'sqlite.indexes.inspect': sqliteIndexesInspectSchema,
   'sqlite.indexes.preview': sqliteIndexesPreviewSchema,
   'sqlite.indexes.apply': sqliteIndexesApplySchema,

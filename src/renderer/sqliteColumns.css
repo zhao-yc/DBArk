@@ -1,0 +1,5 @@
+.sqlite-columns pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.sqlite-columns .sqlite-columns-scroll { max-height: 320px; overflow: auto; }
+.sqlite-columns .sqlite-columns-scroll td { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sqlite-columns .sqlite-column-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.sqlite-columns .sqlite-column-draft { border: 1px solid var(--border); border-radius: 4px; padding: 8px; }

@@ -87,3 +87,31 @@ Root 对导出原附件重新核对 SHA256、CSV／JSON／XLSX 值及内存 SQLi
 首轮候选指纹为 `9d65565877c47e5af666f1cda3b8a0aa2c403c18a5f008c2afe62a46384a05b1`；晚 ACK 及旧夹具修复后的最终候选为 `6fa154ee04428ef67e21b401094602420f61a108cd47f16a9c66553181f1d504`。二者分别覆盖 3,142 份源码／测试／脚本／工作流与构建配置，主进程 source map 的 220 份项目来源逐字对应各自候选文件。首轮原报告与审计保留原目录，最终轮保留到 `.cache/sqlite-indexes-20261101/final/`；不提交测试数据或构建产物。
 
 本增量 macOS arm64／x64 由提交后的原 CI 继续验证，未在本机证明；安装包、系统菜单输入与签名验收均未进行。原 178 的 Mac 失败不追认。本轮不安装、不创建正式 Release，不增加完整 R02 工作包或正式发行计数。既有字段／主键／外键等表结构迁移、其它导入格式和模式继续独立推进。
+
+## 后续跨平台源码复验
+
+准确提交 `b8e401e559a4321ebbd90a02a943ba3e2b25ee4a` 的 [SQLite 专项 41259146535](https://github.com/zhao-yc/DBArk/actions/runs/41259146535) 已真实终态成功。三平台分别读取了原 job／step、完整日志、artifact 元数据及原报告，而非只看工作流总状态：
+
+| 平台 | 原 job | 原报告结果 |
+| --- | --- | --- |
+| Windows x64 | 124708590890 | 13 份 report，15 expected，0 unexpected／flaky／skipped；每次 retry 为 0。 |
+| macOS arm64 | 124708590720 | 13 份 report，15 expected，0 unexpected／flaky／skipped；每次 retry 为 0。 |
+| macOS x64 | 124708590921 | 13 份 report，15 expected，0 unexpected／flaky／skipped；每次 retry 为 0。 |
+
+每平台的新表导入、索引管理各为两例，其余 11 项各一例。新索引两例在两种 Mac 架构均真实运行；这份 b8 源码复验不含随后开发的字段管理增量。
+
+原 178 的两个 Mac 失败点在本轮分别真实复验：macOS x64 完整导出用例 23.304 秒通过，chooser 取消零 export、旧目标字节保持及零 partial 的边界仍在，随后 CSV／JSON／SQL／XLSX 各导出 1,353 行，1,537 行源数据独立完整保持；macOS arm64 整文件导入用例 40.655 秒通过，CSV／JSON 各两行 COMMIT ACK 和精确磁盘读回、第三行约束失败的整批 ROLLBACK ACK 及原成功展示断言均完成。这些专项各自两次正常退出 0、准确临时目录清理为 true，无系统剪贴板操作。原 178 两轮失败仍保留原终态及原 DOM，不用 b8 成功追认旧轮。
+
+三个 SQLite 报告 ZIP 的实际长度与 SHA256 均与 GitHub API 元数据一致，并经 Root 独立重核：
+
+| Artifact | 平台 | 字节 | SHA256 |
+| --- | --- | ---: | --- |
+| 13064786133 | Windows x64 | 1,078,864 | `346ed0a0811624c9b99c6810e785662ce281fc2fa80e1ea9df20ad940fca2856` |
+| 13065170033 | macOS arm64 | 1,124,499 | `882cc23f7a9d5a3742b0fe597c39a189fd1050b65b9904c968d8c4dfc1222018` |
+| 13064777405 | macOS x64 | 1,174,395 | `4c8dd79aba42c68ad5e5d69568eff43d58b5c236421b2a632dfe85e4a96fbcea` |
+
+仅下载必要源码原生记录，没有下载安装包。原始 run／jobs／artifacts JSON、完整日志 ZIP、三份原件 ZIP 及解包 report、独立导出／导入／索引及清理 JSON 附件保留在私有 `.cache/sqlite-columns-20261101/ci-b8-*`，审计说明为 `ci-b8-audit.md`；这些测试数据与原件不入库。
+
+同提交的[客户端工作流 41259146513](https://github.com/zhao-yc/DBArk/actions/runs/41259146513) 在最后一次有界读取 `2026-11-01 01:14:29 UTC` 仍为 in_progress：类型与单元 job 124708590608 成功；Windows job 124708590743 位于第 15 步未发布打包，macOS arm64 job 124708590859 及 x64 job 124708590695 位于第 14 步 legacy-source，独立剪贴板 job 按条件跳过。当时没有失败，但不能据此把未完成源码步骤或安装阶段记为通过；后续终态另行核对，不把这份时间快照当作永久当前状态。
+
+上述 SQLite 结果属于三平台开发源码原生验收，不等同安装、系统菜单输入、签名或正式发行；未创建 Release，也不增加完整 R02 或发行计数。

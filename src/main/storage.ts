@@ -1,4 +1,5 @@
 import { recoverSqliteIndexesTask } from '../shared/sqliteIndexesFact';
+import { recoverSqliteColumnsTask } from '../shared/sqliteColumnsFact';
 import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
 import { recoverSqliteImportTask } from '../shared/sqliteTableImportFact';
 import { recoverSqliteWriteTask } from '../shared/sqliteWriteFact';
@@ -137,6 +138,11 @@ export class LocalStore {
     // 索引DDL按独立语句事实恢复；只读目录与能力、表达式和SQL均不随任务恢复。
     for (const task of this.tasks()) if (task.kind.startsWith('sqlite.indexes.')) {
       const restored = recoverSqliteIndexesTask(task);
+      if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
+    }
+    // 字段DDL仅恢复最小事实；依赖目录、默认值和原ALTER不会成为重放任务。
+    for (const task of this.tasks()) if (task.kind.startsWith('sqlite.columns.')) {
+      const restored = recoverSqliteColumnsTask(task);
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
     }
     // 原生建表以独立事务回执恢复，不把MySQL隐式提交语义或行数套到DDL语句数上。
