@@ -35,6 +35,8 @@ export type SqliteTableFilter = z.infer<typeof sqliteTableFilterSchema>;
 export type SqliteTablePageInput = z.infer<typeof sqliteTablePageSchema>;
 export interface SqliteTableColumn { name: string; declaredType: string; generated?: boolean; }
 export interface SqliteTablePage {
+  /** 与原页行列一一对应：n=NULL、t=TEXT、i=INTEGER、r=REAL、b=BLOB；不由声明亲和性猜类型。 */
+  storageTypes?: string[];
   /** 仅显式可编辑页请求签发，任意SQL结果和原只读页不获得写入能力。 */
   edit?: import('./sqliteTableEdit').SqliteTableEditPage;
   /** 原目录定义及完整列事实摘要，导出前须在准确只读快照重新核对。 */
@@ -45,4 +47,11 @@ export interface SqliteTablePage {
   offset: number;
   limit: number;
   hasMore: boolean;
+}
+
+/** 旧页可省略存储类型；新事实必须完整对应有界结果，不接受稀疏行或未知编码。 */
+export function assertSqliteStorageTypes(page: SqliteTablePage): void {
+  if (page.storageTypes === undefined) return;
+  if (!Array.isArray(page.storageTypes) || page.storageTypes.length !== page.result.rows.length || page.storageTypes.length > sqliteTableBrowseLimits.pageSize) throw Error('SQLite单元格存储类型与原页不匹配');
+  for (const row of page.storageTypes) if (typeof row !== 'string' || row.length !== page.columns.length || !/^[ntirb]*$/.test(row)) throw Error('SQLite单元格存储类型与原列不匹配');
 }

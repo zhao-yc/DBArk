@@ -198,6 +198,23 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(() => expect(table().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible()); await step(() => expect(table().getByRole('grid').getByText('0x00ff', { exact: true })).toBeVisible()); await step(() => expect(table().getByRole('grid').getByText('0xff00', { exact: true })).toBeVisible()); await step(() => expect(table().getByRole('grid').locator('.null-value')).toHaveCount(3));
     const nextCount = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: 'SQLite 下一页', exact: true }).click()); await step(() => expect.poll(async () => (await audit()).pages.length).toBe(nextCount + 1)); await expectIds([6, 7, 8, 9, 10]);
     expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 5, limit: 5, table: tableName }); await step(() => table().getByRole('button', { name: 'SQLite 首页', exact: true }).click()); await expectIds([1, 2, 3, 4, 5]);
+    stage = '只读原格TEXT、BLOB和NULL筛选草稿，明确应用前零读取';
+    /** 由当前真实表头确定原格位置，鼠标选格后只走已实现菜单。 */
+    const cellFilter = async (rowIndex: number, name: string, exclude: boolean) => {
+      const before = (await step(audit)).pages.length, grid = table().getByRole('grid');
+      await step(() => grid.evaluate(element => { element.scrollLeft = element.scrollWidth; }));
+      const header = grid.getByRole('columnheader').filter({ hasText: new RegExp('^' + name) });
+      const position = await step(() => header.getAttribute('aria-colindex')); if (!position) throw Error('筛选原格列位置未知');
+      await step(() => grid.locator('[role="row"][aria-rowindex="' + (rowIndex + 2) + '"] [role="gridcell"][aria-colindex="' + position + '"]').click());
+      await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(table(), { name: exclude ? '不等于当前单元格' : '等于当前单元格', exact: true }, check)).click());
+      expect((await step(audit)).pages.length).toBe(before);
+    };
+    await cellFilter(1, 'mixed', false); await step(() => expect(table().getByLabel('SQLite 筛选 1 值类型', { exact: true })).toHaveValue('text')); await step(() => expect(table().getByLabel('SQLite 筛选 1 条件值', { exact: true })).toHaveValue('2')); await apply([2]);
+    await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
+    await cellFilter(0, 'payload', false); await step(() => expect(table().getByLabel('SQLite 筛选 1 值类型', { exact: true })).toHaveValue('blob')); await step(() => expect(table().getByLabel('SQLite 筛选 1 条件值', { exact: true })).toHaveValue('00ff')); await apply([1]);
+    await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
+    await cellFilter(0, 'nullable', true); await step(() => expect(table().getByLabel('SQLite 筛选 1 运算符', { exact: true })).toHaveValue('notNull')); await apply([2, 4, 6, 8, 10]);
+    await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
     stage = '真实控件区分整数与文本并验证AND/OR'; await controls(true); await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await filter(1, 'mixed', 'eq', 'integer', '2'); await apply([1]);
     expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ filters: [{ column: 'mixed', operator: 'eq', value: { kind: 'integer', value: '2' } }] }); await controls(true); await step(() => table().getByLabel('SQLite 筛选 1 值类型', { exact: true }).selectOption('text')); await apply([2]);
     await controls(true); await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await filter(2, 'id', 'gte', 'integer', '30'); await step(() => table().getByLabel('SQLite 筛选关系', { exact: true }).selectOption('and')); await apply([]);

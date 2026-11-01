@@ -99,7 +99,9 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
         return Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)])) as DataRow;
       }), truncated: false, elapsedMs: 0, statement: request.sql,
     };
-    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit };
+    // 每格一个协议类型码，不新增SQL；与去掉编辑定位列后的本页原值一一对应。
+    const storageTypes = originalRows.map(row => row.slice(extra).map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join(''));
+    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit };
   } catch (reason) { failed = true; failure = reason; }
   // 即使边界取消也只回滚本次独立只读快照，绝不借用户查询标签的事务。
   control.beginCleanup();
@@ -112,7 +114,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
   }
   if (failed) throw failure;
   control.check(); page!.result.elapsedMs = performance.now() - started;
-  if (Buffer.byteLength(JSON.stringify(page!.result)) > limits.resultBytes) throw Error('SQLite表浏览结果对象超过16MiB预算，请减少每页行数或缩小范围');
+  if (Buffer.byteLength(JSON.stringify({ result: page!.result, storageTypes: page!.storageTypes })) > limits.resultBytes) throw Error('SQLite表浏览结果对象超过16MiB预算，请减少每页行数或缩小范围');
   if (editPlan) page!.edit = editPlan.capture(originalRows);
   return page!;
 }

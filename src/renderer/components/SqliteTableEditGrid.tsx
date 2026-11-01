@@ -12,9 +12,9 @@ import '../sqliteTableClipboard.css';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; }
+interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, onCheckedRows, findHit, sort, onSortChange }: Props) {
+export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange }: Props) {
   const ticket = {}, committed = useRef<object | undefined>(undefined);
   const grid = useRef<DataGridHandle | null>(null), handledFind = useRef<string | undefined>(undefined);
   const source = useRef({ page, rows, identity: {} }); if (source.current.page !== page || source.current.rows !== rows) source.current = { page, rows, identity: {} };
@@ -91,6 +91,8 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   function captureCell(row?: SqliteDraftRow, key = ''): void {
     if (!baseCurrent(row) || !noModal()) return;
     const column = Number(key.slice(1)), position = row ? { row, key } : undefined;
+    // 筛选允许读取生成列；粘贴起点仍沿原可写字段限制。
+    onFilterCell?.(!disabled && row && !row.deleted && /^c(?:0|[1-9]\d*)$/.test(key) && Number.isSafeInteger(column) && page.columns[column] ? { row, column } : undefined);
     let reason: string = rangeText.anchorRequired, value: SqlitePasteAnchor | undefined;
     if (disabled || page.edit?.kind !== 'editable') reason = rangeText.readonly;
     else if (row?.deleted) reason = rangeText.deleted;

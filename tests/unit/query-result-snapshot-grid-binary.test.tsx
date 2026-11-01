@@ -42,11 +42,11 @@ afterEach(async () => { if (root) await act(async () => root!.unmount()); root =
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 同一真实根可重绘来源；不生成任何连接、会话或测试文件。 */
-async function mount(query = false, fileActions?: boolean) {
+async function mount(query = false, fileActions?: boolean, activeCell?: (cell: import('../../src/renderer/queryResultHeaderCopy').QueryResultCopyCell | undefined) => void) {
   const tab = { id: 'q', kind: 'query' as const, title: '原查询', connectionId: 'c', sql: 'SELECT payload' };
   store.setState(state => ({ settings: { ...state.settings, tabs: query ? [tab] : [], activeTabId: query ? tab.id : undefined }, connections: [], activeJobs: {}, connectionVersions: { c: 1 } }));
   port.invoke.mockReset(); let identity: readonly unknown[] = ['原结果'], current = true;
-  const render = () => <Grid columns={columns} rows={rows} binaryFileActions={fileActions} binarySourceIdentity={identity} binaryIsCurrent={() => current} isCurrent={() => current}/>;
+  const render = () => <Grid columns={columns} rows={rows} selectionScope={activeCell ? identity : undefined} onActiveCellChange={activeCell} binaryFileActions={fileActions} binarySourceIdentity={identity} binaryIsCurrent={() => current} isCurrent={() => current}/>;
   const host = doc.createElement('div'); doc.body.appendChild(host); root = createRoot(host as unknown as Element);
   await act(async () => root!.render(render()));
   return { render, set identity(value: readonly unknown[]) { identity = value; }, set current(value: boolean) { current = value; } };
@@ -97,4 +97,12 @@ describe('全局结果快照字节只读端口（纯RAM）', () => {
     await mount(true); await openBinary(); const pending = deferred<unknown>(); port.invoke.mockReturnValue(pending.promise); await click(button(filesText.save));
     await act(async () => root!.unmount()); root = undefined; await act(async () => pending.resolve({ bytes: 6, name: '卸载后.bin' })); expect(doc.body.textContent).not.toContain('卸载后.bin'); expect(port.invoke).toHaveBeenCalledTimes(1);
   });
+});
+
+it('只读原格通知保持准确BLOB行列引用，失效/卸载后的旧事件不能回调', async () => {
+  const selected = vi.fn(), f = await mount(false, false, selected); expect(selected).not.toHaveBeenCalled();
+  await act(async () => port.grid.onCellClick({ row: rows[0], rowIdx: 0, column: columns[0] }));
+  expect(selected).toHaveBeenLastCalledWith({ index: 0, row: rows[0], column: columns[0] }); expect(port.invoke).not.toHaveBeenCalled();
+  const old = port.grid.onCellClick; f.current = false; await act(async () => old({ row: rows[0], rowIdx: 0, column: columns[0] })); expect(selected).toHaveBeenCalledTimes(1);
+  f.current = true; await act(async () => root!.unmount()); root = undefined; await act(async () => old({ row: rows[0], rowIdx: 0, column: columns[0] })); expect(selected).toHaveBeenCalledTimes(1);
 });

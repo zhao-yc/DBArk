@@ -36,3 +36,16 @@ it('没有排序能力或busy时不展示可排序字段', async () => {
   const f = fixture(); await f.mount({ onSortChange: undefined }); expect(port.props.columns.slice(2).every((c: any) => c.sortable === false)).toBe(true);
   await f.mount({ onSortChange: f.callback, disabled: true }); expect(port.props.columns.slice(2).every((c: any) => c.sortable === false)).toBe(true); await act(async () => port.props.onSortColumnsChange([])); expect(f.callback).not.toHaveBeenCalled();
 });
+it('真实选格端口允许生成列筛选，原粘贴起点仍拒绝生成列，不在渲染时通知', async () => {
+  const f = fixture(), filter = vi.fn(), pasteAnchor = vi.fn(); await f.mount({ onFilterCell: filter, onActiveCell: pasteAnchor }); expect(filter).not.toHaveBeenCalled();
+  await act(async () => port.props.onCellClick({ row: f.rows[0], column: { key: 'c1' } }));
+  expect(filter).toHaveBeenLastCalledWith({ row: f.rows[0], column: 1 }); expect(pasteAnchor).not.toHaveBeenCalledWith({ row: f.rows[0], column: 1 });
+});
+it.each(['modal', 'source', 'old-render', 'unmount'] as const)('%s使旧选格端口不能通知新筛选来源', async kind => {
+  const f = fixture(), filter = vi.fn(); await f.mount({ onFilterCell: filter }); const old = port.props.onCellClick;
+  if (kind === 'modal') { const modal = document.createElement('div'); modal.setAttribute('role', 'dialog'); document.body.appendChild(modal); }
+  if (kind === 'source') f.alive.value = false;
+  if (kind === 'old-render') await f.mount({ rows: [...f.rows] });
+  if (kind === 'unmount') { await act(async () => root!.unmount()); root = undefined; }
+  await act(async () => old({ row: f.rows[0], column: { key: 'c0' } })); expect(filter).not.toHaveBeenCalled();
+});

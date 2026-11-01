@@ -1,4 +1,4 @@
-import { sqliteTableBrowseLimits, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
+import { assertSqliteStorageTypes, sqliteTableBrowseLimits, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import { validateResultExportData } from '../shared/resultExport';
 import { resultExportData } from './resultExport';
 import { sqliteTableBrowseZh as text } from './locales/sqliteTableBrowse.zh-CN';
@@ -22,6 +22,7 @@ export function assertSqliteTablePage(page: SqliteTablePage, input: SqliteTableP
   if (typeof page?.schemaKey !== 'string' || !/^[a-f0-9]{64}$/.test(page.schemaKey) || page.columns?.some(column => column.generated !== undefined && typeof column.generated !== 'boolean')) throw Error(text.invalidPage);
   if (!page || page.target?.connectionId !== input.connectionId || page.target.database !== input.database || page.target.table !== input.table || !['table', 'view'].includes(page.target.kind) || page.offset !== input.offset || page.limit !== input.limit || typeof page.hasMore !== 'boolean' || !Array.isArray(page.columns) || page.columns.length > sqliteTableBrowseLimits.columns || !page.result || !Array.isArray(page.result.columns) || page.columns.length !== page.result.columns.length || page.result.rows.length > input.limit || page.columns.some((column, index) => typeof column.name !== 'string' || typeof column.declaredType !== 'string' || page.result.columns[index]?.name !== column.name)) throw Error(text.invalidPage);
   validateResultExportData(resultExportData(page.result));
+  assertSqliteStorageTypes(page);
 }
 /** 请求串行持有准确 busy 租约；替换先取消旧 task 并等原 Promise 终态，绝不借取消响应猜读取已结束。 */
 export class SqliteTableBrowser {

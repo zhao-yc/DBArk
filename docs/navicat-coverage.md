@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 表／视图新增[按当前单元格筛选](development/sqlite-table-cell-filter-20261101.md)：在“更多”中将原格等值或排除条件加入草稿，明确应用后读取全表；按真实存储类型保留整数、文本、实数、NULL 和二进制，读写／只读共用，旧页及改值格拒绝。暂不发布。
+
 SQLite 表／视图新增[筛选条件启停](development/sqlite-filter-enabled-20261101.md)：单条与全部启停保留原值，明确“应用”后生效；分页、生成查询和完整导出共享启用子集，全部停用不附带 WHERE。未提交修改保留原确认流程，暂不发布。
 
 SQLite 高频查询新增[从已应用筛选生成 SELECT](development/sqlite-filtered-select-20261101.md)：表／视图及只读连接、字段选择与顺序、原typed条件与多列排序，默认不带当前页分页，可明确LIMIT；只开原连接独立草稿，不自动执行且保留父数据修改。验证与未支持名称边界见专项记录，暂不发布。

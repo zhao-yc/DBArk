@@ -165,6 +165,18 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     stage = '可靠PK原页typed值与本地增改删零写入'; await openObject(rwName, pkTable); await step(() => expect(grid()).toBeVisible()); await sortPage(['id']); await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']));
     stage = '可写Grid真实id列头降序、移除、升序均读取服务端新原页';
     await headerSortPk([{ column: 'id', direction: 'desc' }], ['INTEGER · 999', 'INTEGER · 4', 'INTEGER · 3', 'INTEGER · 2', 'INTEGER · 1']); await headerSortPk([]); await headerSortPk([{ column: 'id', direction: 'asc' }], ['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']); expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
+    stage = '可编辑原格按INTEGER类型加入筛选且零读取，明确Apply后只读匹配行';
+    const beforeCellFilter = operations(await step(audit), 'sqlite.tablePage').length;
+    const mixedPosition = await step(() => grid().getByRole('columnheader', { name: 'mixed', exact: true }).getAttribute('aria-colindex')); if (!mixedPosition) throw Error('原mixed列位置未知');
+    await step(() => grid().locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="' + mixedPosition + '"]').click());
+    await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(table(), { name: '等于当前单元格', exact: true }, check)).click());
+    await step(() => expect(table().getByLabel('SQLite 筛选 1 值类型', { exact: true })).toHaveValue('integer')); await step(() => expect(table().getByLabel('SQLite 筛选 1 条件值', { exact: true })).toHaveValue('2'));
+    expect(operations(await step(audit), 'sqlite.tablePage')).toHaveLength(beforeCellFilter);
+    await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click());
+    await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']));
+    await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click());
+    await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']));
+    expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
     const pkPage = operations(await step(audit), 'sqlite.tablePage').at(-1); expect(pkPage?.request).toMatchObject({ connectionId: rw.id, table: pkTable, editing: true }); expect(result(pkPage?.reply)).toMatchObject({ edit: { kind: 'editable', locator: { kind: 'rowid' } } });
     // 区域起点会更新网格代次；真实F2和双击仍须打开原单元格窗口，取消保持零预览、零写入。
     const notePosition = await step(() => grid().getByRole('columnheader', { name: 'note', exact: true }).getAttribute('aria-colindex'));
