@@ -1,6 +1,8 @@
 # 使用指南
 
-SQLite 表／视图新增[只读表页原TEXT字节保护](development/sqlite-page-text-20261102.md)：坏编码拒绝整页，有效NUL／BOM／真实替代字符保留；原分页、排序及其它存储类型保持，任意SQL结果的同级保证继续处理，暂不发布。
+SQLite 开发源码的查询结果现在严格读取原始 TEXT：坏编码会报告错误，不把替换字符当作正常数据；真实保存的替代字符、BOM 和 NUL 仍保留。若写入语句的 `RETURNING` 结果报错，写入可能已经发生，应检查事务及数据，勿直接重跑。详见[原字节读取接入与边界](development/sqlite-native-runtime-20261102.md)，暂不发布。
+
+SQLite 表／视图新增[只读表页原TEXT字节保护](development/sqlite-page-text-20261102.md)：坏编码拒绝整页，有效NUL／BOM／真实替代字符保留；原分页、排序及其它存储类型保持；任意 SQL 结果现已接入原字节 worker，见上方接入记录，暂不发布。
 
 SQLite 表／视图新增[全表不同值勾选筛选](development/sqlite-value-options-20261102.md)：独立只读候选、全表搜索、原类型与NULL勾选、计数和取消，先加入草稿再明确应用；分页、导出、生成查询及命名方案共用，暂不发布。
 

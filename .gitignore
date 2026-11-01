@@ -9,6 +9,7 @@ playwright-report/
 .local/
 .tools/
 .cache/
+src/engine/sqlite/sqlite-native/
 *.log
 *.pem
 *.key

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { build } from 'esbuild';
+import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/session';
 import type { SqliteExecutionResult, SqliteProcessExit, SqliteProcessTransport, SqliteValue, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 
@@ -26,7 +26,7 @@ afterEach(async context => {
 afterAll(() => { if (!retained) removeDirectory(bundleDirectory); });
 
 /** 独立临时磁盘库，原生打开读取；没有任何数据库服务器或用户配置。 */
-function fixture(journal: 'DELETE' | 'WAL' = 'DELETE') { const directory = mkdtempSync(join(tmpdir(), 'dbark-sqlite-driver-')); directories.push(directory); const path = join(directory, 'sample.sqlite'); const db = new DatabaseSync(path); db.exec('PRAGMA journal_mode=' + journal); db.exec('CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT)'); db.close(); return { directory, path }; }
+function fixture(journal: 'DELETE' | 'WAL' = 'DELETE', encoding: 'UTF-8' | 'UTF-16le' | 'UTF-16be' = 'UTF-8') { const directory = mkdtempSync(join(tmpdir(), 'dbark-sqlite-driver-')); directories.push(directory); const path = join(directory, 'sample.sqlite'); const db = new DatabaseSync(path); db.exec("PRAGMA encoding='" + encoding + "'"); db.exec('PRAGMA journal_mode=' + journal); db.exec('CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT)'); db.close(); return { directory, path }; }
 function transport(): SqliteProcessTransport {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && !/^DBARK_/i.test(key) && !['NODE_OPTIONS', 'NODE_PATH', 'ELECTRON_RUN_AS_NODE'].includes(key)));
   const child = fork(worker, [], { env, execArgv: [], serialization: 'advanced', stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
@@ -40,6 +40,32 @@ async function collect(session: SqliteDriverSession, sql: string) { const rows: 
 function diskCount(path: string) { const db = new DatabaseSync(path); try { return { count: db.prepare('SELECT count(*) AS n FROM subject').get()!.n, integrity: Object.values(db.prepare('PRAGMA integrity_check').get()!)[0] }; } finally { db.close(); } }
 
 describe('SQLite真实磁盘原生驱动与进程生命周期', () => {
+  it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s任意查询坏TEXT明确拒绝，真实BOM/NUL/替代字符不误拒或改写', async encoding => {
+    const { path } = fixture('DELETE', encoding), invalid = encoding === 'UTF-8' ? '80' : encoding === 'UTF-16le' ? '00d8' : 'd800', valid = '\uFEFF真实\0🚢\uFFFD';
+    const setup = new DatabaseSync(path); setup.prepare('INSERT INTO subject VALUES(1,?)').run(valid); setup.exec("INSERT INTO subject VALUES(2,CAST(X'" + invalid + "' AS TEXT))");
+    const before = setup.prepare('SELECT id,hex(note) AS bytes FROM subject ORDER BY id').all(); setup.close(); const session = await open(path, true), rows: SqliteValue[][] = [];
+    await expect(session.execute('SELECT note FROM subject ORDER BY id', { batchRows: 1, onBatch: batch => { rows.push(...batch.rows); } })).rejects.toMatchObject({ code: 'SQLITE_TEXT_ENCODING_UNREPRESENTABLE', completedStatements: 0, transaction: false, sessionClosed: false });
+    expect(rows).toEqual([[valid]]); expect((await collect(session, 'SELECT note FROM subject WHERE id=1')).rows).toEqual([[valid]]);
+    await expect(session.execute("SELECT CAST(X'" + invalid + "' AS TEXT)")).rejects.toMatchObject({ code: 'SQLITE_TEXT_ENCODING_UNREPRESENTABLE' });
+    await session.close(); expect(await processes[0].exited).toEqual({ code: 0, signal: null }); expect(processes[0].kills).toBe(0);
+    const check = new DatabaseSync(path, { readOnly: true }); try { expect(check.prepare('SELECT id,hex(note) AS bytes FROM subject ORDER BY id').all()).toEqual(before); } finally { check.close(); }
+  });
+  it('用户SQL不能调用私有原生控制函数，大小写和引号均不借内部编译许可', async () => {
+    const { path } = fixture(), session = await open(path);
+    for (const name of ['dbark_raw_probe_v1', 'DBARK_RAW_PROBE_V1', '"dbark_raw_probe_v1"']) {
+      await expect(session.execute('SELECT ' + name + '(2,NULL)')).rejects.toMatchObject({ completedStatements: 0, transaction: false, sessionClosed: false });
+      expect((await collect(session, 'SELECT 7')).rows).toEqual([[{ type: 'integer', value: '7' }]]);
+    }
+  });
+  it('坏RETURNING失败仍保实际写入事实，明确事务由用户回滚，不自动重放', async () => {
+    const { path } = fixture(); const setup = new DatabaseSync(path); setup.exec("INSERT INTO subject VALUES(1,CAST(X'80' AS TEXT))"); setup.close(); const session = await open(path);
+    await expect(session.execute('UPDATE subject SET id=id+10 RETURNING note')).rejects.toMatchObject({ code: 'SQLITE_TEXT_ENCODING_UNREPRESENTABLE', transaction: false, completedStatements: 0 });
+    const ids = () => { const other = new DatabaseSync(path, { readOnly: true }); try { return other.prepare('SELECT id,hex(note) AS bytes FROM subject').all(); } finally { other.close(); } };
+    expect(ids()).toEqual([{ id: 11, bytes: '80' }]); await session.execute('BEGIN');
+    await expect(session.execute('UPDATE subject SET id=id+10 RETURNING note')).rejects.toMatchObject({ code: 'SQLITE_TEXT_ENCODING_UNREPRESENTABLE', transaction: true });
+    expect(ids()).toEqual([{ id: 11, bytes: '80' }]); await session.execute('ROLLBACK'); expect(ids()).toEqual([{ id: 11, bytes: '80' }]);
+    expect((await collect(session, 'SELECT id FROM subject')).rows).toEqual([[{ type: 'integer', value: '11' }]]);
+  });
   it('重复列名按位置保留，动态INTEGER/REAL/TEXT/NULL/BLOB不丢精度且可连续执行', async () => {
     const { path } = fixture(), session = await open(path), columns: string[][] = [];
     const rows: SqliteValue[][] = [];

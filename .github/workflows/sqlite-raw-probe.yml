@@ -5,7 +5,10 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/sqlite-raw-probe.yml'
-      - 'research/sqlite-raw-bridge/rawProbe.c'
+      - 'src/engine/sqlite/nativeRows.c'
+      - 'src/engine/sqlite/nativeRuntime.ts'
+      - 'src/engine/sqlite/workerCore.ts'
+      - 'scripts/build-sqlite-native.mjs'
       - 'src/engine/sqlite/rawValue.ts'
       - 'src/engine/sqlite/rawStatement.ts'
       - 'src/engine/sqlite/rawFrames.ts'
@@ -14,12 +17,22 @@ on:
       - 'tests/unit/sqlite-raw-value.test.ts'
       - 'tests/unit/sqlite-raw-statement.test.ts'
       - 'tests/unit/sqlite-raw-frames.test.ts'
+      - 'tests/unit/sqlite-driver.test.ts'
+      - 'tests/unit/sqlite-create-guard.test.ts'
+      - 'tests/unit/sqlite-native-runtime.test.ts'
+      - 'tests/unit/sqlite-native-build.test.ts'
+      - 'tests/helpers/buildSqliteWorker.ts'
+      - 'tests/helpers/sqliteNativeSetup.mjs'
+      - 'vitest.config.ts'
       - 'package.json'
       - 'pnpm-lock.yaml'
   pull_request:
     paths:
       - '.github/workflows/sqlite-raw-probe.yml'
-      - 'research/sqlite-raw-bridge/rawProbe.c'
+      - 'src/engine/sqlite/nativeRows.c'
+      - 'src/engine/sqlite/nativeRuntime.ts'
+      - 'src/engine/sqlite/workerCore.ts'
+      - 'scripts/build-sqlite-native.mjs'
       - 'src/engine/sqlite/rawValue.ts'
       - 'src/engine/sqlite/rawStatement.ts'
       - 'src/engine/sqlite/rawFrames.ts'
@@ -28,6 +41,13 @@ on:
       - 'tests/unit/sqlite-raw-value.test.ts'
       - 'tests/unit/sqlite-raw-statement.test.ts'
       - 'tests/unit/sqlite-raw-frames.test.ts'
+      - 'tests/unit/sqlite-driver.test.ts'
+      - 'tests/unit/sqlite-create-guard.test.ts'
+      - 'tests/unit/sqlite-native-runtime.test.ts'
+      - 'tests/unit/sqlite-native-build.test.ts'
+      - 'tests/helpers/buildSqliteWorker.ts'
+      - 'tests/helpers/sqliteNativeSetup.mjs'
+      - 'vitest.config.ts'
       - 'package.json'
       - 'pnpm-lock.yaml'
   workflow_dispatch:
@@ -67,8 +87,8 @@ jobs:
           Invoke-WebRequest 'https://ziglang.org/download/0.15.2/zig-x86_64-windows-0.15.2.zip' -OutFile .tools/zig/archive.zip
           if ((Get-FileHash .tools/zig/archive.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c') { throw '官方编译器摘要不符' }
           Expand-Archive -LiteralPath .tools/zig/archive.zip -DestinationPath .tools/zig
-      - name: 单次验证原字节解码边界
-        run: pnpm exec vitest run tests/unit/sqlite-raw-value.test.ts tests/unit/sqlite-raw-statement.test.ts tests/unit/sqlite-raw-frames.test.ts --maxWorkers=1
+      - name: 单次验证原字节边界及真实worker集成
+        run: pnpm exec vitest run tests/unit/sqlite-raw-value.test.ts tests/unit/sqlite-raw-statement.test.ts tests/unit/sqlite-raw-frames.test.ts tests/unit/sqlite-driver.test.ts tests/unit/sqlite-create-guard.test.ts tests/unit/sqlite-native-runtime.test.ts tests/unit/sqlite-native-build.test.ts --maxWorkers=1 --reporter=default --reporter=json --outputFile=.cache/sqlite-worker-runtime-report.json
       - name: 单次编译并验证真实SQLite原字节
         run: node scripts/sqlite-raw-probe.mjs
       - name: 记录准确源码提交
@@ -85,5 +105,7 @@ jobs:
             .cache/sqlite-raw-probe-*/compile.json
             .cache/sqlite-raw-probe-*/report.json
             .cache/sqlite-raw-probe-head.txt
+            .cache/sqlite-worker-runtime-report.json
+            .cache/sqlite-native-build/compile-*/compile.json
           include-hidden-files: true
           if-no-files-found: warn

@@ -1,12 +1,8 @@
 # Navicat 全功能覆盖目标
 
-SQLite内部原字节桥新增[有界批次与消费者确认](development/sqlite-raw-frames-20261102.md)，验证跨帧字段、百万行、ACK／取消及真实写入状态；仍未接入客户端，不增加R02完整工作包或发行计数。
+SQLite 原字节读取已[接入实际 worker](development/sqlite-native-runtime-20261102.md)，任意查询严格校验 TEXT 编码，保留原类型、预算、ACK、取消及写入事实；Windows 源码工作区和 3783 项相关测试通过，Mac 与打包另验。此前[批次](development/sqlite-raw-frames-20261102.md)及[语句适配器](development/sqlite-raw-statement-20261102.md)保留为接入前实证，不增加 R02 完整工作包或发行计数。
 
-SQLite内部原字节桥新增[参数／元数据／长SQL语句适配器](development/sqlite-raw-statement-20261102.md)，独立验证精确绑定、原生列目录、脚本前缀及失败终态；仍未接入客户端，不增加R02完整工作包或发行计数。
-
-SQLite任意SQL的[原字节读取桥研发准备](../research/sqlite-raw-bridge/README.md)已验证三编码、单次求值及RETURNING不重放；内部模块尚未接入查询工作区，不增加R02完整工作包或发行计数。
-
-SQLite 表／视图新增[只读表页原TEXT字节保护](development/sqlite-page-text-20261102.md)：坏编码拒绝整页，有效NUL／BOM／真实替代字符保留；原分页、排序及其它存储类型保持，任意SQL结果的同级保证继续处理，暂不发布。
+SQLite 表／视图新增[只读表页原TEXT字节保护](development/sqlite-page-text-20261102.md)：坏编码拒绝整页，有效NUL／BOM／真实替代字符保留；原分页、排序及其它存储类型保持；任意 SQL 结果现已接入原字节 worker，见上方接入记录，暂不发布。
 
 SQLite 表／视图新增[全表不同值勾选筛选](development/sqlite-value-options-20261102.md)：独立只读候选、全表搜索、原类型与NULL勾选、计数和取消，先加入草稿再明确应用；分页、导出、生成查询及命名方案共用，暂不发布。
 

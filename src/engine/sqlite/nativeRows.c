@@ -1,4 +1,4 @@
-/* DBArk自有实验源码，MIT；尚未接入客户端。头文件从固定Node版本下载并核SHA256。
+/* DBArk自有SQLite原生读取源码，MIT；仅由worker固定资源入口加载。公共头文件核SHA256。
  * 每条原SQL只prepare/step一次；只对step返回SQLITE_ROW后的值副本读取字节。
  * 单值返回BLOB，避免Node在交给JS前已替换无效TEXT；不使用trace回调读列。 */
 #include "sqlite3ext.h"

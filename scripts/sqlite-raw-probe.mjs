@@ -3,50 +3,22 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, unlinkSync, rmdirSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { DatabaseSync, constants } from 'node:sqlite';
 import { build } from 'esbuild';
+import { compileSqliteNative, sqliteNativeHeaders as headers } from './build-sqlite-native.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const sdk = join(root, '.cache/sqlite-raw-sdk-node24.17.0');
-const headers = {
-  'sqlite3.h': '8e43a79982422f4720685f62839718f0e41410c1b71355aa32af3615ccd9e31d',
-  'sqlite3ext.h': 'ac9645e5c9ff0cf176efdd6e75cb5e98f46295d38e02db5c4d208826a39ab4be',
-};
 
-/** 仅实验命令获取固定公共头文件；每次使用前核摘要，不下载或加载预编译扩展。 */
-async function prepareHeaders() {
-  mkdirSync(sdk, { recursive: true });
-  for (const [name, digest] of Object.entries(headers)) {
-    const path = join(sdk, name);
-    if (!existsSync(path)) {
-      const response = await fetch('https://raw.githubusercontent.com/nodejs/node/v24.17.0/deps/sqlite/' + name, { signal: AbortSignal.timeout(30000) });
-      if (!response.ok) throw Error('固定SQLite头文件下载失败');
-      const bytes = Buffer.from(await response.arrayBuffer());
-      assert.equal(createHash('sha256').update(bytes).digest('hex'), digest, 'SQLite头文件摘要不符');
-      writeFileSync(path, bytes, { flag: 'wx' });
-    }
-    assert.equal(createHash('sha256').update(readFileSync(path)).digest('hex'), digest, '缓存SQLite头文件摘要不符');
-  }
-}
-
-/** 编译器只属于显式实验，不改变pnpm build、产品启动或扩展加载策略。 */
+/** 独立原生API实证；共享产品编译器，但本探针不代替worker或Electron验收。 */
 async function main() {
   assert.equal(process.argv.length, 2, '探针不接受环境、数据库或扩展路径参数');
   assert.ok(['win32', 'darwin', 'linux'].includes(process.platform), '尚未支持此实验平台');
-  await prepareHeaders();
   const cache = join(root, '.cache'); mkdirSync(cache, { recursive: true });
   const run = mkdtempSync(join(cache, 'sqlite-raw-probe-'));
   console.log('原始实验记录目录：' + run);
   const binary = join(run, 'rawProbe' + (process.platform === 'win32' ? '.dll' : process.platform === 'darwin' ? '.dylib' : '.so'));
-  const zig = join(root, '.tools/zig/zig-x86_64-windows-0.15.2/zig.exe');
-  const compiler = process.platform === 'win32' ? zig : 'cc';
-  if (process.platform === 'win32') assert.ok(existsSync(compiler), 'Windows实验需先准备经官方SHA256核对的Zig 0.15.2；不会自动安装');
-  const args = [...(process.platform === 'win32' ? ['cc'] : []), process.platform === 'darwin' ? '-dynamiclib' : '-shared', ...(process.platform === 'win32' ? [] : ['-fPIC']), '-O2', '-Wall', '-Wextra', '-Werror', '-I', sdk, join(root, 'research/sqlite-raw-bridge/rawProbe.c'), '-o', binary];
-  const compiled = spawnSync(compiler, args, { cwd: run, shell: false, windowsHide: true, encoding: 'utf8', env: { ...process.env, ZIG_GLOBAL_CACHE_DIR: join(cache, 'zig-global'), ZIG_LOCAL_CACHE_DIR: join(cache, 'zig-local') } });
-  writeFileSync(join(run, 'compile.json'), JSON.stringify({ status: compiled.status, signal: compiled.signal, error: compiled.error?.message, stdout: compiled.stdout, stderr: compiled.stderr }, null, 2));
-  assert.equal(compiled.error, undefined, '编译器启动失败'); assert.equal(compiled.signal, null); assert.equal(compiled.status, 0, '原生编译失败，保留原始记录');
+  await compileSqliteNative(binary);
   const bundle = join(run, 'rawValue.cjs');
   await build({ entryPoints: [join(root, 'src/engine/sqlite/rawValue.ts')], outfile: bundle, bundle: true, platform: 'node', format: 'cjs', target: 'node24' });
   const { decodeSqliteRawValue } = createRequire(import.meta.url)(bundle);
@@ -58,9 +30,9 @@ async function main() {
   const { consumeSqliteRawFrames } = createRequire(import.meta.url)(framesBundle);
   const reports = [];
   for (const encoding of ['UTF-8', 'UTF-16le', 'UTF-16be']) reports.push(await experiment(run, binary, encoding, decodeSqliteRawValue, SqliteRawStatement, consumeSqliteRawFrames));
-  const sourceHashes = Object.fromEntries(['research/sqlite-raw-bridge/rawProbe.c', 'src/engine/sqlite/rawValue.ts', 'src/engine/sqlite/rawStatement.ts', 'src/engine/sqlite/rawFrames.ts', 'scripts/sqlite-raw-probe.mjs'].map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')]));
-  writeFileSync(join(run, 'report.json'), JSON.stringify({ node: process.versions.node, sqlite: process.versions.sqlite, platform: process.platform, arch: process.arch, sourceHash: sourceHashes['research/sqlite-raw-bridge/rawProbe.c'], sourceHashes, headers, reports, productIntegrated: false }, null, 2));
-  console.log('三编码原字节、五类值、原生权限、一次求值、事务、RETURNING与DONE不重放通过；未接入产品。');
+  const sourceHashes = Object.fromEntries(['src/engine/sqlite/nativeRows.c', 'src/engine/sqlite/rawValue.ts', 'src/engine/sqlite/rawStatement.ts', 'src/engine/sqlite/rawFrames.ts', 'scripts/sqlite-raw-probe.mjs', 'scripts/build-sqlite-native.mjs'].map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')]));
+  writeFileSync(join(run, 'report.json'), JSON.stringify({ node: process.versions.node, sqlite: process.versions.sqlite, platform: process.platform, arch: process.arch, sourceHash: sourceHashes['src/engine/sqlite/nativeRows.c'], sourceHashes, headers, reports, verificationScope: 'standalone-native-api' }, null, 2));
+  console.log('三编码原字节、五类值、原生权限、一次求值、事务、RETURNING与DONE不重放通过；本报告仅验证独立原生API。');
 }
 
 /** 一轮只持有自己的合成文件；失败保留文件与报告，成功后关闭再精确核零。 */

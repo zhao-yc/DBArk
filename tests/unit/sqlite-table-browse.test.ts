@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
-import { build } from 'esbuild';
+import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import type { SqliteProcessExit, SqliteProcessTransport, SqliteValue, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/session';
 import type { SqliteConnectionProfile, TaskEvent } from '../../src/shared/contracts';

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { build } from 'esbuild';
+import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import { SqliteDriverSession } from '../../src/engine/sqlite/session';
 import type { SqliteProcessExit, SqliteProcessTransport, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import type { SqliteConnectionProfile } from '../../src/shared/contracts';

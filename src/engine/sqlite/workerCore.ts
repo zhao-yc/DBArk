@@ -1,11 +1,15 @@
 import { closeSync, fstatSync, openSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { constants, DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
+import { constants, DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteWorkerOpenOptions, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteWorkerOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
 import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, compareSqliteRebuildTables, SqliteRebuildComparisonError } from './rebuildComparison';
 import { queryParameterLimits } from '../../shared/queryParameters';
 import { sqliteNamedParameterNames } from './parameters';
+import { createSqliteNativeInvoke, resolveSqliteNativeResource, sqliteNativeFunction } from './nativeRuntime';
+import { SqliteRawStatement, type SqliteRawInvoke } from './rawStatement';
+import { consumeSqliteRawFrames } from './rawFrames';
+import { SqliteRawValueError } from './rawValue';
 
 interface Port { send(message: SqliteWorkerResponse): void; exit(code: number): void; }
 interface Execution { id: string; cancelled: boolean; fault?: DriverFailure; waiting?: { frame: number; resolve(): void }; results: SqliteStatementResult[]; bytes: number; }
@@ -71,16 +75,6 @@ function namedParameters(sql: string, input: unknown): Record<string, SQLInputVa
   } catch { throw invalidNamedParameters(); }
 }
 
-/** 按运行时存储值编码，不根据列亲和性猜测TEXT、INTEGER、REAL或BLOB。 */
-function cell(value: unknown): SqliteValue {
-  if (value === null) return null;
-  if (typeof value === 'bigint') return { type: 'integer', value: value.toString() };
-  if (typeof value === 'number' && !Number.isNaN(value)) return { type: 'real', value: Object.is(value, -0) ? '-0' : String(value) };
-  if (typeof value === 'string' && Buffer.byteLength(value) <= limits.valueBytes) return value;
-  if (value instanceof Uint8Array && value.byteLength <= limits.valueBytes) return { type: 'binary', base64: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64') };
-  throw new DriverFailure('SQLITE_VALUE_INVALID', 'SQLite返回值类型或字段大小超出允许范围');
-}
-
 /** 一个对象只管理一个物理SQLite会话；普通消息取消和原生执行终态分开确认。 */
 export class SqliteWorkerCore {
   private db?: DatabaseSync;
@@ -92,6 +86,8 @@ export class SqliteWorkerCore {
   private rebuildWriter = false;
   private restoringRebuildFlags = false;
   private guardedCreate?: { owner: Execution; guard: SqliteCreateGuard; matched: boolean };
+  private nativeInvoke?: SqliteRawInvoke;
+  private preparingNativeControl = false;
   constructor(private readonly port: Port) {}
 
   /** ACK和取消在消息栈内同步生效，不能排在正在等待ACK的SQL后面。 */
@@ -129,7 +125,7 @@ export class SqliteWorkerCore {
       this.closing = true;
       try {
         if (this.rebuildWriter) this.restoreRebuildFlags();
-        this.db?.close(); this.db = undefined; this.closingId = request.id; this.port.send({ kind: 'closed', id: request.id, ...(this.rebuildWriter ? { rebuildRestored: true as const } : {}) });
+        this.db?.close(); this.db = undefined; this.nativeInvoke = undefined; this.closingId = request.id; this.port.send({ kind: 'closed', id: request.id, ...(this.rebuildWriter ? { rebuildRestored: true as const } : {}) });
       }
       catch { this.closing = false; this.failure(request.id, new DriverFailure('SQLITE_CLOSE_FAILED', 'SQLite会话关闭未确认')); }
       return;
@@ -141,7 +137,7 @@ export class SqliteWorkerCore {
   disconnected(): void {
     this.closing = true;
     if (this.active) { this.active.cancelled = true; this.active.waiting?.resolve(); }
-    try { this.db?.close(); } catch {} finally { this.db = undefined; this.port.exit(0); }
+    try { this.db?.close(); } catch {} finally { this.db = undefined; this.nativeInvoke = undefined; this.port.exit(0); }
   }
 
   /** 从原生连接读取真实事务位；读取失败则退出，由父端报告未知，不能伪造false。 */
@@ -163,7 +159,9 @@ export class SqliteWorkerCore {
       const path = realpathSync.native(options.path); descriptor = openSync(path, options.readOnly ? 'r' : 'r+');
       const before = fstatSync(descriptor, { bigint: true }); if (!before.isFile()) throw invalid();
       const uri = pathToFileURL(path); uri.searchParams.set('mode', options.readOnly ? 'ro' : 'rw');
-      opened = new DatabaseSync(uri.href, { readOnly: options.readOnly, timeout: options.busyTimeoutMs, allowExtension: false, enableForeignKeyConstraints: !rebuild, enableDoubleQuotedStringLiterals: false, defensive: true });
+      const nativeResource = resolveSqliteNativeResource();
+      opened = new DatabaseSync(uri.href, { readOnly: options.readOnly, timeout: options.busyTimeoutMs, allowExtension: true, enableForeignKeyConstraints: !rebuild, enableDoubleQuotedStringLiterals: false, defensive: true });
+      try { opened.loadExtension(nativeResource, 'sqlite3_dbarkrawprobe_init'); } finally { opened.enableLoadExtension(false); }
       const after = statSync(path, { bigint: true }); if (!after.isFile() || before.dev !== after.dev || before.ino !== after.ino) throw invalid();
       opened.enableLoadExtension(false); opened.enableDefensive(true);
       opened.limits.length = Math.min(opened.limits.length, limits.valueBytes);
@@ -201,6 +199,10 @@ export class SqliteWorkerCore {
       // 读写连接也须在原生prepare之前拦截副作用PRAGMA；多句参数检查和消费者ACK都发生得更晚。
       // 所有连接只拥有Main选中的单个磁盘库；ATTACH/DETACH及VACUUM INTO不能另取文件能力。
       opened.setAuthorizer((action, first, second, database, source) => {
+        const nativeControl = second?.toLowerCase() === sqliteNativeFunction;
+        // 内部只编译固定的SELECT函数壳；函数内用户SQL的prepare必须重新经过原权限判断。
+        if (this.preparingNativeControl) return action === constants.SQLITE_SELECT || action === constants.SQLITE_FUNCTION && nativeControl ? constants.SQLITE_OK : constants.SQLITE_DENY;
+        if (action === constants.SQLITE_FUNCTION && nativeControl) return constants.SQLITE_DENY;
         if (action === constants.SQLITE_ATTACH || action === constants.SQLITE_DETACH) return constants.SQLITE_DENY;
         if (action === constants.SQLITE_PRAGMA) {
           const restoring = this.restoringRebuildFlags && rebuild && source === null && (first === 'foreign_keys' && second === 'ON' || first === 'legacy_alter_table' && second === 'OFF');
@@ -210,6 +212,7 @@ export class SqliteWorkerCore {
         if (this.guardedCreate) return this.authorizeCreate(action, first, second, database, source);
         return constants.SQLITE_OK;
       });
+      this.nativeInvoke = createSqliteNativeInvoke(opened, value => { this.preparingNativeControl = value; });
       this.db = opened; this.readOnly = options.readOnly; this.rebuildWriter = rebuild; opened = undefined;
       this.port.send({ kind: 'opened', id, version: versionRow.version, transaction: this.transaction(), readOnly: options.readOnly, identity: { path, device: before.dev.toString(), inode: before.ino.toString() }, ...(rebuild ? { mode: 'table-rebuild' as const } : {}) });
     } catch (error) {
@@ -311,14 +314,17 @@ export class SqliteWorkerCore {
       if (parameters && offset === sql.length) throw invalid();
       while (offset < sql.length) {
         this.check(active); if (active.results.length >= limits.statements) throw invalid();
-        const remaining = sql.slice(offset), statement = this.db!.prepare(remaining), prefix = statement.sourceSQL;
-        if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
-        offset = skipTrivia(sql, offset + prefix.length);
-        if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');
-        if (this.guardedCreate && !this.guardedCreate.matched) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite没有观察到本次准确CREATE原生授权，尚未执行任何语句');
-        if (this.guardedCreate && statement.columns().length !== 0) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite对象创建不能使用EXPLAIN或带结果列的其它语句');
-        const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream);
-        active.results.push(result); this.port.send({ kind: 'statementEnd', id: active.id, result });
+        const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining), prefix = statement.sourceSQL;
+        try {
+          if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
+          offset = skipTrivia(sql, offset + prefix.length);
+          if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');
+          if (this.guardedCreate && !this.guardedCreate.matched) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite没有观察到本次准确CREATE原生授权，尚未执行任何语句');
+          if (this.guardedCreate && statement.columns().length !== 0) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite对象创建不能使用EXPLAIN或带结果列的其它语句');
+          if (!statement.hasStatement) continue;
+          const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream);
+          active.results.push(result); this.port.send({ kind: 'statementEnd', id: active.id, result });
+        } finally { statement.finish(); }
         // 包括零行DDL和控制语句；脚本不能靠连续同步语句饿死父端取消消息。
         await this.yield(active);
       }
@@ -329,49 +335,46 @@ export class SqliteWorkerCore {
       else if (!this.closing) {
         // 原生整数错误码可用于后续诊断；错误正文可能含SQL、路径或参数，仍禁止回传。
         const nativeCode = object(error) && integer(error.errcode, 0, 2147483647) ? 'SQLITE_NATIVE_' + error.errcode : 'SQLITE_EXECUTION_FAILED';
-        this.failure(active.id, error instanceof DriverFailure ? error : new DriverFailure(nativeCode, 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length);
+        this.failure(active.id, error instanceof DriverFailure ? error : error instanceof SqliteRawValueError ? new DriverFailure(error.code === 'SQLITE_RAW_VALUE_INVALID' ? 'SQLITE_VALUE_INVALID' : error.code, error.message) : new DriverFailure(nativeCode, 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length);
       }
     } finally { if (this.guardedCreate?.owner === active) this.guardedCreate = undefined; active.waiting = undefined; if (this.active === active) this.active = undefined; }
   }
 
   /** 结果达到预算后仍drain原语句，避免RETURNING写入因提前return而只执行一部分。 */
-  private async statement(active: Execution, statement: StatementSync, sql: string, parameters: SQLInputValue[] | Record<string, SQLInputValue>, options: SqliteExecutionOptions, stream = false): Promise<SqliteStatementResult> {
-    statement.setReadBigInts(true); statement.setReturnArrays(true);
-    if (!Array.isArray(parameters)) { statement.setAllowBareNamedParameters(false); statement.setAllowUnknownNamedParameters(true); }
+  private async statement(active: Execution, statement: SqliteRawStatement, sql: string, parameters: SQLInputValue[] | Record<string, SQLInputValue>, options: SqliteExecutionOptions, stream = false): Promise<SqliteStatementResult> {
+    statement.bind(parameters);
     const columns = statement.columns(); if (columns.length > limits.columns) throw invalid();
     const before = this.changes(), index = active.results.length;
     await this.sendFrame(active, { kind: 'statement', index, sql, columns });
     this.check(active);
-    let iterator: Iterator<unknown[]> | undefined, rows = 0, truncated = false, retaining = true, steps = 0, batch: SqliteValue[][] = [], batchBytes = 0;
+    let rows = 0, truncated = false, retaining = true, batch: SqliteValue[][] = [], batchBytes = 0, row: SqliteValue[] | undefined, rowBytes = 2;
     const flush = async () => {
       if (!batch.length) return; const output = batch; batch = []; batchBytes = 0; rows += output.length;
       await this.sendFrame(active, { kind: 'batch', index, rows: output }); await this.yield(active);
     };
-    try {
-      iterator = (Array.isArray(parameters) ? statement.iterate(...parameters) : statement.iterate(parameters)) as unknown as Iterator<unknown[]>;
-      while (true) {
-        this.check(active); const item = iterator.next(); if (item.done) break;
-        if (!Array.isArray(item.value) || item.value.length !== columns.length) throw invalid();
-        if (stream) {
-          const values = item.value.map(cell), bytes = Buffer.byteLength(JSON.stringify(values)) + 1;
-          if (bytes > limits.valueBytes || !Number.isSafeInteger(active.bytes + bytes) || !Number.isSafeInteger(rows + batch.length + 1)) throw new DriverFailure('SQLITE_STREAM_FRAME_LIMIT', 'SQLite完整流读取单帧或累计计数超过安全预算');
+    await consumeSqliteRawFrames(statement, { rows: Math.min(200, options.batchRows), check: () => this.check(active), onFrame: async frame => {
+      this.check(active);
+      for (const event of frame.events) {
+        if (event.kind === 'row') {
+          if (event.columns !== columns.length) throw invalid();
+          if (!stream && (!retaining || rows + batch.length >= options.maxRows || active.bytes >= options.maxBytes)) { retaining = false; truncated = true; }
+          row = retaining ? [] : undefined; rowBytes = 2;
+        } else if (event.kind === 'value' && row) {
+          const next = rowBytes + Buffer.byteLength(JSON.stringify(event.value)) + (row.length ? 1 : 0);
+          if (stream && next + 1 > limits.valueBytes) throw new DriverFailure('SQLITE_STREAM_FRAME_LIMIT', 'SQLite完整流读取单帧或累计计数超过安全预算');
+          if (!stream && active.bytes + next + 1 > options.maxBytes) { row = undefined; retaining = false; truncated = true; }
+          else { row.push(event.value); rowBytes = next; }
+        } else if (event.kind === 'rowEnd' && row) {
+          if (row.length !== columns.length) throw invalid(); const bytes = rowBytes + 1;
+          if (!Number.isSafeInteger(active.bytes + bytes) || !Number.isSafeInteger(rows + batch.length + 1)) throw invalid();
           if (batch.length && batchBytes + bytes > limits.valueBytes) await flush();
-          batch.push(values); batchBytes += bytes; active.bytes += bytes;
+          batch.push(row); row = undefined; batchBytes += bytes; active.bytes += bytes;
           if (batch.length >= options.batchRows || batchBytes >= limits.valueBytes) await flush();
-        } else if (!retaining || rows + batch.length >= options.maxRows || active.bytes >= options.maxBytes) { truncated = true; retaining = false; }
-        else {
-          const values = item.value.map(cell), bytes = Buffer.byteLength(JSON.stringify(values)) + 1;
-          if (active.bytes + bytes > options.maxBytes) { truncated = true; retaining = false; }
-          else {
-            if (batch.length && batchBytes + bytes > limits.valueBytes) await flush();
-            batch.push(values); batchBytes += bytes; active.bytes += bytes;
-            if (batch.length >= options.batchRows || batchBytes >= limits.valueBytes) await flush();
-          }
         }
-        if (++steps % 200 === 0) await this.yield(active);
       }
-      await flush(); this.check(active);
-    } finally { iterator?.return?.(); }
+    } });
+    await flush(); this.check(active);
+    statement.finish();
     const changed = this.changes() - before; if (changed < 0n) throw invalid();
     return { index, rows, truncated, changes: changed.toString(), transaction: this.transaction() };
   }

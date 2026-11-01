@@ -5,7 +5,8 @@ import { sqliteDriverLimits } from '../engine/sqlite/protocol';
 
 /** Main持有每个SQLite连接的准确进程对象，避免同步native查询阻塞其它连接及取消入口。 */
 function forkSqliteProcess(workerPath: string): SqliteProcessTransport {
-  const child = utilityProcess.fork(workerPath, [], { serviceName: 'DBArk SQLite 会话', stdio: 'pipe' });
+  // macOS仅此数据库utility使用Plugin helper加载已核摘要的自研库；SQL加载扩展仍关闭。
+  const child = utilityProcess.fork(workerPath, [], { serviceName: 'DBArk SQLite 会话', stdio: 'pipe', ...(process.platform === 'darwin' ? { allowLoadingUnsignedLibraries: true } : {}) });
   child.stdout?.resume(); child.stderr?.resume();
   const exited = new Promise<SqliteProcessExit>(resolve => child.once('exit', code => resolve({ code, signal: null })));
   return {

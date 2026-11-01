@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync, constants } from 'node:sqlite';
 import { copySqliteCreateGuard, sqliteCreateGuardLimits, type SqliteCreateGuard } from '../../src/engine/sqlite/protocol';
-import { build } from 'esbuild';
+import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/session';
 import type { SqliteExecutionResult, SqliteProcessExit, SqliteProcessTransport, SqliteValue, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 

@@ -28,7 +28,7 @@ function inputValue(value: unknown): asserts value is SQLInputValue {
   if (typeof value === 'bigint' && (value < -9223372036854775808n || value > 9223372036854775807n) || typeof value === 'number' && Number.isNaN(value) || typeof value === 'string' && (!validUnicode(value) || Buffer.byteLength(value) > limits.valueBytes) || ArrayBuffer.isView(value) && value.byteLength > limits.valueBytes) throw invalid();
 }
 
-/** 内部候选适配器，尚未替换SqliteWorkerCore；原SQL只prepare一次，逐行或有界帧首次解码。 */
+/** worker内部语句适配器；原SQL只prepare一次，逐行或有界帧首次解码。 */
 export class SqliteRawStatement {
   private closed = false;
   private stepped = false;

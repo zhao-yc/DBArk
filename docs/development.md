@@ -1,12 +1,8 @@
 # 开发与测试
 
-SQLite内部原字节桥新增[有界批次、消费者确认与取消](development/sqlite-raw-frames-20261102.md)：跨帧最大字段、三编码百万行及RETURNING写入事实独立验证，仍未替换客户端驱动，暂不发布。
+SQLite 原字节读取已[接入实际 worker](development/sqlite-native-runtime-20261102.md)：查询结果保留原存储类型，坏 TEXT 明确失败；固定资源构建、摘要校验和私有调用隔离已接线。Windows 源码工作区及相关测试通过，Mac 与打包范围另行验收，暂不发布。此前[语句适配器](development/sqlite-raw-statement-20261102.md)与[有界批次](development/sqlite-raw-frames-20261102.md)记录保留为接入前的独立证据。
 
-SQLite内部原字节桥新增[参数／元数据／长SQL语句适配器](development/sqlite-raw-statement-20261102.md)：沿原生槽绑定、准确列来源、20MiB分段材料及trigger边界，坏TEXT后不再step；仍未接入客户端，暂不发布。
-
-SQLite任意SQL的[原字节读取桥研发准备](../research/sqlite-raw-bridge/README.md)已验证三编码、单次求值及RETURNING不重放；内部模块尚未接入查询工作区，不能据此扩大已交付保护范围，暂不发布。
-
-SQLite 表／视图新增[只读表页原TEXT字节保护](development/sqlite-page-text-20261102.md)：坏编码拒绝整页，有效NUL／BOM／真实替代字符保留；原分页、排序及其它存储类型保持，任意SQL结果的同级保证继续处理，暂不发布。
+SQLite 表／视图新增[只读表页原TEXT字节保护](development/sqlite-page-text-20261102.md)：坏编码拒绝整页，有效NUL／BOM／真实替代字符保留；原分页、排序及其它存储类型保持；任意 SQL 结果现已接入原字节 worker，见上方接入记录，暂不发布。
 
 SQLite 表／视图新增[全表不同值勾选筛选](development/sqlite-value-options-20261102.md)：独立只读候选、全表搜索、原类型与NULL勾选、计数和取消，先加入草稿再明确应用；分页、导出、生成查询及命名方案共用，暂不发布。
 

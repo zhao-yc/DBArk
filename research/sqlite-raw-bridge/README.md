@@ -1,8 +1,8 @@
-# SQLite 任意SQL原字节读取桥（研发准备）
+# SQLite 任意SQL原字节读取桥
 
-状态：原生模块、独立解码器及[参数／元数据／长SQL适配器](../../docs/development/sqlite-raw-statement-20261102.md)已实现并独立验证，**尚未接入客户端查询执行**。不能据此宣称SQL编辑器的坏TEXT字节已经受到保护；已交付的表／视图分页保护见[表页专项](../../docs/development/sqlite-page-text-20261102.md)。不增加R02完整工作包或发行计数。
+状态：现已[接入实际 worker](../../docs/development/sqlite-native-runtime-20261102.md)，原生源码移至 `src/engine/sqlite/nativeRows.c`。本文件以下实验记录保留各自历史范围；独立探针不代替 Electron 或安装验收。不增加 R02 完整工作包或发行计数。
 
-新增[有界批次与消费者确认](../../docs/development/sqlite-raw-frames-20261102.md)：原生200行／最多1MiB帧、跨字段分段、错误终态、ACK与协作取消；准确`33227fb7`的三平台CI及原始ZIP独立核对通过，三编码分别验证百万行计数及RETURNING取消后的真实写入，仍为内部候选。
+接入前的[有界批次与消费者确认](../../docs/development/sqlite-raw-frames-20261102.md)：原生200行／最多1MiB帧、跨字段分段、错误终态、ACK与协作取消；准确`33227fb7`的三平台CI及原始ZIP独立核对通过，三编码分别验证百万行计数及RETURNING取消后的真实写入。该历史检查点仅验证内部候选。
 
 ## 问题与选择
 
@@ -12,15 +12,15 @@ Node 24.17.0／SQLite 3.53.0的普通结果读取会在交给JS前替换坏TEXT�
 
 ## 内部模块
 
-- `rawProbe.c`是DBArk自有MIT源码。仅作为显式实验扩展，在原连接上prepare／step原SQL，保留真实事务和authorizer；记住DONE，避免SQLite再次step自动重跑写入。失败时当场保存扩展错误码，后续step及finalize保留该失败，不把主键冲突1555降成19或伪装成功DONE。
+- `src/engine/sqlite/nativeRows.c`（原 `rawProbe.c`）是 DBArk 自有 MIT 源码。在原连接上 prepare／step 原 SQL，保留真实事务和 authorizer；记住 DONE，避免 SQLite 再次 step 自动重跑写入。失败时当场保存扩展错误码，后续 step 及 finalize 保留该失败，不把主键冲突 1555 降成 19 或伪装成功 DONE。
 - 只在step返回ROW后复制原值，按[原生值编码](https://www.sqlite.org/c3ref/value_encoding.html)记录UTF-8／UTF-16LE／UTF-16BE，再读取独立副本的BLOB字节。遵守[列读取时序](https://www.sqlite.org/c3ref/column_blob.html)，不使用trace回调读列，不改变原statement存储类型。
 - `src/engine/sqlite/rawValue.ts`独立解码五类值；INTEGER保有符号64位，REAL保负零及无穷，TEXT首次解码严格校验并保BOM／NUL／真实U+FFFD，BLOB不作为文本解码。原始与UTF-8表示均受原单值预算约束。
 - 每格原字节独立返回，避免把整行封成一个大BLOB后额外降低原单值门槛。控制参数明确绑定BigInt；SQLITE_FUNCTION拒绝与ATTACH拒绝分别对照原生错误码1及23。
-- 头文件按固定Node版本下载到忽略缓存并核SHA256，不入库；扩展仅由当前源码现场编译。客户端的`allowExtension:false`、IPC、构建和打包配置保持原状。
+- 头文件按固定 Node 版本下载到忽略缓存并核 SHA256，不入库；自研库由当前源码编译。客户端仅启动时固定加载，随后关闭扩展加载；现行构建及隔离策略见接入文档。
 
 ## 运行与证据
 
-命令：`node scripts/sqlite-raw-probe.mjs`。需要Node 24和项目依赖。macOS／Linux使用`cc`；Windows实验使用`.tools/zig/zig-x86_64-windows-0.15.2/zig.exe`，需先按[官方索引](https://ziglang.org/download/index.json)准备并校验编译器，不自动安装到系统。
+命令：`node scripts/sqlite-raw-probe.mjs`。需要 Node 24 和项目依赖。macOS／Linux 使用 `cc`；Windows 使用 `.tools/zig/zig-x86_64-windows-0.15.2/zig.exe`，缺少时共享构建器按固定官方 ZIP 摘要下载到项目，不安装到系统。
 
 每轮创建独立`.cache/sqlite-raw-probe-*`，保留编译日志、原始平台及报告；成功后正常关闭并精确删除合成数据库目录，失败现场保留。无服务器、Docker、安装版配置或系统剪贴板访问。
 
@@ -30,6 +30,6 @@ Node 24.17.0／SQLite 3.53.0的普通结果读取会在交给JS前替换坏TEXT�
 
 基础模块准确`49148f5c`及参数适配器准确`c6ab8ead`的三平台CI均已通过，并分别独立核对原始ZIP、实际架构与源码摘要。新版含三编码参数／元数据、长SQL、trigger边界及坏TEXT粘滞失败；实际回执及剩余边界见[语句适配器专项](../../docs/development/sqlite-raw-statement-20261102.md)。
 
-## 接入前仍需完成
+## 历史接入前清单
 
-参数、元数据、脚本边界与超过1MiB的SQL材料已在三平台候选适配器中验证；有界批次和确认／协作取消另完成内部验证。仍须接入原worker的累计结果／行预算、原IPC ACK、准确进程强取消、事务／错误与已完成写入事实，并完成扩展固定加载位置、能力隔离、三平台客户端构建／签名／打包和性能验收。当前探针不作为生产驱动或兼容回退；Electron窗口、安装版及系统输入仍须单独验证。
+累计结果／行预算、原 IPC ACK、准确进程强取消、事务／错误与已完成写入事实及固定资源隔离现已接入原 worker。三平台客户端、签名、打包和性能按接入文档分别验收；本探针仍只验证独立原生 API，不作为兼容回退或安装证明。
