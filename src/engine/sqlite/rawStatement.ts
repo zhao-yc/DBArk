@@ -28,13 +28,14 @@ function inputValue(value: unknown): asserts value is SQLInputValue {
   if (typeof value === 'bigint' && (value < -9223372036854775808n || value > 9223372036854775807n) || typeof value === 'number' && Number.isNaN(value) || typeof value === 'string' && (!validUnicode(value) || Buffer.byteLength(value) > limits.valueBytes) || ArrayBuffer.isView(value) && value.byteLength > limits.valueBytes) throw invalid();
 }
 
-/** 内部候选适配器，尚未替换SqliteWorkerCore；原SQL只prepare一次，逐格首次解码。 */
+/** 内部候选适配器，尚未替换SqliteWorkerCore；原SQL只prepare一次，逐行或有界帧首次解码。 */
 export class SqliteRawStatement {
   private closed = false;
   private stepped = false;
   private ended = false;
   private failed = false;
   private failure: unknown;
+  private readMode: 'row' | 'frame' | undefined;
   private constructor(private readonly invoke: SqliteRawInvoke, readonly sourceSQL: string, readonly hasStatement: boolean) {}
 
   /** 先取得独占材料阶段再传入分段；未取得能力时绝不收尾别人的statement。 */
@@ -116,6 +117,7 @@ export class SqliteRawStatement {
   /** 不提前累计结果，不重跑语句；坏TEXT只在原始副本上解码，不替换真实数据。 */
   next(): SqliteValue[] | null {
     if (this.closed) throw invalid(); if (this.failed) throw this.failure; if (this.ended) return null;
+    if (this.readMode === 'frame') throw invalid(); this.readMode = 'row';
     this.stepped = true;
     try {
       const length = this.call(1);
@@ -127,6 +129,17 @@ export class SqliteRawStatement {
         values.push(decodeSqliteRawValue({ type: descriptor & 255, encoding: descriptor >> 8, bytes }));
       }
       return values;
+    } catch (error) { this.failed = true; this.failure = error; throw error; }
+  }
+
+  /** 消费者明确请求一帧后才推进；行数/字节均有界，禁止与逐行游标混读。 */
+  readFrame(rows = 200, bytes = 65536): Uint8Array {
+    if (this.closed) throw invalid(); if (this.failed) throw this.failure;
+    if (this.readMode === 'row' || !Number.isSafeInteger(rows) || rows < 1 || rows > 200 || !Number.isSafeInteger(bytes) || bytes < 64 || bytes > limits.valueBytes) throw invalid();
+    this.readMode = 'frame'; this.stepped = true;
+    try {
+      const frame = this.call(16, (BigInt(rows) << 32n) | BigInt(bytes));
+      if (!(frame instanceof Uint8Array) || frame.length < 13 || frame.length > bytes) throw invalid(); return frame;
     } catch (error) { this.failed = true; this.failure = error; throw error; }
   }
 

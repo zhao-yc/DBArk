@@ -53,15 +53,18 @@ async function main() {
   const statementBundle = join(run, 'rawStatement.cjs');
   await build({ entryPoints: [join(root, 'src/engine/sqlite/rawStatement.ts')], outfile: statementBundle, bundle: true, platform: 'node', format: 'cjs', target: 'node24' });
   const { SqliteRawStatement } = createRequire(import.meta.url)(statementBundle);
+  const framesBundle = join(run, 'rawFrames.cjs');
+  await build({ entryPoints: [join(root, 'src/engine/sqlite/rawFrames.ts')], outfile: framesBundle, bundle: true, platform: 'node', format: 'cjs', target: 'node24' });
+  const { consumeSqliteRawFrames } = createRequire(import.meta.url)(framesBundle);
   const reports = [];
-  for (const encoding of ['UTF-8', 'UTF-16le', 'UTF-16be']) reports.push(experiment(run, binary, encoding, decodeSqliteRawValue, SqliteRawStatement));
-  const sourceHashes = Object.fromEntries(['research/sqlite-raw-bridge/rawProbe.c', 'src/engine/sqlite/rawValue.ts', 'src/engine/sqlite/rawStatement.ts', 'scripts/sqlite-raw-probe.mjs'].map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')]));
+  for (const encoding of ['UTF-8', 'UTF-16le', 'UTF-16be']) reports.push(await experiment(run, binary, encoding, decodeSqliteRawValue, SqliteRawStatement, consumeSqliteRawFrames));
+  const sourceHashes = Object.fromEntries(['research/sqlite-raw-bridge/rawProbe.c', 'src/engine/sqlite/rawValue.ts', 'src/engine/sqlite/rawStatement.ts', 'src/engine/sqlite/rawFrames.ts', 'scripts/sqlite-raw-probe.mjs'].map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')]));
   writeFileSync(join(run, 'report.json'), JSON.stringify({ node: process.versions.node, sqlite: process.versions.sqlite, platform: process.platform, arch: process.arch, sourceHash: sourceHashes['research/sqlite-raw-bridge/rawProbe.c'], sourceHashes, headers, reports, productIntegrated: false }, null, 2));
   console.log('三编码原字节、五类值、原生权限、一次求值、事务、RETURNING与DONE不重放通过；未接入产品。');
 }
 
 /** 一轮只持有自己的合成文件；失败保留文件与报告，成功后关闭再精确核零。 */
-function experiment(run, binary, encoding, decode, RawStatement) {
+async function experiment(run, binary, encoding, decode, RawStatement, consumeFrames) {
   const directory = mkdtempSync(join(run, 'fixture-')), path = join(directory, 'sample.sqlite');
   const invalid = encoding === 'UTF-8' ? '80' : encoding === 'UTF-16le' ? '00d8' : 'd800';
   const original = '\uFEFF真实\0🚢\uFFFD', db = new DatabaseSync(path, { allowExtension: true });
@@ -124,11 +127,12 @@ function experiment(run, binary, encoding, decode, RawStatement) {
     assert.throws(() => invoke(1), { code: 'ERR_SQLITE_ERROR', errcode: constraint }, '失败终态不能被后续step当成成功DONE');
     assert.throws(() => invoke(2), { code: 'ERR_SQLITE_ERROR', errcode: constraint });
     const adapter = statementExperiment(db, invoke, RawStatement, original);
+    const frames = await frameExperiment(db, invoke, RawStatement, consumeFrames, encoding, original, path);
     assert.deepEqual(rows('SELECT n FROM subject ORDER BY id'), [[{ type: 'integer', value: '1' }], [{ type: 'integer', value: '2' }]]);
     assert.equal(db.isTransaction, false);
     assert.deepEqual(db.prepare('SELECT id,typeof(v) AS kind,hex(v) AS bytes FROM subject ORDER BY id').all(), sourceBefore);
     successful = true;
-    return { encoding, rawEncoding: bad.encoding, badHex: invalid, originalDefectReproduced: true, oldReplacementCount: lossy.length, validTextKept: true, fiveTypesKept: true, invalidRejected: true, evaluations, writes: [1, 2], nativePermissionsKept: true, repeatedDoneNoReplay: true, nativeFailureCode: constraint, repeatedFailureKept: true, adapter, transaction: false, normalClose: true, fixtureRemoved: true };
+    return { encoding, rawEncoding: bad.encoding, badHex: invalid, originalDefectReproduced: true, oldReplacementCount: lossy.length, validTextKept: true, fiveTypesKept: true, invalidRejected: true, evaluations, writes: [1, 2], nativePermissionsKept: true, repeatedDoneNoReplay: true, nativeFailureCode: constraint, repeatedFailureKept: true, adapter, frames, transaction: false, normalClose: true, fixtureRemoved: true };
   } catch (error) { failure = error; throw error; }
   finally {
     try { if (invoke) invoke(2); }
@@ -197,6 +201,75 @@ function statementExperiment(db, invoke, RawStatement, original) {
   assert.throws(() => statement.next(), error => { badError = error; return error.code === 'SQLITE_TEXT_ENCODING_UNREPRESENTABLE'; });
   assert.throws(() => statement.next(), error => error === badError); assert.equal(badSteps, 1); statement.finish();
   return { positionalTypesKept: true, namedSlotsKept: true, duplicateColumnsKept: true, metadataMatchesNative: true, metadataCalls, longSqlBytes: Buffer.byteLength(first + rest), prefixMatchesNative: true, sourceCalls, triggerBoundaryKept: true, badSteps, badTextFailureSticky: true, maximumSqlBytes: 20 * 1024 * 1024, overBudgetRejected: true, invalidSqlUtf8Rejected: true, staleObjectIsolated: true };
+}
+
+/** 原生帧覆盖最大字段、百万行、ACK取消及原事务；只累计计数和总和，不收全结果。 */
+async function frameExperiment(db, invoke, RawStatement, consume, encoding, original, path) {
+  const smallRows = [], read = async (sql, parameters = [], bytes = 65536) => {
+    const statement = RawStatement.prepare(invoke, sql); statement.bind(parameters); const rows = []; let current, count = 0, maximum = 0;
+    try { await consume({ readFrame: (limit, size) => { const frame = statement.readFrame(limit, size); count++; maximum = Math.max(maximum, frame.length); return frame; } }, { rows: 2, bytes, check: () => {}, onFrame: frame => {
+      for (const event of frame.events) { if (event.kind === 'row') current = []; else if (event.kind === 'value') current.push(event.value); else if (event.kind === 'rowEnd') { rows.push(current); current = undefined; } }
+    } }); return { rows, count, maximum }; } finally { statement.finish(); }
+  };
+  smallRows.push(...(await read('SELECT id,v,n+0.25,zeroblob(0),NULL FROM subject WHERE id=1', [], 64)).rows);
+  assert.deepEqual(smallRows, [[{ type: 'integer', value: '1' }, original, { type: 'real', value: '1.25' }, { type: 'binary', base64: '' }, null]]);
+  assert.deepEqual((await read("SELECT 9223372036854775807,-9223372036854775808,-0.0,1e999,1.25,x'00ff',CAST(x'' AS TEXT)", [], 64)).rows, [[{ type: 'integer', value: '9223372036854775807' }, { type: 'integer', value: '-9223372036854775808' }, { type: 'real', value: '-0' }, { type: 'real', value: 'Infinity' }, { type: 'real', value: '1.25' }, { type: 'binary', base64: 'AP8=' }, '']]);
+  const text = 'a'.repeat(encoding === 'UTF-8' ? 1048576 : 524288), blob = Buffer.alloc(1048576, 0xab);
+  const large = await read('SELECT ?,?', [text, blob]);
+  assert.deepEqual(large.rows, [[text, { type: 'binary', base64: blob.toString('base64') }]]); assert.ok(large.count > 16); assert.ok(large.maximum <= 65536);
+  assert.deepEqual((await read('SELECT id FROM subject WHERE 0')).rows, []);
+  let millionRows = 0, millionSum = 0n, millionFrames = 0, maxFrame = 0;
+  const million = RawStatement.prepare(invoke, 'WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000001) SELECT x FROM n'), started = performance.now();
+  try { await consume({ readFrame: (rows, bytes) => { const frame = million.readFrame(rows, bytes); millionFrames++; maxFrame = Math.max(maxFrame, frame.length); return frame; } }, { check: () => {}, onFrame: frame => {
+    let ended = 0; for (const event of frame.events) { if (event.kind === 'value') { assert.equal(event.value.type, 'integer'); millionSum += BigInt(event.value.value); } else if (event.kind === 'rowEnd') { millionRows++; ended++; } }
+    assert.ok(ended <= 200);
+  } }); } finally { million.finish(); }
+  const millionMs = performance.now() - started; assert.equal(millionRows, 1000001); assert.equal(millionSum, 500001500001n); assert.equal(millionFrames, 5001); assert.ok(maxFrame <= 65536);
+  let evaluated = 0; db.function('probe_frame_ack', { useBigIntArguments: true }, value => { evaluated++; return value; });
+  db.exec('BEGIN'); let reads = 0, cancel = false, release, reached;
+  const ack = new Promise(resolve => { release = resolve; }), first = new Promise(resolve => { reached = resolve; });
+  const source = RawStatement.prepare(invoke, 'WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10) SELECT probe_frame_ack(x) FROM n');
+  const cancelled = Error('本例准确帧任务取消');
+  const reading = consume({ readFrame: (rows, bytes) => { reads++; return source.readFrame(rows, bytes); } }, { rows: 2, check: () => { if (cancel) throw cancelled; }, onFrame: async () => { reached(); await ack; } });
+  const outcome = reading.catch(error => error);
+  await first; await new Promise(resolve => setImmediate(resolve)); assert.equal(reads, 1); assert.equal(evaluated, 2); cancel = true; release(); assert.equal(await outcome, cancelled); assert.equal(reads, 1); assert.equal(evaluated, 2);
+  source.finish(); assert.equal(db.isTransaction, true); assert.equal(db.prepare('SELECT count(*) AS n FROM subject').get().n, 2); db.exec('ROLLBACK'); assert.equal(db.isTransaction, false);
+  const partial = RawStatement.prepare(invoke, 'SELECT zeroblob(1048576)'); let partialReads = 0, partialCancel = false;
+  await assert.rejects(consume({ readFrame: (rows, bytes) => { partialReads++; return partial.readFrame(rows, bytes); } }, { bytes: 64, check: () => { if (partialCancel) throw cancelled; }, onFrame: frame => { assert.equal(frame.events.some(event => event.kind === 'value'), false); partialCancel = true; } }), error => error === cancelled);
+  assert.equal(partialReads, 1); partial.finish(); assert.deepEqual((await read('SELECT 1')).rows, [[{ type: 'integer', value: '1' }]]);
+  let badEvaluated = 0; db.function('probe_frame_bad', { useBigIntArguments: true }, value => { badEvaluated++; return value; });
+  const badSql = "SELECT v,probe_frame_bad(id) FROM subject UNION ALL SELECT '末行',probe_frame_bad(3)", native = db.prepare(badSql); native.setReturnArrays(true);
+  const iterator = native.iterate(); iterator.next(); iterator.next(); iterator.return(); assert.equal(badEvaluated, 2); badEvaluated = 0;
+  const bad = RawStatement.prepare(invoke, badSql); let completed = 0, terminal;
+  try { await assert.rejects(consume(bad, { check: () => {}, onFrame: frame => { for (const event of frame.events) { if (event.kind === 'rowEnd') completed++; if (event.kind === 'error') terminal = event.code; } } }), error => error.code === 'SQLITE_TEXT_ENCODING_UNREPRESENTABLE'); }
+  finally { bad.finish(); }
+  assert.equal(badEvaluated, 2); assert.equal(completed, 1); assert.equal(terminal, 0x7fff0001);
+  const failed = RawStatement.prepare(invoke, "INSERT INTO subject VALUES(1,0,'重复')");
+  await assert.rejects(consume(failed, { check: () => {}, onFrame: frame => { assert.deepEqual(frame.events, [{ kind: 'error', code: 1555 }]); } }), error => error.errcode === 1555);
+  assert.throws(() => failed.finish(), error => error.errcode === 1555);
+  if (encoding !== 'UTF-8') {
+    const wide = Buffer.from('中'.repeat(524288), 'utf16le'); if (encoding === 'UTF-16be') wide.swap16();
+    const budget = RawStatement.prepare(invoke, 'SELECT CAST(? AS TEXT)'); budget.bind([wide]);
+    try { await assert.rejects(consume(budget, { check: () => {}, onFrame: frame => { assert.equal(frame.events.at(-1).code, 0x7fff0002); } }), error => error.code === 'SQLITE_RAW_VALUE_INVALID'); }
+    finally { budget.finish(); }
+  }
+  db.exec('CREATE TABLE probe_frame_write(id INTEGER PRIMARY KEY,n INTEGER)');
+  let writeCancel = false, writeRows = 0;
+  const returning = RawStatement.prepare(invoke, "INSERT INTO probe_frame_write SELECT value,0 FROM json_each('[1,2,3]') RETURNING id");
+  await assert.rejects(consume(returning, { rows: 1, check: () => { if (writeCancel) throw cancelled; }, onFrame: frame => { writeRows += frame.events.filter(event => event.kind === 'rowEnd').length; writeCancel = true; } }), error => error === cancelled);
+  returning.finish(); assert.equal(writeRows, 1); assert.equal(db.isTransaction, false);
+  const independent = () => { const other = new DatabaseSync(path, { readOnly: true }); try { return other.prepare('SELECT id,n FROM probe_frame_write ORDER BY id').all().map(row => [row.id, row.n]); } finally { other.close(); } };
+  assert.deepEqual(independent(), [[1, 0], [2, 0], [3, 0]]);
+  db.exec('BEGIN'); writeCancel = false;
+  const transactionWrite = RawStatement.prepare(invoke, 'UPDATE probe_frame_write SET n=n+1 RETURNING id');
+  await assert.rejects(consume(transactionWrite, { rows: 1, check: () => { if (writeCancel) throw cancelled; }, onFrame: () => { writeCancel = true; } }), error => error === cancelled);
+  transactionWrite.finish(); assert.equal(db.isTransaction, true);
+  assert.deepEqual(db.prepare('SELECT n FROM probe_frame_write ORDER BY id').all().map(row => row.n), [1, 1, 1]); assert.deepEqual(independent(), [[1, 0], [2, 0], [3, 0]]);
+  db.exec('ROLLBACK'); assert.deepEqual(independent(), [[1, 0], [2, 0], [3, 0]]);
+  const noStep = RawStatement.prepare(invoke, 'INSERT INTO probe_frame_write VALUES(4,0) RETURNING id'); let cancelledReads = 0;
+  await assert.rejects(consume({ readFrame: (rows, bytes) => { cancelledReads++; return noStep.readFrame(rows, bytes); } }, { check: () => { throw cancelled; }, onFrame: () => { throw Error('首帧前取消不应回包'); } }), error => error === cancelled);
+  noStep.finish(); assert.equal(cancelledReads, 0); assert.deepEqual(independent(), [[1, 0], [2, 0], [3, 0]]);
+  return { smallTypesKept: true, numericExtremesKept: true, maximumTextBytes: Buffer.byteLength(text), maximumBlobBytes: blob.length, largeValueFrames: large.count, maximumFrameBytes: large.maximum, convertedBudgetChecked: encoding !== 'UTF-8', millionRows, millionSum: String(millionSum), millionFrames, millionMs, ackReads: reads, ackEvaluated: evaluated, cancellationPreservedTransaction: true, partialReads, partialBufferFinalized: true, badEvaluated, completedBeforeBad: completed, nativeErrorKept: true, returningRowsDelivered: writeRows, returningWritesAfterCancel: 3, explicitTransactionKept: true, explicitRollbackVerified: true, cancelledReads, independentDiskVerified: true };
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

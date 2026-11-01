@@ -83,4 +83,11 @@ describe('SQLite原字节候选适配器的输入、能力及损坏回包保护'
     expect(original).toMatchObject({ code: 'SQLITE_TEXT_ENCODING_UNREPRESENTABLE' });
     expect(() => statement.next()).toThrow(original as Error); expect(bad.mutations()).toHaveLength(1); statement.finish();
   });
+  it('逐行和批次不能混读，帧预算错误在原生推进前拒绝', () => {
+    const bytes = Buffer.alloc(13); bytes.write('DBF1'); bytes.writeBigUInt64LE(1n, 4); bytes[12] = 0x13;
+    const fixture = control('SELECT 1', [], op => op === 16 ? bytes : undefined), statement = fixture.statement();
+    expect(() => statement.readFrame(201)).toThrow(SqliteRawStatementError); expect(fixture.invoke.mock.calls.some(([op]) => op === 16)).toBe(false);
+    expect(statement.readFrame()).toBe(bytes); expect(() => statement.next()).toThrow(SqliteRawStatementError); statement.finish();
+    const row = fixture.statement(); row.next(); expect(() => row.readFrame()).toThrow(SqliteRawStatementError); row.finish();
+  });
 });

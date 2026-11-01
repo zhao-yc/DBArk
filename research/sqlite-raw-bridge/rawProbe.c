@@ -8,9 +8,15 @@ SQLITE_EXTENSION_INIT1
 
 #define RAW_SQL_BYTES (20*1024*1024)
 #define RAW_SQL_CHUNK 65536
+#define RAW_VALUE_BYTES (1024*1024)
+#define RAW_TEXT_ERROR 0x7fff0001
+#define RAW_VALUE_ERROR 0x7fff0002
 typedef struct RawProbe {
   sqlite3 *db; sqlite3_stmt *statement; int done; int row; int result; int started; int bind_index;
   unsigned char *sql; int sql_length; int sql_capacity; int sql_stage; int consumed;
+  int read_mode; int frame_phase; int frame_column; sqlite3_uint64 frame_sequence;
+  sqlite3_value *frame_value; const unsigned char *frame_data; unsigned char frame_numeric[8];
+  int frame_size; int frame_offset;
 } RawProbe;
 
 /* 固定提示不泄露SQL、参数或数据库路径。 */
@@ -23,11 +29,11 @@ static int failure_code(sqlite3 *db, int rc) {
 }
 
 /* 完整UTF8到齐后一次核验；分段边界允许落在多字节字符内部，禁止NUL及无效Unicode。 */
-static int valid_sql(const unsigned char *bytes, int length) {
+static int valid_utf8(const unsigned char *bytes, int length, int allow_zero) {
   int i=0;
   while (i<length) {
     uint32_t code, minimum; int follow, j; unsigned char first=bytes[i++];
-    if (first<128) { if (!first) return 0; continue; }
+    if (first<128) { if (!first && !allow_zero) return 0; continue; }
     if (first>=194 && first<=223) { code=first&31; follow=1; minimum=128; }
     else if (first>=224 && first<=239) { code=first&15; follow=2; minimum=2048; }
     else if (first>=240 && first<=244) { code=first&7; follow=3; minimum=65536; }
@@ -39,10 +45,37 @@ static int valid_sql(const unsigned char *bytes, int length) {
   return 1;
 }
 
+/* UTF16源字节必须成对，真实BOM和NUL是内容；同时核UTF8表示的原单值预算。 */
+static int valid_text(const unsigned char *bytes, int length, int encoding) {
+  int i, utf8_bytes=0;
+  if (encoding==SQLITE_UTF8) return valid_utf8(bytes,length,1) ? SQLITE_OK : RAW_TEXT_ERROR;
+  if ((encoding!=SQLITE_UTF16LE && encoding!=SQLITE_UTF16BE) || (length&1)) return RAW_TEXT_ERROR;
+  for (i=0;i<length;i+=2) {
+    unsigned int code=encoding==SQLITE_UTF16LE ? bytes[i]|((unsigned int)bytes[i+1]<<8) : ((unsigned int)bytes[i]<<8)|bytes[i+1];
+    if (code>=55296 && code<=56319) {
+      unsigned int low;
+      if (i+3>=length) return RAW_TEXT_ERROR;
+      low=encoding==SQLITE_UTF16LE ? bytes[i+2]|((unsigned int)bytes[i+3]<<8) : ((unsigned int)bytes[i+2]<<8)|bytes[i+3];
+      if (low<56320 || low>57343) return RAW_TEXT_ERROR;
+      i+=2; utf8_bytes+=4;
+    } else if (code>=56320 && code<=57343) return RAW_TEXT_ERROR;
+    else utf8_bytes+=code<128 ? 1 : code<2048 ? 2 : 3;
+    if (utf8_bytes>RAW_VALUE_BYTES) return RAW_VALUE_ERROR;
+  }
+  return SQLITE_OK;
+}
+
+/* 跨帧仅保留一个独立值副本；完成、取消或finalize时精确释放。 */
+static void release_frame_value(RawProbe *p) {
+  sqlite3_value_free(p->frame_value); p->frame_value=0; p->frame_data=0; p->frame_size=0; p->frame_offset=0;
+}
+
 /* 释放本轮SQL材料与阶段；只在原statement明确finalize后调用。 */
 static void clear_source(RawProbe *p) {
+  release_frame_value(p);
   sqlite3_free(p->sql); p->sql=0; p->sql_length=0; p->sql_capacity=0; p->sql_stage=0; p->consumed=0;
   p->done=0; p->row=0; p->result=SQLITE_OK; p->started=0; p->bind_index=0;
+  p->read_mode=0; p->frame_phase=0; p->frame_column=0; p->frame_sequence=0;
 }
 
 /* 缓冲上限固定20MiB，扩容失败保留原材料，调用方须明确放弃；不触发prepare或step。 */
@@ -63,11 +96,82 @@ static int append_sql(sqlite3_context *ctx, RawProbe *p, const void *bytes, int 
 /* 原生tail只认第一条完整语句；不扫描或改写trigger内部的分号。 */
 static void prepare_source(sqlite3_context *ctx, RawProbe *p) {
   const char *tail; int rc;
-  if (p->sql_stage!=1 || !p->sql_length || !valid_sql(p->sql,p->sql_length)) { invalid(ctx); return; }
+  if (p->sql_stage!=1 || !p->sql_length || !valid_utf8(p->sql,p->sql_length,0)) { invalid(ctx); return; }
   rc=sqlite3_prepare_v3(p->db,(const char *)p->sql,p->sql_length,0,&p->statement,&tail);
   if (rc!=SQLITE_OK) { rc=failure_code(p->db,rc); sqlite3_finalize(p->statement); p->statement=0; clear_source(p); sqlite3_result_error_code(ctx,rc); return; }
   p->sql_stage=2; p->consumed=(int)(tail-(const char *)p->sql);
   sqlite3_result_int(ctx,p->consumed);
+}
+
+/* 帧中的整数均显式小端，与主机字节序无关。 */
+static void write_u32(unsigned char *output, uint32_t value) {
+  int i; for (i=0;i<4;i++) output[i]=(unsigned char)(value>>(i*8));
+}
+
+/* 出错时只记固定码并停止本次原生读取，不能预取错误行之后的用户表达式。 */
+static void frame_failure(RawProbe *p, int code) {
+  release_frame_value(p); p->done=1; p->row=0; p->result=code; p->frame_phase=5;
+}
+
+/* 一次最多200行、1MiB；头部原子写入，字段数据可跨帧，不降低1MiB单值上限。 */
+static void read_frame(sqlite3_context *ctx, RawProbe *p, sqlite3_int64 request) {
+  int max_rows, max_bytes, used=12, rows=0, rc, i; unsigned char *output;
+  sqlite3_int64 requested_rows=request>>32; uint32_t requested_bytes=(uint32_t)(request&UINT64_C(0xffffffff));
+  if (request<0 || requested_rows<1 || requested_rows>200 || requested_bytes<64 || requested_bytes>RAW_VALUE_BYTES || p->read_mode==1 || p->bind_index || p->frame_sequence>=UINT64_C(9007199254740991)) { invalid(ctx); return; }
+  max_rows=(int)requested_rows; max_bytes=(int)requested_bytes;
+  output=sqlite3_malloc(max_bytes); if (!output) { sqlite3_result_error_nomem(ctx); return; }
+  p->read_mode=2; p->started=1; memcpy(output,"DBF1",4); p->frame_sequence++;
+  for (i=0;i<8;i++) output[4+i]=(unsigned char)(p->frame_sequence>>(i*8));
+  while (used<max_bytes) {
+    if (p->frame_phase==0) {
+      if (rows>=max_rows) break;
+      if (max_bytes-used<5) break;
+      if (p->done || !p->statement) { if (!p->done) { p->done=1; p->result=SQLITE_DONE; } p->frame_phase=5; continue; }
+      p->row=0; rc=sqlite3_step(p->statement);
+      if (rc==SQLITE_ROW) { p->row=1; p->frame_column=0; p->frame_phase=1; }
+      else { p->done=1; p->result=rc==SQLITE_DONE ? rc : failure_code(p->db,rc); p->frame_phase=5; }
+    } else if (p->frame_phase==1) {
+      int columns=sqlite3_column_count(p->statement);
+      if (columns<1 || columns>1024) { frame_failure(p,RAW_VALUE_ERROR); continue; }
+      if (max_bytes-used<5) break;
+      output[used++]=0x10; write_u32(output+used,(uint32_t)columns); used+=4; p->frame_phase=2;
+    } else if (p->frame_phase==2) {
+      int type, encoding=0;
+      if (p->frame_column>=sqlite3_column_count(p->statement)) { p->frame_phase=4; continue; }
+      if (max_bytes-used<7) break;
+      p->frame_value=sqlite3_value_dup(sqlite3_column_value(p->statement,p->frame_column));
+      if (!p->frame_value) { frame_failure(p,SQLITE_NOMEM); continue; }
+      type=sqlite3_value_type(p->frame_value);
+      if (type==SQLITE_INTEGER || type==SQLITE_FLOAT) {
+        uint64_t bits;
+        if (type==SQLITE_INTEGER) bits=(uint64_t)sqlite3_value_int64(p->frame_value);
+        else { double number=sqlite3_value_double(p->frame_value); memcpy(&bits,&number,8); }
+        for (i=0;i<8;i++) p->frame_numeric[i]=(unsigned char)(bits>>(i*8));
+        p->frame_size=8; p->frame_data=p->frame_numeric;
+      } else if (type==SQLITE_NULL) { p->frame_size=0; p->frame_data=(const unsigned char *)""; }
+      else if (type==SQLITE_TEXT || type==SQLITE_BLOB) {
+        if (type==SQLITE_TEXT) encoding=sqlite3_value_encoding(p->frame_value);
+        p->frame_data=sqlite3_value_blob(p->frame_value); p->frame_size=sqlite3_value_bytes(p->frame_value);
+        if (p->frame_size && !p->frame_data) { frame_failure(p,SQLITE_NOMEM); continue; }
+        if (p->frame_size>RAW_VALUE_BYTES) { frame_failure(p,RAW_VALUE_ERROR); continue; }
+        if (type==SQLITE_TEXT && (rc=valid_text(p->frame_data,p->frame_size,encoding))!=SQLITE_OK) { frame_failure(p,rc); continue; }
+      } else { frame_failure(p,RAW_VALUE_ERROR); continue; }
+      output[used++]=0x11; output[used++]=(unsigned char)type; output[used++]=(unsigned char)encoding;
+      write_u32(output+used,(uint32_t)p->frame_size); used+=4; p->frame_offset=0; p->frame_phase=3;
+    } else if (p->frame_phase==3) {
+      int count=p->frame_size-p->frame_offset;
+      if (count>max_bytes-used) count=max_bytes-used;
+      if (count) { memcpy(output+used,p->frame_data+p->frame_offset,count); used+=count; p->frame_offset+=count; }
+      if (p->frame_offset==p->frame_size) { release_frame_value(p); p->frame_column++; p->frame_phase=2; }
+    } else if (p->frame_phase==4) {
+      output[used++]=0x12; rows++; p->row=0; p->frame_phase=0;
+    } else {
+      if (p->result==SQLITE_DONE) output[used++]=0x13;
+      else { if (max_bytes-used<5) break; output[used++]=0x14; write_u32(output+used,(uint32_t)p->result); used+=4; }
+      break;
+    }
+  }
+  sqlite3_result_blob(ctx,output,used,sqlite3_free);
 }
 
 /* 元数据始终来自当前原生statement；NULL与空字符串分开，UTF8原字节由JS严格解码。 */
@@ -107,12 +211,12 @@ static void read_value(sqlite3_context *ctx, RawProbe *p, int op, int column) {
   sqlite3_value_free(copy);
 }
 
-/* 0直接准备、1推进、2收尾、3/4读值；5～11参数/元数据/原前缀，12～14分段SQL，15真实statement位。 */
+/* 0直接准备、1推进、2收尾、3/4读值；5～11参数/元数据/原前缀，12～14分段SQL，15真实statement位，16有界帧。 */
 static void run(sqlite3_context *ctx, int argc, sqlite3_value **args) {
   RawProbe *p = sqlite3_user_data(ctx); int op, rc; sqlite3_int64 operation;
   if (argc != 2 || sqlite3_value_type(args[0]) != SQLITE_INTEGER) { invalid(ctx); return; }
   operation=sqlite3_value_int64(args[0]);
-  if (operation < 0 || operation > 15) { invalid(ctx); return; }
+  if (operation < 0 || operation > 16) { invalid(ctx); return; }
   op=(int)operation;
   if (op == 0) {
     const char *sql; int length;
@@ -155,6 +259,7 @@ static void run(sqlite3_context *ctx, int argc, sqlite3_value **args) {
     if (sqlite3_value_type(args[1])!=SQLITE_NULL) { invalid(ctx); return; }
     sqlite3_result_int(ctx,op==15 ? p->statement!=0 : !p->statement ? 0 : op==5 ? sqlite3_bind_parameter_count(p->statement) : sqlite3_column_count(p->statement)); return;
   }
+  if (op==16) { if(sqlite3_value_type(args[1])!=SQLITE_INTEGER) invalid(ctx); else read_frame(ctx,p,sqlite3_value_int64(args[1])); return; }
   if (!p->statement) {
     if (op==1 && sqlite3_value_type(args[1])==SQLITE_NULL) sqlite3_result_null(ctx); else invalid(ctx);
     return;
@@ -185,12 +290,13 @@ static void run(sqlite3_context *ctx, int argc, sqlite3_value **args) {
   if (op==9) { if(sqlite3_value_type(args[1])!=SQLITE_INTEGER) invalid(ctx); else metadata(ctx,p,sqlite3_value_int64(args[1])); return; }
   if (op == 3 || op == 4) {
     sqlite3_int64 column;
-    if (sqlite3_value_type(args[1]) != SQLITE_INTEGER) { invalid(ctx); return; }
+    if (sqlite3_value_type(args[1]) != SQLITE_INTEGER || p->read_mode==2) { invalid(ctx); return; }
     column=sqlite3_value_int64(args[1]);
     if (column < 0 || column >= sqlite3_column_count(p->statement)) { invalid(ctx); return; }
     read_value(ctx,p,op,(int)column); return;
   }
-  if (op != 1 || sqlite3_value_type(args[1]) != SQLITE_NULL || p->bind_index) { invalid(ctx); return; }
+  if (op != 1 || sqlite3_value_type(args[1]) != SQLITE_NULL || p->bind_index || p->read_mode==2) { invalid(ctx); return; }
+  p->read_mode=1;
   /* SQLite在DONE后再次step可能自动重跑；桥必须记住终态，不能因此重放写入。 */
   if (p->done) {
     if (p->result == SQLITE_DONE) sqlite3_result_null(ctx); else sqlite3_result_error_code(ctx,p->result);
