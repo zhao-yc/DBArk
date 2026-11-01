@@ -1,0 +1,3 @@
+.sqlite-objects pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.sqlite-objects [aria-label="SQLite 对象风险确认"] { display:grid; gap:8px; margin:12px 0; }
+.sqlite-objects-template { margin:12px 0; }

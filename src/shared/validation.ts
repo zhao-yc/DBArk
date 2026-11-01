@@ -1,3 +1,4 @@
+import { sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema } from './sqliteObjects';
 import { sqliteTableMaintenanceInspectSchema, sqliteTableMaintenancePreviewSchema, sqliteTableMaintenanceApplySchema, sqliteTableMaintenanceReleaseSchema } from './sqliteTableMaintenance';
 import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteTableRenameApplySchema, sqliteTableRenameReleaseSchema } from './sqliteTableRename';
 import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsApplySchema, sqliteColumnsReleaseSchema } from './sqliteColumns';
@@ -220,15 +221,19 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableImport.release': sqliteTableImportReleaseSchema,
   'sqlite.importSource.inspect': sqliteImportSourceInspectSchema,
   'sqlite.importSource.release': sqliteImportSourceReleaseSchema,
+  'sqlite.objects.inspect': sqliteObjectsInspectSchema,
   'sqlite.tableMaintenance.inspect': sqliteTableMaintenanceInspectSchema,
   'sqlite.tableRename.inspect': sqliteTableRenameInspectSchema,
   'sqlite.columns.inspect': sqliteColumnsInspectSchema,
+  'sqlite.objects.preview': sqliteObjectsPreviewSchema,
   'sqlite.tableMaintenance.preview': sqliteTableMaintenancePreviewSchema,
   'sqlite.tableRename.preview': sqliteTableRenamePreviewSchema,
   'sqlite.columns.preview': sqliteColumnsPreviewSchema,
+  'sqlite.objects.apply': sqliteObjectsApplySchema,
   'sqlite.tableMaintenance.apply': sqliteTableMaintenanceApplySchema,
   'sqlite.tableRename.apply': sqliteTableRenameApplySchema,
   'sqlite.columns.apply': sqliteColumnsApplySchema,
+  'sqlite.objects.release': sqliteObjectsReleaseSchema,
   'sqlite.tableMaintenance.release': sqliteTableMaintenanceReleaseSchema,
   'sqlite.tableRename.release': sqliteTableRenameReleaseSchema,
   'sqlite.columns.release': sqliteColumnsReleaseSchema,

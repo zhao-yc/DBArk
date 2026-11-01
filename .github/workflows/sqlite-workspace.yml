@@ -108,6 +108,8 @@ jobs:
         run: node scripts/sqlite-workspace-ci.mjs table-rename
       - name: 单次运行SQLite已有表清空删除原生专项
         run: node scripts/sqlite-workspace-ci.mjs table-maintenance
+      - name: 单次运行SQLite视图触发器管理原生专项
+        run: node scripts/sqlite-workspace-ci.mjs objects
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -130,4 +132,5 @@ jobs:
             test-results/sqlite-columns/
             test-results/sqlite-table-rename/
             test-results/sqlite-table-maintenance/
+            test-results/sqlite-objects/
           if-no-files-found: warn

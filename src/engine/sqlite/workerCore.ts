@@ -2,7 +2,7 @@ import { closeSync, fstatSync, openSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { constants, DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
-import { copySqliteNamedParameters, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteColumn, type SqliteExecutionOptions, type SqliteOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { copySqliteNamedParameters, copySqliteCreateGuard, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
 import { queryParameterLimits } from '../../shared/queryParameters';
 import { sqliteNamedParameterNames } from './parameters';
 
@@ -88,6 +88,7 @@ export class SqliteWorkerCore {
   private closing = false;
   private closingId?: string;
   private readOnly = false;
+  private guardedCreate?: { owner: Execution; guard: SqliteCreateGuard; matched: boolean };
   constructor(private readonly port: Port) {}
 
   /** ACK和取消在消息栈内同步生效，不能排在正在等待ACK的SQL后面。 */
@@ -187,12 +188,12 @@ export class SqliteWorkerCore {
       }
       // 读写连接也须在原生prepare之前拦截副作用PRAGMA；多句参数检查和消费者ACK都发生得更晚。
       // 所有连接只拥有Main选中的单个磁盘库；ATTACH/DETACH及VACUUM INTO不能另取文件能力。
-      opened.setAuthorizer((action, first, second) => {
+      opened.setAuthorizer((action, first, second, database, source) => {
         if (action === constants.SQLITE_ATTACH || action === constants.SQLITE_DETACH) return constants.SQLITE_DENY;
         if (action === constants.SQLITE_PRAGMA) return readablePragma(first, second) ? constants.SQLITE_OK : constants.SQLITE_DENY;
-        if (!options.readOnly) return constants.SQLITE_OK;
-        if ([constants.SQLITE_READ, constants.SQLITE_SELECT, constants.SQLITE_FUNCTION, constants.SQLITE_RECURSIVE, constants.SQLITE_TRANSACTION, constants.SQLITE_SAVEPOINT].includes(action)) return constants.SQLITE_OK;
-        return constants.SQLITE_DENY;
+        if (options.readOnly && ![constants.SQLITE_READ, constants.SQLITE_SELECT, constants.SQLITE_FUNCTION, constants.SQLITE_RECURSIVE, constants.SQLITE_TRANSACTION, constants.SQLITE_SAVEPOINT].includes(action)) return constants.SQLITE_DENY;
+        if (this.guardedCreate) return this.authorizeCreate(action, first, second, database, source);
+        return constants.SQLITE_OK;
       });
       this.db = opened; this.readOnly = options.readOnly; opened = undefined;
       this.port.send({ kind: 'opened', id, version: versionRow.version, transaction: this.transaction(), readOnly: options.readOnly, identity: { path, device: before.dev.toString(), inode: before.ino.toString() } });
@@ -200,6 +201,25 @@ export class SqliteWorkerCore {
       try { opened?.close(); } catch {}
       this.failure(id, error instanceof DriverFailure ? error : new DriverFailure('SQLITE_OPEN_FAILED', 'SQLite文件打开失败或当前运行时不支持所需原生能力'));
     } finally { if (descriptor !== undefined) { try { closeSync(descriptor); } catch { this.port.exit(1); } } }
+  }
+
+  /** CREATE的原生action才证明准确对象与ON关系；不从SQL正文正则推断触发器归属。 */
+  private authorizeCreate(action: number, first: string | null, second: string | null, database: string | null, source: string | null): number {
+    const pending = this.guardedCreate!;
+    const deny = () => { pending.owner.fault ??= new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite原生对象创建目标、类型或所属关系不符合本次内部能力，尚未执行CREATE'); return constants.SQLITE_DENY; };
+    if (this.active !== pending.owner) return deny();
+    const expected = pending.guard.kind === 'view' ? constants.SQLITE_CREATE_VIEW : constants.SQLITE_CREATE_TRIGGER;
+    if (action === expected) {
+      const fold = (value: string) => value.replace(/[A-Z]/g, character => character.toLowerCase());
+      if (database !== 'main' || source !== null || first !== pending.guard.name || pending.guard.kind === 'trigger' && (second === null || !pending.guard.allowedRelations.some(name => fold(name) === fold(second)))) return deny();
+      pending.matched = true; return constants.SQLITE_OK;
+    }
+    if ([constants.SQLITE_INSERT, constants.SQLITE_UPDATE, constants.SQLITE_DELETE].includes(action)) {
+      // CREATE必须写sqlite_schema；此许可不能用于业务DML，且step前仍要求观察到准确CREATE。
+      return database === 'main' && source === null && ['sqlite_master', 'sqlite_schema'].includes(first ?? '') ? constants.SQLITE_OK : deny();
+    }
+    if ([constants.SQLITE_READ, constants.SQLITE_SELECT, constants.SQLITE_FUNCTION, constants.SQLITE_RECURSIVE].includes(action)) return constants.SQLITE_OK;
+    return deny();
   }
 
   /** 每个帧先登记原序号再发送，ACK或取消只唤醒本帧；唤醒后重新核验取消状态。 */
@@ -235,6 +255,14 @@ export class SqliteWorkerCore {
       if (request.parameters !== undefined && (!Array.isArray(request.parameters) || request.parameters.length > limits.columns)) throw invalid();
       const parameters = request.parameters?.map(parameter);
       if (parameters && parameters.reduce<number>((bytes, value) => bytes + (typeof value === 'string' ? Buffer.byteLength(value) : value instanceof Uint8Array ? value.byteLength : 16), 0) > limits.resultBytes) throw invalid();
+      const descriptor = Object.getOwnPropertyDescriptor(request, 'createGuard');
+      if (stream && ('createGuard' in request)) throw new DriverFailure('SQLITE_CREATE_GUARD_INVALID', 'SQLite完整流读取不接受对象创建内部能力');
+      if (descriptor && !('value' in descriptor) || !descriptor && 'createGuard' in request) throw new DriverFailure('SQLITE_CREATE_GUARD_INVALID', 'SQLite对象创建内部能力无效');
+      if (descriptor?.value !== undefined) {
+        if (stream || named !== undefined || !Array.isArray(request.parameters) || request.parameters.length !== 0 || Reflect.ownKeys(request.parameters).length !== 1) throw new DriverFailure('SQLITE_CREATE_GUARD_INVALID', 'SQLite对象创建必须独占显式空参数和单条语句');
+        let guard: SqliteCreateGuard; try { guard = copySqliteCreateGuard(descriptor.value); } catch { throw new DriverFailure('SQLITE_CREATE_GUARD_INVALID', 'SQLite对象创建内部能力格式或预算无效'); }
+        this.guardedCreate = { owner: active, guard, matched: false };
+      }
       let offset = skipTrivia(sql);
       if (stream && (!Array.isArray(request.parameters) || !/^SELECT\b/i.test(sql.slice(offset)))) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite完整流读取只接受单条SELECT');
       if (parameters && offset === sql.length) throw invalid();
@@ -244,6 +272,8 @@ export class SqliteWorkerCore {
         if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
         offset = skipTrivia(sql, offset + prefix.length);
         if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');
+        if (this.guardedCreate && !this.guardedCreate.matched) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite没有观察到本次准确CREATE原生授权，尚未执行任何语句');
+        if (this.guardedCreate && statement.columns().length !== 0) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite对象创建不能使用EXPLAIN或带结果列的其它语句');
         const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream);
         active.results.push(result); this.port.send({ kind: 'statementEnd', id: active.id, result });
         // 包括零行DDL和控制语句；脚本不能靠连续同步语句饿死父端取消消息。
@@ -258,7 +288,7 @@ export class SqliteWorkerCore {
         const nativeCode = object(error) && integer(error.errcode, 0, 2147483647) ? 'SQLITE_NATIVE_' + error.errcode : 'SQLITE_EXECUTION_FAILED';
         this.failure(active.id, error instanceof DriverFailure ? error : new DriverFailure(nativeCode, 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length);
       }
-    } finally { active.waiting = undefined; if (this.active === active) this.active = undefined; }
+    } finally { if (this.guardedCreate?.owner === active) this.guardedCreate = undefined; active.waiting = undefined; if (this.active === active) this.active = undefined; }
   }
 
   /** 结果达到预算后仍drain原语句，避免RETURNING写入因提前return而只执行一部分。 */

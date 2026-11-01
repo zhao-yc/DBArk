@@ -1,3 +1,4 @@
+import { sqliteObjectsFactSchema, type SqliteObjectsFact } from '../shared/sqliteObjects';
 import { sqliteTableMaintenanceFactSchema, type SqliteTableMaintenanceFact } from '../shared/sqliteTableMaintenance';
 import { sqliteTableRenameFactSchema, type SqliteTableRenameFact } from '../shared/sqliteTableRename';
 import { sqliteColumnsFactSchema, type SqliteColumnsFact } from '../shared/sqliteColumns';
@@ -9,18 +10,25 @@ import { taskCancelSnapshotSchema, type TaskCancelState } from '../shared/taskCa
 import { sqliteTableCreateFactSchema, type SqliteTableCreateFact } from '../shared/sqliteTableCreate';
 import { sqliteIndexesFactSchema, type SqliteIndexesFact } from '../shared/sqliteIndexes';
 
-/** 字段DDL使用独立严格事实；COMMIT可能发送或未知时不再授予取消。 */
+/** 视图/触发器修改使用自己的严格ACK，提交边界及未知结果不授予取消。 */
+export function sqliteObjectsCancelLocked(fact?: SqliteObjectsFact): boolean {
+  const parsed = sqliteObjectsFactSchema.safeParse(fact);
+  return parsed.success && (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown');
+}
+
 /** 清空／删除表采用自己的严格事务事实，COMMIT边界及未知结果不再授权取消。 */
 export function sqliteTableMaintenanceCancelLocked(fact?: SqliteTableMaintenanceFact): boolean {
   const parsed = sqliteTableMaintenanceFactSchema.safeParse(fact);
   return parsed.success && (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown');
 }
 
+/** 表重命名沿原DDL事务回执判定取消边界，不能从进度推断可取消。 */
 export function sqliteTableRenameCancelLocked(fact?: SqliteTableRenameFact): boolean {
   const parsed = sqliteTableRenameFactSchema.safeParse(fact);
   return parsed.success && (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown');
 }
 
+/** 字段DDL使用独立严格事实；COMMIT可能发送或未知时不再授予取消。 */
 export function sqliteColumnsCancelLocked(fact?: SqliteColumnsFact): boolean {
   const parsed = sqliteColumnsFactSchema.safeParse(fact);
   return parsed.success && (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown');
@@ -88,7 +96,7 @@ export class TaskCancelStates {
     const entry = this.entries.get(event.taskId); if (!this.active || !entry) return;
     if (event.status !== 'running') { entry.state = 'finished'; entry.locked = true; }
     else if (!entry.locked) {
-      if (event.tableApply?.evidence.commitMayHaveBeenSent || sqliteTableMaintenanceCancelLocked(event.sqliteTableMaintenance) || sqliteTableRenameCancelLocked(event.sqliteTableRename) || sqliteColumnsCancelLocked(event.sqliteColumns) || sqliteIndexesCancelLocked(event.sqliteIndexes) || sqliteTableCreateCancelLocked(event.sqliteCreate) || sqliteWriteCancelLocked(event.sqliteWrite, event.sqliteImportOperation === 'apply')) { entry.state = 'confirming'; entry.locked = true; }
+      if (event.tableApply?.evidence.commitMayHaveBeenSent || sqliteObjectsCancelLocked(event.sqliteObjects) || sqliteTableMaintenanceCancelLocked(event.sqliteTableMaintenance) || sqliteTableRenameCancelLocked(event.sqliteTableRename) || sqliteColumnsCancelLocked(event.sqliteColumns) || sqliteIndexesCancelLocked(event.sqliteIndexes) || sqliteTableCreateCancelLocked(event.sqliteCreate) || sqliteWriteCancelLocked(event.sqliteWrite, event.sqliteImportOperation === 'apply')) { entry.state = 'confirming'; entry.locked = true; }
       else entry.state = 'checking';
     }
     entry.version = ++this.clock;

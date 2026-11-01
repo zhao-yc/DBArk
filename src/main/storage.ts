@@ -1,3 +1,4 @@
+import { recoverSqliteObjectsTask } from '../shared/sqliteObjectsFact';
 import { recoverSqliteTableMaintenanceTask } from '../shared/sqliteTableMaintenanceFact';
 import { recoverSqliteTableRenameTask } from '../shared/sqliteTableRenameFact';
 import { recoverSqliteIndexesTask } from '../shared/sqliteIndexesFact';
@@ -142,12 +143,17 @@ export class LocalStore {
       const restored = recoverSqliteIndexesTask(task);
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
     }
-    // 表重命名只恢复最小事实；新名、目录、导航身份和原ALTER不会成为重放任务。
+    // 对象定义仅恢复最小ACK，不恢复原SQL、预览目录或执行能力。
+    for (const task of this.tasks()) if (task.kind.startsWith('sqlite.objects.')) {
+      const restored = recoverSqliteObjectsTask(task);
+      if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
+    }
     // 表清空／删除仅恢复最小原生事务事实，不恢复预览、目录或写入能力。
     for (const task of this.tasks()) if (task.kind.startsWith('sqlite.tableMaintenance.')) {
       const restored = recoverSqliteTableMaintenanceTask(task);
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
     }
+    // 表重命名只恢复最小事实；新名、目录、导航身份和原ALTER不会成为重放任务。
     for (const task of this.tasks()) if (task.kind.startsWith('sqlite.tableRename.')) {
       const restored = recoverSqliteTableRenameTask(task);
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);

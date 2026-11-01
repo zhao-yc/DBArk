@@ -9,6 +9,27 @@ export const sqliteDriverLimits = {
 /** 仅Main生成导出/编辑投影使用；纯校验且禁止schema间接调用，不授予任何写能力。 */
 export const sqliteExportTextFunction = 'dbark_sqlite_export_text_exact_v1';
 
+/** 仅Main对象管理编译器注入；不属于Renderer IPC，不能授予TEMP、附加库或任意DDL权限。 */
+export interface SqliteCreateGuard { kind: 'view' | 'trigger'; name: string; allowedRelations: string[]; }
+export const sqliteCreateGuardLimits = { relations: 4096, name: 512, bytes: 2 * 1024 * 1024 } as const;
+/** 原型、getter及稀疏数组不进入内部能力；会话与worker各复制一次，不能依赖发送后的可变数组。 */
+export function copySqliteCreateGuard(input: unknown): SqliteCreateGuard {
+  const invalid = () => Error('SQLite对象创建内部能力格式无效');
+  if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw invalid();
+  const keys = Reflect.ownKeys(input); if (keys.length !== 3 || keys.some(key => !['kind', 'name', 'allowedRelations'].includes(String(key)) || typeof key !== 'string')) throw invalid();
+  const values = Object.create(null) as Record<string, unknown>;
+  for (const key of keys) { const descriptor = Object.getOwnPropertyDescriptor(input, key); if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw invalid(); values[key as string] = descriptor.value; }
+  const validName = (name: unknown): name is string => typeof name === 'string' && name.length > 0 && name.length <= sqliteCreateGuardLimits.name && !name.includes('\0') && !/^sqlite_/i.test(name) && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(name);
+  if (typeof values.kind !== 'string' || !['view', 'trigger'].includes(values.kind) || !validName(values.name) || !Array.isArray(values.allowedRelations) || values.allowedRelations.length > sqliteCreateGuardLimits.relations) throw invalid();
+  const relations = values.allowedRelations, relationKeys = Reflect.ownKeys(relations); if (relationKeys.length !== relations.length + 1 || Object.getPrototypeOf(relations) !== Array.prototype) throw invalid();
+  const copied: string[] = [], seen = new Set<string>(), encoder = new TextEncoder(); let bytes = encoder.encode(values.name).length;
+  for (let index = 0; index < relations.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(relations, String(index)); if (!descriptor || !descriptor.enumerable || !('value' in descriptor) || !validName(descriptor.value)) throw invalid();
+    const name = descriptor.value, key = name.replace(/[A-Z]/g, character => character.toLowerCase()); if (seen.has(key) || (bytes += encoder.encode(name).length + 4) > sqliteCreateGuardLimits.bytes) throw invalid(); seen.add(key); copied.push(name);
+  }
+  return { kind: values.kind as SqliteCreateGuard['kind'], name: values.name, allowedRelations: copied };
+}
+
 /** INTEGER 不经过 Number；REAL 单独标记，保留负零和无穷，TEXT 不按声明亲和性转换。 */
 export type SqliteValue = null | string | { type: 'integer'; value: string } | { type: 'real'; value: string } | { type: 'binary'; base64: string };
 /** 先复制纯自有数据字段，避免IPC序列化触发getter或依赖原型；实际字节、数值和全文绑定由worker再核。 */
@@ -48,8 +69,8 @@ export interface SqliteFileIdentity { path: string; device: string; inode: strin
 
 export type SqliteWorkerRequest =
   | { kind: 'open'; id: string; options: SqliteOpenOptions }
-  | { kind: 'execute'; id: string; sql: string; parameters?: SqliteValue[]; namedParameters?: Record<string, SqliteValue>; options: SqliteExecutionOptions }
-  | { kind: 'streamRead'; id: string; sql: string; parameters: SqliteValue[]; namedParameters?: never; options: SqliteStreamReadOptions }
+  | { kind: 'execute'; id: string; sql: string; parameters?: SqliteValue[]; namedParameters?: Record<string, SqliteValue>; createGuard?: SqliteCreateGuard; options: SqliteExecutionOptions }
+  | { kind: 'streamRead'; id: string; sql: string; parameters: SqliteValue[]; namedParameters?: never; createGuard?: never; options: SqliteStreamReadOptions }
   | { kind: 'ack'; id: string; frame: number }
   | { kind: 'cancel'; id: string }
   | { kind: 'closeAck'; id: string }

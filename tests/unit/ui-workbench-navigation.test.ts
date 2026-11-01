@@ -129,6 +129,29 @@ describe('收藏与链接的最新显式导航意图', () => {
     navigation.retireTable({ ...a, table: 'unknown' }); expect(navigation.completeTableRename(b, { ...a, table: 'unknown' }, 'a'.repeat(64))).toBe(false);
     const other = { ...uri, connectionId: 'other' }; request.mockResolvedValueOnce(other); await expect(navigation.open(other)).resolves.toBe(true);
   });
+  it('视图删除或未知定义使旧链接立即退役，大小写别名和迟到解析不能复活，同名表及其它库不受影响', async () => {
+    const view = { connectionId: 'c', database: 'main', kind: 'view', name: 'Report' } as const;
+    const waiting = pending(); request.mockReturnValueOnce(waiting.promise);
+    const opening = navigation.open(view); navigation.retireObject(view); waiting.resolve(view);
+    expect(await opening).toBe(false);
+    await expect(navigation.open({ ...view, name: 'REPORT' })).rejects.toThrow('旧对象链接');
+    expect(request).toHaveBeenCalledTimes(1); expect(workspace.useWorkspace.getState().settings.tabs).toEqual([]);
+    const table = { ...view, kind: 'table' } as const; request.mockResolvedValueOnce(table);
+    expect(await navigation.open(table)).toBe(true);
+    const other = { ...view, database: 'other' }; request.mockResolvedValueOnce(other);
+    expect(await navigation.open(other)).toBe(true);
+  });
+  it('触发器删除退役准确种类，解析替换为已退役目标也在投影前拒绝', async () => {
+    const trigger = { connectionId: 'c', database: 'main', kind: 'trigger', name: 'Audit' } as const;
+    navigation.retireObject(trigger);
+    await expect(navigation.open({ ...trigger, name: 'audit' })).rejects.toThrow('旧对象链接');
+    expect(request).not.toHaveBeenCalled();
+    request.mockResolvedValueOnce(trigger);
+    await expect(navigation.open({ ...trigger, name: 'unrelated' })).rejects.toThrow('旧对象链接');
+    expect(workspace.useWorkspace.getState().selection).toBeUndefined(); expect(definition).not.toHaveBeenCalled();
+    const view = { ...trigger, kind: 'view' } as const; request.mockResolvedValueOnce(view);
+    expect(await navigation.open(view)).toBe(true);
+  });
   it('系统入口复用原解析后投影门，提交完成前不选择连接或开页且不追加内部resolve', async () => {
     let finish!: () => void; const submitted = new Promise<void>(resolve => { finish = resolve; });
     const resolve = vi.fn(async () => testing), beforeProject = vi.fn(() => submitted), isCurrent = vi.fn(() => true);
