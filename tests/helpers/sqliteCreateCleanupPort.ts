@@ -3,6 +3,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { SqliteTableCreateMain } from '../../src/main/sqliteTableCreateMain';
 import { SqliteTableImportMain } from '../../src/main/sqliteTableImportMain';
+import { SqliteIndexesMain } from '../../src/main/sqliteIndexesMain';
 
 /** 原退出回调的RAM端口：运行真实清理函数和真实空账本，既不加载Electron也不吞新收尾分支。 */
 export function emptySqliteCreateCleanup(): () => Promise<void> {
@@ -25,4 +26,10 @@ export function emptySqliteTableCreateMain(): SqliteTableCreateMain {
 export function emptySqliteTableImportMain(): SqliteTableImportMain {
   const unexpected = () => { throw Error('旧退出夹具未登记SQLite导入操作'); };
   return new SqliteTableImportMain({ assert: unexpected, same: unexpected, revision: () => 0, epoch: () => ({}), available: unexpected, closing: () => false, profile: () => undefined, file: unexpected, request: async () => unexpected(), task: () => undefined, replace: unexpected, save: unexpected, event: unexpected });
+}
+
+/** 旧退出场景未登记索引操作，仍执行真实索引协调器的初始空账本收尾。 */
+export function emptySqliteIndexesMain(): SqliteIndexesMain {
+  const unexpected = () => { throw Error('旧退出夹具未登记SQLite索引操作'); };
+  return new SqliteIndexesMain({ assert: unexpected, same: unexpected, revision: () => 0, epoch: () => ({}), available: unexpected, closing: () => false, profile: () => undefined, request: async () => unexpected(), task: () => undefined, replace: unexpected, save: unexpected, event: unexpected });
 }

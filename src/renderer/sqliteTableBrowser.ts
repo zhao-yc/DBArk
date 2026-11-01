@@ -6,7 +6,7 @@ import { sqliteTableBrowseZh as text } from './locales/sqliteTableBrowse.zh-CN';
 export type SqliteTableQuery = Pick<SqliteTablePageInput, 'limit' | 'mode' | 'filters' | 'sort'>;
 export interface SqliteFilterDraft { id: string; column: string; operator: SqliteTableFilter['operator']; kind: NonNullable<SqliteTableFilter['value']>['kind']; value: string; }
 export interface SqliteSortDraft { id: string; column: string; direction: 'asc' | 'desc'; }
-export interface SqliteTableScope { tab: unknown; profile: unknown; connectionId: string; database?: string; table?: string; version: number; present: boolean; active: boolean; sqlite: boolean; editing?: boolean; }
+export interface SqliteTableScope { tab: unknown; profile: unknown; connectionId: string; database?: string; table?: string; version: number; schemaRevision?: number; present: boolean; active: boolean; sqlite: boolean; editing?: boolean; }
 interface BusyLease { owns(): boolean; release(): boolean; }
 export interface SqliteTableView { busy: boolean; stopping: boolean; error: string; page?: SqliteTablePage; columns: SqliteTableColumn[]; }
 interface Ports { scope(): SqliteTableScope; acquire(): BusyLease; read(input: SqliteTablePageInput): Promise<SqliteTablePage>; release?(snapshotId: string): Promise<unknown>; cancel(taskId: string): Promise<unknown>; id(): string; changed(view: SqliteTableView): void; subscribe(changed: () => void): () => void; }
@@ -32,7 +32,7 @@ export class SqliteTableBrowser {
   /** 严格模式恢复只重新订阅；旧请求仍保持已取消墓碑，不能重新获得交付权。 */
   activate(): void { this.disposed = false; this.unsubscribe?.(); this.unsubscribe = this.ports.subscribe(() => this.observe()); }
   /** 对象身份和修订同时验证，不能用相同名称复活旧目标。 */
-  private same(scope: SqliteTableScope): boolean { const now = this.ports.scope(); return !this.disposed && now.present && now.active && now.sqlite && now.database === 'main' && now.table === scope.table && now.connectionId === scope.connectionId && now.tab === scope.tab && now.profile === scope.profile && now.version === scope.version; }
+  private same(scope: SqliteTableScope): boolean { const now = this.ports.scope(); return !this.disposed && now.present && now.active && now.sqlite && now.database === 'main' && now.table === scope.table && now.connectionId === scope.connectionId && now.tab === scope.tab && now.profile === scope.profile && now.version === scope.version && now.schemaRevision === scope.schemaRevision; }
   /** busy 按真实在途操作和等待意图投影，不依赖 React 上一帧。 */
   private emit(patch: Partial<SqliteTableView> = {}): void { this.view = { ...this.view, ...patch, busy: !!this.operation || this.wanted !== undefined }; if (!this.disposed) this.ports.changed(this.view); }
   /** 只允许当前准确页用于复制与导出；别的作业接管后原读取不能释放其占用。 */

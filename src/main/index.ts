@@ -40,9 +40,11 @@ import { sqliteTableExportMessages } from '../shared/sqliteTableExport';
 import { SqliteTableEditOwners, type SqliteEditLease } from './sqliteTableEditOwners';
 import { SqliteWriteRecords } from './sqliteWriteRecords';
 import { SqliteTableCreateMain } from './sqliteTableCreateMain';
+import { SqliteIndexesMain } from './sqliteIndexesMain';
 import { SqliteTableImportMain } from './sqliteTableImportMain';
 import { sqliteImportFactMessage } from '../shared/sqliteTableImportFact';
 import { sqliteCreateFactMessage } from '../shared/sqliteTableCreateFact';
+import { sqliteIndexesFactMessage } from '../shared/sqliteIndexesFact';
 import { sqliteTableEditMessages, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
 import { sqliteWriteFactMessage } from '../shared/sqliteWriteFact';
 import { ColumnsMainCapabilities, type ColumnsInvocation } from './columnsMainCapabilities';
@@ -191,6 +193,14 @@ const sqliteEdits = new SqliteTableEditOwners({
 });
 const sqliteWrites = new SqliteWriteRecords({ task: id => tasks.get(id), replace: value => { tasks.set(value.id, value); }, save: value => store.saveTask(value), notify: value => taskEvent({ taskId: value.id, status: value.status, progress: value.progress, message: value.message }) });
 const sqliteTableCreates = new SqliteTableCreateMain({
+  assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
+  revision: () => store.connectionRevision(), available: id => connectionConfig.assertAvailable(id), closing: () => shuttingDown,
+  epoch: id => { let value = tableValueOptionsConnectionOwners.get(id); if (!value) { value = {}; tableValueOptionsConnectionOwners.set(id, value); } return value; },
+  profile: id => { const value = store.connections().find(profile => profile.id === id); return value?.dialect === 'sqlite' ? value : undefined; },
+  request: (command, input) => broker.request(command, input), task: id => tasks.get(id), replace: task => { tasks.set(task.id, task); },
+  save: task => store.saveTask(task), event: event => taskEvent(event),
+});
+const sqliteIndexes = new SqliteIndexesMain({
   assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
   revision: () => store.connectionRevision(), available: id => connectionConfig.assertAvailable(id), closing: () => shuttingDown,
   epoch: id => { let value = tableValueOptionsConnectionOwners.get(id); if (!value) { value = {}; tableValueOptionsConnectionOwners.set(id, value); } return value; },
@@ -459,8 +469,11 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
   if (structure) structureProgress.set(event.taskId, { ...structure });
   const current = tasks.get(event.taskId);
   // 新建表事件的类别和回执只从本Main已登记任务取出，不能由utility进度补造。
-  const { sqliteWrite: _untrustedWrite, sqliteImportOperation: _untrustedImportOperation, sqliteCreate: _untrustedCreate, sqliteCreateOperation: _untrustedCreateOperation, ...ordinaryEvent } = event; event = ordinaryEvent;
+  const { sqliteIndexes: _untrustedIndexes, sqliteIndexesOperation: _untrustedIndexesOperation, sqliteWrite: _untrustedWrite, sqliteImportOperation: _untrustedImportOperation, sqliteCreate: _untrustedCreate, sqliteCreateOperation: _untrustedCreateOperation, ...ordinaryEvent } = event; event = ordinaryEvent;
   if (current?.kind === 'sqlite.tableCreate.preview' || current?.kind === 'sqlite.tableCreate.apply') event = { ...event, sqliteCreateOperation: current.kind === 'sqlite.tableCreate.preview' ? 'preview' : 'apply' };
+  if (current?.kind.startsWith('sqlite.indexes.')) event = { ...event, sqliteIndexesOperation: current.kind === 'sqlite.indexes.inspect' ? 'inspect' : current.kind === 'sqlite.indexes.preview' ? 'preview' : 'apply' };
+  if (current?.sqliteIndexes) event = { ...event, sqliteIndexes: structuredClone(current.sqliteIndexes) };
+  if (current?.sqliteIndexes?.commitAcknowledged) event = { ...event, status: 'completed', progress: 100, message: sqliteIndexesFactMessage(current.sqliteIndexes) };
   if (current?.kind === 'sqlite.importSource.inspect') event = { ...event, sqliteImportOperation: 'source' };
   if (current?.kind.startsWith('sqlite.tableImport.')) event = { ...event, sqliteImportOperation: current.kind === 'sqlite.tableImport.inspect' ? 'inspect' : current.kind === 'sqlite.tableImport.preview' ? 'preview' : 'apply' };
   if (current?.sqliteWrite) event = { ...event, sqliteWrite: structuredClone(current.sqliteWrite) };
@@ -471,7 +484,7 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
   if (current?.kind === 'table.exportFiltered' || current?.kind === 'sqlite.tableExport') tableFilteredExports.observe(event.taskId);
   if (current) {
     // 服务器错误可能回显已绑定值；参数查询的失败细节仅送给当前界面，不写入磁盘任务记录。
-    const message = current.kind === 'sqlite.tableCreate.apply' && current.sqliteCreate ? sqliteCreateFactMessage(current.sqliteCreate) : current.kind === 'sqlite.tableImport.apply' && current.sqliteWrite ? sqliteImportFactMessage(current.sqliteWrite) : current.kind === 'sqlite.tableEdit.apply' && current.sqliteWrite ? sqliteWriteFactMessage(current.sqliteWrite) : persistedTaskMessage(current.kind, event);
+    const message = current.kind === 'sqlite.indexes.apply' && current.sqliteIndexes ? sqliteIndexesFactMessage(current.sqliteIndexes) : current.kind === 'sqlite.tableCreate.apply' && current.sqliteCreate ? sqliteCreateFactMessage(current.sqliteCreate) : current.kind === 'sqlite.tableImport.apply' && current.sqliteWrite ? sqliteImportFactMessage(current.sqliteWrite) : current.kind === 'sqlite.tableEdit.apply' && current.sqliteWrite ? sqliteWriteFactMessage(current.sqliteWrite) : persistedTaskMessage(current.kind, event);
     const record = { ...current, status: event.status, progress: event.progress, message, finishedAt: event.status === 'running' ? undefined : new Date().toISOString() };
     tasks.set(event.taskId, record);
     if (event.status !== 'running' || Date.now() - (lastPersist.get(event.taskId) ?? 0) > 1000) {
@@ -650,6 +663,12 @@ async function runTableFilteredDelete(command: 'table.filteredDelete.preview' | 
 }
 
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  if (command.startsWith('sqlite.indexes.')) {
+    const id = input.taskId;
+    if (id && (tasks.has(id) || completionTasks.has(id) || savedQueryPages?.owns(id) || historyPages?.owns(id) || historyDelete?.owns(id))) throw Error('任务编号已使用，请重新发起操作');
+    return sqliteIndexes.request(columns!, command, input);
+  }
+  if (command === 'query.cancel' && tasks.get(input.taskId)?.kind.startsWith('sqlite.indexes.') && sqliteIndexes.owns(input.taskId)) return sqliteIndexes.cancel(columns!, input.taskId);
   if (command.startsWith('sqlite.tableImport.') || command.startsWith('sqlite.importSource.')) {
     const id = input.taskId;
     if (id && (tasks.has(id) || completionTasks.has(id) || savedQueryPages?.owns(id) || historyPages?.owns(id) || historyDelete?.owns(id))) throw Error('任务编号已使用，请重新发起操作');
@@ -1451,6 +1470,7 @@ app.on('before-quit', event => {
     await Promise.allSettled([...queryFileOperations]);
     await closeSqliteDatabaseCreates();
     await sqliteTableImports.drain();
+    await sqliteIndexes.drain();
     await sqliteTableCreates.drain();
     await resultInserts.drain();
     await filteredUpdates.drain();
@@ -1472,6 +1492,7 @@ app.on('before-quit', event => {
       try { await closeSqliteDatabaseCreates(); }
       catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : 'SQLite新建文件资源尚未确认释放'); return; }
       await sqliteTableImports.drain();
+      await sqliteIndexes.drain();
       await sqliteTableCreates.drain();
       try { await broker?.forceClose(); } catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
@@ -1605,6 +1626,8 @@ else {
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
         const sqliteImportRequest = payload.command.startsWith('sqlite.tableImport.') || payload.command.startsWith('sqlite.importSource.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && (!!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.tableImport.') || tasks.get(payload.input.taskId)?.kind === 'sqlite.importSource.inspect') && sqliteTableImports.owns(payload.input.taskId);
         if (sqliteImportRequest) columns = columnsMain.capture(event);
+        const sqliteIndexesRequest = payload.command.startsWith('sqlite.indexes.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && !!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.indexes.') && sqliteIndexes.owns(payload.input.taskId);
+        if (sqliteIndexesRequest) columns = columnsMain.capture(event);
         const sqliteCreateRequest = payload.command.startsWith('sqlite.tableCreate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && !!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.tableCreate.') && sqliteTableCreates.owns(payload.input.taskId);
         if (sqliteCreateRequest) columns = columnsMain.capture(event);
         const sqliteEditRequest = payload.command.startsWith('sqlite.tableEdit.') || payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' && 'editing' in payload.input && payload.input.editing === true || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind === 'sqlite.tableEdit.apply';
@@ -1691,6 +1714,7 @@ else {
             catch (error) { await resultInserts.rejectPublication(result, columns!); throw error; }
           }
           if (sqliteImportRequest) { columnsMain.assertCapturedOwner(columns); if (payload.command === 'sqlite.tableImport.inspect' || payload.command === 'sqlite.tableImport.preview' || payload.command === 'sqlite.importSource.inspect') sqliteTableImports.assertPublication(columns!, result, payload.command); }
+          if (sqliteIndexesRequest) { columnsMain.assertCapturedOwner(columns); if (payload.command === 'sqlite.indexes.inspect' || payload.command === 'sqlite.indexes.preview') sqliteIndexes.assertPublication(columns!, result, payload.command); }
           if (sqliteCreateRequest) { columnsMain.assertCapturedOwner(columns); if (payload.command === 'sqlite.tableCreate.preview') sqliteTableCreates.assertPublication(columns!, result); }
           return { ok: true, result };
         } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation);if(trackedFileOperation)queryFileOperations.delete(operation); }

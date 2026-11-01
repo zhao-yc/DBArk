@@ -1,3 +1,4 @@
+import { recoverSqliteIndexesTask } from '../shared/sqliteIndexesFact';
 import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
 import { recoverSqliteImportTask } from '../shared/sqliteTableImportFact';
 import { recoverSqliteWriteTask } from '../shared/sqliteWriteFact';
@@ -132,6 +133,11 @@ export class LocalStore {
       const restored = task.kind === 'sqlite.tableImport.apply' || task.kind === 'sqlite.importSource.inspect' ? recoverSqliteImportTask(task) : recoverSqliteWriteTask(task);
       // 已完成且已脱敏的记录无需每次启动重写整份本地配置。
       if (Object.keys(task).length !== Object.keys(restored).length || Object.entries(restored).some(([key, value]) => key === 'sqliteWrite' ? JSON.stringify(task.sqliteWrite) !== JSON.stringify(value) : task[key as keyof TaskRecord] !== value)) this.saveTask(restored);
+    }
+    // 索引DDL按独立语句事实恢复；只读目录与能力、表达式和SQL均不随任务恢复。
+    for (const task of this.tasks()) if (task.kind.startsWith('sqlite.indexes.')) {
+      const restored = recoverSqliteIndexesTask(task);
+      if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
     }
     // 原生建表以独立事务回执恢复，不把MySQL隐式提交语义或行数套到DDL语句数上。
     for (const task of this.tasks()) if (task.kind === 'sqlite.tableCreate.apply') {

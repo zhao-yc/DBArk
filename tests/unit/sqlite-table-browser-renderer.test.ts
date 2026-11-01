@@ -67,3 +67,8 @@ describe('SQLite 原表请求串行与准确生命周期', () => {
     const f = fixture(), pending = f.controller.load(query(), 0), page = result(f.reads[0].input); page.target.table = '其他表'; f.reads[0].pending.resolve(page); await pending; expect(f.view().page).toBeUndefined(); expect(f.view().error).toContain('不匹配'); expect(f.busy).toBe(false); f.controller.dispose();
   });
 });
+
+it('索引结构代次改变时旧准确页和在途读取均失效，恢复数值不能复活旧页', async () => {
+  const f = fixture(), pending = f.controller.load(query(), 0), page = result(f.reads[0].input); f.reads[0].pending.resolve(page); await pending; expect(f.controller.pageCurrent(page)).toBe(true);
+  f.scope.schemaRevision = 1; f.emit(); expect(f.controller.pageCurrent(page)).toBe(false); expect(f.view().page).toBeUndefined(); f.scope.schemaRevision = undefined; f.emit(); expect(f.controller.pageCurrent(page)).toBe(false); f.controller.dispose();
+});

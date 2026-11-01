@@ -1,4 +1,5 @@
 import { sqliteImportTaskMessage } from '../shared/sqliteTableImportFact';
+import { sqliteIndexesTaskMessage } from '../shared/sqliteIndexesFact';
 import type { Command, TaskEvent } from '../shared/contracts';
 import { sqliteTableCreateMessages } from '../shared/sqliteTableCreate';
 import { sqliteTableExportMessages } from '../shared/sqliteTableExport';
@@ -6,6 +7,7 @@ import { sqliteTableEditMessages } from '../shared/sqliteTableEdit';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command.startsWith('sqlite.indexes.')) return sqliteIndexesTaskMessage(command, event.status);
   if (command.startsWith('sqlite.tableImport.') || command.startsWith('sqlite.importSource.')) return sqliteImportTaskMessage(command, event.status);
   if (command === 'sqlite.tableCreate.apply') return event.status === 'completed' ? sqliteTableCreateMessages.committed : event.status === 'running' ? sqliteTableCreateMessages.running : sqliteTableCreateMessages.unknown;
   if (command === 'sqlite.tableCreate.preview') return event.status === 'completed' ? 'SQLite建表预览已生成，尚未写入；设计、SQL和默认值未保存。' : 'SQLite建表预览未交付；设计、SQL和默认值未保存。';

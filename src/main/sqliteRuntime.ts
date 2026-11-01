@@ -17,12 +17,16 @@ import { sqliteTableImportInspectSchema, sqliteTableImportPreviewSchema, sqliteT
 import { SqliteTableImports, assertSqliteImportSource, readSqliteImportTarget, verifySqliteImportTarget, inspectSqliteImportFile, previewSqliteImport, applySqliteImport, sqliteImportNotSent, type SqliteImportInspection, type SqliteTableImportInspectRequest, type SqliteTableImportPreviewRequest, type SqliteTableImportApplyRequest, type SqliteTableImportControl } from './sqliteTableImport';
 import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema, sqliteImportSourceMessages, type SqliteImportSourceInspectOutput } from '../shared/sqliteImportSource';
 import { SqliteImportSources, inspectSqliteImportSource, type SqliteImportSourceRequest } from './sqliteImportSource';
+import { sqliteIndexesInspectSchema, sqliteIndexesPreviewSchema, sqliteIndexesApplySchema, sqliteIndexesReleaseSchema, sqliteIndexesMessages, type SqliteIndexesInspectOutput, type SqliteIndexesPreviewOutput, type SqliteIndexesOutcome } from '../shared/sqliteIndexes';
+import { SqliteIndexes, inspectSqliteIndexes, verifySqliteIndexes, applySqliteIndexes, sqliteIndexesNotSent, type SqliteIndexesInspectRequest, type SqliteIndexesPreviewRequest, type SqliteIndexesApplyRequest } from './sqliteIndexes';
 
 /** SQLite文件导入独立并发上限；原任务settled之后才归还槽位。 */
 const sqliteImportConcurrency = 2;
 type SqliteImportResult = SqliteTableImportInspectOutput | SqliteTableImportPreviewOutput | SqliteTableImportOutcome | SqliteImportSourceInspectOutput;
 /** 用真实结果字段窄化，不以阶段字符串把任意泛型结果强转成写入事实。 */
 function importOutcome(value: SqliteImportResult | undefined): SqliteTableImportOutcome | undefined { return value && 'outcome' in value ? value : undefined; }
+type SqliteIndexesResult = SqliteIndexesInspectOutput | SqliteIndexesPreviewOutput | SqliteIndexesOutcome;
+function indexesOutcome(value: SqliteIndexesResult | undefined): SqliteIndexesOutcome | undefined { return value && 'outcome' in value ? value : undefined; }
 
 interface Resource { transport: SqliteProcessTransport; driver?: SqliteDriverSession; }
 interface Connection {
@@ -52,10 +56,12 @@ interface CreateTask extends Omit<BrowseTask, 'kind'> { kind: 'create'; input: S
 interface FinishedCreateTask { kind: 'create-finished' | 'create-preview-finished'; active?: undefined; }
 interface ImportTask extends Omit<BrowseTask, 'kind'> { kind: 'import'; input: { taskId: string; assertCurrent(): void }; committing: boolean; abort: AbortController; exit?: SqliteProcessExit; }
 interface FinishedImportTask { kind: 'import-finished'; active?: undefined; }
-type ReadTask = BrowseTask | ExportTask | EditTask | CreatePreviewTask | CreateTask | ImportTask;
-type Task = QueryTask | BrowseTask | FinishedBrowseTask | ExportTask | FinishedExportTask | EditTask | FinishedEditTask | CreatePreviewTask | CreateTask | FinishedCreateTask | ImportTask | FinishedImportTask;
+interface IndexesTask extends Omit<ImportTask, 'kind'> { kind: 'indexes'; }
+interface FinishedIndexesTask { kind: 'indexes-finished'; active?: undefined; }
+type ReadTask = BrowseTask | ExportTask | EditTask | CreatePreviewTask | CreateTask | ImportTask | IndexesTask;
+type Task = QueryTask | BrowseTask | FinishedBrowseTask | ExportTask | FinishedExportTask | EditTask | FinishedEditTask | CreatePreviewTask | CreateTask | FinishedCreateTask | ImportTask | FinishedImportTask | IndexesTask | FinishedIndexesTask;
 /** 所有独立utility任务共用原连接取消/关闭账本，不因新增建表另建孤岛。 */
-function readTask(task: Task): task is ReadTask { return ['browse', 'export', 'edit', 'create-preview', 'create', 'import'].includes(task.kind); }
+function readTask(task: Task): task is ReadTask { return ['browse', 'export', 'edit', 'create-preview', 'create', 'import', 'indexes'].includes(task.kind); }
 function committing(task: ReadTask): boolean { return 'committing' in task && task.committing; }
 export interface SqliteRuntimeOptions {
   emit: (event: TaskEvent) => void;
@@ -89,6 +95,7 @@ export class SqliteRuntime {
   private readonly creates = new SqliteTableCreates();
   private readonly imports = new SqliteTableImports();
   private readonly importSources = new SqliteImportSources();
+  private readonly indexes = new SqliteIndexes();
   private importsActive = 0;
 
   constructor(private readonly options: SqliteRuntimeOptions) {}
@@ -478,11 +485,11 @@ export class SqliteRuntime {
 
   /** 有效导入任务编号立即留SQLite墓碑，失败、过期或错误确认也不能被其它任务复用。 */
   private reserveImportTask(id: string): void { if (this.stopping || this.tasks.has(id)) throw Error('SQLite正在退出或任务编号已经使用'); this.tasks.set(id, { kind: 'import-finished' }); }
-  private importCheck(task: ImportTask): void { if (!task.committing) { this.browseCheck(task); task.input.assertCurrent(); } }
+  private importCheck(task: ImportTask | IndexesTask): void { if (!task.committing) { this.browseCheck(task); task.input.assertCurrent(); } }
   private importControl(task: ImportTask): SqliteTableImportControl { return { signal: task.abort.signal, check: () => this.importCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; }, progress: records => { this.importCheck(task); this.options.emit({ taskId: task.input.taskId, status: 'running', progress: 0, message: '正在处理SQLite导入记录；概要不保存文件原值或路径', rows: records }); } }; }
   private retireImport(task: ImportTask): void { if (!task.active && (!task.resource || !task.connection.resources.has(task.resource)) && this.tasks.get(task.input.taskId) === task) this.tasks.set(task.input.taskId, { kind: 'import-finished' }); }
   /** 结束准确utility后释放重引用；流文件读取仍由同一任务/pending/AbortController持有。 */
-  private async closeImportDriver(task: ImportTask): Promise<void> {
+  private async closeImportDriver(task: ImportTask | IndexesTask): Promise<void> {
     let failure: unknown; const cancelledExit = task.cancelled && !task.committing && task.driver?.isClosed;
     task.cleaning = true;
     if (task.driver) {
@@ -576,6 +583,57 @@ export class SqliteRuntime {
     });
   }
 
+  /** 索引任务使用原准确连接/transport账本；终态且exit确认后只留下轻量编号墓碑。 */
+  private startIndexes<T extends SqliteIndexesResult>(input: IndexesTask['input'], connection: Connection, phase: 'inspect' | 'preview' | 'apply', action: (task: IndexesTask) => Promise<T>): Promise<T> {
+    const task: IndexesTask = { kind: 'indexes', input, connection, abort: new AbortController(), committing: false, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
+    const retire = () => { if (!task.active && (!task.resource || !connection.resources.has(task.resource)) && this.tasks.get(input.taskId) === task) this.tasks.set(input.taskId, { kind: 'indexes-finished' }); };
+    const work = this.track(connection, async () => {
+      let value: T | undefined, failure: unknown, failed = false;
+      try { this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: sqliteIndexesMessages.running, sqliteIndexesOperation: phase }); this.importCheck(task); value = await action(task); }
+      catch (reason) { failure = reason; failed = true; }
+      if (task.driver || task.resource) try { await this.closeImportDriver(task); } catch (reason) { const outcome = indexesOutcome(value); if (outcome) outcome.cleanupWarning = true; else { failure = failed ? new AggregateError([failure, reason], 'SQLite索引操作及准确资源收尾失败') : reason; failed = true; } }
+      if (!failed && phase !== 'apply') try { this.importCheck(task); } catch (reason) { failure = reason; failed = true; }
+      if (failed) { try { this.options.emit({ taskId: input.taskId, status: task.cancelled && !task.cleanupFailure && !task.cancelFailure ? 'cancelled' : 'failed', progress: 0, message: 'SQLite索引操作未完成，未自动重试', sqliteIndexesOperation: phase }); } catch { /* 原目录/资源失败事实优先。 */ } throw failure; }
+      const outcome = indexesOutcome(value), cancelled = task.cancelled && !task.cleanupFailure && !task.cancelFailure && outcome?.outcome !== 'committed' && outcome?.outcome !== 'unknown';
+      if (outcome && task.cleanupFailure) outcome.cleanupWarning = true;
+      try { this.options.emit({ taskId: input.taskId, status: outcome ? outcome.outcome === 'committed' ? 'completed' : cancelled ? 'cancelled' : 'failed' : 'completed', progress: !outcome || outcome.outcome === 'committed' ? 100 : 0, message: outcome?.message ?? 'SQLite索引目录或预览已完成，尚未执行索引写入', sqliteIndexesOperation: phase, ...(outcome ? { sqliteIndexes: structuredClone(outcome.fact) } : {}) }); } catch { /* 原COMMIT/ROLLBACK ACK不被通知失败改变。 */ }
+      return value!;
+    }); task.active = work; const done = () => { task.active = undefined; retire(); }; void work.then(done, done);
+    // 迟到exit仍只回收原准确资源，不解除连接blocked屏障。
+    void work.finally(() => { if (task.resource) void task.resource.transport.exited.then(retire, () => {}); }).catch(() => {}); return work;
+  }
+  /** 同一任务的每个读取边界都复核取消/owner，收尾错误留原资源事实。 */
+  private indexControl(task: IndexesTask) { return { check: () => this.importCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: (reason: unknown) => { task.cleanupFailure = reason; } }; }
+  /** 每个独立driver都先登记准确transport，直到真实exit才可回收。 */
+  private async openIndexesDriver(task: IndexesTask, profile: SqliteConnectionProfile, readOnly: boolean): Promise<void> {
+    task.driver = await this.driver(task.connection, profile, readOnly, resource => { task.resource = resource; void resource.transport.exited.then(exit => { task.exit = exit; }, () => {}); }); this.importCheck(task);
+  }
+  /** 原只读utility和快照均关闭确认后才发布目录能力。 */
+  private indexesInspect(source: unknown): Promise<SqliteIndexesInspectOutput> {
+    const raw = source as SqliteIndexesInspectRequest; if (!raw || typeof raw.assertCurrent !== 'function') throw Error('SQLite索引检查缺少Main原文档能力'); const { assertCurrent, ...publicInput } = raw, input = sqliteIndexesInspectSchema.parse(publicInput); this.reserveImportTask(input.taskId); assertCurrent();
+    const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id); this.assertTarget(connection, profile);
+    return this.startIndexes({ taskId: input.taskId, assertCurrent }, connection, 'inspect', async task => { await this.openIndexesDriver(task, profile, true); const snapshot = await inspectSqliteIndexes(task.driver!, profile, input.table, this.indexControl(task)); await this.closeImportDriver(task); this.importCheck(task); return this.indexes.publish(snapshot); });
+  }
+  /** 预览保留准确RO引用直到Promise结束；自然TTL与显式撤权互不混淆。 */
+  private indexesPreview(source: unknown): Promise<SqliteIndexesPreviewOutput> {
+    const raw = source as SqliteIndexesPreviewRequest; if (!raw || typeof raw.assertCurrent !== 'function') throw Error('SQLite索引预览缺少Main原文档能力'); const { assertCurrent, ...publicInput } = raw, input = sqliteIndexesPreviewSchema.parse(publicInput); this.reserveImportTask(input.taskId); assertCurrent(); const catalogue = this.indexes.catalogue(input.catalogueId);
+    const profile = this.profile(this.options.resolveProfile(catalogue.target.connectionId)); if (!sameTarget(profile, catalogue.profile)) throw Error(sqliteIndexesMessages.stale); const connection = this.connection(profile.id); this.assertTarget(connection, profile); const pin = this.indexes.pin(catalogue), checkOwner = () => { assertCurrent(); pin.check(); };
+    try { return this.startIndexes({ taskId: input.taskId, assertCurrent: checkOwner }, connection, 'preview', async task => { await this.openIndexesDriver(task, profile, true); await verifySqliteIndexes(task.driver!, catalogue, this.indexControl(task)); await this.closeImportDriver(task); this.importCheck(task); return this.indexes.preview(catalogue, input.actions); }).finally(pin.release); } catch (reason) { pin.release(); throw reason; }
+  }
+  /** 单次领取预览并注入Main同步回执，原写事务不借用任何用户标签会话。 */
+  private indexesApply(source: unknown): Promise<SqliteIndexesOutcome> {
+    const raw = source as SqliteIndexesApplyRequest; if (!raw || typeof raw.operationId !== 'string' || !raw.operationId || raw.operationId.length > 200 || typeof raw.assertCurrent !== 'function' || typeof raw.recordIndexesFact !== 'function') throw Error('SQLite索引提交缺少Main同步事实和原文档能力');
+    const { operationId, assertCurrent, recordIndexesFact, ...publicInput } = raw, input = sqliteIndexesApplySchema.parse(publicInput); this.reserveImportTask(input.taskId); const claim = this.indexes.claim(input), connection = this.connections.get(claim.catalogue.target.connectionId);
+    const request: SqliteIndexesApplyRequest = { ...input, operationId, assertCurrent, recordIndexesFact: fact => { const result: unknown = recordIndexesFact(fact); if (result && typeof (result as { then?: unknown }).then === 'function') throw Error('SQLite索引事实必须同步持久化'); this.options.emit({ taskId: input.taskId, status: fact.commitAcknowledged ? 'completed' : 'running', progress: fact.commitAcknowledged ? 100 : 0, message: sqliteIndexesMessages.running, sqliteIndexesOperation: 'apply', sqliteIndexes: structuredClone(fact) }); } };
+    if (!connection) { const value = sqliteIndexesNotSent(claim, request); try { this.options.emit({ taskId: input.taskId, status: 'failed', progress: 0, message: sqliteIndexesMessages.notSent, sqliteIndexesOperation: 'apply', sqliteIndexes: structuredClone(value.fact) }); } catch { /* 未发送事实优先。 */ } return Promise.resolve(value); }
+    return this.startIndexes({ taskId: input.taskId, assertCurrent }, connection, 'apply', async task => {
+      let value: SqliteIndexesOutcome;
+      try { this.importCheck(task); const profile = this.profile(this.options.resolveProfile(claim.catalogue.target.connectionId)); if (!claim.confirmed || profile.sqlite.readOnly || !sameTarget(profile, claim.catalogue.profile)) throw Error(sqliteIndexesMessages.stale); await this.openIndexesDriver(task, profile, false); value = await applySqliteIndexes(task.driver!, claim, request, { ...this.indexControl(task), beginCommit: () => { this.importCheck(task); task.committing = true; } }); }
+      catch { value = sqliteIndexesNotSent(claim, request); }
+      this.indexes.settle(claim, value.outcome); return value;
+    });
+  }
+
   /** 仅列出已经接入原工作区的命令；其余命令在SQLite终点明确拒绝。 */
   async request(command: string, input: any): Promise<any> {
     switch (command) {
@@ -598,7 +656,7 @@ export class SqliteRuntime {
         const changed = input.transportChanged || connection && (!connection.profile || !sameTarget(connection.profile, next));
         if (!connection || !changed) return;
         if (connection.closing || connection.blocked || connection.pending.size || connection.resources.size || connection.files.size || [...this.sessions.values()].some(session => session.connection === connection)) throw Error('SQLite连接仍有打开的会话、运行操作或未确认资源；请先显式关闭标签并断开连接，现有任务未取消');
-        this.edits.releaseConnection(input.id); this.creates.releaseConnection(input.id); this.imports.releaseConnection(input.id); this.importSources.releaseConnection(input.id); this.connections.delete(input.id); return;
+        this.edits.releaseConnection(input.id); this.creates.releaseConnection(input.id); this.imports.releaseConnection(input.id); this.importSources.releaseConnection(input.id); this.indexes.releaseConnection(input.id); this.connections.delete(input.id); return;
       }
       case 'connections.close': return this.closeConnection(input.id);
       case 'sessions.open': {
@@ -646,6 +704,10 @@ export class SqliteRuntime {
       case 'sqlite.tableCreate.apply': return this.tableCreateApply(input);
       case 'sqlite.tableCreate.release': return this.creates.release(sqliteTableCreateReleaseSchema.parse(input).previewId);
       case 'sqlite.tableImport.inspect': return this.tableImportInspect(input);
+      case 'sqlite.indexes.inspect': return this.indexesInspect(input);
+      case 'sqlite.indexes.preview': return this.indexesPreview(input);
+      case 'sqlite.indexes.apply': return this.indexesApply(input);
+      case 'sqlite.indexes.release': return this.indexes.release(sqliteIndexesReleaseSchema.parse(input));
       case 'sqlite.importSource.inspect': return this.importSourceInspect(input);
       case 'sqlite.importSource.release': { const id = sqliteImportSourceReleaseSchema.parse(input).sourceId; this.importSources.release(id); this.imports.releaseSource(id); return; }
       case 'sqlite.tableImport.preview': return this.tableImportPreview(input);
@@ -690,6 +752,7 @@ export class SqliteRuntime {
     this.creates.releaseConnection(id);
     this.imports.releaseConnection(id);
     this.importSources.releaseConnection(id);
+    this.indexes.releaseConnection(id);
     const work = (async () => {
       const browse = [...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && task.connection === connection && !!task.active);
       const browseDrivers = new Set(browse.map(task => task.driver));
@@ -718,7 +781,7 @@ export class SqliteRuntime {
     this.stopping = true;
     const work = (async () => {
       for (const task of this.tasks.values()) if (readTask(task) && !committing(task) && task.active) { task.cancelled = true; if (task.kind === 'import') task.abort.abort(); }
-      for (const id of this.connections.keys()) { this.edits.releaseConnection(id); this.creates.releaseConnection(id); this.imports.releaseConnection(id); this.importSources.releaseConnection(id); }
+      for (const id of this.connections.keys()) { this.edits.releaseConnection(id); this.creates.releaseConnection(id); this.imports.releaseConnection(id); this.importSources.releaseConnection(id); this.indexes.releaseConnection(id); }
       const protectedResources = new Set([...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && committing(task) && !!task.active).map(task => task.resource));
       const resources = [...this.connections.values()].flatMap(connection => { connection.closing = true; return [...connection.resources]; });
       for (const resource of resources) if (!protectedResources.has(resource)) try { resource.transport.terminate(); } catch { /* 仍等待真实exit，终止调用异常不能跳过其它句柄。 */ }

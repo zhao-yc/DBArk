@@ -4,6 +4,13 @@ import { sqliteImportWriteFactSchema } from '../shared/sqliteTableImport';
 import { sqliteWriteFactSchema } from '../shared/sqliteWriteFact';
 import { taskCancelSnapshotSchema, type TaskCancelState } from '../shared/taskCancelState';
 import { sqliteTableCreateFactSchema, type SqliteTableCreateFact } from '../shared/sqliteTableCreate';
+import { sqliteIndexesFactSchema, type SqliteIndexesFact } from '../shared/sqliteIndexes';
+
+/** 索引DDL使用独立严格事实；COMMIT可能发送或未知时不再授予取消。 */
+export function sqliteIndexesCancelLocked(fact?: SqliteIndexesFact): boolean {
+  const parsed = sqliteIndexesFactSchema.safeParse(fact);
+  return parsed.success && (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown');
+}
 
 /** COMMIT可能已投递或结果未知时取消无法保证撤销；只认可严格最小建表事实。 */
 export function sqliteTableCreateCancelLocked(fact?: SqliteTableCreateFact): boolean {
@@ -61,7 +68,7 @@ export class TaskCancelStates {
     const entry = this.entries.get(event.taskId); if (!this.active || !entry) return;
     if (event.status !== 'running') { entry.state = 'finished'; entry.locked = true; }
     else if (!entry.locked) {
-      if (event.tableApply?.evidence.commitMayHaveBeenSent || sqliteTableCreateCancelLocked(event.sqliteCreate) || sqliteWriteCancelLocked(event.sqliteWrite, event.sqliteImportOperation === 'apply')) { entry.state = 'confirming'; entry.locked = true; }
+      if (event.tableApply?.evidence.commitMayHaveBeenSent || sqliteIndexesCancelLocked(event.sqliteIndexes) || sqliteTableCreateCancelLocked(event.sqliteCreate) || sqliteWriteCancelLocked(event.sqliteWrite, event.sqliteImportOperation === 'apply')) { entry.state = 'confirming'; entry.locked = true; }
       else entry.state = 'checking';
     }
     entry.version = ++this.clock;

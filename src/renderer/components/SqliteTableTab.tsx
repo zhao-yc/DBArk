@@ -1,3 +1,7 @@
+import { ActionMenu, ActionMenuSection } from './ActionMenu';
+import { tableToolbarZh } from '../locales/tableToolbar.zh-CN';
+import { navigationZh } from '../locales/navigation.zh-CN';
+import { sqliteIndexesZh } from '../locales/sqliteIndexes.zh-CN';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ResultExportData } from '../../shared/contracts';
 import type { SqliteOriginalValue, SqliteTableEditPreview } from '../../shared/sqliteTableEdit';
@@ -34,11 +38,14 @@ interface EditPreviewTicket { id: string; editor: SqliteTableEditor; page: Sqlit
 /** 初次请求只读取无条件第一页，不恢复未明确应用的草稿条件。 */
 const initialQuery = (): SqliteTableQuery => ({ limit: 100, mode: 'and', filters: [], sort: [] });
 /** 原 table 标签的 SQLite 分支复用分页来源；编辑采用独立快照，不借用查询标签事务。 */
-export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boolean }) {
+export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomatically = true, onIndexes }: { tab: WorkspaceTab; active: boolean; refreshVersion?: number; refreshAutomatically?: boolean; onIndexes?(): void }) {
   const profile = useWorkspace(state => state.connections.find(item => item.id === tab.connectionId));
   const version = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const externalBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
-  const latest = useRef({ tab, active }); latest.current = { tab, active };
+  const latest = useRef({ tab, active, refreshVersion }); latest.current = { tab, active, refreshVersion };
+  // 未知结构回执在原标签内持续阻止自动读取；切换标签或后续回执不能替代用户明确刷新。
+  const automaticReads = useRef({ version: refreshVersion, blocked: false });
+  if (automaticReads.current.version !== refreshVersion) automaticReads.current = { version: refreshVersion, blocked: automaticReads.current.blocked || !refreshAutomatically };
   const [view, setView] = useState<SqliteTableView>({ busy: false, stopping: false, error: '', columns: [] });
   const [conditions, setConditions] = useState(false), [limit, setLimit] = useState(100), [mode, setMode] = useState<'and' | 'or'>('and');
   const [filters, setFilters] = useState<SqliteFilterDraft[]>([]), [sort, setSort] = useState<SqliteSortDraft[]>([]), [validation, setValidation] = useState('');
@@ -54,7 +61,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   const [controller] = useState(() => new SqliteTableBrowser({
     scope: () => {
       const current = latest.current, workspace = useWorkspace.getState(), present = workspace.settings.tabs.find(item => item.id === current.tab.id), connection = workspace.connections.find(item => item.id === current.tab.connectionId);
-      return { tab: present, profile: connection, connectionId: current.tab.connectionId, database: current.tab.database, table: current.tab.table, version: workspace.connectionVersions[current.tab.connectionId] ?? 0, present: present === current.tab && present?.kind === 'table', active: current.active && workspace.settings.activeTabId === current.tab.id, sqlite: connection?.dialect === 'sqlite', ...(connection?.dialect === 'sqlite' && !connection.sqlite.readOnly ? { editing: true } : {}) };
+      return { tab: present, profile: connection, connectionId: current.tab.connectionId, database: current.tab.database, table: current.tab.table, version: workspace.connectionVersions[current.tab.connectionId] ?? 0, schemaRevision: current.refreshVersion, present: present === current.tab && present?.kind === 'table', active: current.active && workspace.settings.activeTabId === current.tab.id, sqlite: connection?.dialect === 'sqlite', ...(connection?.dialect === 'sqlite' && !connection.sqlite.readOnly ? { editing: true } : {}) };
     },
     acquire: () => acquireWorkspaceBusy(latest.current.tab.id), read: input => invoke('sqlite.tablePage', input), release: snapshotId => invoke('sqlite.tableEdit.release', { snapshotId }), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: next => { fullExportRef.current?.intent.current(); importRef.current?.source.observePage(next.page); setView(next); }, subscribe: changed => useWorkspace.subscribe(changed),
   }));
@@ -65,11 +72,27 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
     const before = target.current, changed = before.profile !== profile || before.version !== version || before.connectionId !== tab.connectionId || before.database !== tab.database || before.table !== tab.table;
     target.current = { profile, version, connectionId: tab.connectionId, database: tab.database, table: tab.table };
     editorRef.current?.observe();
+    if (automaticReads.current.blocked) { controller.observe(); setValidation(sqliteIndexesZh.tableStale); return; }
     // 有草稿时保留原页；连接或目标变化只撤销提交权，不拿新回包替换本地内容。
     if (editorRef.current?.dirty || editorRef.current?.busy || importRef.current && (importRef.current.dirty || importRef.current.acquiring || importRef.current.lease)) { controller.observe(); return; }
     if (changed) { applied.current = initialQuery(); setLimit(100); setMode('and'); setFilters([]); setSort([]); setValidation(''); }
     if (active) { dropEditor(); void controller.load(applied.current, 0); } else controller.observe();
   }, [controller, active, profile, version, tab.connectionId, tab.database, tab.table]);
+  const structureVersion = useRef(refreshVersion);
+  const structureDisplay = useRef<{ tab: WorkspaceTab; profile: typeof profile; version: number; page: SqliteTablePage } | undefined>(undefined), displayVersion = useRef(refreshVersion);
+  /** 旧页只保展示，不再提供编辑/导入/导出授权；目标或profile变化不能继承该展示。 */
+  useLayoutEffect(() => {
+    if (displayVersion.current !== refreshVersion) { displayVersion.current = refreshVersion; if (view.page) structureDisplay.current = { tab, profile, version, page: view.page }; }
+    if (view.page && controller.pageCurrent(view.page)) structureDisplay.current = undefined;
+  }, [refreshVersion, view.page, tab, profile, version]);
+  /** 结构回执只使旧快照失效；脏页、未决写入和其它弹窗不被后台刷新覆盖。 */
+  useEffect(() => {
+    if (structureVersion.current === refreshVersion) return; structureVersion.current = refreshVersion;
+    controller.observe(); editorRef.current?.observe();
+    const editor = editorRef.current, workspace = useWorkspace.getState();
+    if (editor?.dirty || editor?.busy || editor?.view.unknown || inputRef.current || previewRef.current || importRef.current || fullExportRef.current || exportData || workspace.dirtyTabs[tab.id] || workspace.activeJobs[tab.id] || automaticReads.current.blocked || !refreshAutomatically) { setValidation(sqliteIndexesZh.tableStale); return; }
+    if (active) { const offset = page?.offset ?? 0; dropEditor(); void controller.load(applied.current, offset); }
+  }, [refreshVersion]);
   useLayoutEffect(() => { controller.observe(); editorRef.current?.observe(); fullExportRef.current?.intent.observe([view.page, applied.current, tab, profile, version, active]); importRef.current?.source.observe([view.page, applied.current, tab, profile, version, active]); });
   useEffect(() => { const stop = useWorkspace.subscribe(() => { fullExportRef.current?.intent.current(); importRef.current?.source.current(); }); return () => { stop(); fullExportRef.current?.intent.invalidate(); importRef.current?.source.invalidate(); }; }, []);
   /** 页面编辑能力只从后端签发的准确快照创建；同步订阅守住真实来源 ABA。 */
@@ -78,10 +101,10 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
     if (!received || received.edit?.kind !== 'editable' || editorRef.current?.page === received || editorRef.current?.dirty) return;
     if (!controller.pageCurrent(received) || profile?.dialect !== 'sqlite' || profile.sqlite.readOnly) { controller.releaseUnadopted(received); return; }
     dropEditor();
-    const captured = { tab, profile, version };
+    const captured = { tab, profile, version, schemaRevision: refreshVersion };
     try {
       const editor = new SqliteTableEditor(received, {
-        current: () => { const now = useWorkspace.getState(); return now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && now.connections.find(item => item.id === captured.tab.connectionId) === captured.profile && captured.profile?.dialect === 'sqlite' && !captured.profile.sqlite.readOnly && (now.connectionVersions[captured.tab.connectionId] ?? 0) === captured.version; },
+        current: () => { const now = useWorkspace.getState(); return now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && now.connections.find(item => item.id === captured.tab.connectionId) === captured.profile && captured.profile?.dialect === 'sqlite' && !captured.profile.sqlite.readOnly && (now.connectionVersions[captured.tab.connectionId] ?? 0) === captured.version && latest.current.refreshVersion === captured.schemaRevision; },
         active: () => latest.current.active && useWorkspace.getState().settings.activeTabId === captured.tab.id,
         available: () => !useWorkspace.getState().activeJobs[captured.tab.id], acquire: () => acquireWorkspaceBusy(captured.tab.id), id: uid, now: Date.now,
         changed: setEditView, dirty: dirty => { const now = useWorkspace.getState(); if (importRef.current?.dirty && !dirty) return; if (now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && !!now.dirtyTabs[captured.tab.id] !== dirty) now.setDirty(captured.tab.id, dirty); },
@@ -95,11 +118,12 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   }, [view.page]);
   useEffect(() => { const unsubscribe = useWorkspace.subscribe(() => editorRef.current?.observe()); const timer = setInterval(() => editorRef.current?.observe(), 5000); return () => { unsubscribe(); clearInterval(timer); editorRef.current?.dispose(); }; }, []);
   // 导入草稿/原租约存活时保留准确原页；即使controller撤销来源，也不以新页覆盖草稿背景。
-  const page = importRef.current && (importRef.current.dirty || importRef.current.acquiring || importRef.current.lease) ? importRef.current.page : editView && (editView.dirty || !view.page || editView.page === view.page) ? editView.page : view.page;
+  const retained = structureDisplay.current, stalePage = retained?.tab === tab && retained.profile === profile && retained.version === version ? retained.page : undefined;
+  const page = importRef.current && (importRef.current.dirty || importRef.current.acquiring || importRef.current.lease) ? importRef.current.page : editView && (editView.dirty || !view.page || editView.page === view.page) ? editView.page : view.page ?? stalePage;
   const names = (page?.columns ?? view.columns).map(column => column.name), invalidTarget = profile?.dialect !== 'sqlite' || tab.database !== 'main' || !tab.table;
   /** 只有明确放弃或无草稿时可替换当前页，运行中写操作从不被读取入口打断。 */
   function dropEditor(): void { editorRef.current?.dispose(); editorRef.current = null; inputRef.current = null; previewRef.current = null; setEditView(null); setCellInput(null); setPreviewOpen(null); const now = useWorkspace.getState(); if (now.settings.tabs.find(item => item.id === tab.id) === tab && now.dirtyTabs[tab.id]) now.setDirty(tab.id, false); }
-  function prepareRead(): boolean { const editor = editorRef.current; if (editor?.busy) return false; if (editor?.dirty && !window.confirm(editText.confirmDiscard)) return false; dropEditor(); return true; }
+  function prepareRead(): boolean { const editor = editorRef.current; if (editor?.busy) return false; if (editor?.dirty && !window.confirm(editText.confirmDiscard)) return false; dropEditor(); automaticReads.current.blocked = false; return true; }
   /** 操作读取同步目标和占用，旧按钮与隐藏标签不得开始新读取。 */
   function available(): boolean { const workspace = useWorkspace.getState(); return active && !invalidTarget && workspace.settings.tabs.find(item => item.id === tab.id) === tab && workspace.settings.activeTabId === tab.id && workspace.connections.find(item => item.id === tab.connectionId) === profile && (workspace.connectionVersions[tab.connectionId] ?? 0) === version && (!workspace.activeJobs[tab.id] || view.busy) && !document.querySelector('[role="dialog"], [role="alertdialog"]'); }
   /** 表单只在明确应用时严格校验并读取，类型或顺序编辑本身不发送请求。 */
@@ -206,7 +230,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   const fieldOptions = (page?.columns ?? view.columns).map((column, index) => <option key={index} value={column.name}>{column.name} · {column.declaredType || text.dynamic}</option>);
   return <div className="workspace-tab table-tab sqlite-table-tab" aria-label={text.title} data-readonly={editView ? 'false' : 'true'}>
     <div className="context-bar"><span className="connection-dot" style={{ background: profile?.color }}/><strong>{profile?.name ?? tab.connectionId}</strong><span>/</span><span>{tab.database}</span><span>/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">SQLite · {text.title}</span></div>
-    <div className="toolbar"><button aria-label={text.refresh} disabled={!active || invalidTarget || !!exportData || externalBusy && !view.busy} onClick={() => read(page?.offset ?? 0)}>{text.refresh}</button><button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button><button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button><button aria-label={sqliteZh.selectQuery} disabled={invalidTarget || view.busy || externalBusy} onClick={() => { if (available()) openSqliteSelect(tab.connectionId, tab.database!, { name: tab.table!, kind: page?.target.kind ?? 'table' }); }}>{sqliteZh.selectQuery}</button><button aria-label={text.export} disabled={!page || view.busy || externalBusy} onClick={exportPage}>{text.export}</button><button aria-label={exportText.entry} disabled={!page || view.busy || externalBusy || !!fullExport} onClick={openAllExport}>{exportText.entry}</button>{page?.target.kind === 'table' && <button aria-label={importText.entry} title={editView?.dirty || editView?.busy || editView?.unknown || externalBusy ? importText.busyDraft : undefined} disabled={!active || invalidTarget || view.busy || externalBusy || !!fullExport || !!exportData || !!tableImport || !!editView?.dirty || !!editView?.busy || !!editView?.unknown || !!cellInput || !!previewOpen} onClick={openImport}>{importText.entry}</button>}</div>
+    <div className="toolbar"><button aria-label={text.refresh} disabled={!active || invalidTarget || !!exportData || externalBusy && !view.busy} onClick={() => read(page?.offset ?? 0)}>{text.refresh}</button><button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button><button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button><button aria-label={sqliteZh.selectQuery} disabled={invalidTarget || view.busy || externalBusy} onClick={() => { if (available()) openSqliteSelect(tab.connectionId, tab.database!, { name: tab.table!, kind: page?.target.kind ?? 'table' }); }}>{sqliteZh.selectQuery}</button><button aria-label={text.export} disabled={!page || view.busy || externalBusy} onClick={exportPage}>{text.export}</button><button aria-label={exportText.entry} disabled={!page || view.busy || externalBusy || !!fullExport} onClick={openAllExport}>{exportText.entry}</button>{page?.target.kind === 'table' && <button aria-label={importText.entry} title={editView?.dirty || editView?.busy || editView?.unknown || externalBusy ? importText.busyDraft : undefined} disabled={!active || invalidTarget || view.busy || externalBusy || !!fullExport || !!exportData || !!tableImport || !!editView?.dirty || !!editView?.busy || !!editView?.unknown || !!cellInput || !!previewOpen} onClick={openImport}>{importText.entry}</button>}{onIndexes && page?.target.kind === 'table' && <ActionMenu label={navigationZh.more} disabled={!active || invalidTarget || view.busy || externalBusy} contextKey={JSON.stringify([tab.id, version, refreshVersion, page.schemaKey, view.busy, externalBusy, !!editView?.dirty])} isCurrent={() => available() && controller.pageCurrent(page)}><ActionMenuSection label={tableToolbarZh.structure}><button aria-label={sqliteIndexesZh.entry} disabled={!!editView?.dirty || !!editView?.busy || !!editView?.unknown || !!cellInput || !!previewOpen || !!tableImport || !!fullExport || !!exportData} onClick={() => { if (available() && controller.pageCurrent(page) && !editorRef.current?.dirty && !editorRef.current?.busy && !editorRef.current?.view.unknown) onIndexes(); }}>{sqliteIndexesZh.entry}</button></ActionMenuSection></ActionMenu>}</div>
     <p className="sqlite-browse-hint">{editView ? editText.editable : page?.edit?.kind === 'readonly' ? page.edit.reason : text.readonly}</p>
     {conditions && <div className="sqlite-browse-conditions"><p className="muted small">{text.typesHint}</p><fieldset aria-label={text.filters}><legend>{text.filters}</legend><select aria-label={text.mode} value={mode} onChange={event => setMode(event.target.value as 'and' | 'or')}><option value="and">AND</option><option value="or">OR</option></select><button disabled={!names.length || filters.length >= sqliteTableBrowseLimits.filters} onClick={() => setFilters(values => values.length >= sqliteTableBrowseLimits.filters ? values : [...values, { id: uid(), column: names[0], operator: 'eq', kind: 'text', value: '' }])}>{text.addFilter}</button>
       {filters.map((filter, index) => <div className="sqlite-browse-rule" key={filter.id}><select aria-label={text.filterColumn(index + 1)} value={filter.column} onChange={event => updateFilter(filter.id, { column: event.target.value })}>{fieldOptions}</select><select aria-label={text.filterOperator(index + 1)} value={filter.operator} onChange={event => changeOperator(filter.id, event.target.value as SqliteFilterDraft['operator'])}>{Object.entries(text.operators).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>{!['isNull', 'notNull'].includes(filter.operator) && <><select aria-label={text.filterKind(index + 1)} value={filter.kind} onChange={event => updateFilter(filter.id, { kind: event.target.value as SqliteFilterDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind} disabled={filter.operator === 'contains' && kind !== 'text' || kind === 'blob' && !['eq', 'ne'].includes(filter.operator)}>{label}</option>)}</select><input aria-label={text.filterValue(index + 1)} value={filter.value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => updateFilter(filter.id, { value: event.target.value })}/></>}<button aria-label={text.removeFilter(index + 1)} onClick={() => setFilters(values => values.filter(value => value.id !== filter.id))}>×</button></div>)}</fieldset>

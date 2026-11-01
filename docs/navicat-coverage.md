@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+R02 开发源码本轮新增[SQLite 已有普通表索引管理](development/sqlite-indexes-20261101.md)：查看、创建、原子替换和删除，支持字段／表达式键、ASC／DESC、实际排序规则及部分索引 WHERE；自动主键／UNIQUE 约束索引只读。准确原表草稿保护、独立 DDL 事务、最小提交回执及原页安全刷新同步接入；提交未知后须明确刷新，切换标签不会自动解锁。修复导入／索引响应中断及清理期间晚到 ACK 的终态、原页通知和取消边界。最终 Windows 严格类型及构建通过，完整 1,063 文件／21,713 项通过、1 平台专项跳过；最终构建 9 个原生用例各单次通过，18 次正常退出和 9 个准确目录清理已核，导出四格式独立读回及真实事务帧另有原件。首轮 7 项 AST 夹具失败、早期类型／select 夹具错误及旧 178 两个 Mac 失败分别保留；未追认旧轮，不声明本增量 Mac／安装已验。R02 仍部分完成，暂不发布。
+
 R02／F01 开发源码新增[SQLite CSV／JSON 导入为新表](development/sqlite-import-new-table-20261101.md)：完整来源检查后人工选择字段，复用正式 SQLite 设计器；真实建表回执及结构核验后明确继续，再进行整文件映射、预检和独立数据提交。两次事务分别展示，失败保留已建表，不自动删除或重试。补齐表页原生工具菜单导入及对象列表入口；预检跨自然 TTL 后明确撤权的组合边界同步加固。最终 Windows 严格类型、构建及完整 21,554 项通过／1 平台跳过；新表导入两例及四个原生回归单次通过，十二次正常退出和六座临时目录清理已核。首轮测试预期、旧定位及跨 TTL 撤权竞态分别修复并保留原件；Mac／安装和系统菜单输入范围见专项记录，R02／F01 仍部分完成，暂不发布。
 
 R02／F01 开发源码新增[SQLite 现有表 CSV／JSON 导入](development/sqlite-table-import-20261101.md)：文件／编码、显式类型映射、完整预检及有界失败记录，准确目标确认后单次整文件事务。默认值、生成列、NULL／空串、64位整数／BLOB 和原查询事务独立；显式 OR ABORT 防止约束默认跳过／替换，保最小事务回执。同步修复共享 UTF-16LE／GB18030 读取的跨块非 BMP 丢字，原字符集映射及旧容错保持。最终 Windows 严格类型、构建、完整 21,450 项通过／1 平台跳过；导入、原工作区及原建表三窗口单次通过，Root 核原始帧、四条磁盘精确值、冲突回滚、源变化零写、六正常退出及准确清理。初期类型／夹具、编码原失败及中间候选分别保留。新功能 Mac／安装、原生工具菜单接线和后续导入模式另验，R02／F01 仍部分完成，暂不发布。上一 `fcd2c486` 三平台十项 SQLite 源码专项共 30 份原件已核，详见[后续复验](development/sqlite-table-create-20261101.md#后续跨平台源码复验)，不代替本增量验收。
@@ -519,7 +521,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | 编号 | 工作包 | 状态 | 验收要求 |
 | --- | --- | --- | --- |
 | R01 | PostgreSQL | 待做 | 会话、schema、序列、类型、函数、约束与驱动完整矩阵 |
-| R02 | SQLite | 部分 | 开发源码已接入[原连接与查询工作区](development/sqlite-workspace-20261031.md)、[执行当前语句](development/sqlite-current-statement-20261101.md)、[类型参数脚本](development/sqlite-parameters-20261101.md)、[原会话执行计划](development/sqlite-explain-20261101.md)、分页／typed筛选和多列排序、[完整四格式流式数据导出](development/sqlite-table-export-20261031.md)、[表格草稿增删改与集中提交](development/sqlite-table-edit-20261101.md)，以及[SQL结构及数据导出](development/sqlite-schema-export-20261101.md)。选择现存文件、默认只读、main元数据、SELECT／定义草稿、原编辑器及事务控制；复制／连接导入需重新选择文件。结构设计及数据导入仍待接入；仅已验实际平台计入证据，不增加完整工作包或发行计数 |
+| R02 | SQLite | 部分 | 开发源码已接入[原连接与查询工作区](development/sqlite-workspace-20261031.md)、[新建数据库文件](development/sqlite-create-20261101.md)、[可视化新建表](development/sqlite-table-create-20261101.md)、[已有普通表索引管理](development/sqlite-indexes-20261101.md)、[CSV／JSON 整文件导入](development/sqlite-table-import-20261101.md)及[导入为新表](development/sqlite-import-new-table-20261101.md)，另有[当前语句](development/sqlite-current-statement-20261101.md)、[类型参数](development/sqlite-parameters-20261101.md)、[执行计划](development/sqlite-explain-20261101.md)、分页／typed 筛选和多列排序、[完整四格式导出](development/sqlite-table-export-20261031.md)、[表格增删改](development/sqlite-table-edit-20261101.md)及[SQL 结构数据导出](development/sqlite-schema-export-20261101.md)。默认只读、main 元数据与原会话事务保持；复制／连接导入仍需重新选择文件。既有字段及主外键等表结构迁移、其它导入格式／模式待接入；各增量按实际平台独立验收，原失败不追认，不增加完整工作包或发行计数 |
 | M01 | 同类/跨类型传输 | 待做 | 结构数据映射、预览、批次、取消、错误与精度 |
 | M02 | 结构比较同步 | 部分 | 0.17开发中已有两表原定义比较、差异分类及受限SQL审查稿，六实例读取/预览保护24项通过，见[首批集成](../tests/integration/acceptance-parallel-integration-20261016.md)。尚不能执行同步；完整对象/方向/依赖及目标再检查继续，外键全库名称可用性未知时拒绝危险混合脚本 |
 | M03 | 数据比较同步 | 待做 | 键/筛选、差异分页、冲突，选择增删改 |

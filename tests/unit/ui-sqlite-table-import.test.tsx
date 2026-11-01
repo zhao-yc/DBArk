@@ -68,3 +68,110 @@ it('unknown提交边界在来源失效/卸载也不再cancel，晚到真实COMMI
 it.each(['truncated', 'partial'] as const)('%s报告展示实际issue总数与完整性，不把零错误记录或有限明细冒称全文件完成', async mode => { const report = mode === 'truncated' ? { checkedRecords: 2, validRecords: 0, invalidRecords: 2, issueCount: 101, issues: Array.from({ length: 100 }, (_, index) => sqliteTableImportIssue('invalid-value', { record: index % 2 + 1, source: 'id_src', target: 'id' })), truncated: true, complete: true } : { checkedRecords: 0, validRecords: 0, invalidRecords: 0, issueCount: 1, issues: [sqliteTableImportIssue('source-changed')], truncated: false, complete: false }; const value: SqliteTableImportPreviewOutput = { ok: false, inspectionId: 'inspection', target, source: inspection().source, records: 2, report, warnings: [] }; const f = await mount({ preview: vi.fn(async () => value) }); await ready(); await mapping(); await click(text.preview); expect(document.body.textContent).toContain(text.reportSummary(report.checkedRecords, 2, report.invalidRecords, report.issueCount)); if (mode === 'truncated') expect(document.body.textContent).toContain(text.reportTruncated(100, 101)); else expect(document.body.textContent).toContain(text.reportPartial); expect(button(text.apply).disabled).toBe(true); expect(f.apply).not.toHaveBeenCalled(); });
 it.each(['inspect', 'preview'] as const)('ready+确认后重新%s再停止，已release能力不能在finish后复活旧Apply', async phase => { const f = await mount(); await preflight(); await input(text.confirmation, 'main.subject'); const oldApply = props(button(text.apply)).onClick, inspecting = deferred<SqliteTableImportInspectOutput>(), checking = deferred<SqliteTableImportPreviewOutput>(); if (phase === 'inspect') f.inspect.mockReturnValueOnce(inspecting.promise); else f.preview.mockReturnValueOnce(checking.promise); await click(phase === 'inspect' ? text.inspect : text.preview); expect(document.querySelector('[aria-label="' + text.previewTitle + '"]')).toBeNull(); expect(document.querySelector('[aria-label="' + text.confirmation + '"]')).toBeNull(); expect(f.release).toHaveBeenCalledWith({ previewId: 'preview-1' }); await click(text.stop); await act(async () => { if (phase === 'inspect') inspecting.reject(Error('原重新检查已停止')); else checking.reject(Error('原重新预检已停止')); }); expect(button(text.apply).disabled).toBe(true); expect(document.querySelector('[aria-label="' + text.previewTitle + '"]')).toBeNull(); await act(async () => { oldApply(); props(button(text.apply)).onClick(); }); expect(f.apply).not.toHaveBeenCalled(); expect(document.body.textContent).toContain('合成数据.csv'); if (phase === 'inspect') await click(text.inspect); await click(text.preview); expect(f.preview.mock.calls.at(-1)![0].mapping).toEqual([{ source: 'id_src', target: 'id', kind: 'integer' }]); expect(control(text.confirmation).value).toBe(''); expect(f.apply).not.toHaveBeenCalled(); });
 it.each(['inspection-first', 'preview-first'] as const)('%s过期按独立期限控制，旧父检查不能作废仍有效的签发预览', async mode => { const now = Date.now(), original = { ...inspection(), expiresAt: new Date(now + (mode === 'inspection-first' ? 60000 : 120000)).toISOString() }, value: SqliteTableImportPreviewOutput = { ok: true, inspectionId: original.inspectionId, target, source: original.source, records: 2, previewId: 'independent-preview', sql: buildSqliteTableImportInsert(target.table, ['id']), confirmation: 'main.subject', expiresAt: new Date(now + (mode === 'inspection-first' ? 120000 : 60000)).toISOString(), warnings: [], report: { checkedRecords: 2, validRecords: 2, invalidRecords: 0, issueCount: 0, issues: [], truncated: false, complete: true } }; const f = await mount({ inspect: vi.fn(async () => original), preview: vi.fn(async () => value) }); await preflight(); const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 90000); try { await f.rerender({}); if (mode === 'inspection-first') { expect(button(text.preview).disabled).toBe(true); expect(control(text.kind('id_src')).disabled).toBe(true); expect(control(text.confirmation).disabled).toBe(false); expect(document.body.textContent).toContain(text.inspectionExpiredPreviewValid); await act(async () => props(control(text.kind('id_src'))).onChange({ target: { value: 'text' } })); expect(document.querySelector('[aria-label="' + text.previewTitle + '"]')).not.toBeNull(); await input(text.confirmation, 'main.subject'); expect(button(text.apply).disabled).toBe(false); await click(text.apply); expect(f.apply).toHaveBeenCalledOnce(); expect(f.onCommitted).toHaveBeenCalledOnce(); } else { expect(button(text.preview).disabled).toBe(false); expect(control(text.kind('id_src')).disabled).toBe(false); expect(control(text.confirmation).disabled).toBe(true); expect(button(text.apply).disabled).toBe(true); await act(async () => props(button(text.apply)).onClick()); expect(f.apply).not.toHaveBeenCalled(); } } finally { clock.mockRestore(); } });
+
+/** Mac原件暴露的迟到TaskEvent顺序：可信结果先到，准确preview释放还在等待。 */
+it.each(['committed', 'rolled-back', 'not-sent'] as const)('真实%s终态在清理窗口收到重复事件，不能再显示等待或发送旧取消', async kind => {
+  const held = deferred<void>(), value = outcome(kind), release = vi.fn<SqliteTableImportServices['release']>(async input => { if (input.previewId) await held.promise; }), run = vi.fn<SqliteTableImportServices['apply']>(async () => value), f = await mount({ apply: run, release });
+  await preflight(); await input(text.confirmation, 'main.subject'); await click(text.apply); expect(release).toHaveBeenCalledWith({ previewId: expect.any(String) }); expect(button(text.stop).disabled).toBe(true);
+  const oldStop = props(button(text.stop)).onClick; await act(async () => oldStop()); expect(f.cancel).not.toHaveBeenCalled();
+  const taskId = run.mock.calls[0][0].taskId;
+  // 仅通过真实apply请求的编号投递重复终态，不伪造后继操作或跨目标事件。
+  await f.emit({ taskId, status: kind === 'committed' ? 'completed' : 'failed', progress: kind === 'committed' ? 100 : 0, message: '原终态已确认', sqliteWrite: value.fact });
+  const statuses = document.querySelectorAll('[role="status"]').map(node => node.textContent);
+  const { sqliteImportFactMessage } = await import('../../src/shared/sqliteTableImportFact');
+  expect(statuses).toContain(kind === 'committed' ? text.committed(2) : kind === 'rolled-back' ? sqliteImportFactMessage(value.fact) : value.message); expect(statuses).not.toContain(text.commitBoundary); expect(f.cancel).not.toHaveBeenCalled();
+  await click(text.close); if (kind !== 'committed') await click(text.discardClose); expect(f.onClose).not.toHaveBeenCalled(); expect(f.cancel).not.toHaveBeenCalled();
+  await act(async () => held.resolve()); expect(f.onClose).toHaveBeenCalledOnce(); expect(f.onCommitted).toHaveBeenCalledTimes(kind === 'committed' ? 1 : 0);
+});
+
+it.each(['committed', 'rolled-back'] as const)('Main同操作%s事件后原RPC断包仍保ACK，原request及held release结束前不关闭或通知提交', async kind => {
+  const pending = deferred<SqliteTableImportOutcome>(), held = deferred<void>(), run = vi.fn<SqliteTableImportServices['apply']>(() => pending.promise), release = vi.fn<SqliteTableImportServices['release']>(async value => { if (value.previewId) await held.promise; }), f = await mount({ apply: run, release });
+  await preflight(); await input(text.confirmation, 'main.subject'); await click(text.apply); const taskId = run.mock.calls[0][0].taskId, oldStop = props(button(text.stop)).onClick;
+  const initial = outcome('not-sent').fact, writing = { ...initial, phase: 'writing' as const, appliedRows: 1 }, terminal = { ...outcome(kind).fact, appliedRows: kind === 'rolled-back' ? 1 : 2 };
+  await f.emit({ taskId, sqliteImportOperation: 'apply', status: 'running', progress: 0, message: '原操作尚未发送', sqliteWrite: initial }); await f.emit({ taskId, sqliteImportOperation: 'apply', status: 'running', progress: 40, message: '原事务处理一行', sqliteWrite: writing });
+  if (kind === 'committed') await f.emit({ taskId, sqliteImportOperation: 'apply', status: 'running', progress: 99, message: '原COMMIT等待', sqliteWrite: { ...terminal, phase: 'commit-pending', commitAcknowledged: false } });
+  await f.emit({ taskId, sqliteImportOperation: 'apply', status: kind === 'committed' ? 'completed' : 'failed', progress: kind === 'committed' ? 100 : 0, message: '原Main已确认终态', sqliteWrite: terminal });
+  const { sqliteImportFactMessage } = await import('../../src/shared/sqliteTableImportFact');
+  expect(document.querySelectorAll('[role="status"]').map(node => node.textContent)).toContain(kind === 'committed' ? text.committed(2) : sqliteImportFactMessage(terminal)); expect(button(text.stop).disabled).toBe(true); expect(f.onCommitted).not.toHaveBeenCalled(); expect(f.onActivity.mock.calls.at(-1)).toEqual([1]); expect(release).not.toHaveBeenCalledWith({ previewId: expect.any(String) });
+  await act(async () => { oldStop(); props(button(text.stop)).onClick(); }); expect(f.cancel).not.toHaveBeenCalled();
+  // 关闭可提出意图，但不能把Main事件当成原RPC/文件能力已经收尾。
+  await click(text.close); await click(text.discardClose); expect(f.onClose).not.toHaveBeenCalled(); expect(f.cancel).not.toHaveBeenCalled();
+  await act(async () => pending.reject(Error('合成原响应传输中断，不能撤销Main事务确认')));
+  expect(release).toHaveBeenCalledWith({ previewId: expect.any(String) }); expect(f.onClose).not.toHaveBeenCalled(); expect(f.onCommitted).not.toHaveBeenCalled(); expect(f.onActivity.mock.calls.at(-1)).toEqual([1]);
+  expect(control(text.factTitle).textContent).toContain(text.phases[kind]); expect(document.querySelectorAll('dd').map(node => node.textContent)).toEqual([terminal.operationId, 'sqlite / main / subject', '2', kind === 'committed' ? '2' : '1']);
+  const statuses = document.querySelectorAll('[role="status"]').map(node => node.textContent); expect(statuses).toContain(kind === 'committed' ? text.committed(2) : sqliteImportFactMessage(terminal)); expect(statuses).not.toContain(text.unknown); expect(statuses).not.toContain(text.commitBoundary);
+  await f.emit({ taskId, sqliteImportOperation: 'apply', status: kind === 'committed' ? 'completed' : 'failed', progress: kind === 'committed' ? 100 : 0, message: '重复原终态', sqliteWrite: terminal }); await act(async () => oldStop()); expect(f.cancel).not.toHaveBeenCalled(); expect(f.onCommitted).not.toHaveBeenCalled();
+  await act(async () => held.resolve()); expect(f.onClose).toHaveBeenCalledOnce(); expect(f.onActivity.mock.calls.at(-1)).toEqual([-1]); expect(release.mock.calls.filter(([value]) => !!value.previewId)).toHaveLength(1);
+  if (kind === 'committed') expect(f.onCommitted).toHaveBeenCalledExactlyOnceWith({ operationId: terminal.operationId, target, outcome: 'committed', counts: { insert: 2, update: 0, delete: 0 }, fact: terminal, message: sqliteImportFactMessage(terminal), cleanupWarning: true }, false); else expect(f.onCommitted).not.toHaveBeenCalled();
+});
+
+it.each(['wrong-task', 'wrong-operation', 'wrong-target', 'wrong-count', 'malformed', 'unconfirmed', 'failed-reply'] as const)('原RPC失败且%s不能提供可信ACK时仍unknown锁定，不从失败原文补造提交或重放', async invalid => {
+  const pending = deferred<SqliteTableImportOutcome>(), held = deferred<void>(), run = vi.fn<SqliteTableImportServices['apply']>(() => pending.promise), release = vi.fn<SqliteTableImportServices['release']>(async value => { if (value.previewId) await held.promise; }), f = await mount({ apply: run, release });
+  await preflight(); await input(text.confirmation, 'main.subject'); const oldApply = props(button(text.apply)).onClick; await click(text.apply); const taskId = run.mock.calls[0][0].taskId, initial = outcome('not-sent').fact;
+  await f.emit({ taskId, sqliteImportOperation: 'apply', status: 'running', progress: 0, message: '原操作身份', sqliteWrite: initial }); await f.emit({ taskId, sqliteImportOperation: 'apply', status: 'running', progress: 30, message: '只确认处理，不确认提交', sqliteWrite: { ...initial, phase: 'writing', appliedRows: 1 } });
+  const bad = outcome().fact;
+  if (invalid === 'wrong-operation') bad.operationId = '4b114a51-7550-44a5-ae0c-cbd48a938b26'; else if (invalid === 'wrong-target') bad.target = { ...target, table: '其它表' }; else if (invalid === 'wrong-count') { bad.requestedRows = 3; bad.appliedRows = 3; } else if (invalid === 'malformed') bad.rollbackAcknowledged = true;
+  if (invalid !== 'unconfirmed' && invalid !== 'failed-reply') await f.emit({ taskId: invalid === 'wrong-task' ? '另一任务' : taskId, sqliteImportOperation: 'apply', status: 'completed', progress: 100, message: '不可采信ACK', sqliteWrite: bad });
+  const oldStop = props(button(text.stop)).onClick;
+  // 失败响应对象即使夹带伪ACK也不是Main已验证事件，不能读取它来恢复成功。
+  await act(async () => pending.reject(Object.assign(Error('合成原响应失败'), invalid === 'failed-reply' ? { sqliteWrite: outcome().fact, outcome: 'committed' } : {})));
+  expect(document.querySelectorAll('[role="status"]').map(node => node.textContent)).toContain(text.unknown); expect(document.querySelector('[aria-label="' + text.factTitle + '"]')).toBeNull(); expect(f.onCommitted).not.toHaveBeenCalled(); expect(button(text.stop).disabled).toBe(true);
+  await act(async () => { oldStop(); oldApply(); }); expect(f.cancel).not.toHaveBeenCalled(); expect(run).toHaveBeenCalledOnce(); expect(f.onActivity.mock.calls.at(-1)).toEqual([1]);
+  await act(async () => held.resolve()); expect(f.onCommitted).not.toHaveBeenCalled(); expect(button(text.apply).disabled).toBe(true); expect(button(text.preview).disabled).toBe(true); expect(run).toHaveBeenCalledOnce(); expect(f.onClose).not.toHaveBeenCalled(); expect(f.onActivity.mock.calls.at(-1)).toEqual([-1]);
+});
+
+/** 原RPC先结束，Main强事实后到：预览释放窗口不能丢掉晚ACK或提前释放原退出租约。 */
+it.each([
+  ['reject', 'committed'], ['reject', 'rolled-back'], ['unknown', 'committed'], ['unknown', 'rolled-back'],
+] as const)('%s响应后held release期间晚到%s，准确归并而不重放或提前通知', async (response, kind) => {
+  const pending = deferred<SqliteTableImportOutcome>(), held = deferred<void>(), run = vi.fn<SqliteTableImportServices['apply']>(() => pending.promise), release = vi.fn<SqliteTableImportServices['release']>(async value => { if (value.previewId) await held.promise; }), f = await mount({ apply: run, release });
+  await preflight(); await input(text.confirmation, 'main.subject'); const oldApply = props(button(text.apply)).onClick; await click(text.apply); const oldStop = props(button(text.stop)).onClick, taskId = run.mock.calls[0][0].taskId, initial = outcome('not-sent').fact;
+  await f.emit({ taskId, status: 'running', progress: 0, message: '原操作身份', sqliteWrite: initial });
+  await f.emit({ taskId, status: 'running', progress: 40, message: '原事务处理一行', sqliteWrite: { ...initial, phase: 'writing', appliedRows: 1 } });
+  const unknown = { ...outcome('unknown'), cleanupWarning: true, failure: sqliteTableImportIssue('transaction-error') };
+  await act(async () => { if (response === 'reject') pending.reject(Error('原RPC断包，尚无可信ACK')); else pending.resolve(unknown); });
+  expect(release).toHaveBeenCalledWith({ previewId: 'preview-1' }); expect(button(text.stop).disabled).toBe(true); expect(f.onActivity.mock.calls.at(-1)).toEqual([1]); expect(f.onCommitted).not.toHaveBeenCalled(); expect(f.onClose).not.toHaveBeenCalled();
+  expect(document.querySelectorAll('[role="status"]').map(node => node.textContent)).toContain(text.unknown);
+  // 晚到的错误目标/计数/操作仍不能解除未知锁；只有原操作的合法单向ACK才可收束。
+  const terminal = { ...outcome(kind).fact, appliedRows: kind === 'committed' || response === 'unknown' ? 2 : 1 };
+  for (const fact of [{ ...terminal, target: { ...target, table: 'other' } }, { ...terminal, requestedRows: 3, appliedRows: 3 }, { ...terminal, operationId: '4b114a51-7550-44a5-ae0c-cbd48a938b26' }]) {
+    await f.emit({ taskId, status: 'completed', progress: 100, message: '不可采用的晚ACK', sqliteWrite: fact });
+    expect(document.querySelectorAll('[role="status"]').map(node => node.textContent)).toContain(text.unknown); expect(f.onCommitted).not.toHaveBeenCalled();
+  }
+  if (kind === 'committed' && response === 'reject') await f.emit({ taskId, status: 'running', progress: 99, message: '原COMMIT边界', sqliteWrite: { ...terminal, phase: 'commit-pending', commitAcknowledged: false } });
+  await f.emit({ taskId, status: kind === 'committed' ? 'completed' : 'failed', progress: 100, message: '原Main晚到终态', sqliteWrite: terminal });
+  const { sqliteImportFactMessage } = await import('../../src/shared/sqliteTableImportFact');
+  expect(control(text.factTitle).textContent).toContain(text.phases[kind]); expect(document.querySelectorAll('dd').map(node => node.textContent)).toEqual([terminal.operationId, 'sqlite / main / subject', '2', String(terminal.appliedRows)]);
+  const statuses = document.querySelectorAll('[role="status"]').map(node => node.textContent); expect(statuses).toContain(kind === 'committed' ? text.committed(2) : sqliteImportFactMessage(terminal)); expect(statuses).not.toContain(text.unknown); expect(statuses).not.toContain(text.commitBoundary);
+  if (response === 'unknown' && kind === 'rolled-back') expect(control(text.failure).textContent).toContain(unknown.failure.message); else expect(document.querySelector('[aria-label="' + text.failure + '"]')).toBeNull();
+  await act(async () => { oldStop(); props(button(text.stop)).onClick(); oldApply(); }); expect(f.cancel).not.toHaveBeenCalled(); expect(run).toHaveBeenCalledOnce(); expect(f.onCommitted).not.toHaveBeenCalled(); expect(button(text.preview).disabled).toBe(true);
+  await f.emit({ taskId, status: kind === 'committed' ? 'completed' : 'failed', progress: 100, message: '重复原ACK', sqliteWrite: terminal }); expect(f.onCommitted).not.toHaveBeenCalled();
+  if (kind === 'committed') { await click(text.close); expect(f.onClose).not.toHaveBeenCalled(); }
+  await act(async () => held.resolve()); expect(f.onActivity.mock.calls.at(-1)).toEqual([-1]); expect(release.mock.calls.filter(([value]) => !!value.previewId)).toHaveLength(1); expect(run).toHaveBeenCalledOnce(); expect(f.cancel).not.toHaveBeenCalled();
+  if (kind === 'committed') {
+    expect(f.onCommitted).toHaveBeenCalledExactlyOnceWith({ operationId: terminal.operationId, target, outcome: kind, counts: { insert: 2, update: 0, delete: 0 }, fact: terminal, message: sqliteImportFactMessage(terminal), cleanupWarning: true }, false); expect(f.onClose).toHaveBeenCalledOnce();
+  } else {
+    expect(f.onCommitted).not.toHaveBeenCalled(); expect(f.onClose).not.toHaveBeenCalled(); expect(button(text.preview).disabled).toBe(false); expect(button(text.apply).disabled).toBe(true);
+    expect(props(control(text.kind('id_src'))).value).toBe('integer'); await act(async () => oldApply()); expect(run).toHaveBeenCalledOnce(); expect(f.preview).toHaveBeenCalledOnce();
+    await click(text.close); await click(text.discardClose); expect(f.onClose).toHaveBeenCalledOnce();
+  }
+});
+
+it.each(['committed', 'rolled-back'] as const)('原%s回执在释放及重复ACK后完整保留cleanupWarning与合法失败明细', async kind => {
+  const held = deferred<void>(), value: SqliteTableImportOutcome = { ...outcome(kind), cleanupWarning: true, ...(kind === 'rolled-back' ? { failure: sqliteTableImportIssue('native-rejected', { record: 2, target: 'note' }) } : {}) }, run = vi.fn<SqliteTableImportServices['apply']>(async () => value), release = vi.fn<SqliteTableImportServices['release']>(async input => { if (input.previewId) await held.promise; }), f = await mount({ apply: run, release });
+  await preflight(); await input(text.confirmation, 'main.subject'); await click(text.apply); const taskId = run.mock.calls[0][0].taskId;
+  await f.emit({ taskId, status: kind === 'committed' ? 'completed' : 'failed', progress: 100, message: '重复已知ACK', sqliteWrite: value.fact });
+  if (value.failure) expect(control(text.failure).textContent).toContain(value.failure.message); expect(f.onCommitted).not.toHaveBeenCalled();
+  await act(async () => held.resolve());
+  if (kind === 'committed') expect(f.onCommitted).toHaveBeenCalledExactlyOnceWith(value, false); else { expect(f.onCommitted).not.toHaveBeenCalled(); expect(control(text.failure).textContent).toContain(value.failure!.message); expect(button(text.preview).disabled).toBe(false); }
+});
+
+it('晚COMMIT在preview release结束但原cancel ACK仍等待时收束，退出与唯一通知继续等待ACK', async () => {
+  const pending = deferred<SqliteTableImportOutcome>(), held = deferred<void>(), cancelAck = deferred<unknown>(), run = vi.fn<SqliteTableImportServices['apply']>(() => pending.promise), cancel = vi.fn<SqliteTableImportServices['cancel']>(() => cancelAck.promise), release = vi.fn<SqliteTableImportServices['release']>(async value => { if (value.previewId) await held.promise; }), f = await mount({ apply: run, cancel, release });
+  await preflight(); await input(text.confirmation, 'main.subject'); await click(text.apply); const taskId = run.mock.calls[0][0].taskId, initial = outcome('not-sent').fact;
+  await f.emit({ taskId, status: 'running', progress: 0, message: '', sqliteWrite: initial }); await f.emit({ taskId, status: 'running', progress: 40, message: '', sqliteWrite: { ...initial, phase: 'writing', appliedRows: 1 } }); await click(text.stop);
+  await act(async () => pending.reject(Error('原响应断包'))); await act(async () => held.resolve()); expect(f.onCommitted).not.toHaveBeenCalled(); expect(f.onActivity.mock.calls.at(-1)).toEqual([1]);
+  await f.emit({ taskId, status: 'running', progress: 99, message: '', sqliteWrite: { ...outcome().fact, phase: 'commit-pending', commitAcknowledged: false } }); await f.emit({ taskId, status: 'completed', progress: 100, message: '原Main确认提交', sqliteWrite: outcome().fact });
+  expect(control(text.factTitle).textContent).toContain(text.phases.committed); expect(button(text.stop).disabled).toBe(true); await click(text.close); expect(f.onClose).not.toHaveBeenCalled(); expect(f.onCommitted).not.toHaveBeenCalled(); expect(cancel).toHaveBeenCalledExactlyOnceWith(taskId);
+  await act(async () => cancelAck.resolve(undefined)); expect(f.onCommitted).toHaveBeenCalledOnce(); expect(f.onClose).toHaveBeenCalledOnce(); expect(f.onActivity.mock.calls.at(-1)).toEqual([-1]); expect(run).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
+});

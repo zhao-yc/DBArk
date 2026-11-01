@@ -177,3 +177,13 @@ describe('SQLite真实磁盘原生驱动与进程生命周期', () => {
     expect(cancelled).toBe(true); expect(session.isBusy).toBe(false); expect((await collect(session, 'SELECT 2')).rows).toEqual([[{ type: 'integer', value: '2' }]]);
   });
 });
+
+/** collation目录只增加无赋值读取，不扩大prepare阶段PRAGMA写授权。 */
+it.each([false, true])('真实只读collation_list及TVF可用，赋值始终拒绝（readonly=%s）', async readOnly => {
+  const { path } = fixture(), session = await open(path, readOnly), values = await collect(session, 'PRAGMA main.collation_list');
+  const names = values.rows.map(row => row[1]); for (const name of ['BINARY', 'NOCASE', 'RTRIM']) expect(names).toContain(name);
+  expect((await collect(session, "SELECT name FROM pragma_collation_list WHERE name='BINARY'")).rows).toEqual([['BINARY']]);
+  for (const sql of ['PRAGMA collation_list=1', "PRAGMA collation_list('BINARY')", 'EXPLAIN PRAGMA collation_list=1']) await expect(session.execute(sql)).rejects.toMatchObject({ completedStatements: 0, sessionClosed: false });
+  expect((await collect(session, 'PRAGMA foreign_keys')).rows).toEqual([[{ type: 'integer', value: '1' }]]);
+  expect((await collect(session, 'SELECT count(*) FROM subject')).rows).toEqual([[{ type: 'integer', value: '0' }]]); await session.close(); expect(session.isClosed).toBe(true);
+});

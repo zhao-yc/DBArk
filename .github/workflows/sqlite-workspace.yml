@@ -100,6 +100,8 @@ jobs:
         run: node scripts/sqlite-workspace-ci.mjs table-import
       - name: 单次运行SQLite文件导入为新表原生专项
         run: node scripts/sqlite-workspace-ci.mjs import-new-table
+      - name: 单次运行SQLite已有表索引管理原生专项
+        run: node scripts/sqlite-workspace-ci.mjs indexes
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -118,4 +120,5 @@ jobs:
             test-results/sqlite-table-create/
             test-results/sqlite-table-import/
             test-results/sqlite-import-new-table/
+            test-results/sqlite-indexes/
           if-no-files-found: warn

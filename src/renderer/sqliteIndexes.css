@@ -1,0 +1,6 @@
+.sqlite-indexes .sqlite-index-catalogue { display: grid; gap: 12px; max-height: 320px; overflow: auto; }
+.sqlite-indexes .sqlite-index-entry { border: 1px solid var(--border); padding: 8px; border-radius: 4px; }
+.sqlite-indexes pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.sqlite-indexes .sqlite-index-key { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+.sqlite-indexes .sqlite-index-key input { flex: 1 1 160px; min-width: 100px; }
+.sqlite-indexes .sqlite-index-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

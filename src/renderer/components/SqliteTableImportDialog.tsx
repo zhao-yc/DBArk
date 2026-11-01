@@ -5,6 +5,7 @@ import { sqliteTableCreateOutcomeSchema, type SqliteTableCreateOutcome } from '.
 import { sqliteTableImportInspectSchema, sqliteTableImportInspectionSchema, sqliteTableImportMappingSchema, sqliteTableImportPreviewOutputSchema, sqliteTableImportOutcomeSchema, sqliteTableImportLimits, sqliteImportWriteFactSchema, assertSqliteImportWriteFactTransition, type SqliteImportWriteFact, type SqliteTableImportInspectInput, type SqliteTableImportInspectOutput, type SqliteTableImportPreviewInput, type SqliteTableImportPreviewOutput, type SqliteTableImportApplyInput, type SqliteTableImportReleaseInput, type SqliteTableImportOutcome, type SqliteTableImportMapping } from '../../shared/sqliteTableImport';
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteTableImportZh as text } from '../locales/sqliteTableImport.zh-CN';
+import { sqliteImportFactMessage } from '../../shared/sqliteTableImportFact';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import '../sqliteTableImport.css';
 import { csvImportDelimiters } from '../../shared/csvImport';
@@ -50,7 +51,7 @@ export interface SqliteTableImportInitialSource { file: FileChoice; sourceId: st
 interface Props { source: SqliteTableImportSource; initialSource?: SqliteTableImportInitialSource; services?: SqliteTableImportServices; onActivity(delta: 1 | -1): void; onDirtyChange?(dirty: boolean): void; onClose(): void; onCommitted?(output: SqliteTableImportOutcome, sourceChanged: boolean): void; onCleanupError(message: string): void; }
 type Mapping = { id: string; source: string | null; target: string; kind: SqliteTableImportMapping['kind'] };
 type Draft = { format: 'csv' | 'json'; encoding: SqliteTableImportInspectInput['encoding']; delimiter: NonNullable<SqliteTableImportInspectInput['csvDelimiter']>; header: boolean; file?: FileChoice; inspection?: SqliteTableImportInspectOutput; mapping: Mapping[]; preview?: SqliteTableImportPreviewOutput; confirmation: string; outcome?: SqliteTableImportOutcome; locked: boolean; };
-type Operation = { kind: 'choose' | 'inspect' | 'preview' | 'apply'; id?: string; draft: Draft; generation: number; cancelled: boolean; sent: boolean; commitBoundary: boolean; fact?: SqliteImportWriteFact; cancel?: Promise<void>; promise?: Promise<void>; committed?: SqliteTableImportOutcome; };
+type Operation = { kind: 'choose' | 'inspect' | 'preview' | 'apply'; id?: string; draft: Draft; generation: number; readonly expectedRows?: number; cancelled: boolean; sent: boolean; resultReceived?: boolean; receivedOutcome?: SqliteTableImportOutcome; commitBoundary: boolean; fact?: SqliteImportWriteFact; cancel?: Promise<void>; promise?: Promise<void>; committed?: SqliteTableImportOutcome; committedNotified?: boolean; };
 
 /** 完整文件检查与显式映射分阶段进行；只有一次明确确认才能提交原表的独立事务。 */
 export function SqliteTableImportDialog({ source, initialSource, services = sqliteTableImportServices, ...callbacks }: Props) {
@@ -96,22 +97,24 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     replace({ ...draft, mapping: draft.mapping.map(value => value === row ? { ...row, source } : value), preview: undefined, confirmation: '', outcome: undefined });
   }
   /** 同步原租约覆盖每个请求和原取消ACK；旧finally只释放自己的busy。 */
-  function begin(kind: Operation['kind'], pendingDraft = draft): Operation | undefined {
+  function begin(kind: Operation['kind'], pendingDraft = draft, expectedRows?: number): Operation | undefined {
     if (!editable()) return;
-    const op: Operation = { kind, ...(kind === 'choose' ? {} : { id: uid() }), draft: pendingDraft, generation: generation.current, cancelled: false, sent: false, commitBoundary: false }; operation.current = op;
+    const op: Operation = { kind, ...(kind === 'choose' ? {} : { id: uid() }), draft: pendingDraft, generation: generation.current, expectedRows, cancelled: false, sent: false, commitBoundary: false }; operation.current = op;
     try { owner.callbacks.onActivity(1); if (!current()) throw Error(text.stale); if (pendingDraft !== draft) replace(pendingDraft); setBusy(true); setError(''); setMessage(''); setProgress(undefined); return op; }
     catch (reason) { operation.current = undefined; try { owner.callbacks.onActivity(-1); } catch {} report(reason); }
   }
   const accepts = (op: Operation) => operation.current === op && generation.current === op.generation && live.current === op.draft && current() && !op.cancelled;
   async function finish(op: Operation): Promise<void> {
     let pending: Promise<void> | undefined; do { pending = op.cancel; if (pending) await pending; } while (pending !== op.cancel);
+    // 原请求、预览释放和取消ACK均结束后，再收束清理期间晚到的真实事务ACK。
+    reconcileAcknowledged(op);
     if (operation.current === op) operation.current = undefined;
     try { owner.callbacks.onActivity(-1); } catch (reason) { report(reason); }
     if (mounted.current && generation.current === op.generation) setBusy(false);
-    if (op.committed) { const changed = !mounted.current || invalid.current || !owner.source.current(); try { owner.callbacks.onCommitted?.(op.committed, changed); } catch (reason) { report(reason); } }
+    if (op.committed && !op.committedNotified) { op.committedNotified = true; const changed = !mounted.current || invalid.current || !owner.source.current(); try { owner.callbacks.onCommitted?.(op.committed, changed); } catch (reason) { report(reason); } }
     if (!mounted.current) void releaseAll().catch(report);
   }
-  function stop(op = operation.current): void { if (!op || operation.current !== op || op.cancelled || op.commitBoundary) return; op.cancelled = true; if (op.sent && op.id) op.cancel = Promise.resolve().then(() => owner.services.cancel(op.id!)).then(() => undefined).catch(report); if (mounted.current) setMessage(text.cancelling); }
+  function stop(op = operation.current): void { if (!op || operation.current !== op || op.cancelled || op.commitBoundary || op.resultReceived || op.fact?.commitAcknowledged || op.fact?.rollbackAcknowledged) return; op.cancelled = true; if (op.sent && op.id) op.cancel = Promise.resolve().then(() => owner.services.cancel(op.id!)).then(() => undefined).catch(report); if (mounted.current) setMessage(text.cancelling); }
   /** 取消文件选择保留完整旧草稿；chooser晚回不得给新格式或后继来源签入令牌。 */
   function choose(): void {
     if (owner.initialSource) return;
@@ -158,20 +161,53 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
       finally { await finish(op); }
     })();
   }
+  /** 只收束本操作已由Main事件核验的ACK；预览记录数在领取时固定，不能随显示草稿变化。 */
+  function confirmedFailureOutcome(op: Operation): SqliteTableImportOutcome | undefined {
+    const parsed = sqliteImportWriteFactSchema.safeParse(op.fact);
+    if (!op.sent || op.kind !== 'apply' || !parsed.success || !sameTarget(parsed.data.target) || parsed.data.requestedRows !== op.expectedRows || !parsed.data.commitAcknowledged && !parsed.data.rollbackAcknowledged) return;
+    const fact = parsed.data;
+    const received = op.receivedOutcome;
+    // 已知终态不重建，保留原请求的失败行及清理告警；未知回执只能由同操作ACK收束。
+    if (received && JSON.stringify(received.fact) === JSON.stringify(fact)) return received;
+    return sqliteTableImportOutcomeSchema.parse({ operationId: fact.operationId, target: fact.target, outcome: fact.commitAcknowledged ? 'committed' : 'rolled-back', counts: { insert: fact.requestedRows, update: 0, delete: 0 }, fact, message: sqliteImportFactMessage(fact), cleanupWarning: true, ...(!fact.commitAcknowledged && received?.operationId === fact.operationId && received.failure ? { failure: received.failure } : {}) });
+  }
+  /** 事件只更新已settle请求的准确回执，提交通知仍由finish在所有原收尾完成后单次发送。 */
+  function reconcileAcknowledged(op: Operation): SqliteTableImportOutcome | undefined {
+    if (!op.resultReceived) return;
+    const value = confirmedFailureOutcome(op); if (!value) return;
+    if (value.fact.commitAcknowledged) op.committed = value;
+    if (mounted.current && generation.current === op.generation) {
+      replace({ ...op.draft, preview: undefined, confirmation: '', outcome: value, locked: value.fact.commitAcknowledged });
+      setMessage(value.fact.commitAcknowledged ? text.committed(value.fact.appliedRows) : sqliteImportFactMessage(value.fact));
+    }
+    return value;
+  }
   /** 预览一次性消费，已确认COMMIT独立于晚取消和刷新；未知批次绝不自动重放。 */
   function apply(): void {
     const chosen = draft.preview;
     if (!editable() || !chosen?.ok || owner.source.readOnly || draft.inspection?.readOnly || draft.confirmation !== chosen.confirmation || consumed.current.has(chosen.previewId)) return;
     if (Date.parse(chosen.expiresAt) <= Date.now()) { setError(text.expired); return; }
-    const op = begin('apply'); if (!op) return; consumed.current.add(chosen.previewId);
+    const op = begin('apply', draft, chosen.records); if (!op) return; consumed.current.add(chosen.previewId);
     op.promise = (async () => {
       try {
         if (!accepts(op)) return; op.sent = true; const value = sqliteTableImportOutcomeSchema.parse(await owner.services.apply({ previewId: chosen.previewId, confirmation: chosen.confirmation, taskId: op.id! }));
-        if (!sameTarget(value.target) || value.fact.requestedRows !== chosen.records) throw Error(text.invalid);
+        if (!sameTarget(value.target) || value.fact.requestedRows !== op.expectedRows) throw Error(text.invalid);
         if (op.fact) assertSqliteImportWriteFactTransition(op.fact, value.fact);
+        // 请求已取得可信终态；元数据释放仍在等待时，也不能再向已结束的任务发取消。
+        op.fact = value.fact; op.receivedOutcome = value; op.resultReceived = true;
+        if (value.fact.commitMayHaveBeenSent || value.fact.phase === 'unknown') op.commitBoundary = true;
         if (value.fact.commitAcknowledged) op.committed = value;
         if (mounted.current && generation.current === op.generation) { replace({ ...op.draft, preview: undefined, confirmation: '', outcome: value, locked: value.fact.commitAcknowledged || value.outcome === 'unknown' }); setMessage(value.fact.commitAcknowledged ? text.committed(value.fact.appliedRows) : value.outcome === 'unknown' ? text.unknown : value.message); }
-      } catch (reason) { if (mounted.current && generation.current === op.generation) { replace({ ...op.draft, preview: undefined, confirmation: '', locked: op.sent }); setMessage(op.sent ? text.unknown : ''); report(reason); } }
+      } catch (reason) {
+        const confirmed = confirmedFailureOutcome(op);
+        // transport已settle并不代表release已完成；保持原busy等待，同时禁止旧Stop再取消终结任务。
+        if (op.sent) op.resultReceived = true;
+        if (confirmed?.fact.commitAcknowledged) op.committed = confirmed;
+        if (mounted.current && generation.current === op.generation) {
+          replace({ ...op.draft, preview: undefined, confirmation: '', ...(confirmed ? { outcome: confirmed } : {}), locked: confirmed ? confirmed.fact.commitAcknowledged : op.sent });
+          setMessage(confirmed ? confirmed.fact.commitAcknowledged ? text.committed(confirmed.fact.appliedRows) : confirmed.message : op.sent ? text.unknown : ''); report(reason);
+        }
+      }
       finally { await releaseOne('previewId', chosen.previewId).catch(report); await finish(op); }
     })();
   }
@@ -189,15 +225,23 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     const unsubscribe = owner.services.subscribe(event => {
       const op = operation.current; if (!op || event.taskId !== op.id) return;
       if (op.kind === 'apply' && event.sqliteWrite) {
-        const parsed = sqliteImportWriteFactSchema.safeParse(event.sqliteWrite), expected = op.draft.preview;
-        if (!parsed.success || !expected?.ok || !sameTarget(parsed.data.target) || parsed.data.requestedRows !== expected.records) return;
+        const parsed = sqliteImportWriteFactSchema.safeParse(event.sqliteWrite);
+        if (!parsed.success || !sameTarget(parsed.data.target) || parsed.data.requestedRows !== op.expectedRows) return;
         try { if (op.fact) assertSqliteImportWriteFactTransition(op.fact, parsed.data); } catch { return; }
         op.fact = parsed.data;
         if (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown') op.commitBoundary = true;
+        reconcileAcknowledged(op);
       }
       // 来源撤权、旧stop闭包、关闭和卸载都必须尊重已观察的COMMIT单向边界。
       if (!owner.source.current()) { invalid.current = true; if (mounted.current) setStale(true); stop(op); }
-      if (mounted.current) { if (op.commitBoundary) setMessage(text.commitBoundary); setProgress(event); }
+      if (mounted.current) {
+        // 迟到进度不能把已确认COMMIT/ROLLBACK重新描述为等待提交；原事实始终优先。
+        if (op.fact?.commitAcknowledged) setMessage(text.committed(op.fact.appliedRows));
+        else if (op.fact?.rollbackAcknowledged) setMessage(sqliteImportFactMessage(op.fact));
+        else if (op.kind === 'apply' && op.resultReceived && (!op.receivedOutcome || op.receivedOutcome.outcome === 'unknown')) setMessage(text.unknown);
+        else if (op.commitBoundary) setMessage(text.commitBoundary);
+        setProgress(event);
+      }
     });
     return () => { mounted.current = false; generation.current++; unsubscribeSource(); unsubscribe(); stop(); if (!operation.current) void releaseAll().catch(report); owner.callbacks.onDirtyChange?.(false); };
   }, []);
@@ -218,5 +262,5 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     {draft.outcome && <details aria-label={text.factTitle}><summary>{text.phases[draft.outcome.fact.phase]}</summary><dl><dt>{text.factOperation}</dt><dd>{draft.outcome.operationId}</dd><dt>{text.factTarget}</dt><dd>{draft.outcome.target.connectionId} / {draft.outcome.target.database} / {draft.outcome.target.table}</dd><dt>{text.factRequested}</dt><dd>{draft.outcome.fact.requestedRows}</dd><dt>{text.factApplied}</dt><dd>{draft.outcome.fact.appliedRows}</dd></dl></details>}
     {draft.outcome?.failure && <table aria-label={text.failure}><thead><tr><th>{text.reportRow}</th><th>{text.reportColumn}</th><th>{text.reportReason}</th></tr></thead><tbody><tr><td>{draft.outcome.failure.record ?? ''}</td><td>{[draft.outcome.failure.source, draft.outcome.failure.target].filter(Boolean).join(' → ')}</td><td>{draft.outcome.failure.code} · {draft.outcome.failure.message}</td></tr></tbody></table>}
     {(previewExpired || !selected && inspectionExpired) && <ErrorBox message={text.expired}/>} {selected && !previewExpired && inspectionExpired && <p className="info-strip">{text.inspectionExpiredPreviewValid}</p>}<ErrorBox message={error}/>{message && <p role="status">{message}</p>}{progress && <p role="status">{progress.message}{progress.rows === undefined ? '' : ' · ' + progress.rows}<progress max={100} value={progress.progress}/></p>}{busy && <Spinner text={text.working}/>} {discard && <p className="warning-text">{text.discard}</p>}
-  </div><footer className="modal-footer">{discard ? <><button type="button" disabled={closing} onClick={() => { if (localCurrent()) setDiscard(false); }}>{text.keep}</button><button type="button" disabled={closing} onClick={() => close(true)}>{text.discardClose}</button></> : <><button type="button" disabled={closing} onClick={() => close()}>{text.close}</button><span className="grow"/>{busy && renderedOperation?.id && <button type="button" disabled={renderedOperation.commitBoundary} title={renderedOperation.commitBoundary ? text.commitBoundary : undefined} onClick={() => { if (localCurrent() && operation.current === renderedOperation) stop(renderedOperation); }}>{text.stop}</button>}<button type="button" disabled={disabled || !inspection || inspectionExpired} onClick={preview}>{text.preview}</button><button type="button" className="primary" disabled={disabled || !selected || previewExpired || owner.source.readOnly || inspection?.readOnly || draft.confirmation !== selected.confirmation || consumed.current.has(selected.previewId)} onClick={apply}>{text.apply}</button></>}</footer></Modal>;
+  </div><footer className="modal-footer">{discard ? <><button type="button" disabled={closing} onClick={() => { if (localCurrent()) setDiscard(false); }}>{text.keep}</button><button type="button" disabled={closing} onClick={() => close(true)}>{text.discardClose}</button></> : <><button type="button" disabled={closing} onClick={() => close()}>{text.close}</button><span className="grow"/>{busy && renderedOperation?.id && <button type="button" disabled={renderedOperation.commitBoundary || renderedOperation.resultReceived || renderedOperation.fact?.commitAcknowledged || renderedOperation.fact?.rollbackAcknowledged} title={renderedOperation.fact?.commitAcknowledged ? text.committed(renderedOperation.fact.appliedRows) : renderedOperation.fact?.rollbackAcknowledged ? sqliteImportFactMessage(renderedOperation.fact) : renderedOperation.commitBoundary ? text.commitBoundary : undefined} onClick={() => { if (localCurrent() && operation.current === renderedOperation) stop(renderedOperation); }}>{text.stop}</button>}<button type="button" disabled={disabled || !inspection || inspectionExpired} onClick={preview}>{text.preview}</button><button type="button" className="primary" disabled={disabled || !selected || previewExpired || owner.source.readOnly || inspection?.readOnly || draft.confirmation !== selected.confirmation || consumed.current.has(selected.previewId)} onClick={apply}>{text.apply}</button></>}</footer></Modal>;
 }
