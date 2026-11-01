@@ -5,6 +5,8 @@ import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteColumn, SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import type { SqliteTableEditPage } from '../shared/sqliteTableEdit';
+import { buildSqliteReadPlan, quoteSqliteIdentifier } from '../shared/sqliteReadSql';
+export { quoteSqliteIdentifier } from '../shared/sqliteReadSql';
 
 export interface SqliteEditReadPlan {
   project?: (column: string) => string; extraColumn?: string;
@@ -23,9 +25,6 @@ export class SqliteTableBrowseCancelled extends Error {
   constructor() { super('SQLite表浏览已取消，未发布分页结果'); this.name = 'SqliteTableBrowseCancelled'; }
 }
 
-/** 对已从准确快照目录取得的名称逐个转义，不接收任意SQL表达式。 */
-export function quoteSqliteIdentifier(name: string): string { return '"' + name.replaceAll('"', '""') + '"'; }
-
 /** 类型参数先规范化成driver合同，整数不经Number，REAL负零不丢失。 */
 function operand(value: NonNullable<SqliteTableFilter['value']>): SqliteValue {
   switch (value.kind) {
@@ -38,27 +37,8 @@ function operand(value: NonNullable<SqliteTableFilter['value']>): SqliteValue {
 
 /** 每列都来自真实元数据白名单；运算符固定，所有筛选值及分页数字均使用typed绑定。 */
 export function buildSqliteTableSelect(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected?: readonly string[], complete = false, project?: (qualifiedColumn: string) => string): { sql: string; parameters: SqliteValue[] } {
-  const input = sqliteTablePageSchema.parse(source), names = new Set(columns.map(column => column.name));
-  if (!columns.length || columns.length > limits.columns || names.size !== columns.length) throw Error('SQLite表没有可浏览列或列目录超过预算');
-  const alias = project ? '"__dbark_source"' : undefined;
-  const field = (name: string) => { if (!names.has(name)) throw Error('SQLite筛选或排序列已不存在，请刷新表结构'); return (alias ? alias + '.' : '') + quoteSqliteIdentifier(name); };
-  const output = selected ?? columns.map(column => column.name);
-  if (!output.length || output.length > limits.columns || new Set(output).size !== output.length) throw Error('SQLite导出列为空、重复或超过预算');
-  const parameters: SqliteValue[] = [];
-  const operators = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' } as const;
-  const filters = input.filters.map(filter => {
-    const column = field(filter.column);
-    if (filter.operator === 'isNull' || filter.operator === 'notNull') return column + (filter.operator === 'isNull' ? ' IS NULL' : ' IS NOT NULL');
-    const value = filter.value!;
-    parameters.push(value.kind === 'blob' ? 'blob' : value.kind, operand(value));
-    const comparison = filter.operator === 'contains' ? 'instr(' + column + ', ?) > 0' : column + ' ' + operators[filter.operator] + ' ?';
-    return '(typeof(' + column + ') = ? AND ' + comparison + ')';
-  });
-  const order = input.sort.map(sort => field(sort.column) + (sort.direction === 'asc' ? ' ASC' : ' DESC'));
-  if (!complete) parameters.push({ type: 'integer', value: String(input.limit + 1) }, { type: 'integer', value: String(input.offset) });
-  return { sql: 'SELECT ' + output.map(name => project ? project(field(name)) + ' AS ' + quoteSqliteIdentifier(name) : field(name)).join(', ') + ' FROM "main".' + quoteSqliteIdentifier(input.table) + (alias ? ' AS ' + alias : '')
-    + (filters.length ? ' WHERE ' + filters.join(input.mode === 'and' ? ' AND ' : ' OR ') : '')
-    + (order.length ? ' ORDER BY ' + order.join(', ') : '') + (complete ? '' : ' LIMIT ? OFFSET ?'), parameters };
+  const plan = buildSqliteReadPlan(source, columns, selected, complete, project);
+  return { sql: plan.sql, parameters: plan.parameters.map(parameter => parameter.kind === 'storage-type' ? parameter.value : parameter.kind === 'count' ? { type: 'integer' as const, value: String(parameter.value) } : operand(parameter.value)) };
 }
 
 export interface SqliteTableCatalogue {

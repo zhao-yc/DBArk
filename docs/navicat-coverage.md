@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 高频查询新增[从已应用筛选生成 SELECT](development/sqlite-filtered-select-20261101.md)：表／视图及只读连接、字段选择与顺序、原typed条件与多列排序，默认不带当前页分页，可明确LIMIT；只开原连接独立草稿，不自动执行且保留父数据修改。验证与未支持名称边界见专项记录，暂不发布。
+
 SQLite 高频编辑新增[勾选记录多字段填充](development/sqlite-table-fill-20261101.md)：当前页准确勾选、多字段显式typed输入、单次原子暂存及一步撤销；生成列排除，DEFAULT仅全新增草稿可选，最终仍须原SQL预览和集中提交。验证与未验范围见专项记录，暂不发布。
 
 SQLite 高频查询新增[元数据补全](development/sqlite-completion-20261101.md)：独立 SQLite 分析 Worker、表／视图／字段与别名、明确输出的 CTE／派生表，原物理会话临时命名空间及未提交 DDL 保持。新 IPC 仅传标识符，取消不回滚用户事务；验证及未支持语法见专项记录，Mac／安装另验，暂不发布。

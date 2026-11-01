@@ -1,0 +1,23 @@
+/** 筛选SELECT生成只依赖已应用范围，不执行查询，也不改写父页面草稿或事务。 */
+export const sqliteFilteredSelectZh = {
+  entry: '从 SQLite 当前筛选生成查询…', title: '从 SQLite 当前筛选生成查询',
+  projection: 'SQLite 查询字段投影顺序',
+  choose: (name: string) => '选择 SQLite 查询字段 ' + name,
+  moveUp: (name: string) => '上移 SQLite 查询字段 ' + name,
+  moveDown: (name: string) => '下移 SQLite 查询字段 ' + name,
+  up: '上移', down: '下移', all: '选择全部 SQLite 查询字段', none: '取消全部 SQLite 查询字段',
+  noLimit: '不限制 SQLite 查询行数', limited: '仅查询前 N 行', limit: 'SQLite 查询行数上限',
+  preview: 'SQLite 筛选 SELECT SQL 预览', open: '打开查询草稿', cancel: '取消生成 SQLite 查询',
+  hint: '字段、筛选与排序来自当前已应用范围，尚未应用的表单草稿不纳入。只生成查询草稿，不读取数据行，不自动执行；父页本地草稿和现有事务保持。',
+  orderHint: '上下移动调整投影顺序，只有勾选字段进入 SELECT；全选或全不选保留当前顺序。',
+  limitHint: '默认不限制行数，也不沿用当前页 OFFSET。可明确限制前 1 至 1,000,000 行。',
+  invalid: '字段选择或行数上限无效，未打开查询草稿。',
+  budget: 'SQLite生成查询超过文本预算，请减少字段或筛选条件。',
+  identifierLineBreak: '当前编辑器尚不能原样保持标识符内的回车或换行，不能安全打开这份查询。',
+  empty: '请至少选择一个查询字段。', invalidLimit: '行数上限须为 1 至 1,000,000 的整数。',
+  stale: '原已应用筛选、页面或生成窗口已变化，不能继续使用旧计划；输入已保留。',
+  openFailed: '未能打开查询草稿，输入已保留。请处理提示的问题后重新生成。',
+  tabs: '查询标签已达100个，请先关闭部分标签。',
+  queryTitle: (name: string) => name + ' · 筛选 SELECT',
+  selected: (count: number) => '已选择 ' + count + ' 个查询字段',
+} as const;

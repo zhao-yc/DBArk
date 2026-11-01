@@ -156,6 +156,9 @@ jobs:
       - name: 单次运行SQLite勾选记录多字段填充专项
         if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs table-fill
+      - name: 单次运行SQLite已应用筛选生成查询专项
+        if: matrix.suite == 'management'
+        run: node scripts/sqlite-workspace-ci.mjs filtered-select
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -188,4 +191,5 @@ jobs:
             test-results/sqlite-table-duplicate/
             test-results/sqlite-table-remove-selected/
             test-results/sqlite-table-fill/
+            test-results/sqlite-filtered-select/
           if-no-files-found: warn
