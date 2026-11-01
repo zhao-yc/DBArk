@@ -3,6 +3,9 @@ import type { QueryResult } from './contracts';
 
 /** 表浏览始终有界；不通过完整COUNT或一次性读取全表来计算页数。 */
 export const sqliteTableBrowseLimits = { pageSize: 1000, offset: 1000000000, filters: 32, listValues: 128, parameters: 1024, sorts: 8, columns: 1024, resultBytes: 16 * 1024 * 1024, valueUnits: 65536 } as const;
+export const sqliteTextFilterOperators = ['contains', 'notContains', 'startsWith', 'notStartsWith', 'endsWith', 'notEndsWith'] as const;
+/** 表单和合同共用文本运算符集合，不能将数值或二进制隐式转成文本。 */
+export function isSqliteTextFilter(operator: string): operator is typeof sqliteTextFilterOperators[number] { return sqliteTextFilterOperators.some(value => value === operator); }
 /** 名称及文本拒绝孤立代理项，避免跨进程UTF8编码静默改成另一个字符。 */
 function validUnicode(value: string): boolean { return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value); }
 const name = z.string().min(1).max(512).refine(value => !value.includes('\0') && validUnicode(value), 'SQLite名称不能包含空字符或无效Unicode');
@@ -31,12 +34,12 @@ const listOperands = z.unknown().transform((raw, context) => {
   return values;
 });
 export const sqliteTableFilterSchema = z.object({
-  column: name, operator: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'isNull', 'notNull', 'between', 'notBetween', 'in', 'notIn']), value: operand.optional(), secondValue: operand.optional(), values: listOperands.optional(), enabled: z.boolean().optional(),
+  column: name, operator: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', ...sqliteTextFilterOperators, 'isNull', 'notNull', 'between', 'notBetween', 'in', 'notIn']), value: operand.optional(), secondValue: operand.optional(), values: listOperands.optional(), enabled: z.boolean().optional(),
 }).strict().superRefine((filter, context) => {
   const nullCheck = filter.operator === 'isNull' || filter.operator === 'notNull', list = filter.operator === 'in' || filter.operator === 'notIn';
   if (nullCheck || list ? filter.value !== undefined : filter.value === undefined) context.addIssue({ code: 'custom', message: 'NULL或列表条件不带单值，其余条件必须明确类型和值' });
   if (list ? !filter.values : filter.values !== undefined) context.addIssue({ code: 'custom', message: '只有列表条件可填写列表值，且列表不能留空' });
-  if (filter.operator === 'contains' && filter.value?.kind !== 'text') context.addIssue({ code: 'custom', message: '包含条件只接受文本原文' });
+  if (isSqliteTextFilter(filter.operator) && filter.value?.kind !== 'text') context.addIssue({ code: 'custom', message: '文本匹配条件只接受文本原文' });
   if (filter.value?.kind === 'blob' && !['eq', 'ne'].includes(filter.operator)) context.addIssue({ code: 'custom', message: '二进制条件目前只支持等于与不等于' });
   // 范围两个边界须明确且同型；其他比较不能夹带被静默忽略的第二个值。
   const range = filter.operator === 'between' || filter.operator === 'notBetween';
@@ -51,7 +54,7 @@ export const sqliteTablePageSchema = z.object({
   if (new Set(input.sort.map(sort => sort.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: '排序列不能重复' });
   if (input.filters.reduce((size, filter) => size + (filter.value?.value.length ?? 0) + (filter.secondValue?.value.length ?? 0) + (filter.values?.reduce((total, value) => total + value.value.length, 0) ?? 0), 0) > 131072) context.addIssue({ code: 'custom', message: 'SQLite筛选值总量超过预算' });
   // 保留utility原1024个位置绑定保护，预留分页两个；完整导出与生成查询沿同一准入。
-  const parameters = input.filters.reduce((total, filter) => total + (filter.enabled === false || ['isNull', 'notNull'].includes(filter.operator) ? 0 : ['in', 'notIn'].includes(filter.operator) ? 1 + (filter.values?.length ?? 0) : ['between', 'notBetween'].includes(filter.operator) ? 3 : 2), 2);
+  const parameters = input.filters.reduce((total, filter) => total + (filter.enabled === false || ['isNull', 'notNull'].includes(filter.operator) ? 0 : ['in', 'notIn'].includes(filter.operator) ? 1 + (filter.values?.length ?? 0) : ['between', 'notBetween', 'endsWith', 'notEndsWith'].includes(filter.operator) ? 3 : 2), 2);
   if (parameters > sqliteTableBrowseLimits.parameters) context.addIssue({ code: 'custom', message: '当前启用的筛选条件过多，请减少列表值或条件数量' });
 });
 export type SqliteTableFilter = z.infer<typeof sqliteTableFilterSchema>;

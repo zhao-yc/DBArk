@@ -133,6 +133,14 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     for (const id of ['第一页', '第二页', '最后页', '空页']) expect(taskState(app, id)).toEqual({ kind: 'browse-finished' });
   });
 
+  it('真实worker文本首尾和排除匹配保NUL与通配原文，不纳入NULL或其它存储类型', async () => {
+    const profile = fixture(), { app } = runtime(profile); let serial = 0;
+    for (const [operator, value, expected] of [
+      ['notContains', '%_', ['4', '7', '9']], ['startsWith', '50%_', ['8']], ['notStartsWith', '50%_', ['4', '7', '9']],
+      ['endsWith', '\0字符', ['9']], ['notEndsWith', '\0字符', ['4', '7', '8']], ['endsWith', '', ['4', '7', '8', '9']],
+    ] as const) expect(ids(await page(app, input(profile, '文本首尾' + ++serial, { limit: 100, filters: [{ column: 'value', operator, value: { kind: 'text', value } }] })))).toEqual(expected);
+    for (const record of processes) await closedRead(record);
+  });
   it('typed比较匹配真实存储类型，contains为字面包含，AND/OR与多列排序均由服务器执行', async () => {
     const profile = fixture(), { app } = runtime(profile); let serial = 0;
     const filter = (filters: SqliteTablePageInput['filters'], patch: Partial<SqliteTablePageInput> = {}) => page(app, input(profile, '筛选' + ++serial, { limit: 100, filters, ...patch }));

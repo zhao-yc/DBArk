@@ -93,6 +93,17 @@ async function completed(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite完整导出真实只读流、原子文件与精度回放', () => {
+  it.each([
+    ['notContains', '号', ['1', '4', '5', '6', '7', '8', '9']], ['startsWith', '中文', ['1']], ['notStartsWith', '中文', ['2', '3', '4', '5', '6', '7', '8', '9']],
+    ['endsWith', '\0字符', ['7']], ['notEndsWith', '\0字符', ['1', '2', '3', '4', '5', '6', '8', '9']],
+  ] as const)('%s文本条件在完整流中保持准确源行与NUL，不局限当前一行页', async (operator, value, expected) => {
+    const profile = fixture(), { app } = runtime(profile), source = await page(app, profile), before = await hash(profile.sqlite.filePath!);
+    const input = request(profile, source, { filters: [{ column: 'note', operator, value: { kind: 'text', value } }] });
+    expect(await app.request('sqlite.tableExport', input)).toEqual({ rows: expected.length, fileCommitted: true });
+    const rows = JSON.parse(readFileSync(input.filePath, 'utf8')); expect(rows.map((row: { id: string }) => row.id)).toEqual(expected);
+    if (expected.some(id => String(id) === '7')) expect(rows.find((row: { id: string }) => row.id === '7').note).toBe('空\0字符');
+    await completed(processes.at(-1)!); expect(await hash(profile.sqlite.filePath!)).toBe(before);
+  });
   it.each(['in', 'notIn'] as const)('%s列表沿实际单一流输出，独立文件核行和精度，源文件保持', async operator => {
     const profile = fixture(), { app } = runtime(profile), source = await page(app, profile), before = await hash(profile.sqlite.filePath!);
     const input = request(profile, source, { filters: [{ column: 'id', operator, values: [{ kind: 'integer', value: '2' }, { kind: 'integer', value: '7' }] }] });

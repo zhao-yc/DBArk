@@ -1,4 +1,4 @@
-import { sqliteTableBrowseLimits as limits, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePageInput } from './sqliteTableBrowse';
+import { sqliteTableBrowseLimits as limits, sqliteTablePageSchema, isSqliteTextFilter, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePageInput } from './sqliteTableBrowse';
 
 export type SqliteReadParameter = { kind: 'storage-type'; value: 'text' | 'integer' | 'real' | 'blob' } | { kind: 'operand'; value: NonNullable<SqliteTableFilter['value']> } | { kind: 'count'; value: number };
 export const sqliteReadSqlLimits = { utf8Bytes: 4 * 1024 * 1024, utf16Bytes: 2 * 1024 * 1024, limit: 1000000 } as const;
@@ -27,7 +27,17 @@ function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn
     const value = filter.value!, type = render({ kind: 'storage-type', value: value.kind === 'blob' ? 'blob' : value.kind }), operand = render({ kind: 'operand', value });
     // 原生BETWEEN包含两端，不重排边界；NOT BETWEEN仍保留原动态存储类型限制。
     if (filter.operator === 'between' || filter.operator === 'notBetween') return ['(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'between' ? ' BETWEEN ' : ' NOT BETWEEN ') + operand + ' AND ' + render({ kind: 'operand', value: filter.secondValue! }) + ')'];
-    const comparison = filter.operator === 'contains' ? 'instr(' + column + ', ' + operand + ') > 0' : column + ' ' + operators[filter.operator] + ' ' + operand;
+    let comparison: string;
+    if (isSqliteTextFilter(filter.operator)) {
+      if (filter.operator === 'endsWith' || filter.operator === 'notEndsWith') {
+        // TEXT length遇NUL即停止；完整字节比较保留后缀。SQLite空BLOB的substr返回NULL，显式恢复空字节。
+        const bytes = 'CAST(' + column + ' AS BLOB)', length = 'length(CAST(' + operand + ' AS BLOB))';
+        comparison = 'coalesce(substr(' + bytes + ', length(' + bytes + ') - ' + length + ' + 1), zeroblob(0)) ' + (filter.operator === 'endsWith' ? '=' : '<>') + ' CAST(' + render({ kind: 'operand', value }) + ' AS BLOB)';
+      } else {
+        const match = 'instr(' + column + ', ' + operand + ')';
+        comparison = match + ({ contains: ' > 0', notContains: ' = 0', startsWith: ' = 1', notStartsWith: ' <> 1' } as const)[filter.operator];
+      }
+    } else comparison = column + ' ' + operators[filter.operator] + ' ' + operand;
     return ['(typeof(' + column + ') = ' + type + ' AND ' + comparison + ')'];
   });
   const order = input.sort.map(sort => field(sort.column) + (sort.direction === 'asc' ? ' ASC' : ' DESC'));

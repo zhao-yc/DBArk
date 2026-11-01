@@ -2,6 +2,7 @@ import { act, useState, type ComponentProps } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import type { SqliteFilterDraft } from '../../src/renderer/sqliteTableBrowser';
 import { sqliteTableBrowseZh as text } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { sqliteTextFilterOperators } from '../../src/shared/sqliteTableBrowse';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 const globals=['window','document','navigator','IS_REACT_ACT_ENVIRONMENT'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]as const);
 let document:ReturnType<typeof memoryDocument>,createRoot:typeof import('react-dom/client')['createRoot'],root:ReturnType<typeof createRoot>|undefined,Filters:typeof import('../../src/renderer/components/SqliteTableFilters')['SqliteTableFilters'];
@@ -57,6 +58,12 @@ it('同一帧内函数式编辑合并，不因启停或第二字段事件覆盖�
   const f = await mount(), toggle = props(control(text.filterEnabled(1))).onChange, value = props(control(text.filterValue(1))).onChange;
   await act(async () => { toggle({ target: { checked: false } }); value({ target: { value: '9007199254740993' } }); });
   expect(f.values()[0]).toMatchObject({ enabled: false, value: '9007199254740993' });
+});
+it.each(sqliteTextFilterOperators)('%s切换强制文本且保留原值和停用状态，禁用其它类型，不发送IPC', async operator => {
+  const f = await mount(); await change(text.filterEnabled(1), false); await change(text.filterOperator(1), operator);
+  expect(f.values()[0]).toMatchObject({ operator, kind: 'text', value: '9223372036854775807', enabled: false });
+  expect(control(text.filterKind(1)).querySelectorAll('option').filter(node => node.disabled).map(node => node.value)).toEqual(['integer', 'real', 'blob']);
+  expect(document.body.textContent).toContain(text.textMatchHint); expect(request).not.toHaveBeenCalled();
 });
 it.each(['disabled', 'inactive', 'throws', 'unmount', 'old-render'] as const)('%s使旧事件拒绝，不能污染后继草稿或调用IPC', async mode => {
   const f = await mount(), toggle = props(control(text.filterEnabled(1))).onChange, add = props(button(text.addFilter)).onClick, all = props(button(text.disableFilters)).onClick;

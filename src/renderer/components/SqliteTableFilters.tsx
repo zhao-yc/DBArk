@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
-import { sqliteTableBrowseLimits } from '../../shared/sqliteTableBrowse';
+import { sqliteTableBrowseLimits, isSqliteTextFilter } from '../../shared/sqliteTableBrowse';
 import type { SqliteFilterDraft } from '../sqliteTableBrowser';
 import { sqliteTableBrowseZh as text } from '../locales/sqliteTableBrowse.zh-CN';
 
@@ -51,13 +51,14 @@ export function SqliteTableFilters(props: Props) {
     <button disabled={!enabled} onClick={() => toggleAll(false)}>{text.disableFilters}</button>
     <span className="muted small" role="status">{text.enabledFilters(enabled, filters.length)}</span>
     <p className="muted small">{text.filterEnabledHint}</p>
+    {filters.some(filter => isSqliteTextFilter(filter.operator)) && <p className="muted small">{text.textMatchHint}</p>}
     {!!filters.length && !enabled && <p className="muted small">{text.noEnabledFilters}</p>}
     {filters.map((filter, index) => <div className="sqlite-browse-rule" key={filter.id}>
       <label><input type="checkbox" aria-label={text.filterEnabled(index + 1)} checked={filter.enabled !== false} onChange={event => update(filter.id, { enabled: event.target.checked })}/>{filter.enabled === false ? text.filterDisabledState : text.filterEnabledState}</label>
       <select aria-label={text.filterColumn(index + 1)} value={filter.column} onChange={event => update(filter.id, { column: event.target.value })}>{names.map(name => <option key={name} value={name}>{name}</option>)}</select>
-      <select aria-label={text.filterOperator(index + 1)} value={filter.operator} onChange={event => { const operator = event.target.value as SqliteFilterDraft['operator']; update(filter.id, { operator, ...(['in', 'notIn'].includes(operator) && !filter.values ? { values: [filter.value] } : {}), ...(operator === 'contains' ? { kind: 'text' as const } : {}) }); }}>{Object.entries(text.operators).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
+      <select aria-label={text.filterOperator(index + 1)} value={filter.operator} onChange={event => { const operator = event.target.value as SqliteFilterDraft['operator']; update(filter.id, { operator, ...(['in', 'notIn'].includes(operator) && !filter.values ? { values: [filter.value] } : {}), ...(isSqliteTextFilter(operator) ? { kind: 'text' as const } : {}) }); }}>{Object.entries(text.operators).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
       {!['isNull', 'notNull'].includes(filter.operator) && <>
-        <select aria-label={text.filterKind(index + 1)} value={filter.kind} onChange={event => update(filter.id, { kind: event.target.value as SqliteFilterDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind} disabled={filter.operator === 'contains' && kind !== 'text' || kind === 'blob' && !['eq', 'ne', 'in', 'notIn'].includes(filter.operator)}>{label}</option>)}</select>
+        <select aria-label={text.filterKind(index + 1)} value={filter.kind} onChange={event => update(filter.id, { kind: event.target.value as SqliteFilterDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind} disabled={isSqliteTextFilter(filter.operator) && kind !== 'text' || kind === 'blob' && !['eq', 'ne', 'in', 'notIn'].includes(filter.operator)}>{label}</option>)}</select>
         {['in', 'notIn'].includes(filter.operator) ? <div className="sqlite-browse-list"><p className="muted small">{text.listHint}</p>{(filter.values ?? [filter.value]).map((value, position, values) => <div className="sqlite-browse-list-value" key={position}>
           <span>{position + 1}</span><input aria-label={position === 0 ? text.filterValue(index + 1) : text.listValue(index + 1, position + 1)} value={value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => { const next = event.target.value; updateList(filter.id, values => values.map((before, at) => at === position ? next : before)); }}/>
           <button aria-label={text.removeListValue(index + 1, position + 1)} disabled={values.length <= 1} onClick={() => updateList(filter.id, values => values.filter((_, at) => at !== position))}>×</button>
