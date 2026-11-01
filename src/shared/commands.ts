@@ -4,6 +4,7 @@ export { isUiCommandInvocation } from './uiCommandIds';
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
   'sqlite.completion': true,
+  'sqlite.tablePresets.list': true, 'sqlite.tablePresets.save': true, 'sqlite.tablePresets.delete': true, 'sqlite.tablePresets.read': true,
   'sqlite.tablePage': true,
   'sqlite.tableExport': true,
   'sqlite.tableEdit.preview': true,

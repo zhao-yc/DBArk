@@ -247,6 +247,10 @@ export interface CommandMap {
   'query.transactionSettings.read': { input: { sessionId: string; taskId: string }; output: QueryTransactionSettingsSnapshot };
   'query.transactionSettings.apply': { input: { sessionId: string; taskId: string; expected: QueryTransactionSettingsSnapshot; isolation: QueryTransactionIsolation; readOnly: boolean }; output: QueryTransactionSettingsSnapshot };
   'query.autocommit.apply': { input: QueryAutocommitApplyInput; output: QueryAutocommitOutput };
+  'sqlite.tablePresets.list': { input: import('./sqliteTablePresets').SqliteTablePresetTarget; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
+  'sqlite.tablePresets.save': { input: import('./sqliteTablePresets').SqliteTablePresetSave; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
+  'sqlite.tablePresets.delete': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
+  'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetQuery };
   'sqlite.tablePage': { input: import('./sqliteTableBrowse').SqliteTablePageInput; output: import('./sqliteTableBrowse').SqliteTablePage };
   'sqlite.tableExport': { input: import('./sqliteTableExport').SqliteTableExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
   'sqlite.tableEdit.preview': { input: import('./sqliteTableEdit').SqliteTableEditPreviewInput; output: import('./sqliteTableEdit').SqliteTableEditPreview };

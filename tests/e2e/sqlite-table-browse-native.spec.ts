@@ -1,6 +1,7 @@
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
+import { sqliteTablePresetsZh as presetText } from '../../src/renderer/locales/sqliteTablePresets.zh-CN';
 
 // 默认及--list仅注册跳过项；真实桌面、文件和NodeSQLite只在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -90,6 +91,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
       }
       if (command === 'connections.open' && value.id !== state.connectionId || command.startsWith('metadata.') && value.connectionId !== state.connectionId) return deny('其它数据库连接');
       if (command === 'sqlite.tablePage' && (value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite表目标');
+      if (command.startsWith('sqlite.tablePresets.') && (!['list', 'save', 'delete', 'read'].some(kind => command === 'sqlite.tablePresets.' + kind) || value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite本机方案目标');
       const page: PageFact | undefined = command === 'sqlite.tablePage' ? { request: structuredClone(value), reply: undefined } : undefined;
       if (page) state.pages.push(page);
       state.commands.push(command); state.pending++;
@@ -275,6 +277,18 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     // 保存查询草稿后回到真实表标签；重启须恢复表页而非把SELECT草稿自动执行。
     const tableTab = drafted.tabs.find(tab => tab.kind === 'table' && tab.table === tableName); if (!tableTab) throw Error('原表标签已丢失');
     await step(() => page.locator(`[data-workspace-tab-id="${tableTab.id}"]`).getByRole('button', { name: tableName, exact: true }).click()); await step(() => expect(table().getByRole('grid')).toBeVisible());
+    stage = '本机方案保存与只回填表单';
+    const beforePreset = await step(audit); await controls(true); await step(() => table().getByRole('button', { name: presetText.entry, exact: true }).click());
+    const presetPanel = () => table().getByRole('group', { name: presetText.title, exact: true });
+    await step(() => expect(presetPanel().getByRole('button', { name: presetText.save, exact: true })).toBeEnabled());
+    await step(() => expect.poll(() => presetPanel().evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true));
+    const presetLimit = await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).inputValue());
+    await step(() => presetPanel().getByLabel(presetText.name, { exact: true }).fill('原表排序方案'));
+    await step(() => presetPanel().getByRole('button', { name: presetText.save, exact: true }).click()); await step(() => expect(presetPanel().getByText(presetText.saved, { exact: true })).toBeVisible());
+    await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill(presetLimit === '7' ? '8' : '7'));
+    await step(() => presetPanel().getByRole('button', { name: presetText.load, exact: true }).click()); await step(() => expect(table().getByLabel('SQLite 每页条数', { exact: true })).toHaveValue(presetLimit));
+    await step(() => expect(presetPanel().getByText(presetText.loaded, { exact: true })).toBeVisible());
+    const afterPreset = await step(audit); expect(afterPreset.pages.length).toBe(beforePreset.pages.length); expect(afterPreset.forks).toEqual(beforePreset.forks); expect(disk()).toEqual(baseline); await controls(false);
     // UI切换先于原400ms设置落盘；必须等真实Main持久态确认，不能用旧查询activeId作重启基线。
     await step(() => expect.poll(async () => (await settings()).activeTabId).toBe(tableTab.id));
     const persisted = await settings(), firstFacts = await step(audit), firstTasks = await tasks(); expect(persisted.tabs.find(tab => tab.id === persisted.activeTabId)).toMatchObject({ kind: 'table', table: tableName });
@@ -289,6 +303,12 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     // 原IPC回包先于React交付；完成态必须同时核真实网格与Task终态，不能把加载画面当成已展示。
     await step(() => expect(table().getByRole('grid')).toBeVisible());
     await step(() => expect.poll(async () => (await tasks()).every(task => task.kind === 'sqlite.tablePage' && task.status === 'completed')).toBe(true));
+    stage = '重启持久化方案仍只填写表单'; const beforeRestoredPreset = await step(audit); await controls(true);
+    await step(() => table().getByRole('button', { name: presetText.entry, exact: true }).click());
+    await step(() => table().getByLabel(presetText.selection, { exact: true }).selectOption({ label: '原表排序方案' }));
+    await step(() => table().getByRole('button', { name: presetText.load, exact: true }).click()); await step(() => expect(table().getByLabel('SQLite 每页条数', { exact: true })).toHaveValue(presetLimit));
+    await step(() => expect(table().getByText(presetText.loaded, { exact: true })).toBeVisible());
+    expect((await step(audit)).pages.length).toBe(beforeRestoredPreset.pages.length); expect((await step(audit)).forks).toEqual(beforeRestoredPreset.forks); await controls(false);
     const secondFacts = await step(audit); expect(secondFacts.pickerCalls).toBe(0); expect(secondFacts.denied).toEqual([]); expect(secondFacts.commands.some(command => command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('table.') || command.startsWith('schema.'))).toBe(false); expect(runtime.pageErrors).toEqual([]); expect(disk()).toEqual(baseline);
     // 只手动保留成功完成态的本例合成数据；自动截图、trace和视频始终关闭。
     await step(async () => info.attach('SQLite分页表格完成态', { body: await page.screenshot(), contentType: 'image/png' }));

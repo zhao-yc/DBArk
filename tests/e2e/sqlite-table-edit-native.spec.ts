@@ -1,6 +1,7 @@
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
+import { sqliteTablePresetsZh as presetText } from '../../src/renderer/locales/sqliteTablePresets.zh-CN';
 
 // 默认和--list只注册单个跳过项；原生App、NodeSQLite和文件观察均在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -77,14 +78,15 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
       check(); if (event.sender !== window.webContents || event.senderFrame !== frame) return deny('外来文档IPC');
       if (!payload || typeof payload !== 'object' || !('command' in payload) || typeof payload.command !== 'string' || !('input' in payload) || !payload.input || typeof payload.input !== 'object') return deny('非标准IPC'); const command = payload.command, value = payload.input as Record<string, unknown>;
       if (/clipboard/i.test(command) || command === 'files.path' || command.startsWith('table.') || command.startsWith('schema.') || command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('serverMonitor.') || ['files.export', 'files.exportResult', 'excel.export', 'sqlite.tableExport'].includes(command)) return deny(command);
-      if (command.startsWith('sqlite.') && !['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release'].includes(command)) return deny('未知SQLite命令');
+      if (command.startsWith('sqlite.') && !['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release', 'sqlite.tablePresets.list', 'sqlite.tablePresets.save', 'sqlite.tablePresets.delete', 'sqlite.tablePresets.read'].includes(command)) return deny('未知SQLite命令');
       if (command.startsWith('metadata.') && !['metadata.databases', 'metadata.objects'].includes(command)) return deny(command);
       if (command === 'files.choose') { if (pickerRequest || value.purpose !== 'sqlite-database' || typeof value.sqliteConnectionId !== 'string' || !value.sqliteConnectionId) return deny('文件用途/连接归属'); pickerRequest = value.sqliteConnectionId; }
       if (command === 'connections.save' || command === 'connections.test') { const config = value.sqlite, readOnly = value.name === input.rwName ? false : value.name === input.roName ? true : undefined; if (value.dialect !== 'sqlite' || typeof value.id !== 'string' || !state.pickerIds.includes(value.id) || !config || typeof config !== 'object' || !('readOnly' in config) || config.readOnly !== readOnly || readOnly === undefined || ['host', 'port', 'user', 'password', 'ssh', 'tls'].some(key => Object.hasOwn(value, key))) return deny('非本例明确读写/只读配置'); state.profiles[value.id] = readOnly; }
       if (command === 'connections.open' && !Object.hasOwn(state.profiles, String(value.id)) || command.startsWith('metadata.') && !Object.hasOwn(state.profiles, String(value.connectionId))) return deny('其它数据库连接');
       if (command === 'sqlite.tablePage' && (!Object.hasOwn(state.profiles, String(value.connectionId)) || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite目标');
+      if (command.startsWith('sqlite.tablePresets.') && (!Object.hasOwn(state.profiles, String(value.connectionId)) || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite本机方案目标');
       if (command === 'sqlite.tableEdit.preview' && !snapshots.has(String(value.snapshotId)) || command === 'sqlite.tableEdit.apply' && !previews.has(String(value.previewId)) || command === 'sqlite.tableEdit.release' && !(snapshots.has(String(value.snapshotId)) || previews.has(String(value.previewId)))) return deny('其它编辑快照/预览');
-      const fact: Fact | undefined = command === 'sqlite.tablePage' || command.startsWith('sqlite.tableEdit.') ? { command, request: structuredClone(value) } : undefined; if (fact) state.operations.push(fact); state.commands.push(command); state.pending++;
+      const fact: Fact | undefined = command === 'sqlite.tablePage' || command.startsWith('sqlite.tableEdit.') || command.startsWith('sqlite.tablePresets.') ? { command, request: structuredClone(value) } : undefined; if (fact) state.operations.push(fact); state.commands.push(command); state.pending++;
       try { const reply = await original(event, payload); check(); if (fact) fact.reply = structuredClone(reply);
         if (reply && typeof reply === 'object' && 'ok' in reply && reply.ok === true && 'result' in reply && reply.result && typeof reply.result === 'object') { const output = reply.result; if (command === 'sqlite.tablePage' && 'edit' in output && output.edit && typeof output.edit === 'object' && 'kind' in output.edit && output.edit.kind === 'editable' && 'snapshotId' in output.edit && typeof output.edit.snapshotId === 'string') snapshots.add(output.edit.snapshotId); if (command === 'sqlite.tableEdit.preview' && 'previewId' in output && typeof output.previewId === 'string') previews.add(output.previewId); } return reply;
       } catch (reason) { if (fact) fact.failure = reason instanceof Error ? reason.message : String(reason); throw reason; } finally { state.pending--; if (command === 'files.choose') pickerRequest = undefined; }
@@ -214,6 +216,27 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     for (const [column, kind, value] of [['id', 'integer', '6'], ['note', 'text', insertNote], ['mixed', 'real', '2.5'], ['nullable', 'text', ''], ['payload', 'blob', ''], ['exact_int', 'integer', '9223372036854775807'], ['real_num', 'real', '1.25']] as const) await input(added, column, kind, value, true); await save(added);
     await select(3); await confirm(() => table().getByRole('button', { name: '删除 SQLite 当前行', exact: true }).click(), '将当前记录标记为本地待删除？只有预览并明确提交后才会修改数据库。'); await counts(1, 1, 1); expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
     stage = '脏页列头排序取消原确认，准确增改删草稿/行序/排序均保留且零请求';
+    const beforePresets = await step(audit), presetDraftIds = await columnValues('id');
+    // 原流程可能已展开条件；只在关闭时展开，不能用盲目toggle把真实入口藏掉。
+    if (!(await step(() => table().locator('.sqlite-browse-conditions').isVisible()))) await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click());
+    await step(() => table().getByRole('button', { name: presetText.entry, exact: true }).click());
+    const presetPanel = () => table().getByRole('group', { name: presetText.title, exact: true });
+    await step(() => expect(presetPanel().getByRole('button', { name: presetText.save, exact: true })).toBeEnabled());
+    const presetLimit = await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).inputValue());
+    await step(() => presetPanel().getByLabel(presetText.name, { exact: true }).fill('脏页方案')); await step(() => presetPanel().getByRole('button', { name: presetText.save, exact: true }).click()); await step(() => expect(presetPanel().getByText(presetText.saved, { exact: true })).toBeVisible());
+    await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('7')); await step(() => presetPanel().getByRole('button', { name: presetText.load, exact: true }).click()); await step(() => expect(table().getByLabel('SQLite 每页条数', { exact: true })).toHaveValue(presetLimit));
+    await confirm(() => presetPanel().getByRole('button', { name: presetText.replace, exact: true }).click(), presetText.confirmReplace('脏页方案'), 1);
+    await confirm(() => presetPanel().getByRole('button', { name: presetText.replace, exact: true }).click(), presetText.confirmReplace('脏页方案'));
+    await step(() => expect(presetPanel().getByText(presetText.saved, { exact: true })).toBeVisible());
+    await confirm(() => presetPanel().getByRole('button', { name: presetText.remove, exact: true }).click(), presetText.confirmRemove('脏页方案'), 1);
+    await confirm(() => presetPanel().getByRole('button', { name: presetText.remove, exact: true }).click(), presetText.confirmRemove('脏页方案'));
+    await step(() => expect(presetPanel().getByText(presetText.removed, { exact: true })).toBeVisible()); await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click());
+    await counts(1, 1, 1); expect(await columnValues('id')).toEqual(presetDraftIds); const afterPresets = await step(audit);
+    for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterPresets, command)).toHaveLength(operations(beforePresets, command).length);
+    for (const [command, count] of [['sqlite.tablePresets.save', 2], ['sqlite.tablePresets.read', 1], ['sqlite.tablePresets.delete', 1]] as const) {
+      const facts = operations(afterPresets, command); expect(facts).toHaveLength(count); for (const fact of facts) { expect(fact.failure).toBeUndefined(); expect(fact.reply).toMatchObject({ ok: true }); expect(fact.request).toMatchObject({ connectionId: rw.id, database: 'main', table: pkTable }); }
+    }
+    expect(afterPresets.forks).toEqual(beforePresets.forks); expect(disk()).toEqual(baseline);
     await step(() => (require('./sqlite-grid-navigation') as typeof import('./sqlite-grid-navigation')).revealSqliteEditColumn(page, grid(), 0, check)); const beforeHeaderCancel = await step(audit), draftIds = await columnValues('id'), headerBeforeCancel = grid().getByRole('columnheader').filter({ hasText: /^id(?:[1-9]|\s|$)/ }); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending'));
     await confirm(() => headerBeforeCancel.click(), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1); await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending')); const afterHeaderCancel = await step(audit); for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterHeaderCancel, command)).toHaveLength(operations(beforeHeaderCancel, command).length); expect(disk()).toEqual(baseline);
     stage = 'SQL预览取消零写入且保留草稿'; const canceledPreview = await openPreview({ insert: 1, update: 1, delete: 1 }); expect(canceledPreview.output.target).toEqual({ connectionId: rw.id, database: 'main', table: pkTable }); expect(canceledPreview.output.sql).toEqual(expect.arrayContaining([expect.stringMatching(/UPDATE /), expect.stringMatching(/INSERT INTO /), expect.stringMatching(/DELETE FROM /)]));

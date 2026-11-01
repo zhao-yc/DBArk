@@ -4,6 +4,12 @@
 .sqlite-browse-conditions fieldset { margin: 6px 0; padding: 8px; border: 1px solid var(--line-soft); border-radius: 5px; }
 .sqlite-browse-conditions select, .sqlite-browse-conditions input { min-width: 80px; padding: 5px 7px; }
 .sqlite-browse-conditions input[type=number] { width: 84px; margin: 0 8px; }
+/* 本机方案位于可滚动表单内；窄工作区换行，长名称不撑开侧栏或主页面。 */
+.sqlite-table-presets { min-width: 0; }
+.sqlite-table-presets > strong { display: block; overflow-wrap: anywhere; }
+.sqlite-preset-controls { flex-wrap: wrap; }
+.sqlite-preset-controls > input, .sqlite-preset-controls > select { flex: 1 1 160px; min-width: 0; max-width: 100%; }
+.sqlite-preset-controls > button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .sqlite-browse-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .sqlite-browse-rule select { max-width: 220px; }
 .sqlite-browse-rule input { flex: 1; min-width: 100px; }
