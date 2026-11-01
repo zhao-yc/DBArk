@@ -1,6 +1,6 @@
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
-import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
+import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 import { installNavigationMenuRamPort, navigationMenuRamButton, navigationMenuRamInput } from '../helpers/navigationMenuRamPort';
 import type { QueryResultSnapshotOperation } from '../../src/renderer/components/QueryResultSnapshotActions';
 import { queryResultSnapshotUiZh as text } from '../../src/renderer/locales/queryResultSnapshot.zh-CN';
@@ -69,4 +69,23 @@ it('快照动作移入按需菜单后，菜单关闭仍保留原IO占用及正�
   await click(text.save); expect(save).toHaveBeenCalledOnce(); expect(document.body.querySelector('[role="menu"]')).toBeNull(); expect(owner.invalidate).not.toHaveBeenCalled(); expect(owner.finish).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain(text.working); expect(button(text.cancel)).toBeDefined();
   await act(async () => finish({ name: '仅RAM.json' })); expect(owner.finish).toHaveBeenCalledOnce(); expect(owner.uncertain).not.toHaveBeenCalled(); expect(document.body.textContent).toContain(text.saved);
+});
+
+it('聚焦菜单不触发背景滚动收起，真实外部滚动仍关闭且不执行业务', async () => {
+  const background = document.createElement('div'); document.body.appendChild(background);
+  const originalFocus = MemoryNode.prototype.focus, execute = vi.fn();
+  // 仅模拟浏览器未限制focus时的祖先滚动；不调用菜单关闭回调或替换产品业务处理器。
+  const focus = vi.spyOn(MemoryNode.prototype, 'focus').mockImplementation(function(this: MemoryNode, options?: FocusOptions) {
+    originalFocus.call(this);
+    if (this.getAttribute('role') === 'menuitem' && !options?.preventScroll) queueMicrotask(() => background.dispatchEvent(new MemoryEvent('scroll')));
+  });
+  try {
+    await mount(<ActionMenu label="更多"><ActionMenuSection label="分组"><button onClick={execute}>执行原操作</button></ActionMenuSection></ActionMenu>);
+    await click('更多'); expect(document.body.querySelectorAll('[role="menu"]')).toHaveLength(1);
+    const section = document.body.querySelector('[data-submenu-index="0"]'); expect(section).not.toBeNull();
+    await act(async () => { section!.dispatchEvent(new MemoryEvent('click')); }); expect(document.body.querySelectorAll('[role="menu"]')).toHaveLength(2);
+    await act(async () => { background.dispatchEvent(new MemoryEvent('scroll')); });
+    expect(document.body.querySelector('[role="menu"]')).toBeNull(); expect(execute).not.toHaveBeenCalled();
+    await click('执行原操作'); expect(execute).toHaveBeenCalledOnce();
+  } finally { focus.mockRestore(); }
 });

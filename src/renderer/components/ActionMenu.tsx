@@ -2,6 +2,7 @@ import { Children, Fragment, cloneElement, isValidElement, useEffect, useLayoutE
 import { createPortal } from 'react-dom';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useWorkspace } from '../store';
+import { focusActionMenuControl } from '../actionMenuFocus';
 import '../actionMenu.css';
 
 interface SectionProps { label: string; children: ReactNode; }
@@ -50,7 +51,7 @@ export function ActionMenu({ label, icon, className, disabled, children, isCurre
     ownerRef.current = undefined;
     if (dismissCurrent === dismissRef.current) dismissCurrent = undefined;
     if (alive.current) { setOwner(undefined); setPath([]); setSubAnchor(undefined); }
-    if (focus && current.anchor.isConnected) current.anchor.focus();
+    if (focus && current.anchor.isConnected) focusActionMenuControl(current.anchor);
   }
 
   /** 模态曾出现、目标换代或原锚点消失后，旧操作永久失效。 */
@@ -94,7 +95,7 @@ export function ActionMenu({ label, icon, className, disabled, children, isCurre
     const bounds = owner.anchor.getBoundingClientRect(), node = panel.current, rect = node.getBoundingClientRect();
     node.style.left = Math.max(8, Math.min(bounds.left, window.innerWidth - rect.width - 8)) + 'px';
     node.style.top = Math.max(8, Math.min(bounds.bottom + 4, window.innerHeight - rect.height - 8)) + 'px';
-    if (!path.length) node.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)')?.focus();
+    if (!path.length) focusActionMenuControl(node.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)'), node);
   }, [owner]);
   useLayoutEffect(() => {
     if (!owner || !submenu.current || !subAnchor) return;
@@ -102,7 +103,7 @@ export function ActionMenu({ label, icon, className, disabled, children, isCurre
     const left = bounds.right + rect.width + 8 <= window.innerWidth ? bounds.right + 4 : bounds.left - rect.width - 4;
     node.style.left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8)) + 'px';
     node.style.top = Math.max(8, Math.min(bounds.top, window.innerHeight - rect.height - 8)) + 'px';
-    node.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)')?.focus();
+    focusActionMenuControl(node.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)'), node);
   }, [owner, path, subAnchor]);
 
   /** 方向键仅操作当前层；动作执行前先消费原owner再调用原业务回调。 */
@@ -115,19 +116,19 @@ export function ActionMenu({ label, icon, className, disabled, children, isCurre
       if (event.target instanceof HTMLElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName)) {
         const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)')];
         const position = controls.indexOf(event.target), next = controls[position + (event.shiftKey ? -1 : 1)];
-        if (next) { event.preventDefault(); next.focus(); return; }
+        if (next) { event.preventDefault(); focusActionMenuControl(next, event.currentTarget); return; }
       }
       close(candidate); return;
     }
     // 菜单内数字/文本控件保留原生光标与步进键，不把编辑按键改成菜单导航。
     if (event.target instanceof HTMLElement && (['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName) || event.target.isContentEditable)
       && !(event.target instanceof HTMLInputElement && event.target.type === 'checkbox')) return;
-    if (nested && event.key === 'ArrowLeft') { event.preventDefault(); setPath([]); setSubAnchor(undefined); subAnchor?.focus(); return; }
+    if (nested && event.key === 'ArrowLeft') { event.preventDefault(); setPath([]); setSubAnchor(undefined); focusActionMenuControl(subAnchor, panel.current); return; }
     if (event.key === 'ArrowRight') { const target = event.target; if (target instanceof HTMLButtonElement && target.dataset.submenuIndex) { event.preventDefault(); setPath([Number(target.dataset.submenuIndex)]); setSubAnchor(target); } return; }
     const buttons = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)')], index = buttons.indexOf(document.activeElement as HTMLElement);
     let next: number;
     if (event.key === 'ArrowDown') next = (index + 1) % buttons.length; else if (event.key === 'ArrowUp') next = (index + buttons.length - 1) % buttons.length; else if (event.key === 'Home') next = 0; else if (event.key === 'End') next = buttons.length - 1; else return;
-    if (buttons[next]) { event.preventDefault(); buttons[next].focus(); buttons[next].scrollIntoView({ block: 'nearest' }); }
+    if (buttons[next]) { event.preventDefault(); focusActionMenuControl(buttons[next], event.currentTarget); }
   }
   /** 当前展示项仍须存在且可用，避免菜单打开期间原按钮被禁用后执行旧回调。 */
   function actionAvailable(index: number, nested: boolean): boolean {

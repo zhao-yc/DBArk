@@ -6,7 +6,12 @@ export async function observeNavigationMenu(page: Page): Promise<void> {
     const root = window as typeof window & { __dbarkNavigationMenuEvents?: unknown[] };
     if (root.__dbarkNavigationMenuEvents) return;
     const events: unknown[] = []; root.__dbarkNavigationMenuEvents = events;
-    const describe = (target: EventTarget | null) => target instanceof Element ? { tag: target.tagName, role: target.getAttribute('role'), class: target.getAttribute('class'), label: target.getAttribute('aria-label') } : { window: target === window, document: target === document };
+    const describe = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return { window: target === window, document: target === document };
+      const ancestors: { tag: string; id: string; class: string | null }[] = [];
+      for (let parent = target.parentElement; parent && ancestors.length < 5; parent = parent.parentElement) ancestors.push({ tag: parent.tagName, id: parent.id, class: parent.getAttribute('class') });
+      return { tag: target.tagName, id: target.id, role: target.getAttribute('role'), class: target.getAttribute('class'), label: target.getAttribute('aria-label'), style: target.getAttribute('style')?.slice(0, 512), scrollTop: target.scrollTop, scrollLeft: target.scrollLeft, ancestors };
+    };
     const record = (kind: string, target: EventTarget | null) => {
       if (events.length >= 256) events.shift();
       events.push({ at: performance.now(), kind, target: describe(target), active: describe(document.activeElement), menus: [...document.querySelectorAll('.action-menu-panel')].map(node => ({ label: node.getAttribute('aria-label'), submenu: node.classList.contains('action-menu-submenu') })), triggers: [...document.querySelectorAll('.action-menu-trigger[aria-expanded="true"]')].map(node => node.getAttribute('aria-label')) });

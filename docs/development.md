@@ -1,5 +1,7 @@
 # 开发与测试
 
+分组菜单新增[聚焦与背景滚动修正](development/action-menu-focus-20261102.md)：程序聚焦不滚动工作区，键盘只滚动本层菜单；来源、权限及外部关闭保护保持。Windows 源码原导航、表页和索引验证通过，三平台专项继续，暂不发布。
+
 SQLite 原字节读取已[接入实际 worker](development/sqlite-native-runtime-20261102.md)：查询结果保留原存储类型，坏 TEXT 明确失败；固定资源构建、摘要校验和私有调用隔离已接线。Windows 源码工作区及相关测试通过，Mac 与打包范围另行验收，暂不发布。此前[语句适配器](development/sqlite-raw-statement-20261102.md)与[有界批次](development/sqlite-raw-frames-20261102.md)记录保留为接入前的独立证据。
 
 SQLite 表／视图新增[只读表页原TEXT字节保护](development/sqlite-page-text-20261102.md)：坏编码拒绝整页，有效NUL／BOM／真实替代字符保留；原分页、排序及其它存储类型保持；任意 SQL 结果现已接入原字节 worker，见上方接入记录，暂不发布。

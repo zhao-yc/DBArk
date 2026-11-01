@@ -1,0 +1,88 @@
+name: 分组菜单焦点原生验收
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/action-menu-focus.yml'
+      - 'src/renderer/components/ActionMenu.tsx'
+      - 'src/renderer/actionMenuFocus.ts'
+      - 'src/renderer/actionMenu.css'
+      - 'tests/unit/action-menu-*.test.*'
+      - 'tests/e2e/navigation-menu*.ts'
+      - 'tests/e2e/navigation-workbench.spec.ts'
+      - 'tests/e2e/sqlite-table-browse-native.spec.ts'
+      - 'tests/e2e/sqlite-indexes-native.spec.ts'
+  pull_request:
+    paths:
+      - '.github/workflows/action-menu-focus.yml'
+      - 'src/renderer/components/ActionMenu.tsx'
+      - 'src/renderer/actionMenuFocus.ts'
+      - 'src/renderer/actionMenu.css'
+      - 'tests/unit/action-menu-*.test.*'
+      - 'tests/e2e/navigation-menu*.ts'
+      - 'tests/e2e/navigation-workbench.spec.ts'
+      - 'tests/e2e/sqlite-table-browse-native.spec.ts'
+      - 'tests/e2e/sqlite-indexes-native.spec.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  menu-focus:
+    name: 菜单原生 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖与Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 单次验证程序焦点、滚动边界与旧菜单失效
+        run: pnpm exec vitest run tests/unit/action-menu-state.test.tsx tests/unit/action-menu-focus.test.ts --maxWorkers=1
+      - name: 构建准确源码
+        run: pnpm build
+      # 三份原spec原样执行，不改期限、断言、fixture或失败现场保留规则。
+      - name: 单次验证原表页菜单与完整分页筛选排序
+        run: node scripts/sqlite-workspace-ci.mjs table
+      - name: 单次验证原索引两例
+        run: node scripts/sqlite-workspace-ci.mjs indexes
+      - name: 单次验证原导航五例与键盘操作
+        run: pnpm exec playwright test tests/e2e/navigation-workbench.spec.ts --workers=1 --retries=0 --trace=off --reporter=list,json --output=test-results/action-menu-focus-navigation
+        env:
+          DBARK_NAVIGATION_WORKBENCH_TEST: '1'
+          DBARK_INTEGRATION_ENABLED: '0'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/action-menu-focus-navigation/report.json
+      - name: 记录准确提交
+        if: always()
+        run: |
+          node -e "require('node:fs').mkdirSync('.cache',{recursive:true})"
+          git rev-parse HEAD > .cache/action-menu-focus-head.txt
+      - name: 保留原始终态与事件回执
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: action-menu-focus-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/sqlite-table-browse/
+            test-results/sqlite-indexes/
+            test-results/action-menu-focus-navigation/
+            .cache/action-menu-focus-head.txt
+          include-hidden-files: true
+          if-no-files-found: warn
