@@ -158,6 +158,18 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     for (const profile of profiles) { for (const field of ['host', 'port', 'user', 'password', 'rememberPassword', 'hasPassword', 'ssh', 'tls']) expect(profile).not.toHaveProperty(field); if (profile.dialect !== 'sqlite') throw Error('SQLite连接不应转为网络'); expect(profile.sqlite.fileToken).toBeUndefined(); }
     stage = '可靠PK原页typed值与本地增改删零写入'; await openObject(rwName, pkTable); await step(() => expect(grid()).toBeVisible()); await sortPage(['id']); await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']));
     const pkPage = operations(await step(audit), 'sqlite.tablePage').at(-1); expect(pkPage?.request).toMatchObject({ connectionId: rw.id, table: pkTable, editing: true }); expect(result(pkPage?.reply)).toMatchObject({ edit: { kind: 'editable', locator: { kind: 'rowid' } } });
+    // 区域起点会更新网格代次；真实F2和双击仍须打开原单元格窗口，取消保持零预览、零写入。
+    const notePosition = await step(() => grid().getByRole('columnheader', { name: 'note', exact: true }).getAttribute('aria-colindex'));
+    if (!notePosition || !/^[1-9][0-9]*$/.test(notePosition)) throw Error('原单元格回归缺少准确列位置');
+    const noteCell = grid().locator(`[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="${notePosition}"]`);
+    for (const mode of ['F2', '双击'] as const) {
+      if (mode === 'F2') { await step(() => noteCell.click()); await step(() => noteCell.press('F2')); }
+      else await step(() => noteCell.dblclick());
+      const cell = page.getByRole('dialog', { name: '编辑 SQLite 单元格', exact: true });
+      await step(() => expect(cell).toBeVisible()); await step(() => expect(cell.getByLabel('SQLite 字段 note 值', { exact: true })).toHaveValue(oldNote + '1'));
+      await step(() => cell.getByRole('button', { name: '取消 SQLite 字段编辑', exact: true }).click()); await step(() => expect(cell).toBeHidden());
+      expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]); expect(disk()).toEqual(baseline);
+    }
     const edit = await openRow(1); for (const [column, kind, value] of [['note', 'text', oldNote + '1'], ['mixed', 'integer', '2'], ['exact_int', 'integer', '9223372036854775807'], ['payload', 'blob', '00ff'], ['real_num', 'real', '1.25']] as const) { await step(() => expect(edit.getByLabel('SQLite 字段 ' + column + ' 类型', { exact: true })).toHaveValue(kind)); await step(() => expect(edit.getByLabel('SQLite 字段 ' + column + ' 值', { exact: true })).toHaveValue(value)); }
     await input(edit, 'note', 'text', newNote); await input(edit, 'mixed', 'text', '2'); await input(edit, 'nullable', 'null'); await input(edit, 'payload', 'blob', '00aaff'); await input(edit, 'exact_int', 'integer', '-9223372036854775808'); await input(edit, 'real_num', 'real', '-2.75'); await save(edit);
     await step(() => table().getByRole('button', { name: '新增 SQLite 记录', exact: true }).click()); const added = page.getByRole('dialog', { name: '新增 SQLite 记录', exact: true }); await step(() => expect(added).toBeVisible()); await step(() => expect(added.getByRole('checkbox', { name: '写入 SQLite 字段 defaulted', exact: true })).not.toBeChecked());

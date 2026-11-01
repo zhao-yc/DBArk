@@ -135,6 +135,9 @@ jobs:
       - name: 单次运行SQLite复制与粘贴新增草稿专项
         if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs clipboard
+      - name: 单次运行SQLite当前单元格区域粘贴专项
+        if: matrix.suite == 'management'
+        run: node scripts/sqlite-workspace-ci.mjs range-paste
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -160,4 +163,5 @@ jobs:
             test-results/sqlite-objects/
             test-results/sqlite-table-rebuild/
             test-results/sqlite-table-clipboard/
+            test-results/sqlite-table-range-paste/
           if-no-files-found: warn
