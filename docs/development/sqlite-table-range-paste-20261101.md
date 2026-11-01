@@ -38,3 +38,9 @@ WIN11-TEST 本轮读取不可达，未派发任务；按既有授权在本机Win
 ## 上轮CI与本轮分组
 
 上一准确提交 `dbf3641f8627fdafa6d3b85b60997a55158da9dd` 的 [SQLite CI](https://github.com/zhao-yc/DBArk/actions/runs/41285427011) 已有三平台六组 API success；仅核步骤API，未独审附件，不作本区域增量的Mac通过证据。当前新增区域专项后为20项、workspace／management各10项，原20分钟job、120秒用例、单worker、零重试、唯一分组产物及原始记录上传均保持。Intel旧轮超时和本轮范围分别保留，不追认跳过。
+
+## 后续CI与窄窗口复验
+
+准确 `8a10cbbf` 的 [SQLite CI](https://github.com/zhao-yc/DBArk/actions/runs/41288605361) 六组最终四成功、两失败；Windows／Mac arm64 management失败原件已下载独审，均在5秒内找不到视区外 `nullable` 列头，原Main回包仍含准确六列。Intel Mac management仅核API成功，不冒称原件独审。
+
+后继源码增加真实横向滚轮导航，不关闭虚拟化、不改DOM或业务断言，并在本机1024px最小窗口单次通过原完整区域用例。原失败和原资源现场不追认成功，Mac复验继续；详情及新列重排的独立验证见[实际列顺序调整](sqlite-table-reorder-20261101.md)。

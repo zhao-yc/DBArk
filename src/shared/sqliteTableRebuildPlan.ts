@@ -1,3 +1,4 @@
+import { copySqliteTableRebuildColumnOrder } from './sqliteTableRebuild';
 import { buildSqliteTableCreateDefault, sqliteTableCreateColumnSchema, type SqliteTableCreateDefault } from './sqliteTableCreate';
 
 /** 重建编译只修改声明跨度；不推断数据转换、不签发执行能力，也不重新序列化既有约束。 */
@@ -6,7 +7,7 @@ export interface SqliteRebuildSourceColumn { name: string; hidden: number; }
 export interface SqliteRebuildColumnChange { column: string; declaredType?: string; default?: SqliteTableCreateDefault; }
 export interface SqliteTableRebuildDefinitionInput {
   table: string; tableSql: string; columns: readonly SqliteRebuildSourceColumn[];
-  candidateName: string; changes: readonly SqliteRebuildColumnChange[];
+  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[];
 }
 export interface SqliteTableRebuildDefinition {
   candidateSql: string;
@@ -14,6 +15,7 @@ export interface SqliteTableRebuildDefinition {
 }
 interface Token { kind: 'word' | 'quoted' | 'string' | 'number' | 'symbol'; value: string; start: number; end: number; }
 interface Span { start: number; end: number; }
+interface DefinitionSegment extends Span { column?: string; }
 interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; }
 const limits = sqliteTableRebuildPlanLimits, encoder = new TextEncoder();
 const fold = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
@@ -139,19 +141,19 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
 }
 
 /** 校验CREATE归属与原生列顺序；仅接受普通main表，不接收CTAS、虚拟表和多语句。 */
-function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; bodyStart: number; columns: ColumnDefinition[] } {
+function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; bodyStart: number; columns: ColumnDefinition[]; segments: DefinitionSegment[] } {
   const parts = tokenize(input.tableSql); let index = 0;
   if (!word(parts[index++], 'CREATE') || !word(parts[index++], 'TABLE')) throw invalid();
   let tableToken = parts[index++];
   if (symbol(parts[index], '.')) { if (fold(identifier(tableToken) ?? '') !== 'main') throw invalid(); index++; tableToken = parts[index++]; }
   if (fold(identifier(tableToken) ?? '') !== fold(input.table)) throw invalid();
-  const open = index, end = groupEnd(parts, index), columns: ColumnDefinition[] = []; let begin = open + 1;
+  const open = index, end = groupEnd(parts, index), columns: ColumnDefinition[] = [], segments: DefinitionSegment[] = []; let begin = open + 1, rawStart = parts[open].end;
   for (index = begin; index < end - 1; index++) {
     if (symbol(parts[index], '(')) { index = groupEnd(parts, index) - 1; continue; }
     if (!symbol(parts[index], ',')) continue;
-    consume(parts.slice(begin, index)); begin = index + 1;
+    consume(parts.slice(begin, index), rawStart, parts[index].start); begin = index + 1; rawStart = parts[index].end;
   }
-  consume(parts.slice(begin, end - 1)); index = end;
+  consume(parts.slice(begin, end - 1), rawStart, parts[end - 1].start); index = end;
   while (index < parts.length && !symbol(parts[index], ';')) {
     // native接受重复表选项；原样保留，而不是为了输出美观重新序列化或去重。
     if (word(parts[index], 'STRICT')) index++;
@@ -163,19 +165,26 @@ function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; bo
   if (index !== parts.length || columns.length !== input.columns.length || !columns.length) throw invalid();
   for (let ordinal = 0; ordinal < columns.length; ordinal++) if (columns[ordinal].name !== input.columns[ordinal].name || columns[ordinal].hidden !== input.columns[ordinal].hidden) throw invalid();
   // native DROP首列会移除其name至下一列name前的全部文字；原leading trivia须置于私有列之前。
-  return { table: { start: tableToken.start, end: tableToken.end }, bodyStart: parts[open + 1].start, columns };
+  return { table: { start: tableToken.start, end: tableToken.end }, bodyStart: parts[open + 1].start, columns, segments };
 
   /** 表级约束原样保留；它们不能被当成与原生列目录同名的可编辑字段。 */
-  function consume(segment: Token[]): void {
+  function consume(segment: Token[], start: number, end: number): void {
     if (!segment.length) throw invalid();
-    if (['CONSTRAINT', 'PRIMARY', 'UNIQUE', 'CHECK', 'FOREIGN'].some(value => word(segment[0], value))) return;
-    columns.push(columnDefinition(segment)); if (columns.length > limits.columns) throw invalid();
+    if (['CONSTRAINT', 'PRIMARY', 'UNIQUE', 'CHECK', 'FOREIGN'].some(value => word(segment[0], value))) { segments.push({ start, end }); return; }
+    const column = columnDefinition(segment); segments.push({ start, end, column: column.name }); columns.push(column); if (columns.length > limits.columns) throw invalid();
   }
 }
 
 /** 输出仅是候选CREATE。调用方仍须native验证结构、完整复制核对、外键及真实事务ACK才能提交。 */
 export function compileSqliteTableRebuildDefinition(input: SqliteTableRebuildDefinitionInput): SqliteTableRebuildDefinition {
   return compileDefinition(input);
+}
+
+/** 后验仅归一准确CREATE表头名称，完整正文/注释/约束均原样比较；不借无意义字段补丁绕非空门。 */
+export function normalizeSqliteTableRebuildDefinitionName(input: Pick<SqliteTableRebuildDefinitionInput, 'table' | 'tableSql' | 'columns'>, candidateName: string): string {
+  if (!input.table || !validText(input.table) || /^sqlite_/i.test(input.table) || candidateName.length !== 48 || !/^__dbark_rebuild_[a-f0-9]{32}$/.test(candidateName) || !input.columns.length || input.columns.length > limits.columns || new Set(input.columns.map(column => fold(column.name))).size !== input.columns.length || input.columns.some(column => !column.name || !validText(column.name) || ![0, 2, 3].includes(column.hidden))) throw invalid();
+  const source = definition({ ...input, candidateName, changes: [] });
+  const sql = input.tableSql.slice(0, source.table.start) + quote(candidateName) + input.tableSql.slice(source.table.end); if (encoder.encode(sql).length > limits.sqlBytes) throw invalid(); return sql;
 }
 
 export interface SqliteTableRebuildCopyDefinition extends SqliteTableRebuildDefinition { ordinalColumn: string; ordinalIndex: string; createOrdinalIndexSql: string; removeOrdinalSql: string[]; }
@@ -190,9 +199,25 @@ export function compileSqliteTableRebuildCopyDefinition(input: SqliteTableRebuil
 }
 
 /** 普通候选与带私有编号候选共享同一跨度编译，不复制或重新实现默认值/约束解析。 */
-function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn?: string): SqliteTableRebuildDefinition {
-  if (!input.table || !validText(input.table) || /^sqlite_/i.test(input.table) || input.candidateName.length !== 48 || !/^__dbark_rebuild_[a-f0-9]{32}$/.test(input.candidateName) || fold(input.table) === input.candidateName || !input.columns.length || input.columns.length > limits.columns || !input.changes.length || input.changes.length > limits.changes) throw invalid();
+function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn?: string, reorderedBase = false): SqliteTableRebuildDefinition {
+  const orderDescriptor = Object.getOwnPropertyDescriptor(input, 'columnOrder'); if (orderDescriptor && (!orderDescriptor.enumerable || !('value' in orderDescriptor))) throw invalid();
+  const rawOrder = orderDescriptor?.value;
+
+  if (!input.table || !validText(input.table) || /^sqlite_/i.test(input.table) || input.candidateName.length !== 48 || !/^__dbark_rebuild_[a-f0-9]{32}$/.test(input.candidateName) || fold(input.table) === input.candidateName || !input.columns.length || input.columns.length > limits.columns || !input.changes.length && !reorderedBase && rawOrder === undefined || input.changes.length > limits.changes) throw invalid();
   if (new Set(input.columns.map(column => fold(column.name))).size !== input.columns.length || input.columns.some(column => !column.name || !validText(column.name) || ![0, 2, 3].includes(column.hidden))) throw invalid();
+  if (rawOrder !== undefined) {
+    const order = copySqliteTableRebuildColumnOrder(rawOrder, input.columns.map(column => column.name));
+    // 先在原顺序应用类型/default跨度，再移动完整声明切片；两类编辑不会重叠或覆盖别列。
+    const base = compileDefinition({ ...input, columnOrder: undefined }, undefined, true), parsed = definition({ ...input, table: input.candidateName, tableSql: base.candidateSql, columnOrder: undefined });
+    const slices = new Map(parsed.segments.filter(segment => segment.column !== undefined).map(segment => [segment.column!, base.candidateSql.slice(segment.start, segment.end)]));
+    const chunks: string[] = []; let position = 0, next = 0;
+    for (const segment of parsed.segments) { chunks.push(base.candidateSql.slice(position, segment.start), segment.column === undefined ? base.candidateSql.slice(segment.start, segment.end) : slices.get(order[next++])!); position = segment.end; }
+    chunks.push(base.candidateSql.slice(position)); let candidateSql = chunks.join('');
+    const exactColumns = new Map(input.columns.map(column => [column.name, column])), targetColumns = order.map(name => exactColumns.get(name)!);
+    if (ordinalColumn) { const target = definition({ ...input, table: input.candidateName, tableSql: candidateSql, columns: targetColumns, columnOrder: undefined }); candidateSql = candidateSql.slice(0, target.bodyStart) + quote(ordinalColumn) + ' INTEGER NOT NULL, ' + candidateSql.slice(target.bodyStart); }
+    if (encoder.encode(candidateSql).length > limits.sqlBytes) throw invalid();
+    return { candidateSql, columnMapping: targetColumns.map(column => ({ name: column.name, copy: column.hidden === 0 })) };
+  }
   const source = definition(input), columns = new Map(source.columns.map((column, index) => [fold(column.name), { definition: column, hidden: input.columns[index].hidden }]));
   const edits: (Span & { sql: string; order?: number })[] = [{ ...source.table, sql: quote(input.candidateName) }], changed = new Set<string>();
   let addedBytes = encoder.encode(edits[0].sql).length;

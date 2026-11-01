@@ -5,6 +5,8 @@ import { sqliteDriverLimits, type SqliteValue } from './protocol';
 export const sqliteRebuildComparisonLimits = { columns: 1024, groupColumns: 256, batchRows: 256, nameCharacters: 512, inputBytes: 2 * 1024 * 1024, indexes: 4096 } as const;
 export interface SqliteRebuildComparisonInput {
   source: string; candidate: string; sourceOrder: string[]; candidateOrdinal: string; columns: string[];
+  /** 仅实际列重排计划提供准确候选全列序；值投影始终按源columns逐列名核对。 */
+  candidateOrder?: string[];
   rowid?: { source: string; candidate: string };
   /** 双验证表的中间源可额外包含真实连续ordinal；不把类型变更后的PK顺序当旧行顺序。 */
   sourceOrdinal?: string;
@@ -59,7 +61,7 @@ function own(input: unknown, required: readonly string[], optional: readonly str
 }
 /** 独立复制原调用的数组和rowid能力，不能在发送或await后继承调用者改动。 */
 export function copySqliteRebuildComparisonInput(raw: unknown): SqliteRebuildComparisonInput {
-  const value = own(raw, ['source', 'candidate', 'sourceOrder', 'candidateOrdinal', 'columns'], ['rowid', 'losslessColumns', 'sourceOrdinal']); let bytes = 200;
+  const value = own(raw, ['source', 'candidate', 'sourceOrder', 'candidateOrdinal', 'columns'], ['rowid', 'losslessColumns', 'sourceOrdinal', 'candidateOrder']); let bytes = 200;
   const name = (input: unknown): string => { if (!validName(input) || (bytes += encoder.encode(input).length + 4) > limits.inputBytes) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID'); return input; };
   const list = (input: unknown, allowEmpty = false): string[] => {
     if (!Array.isArray(input) || Object.getPrototypeOf(input) !== Array.prototype || !allowEmpty && !input.length || input.length > limits.columns || Reflect.ownKeys(input).length !== input.length + 1) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
@@ -73,8 +75,10 @@ export function copySqliteRebuildComparisonInput(raw: unknown): SqliteRebuildCom
   if (sourceOrdinal !== undefined && columns.some(column => fold(column) === fold(sourceOrdinal))) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
   const losslessColumns = value.losslessColumns === undefined ? undefined : list(value.losslessColumns, true);
   if (losslessColumns?.some(column => !columns.includes(column))) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
+  const candidateOrder = value.candidateOrder === undefined ? undefined : list(value.candidateOrder);
+  if (candidateOrder && (candidateOrder.length !== columns.length || candidateOrder.some(column => !columns.includes(column)))) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
   let rowid: SqliteRebuildComparisonInput['rowid']; if (value.rowid !== undefined) { const pair = own(value.rowid, ['source', 'candidate']); rowid = { source: name(pair.source), candidate: name(pair.candidate) }; }
-  return { source, candidate, sourceOrder, candidateOrdinal, columns, ...(rowid ? { rowid } : {}), ...(sourceOrdinal === undefined ? {} : { sourceOrdinal }), ...(losslessColumns === undefined ? {} : { losslessColumns }) };
+  return { source, candidate, sourceOrder, candidateOrdinal, columns, ...(rowid ? { rowid } : {}), ...(sourceOrdinal === undefined ? {} : { sourceOrdinal }), ...(losslessColumns === undefined ? {} : { losslessColumns }), ...(candidateOrder === undefined ? {} : { candidateOrder }) };
 }
 /** 只有相等的完整计数才可成为成功结果；私有比较不能夹带行值或SQL。 */
 export function copySqliteRebuildComparisonResult(raw: unknown): SqliteRebuildComparisonResult {
@@ -209,7 +213,8 @@ export async function compareSqliteRebuildTables(db: DatabaseSync, raw: SqliteRe
   const input = copySqliteRebuildComparisonInput(raw); control.check(); if (!db.isTransaction) return fail('SQLITE_REBUILD_COMPARISON_TRANSACTION_REQUIRED');
   const sourceWithout = withoutRowid(db, input.source, control), candidateWithout = withoutRowid(db, input.candidate, control), sourceColumns = columns(db, input.source, control), candidateColumns = columns(db, input.candidate, control);
   if (sourceWithout !== candidateWithout) return fail('SQLITE_REBUILD_COMPARISON_ROWID_INVALID');
-  if (sourceColumns.length !== input.columns.length + (input.sourceOrdinal ? 1 : 0) || sourceColumns.filter(column => column.name !== input.sourceOrdinal).some((column, index) => column.name !== input.columns[index]) || candidateColumns.length !== input.columns.length + 1 || candidateColumns.filter(column => column.name !== input.candidateOrdinal).some((column, index) => column.name !== input.columns[index])) return fail('SQLITE_REBUILD_COMPARISON_COLUMNS_INVALID');
+  const candidateOrder = input.candidateOrder ?? input.columns;
+  if (sourceColumns.length !== input.columns.length + (input.sourceOrdinal ? 1 : 0) || sourceColumns.filter(column => column.name !== input.sourceOrdinal).some((column, index) => column.name !== input.columns[index]) || candidateColumns.length !== input.columns.length + 1 || candidateColumns.filter(column => column.name !== input.candidateOrdinal).some((column, index) => column.name !== candidateOrder[index])) return fail('SQLITE_REBUILD_COMPARISON_COLUMNS_INVALID');
   const sourceIndexes = indexes(db, input.source, control), candidateIndexes = indexes(db, input.candidate, control);
   /** 源与候选ordinal均由真实NOT NULL INTEGER和准确完整单列唯一索引授权。 */
   const assertOrdinal = (name: string, fields: Column[], allIndexes: Index[]) => {

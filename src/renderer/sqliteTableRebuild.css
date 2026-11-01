@@ -4,3 +4,12 @@
 .sqlite-table-rebuild .sqlite-rebuild-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
 .sqlite-table-rebuild .sqlite-rebuild-acks { display: grid; gap: 8px; margin: 12px 0; }
 @media (max-width: 700px) { .sqlite-table-rebuild .sqlite-rebuild-fields { grid-template-columns: 1fr; } }
+
+/* 实际列顺序始终单行紧凑显示，完整名称保留在title中。 */
+.sqlite-table-rebuild .sqlite-rebuild-order ol { list-style: none; padding: 0; max-height: 248px; overflow: auto; }
+.sqlite-table-rebuild .sqlite-rebuild-order li { display: flex; align-items: center; gap: 8px; min-height: 31px; }
+.sqlite-table-rebuild .sqlite-rebuild-order-position { width: 3ch; flex: none; color: var(--muted); }
+.sqlite-table-rebuild .sqlite-rebuild-order-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sqlite-table-rebuild .sqlite-rebuild-order button { flex: none; }
+.sqlite-table-rebuild .sqlite-rebuild-order li > span { white-space: nowrap; }
+.sqlite-table-rebuild .sqlite-rebuild-order li button { min-height: 25px; height: 25px; padding: 2px 7px; white-space: nowrap; }

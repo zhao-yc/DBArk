@@ -40,14 +40,24 @@ function withinBudget(input: unknown): boolean {
 }
 const budget = z.unknown().superRefine((value, context) => { if (!withinBudget(value)) context.addIssue({ code: 'custom', message: 'SQLite表重建合同无效或超过2MiB UTF8预算' }); });
 /** 仅允许类型/默认值补丁；空类型明确表示去掉声明，不能夹带任意SQL。 */
-export const sqliteTableRebuildChangesSchema = budget.pipe(z.array(z.object({
+const edits = z.array(z.object({
   column: name,
   declaredType: z.union([z.literal(''), sqliteTableCreateColumnSchema.shape.declaredType]).optional(),
   default: sqliteTableCreateDefaultSchema.optional(),
-}).strict().refine(change => change.declaredType !== undefined || change.default !== undefined, 'SQLite重建补丁缺少类型或默认值')).min(1).max(sqliteTableRebuildLimits.changes).superRefine((changes, context) => {
+}).strict().refine(change => change.declaredType !== undefined || change.default !== undefined, 'SQLite重建补丁缺少类型或默认值')).max(sqliteTableRebuildLimits.changes).superRefine((changes, context) => {
   if (new Set(changes.map(change => fold(change.column))).size !== changes.length) context.addIssue({ code: 'custom', message: 'SQLite重建补丁字段不能重复' });
-}));
+});
+/** 旧字段补丁入口仍要求非空；实际重排的组合入口才能使用空补丁。 */
+export const sqliteTableRebuildChangesSchema = budget.pipe(edits.refine(changes => changes.length > 0, 'SQLite重建补丁不能为空'));
+export const sqliteTableRebuildEditsSchema = budget.pipe(edits);
+export const sqliteTableRebuildColumnOrderSchema = budget.pipe(z.array(name).min(1).max(sqliteTableRebuildLimits.columns).superRefine((order, context) => { if (new Set(order.map(fold)).size !== order.length) context.addIssue({ code: 'custom', message: 'SQLite列顺序不能重复' }); }));
 export type SqliteTableRebuildChange = z.infer<typeof sqliteTableRebuildChangesSchema>[number];
+/** 必须完整准确列出原字段（含生成列）；同序不是一次实际修改，也不接受大小写猜测替换。 */
+export function copySqliteTableRebuildColumnOrder(raw: unknown, source: readonly string[]): string[] {
+  const order = sqliteTableRebuildColumnOrderSchema.parse(raw), names = new Set(source);
+  if (order.length !== source.length || names.size !== source.length || order.some(name => !names.has(name)) || order.every((name, index) => name === source[index])) throw Error('SQLite列顺序必须是全部原字段的准确不同排列');
+  return order;
+}
 const rows = z.string().regex(/^(?:0|[1-9][0-9]{0,18})$/).refine(value => { try { return /^(?:0|[1-9][0-9]{0,18})$/.test(value) && BigInt(value) <= 9223372036854775807n; } catch { return false; } }, 'SQLite行数超过有符号64位范围');
 const signed = z.string().regex(/^(?:0|-?[1-9][0-9]{0,18})$/).refine(value => { try { const number = BigInt(value); return /^(?:0|-?[1-9][0-9]{0,18})$/.test(value) && number >= -9223372036854775808n && number <= 9223372036854775807n; } catch { return false; } });
 export const sqliteTableRebuildInspectSchema = budget.pipe(z.object({ ...sqliteTableRebuildTargetSchema.shape, taskId: id }).strict());
@@ -60,8 +70,8 @@ export const sqliteTableRebuildInspectionSchema = budget.pipe(z.object({ catalog
   if (value.withoutRowid !== (value.rowIdentity.kind === 'primary-key') || value.rowIdentity.kind === 'primary-key' && (new Set(value.rowIdentity.columns.map(fold)).size !== value.rowIdentity.columns.length || JSON.stringify(value.rowIdentity.columns) !== JSON.stringify(value.columns.filter(column => column.primaryKey > 0).sort((a, b) => a.primaryKey - b.primaryKey).map(column => column.name)))) context.addIssue({ code: 'custom', message: 'SQLite行身份与真实主键目录矛盾' });
   if (!value.tableSql.trim() || new Set(value.columns.map(column => fold(column.name))).size !== value.columns.length || new Set(value.columns.map(column => column.cid)).size !== value.columns.length || new Set(value.relatedObjects.map(object => object.type + ':' + fold(object.name))).size !== value.relatedObjects.length) context.addIssue({ code: 'custom', message: 'SQLite表重建目录名称、编号或定义重复/缺失' });
 }));
-export const sqliteTableRebuildPreviewSchema = budget.pipe(z.object({ catalogueId: id, changes: sqliteTableRebuildChangesSchema, taskId: id }).strict());
-export const sqliteTableRebuildPreviewOutputSchema = budget.pipe(z.object({ previewId: id, catalogueId: id, target: sqliteTableRebuildTargetSchema, sql: z.array(sqlText.min(1)).min(1).max(sqliteTableRebuildLimits.statements), confirmation: z.string().min(1).max(1024), changedTypes: z.number().int().min(0).max(sqliteTableRebuildLimits.changes), changedDefaults: z.number().int().min(0).max(sqliteTableRebuildLimits.changes), warnings: z.array(z.string().min(1).max(4096).refine(unicode)).max(128), expiresAt: z.string().datetime() }).strict().superRefine((value, context) => { if (!value.changedTypes && !value.changedDefaults || value.confirmation !== 'main.' + value.target.table) context.addIssue({ code: 'custom', message: 'SQLite重建预览数量或准确确认目标矛盾' }); }));
+export const sqliteTableRebuildPreviewSchema = budget.pipe(z.object({ catalogueId: id, changes: sqliteTableRebuildEditsSchema, columnOrder: sqliteTableRebuildColumnOrderSchema.optional(), taskId: id }).strict().refine(value => value.changes.length > 0 || value.columnOrder !== undefined, 'SQLite重建至少需要字段补丁或实际列重排'));
+export const sqliteTableRebuildPreviewOutputSchema = budget.pipe(z.object({ previewId: id, catalogueId: id, target: sqliteTableRebuildTargetSchema, sql: z.array(sqlText.min(1)).min(1).max(sqliteTableRebuildLimits.statements), confirmation: z.string().min(1).max(1024), changedTypes: z.number().int().min(0).max(sqliteTableRebuildLimits.changes), changedDefaults: z.number().int().min(0).max(sqliteTableRebuildLimits.changes), changedOrder: z.literal(true).optional(), warnings: z.array(z.string().min(1).max(4096).refine(unicode)).max(128), expiresAt: z.string().datetime() }).strict().superRefine((value, context) => { if (!value.changedTypes && !value.changedDefaults && !value.changedOrder || value.confirmation !== 'main.' + value.target.table) context.addIssue({ code: 'custom', message: 'SQLite重建预览数量或准确确认目标矛盾' }); }));
 export const sqliteTableRebuildApplySchema = budget.pipe(z.object({ previewId: id, taskId: id, confirmation: z.string().min(1).max(1024) }).strict());
 export const sqliteTableRebuildReleaseSchema = budget.pipe(z.object({ catalogueId: id.optional(), previewId: id.optional() }).strict().refine(value => !!value.catalogueId || !!value.previewId, '缺少要释放的SQLite表重建能力'));
 export type SqliteTableRebuildInspectInput = z.infer<typeof sqliteTableRebuildInspectSchema>;

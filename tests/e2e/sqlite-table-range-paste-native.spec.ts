@@ -75,6 +75,8 @@ test('真实矩形按位置覆盖原行、old/new预览、单步undo/redo、Main
   const counts = (update: number) => step(() => expect(table().getByRole('status').filter({ hasText: `本地草稿：新增 0 行，修改 ${update} 行，删除 0 行` })).toBeVisible());
   /** 从真实网格列头解析实际aria列位置，生成列仅作负例，不调用父层业务函数。 */
   const cell = async (rowIndex: number, name: string) => {
+    const index = columns.indexOf(name); if (index < 0) throw Error('本例未知SQLite列');
+    await step(() => (require('./sqlite-grid-navigation') as typeof import('./sqlite-grid-navigation')).revealSqliteEditColumn(page, grid(), index, check));
     const header = grid().getByRole('columnheader').filter({ hasText: new RegExp('^' + name + '(?: ·.*)?$') });
     await step(() => expect(header).toHaveCount(1)); const position = await step(() => header.getAttribute('aria-colindex'));
     if (!position || !/^[1-9][0-9]*$/.test(position)) throw Error('原矩形起点列位置未知');
@@ -127,7 +129,8 @@ test('真实矩形按位置覆盖原行、old/new预览、单步undo/redo、Main
   const firstValues: NativeCell[][] = [[{ kind: 'integer', value: '-9223372036854775808' }, { kind: 'blob', value: '00aaff' }], [{ kind: 'integer', value: '9223372036854775807' }, { kind: 'null' }]];
   const conflictValues: NativeCell[][] = [[{ kind: 'integer', value: '7' }, { kind: 'blob', value: 'aabb' }], [{ kind: 'integer', value: '8' }, { kind: 'blob', value: 'ccdd' }]];
   try {
-    check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); expect(basename(directory)).toMatch(/^dbark-e2e-/); expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]); expect((await settings()).tabs).toEqual([]); expect(await tasks()).toEqual([]); expect(await history()).toEqual([]);
+    check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']);
+    await step(() => application.evaluate(({ BrowserWindow }) => { const windows = BrowserWindow.getAllWindows(); if (windows.length !== 1) throw Error('非本例唯一窗口'); windows[0].setSize(1024, 768); })); expect(basename(directory)).toMatch(/^dbark-e2e-/); expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]); expect((await settings()).tabs).toEqual([]); expect(await tasks()).toEqual([]); expect(await history()).toEqual([]);
     const db = new DatabaseSync(database);
     try {
       db.exec('PRAGMA journal_mode=WAL; CREATE TABLE "粘贴""原表🚢"(id INTEGER PRIMARY KEY,label TEXT NOT NULL,g TEXT GENERATED ALWAYS AS(label||\':\'||id) STORED,exact INTEGER,payload BLOB,nullable TEXT DEFAULT \'默认文本\'); CREATE TABLE outside_control(id TEXT PRIMARY KEY,value TEXT); INSERT INTO outside_control VALUES(\'owner-only\',\'界外原值\')');
