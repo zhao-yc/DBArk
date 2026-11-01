@@ -1,0 +1,21 @@
+/** 表重命名先展示准确目标和完整关联定义，再明确确认一次原生DDL。 */
+export const sqliteTableRenameZh = {
+  entry: '重命名 SQLite 表', title: '重命名 SQLite 表', read: '读取 SQLite 表定义', loading: '正在读取或重命名 SQLite 表',
+  busyTarget: '原表或新表名对应的页面存在未提交草稿或运行任务，请先处理后再重命名。',
+  scope: '在 main 内重命名现有普通表，保留原字段和数据；支持 STRICT 与 WITHOUT ROWID。先读取原定义与关联目录，再预览和确认。',
+  dependenciesHint: 'SQLite 会同步修改引用此表的索引、触发器、视图及外键定义。不会修改用户查询中的 SQL；出现依赖错误时整个事务回滚。',
+  readonly: '当前连接为只读：可以查看和预览，不能提交重命名。',
+  catalogue: 'SQLite 原字段目录', tableSql: 'SQLite 原表 SQL', related: 'SQLite 完整关联定义', relatedSql: (type: string, name: string) => `SQLite 重命名关联 ${type} ${name}`,
+  objectKinds: { table: '表', index: '索引', view: '视图', trigger: '触发器' }, noSql: '此对象没有独立 SQL 定义。', noDefault: '（无默认值）',
+  name: '字段名称', declaredType: '声明类型', notNull: 'NOT NULL', defaultSql: '原默认值 SQL', primaryKey: '主键顺序', hidden: '隐藏或生成标记',
+  yes: '是', no: '否', strict: 'STRICT', withoutRowid: 'WITHOUT ROWID', newName: 'SQLite 表新名称',
+  preview: '预览 SQLite 表重命名 SQL', previewTitle: 'SQLite 表重命名 SQL 预览', previewHint: '请核对原表、新名称与完整关联定义；预览不可编辑，明确确认后仅提交一次。', renameTarget: (from: string, to: string) => `${from} → ${to}（尚未执行）`,
+  confirmation: '输入 SQLite 重命名原表确认名称', confirmationHint: (name: string) => `请输入 ${name} 确认重命名`, apply: '确认重命名 SQLite 表',
+  invalid: '原表、连接、修订或窗口来源已变化；原输入保留，不能继续读取、预览或提交。', designInvalid: '新表名无效，请检查名称；原输入保留，不会替换或自动修正。', response: 'SQLite 表重命名回包的目标、新名称或事务事实不一致，请核对原库；不会重放。',
+  catalogueExpired: '原目录已过期，请明确放弃草稿并重新读取。', previewExpired: '重命名预览已过期，请重新预览；不会自动提交。', catalogueExpiredPreview: '原目录已过期，不能修改草稿或重预览；原预览仍可在其独立有效期内确认提交。',
+  reread: '重新读取会放弃当前新表名和原预览。', discardRead: '放弃草稿并重新读取表', keep: '保留重命名草稿', close: '关闭 SQLite 表重命名', discard: '关闭会放弃本地重命名草稿，不能撤销已提交的改名；未知结果必须核对原库。', discardClose: '放弃重命名草稿并关闭',
+  stop: '停止 SQLite 表重命名任务', cancelling: '已请求停止，正在等待原任务和取消响应；取消不能撤销已确认的 COMMIT。', commitBoundary: 'COMMIT 已可能发送或结果未知，正在等待原回执；此时停止不能表示撤销提交。',
+  committed: 'SQLite 表重命名已确认提交。', committedStale: 'SQLite 表重命名已确认提交，但原界面来源已失效；请核对原库，不会重放。', unknown: 'SQLite 表重命名结果未知，本组已锁定，禁止重复提交；请核对原表及新表名。',
+  factTitle: 'SQLite 表重命名事务回执', factOperation: '操作编号', factTarget: '准确原目标', factRequested: '请求的 DDL 语句数', factCompleted: '已处理的 DDL 语句数（不是已提交数）',
+  phases: { 'not-sent': 'DDL 尚未发送', writing: '事务内处理 DDL，尚未提交', 'commit-pending': '等待 COMMIT 确认', committed: 'COMMIT 已确认', 'rolled-back': 'ROLLBACK 已确认，整组回滚', unknown: '结果未知，禁止重复提交' },
+} as const;

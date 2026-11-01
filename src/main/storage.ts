@@ -1,3 +1,4 @@
+import { recoverSqliteTableRenameTask } from '../shared/sqliteTableRenameFact';
 import { recoverSqliteIndexesTask } from '../shared/sqliteIndexesFact';
 import { recoverSqliteColumnsTask } from '../shared/sqliteColumnsFact';
 import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
@@ -140,7 +141,11 @@ export class LocalStore {
       const restored = recoverSqliteIndexesTask(task);
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
     }
-    // 字段DDL仅恢复最小事实；依赖目录、默认值和原ALTER不会成为重放任务。
+    // 表重命名只恢复最小事实；新名、目录、导航身份和原ALTER不会成为重放任务。
+    for (const task of this.tasks()) if (task.kind.startsWith('sqlite.tableRename.')) {
+      const restored = recoverSqliteTableRenameTask(task);
+      if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
+    }
     for (const task of this.tasks()) if (task.kind.startsWith('sqlite.columns.')) {
       const restored = recoverSqliteColumnsTask(task);
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);

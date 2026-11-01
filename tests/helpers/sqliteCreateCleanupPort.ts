@@ -1,3 +1,4 @@
+import { SqliteTableRenameMain } from '../../src/main/sqliteTableRenameMain';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
@@ -39,4 +40,10 @@ export function emptySqliteIndexesMain(): SqliteIndexesMain {
 export function emptySqliteColumnsMain(): SqliteColumnsMain {
   const unexpected = () => { throw Error('旧退出夹具未登记SQLite字段操作'); };
   return new SqliteColumnsMain({ assert: unexpected, same: unexpected, revision: () => 0, epoch: () => ({}), available: unexpected, closing: () => false, profile: () => undefined, request: async () => unexpected(), task: () => undefined, replace: unexpected, save: unexpected, event: unexpected });
+}
+
+/** 原退出场景没有表重命名，仍执行真实协调器的空账本drain。 */
+export function emptySqliteTableRenameMain(): SqliteTableRenameMain {
+  const unexpected = () => { throw Error('旧退出夹具未登记SQLite表重命名操作'); };
+  return new SqliteTableRenameMain({ assert: unexpected, same: unexpected, revision: () => 0, epoch: () => ({}), available: unexpected, closing: () => false, profile: () => undefined, request: async () => unexpected(), task: () => undefined, replace: unexpected, save: unexpected, event: unexpected });
 }

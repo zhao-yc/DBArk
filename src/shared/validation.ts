@@ -1,3 +1,4 @@
+import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteTableRenameApplySchema, sqliteTableRenameReleaseSchema } from './sqliteTableRename';
 import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsApplySchema, sqliteColumnsReleaseSchema } from './sqliteColumns';
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from './sqliteImportSource';
@@ -218,9 +219,13 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableImport.release': sqliteTableImportReleaseSchema,
   'sqlite.importSource.inspect': sqliteImportSourceInspectSchema,
   'sqlite.importSource.release': sqliteImportSourceReleaseSchema,
+  'sqlite.tableRename.inspect': sqliteTableRenameInspectSchema,
   'sqlite.columns.inspect': sqliteColumnsInspectSchema,
+  'sqlite.tableRename.preview': sqliteTableRenamePreviewSchema,
   'sqlite.columns.preview': sqliteColumnsPreviewSchema,
+  'sqlite.tableRename.apply': sqliteTableRenameApplySchema,
   'sqlite.columns.apply': sqliteColumnsApplySchema,
+  'sqlite.tableRename.release': sqliteTableRenameReleaseSchema,
   'sqlite.columns.release': sqliteColumnsReleaseSchema,
   'sqlite.indexes.inspect': sqliteIndexesInspectSchema,
   'sqlite.indexes.preview': sqliteIndexesPreviewSchema,

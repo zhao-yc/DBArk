@@ -78,3 +78,10 @@ Root 审计还核对：每份原目录及预览由独立只读 utility 完成；
 上一提交 b8 的三平台 SQLite 源码专项已另行核验，见[索引增量的后续跨平台源码复验](sqlite-indexes-20261101.md#后续跨平台源码复验)。它没有本轮字段功能，不能代替本轮原生窗口、完整回归或安装验收。
 
 交付指纹为 `5511d0ddd5b551b6029e58294847d6c885e96f68fb3ce61d93a71f30ab85320c`。最终暂存检查发现一份新增测试末尾多余空行，仅规范化 `tests/unit/sqlite-columns.test.ts` 的 EOF；原字节、前后摘要及检查记录保留。与验收候选相比只此文件空白不同，TypeScript 产生的测试 JavaScript 完全相同，Main bundle／map 和全部产品源码逐字相同。没有更改断言、超时或构建，不为纯空白重跑窗口或单元。
+
+
+## 后续三平台源码复验
+
+准确提交 `0f957a652628657221923a8802a2bc4a9bfc7e15` 的[SQLite原工作区 CI](https://github.com/zhao-yc/DBArk/actions/runs/41262116094)现已终态 success：Windows x64、macOS arm64／x64 各 14 份报告、17 项通过，零失败／跳过／flaky／重试。Root 下载三份原始 ZIP，逐份对照 API 大小、SHA256 digest 和 workflow SHA；逐报告核结果，并对三平台新增字段成功／失败两例的真实事务帧、字段和精确值、依赖改写、FK、真实 COMMIT／ROLLBACK ACK、独立表页刷新、重启不重放及两次正常退出逐项复核。每平台两份准确清理回执均在原测试机执行 stat 核零；不以本机文件不存在推断远程清理。
+
+原件在忽略目录 `.cache/sqlite-table-rename-20261101/ci-0f-02-artifact-*.zip`，下载摘要、14报告汇总及三份 `root-prior-columns-*-audit.json` 分别保留。上述仅覆盖该准确提交的源码专项，不追认此前旧失败，也不代替本轮表重命名或安装验收。通用客户端 CI 的实际平台状态另行跟踪。

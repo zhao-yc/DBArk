@@ -1,0 +1,3 @@
+.sqlite-table-rename pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.sqlite-table-rename .sqlite-table-rename-scroll { max-height: 240px; overflow: auto; }
+.sqlite-table-rename td { white-space: pre-wrap; overflow-wrap: anywhere; }

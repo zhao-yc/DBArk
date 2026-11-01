@@ -1,4 +1,5 @@
 import { sqliteIndexesZh } from '../locales/sqliteIndexes.zh-CN';
+import { sqliteTableRenameZh } from '../locales/sqliteTableRename.zh-CN';
 import { sqliteColumnsZh } from '../locales/sqliteColumns.zh-CN';
 import { sqliteTableBrowseZh } from '../locales/sqliteTableBrowse.zh-CN';
 import { openSqliteObject, openSqliteDefinition, openSqliteSelect } from '../sqliteNavigation';
@@ -51,6 +52,7 @@ export function sidebarObjectActions({ connectionId, database, object, onOpen, o
   if (useWorkspace.getState().connections.find(profile => profile.id === connectionId)?.dialect === 'sqlite') return <>
     {(object.kind === 'table' || object.kind === 'view') && <><button data-menu-group="open" title={sqliteTableBrowseZh.browse} aria-label={sqliteTableBrowseZh.browse + ' ' + object.name} onClick={onOpen}><Table2 size={12}/></button><button data-menu-group="open" title={sqliteZh.selectQuery} aria-label={sqliteZh.selectQuery + ' ' + object.name} onClick={() => openSqliteSelect(connectionId, database, object)}><FileCode2 size={12}/></button></>}
     {object.kind === 'table' && database === 'main' && <button data-menu-group="structure" title={sqliteIndexesZh.entry} aria-label={sqliteIndexesZh.entry + ' ' + object.name} onClick={() => onIndexPatches(object.name)}><Table2 size={12}/></button>}
+    {object.kind === 'table' && database === 'main' && <button data-menu-group="structure" title={sqliteTableRenameZh.entry} aria-label={sqliteTableRenameZh.entry + ' ' + object.name} onClick={() => onTableRename(object.name)}><Pencil size={12}/></button>}
     {object.kind === 'table' && database === 'main' && <button data-menu-group="structure" title={sqliteColumnsZh.entry} aria-label={sqliteColumnsZh.entry + ' ' + object.name} onClick={() => onColumnPatches(object.name)}><Pencil size={12}/></button>}
     <button data-menu-group="structure" title={sqliteZh.definition} aria-label={sqliteZh.definition + ' ' + object.name} onClick={() => void openSqliteDefinition(connectionId, database, object)}><Pencil size={12}/></button>
     {onRefresh && <button data-menu-group="refresh" title={zh.common.refresh} aria-label={sidebarContextMenuZh.refreshObject(object.name)} onClick={onRefresh}><RefreshCw size={12}/></button>}

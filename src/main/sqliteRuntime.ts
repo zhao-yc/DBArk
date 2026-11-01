@@ -21,6 +21,8 @@ import { sqliteIndexesInspectSchema, sqliteIndexesPreviewSchema, sqliteIndexesAp
 import { SqliteIndexes, inspectSqliteIndexes, verifySqliteIndexes, applySqliteIndexes, sqliteIndexesNotSent, type SqliteIndexesInspectRequest, type SqliteIndexesPreviewRequest, type SqliteIndexesApplyRequest } from './sqliteIndexes';
 import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsApplySchema, sqliteColumnsReleaseSchema, sqliteColumnsMessages, type SqliteColumnsInspectOutput, type SqliteColumnsPreviewOutput, type SqliteColumnsOutcome } from '../shared/sqliteColumns';
 import { SqliteColumns, inspectSqliteColumns, verifySqliteColumns, applySqliteColumns, sqliteColumnsNotSent, type SqliteColumnsInspectRequest, type SqliteColumnsPreviewRequest, type SqliteColumnsApplyRequest } from './sqliteColumns';
+import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteTableRenameApplySchema, sqliteTableRenameReleaseSchema, sqliteTableRenameMessages, type SqliteTableRenameInspectOutput, type SqliteTableRenamePreviewOutput, type SqliteTableRenameOutcome } from '../shared/sqliteTableRename';
+import { SqliteTableRenames, inspectSqliteTableRename, verifySqliteTableRename, applySqliteTableRename, sqliteTableRenameNotSent, type SqliteTableRenameInspectRequest, type SqliteTableRenamePreviewRequest, type SqliteTableRenameApplyRequest } from './sqliteTableRename';
 
 /** SQLite文件导入独立并发上限；原任务settled之后才归还槽位。 */
 const sqliteImportConcurrency = 2;
@@ -31,6 +33,9 @@ type SqliteIndexesResult = SqliteIndexesInspectOutput | SqliteIndexesPreviewOutp
 function indexesOutcome(value: SqliteIndexesResult | undefined): SqliteIndexesOutcome | undefined { return value && 'outcome' in value ? value : undefined; }
 type SqliteColumnsResult = SqliteColumnsInspectOutput | SqliteColumnsPreviewOutput | SqliteColumnsOutcome;
 function columnsOutcome(value: SqliteColumnsResult | undefined): SqliteColumnsOutcome | undefined { return value && 'outcome' in value ? value : undefined; }
+
+type SqliteTableRenameResult = SqliteTableRenameInspectOutput | SqliteTableRenamePreviewOutput | SqliteTableRenameOutcome;
+function tableRenameOutcome(value: SqliteTableRenameResult | undefined): SqliteTableRenameOutcome | undefined { return value && 'outcome' in value ? value : undefined; }
 
 interface Resource { transport: SqliteProcessTransport; driver?: SqliteDriverSession; }
 interface Connection {
@@ -64,10 +69,12 @@ interface IndexesTask extends Omit<ImportTask, 'kind'> { kind: 'indexes'; }
 interface FinishedIndexesTask { kind: 'indexes-finished'; active?: undefined; }
 interface ColumnsTask extends Omit<ImportTask, 'kind'> { kind: 'columns'; }
 interface FinishedColumnsTask { kind: 'columns-finished'; active?: undefined; }
-type ReadTask = BrowseTask | ExportTask | EditTask | CreatePreviewTask | CreateTask | ImportTask | IndexesTask | ColumnsTask;
-type Task = QueryTask | BrowseTask | FinishedBrowseTask | ExportTask | FinishedExportTask | EditTask | FinishedEditTask | CreatePreviewTask | CreateTask | FinishedCreateTask | ImportTask | FinishedImportTask | IndexesTask | FinishedIndexesTask | ColumnsTask | FinishedColumnsTask;
+interface TableRenameTask extends Omit<ImportTask, 'kind'> { kind: 'table-rename'; }
+interface FinishedTableRenameTask { kind: 'table-rename-finished'; active?: undefined; }
+type ReadTask = BrowseTask | ExportTask | EditTask | CreatePreviewTask | CreateTask | ImportTask | IndexesTask | ColumnsTask | TableRenameTask;
+type Task = QueryTask | BrowseTask | FinishedBrowseTask | ExportTask | FinishedExportTask | EditTask | FinishedEditTask | CreatePreviewTask | CreateTask | FinishedCreateTask | ImportTask | FinishedImportTask | IndexesTask | FinishedIndexesTask | ColumnsTask | FinishedColumnsTask | TableRenameTask | FinishedTableRenameTask;
 /** 所有独立utility任务共用原连接取消/关闭账本，不因新增建表另建孤岛。 */
-function readTask(task: Task): task is ReadTask { return ['browse', 'export', 'edit', 'create-preview', 'create', 'import', 'indexes', 'columns'].includes(task.kind); }
+function readTask(task: Task): task is ReadTask { return ['browse', 'export', 'edit', 'create-preview', 'create', 'import', 'indexes', 'columns', 'table-rename'].includes(task.kind); }
 function committing(task: ReadTask): boolean { return 'committing' in task && task.committing; }
 export interface SqliteRuntimeOptions {
   emit: (event: TaskEvent) => void;
@@ -103,6 +110,7 @@ export class SqliteRuntime {
   private readonly importSources = new SqliteImportSources();
   private readonly indexes = new SqliteIndexes();
   private readonly columns = new SqliteColumns();
+  private readonly tableRenames = new SqliteTableRenames();
   private importsActive = 0;
 
   constructor(private readonly options: SqliteRuntimeOptions) {}
@@ -492,11 +500,11 @@ export class SqliteRuntime {
 
   /** 有效导入任务编号立即留SQLite墓碑，失败、过期或错误确认也不能被其它任务复用。 */
   private reserveImportTask(id: string): void { if (this.stopping || this.tasks.has(id)) throw Error('SQLite正在退出或任务编号已经使用'); this.tasks.set(id, { kind: 'import-finished' }); }
-  private importCheck(task: ImportTask | IndexesTask | ColumnsTask): void { if (!task.committing) { this.browseCheck(task); task.input.assertCurrent(); } }
+  private importCheck(task: ImportTask | IndexesTask | ColumnsTask | TableRenameTask): void { if (!task.committing) { this.browseCheck(task); task.input.assertCurrent(); } }
   private importControl(task: ImportTask): SqliteTableImportControl { return { signal: task.abort.signal, check: () => this.importCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; }, progress: records => { this.importCheck(task); this.options.emit({ taskId: task.input.taskId, status: 'running', progress: 0, message: '正在处理SQLite导入记录；概要不保存文件原值或路径', rows: records }); } }; }
   private retireImport(task: ImportTask): void { if (!task.active && (!task.resource || !task.connection.resources.has(task.resource)) && this.tasks.get(task.input.taskId) === task) this.tasks.set(task.input.taskId, { kind: 'import-finished' }); }
   /** 结束准确utility后释放重引用；流文件读取仍由同一任务/pending/AbortController持有。 */
-  private async closeImportDriver(task: ImportTask | IndexesTask | ColumnsTask): Promise<void> {
+  private async closeImportDriver(task: ImportTask | IndexesTask | ColumnsTask | TableRenameTask): Promise<void> {
     let failure: unknown; const cancelledExit = task.cancelled && !task.committing && task.driver?.isClosed;
     task.cleaning = true;
     if (task.driver) {
@@ -692,6 +700,57 @@ export class SqliteRuntime {
     });
   }
 
+  /** 表重命名共用原准确连接/transport账本；终态且exit确认后只留下轻量编号墓碑。 */
+  private startTableRename<T extends SqliteTableRenameResult>(input: TableRenameTask['input'], connection: Connection, phase: 'inspect' | 'preview' | 'apply', action: (task: TableRenameTask) => Promise<T>): Promise<T> {
+    const task: TableRenameTask = { kind: 'table-rename', input, connection, abort: new AbortController(), committing: false, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
+    const retire = () => { if (!task.active && (!task.resource || !connection.resources.has(task.resource)) && this.tasks.get(input.taskId) === task) this.tasks.set(input.taskId, { kind: 'table-rename-finished' }); };
+    const work = this.track(connection, async () => {
+      let value: T | undefined, failure: unknown, failed = false;
+      try { this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: sqliteTableRenameMessages.running, sqliteTableRenameOperation: phase }); this.importCheck(task); value = await action(task); }
+      catch (reason) { failure = reason; failed = true; }
+      if (task.driver || task.resource) try { await this.closeImportDriver(task); } catch (reason) { const outcome = tableRenameOutcome(value); if (outcome) outcome.cleanupWarning = true; else { failure = failed ? new AggregateError([failure, reason], 'SQLite表重命名操作及准确资源收尾失败') : reason; failed = true; } }
+      if (!failed && phase !== 'apply') try { this.importCheck(task); } catch (reason) { failure = reason; failed = true; }
+      if (failed) { try { this.options.emit({ taskId: input.taskId, status: task.cancelled && !task.cleanupFailure && !task.cancelFailure ? 'cancelled' : 'failed', progress: 0, message: 'SQLite表重命名操作未完成，未自动重试', sqliteTableRenameOperation: phase }); } catch { /* 原目录/资源失败事实优先。 */ } throw failure; }
+      const outcome = tableRenameOutcome(value), cancelled = task.cancelled && !task.cleanupFailure && !task.cancelFailure && outcome?.outcome !== 'committed' && outcome?.outcome !== 'unknown';
+      if (outcome && task.cleanupFailure) outcome.cleanupWarning = true;
+      try { this.options.emit({ taskId: input.taskId, status: outcome ? outcome.outcome === 'committed' ? 'completed' : cancelled ? 'cancelled' : 'failed' : 'completed', progress: !outcome || outcome.outcome === 'committed' ? 100 : 0, message: outcome?.message ?? 'SQLite表重命名目录或预览已完成，尚未执行重命名', sqliteTableRenameOperation: phase, ...(outcome ? { sqliteTableRename: structuredClone(outcome.fact) } : {}) }); } catch { /* 原COMMIT/ROLLBACK ACK不被通知失败改变。 */ }
+      return value!;
+    }); task.active = work; const done = () => { task.active = undefined; retire(); }; void work.then(done, done);
+    // 迟到exit仍只回收原准确资源，不解除连接blocked屏障。
+    void work.finally(() => { if (task.resource) void task.resource.transport.exited.then(retire, () => {}); }).catch(() => {}); return work;
+  }
+  /** 同一任务的每个读取边界都复核取消/owner，收尾错误留原资源事实。 */
+  private tableRenameControl(task: TableRenameTask) { return { check: () => this.importCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: (reason: unknown) => { task.cleanupFailure = reason; } }; }
+  /** 每个独立driver都先登记准确transport，直到真实exit才可回收。 */
+  private async openTableRenameDriver(task: TableRenameTask, profile: SqliteConnectionProfile, readOnly: boolean): Promise<void> {
+    task.driver = await this.driver(task.connection, profile, readOnly, resource => { task.resource = resource; void resource.transport.exited.then(exit => { task.exit = exit; }, () => {}); }); this.importCheck(task);
+  }
+  /** 原只读utility和快照均关闭确认后才发布目录能力。 */
+  private tableRenameInspect(source: unknown): Promise<SqliteTableRenameInspectOutput> {
+    const raw = source as SqliteTableRenameInspectRequest; if (!raw || typeof raw.assertCurrent !== 'function') throw Error('SQLite表重命名检查缺少Main原文档能力'); const { assertCurrent, ...publicInput } = raw, input = sqliteTableRenameInspectSchema.parse(publicInput); this.reserveImportTask(input.taskId); assertCurrent();
+    const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id); this.assertTarget(connection, profile);
+    return this.startTableRename({ taskId: input.taskId, assertCurrent }, connection, 'inspect', async task => { await this.openTableRenameDriver(task, profile, true); const snapshot = await inspectSqliteTableRename(task.driver!, profile, input.table, this.tableRenameControl(task)); await this.closeImportDriver(task); this.importCheck(task); return this.tableRenames.publish(snapshot); });
+  }
+  /** 预览保留准确RO引用直到Promise结束；自然TTL与显式撤权互不混淆。 */
+  private tableRenamePreview(source: unknown): Promise<SqliteTableRenamePreviewOutput> {
+    const raw = source as SqliteTableRenamePreviewRequest; if (!raw || typeof raw.assertCurrent !== 'function') throw Error('SQLite表重命名预览缺少Main原文档能力'); const { assertCurrent, ...publicInput } = raw, input = sqliteTableRenamePreviewSchema.parse(publicInput); this.reserveImportTask(input.taskId); assertCurrent(); const catalogue = this.tableRenames.catalogue(input.catalogueId);
+    const profile = this.profile(this.options.resolveProfile(catalogue.target.connectionId)); if (!sameTarget(profile, catalogue.profile)) throw Error(sqliteTableRenameMessages.stale); const connection = this.connection(profile.id); this.assertTarget(connection, profile); const pin = this.tableRenames.pin(catalogue), checkOwner = () => { assertCurrent(); pin.check(); };
+    try { return this.startTableRename({ taskId: input.taskId, assertCurrent: checkOwner }, connection, 'preview', async task => { await this.openTableRenameDriver(task, profile, true); await verifySqliteTableRename(task.driver!, catalogue, this.tableRenameControl(task)); await this.closeImportDriver(task); this.importCheck(task); return this.tableRenames.preview(catalogue, input.newName); }).finally(pin.release); } catch (reason) { pin.release(); throw reason; }
+  }
+  /** 单次领取预览并注入Main同步回执，原写事务不借用任何用户标签会话。 */
+  private tableRenameApply(source: unknown): Promise<SqliteTableRenameOutcome> {
+    const raw = source as SqliteTableRenameApplyRequest; if (!raw || typeof raw.operationId !== 'string' || !raw.operationId || raw.operationId.length > 200 || typeof raw.assertCurrent !== 'function' || typeof raw.recordTableRenameFact !== 'function') throw Error('SQLite表重命名提交缺少Main同步事实和原文档能力');
+    const { operationId, assertCurrent, recordTableRenameFact, ...publicInput } = raw, input = sqliteTableRenameApplySchema.parse(publicInput); this.reserveImportTask(input.taskId); const claim = this.tableRenames.claim(input), connection = this.connections.get(claim.catalogue.target.connectionId);
+    const request: SqliteTableRenameApplyRequest = { ...input, operationId, assertCurrent, recordTableRenameFact: fact => { const result: unknown = recordTableRenameFact(fact); if (result && typeof (result as { then?: unknown }).then === 'function') throw Error('SQLite表重命名事实必须同步持久化'); this.options.emit({ taskId: input.taskId, status: fact.commitAcknowledged ? 'completed' : 'running', progress: fact.commitAcknowledged ? 100 : 0, message: sqliteTableRenameMessages.running, sqliteTableRenameOperation: 'apply', sqliteTableRename: structuredClone(fact) }); } };
+    if (!connection) { const value = sqliteTableRenameNotSent(claim, request); try { this.options.emit({ taskId: input.taskId, status: 'failed', progress: 0, message: sqliteTableRenameMessages.notSent, sqliteTableRenameOperation: 'apply', sqliteTableRename: structuredClone(value.fact) }); } catch { /* 未发送事实优先。 */ } return Promise.resolve(value); }
+    return this.startTableRename({ taskId: input.taskId, assertCurrent }, connection, 'apply', async task => {
+      let value: SqliteTableRenameOutcome;
+      try { this.importCheck(task); const profile = this.profile(this.options.resolveProfile(claim.catalogue.target.connectionId)); if (!claim.confirmed || profile.sqlite.readOnly || !sameTarget(profile, claim.catalogue.profile)) throw Error(sqliteTableRenameMessages.stale); await this.openTableRenameDriver(task, profile, false); value = await applySqliteTableRename(task.driver!, claim, request, { ...this.tableRenameControl(task), beginCommit: () => { this.importCheck(task); task.committing = true; } }); }
+      catch { value = sqliteTableRenameNotSent(claim, request); }
+      this.tableRenames.settle(claim, value.outcome); return value;
+    });
+  }
+
   /** 仅列出已经接入原工作区的命令；其余命令在SQLite终点明确拒绝。 */
   async request(command: string, input: any): Promise<any> {
     switch (command) {
@@ -714,7 +773,7 @@ export class SqliteRuntime {
         const changed = input.transportChanged || connection && (!connection.profile || !sameTarget(connection.profile, next));
         if (!connection || !changed) return;
         if (connection.closing || connection.blocked || connection.pending.size || connection.resources.size || connection.files.size || [...this.sessions.values()].some(session => session.connection === connection)) throw Error('SQLite连接仍有打开的会话、运行操作或未确认资源；请先显式关闭标签并断开连接，现有任务未取消');
-        this.edits.releaseConnection(input.id); this.creates.releaseConnection(input.id); this.imports.releaseConnection(input.id); this.importSources.releaseConnection(input.id); this.indexes.releaseConnection(input.id); this.columns.releaseConnection(input.id); this.connections.delete(input.id); return;
+        this.edits.releaseConnection(input.id); this.creates.releaseConnection(input.id); this.imports.releaseConnection(input.id); this.importSources.releaseConnection(input.id); this.indexes.releaseConnection(input.id); this.columns.releaseConnection(input.id); this.tableRenames.releaseConnection(input.id); this.connections.delete(input.id); return;
       }
       case 'connections.close': return this.closeConnection(input.id);
       case 'sessions.open': {
@@ -770,6 +829,10 @@ export class SqliteRuntime {
       case 'sqlite.columns.preview': return this.columnsPreview(input);
       case 'sqlite.columns.apply': return this.columnsApply(input);
       case 'sqlite.columns.release': return this.columns.release(sqliteColumnsReleaseSchema.parse(input));
+      case 'sqlite.tableRename.inspect': return this.tableRenameInspect(input);
+      case 'sqlite.tableRename.preview': return this.tableRenamePreview(input);
+      case 'sqlite.tableRename.apply': return this.tableRenameApply(input);
+      case 'sqlite.tableRename.release': return this.tableRenames.release(sqliteTableRenameReleaseSchema.parse(input));
       case 'sqlite.importSource.inspect': return this.importSourceInspect(input);
       case 'sqlite.importSource.release': { const id = sqliteImportSourceReleaseSchema.parse(input).sourceId; this.importSources.release(id); this.imports.releaseSource(id); return; }
       case 'sqlite.tableImport.preview': return this.tableImportPreview(input);
@@ -815,7 +878,7 @@ export class SqliteRuntime {
     this.imports.releaseConnection(id);
     this.importSources.releaseConnection(id);
     this.indexes.releaseConnection(id);
-    this.columns.releaseConnection(id);
+    this.columns.releaseConnection(id); this.tableRenames.releaseConnection(id);
     const work = (async () => {
       const browse = [...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && task.connection === connection && !!task.active);
       const browseDrivers = new Set(browse.map(task => task.driver));
@@ -844,7 +907,7 @@ export class SqliteRuntime {
     this.stopping = true;
     const work = (async () => {
       for (const task of this.tasks.values()) if (readTask(task) && !committing(task) && task.active) { task.cancelled = true; if (task.kind === 'import') task.abort.abort(); }
-      for (const id of this.connections.keys()) { this.edits.releaseConnection(id); this.creates.releaseConnection(id); this.imports.releaseConnection(id); this.importSources.releaseConnection(id); this.indexes.releaseConnection(id); this.columns.releaseConnection(id); }
+      for (const id of this.connections.keys()) { this.edits.releaseConnection(id); this.creates.releaseConnection(id); this.imports.releaseConnection(id); this.importSources.releaseConnection(id); this.indexes.releaseConnection(id); this.columns.releaseConnection(id); this.tableRenames.releaseConnection(id); }
       const protectedResources = new Set([...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && committing(task) && !!task.active).map(task => task.resource));
       const resources = [...this.connections.values()].flatMap(connection => { connection.closing = true; return [...connection.resources]; });
       for (const resource of resources) if (!protectedResources.has(resource)) try { resource.transport.terminate(); } catch { /* 仍等待真实exit，终止调用异常不能跳过其它句柄。 */ }
