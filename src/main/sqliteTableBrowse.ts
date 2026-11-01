@@ -2,11 +2,16 @@ import type { DataRow, QueryResult } from '../shared/contracts';
 import { createHash } from 'node:crypto';
 import { sqliteTableBrowseLimits as limits, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
-import type { SqliteColumn, SqliteValue } from '../engine/sqlite/protocol';
+import { sqliteExportTextFunction, type SqliteColumn, type SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import type { SqliteTableEditPage } from '../shared/sqliteTableEdit';
 import { buildSqliteReadPlan, quoteSqliteIdentifier } from '../shared/sqliteReadSql';
 export { quoteSqliteIdentifier } from '../shared/sqliteReadSql';
+
+/** 仅供准确目录编译器生成的字段表达式使用；TEXT按源编码逐字节核对，其它存储类型原样返回。 */
+export function sqliteExactTextProjection(column: string): string {
+  return 'CASE WHEN typeof(' + column + ') = \'text\' THEN ' + sqliteExportTextFunction + '(' + column + ', CAST(' + column + ' AS BLOB)) ELSE ' + column + ' END';
+}
 
 export interface SqliteEditReadPlan {
   project?: (column: string) => string; extraColumn?: string;
@@ -86,7 +91,8 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     control.check(); await driver.execute('BEGIN'); control.check();
     const catalogue = await readSqliteTableCatalogue(driver, input.table, control), { kind, columns, schemaKey } = catalogue;
     editPlan = input.editing && control.prepareEdit ? await control.prepareEdit(catalogue, driver) : undefined;
-    const request = buildSqliteTableSelect(input, columns, undefined, false, editPlan?.project), extra = editPlan?.extraColumn ? 1 : 0;
+    // 无编辑快照的只读页也必须核对原TEXT字节，不能将驱动替代字符作为真实数据交给网格。
+    const request = buildSqliteTableSelect(input, columns, undefined, false, editPlan?.project ?? sqliteExactTextProjection), extra = editPlan?.extraColumn ? 1 : 0;
     if (editPlan?.extraColumn) request.sql = 'SELECT ' + editPlan.extraColumn + ' AS "__dbark_edit_locator", ' + request.sql.slice(7);
     const values = await rows(driver, request.sql, request.parameters, input.limit + 1, control, actual => {
       if (actual.length !== columns.length + extra || actual.slice(extra).some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');

@@ -127,7 +127,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     const last = await page(app, input(profile, '最后页', { offset: 9 })); expect(ids(last)).toEqual(['10']); expect(last.hasMore).toBe(false);
     const empty = await page(app, input(profile, '空页', { offset: 100 })); expect(empty.result.rows).toEqual([]); expect(empty.hasMore).toBe(false); expect(empty.columns).toEqual(first.columns);
     for (const record of processes) await closedRead(record);
-    const select = processes[0].sent.find(message => message.kind === 'execute' && message.sql.startsWith('SELECT "id"'));
+    const select = processes[0].sent.find(message => message.kind === 'execute' && message.sql.includes(' FROM "main"."mix" AS "__dbark_source"'));
     expect(select).toMatchObject({ parameters: [{ type: 'integer', value: '4' }, { type: 'integer', value: '0' }], options: { maxRows: 4 } });
     expect(events.filter(event => event.status !== 'running').map(event => [event.taskId, event.status])).toEqual([['第一页', 'completed'], ['第二页', 'completed'], ['最后页', 'completed'], ['空页', 'completed']]);
     expect(app.ownsTask('第一页')).toBe(true); await expect(page(app, input(profile, '第一页'))).rejects.toThrow('已经使用');
@@ -170,6 +170,33 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     await expect(app.request('sqlite.valueOptions', { ...request, taskId: '坏编码候选' })).rejects.toThrow(/编码|无损|TEXT/);
     for (const record of processes) { expect(await record.exited).toEqual({ code: 0, signal: null }); expect(record.kills).toBe(0); }
   });
+  it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s只读表页坏编码不能静默替换成真实U+FFFD', async encoding => {
+    const profile = fixture(encoding), bytes = encoding === 'UTF-8' ? '80' : encoding === 'UTF-16le' ? '00d8' : 'd800';
+    disk(profile, db => { db.exec('CREATE TABLE invalid_page(id INTEGER PRIMARY KEY,v)'); db.prepare('INSERT INTO invalid_page VALUES(1,?)').run('真实替代字符\uFFFD\0🚢'); db.exec("INSERT INTO invalid_page VALUES(2,CAST(X'" + bytes + "' AS TEXT))"); });
+    const before = disk(profile, db => db.prepare('SELECT id,typeof(v) AS kind,hex(v) AS bytes FROM invalid_page ORDER BY id').all()), { app } = runtime(profile);
+    await expect(page(app, input(profile, '只读坏编码', { table: 'invalid_page', limit: 10 }))).rejects.toThrow(/编码|无损|TEXT/);
+    const recovered = await page(app, input(profile, '明确缩小到有效记录', { table: 'invalid_page', limit: 10, filters: [{ column: 'id', operator: 'eq', value: { kind: 'integer', value: '1' } }] }));
+    expect(recovered.result.rows).toEqual([{ c0: '1', c1: '真实替代字符\uFFFD\0🚢' }]); expect(recovered.storageTypes).toEqual(['it']);
+    expect(disk(profile, db => db.prepare('SELECT id,typeof(v) AS kind,hex(v) AS bytes FROM invalid_page ORDER BY id').all())).toEqual(before);
+    for (const record of processes) await closedRead(record);
+  });
+  it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s有效表及视图保NUL/BOM/真实U+FFFD与五类存储，不改变原页列名或值', async encoding => {
+    const profile = fixture(encoding); disk(profile, db => {
+      db.exec('CREATE TABLE exact_page(id INTEGER PRIMARY KEY,v); CREATE VIEW exact_page_view AS SELECT * FROM exact_page'); const insert = db.prepare('INSERT INTO exact_page VALUES(?,?)');
+      [null, '\uFEFF前\0🚢后', 9223372036854775807n, 1.25, Buffer.from([128, 255]), '\uFFFD'].forEach((value, index) => insert.run(index + 1, value));
+    }); const { app } = runtime(profile);
+    for (const table of ['exact_page', 'exact_page_view']) {
+      const result = await page(app, input(profile, '完整原文' + table, { table, limit: 10 }));
+      expect(result.result.rows).toEqual([{ c0: '1', c1: null }, { c0: '2', c1: '\uFEFF前\0🚢后' }, { c0: '3', c1: '9223372036854775807' }, { c0: '4', c1: '1.25' }, { c0: '5', c1: { type: 'binary', base64: 'gP8=' } }, { c0: '6', c1: '\uFFFD' }]);
+      expect(result.result.columns.map(column => [column.key, column.name])).toEqual([['c0', 'id'], ['c1', 'v']]); expect(result.storageTypes).toEqual(['in', 'it', 'ii', 'ir', 'ib', 'it']);
+    } for (const record of processes) await closedRead(record);
+  });
+  it('非确定性视图列仍是一次原值，不以重复求值制造文本校验失败', async () => {
+    const profile = fixture(); disk(profile, db => db.exec('CREATE VIEW volatile_page AS SELECT hex(randomblob(32)) AS value'));
+    const { app } = runtime(profile), value = await page(app, input(profile, '随机视图原文', { table: 'volatile_page', sort: [], limit: 1 }));
+    expect(value.result.rows).toHaveLength(1); expect(value.result.rows[0].c0).toMatch(/^[0-9A-F]{64}$/); expect(value.storageTypes).toEqual(['t']);
+    for (const record of processes) await closedRead(record);
+  });
   it('真实worker文本首尾和排除匹配保NUL与通配原文，不纳入NULL或其它存储类型', async () => {
     const profile = fixture(), { app } = runtime(profile); let serial = 0;
     for (const [operator, value, expected] of [
@@ -196,7 +223,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     expect(ids(await filter([{ column: 'group_name', operator: 'eq', value: { kind: 'text', value: 'A' } }, { column: 'rank', operator: 'gte', value: { kind: 'integer', value: '30' } }]))).toEqual(['4', '10']);
     expect(ids(await filter([], { sort: [{ column: 'group_name', direction: 'asc' }, { column: 'rank', direction: 'desc' }, { column: 'id', direction: 'desc' }] }))).toEqual(['10', '4', '8', '7', '2', '1', '6', '3', '9', '5']);
     const injected = processes.flatMap(record => record.sent).filter((message): message is Extract<SqliteWorkerRequest, { kind: 'execute' }> => message.kind === 'execute').find(message => message.parameters?.includes("' OR 1=1 --"));
-    expect(injected).toBeDefined(); expect(injected!.sql).not.toContain("' OR 1=1 --"); expect(injected!.sql).toContain('typeof("value") = ? AND instr("value", ?) > 0');
+    expect(injected).toBeDefined(); expect(injected!.sql).not.toContain("' OR 1=1 --"); expect(injected!.sql).toContain('typeof("__dbark_source"."value") = ? AND instr("__dbark_source"."value", ?) > 0');
     for (const record of processes) await closedRead(record);
   });
 
@@ -204,7 +231,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     const profile = fixture(), { app } = runtime(profile);
     const view = await page(app, input(profile, '视图', { table: 'mix_view', limit: 1 })); expect(view.target.kind).toBe('view'); expect(ids(view)).toEqual(['1']);
     const unicode = await page(app, input(profile, '双引号标识符', { table: '引号"船🚢', sort: [{ column: '字段"甲', direction: 'asc' }], filters: [{ column: '字段"甲', operator: 'eq', value: { kind: 'text', value: 'Unicode中文🚢' } }] }));
-    expect(unicode.result.rows).toEqual([{ c0: 'Unicode中文🚢' }]); expect(unicode.result.statement).toContain('SELECT "字段""甲" FROM "main"."引号""船🚢"');
+    expect(unicode.result.rows).toEqual([{ c0: 'Unicode中文🚢' }]); expect(unicode.result.statement).toContain('FROM "main"."引号""船🚢" AS "__dbark_source"'); expect(unicode.result.statement).toContain('dbark_sqlite_export_text_exact_v1("__dbark_source"."字段""甲", CAST("__dbark_source"."字段""甲" AS BLOB))');
     await expect(page(app, input(profile, '字段注入', { filters: [{ column: 'value" OR 1=1 --', operator: 'isNull' }] }))).rejects.toThrow('列已不存在');
     await expect(page(app, input(profile, '对象注入', { table: 'mix"; DROP TABLE mix; --' }))).rejects.toThrow('表或视图已不存在');
     disk(profile, db => db.exec('ALTER TABLE mix RENAME COLUMN group_name TO renamed_group'));
@@ -294,9 +321,9 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
   it.each(['opening', 'schema', 'catalogue', 'select', 'rollback'] as const)('%s边界取消只作用准确任务，原driver收尾后先发布cancelled再拒绝，旧编号不取消后继读取', async phase => {
     const profile = fixture(), reached = deferred<void>(), nextReached = deferred<void>(); let paused = false, holdNext = false, release!: () => void, releaseNext!: () => void;
     const { app, events } = runtime(profile, () => transport((message, forward) => {
-      const match = phase === 'opening' ? message.kind === 'opened' : message.kind === 'statement' && (phase === 'schema' ? message.sql.includes('SELECT name,type,sql FROM main.sqlite_schema') : phase === 'catalogue' ? message.sql.includes('pragma_table_xinfo') : phase === 'select' ? message.sql.startsWith('SELECT "id"') : message.sql === 'ROLLBACK');
+      const match = phase === 'opening' ? message.kind === 'opened' : message.kind === 'statement' && (phase === 'schema' ? message.sql.includes('SELECT name,type,sql FROM main.sqlite_schema') : phase === 'catalogue' ? message.sql.includes('pragma_table_xinfo') : phase === 'select' ? message.sql.includes(' FROM "main"."mix" AS "__dbark_source"') : message.sql === 'ROLLBACK');
       if (!paused && match) { paused = true; release = forward; reached.resolve(); }
-      else if (holdNext && message.kind === 'statement' && message.sql.startsWith('SELECT "id"')) { holdNext = false; releaseNext = forward; nextReached.resolve(); }
+      else if (holdNext && message.kind === 'statement' && message.sql.includes(' FROM "main"."mix" AS "__dbark_source"')) { holdNext = false; releaseNext = forward; nextReached.resolve(); }
       else forward();
     }));
     const reading = page(app, input(profile, '准确取消')).catch(reason => { expect(events.at(-1)?.status).toBe('cancelled'); return reason; });
@@ -320,7 +347,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
   });
   it('真实阻塞聚合可准确强取消，只读分页关闭不会取消用户标签事务或另一个物理会话', async () => {
     const profile = fixture(); disk(profile, db => db.exec('CREATE VIEW expensive AS WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) AS total FROM n'));
-    const reached = deferred<void>(); const { app, events } = runtime(profile, () => transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.startsWith('SELECT "total"')) reached.resolve(); }));
+    const reached = deferred<void>(); const { app, events } = runtime(profile, () => transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.includes(' FROM "main"."expensive" AS "__dbark_source"')) reached.resolve(); }));
     const user = await app.request('sessions.open', { connectionId: profile.id }); await app.request('query.transaction', { ...user, action: 'begin' });
     const reading = page(app, input(profile, '原生阻塞取消', { table: 'expensive', sort: [] })).catch(reason => reason); await reached.promise; await delay(50);
     await app.request('query.cancel', { taskId: '原生阻塞取消' }); expect(await reading).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(processes[1].kills).toBe(1); expect(processes[0].kills).toBe(0);
@@ -340,7 +367,7 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     const profile = fixture(); disk(profile, db => db.exec('CREATE VIEW expensive AS WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) AS total FROM n'));
     const reached = deferred<void>(); let allowKill = false;
     const { app, events } = runtime(profile, () => {
-      const original = transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.startsWith('SELECT "total"')) reached.resolve(); });
+      const original = transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.includes(' FROM "main"."expensive" AS "__dbark_source"')) reached.resolve(); });
       return { ...original, terminate: () => allowKill ? original.terminate() : false };
     });
     const reading = page(app, input(profile, '退出未确认', { table: 'expensive', sort: [] })).catch(reason => reason); await reached.promise; await delay(50); vi.useFakeTimers();

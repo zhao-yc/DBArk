@@ -1,7 +1,7 @@
 import { sqliteValueOptionsInputSchema, assertSqliteValueOptions, sqliteValueOptionsLimits as limits, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
-import { sqliteExportTextFunction, type SqliteValue } from '../engine/sqlite/protocol';
-import { readSqliteTableCatalogue, buildSqliteTableSelect, quoteSqliteIdentifier, type SqliteTableBrowseControl } from './sqliteTableBrowse';
+import type { SqliteValue } from '../engine/sqlite/protocol';
+import { readSqliteTableCatalogue, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 
 /** 一个只读事务内先核准确结构，再对完整匹配集分组；500+1用于判断截断，不COUNT整表或循环分页。 */
 export async function readSqliteValueOptions(driver: SqliteDriverSession, raw: SqliteValueOptionsInput, control: SqliteTableBrowseControl): Promise<SqliteValueOptionsOutput> {
@@ -16,7 +16,7 @@ export async function readSqliteValueOptions(driver: SqliteDriverSession, raw: S
     const search = input.search ? ' WHERE CASE typeof(' + column + ') WHEN \'blob\' THEN instr(lower(hex(' + column + ')), lower(?)) > 0 ELSE typeof(' + column + ') <> \'null\' AND instr(CAST(' + column + ' AS TEXT), ?) > 0 END' : '';
     if (input.search) parameters.push(input.search, input.search);
     // 代表TEXT须逐字节核对源编码；不能把驱动替换的坏字节当成真实U+FFFD再用于筛选。
-    const projected = 'CASE WHEN typeof(' + column + ') = \'text\' THEN ' + sqliteExportTextFunction + '(' + column + ', CAST(' + column + ' AS BLOB)) ELSE ' + column + ' END';
+    const projected = sqliteExactTextProjection(column);
     const sql = 'SELECT typeof(' + column + '), ' + projected + ', count(*) FROM (' + source.sql + ') AS "__dbark_values"' + search + ' GROUP BY typeof(' + column + '), ' + column + ' ORDER BY typeof(' + column + '), ' + column + ' LIMIT ' + (limits.groups + 1), rows: SqliteValue[][] = [];
     const result = await driver.execute(sql, { parameters, maxRows: limits.groups + 1, batchRows: 100, maxBytes: limits.bytes,
       onStatement: statement => { control.check(); if (statement.index !== 0 || statement.columns.length !== 3) throw Error('SQLite不同值返回了非预期列'); },
