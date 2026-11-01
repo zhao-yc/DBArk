@@ -1,0 +1,81 @@
+name: SQLite原字节读取桥研发验证
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sqlite-raw-probe.yml'
+      - 'research/sqlite-raw-bridge/**'
+      - 'src/engine/sqlite/rawValue.ts'
+      - 'src/engine/sqlite/protocol.ts'
+      - 'scripts/sqlite-raw-probe.mjs'
+      - 'tests/unit/sqlite-raw-value.test.ts'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+  pull_request:
+    paths:
+      - '.github/workflows/sqlite-raw-probe.yml'
+      - 'research/sqlite-raw-bridge/**'
+      - 'src/engine/sqlite/rawValue.ts'
+      - 'src/engine/sqlite/protocol.ts'
+      - 'scripts/sqlite-raw-probe.mjs'
+      - 'tests/unit/sqlite-raw-value.test.ts'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: 原字节实验 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: 准备固定Windows实验编译器并核官方摘要
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .tools/zig | Out-Null
+          Invoke-WebRequest 'https://ziglang.org/download/0.15.2/zig-x86_64-windows-0.15.2.zip' -OutFile .tools/zig/archive.zip
+          if ((Get-FileHash .tools/zig/archive.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c') { throw '官方编译器摘要不符' }
+          Expand-Archive -LiteralPath .tools/zig/archive.zip -DestinationPath .tools/zig
+      - name: 单次验证原字节解码边界
+        run: pnpm exec vitest run tests/unit/sqlite-raw-value.test.ts
+      - name: 单次编译并验证真实SQLite原字节
+        run: node scripts/sqlite-raw-probe.mjs
+      - name: 记录准确源码提交
+        if: always()
+        run: |
+          node -e "require('node:fs').mkdirSync('.cache',{recursive:true})"
+          git rev-parse HEAD > .cache/sqlite-raw-probe-head.txt
+      - name: 保留原始实验回执，不作为客户端安装验收
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite-raw-probe-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/sqlite-raw-probe-*/compile.json
+            .cache/sqlite-raw-probe-*/report.json
+            .cache/sqlite-raw-probe-head.txt
+          include-hidden-files: true
+          if-no-files-found: warn

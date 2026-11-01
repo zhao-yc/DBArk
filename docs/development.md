@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite任意SQL的[原字节读取桥研发准备](../research/sqlite-raw-bridge/README.md)已验证三编码、单次求值及RETURNING不重放；内部模块尚未接入查询工作区，不能据此扩大已交付保护范围，暂不发布。
+
 SQLite 表／视图新增[只读表页原TEXT字节保护](development/sqlite-page-text-20261102.md)：坏编码拒绝整页，有效NUL／BOM／真实替代字符保留；原分页、排序及其它存储类型保持，任意SQL结果的同级保证继续处理，暂不发布。
 
 SQLite 表／视图新增[全表不同值勾选筛选](development/sqlite-value-options-20261102.md)：独立只读候选、全表搜索、原类型与NULL勾选、计数和取消，先加入草稿再明确应用；分页、导出、生成查询及命名方案共用，暂不发布。
