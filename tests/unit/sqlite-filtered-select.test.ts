@@ -59,3 +59,10 @@ it('输出预算拒整份，不截SQL；坏条件不静默过滤', () => {
   const wide = Array.from({ length: 1024 }, (_, i) => ({ name: '"'.repeat(500) + String(i), declaredType: '' })), source = input([{ column: wide[0].name, operator: 'eq', value: { kind: 'text', value: 'x'.repeat(65536) } }], { sort: [] }); expect(() => buildSqliteFilteredSelect(source, wide, wide.map(c => c.name))).toThrow(/预算/);
   expect(() => buildSqliteFilteredSelect(input([{ column: 'gone', operator: 'isNull' }]), columns, ['id'])).toThrow();
 });
+it.each(['between', 'notBetween'] as const)('%s在真实UTF8/UTF16LE/UTF16BE源及不同亲和性保持原范围语义', operator => {
+  for (const column of [field, 'tc', 'nc', 'rc']) for (const [kind, lower, upper] of [['integer', '-9223372036854775808', '9223372036854775807'], ['real', '-0', '1.0'], ['text', 'ABC', 'abc'], ['text', needle, needle]] as const) {
+    const filter: SqliteTableFilter = { column, operator, value: { kind, value: lower }, secondValue: { kind, value: upper } }, source = input([filter]);
+    const generated = buildSqliteFilteredSelect(source, columns, ['id']), original = buildSqliteTableSelect(source, columns, ['id'], true);
+    for (const db of databases) expect(rows(db, generated)).toEqual(rows(db, original.sql, original.parameters.map(bound)));
+  }
+});

@@ -15,12 +15,15 @@ const operand = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('blob'), value: z.string().max(sqliteTableBrowseLimits.valueUnits).regex(/^(?:[0-9a-fA-F]{2})*$/, '二进制条件填写完整十六进制字节') }).strict(),
 ]);
 export const sqliteTableFilterSchema = z.object({
-  column: name, operator: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'isNull', 'notNull']), value: operand.optional(), enabled: z.boolean().optional(),
+  column: name, operator: z.enum(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'isNull', 'notNull', 'between', 'notBetween']), value: operand.optional(), secondValue: operand.optional(), enabled: z.boolean().optional(),
 }).strict().superRefine((filter, context) => {
   const nullCheck = filter.operator === 'isNull' || filter.operator === 'notNull';
   if (nullCheck ? filter.value !== undefined : filter.value === undefined) context.addIssue({ code: 'custom', message: 'NULL条件不带值，其余条件必须明确类型和值' });
   if (filter.operator === 'contains' && filter.value?.kind !== 'text') context.addIssue({ code: 'custom', message: '包含条件只接受文本原文' });
   if (filter.value?.kind === 'blob' && !['eq', 'ne'].includes(filter.operator)) context.addIssue({ code: 'custom', message: '二进制条件目前只支持等于与不等于' });
+  // 范围两个边界须明确且同型；其他比较不能夹带被静默忽略的第二个值。
+  const range = filter.operator === 'between' || filter.operator === 'notBetween';
+  if (range ? !filter.secondValue || filter.secondValue.kind !== filter.value?.kind || filter.secondValue.kind === 'blob' : filter.secondValue !== undefined) context.addIssue({ code: 'custom', message: '范围条件必须填写同类型的两个边界，且不支持二进制；其它条件不带第二个值' });
 });
 export const sqliteTablePageSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.literal('main'), table: name, taskId: z.string().min(1).max(200),
@@ -29,7 +32,7 @@ export const sqliteTablePageSchema = z.object({
   sort: z.array(z.object({ column: name, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
 }).strict().superRefine((input, context) => {
   if (new Set(input.sort.map(sort => sort.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: '排序列不能重复' });
-  if (input.filters.reduce((size, filter) => size + (filter.value?.value.length ?? 0), 0) > 131072) context.addIssue({ code: 'custom', message: 'SQLite筛选值总量超过预算' });
+  if (input.filters.reduce((size, filter) => size + (filter.value?.value.length ?? 0) + (filter.secondValue?.value.length ?? 0), 0) > 131072) context.addIssue({ code: 'custom', message: 'SQLite筛选值总量超过预算' });
 });
 export type SqliteTableFilter = z.infer<typeof sqliteTableFilterSchema>;
 export type SqliteTablePageInput = z.infer<typeof sqliteTablePageSchema>;

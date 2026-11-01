@@ -200,3 +200,7 @@ it('导出摘要显示停用原条件，全部停用明确提示没有筛选而�
   expect(document.body.textContent).toContain('9007199254740993');
   expect(document.body.textContent).toContain('没有已启用的筛选，将读取所有记录。');
 });
+it('范围导出摘要完整显示两个精确边界，不只显示起始值', async () => {
+  await mount({}, 'table', source(), [{ column: 'id', operator: 'between', value: { kind: 'integer', value: '9007199254740993' }, secondValue: { kind: 'integer', value: '9223372036854775807' } }]);
+  expect(document.body.textContent).toContain('介于（包含两端）'); expect(document.body.textContent).toContain('9007199254740993'); expect(document.body.textContent).toContain('AND [整数] 9223372036854775807');
+});

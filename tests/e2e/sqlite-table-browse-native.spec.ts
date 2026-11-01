@@ -215,6 +215,18 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
     await cellFilter(0, 'nullable', true); await step(() => expect(table().getByLabel('SQLite 筛选 1 运算符', { exact: true })).toHaveValue('notNull')); await apply([2, 4, 6, 8, 10]);
     await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
+    stage = '只读范围包含两端、逆序不交换、NOT BETWEEN与停用，坏边界零读取';
+    await controls(true); await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await filter(1, 'id', 'between', 'integer', '30');
+    const invalidRangePages = (await step(audit)).pages.length;
+    await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click()); expect((await step(audit)).pages.length).toBe(invalidRangePages);
+    // 报错表单占据视口时，RDG仅挂载可见行；沿原导航收起表单再核原五行，随后恢复草稿。
+    await controls(false); await expectIds([1, 2, 3, 4, 5]); await controls(true); expect((await step(audit)).pages.length).toBe(invalidRangePages);
+    await step(() => table().getByLabel('SQLite 筛选 1 结束值', { exact: true }).fill('32')); await apply([30, 31, 32]);
+    expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 0, filters: [{ column: 'id', operator: 'between', value: { kind: 'integer', value: '30' }, secondValue: { kind: 'integer', value: '32' } }] });
+    await controls(true); await step(() => table().getByLabel('SQLite 筛选 1 运算符', { exact: true }).selectOption('notBetween')); await apply([1, 2, 3, 4, 5]);
+    await controls(true); await step(() => table().getByLabel('SQLite 筛选 1 运算符', { exact: true }).selectOption('between')); await step(() => table().getByLabel('SQLite 筛选 1 条件值', { exact: true }).fill('32')); await step(() => table().getByLabel('SQLite 筛选 1 结束值', { exact: true }).fill('30')); await apply([]);
+    await controls(true); await step(() => table().getByLabel('启用 SQLite 筛选 1', { exact: true }).uncheck()); await apply([1, 2, 3, 4, 5]);
+    await controls(true); await step(() => expect(table().getByLabel('SQLite 筛选 1 结束值', { exact: true })).toHaveValue('30')); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
     stage = '真实控件区分整数与文本并验证AND/OR'; await controls(true); await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await filter(1, 'mixed', 'eq', 'integer', '2'); await apply([1]);
     expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ filters: [{ column: 'mixed', operator: 'eq', value: { kind: 'integer', value: '2' } }] }); await controls(true); await step(() => table().getByLabel('SQLite 筛选 1 值类型', { exact: true }).selectOption('text')); await apply([2]);
     await controls(true); await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await filter(2, 'id', 'gte', 'integer', '30'); await step(() => table().getByLabel('SQLite 筛选关系', { exact: true }).selectOption('and')); await apply([]);

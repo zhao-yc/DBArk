@@ -20,6 +20,8 @@ function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn
     if (filter.enabled === false) return [];
     if (filter.operator === 'isNull' || filter.operator === 'notNull') return [column + (filter.operator === 'isNull' ? ' IS NULL' : ' IS NOT NULL')];
     const value = filter.value!, type = render({ kind: 'storage-type', value: value.kind === 'blob' ? 'blob' : value.kind }), operand = render({ kind: 'operand', value });
+    // 原生BETWEEN包含两端，不重排边界；NOT BETWEEN仍保留原动态存储类型限制。
+    if (filter.operator === 'between' || filter.operator === 'notBetween') return ['(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'between' ? ' BETWEEN ' : ' NOT BETWEEN ') + operand + ' AND ' + render({ kind: 'operand', value: filter.secondValue! }) + ')'];
     const comparison = filter.operator === 'contains' ? 'instr(' + column + ', ' + operand + ') > 0' : column + ' ' + operators[filter.operator] + ' ' + operand;
     return ['(typeof(' + column + ') = ' + type + ' AND ' + comparison + ')'];
   });

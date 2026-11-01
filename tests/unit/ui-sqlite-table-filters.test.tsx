@@ -77,3 +77,20 @@ it('空组两个启停按钮均禁用，添加新条件仍可用', async () => {
   const f = await mount([]); expect(button(text.enableFilters).disabled).toBe(true); expect(button(text.disableFilters).disabled).toBe(true);
   await click(text.addFilter); expect(f.values()).toHaveLength(1); expect(control(text.filterEnabled(1)).checked).toBe(true);
 });
+it.each(['between', 'notBetween'] as const)('%s两个边界保留原文，启停与切换普通比较不丢第二值，不自动读取', async operator => {
+  const f = await mount(); await change(text.filterOperator(1), operator); expect(control(text.filterSecondValue(1)).value).toBe('');
+  await change(text.filterSecondValue(1), '-9223372036854775808'); await change(text.filterEnabled(1), false);
+  expect(f.values()[0]).toMatchObject({ operator, value: '9223372036854775807', secondValue: '-9223372036854775808', enabled: false });
+  const oldSecond = props(control(text.filterSecondValue(1))).onChange; await change(text.filterOperator(1), 'eq');
+  expect(document.querySelectorAll('input').some(node => node.getAttribute('aria-label') === text.filterSecondValue(1))).toBe(false);
+  await change(text.filterOperator(1), operator); await act(async () => oldSecond({ target: { value: '旧回调污染' } }));
+  expect(control(text.filterSecondValue(1)).value).toBe('-9223372036854775808'); expect(f.values()[0].enabled).toBe(false); expect(request).not.toHaveBeenCalled();
+});
+it('同帧连续编辑两个边界都保留，文本空界和NULL切换不被自动修正', async () => {
+  const f = await mount(); await change(text.filterOperator(1), 'between');
+  const first = props(control(text.filterValue(1))).onChange, second = props(control(text.filterSecondValue(1))).onChange;
+  await act(async () => { first({ target: { value: '9007199254740993' } }); second({ target: { value: '9223372036854775807' } }); });
+  expect(f.values()[0]).toMatchObject({ value: '9007199254740993', secondValue: '9223372036854775807' });
+  await change(text.filterKind(1), 'text'); await change(text.filterSecondValue(1), ''); await change(text.filterOperator(1), 'isNull'); await change(text.filterOperator(1), 'between');
+  expect(f.values()[0]).toMatchObject({ kind: 'text', value: '9007199254740993', secondValue: '' }); expect(request).not.toHaveBeenCalled();
+});

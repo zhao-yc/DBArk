@@ -93,6 +93,15 @@ async function completed(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite完整导出真实只读流、原子文件与精度回放', () => {
+  it.each(['between', 'notBetween'] as const)('%s两个边界进入实际单一只读流，完整文件按原排序且源文件不变', async operator => {
+    const profile = fixture(), { app } = runtime(profile), source = await page(app, profile), before = await hash(profile.sqlite.filePath!);
+    const input = request(profile, source, { filters: [{ column: 'id', operator, value: { kind: 'integer', value: '2' }, secondValue: { kind: 'integer', value: '6' } }] });
+    const ids = operator === 'between' ? ['2', '3', '4', '5', '6'] : ['1', '7', '8', '9'];
+    expect(await app.request('sqlite.tableExport', input)).toEqual({ rows: ids.length, fileCommitted: true });
+    const rows = JSON.parse(readFileSync(input.filePath, 'utf8')); expect(rows.map((row: { id: string }) => row.id)).toEqual(ids);
+    if (operator === 'between') expect(rows[0].value).toBe('-9223372036854775808'); else expect(rows[0].value).toBe('9223372036854775807');
+    await completed(processes.at(-1)!); expect(await hash(profile.sqlite.filePath!)).toBe(before);
+  });
   it.each([true, false])('启用子集=%s：完整流导出忽略停用条件，精度与源文件保持且utility正常退出', async active => {
     const profile = fixture(), { app } = runtime(profile), source = await page(app, profile), before = await hash(profile.sqlite.filePath!);
     const input = request(profile, source, { filters: [{ column: 'value', operator: 'eq', enabled: false, value: { kind: 'integer', value: '9223372036854775807' } }, { column: 'id', operator: 'lte', enabled: active, value: { kind: 'integer', value: '2' } }] });

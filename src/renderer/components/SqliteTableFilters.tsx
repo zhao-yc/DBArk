@@ -49,7 +49,8 @@ export function SqliteTableFilters(props: Props) {
       <select aria-label={text.filterOperator(index + 1)} value={filter.operator} onChange={event => { const operator = event.target.value as SqliteFilterDraft['operator']; update(filter.id, { operator, ...(operator === 'contains' ? { kind: 'text' as const } : {}) }); }}>{Object.entries(text.operators).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
       {!['isNull', 'notNull'].includes(filter.operator) && <>
         <select aria-label={text.filterKind(index + 1)} value={filter.kind} onChange={event => update(filter.id, { kind: event.target.value as SqliteFilterDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind} disabled={filter.operator === 'contains' && kind !== 'text' || kind === 'blob' && !['eq', 'ne'].includes(filter.operator)}>{label}</option>)}</select>
-        <input aria-label={text.filterValue(index + 1)} value={filter.value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => update(filter.id, { value: event.target.value })}/>
+        <input aria-label={text.filterValue(index + 1)} placeholder={['between', 'notBetween'].includes(filter.operator) ? text.rangeStart : undefined} value={filter.value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => update(filter.id, { value: event.target.value })}/>
+        {['between', 'notBetween'].includes(filter.operator) && <input aria-label={text.filterSecondValue(index + 1)} placeholder={text.rangeEnd} value={filter.secondValue ?? ''} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => update(filter.id, { secondValue: event.target.value })}/>}
       </>}
       <button aria-label={text.removeFilter(index + 1)} onClick={() => { if (current()) props.onFilters(values => values.filter(value => value.id !== filter.id)); }}>×</button>
     </div>)}
