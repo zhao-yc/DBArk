@@ -2,7 +2,7 @@
 
 状态：原生模块、独立解码器及[参数／元数据／长SQL适配器](../../docs/development/sqlite-raw-statement-20261102.md)已实现并独立验证，**尚未接入客户端查询执行**。不能据此宣称SQL编辑器的坏TEXT字节已经受到保护；已交付的表／视图分页保护见[表页专项](../../docs/development/sqlite-page-text-20261102.md)。不增加R02完整工作包或发行计数。
 
-新增[有界批次与消费者确认](../../docs/development/sqlite-raw-frames-20261102.md)：原生200行／最多1MiB帧、跨字段分段、错误终态、ACK与协作取消；三编码分别验证百万行计数及RETURNING取消后的真实写入，仍为内部候选。
+新增[有界批次与消费者确认](../../docs/development/sqlite-raw-frames-20261102.md)：原生200行／最多1MiB帧、跨字段分段、错误终态、ACK与协作取消；准确`33227fb7`的三平台CI及原始ZIP独立核对通过，三编码分别验证百万行计数及RETURNING取消后的真实写入，仍为内部候选。
 
 ## 问题与选择
 
