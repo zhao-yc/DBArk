@@ -50,14 +50,18 @@ async function main() {
   const bundle = join(run, 'rawValue.cjs');
   await build({ entryPoints: [join(root, 'src/engine/sqlite/rawValue.ts')], outfile: bundle, bundle: true, platform: 'node', format: 'cjs', target: 'node24' });
   const { decodeSqliteRawValue } = createRequire(import.meta.url)(bundle);
+  const statementBundle = join(run, 'rawStatement.cjs');
+  await build({ entryPoints: [join(root, 'src/engine/sqlite/rawStatement.ts')], outfile: statementBundle, bundle: true, platform: 'node', format: 'cjs', target: 'node24' });
+  const { SqliteRawStatement } = createRequire(import.meta.url)(statementBundle);
   const reports = [];
-  for (const encoding of ['UTF-8', 'UTF-16le', 'UTF-16be']) reports.push(experiment(run, binary, encoding, decodeSqliteRawValue));
-  writeFileSync(join(run, 'report.json'), JSON.stringify({ node: process.versions.node, sqlite: process.versions.sqlite, platform: process.platform, arch: process.arch, sourceHash: createHash('sha256').update(readFileSync(join(root, 'research/sqlite-raw-bridge/rawProbe.c'))).digest('hex'), headers, reports, productIntegrated: false }, null, 2));
+  for (const encoding of ['UTF-8', 'UTF-16le', 'UTF-16be']) reports.push(experiment(run, binary, encoding, decodeSqliteRawValue, SqliteRawStatement));
+  const sourceHashes = Object.fromEntries(['research/sqlite-raw-bridge/rawProbe.c', 'src/engine/sqlite/rawValue.ts', 'src/engine/sqlite/rawStatement.ts', 'scripts/sqlite-raw-probe.mjs'].map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')]));
+  writeFileSync(join(run, 'report.json'), JSON.stringify({ node: process.versions.node, sqlite: process.versions.sqlite, platform: process.platform, arch: process.arch, sourceHash: sourceHashes['research/sqlite-raw-bridge/rawProbe.c'], sourceHashes, headers, reports, productIntegrated: false }, null, 2));
   console.log('三编码原字节、五类值、原生权限、一次求值、事务、RETURNING与DONE不重放通过；未接入产品。');
 }
 
 /** 一轮只持有自己的合成文件；失败保留文件与报告，成功后关闭再精确核零。 */
-function experiment(run, binary, encoding, decode) {
+function experiment(run, binary, encoding, decode, RawStatement) {
   const directory = mkdtempSync(join(run, 'fixture-')), path = join(directory, 'sample.sqlite');
   const invalid = encoding === 'UTF-8' ? '80' : encoding === 'UTF-16le' ? '00d8' : 'd800';
   const original = '\uFEFF真实\0🚢\uFFFD', db = new DatabaseSync(path, { allowExtension: true });
@@ -80,7 +84,7 @@ function experiment(run, binary, encoding, decode) {
       try { internalPrepare = true; control = db.prepare('SELECT dbark_raw_probe_v1(?,?)'); control.setReturnArrays(true); }
       finally { internalPrepare = false; }
       // node:sqlite将JS number绑定为REAL；原生控制整数必须明确使用BigInt。
-      return control.get(BigInt(op), typeof argument === 'number' ? BigInt(argument) : argument)[0];
+      return control.get(BigInt(op), typeof argument === 'number' && op !== 7 ? BigInt(argument) : argument)[0];
     };
     const raw = column => { const descriptor = invoke(3, column); return { type: descriptor & 255, encoding: descriptor >> 8, bytes: invoke(4, column) }; };
     const rows = sql => {
@@ -119,11 +123,12 @@ function experiment(run, binary, encoding, decode) {
     assert.throws(() => invoke(1), { code: 'ERR_SQLITE_ERROR', errcode: constraint });
     assert.throws(() => invoke(1), { code: 'ERR_SQLITE_ERROR', errcode: constraint }, '失败终态不能被后续step当成成功DONE');
     assert.throws(() => invoke(2), { code: 'ERR_SQLITE_ERROR', errcode: constraint });
+    const adapter = statementExperiment(db, invoke, RawStatement, original);
     assert.deepEqual(rows('SELECT n FROM subject ORDER BY id'), [[{ type: 'integer', value: '1' }], [{ type: 'integer', value: '2' }]]);
     assert.equal(db.isTransaction, false);
     assert.deepEqual(db.prepare('SELECT id,typeof(v) AS kind,hex(v) AS bytes FROM subject ORDER BY id').all(), sourceBefore);
     successful = true;
-    return { encoding, rawEncoding: bad.encoding, badHex: invalid, originalDefectReproduced: true, oldReplacementCount: lossy.length, validTextKept: true, fiveTypesKept: true, invalidRejected: true, evaluations, writes: [1, 2], nativePermissionsKept: true, repeatedDoneNoReplay: true, nativeFailureCode: constraint, repeatedFailureKept: true, transaction: false, normalClose: true, fixtureRemoved: true };
+    return { encoding, rawEncoding: bad.encoding, badHex: invalid, originalDefectReproduced: true, oldReplacementCount: lossy.length, validTextKept: true, fiveTypesKept: true, invalidRejected: true, evaluations, writes: [1, 2], nativePermissionsKept: true, repeatedDoneNoReplay: true, nativeFailureCode: constraint, repeatedFailureKept: true, adapter, transaction: false, normalClose: true, fixtureRemoved: true };
   } catch (error) { failure = error; throw error; }
   finally {
     try { if (invoke) invoke(2); }
@@ -135,6 +140,63 @@ function experiment(run, binary, encoding, decode) {
       assert.equal(dirname(path), directory); assert.equal(dirname(directory), run); unlinkSync(path); rmdirSync(directory); assert.equal(existsSync(directory), false);
     }
   }
+}
+
+/** 用当前适配器对照原生绑定/列目录，原5类值与写入断言全部保留。 */
+function statementExperiment(db, invoke, RawStatement, original) {
+  db.limits.length = 1024 * 1024; db.limits.sqlLength = 20 * 1024 * 1024;
+  db.limits.column = 1024; db.limits.variableNumber = 1024;
+  let statement = RawStatement.prepare(invoke, 'SELECT ?1,?2,?3,?4,?5,?6');
+  assert.deepEqual(statement.parameterNames(), ['?1', '?2', '?3', '?4', '?5', '?6']);
+  const privateText = original + "' OR 1=1 --";
+  statement.bind([9223372036854775807n, -0, privateText, new Uint8Array([128, 255]), null, new Uint8Array()]);
+  assert.deepEqual(statement.next(), [{ type: 'integer', value: '9223372036854775807' }, { type: 'real', value: '-0' }, privateText, { type: 'binary', base64: 'gP8=' }, null, { type: 'binary', base64: '' }]);
+  assert.throws(() => statement.bind([])); assert.equal(statement.next(), null); statement.finish();
+  const closed = statement;
+  statement = RawStatement.prepare(invoke, 'SELECT :text,:text,:min,:real,:missing');
+  assert.deepEqual(statement.parameterNames(), [':text', ':min', ':real', ':missing']);
+  statement.bind({ ':text': privateText, ':min': -9223372036854775808n, ':real': 1.25, ':unused': '忽略未用具名值' });
+  assert.deepEqual(statement.next(), [privateText, privateText, { type: 'integer', value: '-9223372036854775808' }, { type: 'real', value: '1.25' }, null]);
+  assert.equal(statement.next(), null); statement.finish();
+  for (const [sql, parameters, expected] of [
+    ['SELECT :x,?', [1n], [null, { type: 'integer', value: '1' }]],
+    ['SELECT ?4,?1', [1n], [null, { type: 'integer', value: '1' }]],
+    ['SELECT ?', [], [null]],
+  ]) { statement = RawStatement.prepare(invoke, sql); statement.bind(parameters); assert.deepEqual(statement.next(), expected); statement.finish(); }
+  statement = RawStatement.prepare(invoke, 'SELECT :x');
+  assert.throws(() => statement.bind([1n]), error => error.errcode === 25); statement.finish();
+  let metadataCalls = 0; db.function('probe_metadata_once', () => { metadataCalls++; return '只求值一次'; });
+  const metadataSql = 'SELECT id AS "同名🚢",v AS "同名🚢",n+1 AS expression,probe_metadata_once() AS once FROM subject WHERE id=1';
+  const originalColumns = db.prepare(metadataSql).columns();
+  statement = RawStatement.prepare(invoke, metadataSql);
+  assert.deepEqual(statement.columns(), originalColumns); assert.equal(metadataCalls, 0);
+  assert.deepEqual(statement.next(), [{ type: 'integer', value: '1' }, original, { type: 'integer', value: '2' }, '只求值一次']);
+  assert.deepEqual(statement.columns(), originalColumns); assert.equal(statement.next(), null); statement.finish(); assert.equal(metadataCalls, 1);
+  let sourceCalls = 0; db.function('probe_source_once', () => { sourceCalls++; return '原SQL调用' + sourceCalls; });
+  const first = '/*' + '🚢'.repeat(300000) + '*/ SELECT probe_source_once() AS "列🚢";', rest = '\n SELECT probe_source_once()';
+  const nativePrefix = db.prepare(first + rest).sourceSQL;
+  statement = RawStatement.prepare(invoke, first + rest);
+  assert.equal(statement.sourceSQL, first); assert.equal(statement.sourceSQL, nativePrefix); assert.equal(statement.hasStatement, true);
+  assert.equal(sourceCalls, 0); assert.deepEqual(statement.next(), ['原SQL调用1']); assert.equal(statement.next(), null); statement.finish(); assert.equal(sourceCalls, 1);
+  statement = RawStatement.prepare(invoke, rest); assert.deepEqual(statement.next(), ['原SQL调用2']); statement.finish(); assert.equal(sourceCalls, 2);
+  statement = RawStatement.prepare(invoke, 'SELECT 1');
+  assert.throws(() => closed.next()); closed.finish(); assert.deepEqual(statement.next(), [{ type: 'integer', value: '1' }]); statement.finish();
+  statement = RawStatement.prepare(invoke, '/*纯注释🚢*/ -- 没有SQL');
+  assert.equal(statement.hasStatement, false); assert.deepEqual(statement.columns(), []); assert.deepEqual(statement.parameterNames(), []); assert.equal(statement.next(), null); statement.finish();
+  assert.equal(invoke(12), 0); const chunk = Buffer.alloc(65536, 32);
+  for (let index = 0; index < 320; index++) assert.equal(invoke(13, chunk), (index + 1) * 65536);
+  assert.throws(() => invoke(13, new Uint8Array([32])), /DBARK_RAW_PROBE_INVALID/); invoke(2);
+  assert.equal(invoke(12), 0); invoke(13, new Uint8Array([0xc0, 0x80])); assert.throws(() => invoke(14), /DBARK_RAW_PROBE_INVALID/); invoke(2);
+  db.exec('CREATE TEMP TABLE probe_boundary_audit(note)');
+  const trigger = "CREATE TEMP TRIGGER probe_boundary AFTER INSERT ON subject BEGIN INSERT INTO probe_boundary_audit VALUES('分号;不是边界'); INSERT INTO probe_boundary_audit VALUES('第二句'); END;";
+  const nativeTrigger = db.prepare(trigger + rest).sourceSQL;
+  statement = RawStatement.prepare(invoke, trigger + rest); assert.equal(statement.sourceSQL, nativeTrigger); assert.equal(statement.sourceSQL, trigger);
+  assert.deepEqual(statement.columns(), []); assert.equal(statement.next(), null); statement.finish(); assert.equal(sourceCalls, 2);
+  let badSteps = 0, badError;
+  statement = RawStatement.prepare((op, value) => { if (op === 1) badSteps++; return invoke(op, value); }, 'SELECT v FROM subject WHERE id=2');
+  assert.throws(() => statement.next(), error => { badError = error; return error.code === 'SQLITE_TEXT_ENCODING_UNREPRESENTABLE'; });
+  assert.throws(() => statement.next(), error => error === badError); assert.equal(badSteps, 1); statement.finish();
+  return { positionalTypesKept: true, namedSlotsKept: true, duplicateColumnsKept: true, metadataMatchesNative: true, metadataCalls, longSqlBytes: Buffer.byteLength(first + rest), prefixMatchesNative: true, sourceCalls, triggerBoundaryKept: true, badSteps, badTextFailureSticky: true, maximumSqlBytes: 20 * 1024 * 1024, overBudgetRejected: true, invalidSqlUtf8Rejected: true, staleObjectIsolated: true };
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

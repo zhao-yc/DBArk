@@ -5,21 +5,25 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/sqlite-raw-probe.yml'
-      - 'research/sqlite-raw-bridge/**'
+      - 'research/sqlite-raw-bridge/rawProbe.c'
       - 'src/engine/sqlite/rawValue.ts'
+      - 'src/engine/sqlite/rawStatement.ts'
       - 'src/engine/sqlite/protocol.ts'
       - 'scripts/sqlite-raw-probe.mjs'
       - 'tests/unit/sqlite-raw-value.test.ts'
+      - 'tests/unit/sqlite-raw-statement.test.ts'
       - 'package.json'
       - 'pnpm-lock.yaml'
   pull_request:
     paths:
       - '.github/workflows/sqlite-raw-probe.yml'
-      - 'research/sqlite-raw-bridge/**'
+      - 'research/sqlite-raw-bridge/rawProbe.c'
       - 'src/engine/sqlite/rawValue.ts'
+      - 'src/engine/sqlite/rawStatement.ts'
       - 'src/engine/sqlite/protocol.ts'
       - 'scripts/sqlite-raw-probe.mjs'
       - 'tests/unit/sqlite-raw-value.test.ts'
+      - 'tests/unit/sqlite-raw-statement.test.ts'
       - 'package.json'
       - 'pnpm-lock.yaml'
   workflow_dispatch:
@@ -60,7 +64,7 @@ jobs:
           if ((Get-FileHash .tools/zig/archive.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c') { throw '官方编译器摘要不符' }
           Expand-Archive -LiteralPath .tools/zig/archive.zip -DestinationPath .tools/zig
       - name: 单次验证原字节解码边界
-        run: pnpm exec vitest run tests/unit/sqlite-raw-value.test.ts
+        run: pnpm exec vitest run tests/unit/sqlite-raw-value.test.ts tests/unit/sqlite-raw-statement.test.ts --maxWorkers=1
       - name: 单次编译并验证真实SQLite原字节
         run: node scripts/sqlite-raw-probe.mjs
       - name: 记录准确源码提交
