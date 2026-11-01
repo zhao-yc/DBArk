@@ -1,6 +1,6 @@
 /** SQLite复制与新增草稿映射的集中中文文案。 */
 export const sqliteTableClipboardZh = {
-  title: '粘贴为 SQLite 新增草稿', paste: '粘贴为新增草稿', copyCell: '复制 SQLite 单元格', copyRow: '复制 SQLite 当前行', copyRange: '复制 SQLite 选区', copyAll: '复制 SQLite 当前页',
+  title: '粘贴为 SQLite 新增草稿', paste: '粘贴为新增草稿', copyCell: '复制 SQLite 单元格', copyRow: '勾选 SQLite 记录', copyRange: '复制 SQLite 选区', copyAll: '勾选 SQLite 当前页',
   preview: '预览新增草稿', previewRows: 'SQLite 粘贴前十行预览', previewHint: '仅展示前10行；暂存会保留完整映射批次，不执行SQL。', defaultValue: 'DEFAULT（省略）', generatedValue: '生成列（省略）',
   sourceColumn: '选择粘贴来源列',
   source: '剪贴板内容', mapping: '来源列映射', skip: '跳过此来源列', target: '目标字段', conversion: '写入类型', stage: '暂存新增草稿', cancel: '取消', read: '读取剪贴板', clear: '清空输入',

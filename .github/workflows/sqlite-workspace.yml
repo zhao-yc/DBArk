@@ -147,6 +147,9 @@ jobs:
       - name: 单次运行SQLite复制当前记录专项
         if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs table-duplicate
+      - name: 单次运行SQLite勾选批量删除专项
+        if: matrix.suite == 'management'
+        run: node scripts/sqlite-workspace-ci.mjs table-remove-selected
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -176,4 +179,5 @@ jobs:
             test-results/sqlite-table-reorder/
             test-results/sqlite-table-find/
             test-results/sqlite-table-duplicate/
+            test-results/sqlite-table-remove-selected/
           if-no-files-found: warn

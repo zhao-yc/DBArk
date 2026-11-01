@@ -7,13 +7,14 @@ import { sqliteTableClipboardZh as clipboardText } from '../locales/sqliteTableC
 import { encodeSqliteClipboard, writeSqliteClipboardData } from '../sqliteTableClipboard';
 import { sqliteTableRangePasteZh as rangeText } from '../locales/sqliteTableRangePaste.zh-CN';
 import type { SqlitePasteAnchor } from '../sqliteTableRangePaste';
+import type { SqliteCheckedRows } from '../sqliteTableSelection';
 import '../sqliteTableClipboard.css';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; findHit?: SqliteTableFindGridHit; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; }
+interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, findHit, sort, onSortChange }: Props) {
+export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, onCheckedRows, findHit, sort, onSortChange }: Props) {
   const ticket = {}, committed = useRef<object | undefined>(undefined);
   const grid = useRef<DataGridHandle | null>(null), handledFind = useRef<string | undefined>(undefined);
   const source = useRef({ page, rows, identity: {} }); if (source.current.page !== page || source.current.rows !== rows) source.current = { page, rows, identity: {} };
@@ -21,6 +22,48 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   const selection = useRef<{ owner: typeof owner; ids: ReadonlySet<string>; revision: object }>({ owner, ids: new Set(), revision: {} });
   if (selection.current.owner !== owner) selection.current = { owner, ids: new Set(), revision: {} };
   const selectedRows = selection.current.ids, selectionTicket = selection.current.revision;
+  // capture只读最新已提交上下文，父接纳selection引发重渲染不会撤销同源勾选。
+  const checkedContext = useRef<{ owner: typeof owner; disabled: boolean; isCurrent(): boolean } | undefined>(undefined);
+  const checkedProof = useRef<{ owner: typeof owner; revision: object; capture: SqliteCheckedRows; canRenew(): boolean; invalidate(recoverable?: boolean): void } | undefined>(undefined), checkedNotified = useRef<SqliteCheckedRows | undefined>(undefined), checkedNotify = useRef(onCheckedRows); checkedNotify.current = onCheckedRows;
+  if (checkedProof.current?.owner !== owner) checkedProof.current?.invalidate();
+  else if (disabled) checkedProof.current?.invalidate(true);
+  useLayoutEffect(() => { const context = { owner, disabled, isCurrent }; checkedContext.current = context; return () => { if (checkedContext.current === context) checkedContext.current = undefined; }; });
+  /** 每个checkbox修订绑定完整非删除原行，临时失效后只能签新token，旧token永久拒绝。 */
+  function checkedCapture(force = false): SqliteCheckedRows | undefined {
+    if (source.current !== owner || selection.current.owner !== owner) return;
+    const revision = selection.current.revision, previous = checkedProof.current;
+    if (!force && previous?.owner === owner && previous.revision === revision) return previous.capture;
+    previous?.invalidate();
+    const originalRows = [...rows], targetSignature = JSON.stringify([page.target, page.schemaKey, page.columns, page.edit?.kind === 'editable' ? [page.edit.snapshotId, page.edit.columns] : page.edit]);
+    const selected = Object.freeze(rows.filter(row => selection.current.ids.has(row.id) && !row.deleted)), original = selected.map(row => ({ row, id: row.id, index: row.index, values: row.values }));
+    let valid = true, sourceValid = true, renewable = false;
+    /** 来源失败留下独立墓碑，不能借临时disabled或Modal恢复重签到已变化的行。 */
+    const sourceCurrent = () => {
+      try {
+        const actual = rows.filter(row => selection.current.ids.has(row.id) && !row.deleted);
+        if (!sourceValid || source.current !== owner || selection.current.owner !== owner || selection.current.revision !== revision || rows.length !== originalRows.length || rows.some((row, index) => row !== originalRows[index]) || JSON.stringify([page.target, page.schemaKey, page.columns, page.edit?.kind === 'editable' ? [page.edit.snapshotId, page.edit.columns] : page.edit]) !== targetSignature || new Set(selected.map(row => row.id)).size !== selected.length || original.some(item => !rows.includes(item.row) || item.row.deleted || item.row.id !== item.id || item.row.index !== item.index || item.row.values !== item.values) || actual.length !== selected.length || actual.some((row, index) => row !== selected[index])) sourceValid = false;
+      } catch { sourceValid = false; }
+      if (!sourceValid) { valid = false; renewable = false; } return sourceValid;
+    };
+    const capture: SqliteCheckedRows = Object.freeze({ page, rows, selected, current() {
+      if (!sourceCurrent() || !valid) return false;
+      const context = checkedContext.current;
+      try { if (!context || context.owner !== owner || context.disabled || !context.isCurrent() || !noModal()) { valid = false; renewable = true; } }
+      catch { valid = false; renewable = true; }
+      return valid;
+    } });
+    checkedProof.current = { owner, revision, capture, canRenew: () => sourceCurrent() && renewable, invalidate: (recoverable = false) => { valid = false; renewable = recoverable && sourceValid; } }; return capture;
+  }
+  /** 只在事件或准确新owner提交后通知；卸载不发无目标清空，避免覆盖继任capture。 */
+  function notifyChecked(force = false): void { const capture = checkedCapture(force); if (!capture || checkedNotified.current === capture) return; checkedNotified.current = capture; try { checkedNotify.current?.(capture); } catch { checkedProof.current?.invalidate(); setError(rangeText.stale); } }
+  useEffect(() => {
+    const context = checkedContext.current; if (source.current !== owner || context?.owner !== owner) return;
+    const previous = checkedProof.current;
+    if (!previous || previous.owner !== owner || previous.revision !== selection.current.revision) { notifyChecked(); return; }
+    if (previous.capture.current() || !previous.canRenew()) return;
+    // 父layout与当前DOM均已提交，恢复时只签一次fresh token，不让旧授权复活。
+    try { if (!context.disabled && context.isCurrent() && noModal()) notifyChecked(true); } catch { /* 当前门无法确认时保留旧墓碑。 */ }
+  });
   const activeCell = useRef<{ owner: typeof owner; value?: SqlitePasteAnchor; position?: { row: SqliteDraftRow; key: string }; reason: string; revision: object }>({ owner, reason: rangeText.anchorRequired, revision: {} });
   if (activeCell.current.owner !== owner) activeCell.current = { owner, reason: rangeText.anchorRequired, revision: {} };
   const anchorTicket = activeCell.current.revision, notified = useRef<SqlitePasteAnchor | undefined>(undefined), notifyRef = useRef(onActiveCell); notifyRef.current = onActiveCell;
@@ -96,7 +139,7 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className="results-grid" columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={32} headerRowHeight={42}
     sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
-    selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={ids => { if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return; selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} }; selectionChanged(value => value + 1); }}
+    selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={ids => { if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return; selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} }; notifyChecked(); selectionChanged(value => value + 1); }}
     rowClass={row => row.deleted ? 'row-deleted' : row.index === undefined ? 'row-inserted' : undefined}
     onCellClick={({ row, column }) => { if (baseCurrent(row)) { onSelect(row); captureCell(row, column?.key); } }}
     onCellDoubleClick={({ row, column }, event) => { event.preventGridDefault(); edit(row, column.key); }}

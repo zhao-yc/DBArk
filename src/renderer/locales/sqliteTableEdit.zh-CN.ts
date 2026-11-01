@@ -21,5 +21,9 @@ export const sqliteTableEditZh = {
   kinds: { text: '文本 / JSON 文本', integer: '整数（64 位）', real: '实数（有限）', blob: '二进制（十六进制）', null: 'NULL' },
   type: (name: string) => 'SQLite 字段 ' + name + ' 类型', value: (name: string) => 'SQLite 字段 ' + name + ' 值', include: (name: string) => '写入 SQLite 字段 ' + name,
   select: (row: number) => '选择 SQLite 第 ' + row + ' 行',
+  removeSelected: '删除 SQLite 勾选记录',
+  removeSelectedCount: (count: number) => '已勾选 ' + count + ' 条 SQLite 当前页记录',
+  removeSelectedConfirm: (count: number) => '将当前页勾选的 ' + count + ' 条记录标记为本地待删除？本地新增记录会移除；只有预览并明确提交后才会修改数据库。',
+  bulkDeleteLimit: '累计 SQLite 草稿超过500条或原输入预算；请缩小勾选范围。',
   counts: (insert: number, update: number, remove: number) => '本地草稿：新增 ' + insert + ' 行，修改 ' + update + ' 行，删除 ' + remove + ' 行',
 };

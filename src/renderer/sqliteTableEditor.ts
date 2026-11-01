@@ -165,6 +165,37 @@ export class SqliteTableEditor {
     this.replace(this.rows.map(item => item === row ? { ...row, values: structuredClone(next) } : item));
   }
   remove(id: string): void { if (this.canEdit()) this.replace(this.rows.flatMap(row => row.id !== id ? [row] : row.index === undefined ? [] : [{ ...row, deleted: true }])); }
+  /** 勾选删除仅改变本地草稿；整批及最终累计预算通过后形成一个撤销步骤，不分配ID或发送任务。 */
+  removeRows(ids: readonly string[]): number {
+    if (!this.canEdit() || this.input || this.page.edit?.kind !== 'editable') throw Error(this.message || text.stale);
+    const edit = this.page.edit, original = this.rows, past = this.past, pastLength = past.length, future = this.future, futureLength = future.length, preview = this.previewValue, snapshotId = edit.snapshotId, schemaKey = this.page.schemaKey;
+    const width = this.page.columns.length;
+    if (!width || width > 1024 || edit.columns.length !== width || edit.columns.some((item, index) => item.name !== this.page.columns[index].name || item.generated !== !!this.page.columns[index].generated)) throw Error(text.invalid);
+    // 同步端口也可能触发来源交接；除数组身份外核对完整before，不能把重入修改混入这次删除。
+    const sourceRows = edit.rows, metadata = JSON.stringify([this.page.target, edit.snapshotId, edit.expiresAt, edit.columns, this.page.columns, edit.locator]);
+    const before = JSON.stringify([original, edit.rows]), rowRefs = original.map(row => ({ row, values: row.values }));
+    const current = () => {
+      if (!this.canEdit() || this.input || this.page.edit !== edit || edit.rows !== sourceRows || edit.snapshotId !== snapshotId || this.page.schemaKey !== schemaKey || this.rows !== original || this.past !== past || past.length !== pastLength || this.future !== future || future.length !== futureLength || this.previewValue !== preview || JSON.stringify([this.page.target, edit.snapshotId, edit.expiresAt, edit.columns, this.page.columns, edit.locator]) !== metadata || JSON.stringify([original, edit.rows]) !== before || original.length !== rowRefs.length || rowRefs.some((item, index) => original[index] !== item.row || item.row.values !== item.values)) throw Error(this.message || text.stale);
+    };
+    const requested = appendArray(ids, 0, 1500), selected = new Set<string>(), byId = new Map<string, SqliteDraftRow>();
+    for (const row of original) {
+      if (typeof row.id !== 'string' || !row.id.length || byId.has(row.id)) throw Error(text.invalid);
+      byId.set(row.id, row);
+    }
+    for (let index = 0; index < requested.length; index++) {
+      const id: unknown = Object.getOwnPropertyDescriptor(requested, String(index))!.value;
+      if (typeof id !== 'string' || !id.length || selected.has(id)) throw Error(text.invalid);
+      const row = byId.get(id);
+      if (!row || row.deleted || row.values.length !== width || row.index !== undefined && (!Number.isInteger(row.index) || row.index < 0 || row.index >= edit.rows.length)) throw Error(text.invalid);
+      selected.add(id);
+    }
+    current(); if (!selected.size) return 0;
+    const next = original.flatMap(row => !selected.has(row.id) ? [row] : row.index === undefined ? [] : [{ ...row, deleted: true }]);
+    // 删除本地新增可令最终changes为空；原schema的min(1)只在确有最终修改时适用。
+    const changes = sqliteDraftChanges(this.page, next);
+    if (changes.length && !sqliteTableEditPreviewSchema.safeParse({ snapshotId, taskId: 'sqlite-remove-selected-validation', changes }).success) throw Error(text.bulkDeleteLimit);
+    current(); this.replace(next); return selected.size;
+  }
   undo(): void { if (!this.canEdit() || !this.past.length) return; this.invalidatePreview(); this.future.push(this.rows); this.rows = this.past.pop()!; this.emit(); }
   redo(): void { if (!this.canEdit() || !this.future.length) return; this.invalidatePreview(); this.past.push(this.rows); this.rows = this.future.pop()!; this.emit(); }
   /** 明确放弃只处理本地草稿；未知提交仍不可重放，必须重新读取新快照。 */
