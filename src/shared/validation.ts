@@ -1,6 +1,7 @@
 import { sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema } from './sqliteObjects';
 import { sqliteTableMaintenanceInspectSchema, sqliteTableMaintenancePreviewSchema, sqliteTableMaintenanceApplySchema, sqliteTableMaintenanceReleaseSchema } from './sqliteTableMaintenance';
 import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteTableRenameApplySchema, sqliteTableRenameReleaseSchema } from './sqliteTableRename';
+import { sqliteTableRebuildInspectSchema, sqliteTableRebuildPreviewSchema, sqliteTableRebuildApplySchema, sqliteTableRebuildReleaseSchema } from './sqliteTableRebuild';
 import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsApplySchema, sqliteColumnsReleaseSchema } from './sqliteColumns';
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from './sqliteImportSource';
@@ -224,18 +225,22 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.objects.inspect': sqliteObjectsInspectSchema,
   'sqlite.tableMaintenance.inspect': sqliteTableMaintenanceInspectSchema,
   'sqlite.tableRename.inspect': sqliteTableRenameInspectSchema,
+  'sqlite.tableRebuild.inspect': sqliteTableRebuildInspectSchema,
   'sqlite.columns.inspect': sqliteColumnsInspectSchema,
   'sqlite.objects.preview': sqliteObjectsPreviewSchema,
   'sqlite.tableMaintenance.preview': sqliteTableMaintenancePreviewSchema,
   'sqlite.tableRename.preview': sqliteTableRenamePreviewSchema,
+  'sqlite.tableRebuild.preview': sqliteTableRebuildPreviewSchema,
   'sqlite.columns.preview': sqliteColumnsPreviewSchema,
   'sqlite.objects.apply': sqliteObjectsApplySchema,
   'sqlite.tableMaintenance.apply': sqliteTableMaintenanceApplySchema,
   'sqlite.tableRename.apply': sqliteTableRenameApplySchema,
+  'sqlite.tableRebuild.apply': sqliteTableRebuildApplySchema,
   'sqlite.columns.apply': sqliteColumnsApplySchema,
   'sqlite.objects.release': sqliteObjectsReleaseSchema,
   'sqlite.tableMaintenance.release': sqliteTableMaintenanceReleaseSchema,
   'sqlite.tableRename.release': sqliteTableRenameReleaseSchema,
+  'sqlite.tableRebuild.release': sqliteTableRebuildReleaseSchema,
   'sqlite.columns.release': sqliteColumnsReleaseSchema,
   'sqlite.indexes.inspect': sqliteIndexesInspectSchema,
   'sqlite.indexes.preview': sqliteIndexesPreviewSchema,

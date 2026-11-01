@@ -1,6 +1,7 @@
+import type { SqliteValue } from '../../src/engine/sqlite/protocol';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
-import { compareSqliteRebuildTables as compare, copySqliteRebuildComparisonInput as copyInput, copySqliteRebuildComparisonResult as copyResult, SqliteRebuildComparisonError, type SqliteRebuildComparisonInput } from '../../src/engine/sqlite/rebuildComparison';
+import { compareSqliteRebuildTables as compare, copySqliteRebuildComparisonInput as copyInput, copySqliteRebuildComparisonResult as copyResult, SqliteRebuildComparisonError, sqliteRebuildStoredKeyEquivalent as storedKeyEquivalent, type SqliteRebuildComparisonInput } from '../../src/engine/sqlite/rebuildComparison';
 
 const valueMismatch = 'SQLITE_REBUILD_COMPARISON_VALUE_MISMATCH', rowidMismatch = 'SQLITE_REBUILD_COMPARISON_ROWID_INVALID';
 /** 只比较原生内存库中已存在的两表；本夹具不冒称Main复制、提交或真实文件验收。 */
@@ -127,5 +128,73 @@ describe('SQLite比较边界、宽列、取消和完整游标', () => {
   it('原生失败只交付固定类别，不泄露函数原错、SQL或值', async () => {
     const db = new DatabaseSync(':memory:'); try { db.function('private_failure', { deterministic: true }, () => 0); db.exec('CREATE TABLE source(id INTEGER PRIMARY KEY,value AS(private_failure()) VIRTUAL); CREATE TABLE candidate(id INTEGER PRIMARY KEY,value,ordinal INTEGER NOT NULL UNIQUE); INSERT INTO source(id) VALUES(1); INSERT INTO candidate VALUES(1,0,1)'); db.function('private_failure', { deterministic: true }, () => { throw Error('PRIVATE_ROW_VALUE_915'); }); db.exec('BEGIN IMMEDIATE'); const input = { source: 'source', candidate: 'candidate', sourceOrder: ['id'], candidateOrdinal: 'ordinal', columns: ['id', 'value'], rowid: { source: 'id', candidate: 'id' } }; let failure: unknown; try { await compare(db, input, control()); } catch (reason) { failure = reason; } expect(failure).toBeInstanceOf(SqliteRebuildComparisonError); expect(failure).toMatchObject({ code: 'SQLITE_REBUILD_COMPARISON_NATIVE_FAILED' }); expect((failure as Error).message).not.toContain('PRIVATE'); expect((failure as Error).message).not.toContain('SELECT'); }
     finally { if (db.isTransaction) db.exec('ROLLBACK'); db.close(); }
+  });
+});
+
+
+describe('双验证表源ordinal完整证明', () => {
+  it('WR类型变化后的PK顺序与旧ordinal相反，源序号独立核验而主值按当前PK对齐', async () => {
+    const db = new DatabaseSync(':memory:'); try {
+      db.exec("CREATE TABLE source(key TEXT PRIMARY KEY,value TEXT,old_order INTEGER NOT NULL UNIQUE) WITHOUT ROWID; CREATE TABLE candidate(key TEXT PRIMARY KEY,value TEXT,new_order INTEGER NOT NULL UNIQUE) WITHOUT ROWID; INSERT INTO source VALUES('2','two',1),('10','ten',2); INSERT INTO candidate SELECT key,value,ROW_NUMBER() OVER(ORDER BY key COLLATE BINARY ASC) FROM source; BEGIN IMMEDIATE");
+      const input = { source: 'source', candidate: 'candidate', sourceOrder: ['key'], sourceOrdinal: 'old_order', candidateOrdinal: 'new_order', columns: ['key', 'value'] }; expect((await compare(db, input, control())).verifiedRows).toBe('2');
+      await expect(compare(db, { ...input, sourceOrdinal: undefined }, control())).rejects.toMatchObject({ code: 'SQLITE_REBUILD_COMPARISON_COLUMNS_INVALID' });
+      db.exec("UPDATE candidate SET value='CHANGED' WHERE key='2'"); await expect(compare(db, input, control())).rejects.toMatchObject({ code: valueMismatch });
+    } finally { if (db.isTransaction) db.exec('ROLLBACK'); db.close(); }
+  });
+  it('普通表两端同名ordinal合法，仍逐值核真实rowid并拒隐藏rowid变化', async () => fixture(async (db, base) => {
+    db.exec("INSERT INTO source VALUES(100,'a',1),(205,'b',2); INSERT INTO candidate SELECT * FROM source"); const input = { ...base, sourceOrdinal: 'ordinal' }; expect((await compare(db, input, control())).verifiedRows).toBe('2');
+    db.exec('UPDATE candidate SET id=101 WHERE id=100'); await expect(compare(db, input, control())).rejects.toMatchObject({ code: rowidMismatch });
+  }, 'CREATE TABLE source(id INTEGER PRIMARY KEY,value,ordinal INTEGER NOT NULL UNIQUE); CREATE TABLE candidate(id INTEGER PRIMARY KEY,value,ordinal INTEGER NOT NULL UNIQUE)'));
+  it.each(['old_order TEXT NOT NULL UNIQUE', 'old_order INTEGER UNIQUE', 'old_order INTEGER NOT NULL', 'old_order INTEGER NOT NULL, UNIQUE(old_order,id)'])('源序号%s不能替代真实完整单列整数唯一证明', async declaration => fixture(async (db, base) => {
+    await expect(compare(db, { ...base, sourceOrdinal: 'old_order' }, control())).rejects.toMatchObject({ code: 'SQLITE_REBUILD_COMPARISON_ORDINAL_INVALID' });
+  }, 'CREATE TABLE source(id INTEGER PRIMARY KEY,value,' + declaration + '); CREATE TABLE candidate(id INTEGER PRIMARY KEY,value,ordinal INTEGER NOT NULL UNIQUE)'));
+  it.each([0, 2, -1])('源序号首值%s或缺号不能被候选连续序号掩盖', async ordinal => fixture(async (db, base) => {
+    db.prepare("INSERT INTO source VALUES(1,'a',?)").run(ordinal); db.exec("INSERT INTO candidate VALUES(1,'a',1)"); await expect(compare(db, { ...base, sourceOrdinal: 'old_order' }, control())).rejects.toMatchObject({ code: 'SQLITE_REBUILD_COMPARISON_ORDINAL_INVALID' });
+  }, 'CREATE TABLE source(id INTEGER PRIMARY KEY,value,old_order INTEGER NOT NULL UNIQUE); CREATE TABLE candidate(id INTEGER PRIMARY KEY,value,ordinal INTEGER NOT NULL UNIQUE)'));
+  it('带源ordinal仍必须提供准确WR全PK，不能以任意列或部分键冒充已验证身份', async () => {
+    const db = new DatabaseSync(':memory:'); try { db.exec('CREATE TABLE source(a,b,value,old_order INTEGER NOT NULL UNIQUE,PRIMARY KEY(a,b)) WITHOUT ROWID; CREATE TABLE candidate(a,b,value,ordinal INTEGER NOT NULL UNIQUE,PRIMARY KEY(a,b)) WITHOUT ROWID; BEGIN IMMEDIATE');
+      const input = { source: 'source', candidate: 'candidate', sourceOrdinal: 'old_order', candidateOrdinal: 'ordinal', sourceOrder: ['a'], columns: ['a', 'b', 'value'] }; await expect(compare(db, input, control())).rejects.toMatchObject({ code: 'SQLITE_REBUILD_COMPARISON_SOURCE_ORDER_INVALID' }); expect((await compare(db, { ...input, sourceOrder: ['a', 'b'] }, control())).verifiedRows).toBe('0');
+    } finally { if (db.isTransaction) db.exec('ROLLBACK'); db.close(); }
+  });
+  it('sourceOrdinal严格复制且不属于用户列；getter、坏Unicode和额外源列均拒绝', async () => fixture(async (db, base) => {
+    const input = { ...base, sourceOrdinal: 'old_order' }; expect(copyInput(input).sourceOrdinal).toBe('old_order'); expect(() => copyInput({ ...base, sourceOrdinal: 'value' })).toThrow(); expect(() => copyInput({ ...base, sourceOrdinal: '\ud800' })).toThrow();
+    const getter = vi.fn(() => 'old_order'); const accessed = { ...base }; Object.defineProperty(accessed, 'sourceOrdinal', { enumerable: true, get: getter }); expect(() => copyInput(accessed)).toThrow(); expect(getter).not.toHaveBeenCalled(); await expect(compare(db, input, control())).rejects.toMatchObject({ code: 'SQLITE_REBUILD_COMPARISON_COLUMNS_INVALID' });
+  }, 'CREATE TABLE source(id INTEGER PRIMARY KEY,value,old_order INTEGER NOT NULL UNIQUE,extra); CREATE TABLE candidate(id INTEGER PRIMARY KEY,value,ordinal INTEGER NOT NULL UNIQUE)'));
+});
+
+
+describe('外键违规行typed主键身份复用全量比较精度门', () => {
+  const integer = (value: string): SqliteValue => ({ type: 'integer', value }), real = (value: string): SqliteValue => ({ type: 'real', value }), binary = (value: string): SqliteValue => ({ type: 'binary', base64: value });
+  it('保持原storage和有符号int64；不同storage缺省不得替换同一违规行身份', () => {
+    for (const value of ['-9223372036854775808', '-1', '0', '9223372036854775807']) expect(storedKeyEquivalent(integer(value), integer(value), false)).toBe(true);
+    expect(storedKeyEquivalent(integer('9223372036854775807'), integer('9223372036854775806'), false)).toBe(false); expect(storedKeyEquivalent(integer('2'), real('2'), false)).toBe(false); expect(storedKeyEquivalent(integer('2'), '2', false)).toBe(false); expect(storedKeyEquivalent(null, null, false)).toBe(true); expect(storedKeyEquivalent(null, '', true)).toBe(false);
+  });
+  it('跨storage必须逐列获权且整数/REAL转换由BigInt反算证明，不能只比较Number', () => {
+    expect(storedKeyEquivalent(integer('9007199254740992'), real('9007199254740992'), true)).toBe(true); expect(storedKeyEquivalent(integer('9007199254740993'), real('9007199254740992'), true)).toBe(false); expect(storedKeyEquivalent(integer('9223372036854775807'), real('9223372036854776000'), true)).toBe(false); expect(storedKeyEquivalent(real('1.5'), integer('1'), true)).toBe(false);
+    expect(storedKeyEquivalent('9223372036854775807', integer('9223372036854775807'), true)).toBe(true); for (const value of ['001', '+1', '-0', '1\0']) expect(storedKeyEquivalent(value, integer('1'), true)).toBe(false);
+  });
+  it('TEXT到REAL仍要求canonical与精确十进制有理数，表面Number往返不能冒充身份', () => {
+    expect(storedKeyEquivalent('1.5', real('1.5'), true)).toBe(true); expect(storedKeyEquivalent('0.125', real('0.125'), true)).toBe(true); expect(storedKeyEquivalent('0.1', real('0.1'), true)).toBe(false); expect(storedKeyEquivalent('5e-324', real('5e-324'), true)).toBe(false);
+    expect(storedKeyEquivalent(real('0.10000000000000002'), '0.10000000000000002', true)).toBe(true); expect(storedKeyEquivalent(real('0.10000000000000002'), '0.1', true)).toBe(false);
+    // Root的等数量违规替换反例依赖此区别：旧TEXT2.0不能冒充原INTEGER2的严格行身份。
+    expect(storedKeyEquivalent('2.0', integer('2'), false)).toBe(false); expect(storedKeyEquivalent(real('2'), '2.0', true)).toBe(true);
+  });
+  it('负零按原REAL位保存，Infinity同storage可匹配，跨storage无穷不获转换权', () => {
+    expect(storedKeyEquivalent(real('-0'), real('-0'), false)).toBe(true); expect(storedKeyEquivalent(real('-0'), real('0'), false)).toBe(false); expect(storedKeyEquivalent(real('-0'), integer('0'), true)).toBe(false); expect(storedKeyEquivalent(real('-0'), '-0', true)).toBe(true); expect(storedKeyEquivalent('-0', real('-0'), true)).toBe(true);
+    for (const value of ['Infinity', '-Infinity']) { expect(storedKeyEquivalent(real(value), real(value), false)).toBe(true); expect(storedKeyEquivalent(real(value), value, true)).toBe(false); expect(storedKeyEquivalent(value, real(value), true)).toBe(false); }
+  });
+  it('TEXT完整Unicode/UTF8/BOM/NUL与BLOB原字节比较，禁止前缀、替换字符或编码近似', () => {
+    const value = '\uFEFF中文🚢\0尾\0'; expect(storedKeyEquivalent(value, value, false)).toBe(true); expect(storedKeyEquivalent(value, value.slice(1), false)).toBe(false); expect(storedKeyEquivalent('a\0b', 'a', true)).toBe(false); expect(storedKeyEquivalent('é', 'e\u0301', true)).toBe(false);
+    expect(storedKeyEquivalent(binary('AP+A'), binary('AP+A'), false)).toBe(true); expect(storedKeyEquivalent(binary('AP+A'), binary('AP+B'), false)).toBe(false); expect(storedKeyEquivalent(binary(''), '', true)).toBe(false); expect(storedKeyEquivalent(binary(Buffer.from(value).toString('base64')), value, true)).toBe(false);
+  });
+  it('拒绝伪造tag、非canonical数字或Base64、越界、原型与getter，错误不回显任何原值', () => {
+    const getter = vi.fn(() => 'PRIVATE_VALUE'), accessed = { type: 'integer' }; Object.defineProperty(accessed, 'value', { enumerable: true, get: getter });
+    const invalid: unknown[] = [1, NaN, undefined, { type: 'integer', value: '01' }, { type: 'integer', value: '+1' }, { type: 'integer', value: '-0' }, { type: 'integer', value: '9223372036854775808' }, { type: 'integer', value: '-9223372036854775809' }, { type: 'real', value: 'NaN' }, { type: 'real', value: '1.0' }, { type: 'real', value: ' 1' }, { type: 'real', value: '1e999' }, { type: 'binary', base64: 'AA' }, { type: 'binary', base64: 'AB==' }, { type: 'binary', base64: 'AA==\n' }, { type: 'integer', value: '1', extra: 'PRIVATE_VALUE' }, Object.assign(Object.create({ secret: 'PRIVATE_VALUE' }), { type: 'integer', value: '1' }), accessed, '\ud800', 'x'.repeat(1024 * 1024 + 1), '🚢'.repeat(262145)];
+    for (const value of invalid) { let error: unknown; try { storedKeyEquivalent(value as SqliteValue, null, false); } catch (reason) { error = reason; } expect(error).toBeInstanceOf(SqliteRebuildComparisonError); expect(error).toMatchObject({ code: 'SQLITE_REBUILD_COMPARISON_INPUT_INVALID' }); expect((error as Error).message).not.toContain('PRIVATE_VALUE'); }
+    expect(getter).not.toHaveBeenCalled(); expect(() => storedKeyEquivalent('x', 'x', 1 as any)).toThrow(SqliteRebuildComparisonError);
+  });
+  it('null原型的准确自有字段可用，读取失败的Proxy仅得到固定输入错误', () => {
+    const value = Object.assign(Object.create(null), { type: 'integer', value: '-1' }); expect(storedKeyEquivalent(value, integer('-1'), false)).toBe(true);
+    const bad = new Proxy({}, { getPrototypeOf() { throw Error('PRIVATE_VALUE'); } }); expect(() => storedKeyEquivalent(bad as SqliteValue, integer('0'), false)).toThrow(SqliteRebuildComparisonError);
   });
 });

@@ -1,3 +1,4 @@
+import { emptySqliteTableRebuildMain } from '../helpers/sqliteCreateCleanupPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { emptySqliteCreateCleanup, emptySqliteTableCreateMain, emptySqliteTableImportMain, emptySqliteIndexesMain, emptySqliteColumnsMain, emptySqliteTableRenameMain, emptySqliteTableMaintenanceMain, emptySqliteObjectsMain } from '../helpers/sqliteCreateCleanupPort';
@@ -109,7 +110,7 @@ function harness() {
   const owners = () => ({ has: () => false, drain: vi.fn(async () => undefined), observe: vi.fn(), invalidateConnection: vi.fn() });
   const context = createContext({
     closeSqliteDatabaseCreates: emptySqliteCreateCleanup(),
-    sqliteObjects: emptySqliteObjectsMain(), sqliteTableMaintenance: emptySqliteTableMaintenanceMain(), sqliteTableRename: emptySqliteTableRenameMain(), sqliteColumns: emptySqliteColumnsMain(), sqliteIndexes: emptySqliteIndexesMain(), sqliteTableCreates: emptySqliteTableCreateMain(), sqliteTableImports: emptySqliteTableImportMain(),
+    sqliteTableRebuild: emptySqliteTableRebuildMain(), sqliteObjects: emptySqliteObjectsMain(), sqliteTableMaintenance: emptySqliteTableMaintenanceMain(), sqliteTableRename: emptySqliteTableRenameMain(), sqliteColumns: emptySqliteColumnsMain(), sqliteIndexes: emptySqliteIndexesMain(), sqliteTableCreates: emptySqliteTableCreateMain(), sqliteTableImports: emptySqliteTableImportMain(),
     Error, Date, Map, Set, Promise, console, setTimeout, clearTimeout, resolveFileToken, persistedTaskMessage, validateMainCommand: validateCommand,
     tasks, files, broker, store, window: { webContents, isDestroyed: () => false }, rendererURL: 'RAM:预检', columnsMain,
     applicationMenu: applicationMenuRamPort().menu, shuttingDown: false, shutdownComplete: false, rendererHasSettings: false, hasPendingEdits: false,

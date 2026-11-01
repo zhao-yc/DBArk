@@ -1,10 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { sqliteDriverLimits, type SqliteValue } from './protocol';
 
 /** 私有writer的全量核对不传行值；结果列分组，表字段仍沿1024用户列门。 */
 export const sqliteRebuildComparisonLimits = { columns: 1024, groupColumns: 256, batchRows: 256, nameCharacters: 512, inputBytes: 2 * 1024 * 1024, indexes: 4096 } as const;
 export interface SqliteRebuildComparisonInput {
   source: string; candidate: string; sourceOrder: string[]; candidateOrdinal: string; columns: string[];
   rowid?: { source: string; candidate: string };
+  /** 双验证表的中间源可额外包含真实连续ordinal；不把类型变更后的PK顺序当旧行顺序。 */
+  sourceOrdinal?: string;
   /** 只有预览中真实改类型的列才能获此权限；默认空名单，默认值变更不授跨storage转换。 */
   losslessColumns?: string[];
 }
@@ -56,7 +59,7 @@ function own(input: unknown, required: readonly string[], optional: readonly str
 }
 /** 独立复制原调用的数组和rowid能力，不能在发送或await后继承调用者改动。 */
 export function copySqliteRebuildComparisonInput(raw: unknown): SqliteRebuildComparisonInput {
-  const value = own(raw, ['source', 'candidate', 'sourceOrder', 'candidateOrdinal', 'columns'], ['rowid', 'losslessColumns']); let bytes = 200;
+  const value = own(raw, ['source', 'candidate', 'sourceOrder', 'candidateOrdinal', 'columns'], ['rowid', 'losslessColumns', 'sourceOrdinal']); let bytes = 200;
   const name = (input: unknown): string => { if (!validName(input) || (bytes += encoder.encode(input).length + 4) > limits.inputBytes) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID'); return input; };
   const list = (input: unknown, allowEmpty = false): string[] => {
     if (!Array.isArray(input) || Object.getPrototypeOf(input) !== Array.prototype || !allowEmpty && !input.length || input.length > limits.columns || Reflect.ownKeys(input).length !== input.length + 1) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
@@ -66,10 +69,12 @@ export function copySqliteRebuildComparisonInput(raw: unknown): SqliteRebuildCom
   };
   const source = name(value.source), candidate = name(value.candidate), candidateOrdinal = name(value.candidateOrdinal), sourceOrder = list(value.sourceOrder), columns = list(value.columns);
   if (/^sqlite_/i.test(source) || /^sqlite_/i.test(candidate) || fold(source) === fold(candidate) || columns.some(column => fold(column) === fold(candidateOrdinal))) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
+  const sourceOrdinal = value.sourceOrdinal === undefined ? undefined : name(value.sourceOrdinal);
+  if (sourceOrdinal !== undefined && columns.some(column => fold(column) === fold(sourceOrdinal))) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
   const losslessColumns = value.losslessColumns === undefined ? undefined : list(value.losslessColumns, true);
   if (losslessColumns?.some(column => !columns.includes(column))) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
   let rowid: SqliteRebuildComparisonInput['rowid']; if (value.rowid !== undefined) { const pair = own(value.rowid, ['source', 'candidate']); rowid = { source: name(pair.source), candidate: name(pair.candidate) }; }
-  return { source, candidate, sourceOrder, candidateOrdinal, columns, ...(rowid ? { rowid } : {}), ...(losslessColumns === undefined ? {} : { losslessColumns }) };
+  return { source, candidate, sourceOrder, candidateOrdinal, columns, ...(rowid ? { rowid } : {}), ...(sourceOrdinal === undefined ? {} : { sourceOrdinal }), ...(losslessColumns === undefined ? {} : { losslessColumns }) };
 }
 /** 只有相等的完整计数才可成为成功结果；私有比较不能夹带行值或SQL。 */
 export function copySqliteRebuildComparisonResult(raw: unknown): SqliteRebuildComparisonResult {
@@ -171,21 +176,62 @@ function equalCell(source: Cell, candidate: Cell, decoder: TextDecoder, allowCon
   return false;
 }
 
+/** 只接受原driver完整typed值；TEXT的原库编码字节已由调用方exact投影先证明无损。 */
+function storedKeyCell(raw: unknown): Cell {
+  if (raw === null) return { kind: 'null', value: null, bytes: null };
+  if (typeof raw === 'string') {
+    if (raw.length > sqliteDriverLimits.valueBytes || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(raw)) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
+    const bytes = encoder.encode(raw); if (bytes.byteLength > sqliteDriverLimits.valueBytes) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID'); return { kind: 'text', value: raw, bytes };
+  }
+  const value = own(raw, ['type'], ['value', 'base64']);
+  if (Object.keys(value).length !== 2) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
+  if (value.type === 'integer' && Object.hasOwn(value, 'value') && typeof value.value === 'string' && value.value.length <= 20 && /^(?:0|-?[1-9][0-9]*)$/.test(value.value)) {
+    const integer = BigInt(value.value); if (integer < -maxInteger - 1n || integer > maxInteger) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID'); return { kind: 'integer', value: integer, bytes: null };
+  }
+  if (value.type === 'real' && Object.hasOwn(value, 'value') && typeof value.value === 'string' && value.value.length <= 64) {
+    const real = Number(value.value); if (Number.isNaN(real) || (Object.is(real, -0) ? value.value !== '-0' : String(real) !== value.value)) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID'); return { kind: 'real', value: real, bytes: null };
+  }
+  if (value.type === 'binary' && Object.hasOwn(value, 'base64') && typeof value.base64 === 'string' && value.base64.length <= Math.ceil(sqliteDriverLimits.valueBytes / 3) * 4) {
+    const bytes = Buffer.from(value.base64, 'base64'); if (bytes.byteLength > sqliteDriverLimits.valueBytes || bytes.toString('base64') !== value.base64) return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID'); return { kind: 'blob', value: bytes, bytes: null };
+  }
+  return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
+}
+/** FK旧违规行的真实PK身份复用同一精度证明；仅已批准改type的准确列可获跨storage转换。 */
+export function sqliteRebuildStoredKeyEquivalent(source: SqliteValue, candidate: SqliteValue, allowConversion: boolean): boolean {
+  try {
+    if (typeof allowConversion !== 'boolean') return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID');
+    return equalCell(storedKeyCell(source), storedKeyCell(candidate), new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }), allowConversion);
+  } catch (reason) { if (reason instanceof SqliteRebuildComparisonError) throw reason; return fail('SQLITE_REBUILD_COMPARISON_INPUT_INVALID'); }
+}
+
 /** 在同writer事务中按稳定原顺序与候选连续ordinal全量比较，每组至多770结果列。 */
 export async function compareSqliteRebuildTables(db: DatabaseSync, raw: SqliteRebuildComparisonInput, control: SqliteRebuildComparisonControl): Promise<SqliteRebuildComparisonResult> {
   const input = copySqliteRebuildComparisonInput(raw); control.check(); if (!db.isTransaction) return fail('SQLITE_REBUILD_COMPARISON_TRANSACTION_REQUIRED');
   const sourceWithout = withoutRowid(db, input.source, control), candidateWithout = withoutRowid(db, input.candidate, control), sourceColumns = columns(db, input.source, control), candidateColumns = columns(db, input.candidate, control);
   if (sourceWithout !== candidateWithout) return fail('SQLITE_REBUILD_COMPARISON_ROWID_INVALID');
-  if (sourceColumns.length !== input.columns.length || sourceColumns.some((column, index) => column.name !== input.columns[index]) || candidateColumns.length !== input.columns.length + 1 || candidateColumns.filter(column => column.name !== input.candidateOrdinal).some((column, index) => column.name !== input.columns[index])) return fail('SQLITE_REBUILD_COMPARISON_COLUMNS_INVALID');
-  const ordinal = candidateColumns.find(column => column.name === input.candidateOrdinal); if (!ordinal || !ordinal.integerType || !ordinal.notNull || ordinal.hidden !== 0) return fail('SQLITE_REBUILD_COMPARISON_ORDINAL_INVALID');
-  const sourceIndexes = indexes(db, input.source, control), candidateIndexes = indexes(db, input.candidate, control); let uniqueOrdinal = false;
-  for (const index of candidateIndexes) if (index.unique && !index.partial) { const keys = keyColumns(db, index.name, control); if (keys?.length === 1 && keys[0] === input.candidateOrdinal) uniqueOrdinal = true; }
-  if (!uniqueOrdinal) return fail('SQLITE_REBUILD_COMPARISON_ORDINAL_INVALID');
+  if (sourceColumns.length !== input.columns.length + (input.sourceOrdinal ? 1 : 0) || sourceColumns.filter(column => column.name !== input.sourceOrdinal).some((column, index) => column.name !== input.columns[index]) || candidateColumns.length !== input.columns.length + 1 || candidateColumns.filter(column => column.name !== input.candidateOrdinal).some((column, index) => column.name !== input.columns[index])) return fail('SQLITE_REBUILD_COMPARISON_COLUMNS_INVALID');
+  const sourceIndexes = indexes(db, input.source, control), candidateIndexes = indexes(db, input.candidate, control);
+  /** 源与候选ordinal均由真实NOT NULL INTEGER和准确完整单列唯一索引授权。 */
+  const assertOrdinal = (name: string, fields: Column[], allIndexes: Index[]) => {
+    const ordinal = fields.find(column => column.name === name); if (!ordinal || !ordinal.integerType || !ordinal.notNull || ordinal.hidden !== 0) return fail('SQLITE_REBUILD_COMPARISON_ORDINAL_INVALID');
+    for (const index of allIndexes) if (index.unique && !index.partial) { const keys = keyColumns(db, index.name, control); if (keys?.length === 1 && keys[0] === name) return; }
+    return fail('SQLITE_REBUILD_COMPARISON_ORDINAL_INVALID');
+  };
+  assertOrdinal(input.candidateOrdinal, candidateColumns, candidateIndexes);
+  if (input.sourceOrdinal) assertOrdinal(input.sourceOrdinal, sourceColumns, sourceIndexes);
   if (sourceWithout) {
     if (input.rowid) return fail('SQLITE_REBUILD_COMPARISON_ROWID_INVALID'); const primary = sourceColumns.filter(column => column.pk > 0).sort((left, right) => left.pk - right.pk), primaryIndex = sourceIndexes.filter(index => index.origin === 'pk');
     if (!primary.length || primary.some((column, index) => column.pk !== index + 1) || input.sourceOrder.length !== primary.length || primary.some((column, index) => column.name !== input.sourceOrder[index]) || primaryIndex.length !== 1 || !primaryIndex[0].unique || primaryIndex[0].partial) return fail('SQLITE_REBUILD_COMPARISON_SOURCE_ORDER_INVALID');
     const keys = keyColumns(db, primaryIndex[0].name, control); if (!keys || keys.length !== primary.length || keys.some((key, index) => key !== primary[index].name)) return fail('SQLITE_REBUILD_COMPARISON_SOURCE_ORDER_INVALID');
   } else if (!input.rowid || input.sourceOrder.length !== 1 || input.sourceOrder[0] !== input.rowid.source || !actualRowid(input.rowid.source, sourceColumns, sourceIndexes) || !actualRowid(input.rowid.candidate, candidateColumns, candidateIndexes)) return fail('SQLITE_REBUILD_COMPARISON_ROWID_INVALID');
+  let sourceOrdinalRows: bigint | undefined;
+  // 原ordinal仅证明这是准确中间候选；主游标仍按当前真实PK总序，不能把旧行序强套新类型PK。
+  if (input.sourceOrdinal) {
+    const cursor = openCursor(db, 'SELECT ' + quote(input.sourceOrdinal) + ' FROM main.' + quote(input.source) + ' ORDER BY ' + quote(input.sourceOrdinal) + ' ASC'); let count = 0n;
+    try { for (;;) { control.check(); const item = next(cursor); if (item.done) break; count++; if (count > maxInteger || row(item.value, 1)[0] !== count) return fail('SQLITE_REBUILD_COMPARISON_ORDINAL_INVALID'); if (count % BigInt(limits.batchRows) === 0n) { await control.yield(); control.check(); } } }
+    finally { if (!close(cursor)) fail('SQLITE_REBUILD_COMPARISON_CLEANUP_FAILED'); }
+    sourceOrdinalRows = count;
+  }
   const encodingRows = metadata(db, 'PRAGMA main.encoding', [], 1, control); if (encodingRows.length !== 1 || encodingRows[0].length !== 1) return fail('SQLITE_REBUILD_COMPARISON_NATIVE_FAILED');
   const encoding = encodingRows[0][0], label = encoding === 'UTF-8' ? 'utf-8' : encoding === 'UTF-16le' ? 'utf-16le' : encoding === 'UTF-16be' ? 'utf-16be' : undefined; if (!label) return fail('SQLITE_REBUILD_COMPARISON_NATIVE_FAILED');
   const decoder = new TextDecoder(label, { fatal: true, ignoreBOM: true }), columnGroups = Math.ceil(input.columns.length / limits.groupColumns), losslessColumns = new Set(input.losslessColumns ?? []); let expectedRows: bigint | undefined, cumulative = 0n, published: bigint | undefined;
@@ -211,6 +257,6 @@ export async function compareSqliteRebuildTables(db: DatabaseSync, raw: SqliteRe
     } finally { const sourceClosed = close(sourceCursor), candidateClosed = close(candidateCursor); if (!sourceClosed || !candidateClosed) fail('SQLITE_REBUILD_COMPARISON_CLEANUP_FAILED'); }
     if (expectedRows !== undefined && expectedRows !== compared) return fail('SQLITE_REBUILD_COMPARISON_ROW_COUNT_MISMATCH'); expectedRows = compared; await progress();
   }
-  control.check(); if (!db.isTransaction) return fail('SQLITE_REBUILD_COMPARISON_TRANSACTION_REQUIRED'); const rows = (expectedRows ?? 0n).toString();
+  control.check(); if (sourceOrdinalRows !== undefined && sourceOrdinalRows !== expectedRows) return fail('SQLITE_REBUILD_COMPARISON_ROW_COUNT_MISMATCH'); if (!db.isTransaction) return fail('SQLITE_REBUILD_COMPARISON_TRANSACTION_REQUIRED'); const rows = (expectedRows ?? 0n).toString();
   return copySqliteRebuildComparisonResult({ sourceRows: rows, candidateRows: rows, verifiedRows: rows, columnGroups });
 }

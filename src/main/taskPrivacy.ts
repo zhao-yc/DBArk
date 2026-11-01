@@ -1,6 +1,7 @@
 import { sqliteObjectsTaskMessage } from '../shared/sqliteObjectsFact';
 import { sqliteTableMaintenanceTaskMessage } from '../shared/sqliteTableMaintenanceFact';
 import { sqliteTableRenameTaskMessage } from '../shared/sqliteTableRenameFact';
+import { sqliteTableRebuildTaskMessage } from '../shared/sqliteTableRebuildFact';
 import { sqliteColumnsTaskMessage } from '../shared/sqliteColumnsFact';
 import { sqliteImportTaskMessage } from '../shared/sqliteTableImportFact';
 import { sqliteIndexesTaskMessage } from '../shared/sqliteIndexesFact';
@@ -14,6 +15,7 @@ export function persistedTaskMessage(command: string, event: TaskEvent): string 
   if (command.startsWith('sqlite.objects.')) return sqliteObjectsTaskMessage(command, event.status);
   if (command.startsWith('sqlite.tableMaintenance.')) return sqliteTableMaintenanceTaskMessage(command, event.status);
   if (command.startsWith('sqlite.tableRename.')) return sqliteTableRenameTaskMessage(command, event.status);
+  if (command.startsWith('sqlite.tableRebuild.')) return sqliteTableRebuildTaskMessage(command, event.status);
   if (command.startsWith('sqlite.columns.')) return sqliteColumnsTaskMessage(command, event.status);
   if (command.startsWith('sqlite.indexes.')) return sqliteIndexesTaskMessage(command, event.status);
   if (command.startsWith('sqlite.tableImport.') || command.startsWith('sqlite.importSource.')) return sqliteImportTaskMessage(command, event.status);

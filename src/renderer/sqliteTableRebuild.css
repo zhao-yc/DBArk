@@ -1,0 +1,6 @@
+.sqlite-table-rebuild pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
+.sqlite-table-rebuild .sqlite-rebuild-scroll { max-height: 240px; overflow: auto; }
+.sqlite-table-rebuild td { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sqlite-table-rebuild .sqlite-rebuild-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.sqlite-table-rebuild .sqlite-rebuild-acks { display: grid; gap: 8px; margin: 12px 0; }
+@media (max-width: 700px) { .sqlite-table-rebuild .sqlite-rebuild-fields { grid-template-columns: 1fr; } }

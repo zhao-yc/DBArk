@@ -1,3 +1,4 @@
+import { SqliteTableRebuildMain } from '../../src/main/sqliteTableRebuildMain';
 import { SqliteObjectsMain } from '../../src/main/sqliteObjectsMain';
 import { SqliteTableMaintenanceMain } from '../../src/main/sqliteTableMaintenanceMain';
 import { SqliteTableRenameMain } from '../../src/main/sqliteTableRenameMain';
@@ -60,4 +61,10 @@ export function emptySqliteTableMaintenanceMain(): SqliteTableMaintenanceMain {
 export function emptySqliteObjectsMain(): SqliteObjectsMain {
   const unexpected = () => { throw Error('旧退出夹具未登记SQLite对象定义操作'); };
   return new SqliteObjectsMain({ assert: unexpected, same: unexpected, revision: () => 0, epoch: () => ({}), available: unexpected, closing: () => false, profile: () => undefined, request: async () => unexpected(), task: () => undefined, replace: unexpected, save: unexpected, event: unexpected });
+}
+
+/** 原退出场景没有重建操作，仍运行真实Main协调器的初始空账本drain。 */
+export function emptySqliteTableRebuildMain(): SqliteTableRebuildMain {
+  const unexpected = () => { throw Error('旧退出夹具未登记SQLite表重建操作'); };
+  return new SqliteTableRebuildMain({ assert: unexpected, same: unexpected, revision: () => 0, epoch: () => ({}), available: unexpected, closing: () => false, profile: () => undefined, request: async () => unexpected(), task: () => undefined, replace: unexpected, save: unexpected, event: unexpected });
 }

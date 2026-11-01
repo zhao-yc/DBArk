@@ -2,6 +2,7 @@ import { recoverSqliteObjectsTask } from '../shared/sqliteObjectsFact';
 import { recoverSqliteTableMaintenanceTask } from '../shared/sqliteTableMaintenanceFact';
 import { recoverSqliteTableRenameTask } from '../shared/sqliteTableRenameFact';
 import { recoverSqliteIndexesTask } from '../shared/sqliteIndexesFact';
+import { recoverSqliteTableRebuildTask } from '../shared/sqliteTableRebuildFact';
 import { recoverSqliteColumnsTask } from '../shared/sqliteColumnsFact';
 import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
 import { recoverSqliteImportTask } from '../shared/sqliteTableImportFact';
@@ -156,6 +157,11 @@ export class LocalStore {
     // 表重命名只恢复最小事实；新名、目录、导航身份和原ALTER不会成为重放任务。
     for (const task of this.tasks()) if (task.kind.startsWith('sqlite.tableRename.')) {
       const restored = recoverSqliteTableRenameTask(task);
+      if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
+    }
+    // 重建只恢复最小行数与事务ACK，草稿、完整SQL和临时候选能力不恢复。
+    for (const task of this.tasks()) if (task.kind.startsWith('sqlite.tableRebuild.')) {
+      const restored = recoverSqliteTableRebuildTask(task);
       if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
     }
     for (const task of this.tasks()) if (task.kind.startsWith('sqlite.columns.')) {

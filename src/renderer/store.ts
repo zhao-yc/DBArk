@@ -1,3 +1,5 @@
+import { assertSqliteTableRebuildFactTransition, sqliteTableRebuildFactSchema } from '../shared/sqliteTableRebuild';
+import { sqliteTableRebuildFactMessage, sqliteTableRebuildTaskMessage } from '../shared/sqliteTableRebuildFact';
 import { assertSqliteObjectsFactTransition, sqliteObjectsFactSchema } from '../shared/sqliteObjects';
 import { sqliteObjectsFactMessage, sqliteObjectsTaskMessage } from '../shared/sqliteObjectsFact';
 import { assertSqliteTableMaintenanceFactTransition, sqliteTableMaintenanceFactSchema } from '../shared/sqliteTableMaintenance';
@@ -231,6 +233,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 已终态的文件任务不被迟到事件复活或改写；原RPC仍可通过专用收尾发布真实事实。
     if (state.queryFileTasks[event.taskId]?.running === false) return {};
     const previous = state.tasks.find(task => task.id === event.taskId);
+    const rebuildKind = event.sqliteTableRebuildOperation ? `sqlite.tableRebuild.${event.sqliteTableRebuildOperation}` : undefined;
+    if (rebuildKind && (event.sqliteObjectsOperation || event.sqliteTableMaintenanceOperation || event.sqliteTableRenameOperation || event.sqliteColumnsOperation || event.sqliteIndexesOperation || event.sqliteImportOperation || event.sqliteCreateOperation)) return {};
+    if (rebuildKind && previous && previous.kind !== rebuildKind && previous.kind !== zh.workspace.text001) return {};
     const objectsKind = event.sqliteObjectsOperation ? `sqlite.objects.${event.sqliteObjectsOperation}` : undefined;
     if (objectsKind && (event.sqliteTableMaintenanceOperation || event.sqliteTableRenameOperation || event.sqliteColumnsOperation || event.sqliteIndexesOperation || event.sqliteImportOperation || event.sqliteCreateOperation)) return {};
     if (objectsKind && previous && previous.kind !== objectsKind && previous.kind !== zh.workspace.text001) return {};
@@ -258,6 +263,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (maintenanceKind) task.kind = maintenanceKind;
     if (renameKind) task.kind = renameKind;
     if (columnsKind) task.kind = columnsKind;
+    if (rebuildKind) task.kind = rebuildKind;
     const objectsTask = task.kind.startsWith('sqlite.objects.');
     if (objectsTask) {
       const previousFact = task.kind === 'sqlite.objects.apply' ? previous?.sqliteObjects : undefined;
@@ -302,6 +308,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (fact?.commitAcknowledged) { task.status = 'completed'; task.progress = 100; }
       else if (fact?.rollbackAcknowledged) task.status = previous?.status === 'cancelled' || event.status === 'cancelled' ? 'cancelled' : 'failed';
       else if (task.kind === 'sqlite.tableRename.apply' && (fact?.phase === 'unknown' || task.status === 'completed')) { task.status = 'failed'; task.progress = Math.min(task.progress, 99); }
+    }
+    const rebuildTask = task.kind.startsWith('sqlite.tableRebuild.');
+    if (rebuildTask) {
+      const previousFact = task.kind === 'sqlite.tableRebuild.apply' ? previous?.sqliteTableRebuild : undefined;
+      task = { id: task.id, kind: task.kind, startedAt: task.startedAt, status: task.status, progress: task.progress, ...(task.finishedAt === undefined ? {} : { finishedAt: task.finishedAt }), ...(previousFact ? { sqliteTableRebuild: previousFact } : {}), message: '' };
+      if (task.kind === 'sqlite.tableRebuild.apply' && event.sqliteTableRebuild) {
+        const parsed = sqliteTableRebuildFactSchema.safeParse(event.sqliteTableRebuild);
+        try { if (!parsed.success) throw Error('SQLite表重建事实无效'); if (previousFact) assertSqliteTableRebuildFactTransition(previousFact, parsed.data); task.sqliteTableRebuild = parsed.data; }
+        catch { if (previous) return {}; task.status = 'failed'; task.progress = 0; }
+      }
+      const fact = task.sqliteTableRebuild;
+      task.message = fact ? sqliteTableRebuildFactMessage(fact) : sqliteTableRebuildTaskMessage(task.kind, task.status);
+      if (fact?.commitAcknowledged) { task.status = 'completed'; task.progress = 100; }
+      else if (fact?.rollbackAcknowledged) task.status = previous?.status === 'cancelled' || event.status === 'cancelled' ? 'cancelled' : 'failed';
+      else if (task.kind === 'sqlite.tableRebuild.apply' && (fact?.phase === 'unknown' || task.status === 'completed')) { task.status = 'failed'; task.progress = Math.min(task.progress, 99); }
     }
     const columnsTask = task.kind.startsWith('sqlite.columns.');
     if (columnsTask) {
@@ -350,7 +371,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       else if (task.sqliteWrite?.rollbackAcknowledged) task.status = previous?.status === 'cancelled' || event.status === 'cancelled' ? 'cancelled' : 'failed';
       else if (task.kind === 'sqlite.tableImport.apply' && (task.sqliteWrite?.phase === 'unknown' || task.status === 'completed')) { task.status = 'failed'; task.progress = Math.min(task.progress, 99); }
     }
-    if (!sourceTask && !indexesTask && !columnsTask && !renameTask && !maintenanceTask && !objectsTask && event.sqliteCreate && (createKind === 'sqlite.tableCreate.apply' || previous?.kind === 'sqlite.tableCreate.apply')) {
+    if (!rebuildTask && !sourceTask && !indexesTask && !columnsTask && !renameTask && !maintenanceTask && !objectsTask && event.sqliteCreate && (createKind === 'sqlite.tableCreate.apply' || previous?.kind === 'sqlite.tableCreate.apply')) {
       const parsed = sqliteTableCreateFactSchema.safeParse(event.sqliteCreate);
       try {
         if (!parsed.success) throw Error('SQLite建表回执无效');
@@ -370,12 +391,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       else if (fact?.rollbackAcknowledged) task.status = previous?.status === 'cancelled' || event.status === 'cancelled' ? 'cancelled' : 'failed';
       else if (fact?.phase === 'unknown' || task.status === 'completed') { task.status = 'failed'; task.progress = Math.min(task.progress, 99); }
     }
-    if (event.sqliteWrite && !sourceTask && !indexesTask && !columnsTask && !renameTask && !maintenanceTask && !objectsTask && !task.kind.startsWith('sqlite.tableCreate.') && !task.kind.startsWith('sqlite.tableImport.')) {
+    if (event.sqliteWrite && !rebuildTask && !sourceTask && !indexesTask && !columnsTask && !renameTask && !maintenanceTask && !objectsTask && !task.kind.startsWith('sqlite.tableCreate.') && !task.kind.startsWith('sqlite.tableImport.')) {
       const fact = sqliteWriteFactSchema.safeParse(event.sqliteWrite);
       if (fact.success && (!previous?.sqliteWrite?.commitAcknowledged || fact.data.operationId === previous.sqliteWrite.operationId && fact.data.commitAcknowledged)) { task.sqliteWrite = fact.data; task.kind = 'sqlite.tableEdit.apply'; }
     }
     if (task.sqliteWrite?.commitAcknowledged) { task.status = 'completed'; task.progress = 100; task.message = task.kind === 'sqlite.tableImport.apply' ? sqliteImportFactMessage(task.sqliteWrite) : sqliteWriteFactMessage(task.sqliteWrite); }
-    const value = sourceTask || indexesTask || columnsTask || renameTask || maintenanceTask || objectsTask ? undefined : event.queryFileSource, queryFileTasks = { ...state.queryFileTasks };
+    const value = rebuildTask || sourceTask || indexesTask || columnsTask || renameTask || maintenanceTask || objectsTask ? undefined : event.queryFileSource, queryFileTasks = { ...state.queryFileTasks };
     // 未持有本窗口操作租约的文件事件也明确分类，但不能借普通SQL取消命令获取取消权。
     if (value) queryFileTasks[event.taskId] = { taskId: event.taskId, tabId: value.tabId, operation: value.operation, phase: value.phase, bytesProcessed: value.bytesProcessed, ...(value.totalBytes === undefined ? {} : { totalBytes: value.totalBytes }), wrote: value.wrote, cancellable: false, running: event.status === 'running', committed: value.wrote !== 'no' || ['replacing', 'verifying', 'recording'].includes(value.phase), cancelState: 'denied', status: event.status, progress: event.progress, message: task.message, startedAt: task.startedAt };
     return { tasks: [task, ...state.tasks.filter(item => item.id !== event.taskId)].slice(0, 200), queryFileTasks };
