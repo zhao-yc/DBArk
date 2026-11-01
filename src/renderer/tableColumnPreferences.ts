@@ -49,10 +49,10 @@ export function frozenTableKeys(preferences: TablePreferences): string[] {
 }
 
 /** 清除时真正省略可选字段；新边界必须是当前可见的精确唯一列名。 */
-export function setTableFrozenThrough(preferences: TablePreferences, name?: string): TablePreferences {
+export function setTableFrozenThrough(preferences: TablePreferences, name?: string, maximumNameLength = 256): TablePreferences {
   const output: TablePreferences = { version: 1, columns: preferences.columns.map(column => ({ ...column })) };
   if (name === undefined) return output;
-  if (typeof name !== 'string' || !name.length || name.length > 256 || tableFrozenBoundary({ ...output, frozenThrough: name }) !== name) throw Error('冻结边界必须是当前可见的精确唯一列名');
+  if (typeof name !== 'string' || !name.length || name.length > maximumNameLength || tableFrozenBoundary({ ...output, frozenThrough: name }) !== name) throw Error('冻结边界必须是当前可见的精确唯一列名');
   return { ...output, frozenThrough: name };
 }
 

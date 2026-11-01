@@ -2,6 +2,8 @@ import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { sqliteTablePresetsZh as presetText } from '../../src/renderer/locales/sqliteTablePresets.zh-CN';
+import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
+import { tableGridZh as layoutFields } from '../../src/renderer/locales/tableGrid.zh-CN';
 
 // 默认及--list仅注册跳过项；真实桌面、文件和NodeSQLite只在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -17,7 +19,7 @@ if (active) {
 
 type Desktop = typeof import('./desktop-fixture');
 type PageFact = { request: Record<string, unknown>; reply: unknown; failure?: string };
-interface Audit { pending: number; denied: string[]; forks: string[]; pickerCalls: number; connectionId?: string; commands: string[]; pages: PageFact[]; }
+interface Audit { frames?: { event: string; at: number; pid?: number; kind?: string; id?: string; code?: number }[]; pending: number; denied: string[]; forks: string[]; pickerCalls: number; connectionId?: string; commands: string[]; pages: PageFact[]; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：须DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST=1且integration=0，仅使用独占临时SQLite');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -36,6 +38,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
   const { realpathSync } = require('node:fs') as typeof import('node:fs');
   let owner = runtime.ownedDesktopResources(info), application = owner.application, page = owner.page, originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'sqlite-table-browse-native.sqlite');
+  await info.attach('SQLite本例启动所有权', { body: JSON.stringify({ directory, database, pid: originalProcess.pid, platform: process.platform }), contentType: 'application/json' });
   let closed = false, armed = false, stage = '独占合成库准备';
   /** 每个异步边界都只承认本例准确owner与120秒单次期限。 */
   const check = () => {
@@ -66,7 +69,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     const root = globalThis as typeof globalThis & { __sqliteTableBrowseNative?: State }, handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, Handler> })._invokeHandlers;
     const original = handlers?.get('dbark:request'), windows = BrowserWindow.getAllWindows(), window = windows[0], frame = window?.webContents.mainFrame, originalPicker = dialog.showOpenDialog, originalFork = utilityProcess.fork;
     if (typeof original !== 'function' || windows.length !== 1 || !frame || root.__sqliteTableBrowseNative) throw Error('SQLite表浏览原Main入口未知');
-    const state: State = { pending: 0, denied: [], forks: [], pickerCalls: 0, connectionId: input.profileId, commands: [], pages: [], check() {}, restore() {} }; let pickerRequest = false;
+    const state: State = { pending: 0, denied: [], forks: [], frames: [], pickerCalls: 0, connectionId: input.profileId, commands: [], pages: [], check() {}, restore() {} }; let pickerRequest = false;
     const deny = (command: string): never => { state.denied.push(command); throw Error('SQLite只读表浏览专项拒绝越界：' + command); };
     const check = () => { if (root.__sqliteTableBrowseNative !== state || handlers.get('dbark:request') !== wrapped || dialog.showOpenDialog !== picker || utilityProcess.fork !== fork || window.isDestroyed() || BrowserWindow.getAllWindows().length !== 1 || window.webContents.mainFrame !== frame || state.denied.length) throw Error('SQLite表浏览原Main/文档观察器失效'); };
     const picker = (async (...args: unknown[]) => {
@@ -74,11 +77,17 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
       if (input.profileId || state.pickerCalls || !pickerRequest || !state.connectionId || !options?.properties?.includes('openFile')) return deny('非本例SQLite-picker');
       state.pickerCalls++; return { canceled: false, filePaths: [input.database] };
     }) as typeof dialog.showOpenDialog;
-    const fork = ((modulePath: string, ...args: unknown[]) => { check(); state.forks.push(modulePath); if (!/(?:^|[\\/])sqliteWorker\.cjs$/.test(modulePath)) return deny('非SQLite utility'); return Reflect.apply(originalFork, utilityProcess, [modulePath, ...args]); }) as typeof utilityProcess.fork;
+    const fork = ((modulePath: string, ...args: unknown[]) => { check(); state.forks.push(modulePath); if (!/(?:^|[\\/])sqliteWorker\.cjs$/.test(modulePath)) return deny('非SQLite utility'); const child = Reflect.apply(originalFork, utilityProcess, [modulePath, ...args]);
+      // 只观察原utility帧头与退出时点，不接管消息、不记录行值，也不改变ACK或终态门槛。
+      const record = (event: string, packet?: unknown, code?: number) => { if (root.__sqliteTableBrowseNative !== state || state.frames!.length >= 5000) return; const value = packet && typeof packet === 'object' ? packet as { kind?: unknown; id?: unknown } : {}; state.frames!.push({ event, at: performance.now(), pid: child.pid, kind: typeof value.kind === 'string' ? value.kind.slice(0, 80) : undefined, id: typeof value.id === 'string' ? value.id.slice(0, 200) : undefined, code }); };
+      record('fork'); child.on('message', (message: unknown) => record('message', message)); child.on('exit', (code: number) => record('exit', undefined, code)); return child; }) as typeof utilityProcess.fork;
+    // 本机布局只读共用原表页的准确连接/数据库/对象范围，不放宽数据库操作。
     const wrapped: Handler = async (event, payload) => {
       check(); if (event.sender !== window.webContents || event.senderFrame !== frame) return deny('外来文档IPC');
       if (!payload || typeof payload !== 'object' || !('command' in payload) || typeof payload.command !== 'string' || !('input' in payload) || !payload.input || typeof payload.input !== 'object') return deny('非标准IPC');
       const command = payload.command, value = payload.input as Record<string, unknown>;
+      if (command === 'sqlite.tableLayout.get' && (Object.keys(value).length !== 3 || Object.keys(value).some(key => !['connectionId', 'database', 'table'].includes(key)))) return deny('其它SQLite本机列布局');
+
       if (/clipboard/i.test(command) || command === 'files.path' || command.startsWith('table.') || command.startsWith('schema.') || command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('serverMonitor.')) return deny(command);
       if (command.startsWith('metadata.') && !['metadata.databases', 'metadata.objects'].includes(command)) return deny(command);
       if (command === 'files.choose') {
@@ -90,7 +99,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
         if (value.dialect !== 'sqlite' || value.id !== state.connectionId || !config || typeof config !== 'object' || !('readOnly' in config) || config.readOnly !== true || ['host', 'port', 'user', 'password', 'ssh', 'tls'].some(key => Object.hasOwn(value, key))) return deny('非本例只读文件配置');
       }
       if (command === 'connections.open' && value.id !== state.connectionId || command.startsWith('metadata.') && value.connectionId !== state.connectionId) return deny('其它数据库连接');
-      if (command === 'sqlite.tablePage' && (value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite表目标');
+      if ((command === 'sqlite.tablePage' || command.startsWith('sqlite.tableLayout.')) && (value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite表目标');
       if (command.startsWith('sqlite.tablePresets.') && (!['list', 'save', 'delete', 'read'].some(kind => command === 'sqlite.tablePresets.' + kind) || value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite本机方案目标');
       const page: PageFact | undefined = command === 'sqlite.tablePage' ? { request: structuredClone(value), reply: undefined } : undefined;
       if (page) state.pages.push(page);
@@ -291,18 +300,36 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     const afterPreset = await step(audit); expect(afterPreset.pages.length).toBe(beforePreset.pages.length); expect(afterPreset.forks).toEqual(beforePreset.forks); expect(disk()).toEqual(baseline); await controls(false);
     // UI切换先于原400ms设置落盘；必须等真实Main持久态确认，不能用旧查询activeId作重启基线。
     await step(() => expect.poll(async () => (await settings()).activeTabId).toBe(tableTab.id));
+    stage = '只读列布局隐藏重排调宽冻结并保存'; const beforeLayout = await step(audit);
+    await step(() => table().getByRole('button', { name: layoutText.entry, exact: true }).click());
+    const layoutModal = () => page.getByRole('dialog', { name: layoutText.title, exact: true });
+    await step(() => layoutModal().getByRole('checkbox', { name: layoutFields.visible + ' nullable', exact: true }).uncheck());
+    await step(() => layoutModal().getByRole('button', { name: layoutFields.down + ' id', exact: true }).click());
+    await step(() => layoutModal().getByLabel(layoutFields.width + ' id', { exact: true }).fill('220'));
+    await step(() => layoutModal().getByRole('button', { name: layoutFields.freezeThrough('id'), exact: true }).click());
+    await step(() => layoutModal().getByRole('button', { name: layoutFields.save, exact: true }).click()); await step(() => expect(layoutModal().getByText(layoutFields.saved, { exact: true })).toBeVisible());
+    await step(() => layoutModal().locator('.modal-footer').getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(layoutModal()).toBeHidden());
+    const assertLayout = async () => {
+      const grid = table().getByRole('grid'), id = grid.getByRole('columnheader').filter({ hasText: /^id/ });
+      await step(() => expect(grid.getByRole('columnheader').filter({ hasText: /^nullable/ })).toHaveCount(0)); await step(() => expect(id).toHaveAttribute('aria-colindex', '3'));
+      const left = await step(() => id.evaluate(element => { const rect = element.getBoundingClientRect(); if (Math.abs(rect.width - 220) > 1) throw Error('SQLite保存列宽未应用'); return rect.left; }));
+      await step(() => grid.evaluate(element => { element.scrollLeft = 400; })); await step(() => expect.poll(() => id.evaluate(element => element.getBoundingClientRect().left)).toBeCloseTo(left, 0)); await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
+    };
+    await assertLayout(); const afterLayout = await step(audit); expect(afterLayout.pages.length).toBe(beforeLayout.pages.length); expect(afterLayout.forks).toEqual(beforeLayout.forks); expect(disk()).toEqual(baseline);
     const persisted = await settings(), firstFacts = await step(audit), firstTasks = await tasks(); expect(persisted.tabs.find(tab => tab.id === persisted.activeTabId)).toMatchObject({ kind: 'table', table: tableName });
     expect(firstFacts.pickerCalls).toBe(1); expect(firstFacts.denied).toEqual([]); expect(firstFacts.forks.length).toBeGreaterThan(0); expect(firstFacts.forks.every(path => /(?:^|[\\/])sqliteWorker\.cjs$/.test(path))).toBe(true); expect(firstFacts.commands.some(command => command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('table.') || command.startsWith('schema.'))).toBe(false); expect(runtime.pageErrors).toEqual([]);
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: { restore(): void } }).__sqliteTableBrowseNative; if (!state) throw Error('原观察器已失效'); state.restore(); }), true); armed = false;
     stage = '第一owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); const firstPid = originalProcess.pid;
     stage = '同profile重启恢复表页'; await runtime.restartOwnedDesktop(info); owner = runtime.ownedDesktopResources(info); application = owner.application; page = owner.page; originalProcess = application.process(); closed = false; check(); expect(originalProcess.pid).not.toBe(firstPid);
     await arm(profile.id); armed = true; await step(() => expect(table().getByRole('grid')).toBeVisible()); expect(await settings()).toEqual(persisted); expect(await history()).toEqual([]); expect(disk()).toEqual(baseline);
+    await step(() => expect(table().getByRole('button', { name: layoutText.entry, exact: true })).toBeEnabled()); await assertLayout();
     expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(profiles); expect((await tasks()).every(task => task.kind === 'sqlite.tablePage' && task.status === 'completed')).toBe(true);
     // 恢复时首轮读取可能先于观察器安装；只证明安装后的显式刷新，绝不补写先前fork事实。
     const restoredPages = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: '刷新 SQLite 表数据', exact: true }).click()); await step(() => expect.poll(async () => (await audit()).pages.length).toBe(restoredPages + 1));
     // 原IPC回包先于React交付；完成态必须同时核真实网格与Task终态，不能把加载画面当成已展示。
     await step(() => expect(table().getByRole('grid')).toBeVisible());
     await step(() => expect.poll(async () => (await tasks()).every(task => task.kind === 'sqlite.tablePage' && task.status === 'completed')).toBe(true));
+    await assertLayout();
     stage = '重启持久化方案仍只填写表单'; const beforeRestoredPreset = await step(audit); await controls(true);
     await step(() => table().getByRole('button', { name: presetText.entry, exact: true }).click());
     await step(() => table().getByLabel(presetText.selection, { exact: true }).selectOption({ label: '原表排序方案' }));
@@ -319,7 +346,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
   } catch (reason) {
     runtime.retainOwnedDesktopResources(info);
     let partial: Audit | undefined;
-    if (armed && !closed) try { partial = await application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: Audit }).__sqliteTableBrowseNative; return state ? { pending: state.pending, denied: state.denied, forks: state.forks, pickerCalls: state.pickerCalls, connectionId: state.connectionId, commands: state.commands, pages: state.pages } : undefined; }); } catch { /* 只读保留已捕获原件，不借失败重建观察器。 */ }
+    if (armed && !closed) try { partial = await application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: Audit }).__sqliteTableBrowseNative; return state ? { pending: state.pending, denied: state.denied, forks: state.forks, frames: state.frames, pickerCalls: state.pickerCalls, connectionId: state.connectionId, commands: state.commands, pages: state.pages } : undefined; }); } catch { /* 只读保留已捕获原件，不借失败重建观察器。 */ }
     try { await info.attach('SQLite表浏览失败原件保留', { body: JSON.stringify({ stage, directory, database, pid: originalProcess.pid, exitCode: originalProcess.exitCode, closed, armed, partial, automaticRetry: false, automaticRestart: false, automaticForceStop: false, directoryRemoved: false, firstError: reason instanceof Error ? reason.message : String(reason) }), contentType: 'application/json' }); } catch { /* 附件失败不覆盖首因，也不解除原owner保留。 */ }
     throw reason;
   }

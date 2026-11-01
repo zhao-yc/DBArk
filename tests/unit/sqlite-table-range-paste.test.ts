@@ -15,6 +15,18 @@ function fixture(count = 3, names = ['id', 'note', 'other', 'generated']) {
 }
 
 describe('SQLite区域粘贴按位置完整预检', () => {
+  it('隐藏中间列和反向重排沿可见顺序，预览仍指向原字段，不改变原行数组', () => {
+    const f = fixture(), anchor = { row: f.rows[0], column: 2, columns: Object.freeze([2, 0, 1]) }, input = [[cell('新other'), { kind: 'integer', value: '99' } as SqliteClipboardCell]], before = structuredClone(f.rows);
+    const plan = prepareSqliteRangePaste(f.page, f.rows, anchor, input); expect(plan.columns).toEqual(['other', 'id']); expect(plan).toMatchObject({ startColumn: 1, endColumn: 2 });
+    const preview = sqliteRangePastePreview(plan, f.page, f.rows, anchor); expect(preview.rows[0].cells.map(cell => cell.oldValue)).toEqual([f.rows[0].values[2], f.rows[0].values[0]]); expect(sqliteRangePastePlanValues(plan, f.page, f.rows, anchor)).toEqual(input); expect(f.rows).toEqual(before);
+    expect(() => sqliteRangePastePlanValues(plan, f.page, f.rows, { ...anchor, columns: Object.freeze([2, 0, 1]) })).toThrow(text.stale);
+  });
+  it('映射重复/越界/缺起点/访问器拒绝，生成列与剩余可见宽度保护保持', () => {
+    const f = fixture(); for (const columns of [[1, 1], [1, 99], [0, 2], []]) expect(() => prepareSqliteRangePaste(f.page, f.rows, { ...f.anchor, columns }, [[cell('x')]])).toThrow();
+    expect(() => prepareSqliteRangePaste(f.page, f.rows, { ...f.anchor, columns: [1, 3] }, [[cell('x'), cell('y')]])).toThrow(text.generated);
+    expect(() => prepareSqliteRangePaste(f.page, f.rows, { ...f.anchor, columns: [1] }, [[cell('x'), cell('y')]])).toThrow(text.outOfBounds);
+    const getter = vi.fn(() => 1), columns = [1]; Object.defineProperty(columns, '0', { enumerable: true, get: getter }); expect(() => prepareSqliteRangePaste(f.page, f.rows, { ...f.anchor, columns }, [[cell('x')]])).toThrow(); expect(getter).not.toHaveBeenCalled();
+  });
   it('准确起点覆盖矩形，仅签发区域矩阵；目标列及当前页行列范围明确，不重排来源', () => {
     const f = fixture(), input = [[cell('a'), cell('b')], [cell('c'), { kind: 'null' } as SqliteClipboardCell]], original = structuredClone(f.rows), plan = prepareSqliteRangePaste(f.page, f.rows, f.anchor, input);
     expect(plan).toEqual({ rows: 2, width: 2, changedCells: 4, startRow: 1, endRow: 2, startColumn: 2, endColumn: 3, columns: ['note', 'other'] }); expect(Object.isFrozen(plan)).toBe(true); expect(Object.isFrozen(plan.columns)).toBe(true); expect(sqliteRangePastePlanValues(plan, f.page, f.rows, f.anchor)).toEqual(input); expect(f.rows).toEqual(original);

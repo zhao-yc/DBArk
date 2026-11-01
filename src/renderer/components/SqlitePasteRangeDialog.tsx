@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import type { SqliteDraftRow } from '../sqliteTableEditor';
 import { decodeSqliteClipboard, encodeSqliteClipboard, readSqliteClipboard, sqliteClipboardLimits, type SqliteClipboardCell, type SqliteClipboardSource, type SqlitePasteKind } from '../sqliteTableClipboard';
-import { prepareSqliteRangePaste, sqliteRangePastePlanValues, sqliteRangePastePreview, type SqlitePasteAnchor, type SqliteRangePastePlan, type SqliteRangePastePreview } from '../sqliteTableRangePaste';
+import { prepareSqliteRangePaste, sqliteRangePastePlanValues, sqliteRangePastePreview, sqlitePasteColumnOrder, type SqlitePasteAnchor, type SqliteRangePastePlan, type SqliteRangePastePreview } from '../sqliteTableRangePaste';
 import { sqliteTableRangePasteZh as text } from '../locales/sqliteTableRangePaste.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteTableClipboard.css';
@@ -11,9 +11,10 @@ interface Props { page: SqliteTablePage; rows: readonly SqliteDraftRow[]; anchor
 interface Draft { raw: string; fieldEpoch: object; source?: SqliteClipboardSource; kinds: SqlitePasteKind[]; selected: number; preview?: { plan: SqliteRangePastePlan; data: SqliteRangePastePreview }; error: string; }
 /** 区域粘贴仅生成完整矩形本地计划；与新增草稿入口分离，任何错误都不部分覆盖。 */
 export function SqlitePasteRangeDialog({ page, rows, anchor, initial, current, onStage, onClose }: Props) {
-  const owner = useRef({ page, rows, anchor, row: anchor.row, column: anchor.column, initial, current, onStage, onClose }).current;
+  let orderSignature: string | undefined; try { orderSignature = JSON.stringify(sqlitePasteColumnOrder(page, anchor)); } catch { /* 非法映射由原预览门报告，不能猜测另一目标。 */ }
+  const owner = useRef({ page, rows, anchor, row: anchor.row, column: anchor.column, columns: anchor.columns, orderSignature, initial, current, onStage, onClose }).current;
   const invalid = useRef(false), propsInvalid = useRef(false), closed = useRef(false), mounted = useRef(false), staging = useRef(false), consumed = useRef(new WeakSet<SqliteRangePastePlan>());
-  if (owner.page !== page || owner.rows !== rows || owner.anchor !== anchor || owner.row !== anchor.row || owner.column !== anchor.column || owner.initial !== initial) propsInvalid.current = true;
+  if (owner.page !== page || owner.rows !== rows || owner.anchor !== anchor || owner.row !== anchor.row || owner.column !== anchor.column || owner.columns !== anchor.columns || owner.orderSignature !== orderSignature || owner.initial !== initial) propsInvalid.current = true;
   /** native列名只供核对来源，绝不借它重排目标列或跳过生成列。 */
   function fromSource(source: SqliteClipboardSource): Draft { const encoded = encodeSqliteClipboard(source.values, source.columns), value = { ...decodeSqliteClipboard(encoded.sqlite, '', source.text), plain: source.plain }; return { raw: value.text, fieldEpoch: {}, source: value, kinds: value.values[0].map(() => 'preserve'), selected: 0, error: '' }; }
   const [draft, setDraft] = useState<Draft>(() => { try { return initial ? fromSource(initial) : { raw: '', fieldEpoch: {}, kinds: [], selected: 0, error: '' }; } catch (reason) { return { raw: initial?.text ?? '', fieldEpoch: {}, kinds: [], selected: 0, error: reason instanceof Error ? reason.message : text.invalid }; } }), live = useRef(draft); live.current = draft;
@@ -54,7 +55,7 @@ export function SqlitePasteRangeDialog({ page, rows, anchor, initial, current, o
   /** 失效仍能取消自己的当前窗口；旧render与来源误复用不能关闭后继窗口。 */
   function close(): void { if (!local() || propsInvalid.current || staging.current) return; closed.current = true; owner.onClose(); }
   const valid = sourceCurrent(), readonly = owner.page.edit?.kind !== 'editable', source = draft.source, previewed = draft.preview, startRow = owner.rows.indexOf(owner.row) + 1;
-  const targetColumn = (index: number) => owner.page.columns[owner.column + index]?.name ?? text.outOfBounds;
+  const targetColumn = (index: number) => { try { const order = sqlitePasteColumnOrder(owner.page, owner.anchor); return owner.page.columns[order[order.indexOf(owner.column) + index]]?.name ?? text.outOfBounds; } catch { return text.outOfBounds; } };
   const cellText = (value: SqliteClipboardCell) => value === undefined ? text.defaultValue : value.kind === 'null' ? text.kindLabels.null : text.kindLabels[value.kind] + ' · ' + value.value;
   return <Modal title={text.title} wide onClose={close}><div className="modal-content">
     <p>{owner.page.target.connectionId} / {owner.page.target.database} / {owner.page.target.table}</p><p>{text.positionHint}</p><p>{text.bindingHint}</p><p>{text.targetRange(startRow, startRow, owner.column + 1, owner.column + 1)} · {targetColumn(0)}</p>

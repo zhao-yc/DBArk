@@ -1,4 +1,5 @@
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema } from './sqliteTablePresets';
+import { sqliteLayoutTargetSchema, sqliteLayoutSaveSchema, sqliteLayoutResetSchema } from './sqliteTableLayout';
 import { sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema } from './sqliteObjects';
 import { sqliteTableMaintenanceInspectSchema, sqliteTableMaintenancePreviewSchema, sqliteTableMaintenanceApplySchema, sqliteTableMaintenanceReleaseSchema } from './sqliteTableMaintenance';
 import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteTableRenameApplySchema, sqliteTableRenameReleaseSchema } from './sqliteTableRename';
@@ -210,6 +211,7 @@ const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
 });
 
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'sqlite.tableLayout.get': sqliteLayoutTargetSchema, 'sqlite.tableLayout.save': sqliteLayoutSaveSchema, 'sqlite.tableLayout.reset': sqliteLayoutResetSchema,
   'sqlite.tablePresets.list': sqliteTablePresetTargetSchema, 'sqlite.tablePresets.save': sqliteTablePresetSaveSchema, 'sqlite.tablePresets.delete': sqliteTablePresetSelectSchema, 'sqlite.tablePresets.read': sqliteTablePresetSelectSchema,
   'sqlite.tablePage': sqliteTablePageSchema,
   'sqlite.tableExport': sqliteTableExportSchema,

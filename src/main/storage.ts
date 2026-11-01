@@ -1,4 +1,5 @@
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetDocumentSchema, sqliteTablePresetLimits, type SqliteTablePresetTarget, type SqliteTablePresetDocument, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../shared/sqliteTablePresets';
+import { sqliteLayoutTargetSchema, sqliteLayoutDocumentSchema, sqliteLayoutResetSchema, sqliteLayoutSaveSchema, type SqliteLayoutDocument, type SqliteLayoutTarget, type SqliteLayoutInput, type SqliteLayoutStoredSnapshot } from '../shared/sqliteTableLayout';
 import { recoverSqliteObjectsTask } from '../shared/sqliteObjectsFact';
 import { recoverSqliteTableMaintenanceTask } from '../shared/sqliteTableMaintenanceFact';
 import { recoverSqliteTableRenameTask } from '../shared/sqliteTableRenameFact';
@@ -31,7 +32,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import type { AppSettings, ConnectionProfile, NetworkConnectionProfile, SqliteConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
 import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
-import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
+import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
 import type{SavedQueryPagePosition}from'../shared/savedQueryPages';
 import type{HistoryPagePosition,HistoryPageInput}from'../shared/historyPages';
@@ -97,6 +98,7 @@ export class LocalStore {
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_presets'").length) this.readImportPresetDocument();
     validateSavedQueryOrganizationStorage(this.db);
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_presets_sqlite'").length) this.validateSqlitePresetRows();
+    if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_layouts_sqlite'").length) this.validateSqliteLayoutRows();
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
@@ -115,6 +117,9 @@ export class LocalStore {
         -- SQLite命名筛选为可选schema9元数据，与MySQL方案合同隔离。
         CREATE TABLE IF NOT EXISTS table_presets_sqlite (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         DELETE FROM table_presets_sqlite WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=table_presets_sqlite.connection_id);
+        -- SQLite列布局是独立可选元数据，不改变原MySQL偏好或行数据。
+        CREATE TABLE IF NOT EXISTS table_layouts_sqlite (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
+        DELETE FROM table_layouts_sqlite WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=table_layouts_sqlite.connection_id);
         CREATE TABLE IF NOT EXISTS query_file_sources (tab_id TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
         -- 最近列表仅为可选元数据缓存，旧schema9客户端可忽略，不改变文件来源的存储合同。
         CREATE TABLE IF NOT EXISTS query_file_recents (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
@@ -394,6 +399,39 @@ export class LocalStore {
     if (!entry || entry.connectionDigest !== current.source.connectionDigest) throw Error('SQLite方案来源连接已失效，请明确重新保存或覆盖');
     return structuredClone(entry.query);
   }
+  /** 可选布局先核原始字节与目标总量，再解析完整文档；损坏内容不得被迁移覆盖。 */
+  private validateSqliteLayoutRows(replacement?: SqliteLayoutDocument): void {
+    const statement = this.db.prepare('SELECT connection_id,database_name,table_name,data FROM table_layouts_sqlite');
+    let count = replacement ? 1 : 0, bytes = replacement ? Buffer.byteLength(JSON.stringify(replacement) + replacement.target.connectionId + replacement.target.database + replacement.target.table) : 0;
+    try { while (statement.step()) {
+      const row = statement.get(); if (row.some(value => typeof value !== 'string')) throw Error('SQLite列布局存储无效');
+      const target = sqliteLayoutTargetSchema.parse({ connectionId: row[0], database: row[1], table: row[2] });
+      if (replacement && JSON.stringify(replacement.target) === JSON.stringify(target)) continue;
+      count++; bytes += row.reduce<number>((sum, value) => sum + Buffer.byteLength(String(value)), 0);
+      if (count > tablePreferencesLimits.tables || bytes > tablePreferencesLimits.totalBytes) throw Error('SQLite列布局超过500个目标或8MiB上限');
+      const document = sqliteLayoutDocumentSchema.parse(JSON.parse(String(row[3]))); if (JSON.stringify(document.target) !== JSON.stringify(target)) throw Error('SQLite列布局存储目标不匹配');
+    } } finally { statement.free(); }
+    if (count > tablePreferencesLimits.tables || bytes > tablePreferencesLimits.totalBytes) throw Error('SQLite列布局超过本机上限');
+  }
+  /** 准确目标只读取本机元数据；旧连接摘要由界面明确提示，不自动套用到另一文件。 */
+  sqliteTableLayout(raw: unknown): SqliteLayoutStoredSnapshot {
+    const target = sqliteLayoutTargetSchema.parse(raw), source = this.sqlitePresetSource(target);
+    const value = this.records<unknown>('SELECT data FROM table_layouts_sqlite WHERE connection_id=? AND database_name=? AND table_name=?', [target.connectionId, target.database, target.table])[0];
+    const document = sqliteLayoutDocumentSchema.parse(value ?? { version: 1, target, revision: 0, preferences: null });
+    if (JSON.stringify(document.target) !== JSON.stringify(target)) throw Error('SQLite列布局目标不匹配'); return { ...document, source };
+  }
+  /** 保存及重置均带CAS墓碑，在原事务内核完整来源及预算；不修改数据库文件或数据草稿。 */
+  saveSqliteTableLayout(raw: unknown, reset = false, assertCurrent?: () => void): SqliteLayoutStoredSnapshot {
+    const input = reset ? sqliteLayoutResetSchema.parse(raw) : sqliteLayoutSaveSchema.parse(raw); let result!: SqliteLayoutStoredSnapshot;
+    this.mutate(() => {
+      const current = this.sqliteTableLayout({ connectionId: input.connectionId, database: input.database, table: input.table });
+      if (current.revision !== input.expectedRevision || JSON.stringify(current.source) !== JSON.stringify(input.source)) throw Error('SQLite列布局或连接配置已变化，请重新读取');
+      const preferences = reset ? null : (input as SqliteLayoutInput & { preferences: TablePreferences }).preferences;
+      const document = sqliteLayoutDocumentSchema.parse({ version: 1, target: current.target, revision: current.revision + 1, preferences, ...(preferences ? { connectionDigest: current.source.connectionDigest } : {}) });
+      this.validateSqliteLayoutRows(document); this.db.run('INSERT INTO table_layouts_sqlite VALUES(?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data', [current.target.connectionId, current.target.database, current.target.table, JSON.stringify(document)]);
+      result = { ...document, source: current.source };
+    }, assertCurrent); return result;
+  }
   /** 来源只取主进程已保存的连接概要，不解密凭据；摘要不会持久化认证文件路径原文。 */
   private tablePresetSource(target: TablePresetTarget): TablePresetSource {
     const profile=this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?',[target.connectionId])[0];
@@ -654,6 +692,7 @@ export class LocalStore {
       this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets_sqlite WHERE connection_id=?', [id]);
+      this.db.run('DELETE FROM table_layouts_sqlite WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM query_result_presets WHERE connection_id=?', [id]);
       for (const key of this.volatileSecrets.keys()) if (key.startsWith(`${id}\0`)) this.volatileSecrets.delete(key);
     });

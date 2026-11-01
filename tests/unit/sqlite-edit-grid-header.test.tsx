@@ -19,6 +19,13 @@ function fixture() {
   const mount = async (patch: Partial<typeof props> = {}) => { Object.assign(props, patch); if (!root) { const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as HTMLElement); } await act(async () => root!.render(<Grid {...props}/>)); };
   return { props, page, rows, callback, alive, mount };
 }
+it('显示反向顺序、隐藏与冻结不重排行或物理key，列头/调宽仍交付原字段', async () => {
+  const f = fixture(), resize = vi.fn(), filter = vi.fn(); await f.mount({ projection: [{ index: 1, width: 64, frozen: true }, { index: 0, width: 500, frozen: false }], onColumnResize: resize, onFilterCell: filter });
+  expect(port.props.rows).toBe(f.rows); expect(port.props.columns.slice(2).map((column: any) => [column.key, column.width, column.frozen])).toEqual([['c1', 64, true], ['c0', 500, false]]);
+  await act(async () => port.props.onCellClick({ row: f.rows[0], column: { key: 'c1' } })); expect(filter).toHaveBeenCalledWith({ row: f.rows[0], column: 1 });
+  await act(async () => port.props.onColumnResize({ key: 'c0' }, 400)); expect(resize).toHaveBeenCalledExactlyOnceWith('c0', 400);
+  const old = port.props.onColumnResize; await f.mount({ projection: [{ index: 0, frozen: false }] }); await act(async () => old({ key: 'c1' }, 300)); expect(resize).toHaveBeenCalledTimes(1);
+});
 it('只在提交后把真实header意图交父级，包含生成列且保持原行对象', async () => {
   const f = fixture(); await f.mount(); expect(f.callback).not.toHaveBeenCalled(); expect(port.props.rows).toBe(f.rows); expect(port.props.sortColumns).toBe(f.props.sort); expect(port.props.columns[2].sortable).toBe(true); expect(port.props.columns[3].sortable).toBe(true); expect(port.props.columns[0].sortable).not.toBe(true); expect(port.props.columns[1].sortable).not.toBe(true);
   const rules = [{ columnKey: 'c1', direction: 'ASC' }, { columnKey: 'c0', direction: 'DESC' }]; await act(async () => port.props.onSortColumnsChange(rules)); expect(f.callback).toHaveBeenCalledExactlyOnceWith(rules); expect(port.props.rows).toBe(f.rows); expect(f.props.onSelect).not.toHaveBeenCalled(); expect(f.props.onEdit).not.toHaveBeenCalled();

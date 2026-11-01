@@ -22,6 +22,18 @@ function capture(f: ReturnType<typeof fixture>) { const inner = f.editor as unkn
 function unchanged(f: ReturnType<typeof fixture>, before: ReturnType<typeof capture>) { const inner = f.editor as unknown as { past: unknown[]; future: unknown[]; input: boolean }; expect(f.editor.view.rows).toBe(before.rows); expect(inner.past).toBe(before.past); expect(inner.past).toHaveLength(before.pastLength); expect(inner.future).toBe(before.future); expect(inner.future).toHaveLength(before.futureLength); expect(inner.input).toBe(before.input); expect(f.editor.view.preview).toBe(before.preview); expect(f.editor.view.message).toBe(before.message); expect(f.editor.changes).toEqual(before.changes); expect(f.id).toHaveBeenCalledTimes(before.ids); expect(f.release).toHaveBeenCalledTimes(before.releases); expect(f.preview).toHaveBeenCalledTimes(before.previews); expect(f.apply).toHaveBeenCalledTimes(before.applies); expect(f.changed).toHaveBeenCalledTimes(before.changed); expect(f.dirty).toHaveBeenCalledTimes(before.dirty); }
 
 describe('SQLite连续矩形粘贴只暂存已有本地格', () => {
+  it('显示映射反向/跳过隐藏列仍只改原字段，整组一次暂存及撤销', () => {
+    const f = fixture(), original = f.editor.view.rows;
+    expect(f.editor.pasteCells('original-0', 2, [[text('other新值'), { kind: 'integer', value: '99' }]], [2, 0])).toBe(2);
+    expect(f.editor.view.rows[0].values[2]).toEqual(text('other新值')); expect(f.editor.view.rows[0].values[0]).toEqual({ kind: 'integer', value: '99' }); expect(f.editor.view.rows[0].values[1]).toBe(original[0].values[1]); expect(f.editor.view.rows[0].values[3]).toBe(original[0].values[3]);
+    expect(f.editor.changes).toEqual([{ kind: 'update', row: 0, values: [{ column: 'c0', value: { kind: 'integer', value: '99' } }, { column: 'c2', value: text('other新值') }] }]);
+    f.editor.undo(); expect(f.editor.view.rows).toBe(original); expect(f.apply).not.toHaveBeenCalled();
+  });
+  it('映射重复、首格不符、越界、生成列及超宽整批拒绝，不丢原草稿', () => {
+    const f = fixture(), original = f.editor.view.rows;
+    for (const indices of [[2, 2], [1, 2], [2, 99], [2, 3]]) expect(() => f.editor.pasteCells('original-0', 2, [[text('x'), text('y')]], indices)).toThrow();
+    expect(() => f.editor.pasteCells('original-0', 2, [[text('x'), text('y')]], [2])).toThrow(); expect(f.editor.view.rows).toBe(original); expect(f.changed).not.toHaveBeenCalled();
+  });
   it('update与newrow连续混合，DEFAULT清新增值，未触及原对象/非有限/generated引用均保持', () => {
     const f = fixture(), added = f.editor.add()!, pending = [undefined, text('待清除'), undefined, undefined, undefined]; f.editor.save(added, pending); const original = f.editor.view.rows, before = f.id.mock.calls.length;
     expect(f.editor.pasteCells('original-2', 1, [[nil(), text('已替换')], [undefined, { kind: 'blob', value: '' }]])).toBe(4); const after = f.editor.view.rows; expect(after).not.toBe(original); expect(after[0]).toBe(original[0]); expect(after[1]).toBe(original[1]); expect(after[2]).not.toBe(original[2]); expect(after[3]).not.toBe(original[3]); expect(after[2].values[0]).toBe(original[2].values[0]); expect(after[2].values[3]).toBe(original[2].values[3]); expect(after[2].values[4]).toBe(original[2].values[4]); expect(after[2].values[4]).toEqual({ kind: 'real', value: 'Infinity' });

@@ -88,10 +88,13 @@ test('SQLite真实可视化设计预览取消、明确建表与目录冲突回�
       child.on('message', receive); child.once('exit', exit); child.postMessage = post; ports.push({ child, original, wrapped: post, receive, exit }); return child;
     }) as typeof utilityProcess.fork;
     const send = ((channel: string, ...args: unknown[]) => { if (channel === 'dbark:task') state.events.push(structuredClone(args[0])); return Reflect.apply(originalSend, window.webContents, [channel, ...args]); }) as typeof window.webContents.send;
+    // 本机布局只读共用原表页的准确连接/数据库/对象范围，不放宽数据库操作。
     const wrapped: Handler = async (event, payload) => {
       check(); if (event.sender !== window.webContents || event.senderFrame !== frame) return deny('外来文档IPC'); if (!payload || typeof payload !== 'object' || !('command' in payload) || typeof payload.command !== 'string' || !('input' in payload) || !payload.input || typeof payload.input !== 'object') return deny('非标准IPC'); const command = payload.command, value = payload.input as Record<string, unknown>;
+      if (command === 'sqlite.tableLayout.get' && (Object.keys(value).length !== 3 || Object.keys(value).some(key => !['connectionId', 'database', 'table'].includes(key)))) return deny('其它SQLite本机列布局');
+
       if (/clipboard/i.test(command) || command.startsWith('table.') || command.startsWith('schema.') || command.startsWith('sessions.') || command.startsWith('serverMonitor.') || command.startsWith('excel.') || command.startsWith('query.') && command !== 'query.cancel' || command.startsWith('files.') && command !== 'files.choose') return deny(command);
-      if (command.startsWith('sqlite.') && !['sqlite.tableCreate.preview', 'sqlite.tableCreate.apply', 'sqlite.tableCreate.release', 'sqlite.tablePage', 'sqlite.tableEdit.release'].includes(command)) return deny(command);
+      if (command.startsWith('sqlite.') && !['sqlite.tableLayout.get', 'sqlite.tableCreate.preview', 'sqlite.tableCreate.apply', 'sqlite.tableCreate.release', 'sqlite.tablePage', 'sqlite.tableEdit.release'].includes(command)) return deny(command);
       if (command.startsWith('metadata.') && !['metadata.databases', 'metadata.objects'].includes(command)) return deny(command);
       if (command === 'files.choose') { if (pickerRequest || value.purpose !== 'sqlite-database' || typeof value.sqliteConnectionId !== 'string') return deny('其它文件用途/连接'); pickerRequest = value.sqliteConnectionId; }
       if (command === 'connections.save' || command === 'connections.test') { const config = value.sqlite; if (value.dialect !== 'sqlite' || value.name !== input.connectionName || typeof value.id !== 'string' || !state.pickerIds.includes(value.id) || !config || typeof config !== 'object' || !('readOnly' in config) || config.readOnly !== false || ['host', 'port', 'user', 'password', 'ssh', 'tls'].some(key => Object.hasOwn(value, key))) return deny('非本例明确SQLite读写配置'); state.profiles[value.id] = false; }
@@ -99,7 +102,7 @@ test('SQLite真实可视化设计预览取消、明确建表与目录冲突回�
       if (command === 'metadata.objects' && value.database !== 'main') return deny('非main目录');
       if (command === 'sqlite.tableCreate.preview') { const design = value.design; if (!Object.hasOwn(state.profiles, String(value.connectionId)) || value.database !== 'main' || !design || typeof design !== 'object' || !('name' in design) || !input.targets.includes(String(design.name))) return deny('非本例准确新表目标'); }
       if (command === 'sqlite.tableCreate.apply' && !previewIds.has(String(value.previewId)) || command === 'sqlite.tableCreate.release' && !previewIds.has(String(value.previewId))) return deny('非本例预览能力');
-      if (command === 'sqlite.tablePage' && (!Object.hasOwn(state.profiles, String(value.connectionId)) || value.database !== 'main' || value.table !== input.childName)) return deny('其它表页');
+      if ((command === 'sqlite.tablePage' || command === 'sqlite.tableLayout.get') && (!Object.hasOwn(state.profiles, String(value.connectionId)) || value.database !== 'main' || value.table !== input.childName)) return deny('其它表页');
       // 重启首读可能先于观察器：仅允许本例唯一saved profile原文档的单snapshot释放，Main仍核私有owner；不冒称观察过首读签发。
       if (command === 'sqlite.tableEdit.release' && !snapshots.has(String(value.snapshotId)) && !(Object.keys(input.savedProfiles).length === 1 && typeof value.snapshotId === 'string' && !!value.snapshotId && Object.keys(value).length === 1)) return deny('其它表格快照');
       if (command === 'query.cancel' && !state.operations.some(fact => ['sqlite.tableCreate.preview', 'sqlite.tableCreate.apply', 'sqlite.tablePage'].includes(fact.command) && fact.request.taskId === value.taskId)) return deny('其它取消任务');

@@ -12,9 +12,14 @@ import '../sqliteTableClipboard.css';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
-interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; }
+interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; }
 /** 仅SQLite编辑快照使用此虚拟网格；任意查询的ResultsGrid继续保持只读。 */
-export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange }: Props) {
+export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent, onSelect, onEdit, onPaste, onActiveCell, onFilterCell, onCheckedRows, findHit, sort, onSortChange, projection, onColumnResize }: Props) {
+  const display: readonly { index: number; width?: number; frozen: boolean }[] = projection ?? page.columns.map((_, index) => ({ index, frozen: false }));
+  if (!display.length || new Set(display.map(column => column.index)).size !== display.length || display.some(column => !Number.isInteger(column.index) || column.index < 0 || column.index >= page.columns.length || column.width !== undefined && (!Number.isInteger(column.width) || column.width < 64 || column.width > 2000))) throw Error('SQLite显示列映射无效');
+  const orderKey = JSON.stringify(display.map(column => column.index)), orderRef = useRef<{ key: string; indices: readonly number[] }>({ key: orderKey, indices: Object.freeze(display.map(column => column.index)) });
+  if (orderRef.current.key !== orderKey) orderRef.current = { key: orderKey, indices: Object.freeze(display.map(column => column.index)) };
+  const order = orderRef.current.indices, naturalOrder = order.length === page.columns.length && order.every((column, index) => column === index);
   const ticket = {}, committed = useRef<object | undefined>(undefined);
   const grid = useRef<DataGridHandle | null>(null), handledFind = useRef<string | undefined>(undefined);
   const source = useRef({ page, rows, identity: {} }); if (source.current.page !== page || source.current.rows !== rows) source.current = { page, rows, identity: {} };
@@ -67,22 +72,25 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   const activeCell = useRef<{ owner: typeof owner; value?: SqlitePasteAnchor; position?: { row: SqliteDraftRow; key: string }; reason: string; revision: object }>({ owner, reason: rangeText.anchorRequired, revision: {} });
   if (activeCell.current.owner !== owner) activeCell.current = { owner, reason: rangeText.anchorRequired, revision: {} };
   const anchorTicket = activeCell.current.revision, notified = useRef<SqlitePasteAnchor | undefined>(undefined), notifyRef = useRef(onActiveCell); notifyRef.current = onActiveCell;
-  const sameAnchor = (left: SqlitePasteAnchor | undefined, right: SqlitePasteAnchor | undefined) => left?.row === right?.row && left?.column === right?.column;
+  const sameAnchor = (left: SqlitePasteAnchor | undefined, right: SqlitePasteAnchor | undefined) => left?.row === right?.row && left?.column === right?.column && left?.columns === right?.columns;
   /** 真正的cell事件同步通知，避免子layout先于父页渲染票据提交而丢掉准确起点。 */
   function notifyAnchor(value: SqlitePasteAnchor | undefined): void { if (sameAnchor(notified.current, value)) return; notified.current = value; try { notifyRef.current?.(value); } catch { setError(rangeText.stale); } }
   // 源page/rows重绑后的清空只在提交后通知；自己的disabled或Modal不改变真实活动位置。
   useEffect(() => { notifyAnchor(activeCell.current.value); });
+  // 布局窗口关闭后重新签当前物理格的可见列顺序；隐藏的原格不再提供粘贴资格。
+  useEffect(() => { const cell = activeCell.current; if (cell.position && (naturalOrder ? cell.value?.columns !== undefined : cell.value?.columns !== order)) captureCell(cell.position.row, cell.position.key); });
   useEffect(() => () => { if (notified.current !== undefined) { notified.current = undefined; try { notifyRef.current?.(undefined); } catch { /* 旧组件卸载不得向其它目标补发动作。 */ } } }, []);
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = undefined; }; });
   /** 父layout提交票据后才导航；一次token只滚动一次，焦点请求走RDG真实活动格API。 */
   useEffect(() => {
     const hit = findHit, handle = grid.current;
-    if (!hit || handledFind.current === hit.id || hit.page !== page || hit.rows !== rows || !rows.includes(hit.row) || hit.row.deleted || !Number.isInteger(hit.column) || hit.column < 0 || hit.column >= page.columns.length || disabled || !baseCurrent(hit.row) || !noModal() || !handle?.element || !handle.element.ownerDocument.contains(handle.element)) return;
-    handledFind.current = hit.id;
-    const position = { rowIdx: rows.indexOf(hit.row), idx: hit.column + 2 };
+    if (!hit || handledFind.current === hit.id + orderKey || hit.page !== page || hit.rows !== rows || !rows.includes(hit.row) || hit.row.deleted || !Number.isInteger(hit.column) || hit.column < 0 || hit.column >= page.columns.length || disabled || !baseCurrent(hit.row) || !noModal() || !handle?.element || !handle.element.ownerDocument.contains(handle.element)) return;
+    const displayed = order.indexOf(hit.column); if (displayed < 0) return;
+    handledFind.current = hit.id + orderKey;
+    const position = { rowIdx: rows.indexOf(hit.row), idx: displayed + 2 };
     handle.scrollToCell(position);
     if (hit.focus && baseCurrent(hit.row) && !disabled && noModal() && grid.current?.element === handle.element) handle.setActivePosition(position, { shouldFocus: true });
-  }, [findHit, owner, disabled]);
+  }, [findHit, owner, disabled, orderKey]);
   /** 虚拟行复用不授予旧对象权限；复制同样检查原页和准确rows，不能从当前选中名称猜数据。 */
   function baseCurrent(row?: SqliteDraftRow): boolean { try { return committed.current === ticket && source.current === owner && isCurrent() && (!row || rows.includes(row)); } catch { return false; } }
   function localCurrent(): boolean { return committed.current === ticket && source.current === owner && selection.current.revision === selectionTicket && activeCell.current.revision === anchorTicket; }
@@ -92,20 +100,20 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
     if (!baseCurrent(row) || !noModal()) return;
     const column = Number(key.slice(1)), position = row ? { row, key } : undefined;
     // 筛选允许读取生成列；粘贴起点仍沿原可写字段限制。
-    onFilterCell?.(!disabled && row && !row.deleted && /^c(?:0|[1-9]\d*)$/.test(key) && Number.isSafeInteger(column) && page.columns[column] ? { row, column } : undefined);
+    onFilterCell?.(!disabled && row && !row.deleted && /^c(?:0|[1-9]\d*)$/.test(key) && Number.isSafeInteger(column) && order.includes(column) && page.columns[column] ? { row, column } : undefined);
     let reason: string = rangeText.anchorRequired, value: SqlitePasteAnchor | undefined;
     if (disabled || page.edit?.kind !== 'editable') reason = rangeText.readonly;
     else if (row?.deleted) reason = rangeText.deleted;
-    else if (row && /^c(?:0|[1-9]\d*)$/.test(key) && Number.isSafeInteger(column) && page.columns[column]) { if (page.columns[column].generated || page.edit.columns[column]?.generated) reason = rangeText.generated; else { value = Object.freeze({ row, column }); reason = ''; } }
+    else if (row && /^c(?:0|[1-9]\d*)$/.test(key) && Number.isSafeInteger(column) && order.includes(column) && page.columns[column]) { if (page.columns[column].generated || page.edit.columns[column]?.generated) reason = rangeText.generated; else { value = Object.freeze({ row, column, ...(!naturalOrder ? { columns: order } : {}) }); reason = ''; } }
     const before = activeCell.current;
-    if (before.position?.row === position?.row && before.position?.key === position?.key && sameAnchor(before.value, value) && before.reason === reason) return;
+    if (before.position?.row === position?.row && before.position?.key === position?.key && sameAnchor(before.value, value) && before.value?.columns === value?.columns && before.reason === reason) return;
     activeCell.current = { owner, value, position, reason, revision: {} }; notifyAnchor(value); selectionChanged(revision => revision + 1);
   }
   function noModal(): boolean { return !document.querySelector('[role="dialog"], [role="alertdialog"]'); }
   /** 输入控件保留自己的剪贴板语义，不截获文字编辑器、搜索框或其它模态的copy/paste。 */
   function inputTarget(event: ClipboardEvent<HTMLDivElement>): boolean { const node = event.target as HTMLElement | null; return !!node && (node.isContentEditable || ['TEXTAREA', 'SELECT'].includes(node.tagName) || node.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes((node as HTMLInputElement).type)); }
-  const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...page.columns.map((column, index): Column<SqliteDraftRow> => ({
-    key: 'c' + index, name: column.name + (column.generated ? ' · ' + text.generated : ''), width: 180, resizable: true, sortable: !!onSortChange && !disabled,
+  const columns: Column<SqliteDraftRow>[] = [SelectColumn, { key: '__row', name: '#', width: 68, frozen: true, renderCell: ({ row }) => <button aria-label={text.select(rows.indexOf(row) + 1)} aria-pressed={selected === row.id} onClick={() => { if (baseCurrent(row)) { onSelect(row); captureCell(row, '__row'); } }}>{rows.indexOf(row) + 1}</button> }, ...display.map(({ index, width, frozen }): Column<SqliteDraftRow> => ({
+    key: 'c' + index, name: page.columns[index].name + (page.columns[index].generated ? ' · ' + text.generated : ''), minWidth: 64, width: width ?? 180, frozen, resizable: true, sortable: !!onSortChange && !disabled,
     renderCell: ({ row }) => {
       const value = row.values[index], matched = findHit?.page === page && findHit.rows === rows && findHit.row === row && findHit.column === index && !row.deleted;
       const raw = value === undefined ? text.omitted : value.kind === 'null' ? 'NULL' : value.value, range = matched ? findHit.range : undefined;
@@ -121,9 +129,9 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
     if (!current(row) || !noModal() || row.deleted) return;
     try {
       const checked = rows.filter(item => selectedRows.has(item.id) && !item.deleted), index = Number(key.slice(1));
-      if (!checked.length && (!/^c\d+$/.test(key) || !page.columns[index] || row.values.length !== page.columns.length)) return;
+      if (!checked.length && (!/^c\d+$/.test(key) || !order.includes(index) || !page.columns[index] || row.values.length !== page.columns.length)) return;
       if (checked.some(item => item.values.length !== page.columns.length)) throw Error(clipboardText.invalid);
-      const values = checked.length ? checked.map(item => item.values) : [[row.values[index]]], content = encodeSqliteClipboard(values, checked.length ? page.columns.map(column => column.name) : [page.columns[index].name]);
+      const values = checked.length ? checked.map(item => order.map(index => item.values[index])) : [[row.values[index]]], content = encodeSqliteClipboard(values, checked.length ? order.map(index => page.columns[index].name) : [page.columns[index].name]);
       if (!current(row) || !noModal()) return; writeSqliteClipboardData(event.clipboardData, content); setError('');
     } catch (reason) { try { event.clipboardData.clearData(); } catch { /* 仅原事件可清理，不借系统剪贴板重试。 */ } if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
   }
@@ -135,11 +143,12 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
     if (disabled || page.edit?.kind !== 'editable') { setError(rangeText.readonly); return; }
     const target = event.target as HTMLElement | null, anchor = activeCell.current.value;
     if (target?.tagName === 'INPUT' || target?.tagName === 'BUTTON' || !anchor) { setError(activeCell.current.reason || rangeText.anchorRequired); return; }
+    if (naturalOrder ? anchor.columns !== undefined : anchor.columns !== order) { setError(rangeText.stale); return; }
     if (!rows.includes(anchor.row) || anchor.row.deleted || !page.columns[anchor.column] || page.columns[anchor.column].generated || page.edit.columns[anchor.column]?.generated) { setError(rangeText.stale); return; }
     try { onPaste(event.clipboardData, anchor); setError(''); } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : rangeText.invalid); }
   }
   return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className="results-grid" columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={32} headerRowHeight={42}
-    sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }}
+    sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }} onColumnResize={onColumnResize ? (column, width) => { if (!disabled && baseCurrent() && noModal() && /^c(?:0|[1-9]\d*)$/.test(column.key) && order.includes(Number(column.key.slice(1)))) onColumnResize(column.key, width); } : undefined}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={ids => { if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return; selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} }; notifyChecked(); selectionChanged(value => value + 1); }}
     rowClass={row => row.deleted ? 'row-deleted' : row.index === undefined ? 'row-inserted' : undefined}

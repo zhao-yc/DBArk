@@ -7,14 +7,16 @@ export interface TableColumnPreference { name: string; hidden: boolean; width?: 
 export interface TablePreferences { version: 1; columns: TableColumnPreference[]; frozenThrough?: string; }
 export const tablePreferencesLimits = { tables: 500, columns: 4096, entryBytes: 512 * 1024, totalBytes: 8 * 1024 * 1024, minWidth: 64, maxWidth: 2000 } as const;
 export const tablePreferenceTargetSchema = z.object({ connectionId: z.string().min(1).max(200), database: z.string().min(1).max(256), table: z.string().min(1).max(256) }).strict();
-const tablePreferencesShape = z.object({ version: z.literal(1), columns: z.array(z.object({ name: z.string().min(1).max(256), hidden: z.boolean(), width: z.number().int().min(tablePreferencesLimits.minWidth).max(tablePreferencesLimits.maxWidth).optional() }).strict()).max(tablePreferencesLimits.columns), frozenThrough: z.string().min(1).max(256).optional() }).strict().superRefine((preferences, context) => {
+/** 各驱动使用自己的准确名称合同，列布局语义与宽度预算共同维护。 */
+export function tablePreferencesShapeFor(name: z.ZodType<string>, maximum: number = tablePreferencesLimits.columns) { return z.object({ version: z.literal(1), columns: z.array(z.object({ name, hidden: z.boolean(), width: z.number().int().min(tablePreferencesLimits.minWidth).max(tablePreferencesLimits.maxWidth).optional() }).strict()).max(maximum), frozenThrough: name.optional() }).strict().superRefine((preferences, context) => {
   const names = new Set<string>();
   for (const column of preferences.columns) {
     if (names.has(column.name)) context.addIssue({ code: 'custom', message: '表偏好不能重复列名' });
     names.add(column.name);
   }
   if (preferences.frozenThrough !== undefined && !preferences.columns.some(column => column.name === preferences.frozenThrough && !column.hidden)) context.addIssue({ code: 'custom', message: '冻结边界必须是当前可见的精确列名' });
-});
+}); }
+const tablePreferencesShape = tablePreferencesShapeFor(z.string().min(1).max(256));
 
 /** IPC只读取普通对象的自有数据描述符，冻结字段和列描述的getter均不会被执行。 */
 function preferenceRecord(input: unknown, allowed: readonly string[], required: readonly string[] = allowed): Record<string, unknown> {
@@ -32,7 +34,7 @@ function preferenceRecord(input: unknown, allowed: readonly string[], required: 
 }
 
 /** 有界复制稠密列数组，缺省冻结字段保持省略；显式undefined不能冒充有效边界。 */
-function preferenceInput(input: unknown): unknown {
+export function preferenceInput(input: unknown): unknown {
   const source = preferenceRecord(input, ['version', 'columns', 'frozenThrough'], ['version', 'columns']);
   if (Object.hasOwn(source, 'frozenThrough') && source.frozenThrough === undefined) throw Error('冻结边界必须是当前可见的精确列名');
   const original = source.columns;

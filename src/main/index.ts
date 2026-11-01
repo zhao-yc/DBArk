@@ -1,4 +1,5 @@
 import { SqliteTablePresetMain, type SqlitePresetCommand } from './sqliteTablePresetMain';
+import { SqliteTableLayoutMain } from './sqliteTableLayoutMain';
 import { SqliteObjectsMain } from './sqliteObjectsMain';
 import { sqliteObjectsFactMessage } from '../shared/sqliteObjectsFact';
 import { SqliteTableMaintenanceMain } from './sqliteTableMaintenanceMain';
@@ -187,6 +188,7 @@ const filteredDeletes = new TableFilteredDeleteOwners({
 const queryInsertExports=new QueryInsertExports(files,{assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right),revision:()=>store.connectionRevision(),session:id=>sessions.get(id),closing:()=>shuttingDown,stop:async taskId=>{const preparing=preparingTasks.get(taskId);if(preparing){preparing.cancelled=true;return;}return broker.request('query.cancel',{taskId});}});
 const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const sqliteTablePresets = new SqliteTablePresetMain({ get store() { return store; }, assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown });
+const sqliteTableLayouts = new SqliteTableLayoutMain({ get store() { return store; }, assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown });
 const resultPresetSources=new QueryResultPresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
 // 连接关闭不修改磁盘配置修订；不同值另用私有对象代次防关闭后同名重开复活旧候选。
@@ -468,6 +470,7 @@ function cancelTablePresetRead(taskId:string):Promise<unknown> {
 }
 /** 来源销毁不依赖旧渲染进程继续发IPC；收尾失败由仍在等待的原请求保留。 */
 function invalidateTablePresetSources():void {
+  sqliteTableLayouts.invalidate();
   resultPresetSources.invalidate();
   sqliteTablePresets.invalidate(); tablePresetSources.invalidate();for(const taskId of tablePresetReads.keys())void cancelTablePresetRead(taskId).catch(()=>undefined);
 }
@@ -1058,6 +1061,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'sqlite.tablePresets.delete':
     case 'sqlite.tablePresets.read': {
       const result = sqliteTablePresets.execute(command.slice('sqlite.tablePresets.'.length) as SqlitePresetCommand, input, columns);
+      columns!.sqlitePresetPublication = result.publish; return result.value;
+    }
+    case 'sqlite.tableLayout.get':
+    case 'sqlite.tableLayout.save':
+    case 'sqlite.tableLayout.reset': {
+      const result = sqliteTableLayouts.execute(command.slice('sqlite.tableLayout.'.length) as 'get' | 'save' | 'reset', input, columns);
       columns!.sqlitePresetPublication = result.publish; return result.value;
     }
     case 'table.presets.list':
@@ -1779,7 +1788,7 @@ else {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
-        if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
@@ -1791,7 +1800,7 @@ else {
         const trackedFileOperation=payload.command.startsWith('snippets.transfer') || (payload.command === 'files.preflight' || payload.command === 'files.inspectImport');if(trackedFileOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
-          if (payload.command.startsWith('sqlite.tablePresets.')) { if (!columns?.sqlitePresetPublication) throw Error('SQLite方案缺少原请求发布门'); columns.sqlitePresetPublication(); }
+          if (payload.command.startsWith('sqlite.tablePresets.') || payload.command.startsWith('sqlite.tableLayout.')) { if (!columns?.sqlitePresetPublication) throw Error('SQLite方案缺少原请求发布门'); columns.sqlitePresetPublication(); }
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
           if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'table.filteredUpdate.preview') {
