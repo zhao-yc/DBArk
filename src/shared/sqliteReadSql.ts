@@ -19,6 +19,11 @@ function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn
     // 停用仍经过完整合同和字段白名单，不可借停用绕过名称、值格式或全组预算。
     if (filter.enabled === false) return [];
     if (filter.operator === 'isNull' || filter.operator === 'notNull') return [column + (filter.operator === 'isNull' ? ' IS NULL' : ' IS NOT NULL')];
+    // 同型列表仍限制真实存储类型，NOT IN不把NULL或另一类型当成普通不等值。
+    if (filter.operator === 'in' || filter.operator === 'notIn') {
+      const values = filter.values!, kind = values[0].kind, type = render({ kind: 'storage-type', value: kind === 'blob' ? 'blob' : kind });
+      return ['(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'in' ? ' IN (' : ' NOT IN (') + values.map(value => render({ kind: 'operand', value })).join(', ') + '))'];
+    }
     const value = filter.value!, type = render({ kind: 'storage-type', value: value.kind === 'blob' ? 'blob' : value.kind }), operand = render({ kind: 'operand', value });
     // 原生BETWEEN包含两端，不重排边界；NOT BETWEEN仍保留原动态存储类型限制。
     if (filter.operator === 'between' || filter.operator === 'notBetween') return ['(typeof(' + column + ') = ' + type + ' AND ' + column + (filter.operator === 'between' ? ' BETWEEN ' : ' NOT BETWEEN ') + operand + ' AND ' + render({ kind: 'operand', value: filter.secondValue! }) + ')'];

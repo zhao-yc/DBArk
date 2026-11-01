@@ -204,3 +204,7 @@ it('范围导出摘要完整显示两个精确边界，不只显示起始值', a
   await mount({}, 'table', source(), [{ column: 'id', operator: 'between', value: { kind: 'integer', value: '9007199254740993' }, secondValue: { kind: 'integer', value: '9223372036854775807' } }]);
   expect(document.body.textContent).toContain('介于（包含两端）'); expect(document.body.textContent).toContain('9007199254740993'); expect(document.body.textContent).toContain('AND [整数] 9223372036854775807');
 });
+it('列表导出摘要完整显示精确项，不把数字原文转浮点', async () => {
+  await mount({}, 'table', source(), [{ column: 'id', operator: 'in', values: [{ kind: 'integer', value: '9007199254740993' }, { kind: 'integer', value: '9223372036854775807' }] }]);
+  expect(document.body.textContent).toContain('属于列表'); expect(document.body.textContent).toContain('"9007199254740993", "9223372036854775807"');
+});

@@ -66,3 +66,14 @@ it.each(['between', 'notBetween'] as const)('%s在真实UTF8/UTF16LE/UTF16BE源�
     for (const db of databases) expect(rows(db, generated)).toEqual(rows(db, original.sql, original.parameters.map(bound)));
   }
 });
+it.each(['in', 'notIn'] as const)('%s列表在三种真实源编码及不同亲和性保持类型与参数语义', operator => {
+  for (const column of [field, 'tc', 'nc', 'rc']) for (const values of [
+    [{ kind: 'integer' as const, value: '-9223372036854775808' }, { kind: 'integer' as const, value: '9223372036854775807' }],
+    [{ kind: 'real' as const, value: '-0' }, { kind: 'real' as const, value: '0.5' }],
+    [{ kind: 'text' as const, value: needle }, { kind: 'text' as const, value: 'ABC' }, { kind: 'text' as const, value: '' }],
+    [{ kind: 'blob' as const, value: '' }, { kind: 'blob' as const, value: '00ff' }],
+  ]) {
+    const source = input([{ column, operator, values }]), generated = buildSqliteFilteredSelect(source, columns, ['id']), original = buildSqliteTableSelect(source, columns, ['id'], true);
+    for (const db of databases) expect(rows(db, generated)).toEqual(rows(db, original.sql, original.parameters.map(bound)));
+  }
+});

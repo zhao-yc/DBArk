@@ -96,6 +96,13 @@ async function closedRead(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾', () => {
+  it('准确1024个列表/类型/分页绑定经过原utility保护真实执行，不提高原worker门槛', async () => {
+    const profile = fixture(), { app } = runtime(profile), values = Array.from({ length: 128 }, () => ({ kind: 'text' as const, value: '' }));
+    const filters = [...Array.from({ length: 7 }, () => ({ column: 'value', operator: 'in' as const, values })), { column: 'value', operator: 'in' as const, values: values.slice(0, 118) }];
+    expect(ids(await page(app, input(profile, '准确列表绑定上限', { filters })))).toEqual([]);
+    expect(processes.flatMap(record => record.sent).some(message => message.kind === 'execute' && message.parameters?.length === 1024)).toBe(true);
+    for (const record of processes) await closedRead(record);
+  });
   it.each(['mix', 'mix_view'])('%s的紧凑原格存储类型由真实协议保留，与同一磁盘typeof逐格一致', async table => {
     const profile = fixture(), { app } = runtime(profile), actual = await page(app, input(profile, '原格存储类型', { table, limit: 100 }));
     const observer = new DatabaseSync(profile.sqlite.filePath!, { readOnly: true });

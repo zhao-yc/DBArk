@@ -94,3 +94,27 @@ it('同帧连续编辑两个边界都保留，文本空界和NULL切换不被自
   await change(text.filterKind(1), 'text'); await change(text.filterSecondValue(1), ''); await change(text.filterOperator(1), 'isNull'); await change(text.filterOperator(1), 'between');
   expect(f.values()[0]).toMatchObject({ kind: 'text', value: '9007199254740993', secondValue: '' }); expect(request).not.toHaveBeenCalled();
 });
+it.each(['in', 'notIn'] as const)('%s列表沿原值初始化，增删修改保精确值，停用及切换普通比较不丢列表', async operator => {
+  const f = await mount(); await change(text.filterOperator(1), operator); await click(text.addListValue(1)); await change(text.listValue(1, 2), '-9223372036854775808'); await change(text.filterEnabled(1), false);
+  expect(f.values()[0]).toMatchObject({ values: ['9223372036854775807', '-9223372036854775808'], enabled: false });
+  const oldSecond = props(control(text.listValue(1, 2))).onChange; await click(text.removeListValue(1, 1));
+  expect(f.values()[0]).toMatchObject({ values: ['-9223372036854775808'], value: '-9223372036854775808', enabled: false });
+  await act(async () => oldSecond({ target: { value: '旧位置污染' } })); await change(text.filterOperator(1), 'eq'); await change(text.filterOperator(1), operator);
+  expect(f.values()[0].values).toEqual(['-9223372036854775808']); expect(request).not.toHaveBeenCalled();
+});
+it('同帧不同列表项输入合并，先复制事件值，不被随后DOM值污染', async () => {
+  const f = await mount(); await change(text.filterOperator(1), 'in'); await click(text.addListValue(1));
+  const first = props(control(text.filterValue(1))).onChange, second = props(control(text.listValue(1, 2))).onChange, event = { target: { value: '1' } };
+  await act(async () => { first(event); event.target.value = '不应进入草稿'; second({ target: { value: '2' } }); });
+  expect(f.values()[0].values).toEqual(['1', '2']); expect(request).not.toHaveBeenCalled();
+});
+it('列表128项禁止再添加，单项禁止删除为空，二进制列表可明确选择', async () => {
+  const f = await mount([{ id: 'list', column: 'memo', operator: 'in', kind: 'blob', value: '00ff', values: Array.from({ length: 128 }, () => '00ff') }]);
+  expect(button(text.addListValue(1)).disabled).toBe(true); await act(async () => props(button(text.addListValue(1))).onClick()); expect(f.values()[0].values).toHaveLength(128);
+  expect(control(text.filterKind(1)).querySelectorAll('option').find(node => node.value === 'blob')?.disabled).toBe(false);
+});
+it('单项列表不能通过旧删除端口变空，取消启用后编辑不隐式恢复启用', async () => {
+  const f = await mount(); await change(text.filterOperator(1), 'in'); expect(button(text.removeListValue(1, 1)).disabled).toBe(true);
+  await act(async () => props(button(text.removeListValue(1, 1))).onClick()); expect(f.values()[0].values).toHaveLength(1);
+  await change(text.filterEnabled(1), false); await change(text.filterValue(1), '2'); expect(f.values()[0]).toMatchObject({ enabled: false, values: ['2'] });
+});

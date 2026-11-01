@@ -9,6 +9,8 @@
 .sqlite-browse-rule input { flex: 1; min-width: 100px; }
 .sqlite-browse-rule label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .sqlite-browse-rule input[type=checkbox] { flex: none; min-width: 0; width: 14px; padding: 0; }
+.sqlite-browse-list { flex-basis: 100%; min-width: 0; }
+.sqlite-browse-list-value { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 .sqlite-browse-result { flex: 1; min-height: 0; overflow: hidden; }
 .sqlite-browse-result > .results-grid { height: 100%; }
 .sqlite-table-tab .tab-status small { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
