@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import { observeNavigationMenu } from './navigation-menu-diagnostics';
 
 type Options = Parameters<Locator['getByRole']>[1];
 
@@ -26,6 +27,7 @@ async function navigationMenuControl(scope: Page | Locator, directRole: 'button'
   current();
   const direct = scope.getByRole(directRole, options);
   if (await observe(() => direct.count()) > 0) return direct;
+  await observe(() => observeNavigationMenu(page));
   const items = page.locator('.action-menu-panel').getByRole(menuRole, options);
   if (await observe(() => items.count()) > 0) return items;
   const triggers = scope.locator('.action-menu-trigger:visible');

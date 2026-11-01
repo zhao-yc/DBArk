@@ -121,12 +121,12 @@ function legacyOwned(mode: 'CurrentUser' | 'all' = 'CurrentUser') {
 }
 
 describe('对象URI安装配置与实际include有限解释（不代表原生安装验收）', () => {
-  it('仅macOS声明dbark scheme，NSIS显式include且原配置边界不变', () => {
+  it('仅macOS声明dbark scheme，NSIS配置与SQLite签名隔离范围准确', () => {
     expect(manifest.build.mac.protocols).toEqual([{ name: 'DBArk 对象链接', schemes: ['dbark'], role: 'Viewer' }]);
     expect(manifest.build.protocols).toBeUndefined(); expect(manifest.build.win.protocols).toBeUndefined();
     expect(manifest.build.nsis).toEqual({ oneClick: false, allowToChangeInstallationDirectory: true, installerLanguages: ['zh_CN'], include: 'build/installer.nsh' });
     const { protocols: _protocols, ...previousMac } = manifest.build.mac;
-    expect(previousMac).toEqual({ target: ['dmg', 'zip'], icon: 'build/icon.icns', category: 'public.app-category.developer-tools', identity: '-' });
+    expect(previousMac).toEqual({ target: ['dmg', 'zip'], icon: 'build/icon.icns', category: 'public.app-category.developer-tools', identity: '-', signIgnore: ['.*sqlite-native/.*\\.dylib$'] });
     expect(source).not.toMatch(/UseOriginalUrlEncoding|IfShellVarContextAll\s+\w|\b(?:Exec|ExecWait|ExecShell|nsExec::Exec)\s/);
   });
 

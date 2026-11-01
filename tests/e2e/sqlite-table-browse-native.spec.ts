@@ -370,6 +370,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     runtime.retainOwnedDesktopResources(info);
     let partial: Audit | undefined;
     if (armed && !closed) try { partial = await application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: Audit }).__sqliteTableBrowseNative; return state ? { pending: state.pending, denied: state.denied, forks: state.forks, frames: state.frames, pickerCalls: state.pickerCalls, connectionId: state.connectionId, commands: state.commands, lookups: state.lookups, pages: state.pages } : undefined; }); } catch { /* 只读保留已捕获原件，不借失败重建观察器。 */ }
+    try { await info.attach('分组菜单只读事件', { body: JSON.stringify(await (await import('./navigation-menu-diagnostics')).readNavigationMenuObservation(page)), contentType: 'application/json' }); } catch { /* 只读诊断失败不覆盖原错误。 */ }
     try { await info.attach('SQLite表浏览失败原件保留', { body: JSON.stringify({ stage, directory, database, pid: originalProcess.pid, exitCode: originalProcess.exitCode, closed, armed, partial, automaticRetry: false, automaticRestart: false, automaticForceStop: false, directoryRemoved: false, firstError: reason instanceof Error ? reason.message : String(reason) }), contentType: 'application/json' }); } catch { /* 附件失败不覆盖首因，也不解除原owner保留。 */ }
     throw reason;
   }
