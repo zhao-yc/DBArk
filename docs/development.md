@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 高频查询新增[元数据补全](development/sqlite-completion-20261101.md)：独立 SQLite 分析 Worker、表／视图／字段与别名、明确输出的 CTE／派生表，原物理会话临时命名空间及未提交 DDL 保持。新 IPC 仅传标识符，取消不回滚用户事务；验证及未支持语法见专项记录，Mac／安装另验，暂不发布。
+
 W02新增[系统对象链接入口](development/external-object-uris-20261027.md)：有界单实例队列、真实文档及连接修订租约、受限IPC、模态等待与原工作区导航；Windows安装脚本和macOS包声明分别接线。WIN11-TEST类型、123项定向、构建及1个正式事件/真实副实例离线整例通过，原失败与边界见[验收记录](../tests/integration/acceptance-external-object-uris-20261027.md)；系统注册、冷启动及实库成功导航须另取原生证据，暂不发布。
 
 本批表格草稿文件通过独立受限文件能力保存，`table.draftVerify` 在原独立只读会话复核完整旧值，恢复仍由原预览／集中提交链处理。变更不代表已发布；[实现与逐轮验证](development/table-draft-files-20261027.md)分别记录相关单元、构建、原全量失败及实库收尾问题。实库需双门 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_TABLE_DRAFT_TEST=1`；源码窗口将后一个换为 `DBARK_TABLE_DRAFT_UI=1`，默认和列表模式不启用真实资源。凭据及预期实例身份仅从受限本地配置注入，不能写到命令行、日志或源码；须取得本轮随机测试库的创建与精确清理授权后才运行。后续实库、窗口及平台结果按固定快照和原件补录，暂不发布。

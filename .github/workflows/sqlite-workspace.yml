@@ -105,6 +105,9 @@ jobs:
       - name: 单次运行SQLite新建数据库文件原生专项
         if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs create
+      - name: 单次运行SQLite元数据补全原生专项
+        if: matrix.suite == 'workspace'
+        run: node scripts/sqlite-workspace-ci.mjs completion
       - name: 单次运行SQLite可视化新建表原生专项
         if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs table-create
@@ -165,6 +168,7 @@ jobs:
             test-results/sqlite-explain/
             test-results/sqlite-parameters/
             test-results/sqlite-create/
+            test-results/sqlite-completion/
             test-results/sqlite-table-create/
             test-results/sqlite-table-import/
             test-results/sqlite-import-new-table/

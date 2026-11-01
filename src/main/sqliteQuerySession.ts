@@ -30,6 +30,7 @@ export class SqliteQuerySession {
   readonly sessionId: string;
   private active?: Execution;
   private transactionCommand = false;
+  private objectsRevision = 0;
   private closing?: Promise<void>;
   private terminalNotificationFailed = false;
 
@@ -46,9 +47,9 @@ export class SqliteQuerySession {
   /** 通知侧通道失效不改变原生执行事实；Main可读取此标记并要求明确重开，不能自动重放。 */
   get notificationFailed(): boolean { return this.terminalNotificationFailed; }
   /** SQLite主命名空间固定main；不伪造MySQL sql_mode或将其交给MySQL补全分析器。 */
-  completionState(): SqliteCompletionState {
-    const { broken } = this.state(), busy = !!this.active || this.transactionCommand || this.driver.isBusy;
-    return { database: broken ? undefined : 'main', databaseKnown: !broken && !busy, dialect: 'sqlite', serverVersion: this.driver.version, broken, busy };
+  completionState(pending = false): SqliteCompletionState {
+    const { broken } = this.state(), busy = pending || !!this.active || this.transactionCommand || this.driver.isBusy;
+    return { database: broken ? undefined : 'main', databaseKnown: !broken && !busy, dialect: 'sqlite', serverVersion: this.driver.version, objectsRevision: this.objectsRevision, broken, busy };
   }
   private available(sessionId: string, explicitRollback = false): void {
     if (sessionId !== this.sessionId || this.closing || !this.driver.isUsable) throw Error('SQLite原查询会话已关闭或失效，不会自动重连或重放');
@@ -95,6 +96,9 @@ export class SqliteQuerySession {
 
   /** 查询与计划共用同一active任务、ACK、预算、原生终态和通知失效保护，不能绕开会话忙态或重放。 */
   private async run(input: Pick<ExecuteInput, 'taskId' | 'maxRows'>, sql: string, options: RunOptions): Promise<QueryOutcome> {
+    // 任何明确执行均撤销此前目录建议，即使它最终报错或回滚；目录短读本身不推进此修订。
+    if (this.objectsRevision >= Number.MAX_SAFE_INTEGER) throw Error('SQLite会话目录修订已达上限，请明确重开会话');
+    this.objectsRevision++;
     const operation: Execution = { taskId: input.taskId, results: [], started: performance.now(), rows: 0 };
     let resultLimitReached = false;
     this.active = operation;
@@ -173,6 +177,8 @@ export class SqliteQuerySession {
     const commands = { begin: 'BEGIN', commit: 'COMMIT', rollback: 'ROLLBACK' };
     if (!Object.hasOwn(commands, input.action)) throw Error('SQLite事务动作无效');
     const sql = commands[input.action];
+    if (this.objectsRevision >= Number.MAX_SAFE_INTEGER) throw Error('SQLite会话目录修订已达上限，请明确重开会话');
+    this.objectsRevision++;
     this.transactionCommand = true;
     try { await this.driver.execute(sql); } finally { this.transactionCommand = false; }
   }

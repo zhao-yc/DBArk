@@ -1139,6 +1139,15 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       try { return await broker.request(command, { ...input, profile: store.resolveConnection(input.connectionId) }); }
       finally { completionTasks.delete(input.taskId); }
     }
+    case 'sqlite.completion': {
+      if (shuttingDown) throw Error('客户端正在退出，不能读取SQLite补全目录');
+      if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId) || historyDelete?.owns(input.taskId) || completionTasks.size >= 8) throw Error('SQLite补全任务编号已使用或读取繁忙');
+      connectionConfig.assertAvailable(input.connectionId);
+      if (store.resolveConnection(input.connectionId).dialect !== 'sqlite') throw Error('SQLite补全需要已保存的SQLite连接');
+      completionTasks.add(input.taskId);
+      try { return await broker.request(command, input); }
+      finally { completionTasks.delete(input.taskId); }
+    }
     case 'metadata.completion':case 'search.catalogue': {
       if(shuttingDown)throw new Error('客户端正在退出，不能读取补全目录');
       if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(input.taskId)))throw new Error('任务编号已使用，请重新发起操作');

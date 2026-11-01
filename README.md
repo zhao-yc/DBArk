@@ -1,5 +1,7 @@
 # DBArk
 
+SQLite 高频查询新增[元数据补全](docs/development/sqlite-completion-20261101.md)：独立 SQLite 分析 Worker、表／视图／字段与别名、明确输出的 CTE／派生表，原物理会话临时命名空间及未提交 DDL 保持。新 IPC 仅传标识符，取消不回滚用户事务；验证及未支持语法见专项记录，Mac／安装另验，暂不发布。
+
 面向 MySQL / MariaDB 的开源桌面数据库客户端。使用 Electron、React 和 TypeScript，采用 MIT 许可证。
 
 DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式，使用独立的界面与实现。当前开发范围为 Windows 和 macOS 客户端。

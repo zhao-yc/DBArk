@@ -13,6 +13,7 @@ const expected = {
     ['explain', 'sqlite-explain-native.spec.ts', 'sqlite-explain'],
     ['parameters', 'sqlite-parameters-native.spec.ts', 'sqlite-parameters'],
     ['create', 'sqlite-create-native.spec.ts', 'sqlite-create'],
+    ['completion', 'sqlite-completion-native.spec.ts', 'sqlite-completion'],
     ['table-create', 'sqlite-table-create-native.spec.ts', 'sqlite-table-create'],
   ],
   management: [
@@ -68,12 +69,12 @@ describe('SQLite三平台双suite源码CI分片覆盖', () => {
     expect(platforms()).toEqual([{ os: 'windows-latest', label: 'Windows x64', artifact: 'Windows-x64' }, { os: 'macos-latest', label: 'macOS arm64', artifact: 'macOS-arm64' }, { os: 'macos-15-intel', label: 'macOS x64', artifact: 'macOS-x64' }]);
     expect(new Set(platforms().map(value => value.os)).size).toBe(3); expect(workflow).toContain('runs-on: ${{ matrix.os }}'); expect(workflow).toContain('name: SQLite原工作区 · ${{ matrix.label }} · ${{ matrix.suite }}'); expect(workflow).toContain('fail-fast: false'); expect(workflow).toContain('cancel-in-progress: false');
   });
-  it('24项专项按10/14精确分片，不遗漏或重复；每个平台合计每项恰好一次', () => {
-    expect(native).toHaveLength(24); const allExpected = [...expected.workspace, ...expected.management].map(value => value[0]); expect(new Set(native.map(kindFor)).size).toBe(24);
+  it('25项专项按11/14精确分片，不遗漏或重复；每个平台合计每项恰好一次', () => {
+    expect(native).toHaveLength(25); const allExpected = [...expected.workspace, ...expected.management].map(value => value[0]); expect(new Set(native.map(kindFor)).size).toBe(25);
     for (const suite of axis('suite') as Suite[]) expect(native.filter(step => suiteFor(step) === suite).map(kindFor)).toEqual(expected[suite].map(value => value[0]));
     for (const os of axis('os')) {
       const calls = (axis('suite') as Suite[]).flatMap(suite => native.filter(step => suiteFor(step) === suite).map(step => ({ os, suite, kind: kindFor(step) })));
-      expect(calls).toHaveLength(24); for (const kind of allExpected) expect(calls.filter(call => call.kind === kind)).toHaveLength(1);
+      expect(calls).toHaveLength(25); for (const kind of allExpected) expect(calls.filter(call => call.kind === kind)).toHaveLength(1);
     }
   });
   it('每个job完整checkout、Node24、锁文件安装、Electron与源码构建，不用产物替代另一suite的同源准备', () => {
@@ -86,7 +87,7 @@ describe('SQLite三平台双suite源码CI分片覆盖', () => {
     const args: string[] = sqliteOfflineCommand(kind); expect(args).toContain('tests/e2e/' + spec); expect(args).toContain('--workers=1'); expect(args).toContain('--retries=0'); expect(args).toContain('--trace=off'); expect(args.filter(value => value.startsWith('--workers='))).toEqual(['--workers=1']); expect(args.filter(value => value.startsWith('--retries='))).toEqual(['--retries=0']); expect(args.some(value => /timeout|repeat-each|grep/.test(value))).toBe(false);
     const source = readFileSync(new URL('../../tests/e2e/' + spec, import.meta.url), 'utf8'); expect(source).toMatch(/test\.describe\.configure\(\{\s*timeout:\s*120000,\s*retries:\s*0\s*\}\)/); expect(source).toContain('info.timeout !== 120000'); expect(source).toContain('info.retry !== 0'); expect(source).toContain('info.config.workers !== 1');
   });
-  it('每job总时限仍20分钟，上传always含24项目录，六个artifact命名无冲突且保留原轮现场', () => {
+  it('每job总时限仍20分钟，上传always含25项目录，六个artifact命名无冲突且保留原轮现场', () => {
     expect([...workflow.matchAll(/^    timeout-minutes: (\d+)$/gm)].map(match => match[1])).toEqual(['20']);
     const upload = steps.filter(step => step.uses === 'actions/upload-artifact@v4'); expect(upload).toHaveLength(1); expect(upload[0].condition).toBe('always()'); expect(upload[0].raw).toContain('if-no-files-found: warn');
     const paths = [...upload[0].raw.matchAll(/^            test-results\/([a-z-]+)\/$/gm)].map(match => match[1]); expect(paths).toEqual([...expected.workspace, ...expected.management].map(value => value[2]));

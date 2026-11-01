@@ -43,6 +43,7 @@ import { generatedColumnAcknowledgement } from './tableGeneratedColumn';
 import { tableCreateChecksAcknowledgement } from './tableCreateChecks';
 import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
+import { sqliteCompletionInputSchema } from './sqliteCompletion';
 import { tableValueOptionsSearchPattern } from './tableValueOptions';
 import { tableFilteredExportLimits, tableFilteredExportText } from './tableFilteredExport';
 import { queryInsertTargetSchema, queryInsertConfirmationSchema } from './queryInsertExport';
@@ -305,6 +306,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.analyzeContext': z.object({ sessionId: id, taskId: id }).strict(),
   'query.parameterNames': z.object({ sessionId: id, sql: text.min(1) }).strict(),
   'query.sessionState': z.object({ sessionId: id }).strict(),
+  'sqlite.completion': sqliteCompletionInputSchema,
   'query.completionState':z.object({sessionId:id}).strict(),
   'query.temporaryState':z.object({sessionId:id}).strict(),
   'query.temporaryCompletion':z.discriminatedUnion('kind',[z.object({sessionId:id,database:completionName,prefix:completionPrefix,kind:z.literal('objects')}).strict(),z.object({sessionId:id,database:completionName,table:completionName,prefix:completionPrefix,kind:z.literal('columns'),details:z.literal(true).optional()}).strict()]),

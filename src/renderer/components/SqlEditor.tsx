@@ -22,6 +22,10 @@ import { currentStatementZh } from '../locales/currentStatement.zh-CN';
 import { editorContentBridge } from '../editorContentBridge';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import { createSqlFieldHoverProvider } from '../sqlFieldHoverProvider';
+import SqliteCompletionWorker from '../sqliteCompletion.worker?worker';
+import { SqliteCompletionWorkerClient } from '../sqliteCompletionWorkerClient';
+import { createSqliteCompletionProvider } from '../sqliteCompletionProvider';
+import { sqliteCompletionTaskPrefix } from '../../shared/sqliteCompletion';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export type { SqlCompletionScope } from '../completionContext';
@@ -82,7 +86,24 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
   useEffect(() => {
-    if(readOnly||!completion||dialect==='sqlite'){statusRef.current?.('idle');return;}
+    if(readOnly||!completion){statusRef.current?.('idle');return;}
+    // SQLite使用自己的词法和目录，不能将其正文、临时对象或标识符预算交给MySQL分析器。
+    if (dialect === 'sqlite') {
+      const worker = new SqliteCompletionWorkerClient(() => new SqliteCompletionWorker());
+      const provider = createSqliteCompletionProvider({ connectionId: completion.connectionId, sessionId: completion.sessionId,
+        model: () => editorRef.current?.getModel() ?? null,
+        current: () => aliveRef.current && !propsRef.current.readOnly && sameCompletionScope(completionRef.current, completion) && contentRef.current?.ready === true && !document.querySelector('[role="dialog"], [role="alertdialog"]'),
+        worker, request: input => invoke('sqlite.completion', input), cancel: taskId => invoke('query.cancel', { taskId }),
+        state: sessionId => invoke('query.completionState', { sessionId }), id: () => sqliteCompletionTaskPrefix + uid(), status: status => statusRef.current?.(status),
+      });
+      const registration = monaco.languages.registerCompletionItemProvider('sql', { triggerCharacters: provider.triggerCharacters,
+        provideCompletionItems: async (model, position, context, token) => {
+          const result = await provider.provideCompletionItems(model, position, context, token);
+          return { ...result, suggestions: result.suggestions.map(item => ({ ...item, kind: completionKinds[item.kind], ...(item.trigger ? { command: { id: 'editor.action.triggerSuggest', title: '' } } : {}) })) };
+        },
+      });
+      return () => { registration.dispose(); void provider.dispose().catch(() => {}); };
+    }
     const worker=new CompletionWorkerClient(()=>new CompletionWorker()),directory=new CompletionDirectory(completion.connectionId,completion.connectionVersion,{request:input=>invoke('metadata.completion',input),cancel:taskId=>invoke('query.cancel',{taskId}),id:uid});
     let active:AbortController|undefined,disposed=false;
     let hover: ReturnType<typeof createSqlFieldHoverProvider> | undefined;

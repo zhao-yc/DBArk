@@ -1,4 +1,5 @@
 import type { QueryFileCheckInput, QueryFileCheckResult, QueryFileReloadInput, QueryFileReloadResult, QueryFileDiscardInput } from './queryFileReload';
+import type { SqliteCompletionInput, SqliteCompletionOutput } from './sqliteCompletion';
 import type { UiCommandInvocation, UiMenuState, ObjectCategory } from './uiCommands';
 import type { QueryFileSourceRef, QueryFileSourceOpenInput, QueryFileSourceOpenResult, QueryFileSourceSaveInput, QueryFileSourceSaveAsInput, QueryFileSourceSaveResult, QueryFileSourceStatusInput, QueryFileSourceStatus, QueryFileSourceReleaseInput, QueryFileSourceCancelInput } from './queryFileSources';
 import type { QueryRecentFileView } from './queryFileSources';
@@ -196,6 +197,7 @@ export interface CommandMap {
   'metadata.databases': { input: { connectionId: string }; output: string[] };
   'serverMonitor.read': { input: import('./serverMonitor').ServerMonitorInput; output: import('./serverMonitor').ServerMonitorSnapshot };
   'metadata.completion': { input: CompletionMetadataInput; output: CompletionMetadataOutput };
+  'sqlite.completion': { input: SqliteCompletionInput; output: SqliteCompletionOutput };
   'search.structure':{input:StructureSearchInput;output:StructureSearchPage};
   'search.savedQueries':{input:SavedQuerySearchInput;output:SavedQuerySearchPage};
   'search.savedQueriesContinue':{input:SavedQuerySearchNext;output:SavedQuerySearchPage};

@@ -39,10 +39,13 @@ test('SQLite真实参数表单九类型与模板隐私、整组拒绝及事务�
   let owner = runtime.ownedDesktopResources(info), application = owner.application, page = owner.page, originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'sqlite-parameters-native.sqlite');
   let closed = false, armed = false, stage = '独占合成SQLite准备';
+  let loggedStage: string | undefined;
+  /** 仅记录固定阶段名，超时也能定位；不输出SQL、参数、配置或改变原断言与期限。 */
+  const logStage = () => { if (loggedStage !== stage) { loggedStage = stage; console.log('SQLite参数专项阶段：' + stage); } };
   /** 所有异步边界只承认本例准确owner与原120秒单次期限。 */
   const check = () => { const current = runtime.ownedDesktopResources(info); if (current.application !== application || current.page !== page || current.closed !== closed || runtime.dataDir !== directory || info.timeout !== 120000 || info.retry !== 0 || info.repeatEachIndex !== 0 || info.config.workers !== 1) throw Error('SQLite参数脚本owner/profile/120秒单次期限变化'); };
   const audit = () => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteParametersNative?: Audit & { check(): void } }).__sqliteParametersNative; if (!state) throw Error('原SQLite参数脚本观察器不存在'); state.check(); return { pending: state.pending, denied: state.denied, forks: state.forks, pickerIds: state.pickerIds, profiles: state.profiles, sessions: state.sessions, commands: state.commands, operations: state.operations, events: state.events, driverSql: state.driverSql }; });
-  const step = async <T,>(action: () => Promise<T>, skipAuditAfter = false): Promise<T> => { check(); if (armed && !closed) await audit(); const result = await action(); check(); if (armed && !closed && !skipAuditAfter) await audit(); return result; };
+  const step = async <T,>(action: () => Promise<T>, skipAuditAfter = false): Promise<T> => { check(); logStage(); if (armed && !closed) await audit(); const result = await action(); check(); if (armed && !closed && !skipAuditAfter) await audit(); return result; };
   const query = () => page.locator('.query-tab:visible');
   const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
   const tasks = () => step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})));
