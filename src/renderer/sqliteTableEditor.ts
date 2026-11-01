@@ -1,5 +1,5 @@
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
-import { sqliteEditValueSchema, sqliteTableEditPreviewSchema, type SqliteOriginalValue, type SqliteTableChange, type SqliteTableEditPreview, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
+import { sqliteEditValueSchema, sqliteTableEditPreviewSchema, sqliteTableEditLimits, type SqliteOriginalValue, type SqliteTableChange, type SqliteTableEditPreview, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
 import { sqliteTableEditZh as text } from './locales/sqliteTableEdit.zh-CN';
 
 export interface SqliteDraftRow { id: string; index?: number; values: (SqliteOriginalValue | undefined)[]; deleted: boolean; }
@@ -7,6 +7,19 @@ export interface SqliteEditView { page: SqliteTablePage; rows: SqliteDraftRow[];
 interface Lease { owns(): boolean; release(): boolean; }
 interface Ports { current(): boolean; active(): boolean; available(): boolean; acquire(): Lease; id(): string; now(): number; changed(view: SqliteEditView): void; dirty(value: boolean): void; preview(input: { snapshotId: string; taskId: string; changes: SqliteTableChange[] }): Promise<SqliteTableEditPreview>; apply(input: { previewId: string; taskId: string; confirmation: string }): Promise<SqliteTableEditOutcome>; release(input: { snapshotId?: string; previewId?: string }): Promise<unknown>; cancel(taskId: string): Promise<unknown>; committed(): void; }
 interface Operation { id: string; kind: 'preview' | 'apply'; acquiring: boolean; lease?: Lease; sent: boolean; cancelled: boolean; cancel?: Promise<unknown>; }
+/** 先验完整稠密自有data数组；巨量length先拒绝，不map或读取任何索引getter。 */
+function appendArray(value: unknown, minimum: number, maximum: number): readonly unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw Error(text.invalid);
+  const length = Object.getOwnPropertyDescriptor(value, 'length'); if (!length || !('value' in length) || !Number.isInteger(length.value) || length.value < minimum || length.value > maximum || Reflect.ownKeys(value).length !== length.value + 1) throw Error(text.invalid);
+  for (let index = 0; index < length.value; index++) { const item = Object.getOwnPropertyDescriptor(value, String(index)); if (!item?.enumerable || !('value' in item)) throw Error(text.invalid); }
+  return value;
+}
+/** 只取纯对象的自有data字段，先复制再交原typed schema，禁止校验过程触发getter。 */
+function appendValue(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw Error(text.invalid);
+  const keys = Reflect.ownKeys(value); if (!keys.length || keys.length > 2) throw Error(text.invalid); const copied = Object.create(null) as Record<string, unknown>;
+  for (const key of keys) { const item = Object.getOwnPropertyDescriptor(value, key); if (typeof key !== 'string' || !item?.enumerable || !('value' in item)) throw Error(text.invalid); copied[key] = item.value; } return copied;
+}
 /** 原值只用于本地展示和差异判断；写入合同仅包含原页 row 编号与显式 typed 修改。 */
 export function sqliteDraftChanges(page: SqliteTablePage, rows: readonly SqliteDraftRow[]): SqliteTableChange[] {
   if (page.edit?.kind !== 'editable') return [];
@@ -49,6 +62,33 @@ export class SqliteTableEditor {
   /** 每次本地修改形成一个撤销步骤，并同步废弃旧 SQL 预览。 */
   private replace(rows: SqliteDraftRow[]): void { this.invalidatePreview(); this.past.push(this.rows); this.future = []; this.rows = rows; this.input = false; this.message = ''; this.emit(); }
   add(): string | undefined { if (!this.canEdit()) return; const id = this.ports.id(); this.replace([...this.rows, { id, values: this.page.columns.map(() => undefined), deleted: false }]); return id; }
+  /** 多行粘贴仅新增本地草稿；整组与原脏修改通过原预算后才分配ID并一次发布/形成一步undo。 */
+  appendRows(values: readonly (readonly (SqliteOriginalValue | undefined)[])[]): string[] {
+    if (!this.canEdit() || this.page.edit?.kind !== 'editable') throw Error(this.message || text.stale);
+    const edit = this.page.edit, width = this.page.columns.length, original = this.rows, past = this.past, pastLength = past.length, future = this.future, preview = this.previewValue, snapshotId = edit.snapshotId, schemaKey = this.page.schemaKey;
+    if (!width || width > 1024 || edit.columns.length !== width || edit.columns.some((column, index) => column.name !== this.page.columns[index].name)) throw Error(text.invalid);
+    const matrix = appendArray(values, 1, sqliteTableEditLimits.changes), sources: (readonly unknown[])[] = [];
+    // 生成/DEFAULT槽仍须存在且为undefined，最多500x1024槽；全组结构先验完再读typed值。
+    for (let index = 0; index < matrix.length; index++) sources.push(appendArray(Object.getOwnPropertyDescriptor(matrix, String(index))!.value, width, width));
+    const existing = this.changes; if (existing.length + sources.length > sqliteTableEditLimits.changes) throw Error(text.invalid);
+    let cells = 0, units = 0; const account = (column: string, value: Record<string, unknown>) => { cells++; units += column.length + (typeof value.value === 'string' ? value.value.length : 0); if (cells > sqliteTableEditLimits.cells || units > sqliteTableEditLimits.inputUnits) throw Error(text.invalid); };
+    for (const change of existing) if (change.kind !== 'delete') for (const field of change.values) account(field.column, field.value);
+    const copied: (SqliteOriginalValue | undefined)[][] = [], inserts: SqliteTableChange[] = [];
+    for (const source of sources) {
+      const row: (SqliteOriginalValue | undefined)[] = [], fields: { column: string; value: ReturnType<typeof sqliteEditValueSchema.parse> }[] = [];
+      for (let index = 0; index < width; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(source, String(index)); if (!descriptor?.enumerable || !('value' in descriptor)) throw Error(text.invalid); const value: unknown = descriptor.value, column = edit.columns[index];
+        if (value === undefined) { row.push(undefined); continue; } if (column.generated) throw Error(text.invalid);
+        const plain = appendValue(value); account(column.name, plain); const parsed = sqliteEditValueSchema.parse(plain); row.push(parsed); fields.push({ column: column.name, value: parsed });
+      }
+      copied.push(row); inserts.push({ kind: 'insert', values: fields });
+    }
+    sqliteTableEditPreviewSchema.parse({ snapshotId, taskId: 'sqlite-append-validation', changes: [...existing, ...inserts] });
+    const current = () => { if (!this.canEdit() || this.page.edit !== edit || edit.snapshotId !== snapshotId || this.page.schemaKey !== schemaKey || this.rows !== original || this.past !== past || past.length !== pastLength || this.future !== future || this.previewValue !== preview) throw Error(this.message || text.stale); };
+    current(); const used = new Set<string>(); for (const row of original) { if (typeof row.id !== 'string' || !row.id.length || used.has(row.id)) throw Error(text.invalid); used.add(row.id); }
+    const ids: string[] = []; for (const _row of copied) { const id = this.ports.id(); if (typeof id !== 'string' || !id.length || used.has(id)) throw Error(text.invalid); used.add(id); ids.push(id); }
+    current(); this.replace([...original, ...copied.map((row, index) => ({ id: ids[index], values: row, deleted: false }))]); return ids;
+  }
   save(rowId: string, values: (SqliteOriginalValue | undefined)[]): void {
     if (!this.canEdit() || this.page.edit?.kind !== 'editable') return;
     const row = this.rows.find(row => row.id === rowId); if (!row || row.deleted || values.length !== this.page.edit.columns.length) return;

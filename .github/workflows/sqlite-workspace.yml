@@ -40,12 +40,14 @@ concurrency:
 
 jobs:
   sqlite-workspace:
-    name: SQLite原工作区 · ${{ matrix.label }}
+    name: SQLite原工作区 · ${{ matrix.label }} · ${{ matrix.suite }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+        suite: [workspace, management]
         include:
           - os: windows-latest
             label: Windows x64
@@ -73,50 +75,71 @@ jobs:
         run: pnpm build
       - name: 单次运行SQLite原工作区真实专项
         # 120秒由spec自身保持；单worker、零重试且不采集trace。
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs workspace
         env:
           DBARK_INTEGRATION_ENABLED: '0'
           DBARK_SQLITE_WORKSPACE_NATIVE_TEST: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/sqlite-workspace/report.json
       - name: 单次运行SQLite只读表分页筛选排序专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs table
       - name: 单次运行SQLite完整流式导出专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs export
       - name: 单次运行SQLite表格增删改事务专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs edit
       - name: 单次运行SQLite结构SQL导出专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs schema-export
       - name: 单次运行SQLite当前语句原生专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs current
       - name: 单次运行SQLite执行计划原生专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs explain
       - name: 单次运行SQLite类型参数脚本原生专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs parameters
       - name: 单次运行SQLite新建数据库文件原生专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs create
       - name: 单次运行SQLite可视化新建表原生专项
+        if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs table-create
       - name: 单次运行SQLite现有表CSV与JSON导入原生专项
+        if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs table-import
       - name: 单次运行SQLite文件导入为新表原生专项
+        if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs import-new-table
       - name: 单次运行SQLite已有表索引管理原生专项
+        if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs indexes
       - name: 单次运行SQLite已有表字段管理原生专项
+        if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs columns
       - name: 单次运行SQLite已有表重命名原生专项
+        if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs table-rename
       - name: 单次运行SQLite已有表清空删除原生专项
+        if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs table-maintenance
       - name: 单次运行SQLite视图触发器管理原生专项
+        if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs objects
       - name: 单次运行SQLite字段类型默认值重建原生专项
+        if: matrix.suite == 'management'
         run: node scripts/sqlite-workspace-ci.mjs table-rebuild
+      - name: 单次运行SQLite复制与粘贴新增草稿专项
+        if: matrix.suite == 'management'
+        run: node scripts/sqlite-workspace-ci.mjs clipboard
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SQLite原工作区-${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: SQLite原工作区-${{ matrix.artifact }}-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/sqlite-workspace/
             test-results/sqlite-table-browse/
@@ -136,4 +159,5 @@ jobs:
             test-results/sqlite-table-maintenance/
             test-results/sqlite-objects/
             test-results/sqlite-table-rebuild/
+            test-results/sqlite-table-clipboard/
           if-no-files-found: warn

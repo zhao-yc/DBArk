@@ -1,0 +1,4 @@
+.sqlite-edit-clipboard-region { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.sqlite-edit-clipboard-region > .results-grid { height: 100%; min-height: 0; flex: 1; }
+.sqlite-paste-preview { max-height: 300px; overflow: auto; }
+.sqlite-paste-preview td { white-space: pre-wrap; overflow-wrap: anywhere; }
