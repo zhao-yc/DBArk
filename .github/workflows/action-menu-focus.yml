@@ -78,7 +78,7 @@ jobs:
       - name: 单次验证原索引两例
         run: node scripts/sqlite-workspace-ci.mjs indexes
       - name: 单次验证原导航五例与键盘操作
-        run: pnpm exec playwright test tests/e2e/navigation-workbench.spec.ts --workers=1 --retries=0 --trace=off --reporter=list,json --output=test-results/action-menu-focus-navigation
+        run: pnpm exec playwright test tests/e2e/navigation-workbench.spec.ts --workers=1 --retries=0 --trace=off '--reporter=list,json' --output=test-results/action-menu-focus-navigation
         env:
           DBARK_NAVIGATION_WORKBENCH_TEST: '1'
           DBARK_INTEGRATION_ENABLED: '0'

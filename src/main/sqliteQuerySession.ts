@@ -132,7 +132,7 @@ export class SqliteQuerySession {
           if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
           // SQLite列可逐行改变存储类型，不能把声明亲和性伪装成结果中每个单元格的真实类型。
           const columns = statement.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' }));
-          const result: QueryResult = { columns, rows: [], truncated: false, elapsedMs: 0, statement: statement.sql.slice(0, 32768) };
+          const result: QueryResult = { columns, rows: [], sqliteStorage: { version: 1, rows: [] }, truncated: false, elapsedMs: 0, statement: statement.sql.slice(0, 32768) };
           operation.results.push(result);
           event({ resultIndex: statement.index, columns, executionSql: statement.sql });
         },
@@ -142,7 +142,10 @@ export class SqliteQuerySession {
           for (const values of batch.rows) {
             if (values.length !== result.columns.length) throw Error('SQLite结果列数与原批次不匹配');
             if (operation.rows >= input.maxRows) { result.truncated = true; continue; }
-            accepted.push(Object.fromEntries(values.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)]))); operation.rows++;
+            accepted.push(Object.fromEntries(values.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)])));
+            // 只标记原driver已确认的存储类；同样的字符串原文也能区分INTEGER、REAL与TEXT。
+            result.sqliteStorage!.rows.push(values.map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'binary' ? 'b' : value.type === 'integer' ? 'i' : 'r').join(''));
+            operation.rows++;
           }
           result.rows.push(...accepted);
           if (accepted.length) event({ resultIndex: batch.index, batch: accepted, rows: operation.rows });

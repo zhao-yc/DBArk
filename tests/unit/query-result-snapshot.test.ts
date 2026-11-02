@@ -108,8 +108,8 @@ describe('不可信JSON、UTF8及数值标签', () => {
   });
 
   it('类型、版本、必填和可选字段均严格验证，不忽略未知字段或undefined', () => {
-    const value = document(); expect(() => parseQueryResultSnapshot({ ...value, version: 2 })).toThrow(text.version);
-    const unsupported = wire(); unsupported.version = 2; expect(() => decoded(unsupported)).toThrow();
+    const value = document(); expect(() => parseQueryResultSnapshot({ ...value, version: 3 })).toThrow(text.version);
+    const unsupported = wire(); unsupported.version = 3; expect(() => decoded(unsupported)).toThrow();
     expect(() => parseQueryResultSnapshot({ ...value, kind: '别的文件' })).toThrow(text.version);
     expect(() => parseQueryResultSnapshot({ ...value, name: undefined })).toThrow(text.invalid);
     for (const key of ['columns', 'rows', 'truncated', 'elapsedMs', 'statement']) { const changed = wire(); delete changed.result[key]; expect(() => decoded(changed)).toThrow(text.invalid); }

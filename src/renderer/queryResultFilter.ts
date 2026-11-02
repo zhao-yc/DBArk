@@ -4,12 +4,14 @@ export type { QueryResultFilterOperator, QueryResultFilterMode, QueryResultFilte
 import { queryResultFilterKind, queryResultFilterKey, queryResultFilterLiteral, compareQueryResultFilterKeys, type QueryResultSortView } from './queryResultSort';
 import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
 import { compileQueryResultWildcard } from './queryResultWildcard';
+import { bindSqliteResultStorage, projectSqliteResultStorage } from '../shared/sqliteResultStorage';
 
 export const queryResultFilterLimits = Object.freeze({ rows:100000, columns:1024, conditions:32, groups:16, depth:8, members:128, work:2000000, textWork:32*1024*1024, valueUnits:4096, units:8*1024*1024 });
 export interface QueryResultFilterView { readonly result:QueryResult;readonly sourceIndices:readonly number[];readonly rules:readonly Readonly<QueryResultFilterRule>[];readonly mode:QueryResultFilterMode;readonly expression:QueryResultFilterGroup; }
 export interface QueryResultFilterBinding {
   readonly source:QueryResult;readonly rows:QueryResult['rows'];readonly columns:ResultColumn[];readonly rowRefs:readonly QueryResult['rows'][number][];readonly columnRefs:readonly ResultColumn[];
   readonly metadata:readonly ResultColumn[];readonly truncated:boolean;readonly context:readonly unknown[];readonly visible:ResultColumn[];readonly visibleRefs:readonly ResultColumn[];
+  readonly storageCurrent:()=>boolean;
 }
 type Snapshot = { column:ResultColumn;values:CellValue[];binary:readonly (readonly unknown[]|undefined)[] };
 /** 字节仅留自有属性描述符的值身份，NULL条件也可发现原包装漂移，不解码/调用getter。 */
@@ -108,12 +110,15 @@ export class QueryResultFilter {
     const old=this.binding;if(old&&this.current(old)&&old.source===source&&old.visible===visible&&context.length===old.context.length&&context.every((v,i)=>Object.is(v,old.context[i])))return old;
     this.invalidate();const keys=source.columns.map(c=>c.key);
     if(keys.some(k=>typeof k!=='string'||!k||k.length>4096)||new Set(keys).size!==keys.length||new Set(source.rows).size!==source.rows.length||new Set(visible.map(c=>c.key)).size!==visible.length||visible.some(c=>!source.columns.includes(c)))return;
-    const binding:QueryResultFilterBinding={source,rows:source.rows,columns:source.columns,rowRefs:source.rows.slice(),columnRefs:source.columns.slice(),metadata:source.columns.map(c=>({...c})),truncated:source.truncated,context:[...context],visible,visibleRefs:visible.slice()};
+    let storageCurrent:()=>boolean;
+    try{storageCurrent=bindSqliteResultStorage(source);}catch{return;}
+    const binding:QueryResultFilterBinding={source,rows:source.rows,columns:source.columns,rowRefs:source.rows.slice(),columnRefs:source.columns.slice(),metadata:source.columns.map(c=>({...c})),truncated:source.truncated,context:[...context],visible,visibleRefs:visible.slice(),storageCurrent};
     this.binding=binding;this.projection=this.project(binding,[], 'AND',source.rows.map((_,i)=>i));return binding;
   }
   /** 源数组/原位置/元数据/活动条件值一旦漂移就永久撤销，旧owner不能撤销较新owner。 */
   current(binding:QueryResultFilterBinding|undefined):binding is QueryResultFilterBinding{
     if(!binding||this.binding!==binding)return false;
+    if(!binding.storageCurrent()){this.invalidate();return false;}
     if(binding.source.rows!==binding.rows||binding.source.columns!==binding.columns||binding.source.truncated!==binding.truncated||binding.rows.length!==binding.rowRefs.length||binding.columns.length!==binding.metadata.length||binding.rows.some((r,i)=>r!==binding.rowRefs[i])||binding.columns.some((c,i)=>c!==binding.columnRefs[i]||c.key!==binding.metadata[i].key||c.name!==binding.metadata[i].name||c.type!==binding.metadata[i].type)||binding.visible.length!==binding.visibleRefs.length||binding.visible.some((c,i)=>c!==binding.visibleRefs[i])){this.invalidate();return false;}
     try{if(this.snapshots?.some(({column,values,binary})=>binding.rows.some((row,i)=>{const value=cell(row,column),stamp=binaryStamp(value);return !Object.is(value,values[i])||!!stamp&&(!binary[i]||stamp.some((part,j)=>!Object.is(part,binary[i]![j])));}))){this.invalidate();return false;}}catch{this.invalidate();return false;}return true;
   }
@@ -123,7 +128,7 @@ export class QueryResultFilter {
   private project(binding:QueryResultFilterBinding,rules:readonly QueryResultFilterRule[],mode:QueryResultFilterMode,indices:number[],shape:FilterShape={mode,children:rules.map((_,index)=>index)}):QueryResultFilterView{
     const active=rules.some(rule=>rule.enabled!==false),rows=active?Object.freeze(indices.map(i=>binding.rows[i])) as unknown as QueryResult['rows']:binding.rows;
     const saved=Object.freeze(rules.map(r=>Object.freeze({...r,...(r.values?{values:Object.freeze([...r.values])}:{})})));
-    return Object.freeze({result:active?Object.freeze({...binding.source,rows}):binding.source,sourceIndices:Object.freeze(indices),rules:saved,mode,expression:freezeExpression(shape,saved)});
+    return Object.freeze({result:active?Object.freeze({...binding.source,rows,...projectSqliteResultStorage(binding.source,indices)}):binding.source,sourceIndices:Object.freeze(indices),rules:saved,mode,expression:freezeExpression(shape,saved)});
   }
   /** 保留原平铺AND／OR入口，统一进入有界分组执行，不维护第二套比较器。 */
   apply(binding:QueryResultFilterBinding,previous:QueryResultFilterView,rules:readonly QueryResultFilterRule[],mode:QueryResultFilterMode):QueryResultFilterView{

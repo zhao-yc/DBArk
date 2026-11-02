@@ -2,6 +2,7 @@ import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultSortRule } from '../shared/queryResultPresets';
 export type { QueryResultSortRule } from '../shared/queryResultPresets';
 import { queryResultSortZh as text } from './locales/queryResultSort.zh-CN';
+import { bindSqliteResultStorage, projectSqliteResultStorage } from '../shared/sqliteResultStorage';
 
 export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 2000000, valueUnits: 4096, units: 8 * 1024 * 1024 } as const;
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
@@ -13,6 +14,7 @@ export interface QueryResultSortBinding {
   readonly columns: QueryResult['columns']; readonly columnRefs: readonly ResultColumn[]; readonly metadata: readonly ResultColumn[]; readonly visible: ResultColumn[];
   readonly visibleRefs: readonly ResultColumn[]; readonly context: readonly unknown[]; readonly truncated: boolean;
   readonly reasons: ReadonlyMap<string, string | undefined>;
+  readonly storageCurrent: () => boolean;
 }
 const failure = () => new Error(text.stale);
 
@@ -117,7 +119,7 @@ export class QueryResultSort {
     const frozenRules=Object.freeze(rules.map(rule=>Object.freeze({...rule})));
     if (!rules.length) return Object.freeze({result:binding.source,sourceIndices:Object.freeze(sourceIndices),rules:frozenRules});
     const rows = sourceIndices.map(i=>binding.rows[i]); Object.freeze(rows);
-    return Object.freeze({ result:Object.freeze({...binding.source,rows}), sourceIndices:Object.freeze(sourceIndices), rules:frozenRules });
+    return Object.freeze({ result:Object.freeze({...binding.source,rows,...projectSqliteResultStorage(binding.source,sourceIndices)}), sourceIndices:Object.freeze(sourceIndices), rules:frozenRules });
   }
   /** 旧闭包被撤销后不能靠同样对象恢复；这里只清本地视图。 */
   invalidate(): void { this.binding = undefined; this.projection = undefined; this.values = undefined; }
@@ -127,6 +129,8 @@ export class QueryResultSort {
     const old = this.binding;
     if (old && this.current(old) && old.source === source && old.visible === visible && context.length === old.context.length && context.every((v,i)=>Object.is(v,old.context[i]))) return old;
     this.invalidate();
+    let storageCurrent: () => boolean;
+    try { storageCurrent = bindSqliteResultStorage(source); } catch { return; }
     const reasons = new Map<string,string | undefined>(), keys=source.columns.map(column=>column.key);
     const identity = keys.every(key=>typeof key==='string'&&key.length>0) && new Set(keys).size === keys.length && new Set(visible.map(c=>c.key)).size === visible.length && new Set(source.rows).size === source.rows.length && visible.every(column=>source.columns.includes(column));
     let units=0;
@@ -141,12 +145,13 @@ export class QueryResultSort {
         reasons.set(column.key,undefined);
       } catch (reason) { reasons.set(column.key,reason instanceof Error && reason.message === text.budget ? text.budget : text.value); }
     }
-    const binding:QueryResultSortBinding = { source, rows:source.rows, rowRefs:source.rows.slice(), columns:source.columns, columnRefs:source.columns.slice(), metadata:source.columns.map(c=>({...c})), visible, visibleRefs:visible.slice(),context:[...context],truncated:source.truncated,reasons };
+    const binding:QueryResultSortBinding = { source, rows:source.rows, rowRefs:source.rows.slice(), columns:source.columns, columnRefs:source.columns.slice(), metadata:source.columns.map(c=>({...c})), visible, visibleRefs:visible.slice(),context:[...context],truncated:source.truncated,reasons,storageCurrent };
     this.binding=binding; this.projection=this.project(binding,source.rows.map((_,i)=>i)); return binding;
   }
   /** 行位置/列身份及排序键漂移即永久撤销；旧binding不能影响较新的视图。 */
   current(binding: QueryResultSortBinding | undefined): binding is QueryResultSortBinding {
     if (!binding || this.binding !== binding) return false;
+    if (!binding.storageCurrent()) { this.invalidate(); return false; }
     if (binding.source.rows !== binding.rows || binding.source.columns !== binding.columns || binding.source.truncated !== binding.truncated || binding.rows.length !== binding.rowRefs.length || binding.columns.length !== binding.metadata.length || binding.rows.some((r,i)=>r!==binding.rowRefs[i]) || binding.columns.some((c,i)=>c!==binding.columnRefs[i]||c.key!==binding.metadata[i].key||c.name!==binding.metadata[i].name||c.type!==binding.metadata[i].type) || binding.visible.length!==binding.visibleRefs.length || binding.visible.some((c,i)=>c!==binding.visibleRefs[i])) { this.invalidate(); return false; }
     if (this.values) {
       // 即使较早键已能区分所有行，也检查每个活动键，防止次级键漂移后旧复制/导出继续有效。
