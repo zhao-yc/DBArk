@@ -129,6 +129,10 @@ it('主键连续输入读取live表单，重排后旧行输入仅更新原身份
 it('主键位置转换不丢输入，不合法自增／DESC组合暂存失败保留输入且不发预览', async () => {
   const f = await mount(); await click(text.read); await primaryInput(); await input(primaryText.location, 'column'); await input(primaryText.order(1), 'DESC'); await check(primaryText.autoIncrement, true); await click(primaryText.stage); expect(document.body.textContent).toContain(primaryText.invalidDefinition); expect(control(primaryText.order(1)).value).toBe('DESC'); expect(control(primaryText.autoIncrement).checked).toBe(true); expect(f.preview).not.toHaveBeenCalled(); await input(primaryText.location, 'table'); await click(primaryText.stage); await click(text.preview); expect(f.preview.mock.calls[0][0].primaryKeyEdit).toMatchObject({ definition: { location: 'table', autoIncrement: true, columns: [{ order: 'DESC' }] } });
 });
+it('尚无UNIQUE表单时拒绝意外的唯一性预览标记并准确释放能力', async () => {
+  const f = await mount(); await click(text.read); await primaryInput(); await click(primaryText.stage); const original = f.preview.getMockImplementation()!;
+  f.preview.mockImplementation(async input => ({ ...await original(input), changedUniques: 1 })); await click(text.preview); expect(f.release).toHaveBeenCalledWith({ previewId: expect.any(String) }); expect(f.apply).not.toHaveBeenCalled(); expect(button(text.apply).disabled).toBe(true); expect(document.body.textContent).toContain(text.response);
+});
 it.each([undefined, false])('主键变化标记%s不匹配时释放回包能力，不展示可提交风险', async changedPrimaryKey => {
   const f = await mount(); await click(text.read); await primaryInput(); await click(primaryText.stage); const original = f.preview.getMockImplementation()!; f.preview.mockImplementation(async input => ({ ...await original(input), changedPrimaryKey } as any)); await click(text.preview); expect(f.release).toHaveBeenCalledWith({ previewId: expect.any(String) }); expect(f.apply).not.toHaveBeenCalled(); expect(button(text.apply).disabled).toBe(true); expect(document.body.textContent).toContain(text.response);
 });

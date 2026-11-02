@@ -21,7 +21,7 @@ function fixture(readOnly = false) {
   const catalogue = (): SqliteTableRebuildInspectOutput => ({ catalogueId: 'catalogue-' + ++next, target, columns: [{ cid: 0, name: 'id', declaredType: 'INTEGER', notNull: false, defaultSql: null, primaryKey: 0, hidden: 0 }, { cid: 1, name: 'note', declaredType: 'TEXT', notNull: false, defaultSql: null, primaryKey: 0, hidden: 0 }], tableSql: 'CREATE TABLE "对象""🚢"(id INTEGER,note TEXT)', relatedObjects: [], strict: false, withoutRowid: false, rowIdentity: { kind: 'rowid', source: '_rowid_' }, readOnly, expiresAt: new Date(Date.now() + 300000).toISOString() });
   const request = vi.fn(async (command: string, input: any): Promise<any> => {
     if (command === 'sqlite.tableRebuild.inspect') { input.assertCurrent(); return catalogue(); }
-    if (command === 'sqlite.tableRebuild.preview') { input.assertCurrent(); const plan = buildSqliteTableRebuildPlan(catalogue(), input.changes, input.rebuildNames, input.columnOrder, input.foreignKeyEdits, input.primaryKeyEdit); plannedStatements = plan.sql.length; return { previewId: 'preview-' + ++next, catalogueId: input.catalogueId, target, sql: plan.sql, changedTypes: plan.changedTypes, changedDefaults: plan.changedDefaults, ...(plan.changedPrimaryKey ? { changedPrimaryKey: plan.changedPrimaryKey } : {}), ...(plan.changedForeignKeys ? { changedForeignKeys: plan.changedForeignKeys } : {}), warnings: plan.warnings, confirmation: 'main.' + target.table, expiresAt: new Date(Date.now() + 300000).toISOString() }; }
+    if (command === 'sqlite.tableRebuild.preview') { input.assertCurrent(); const plan = buildSqliteTableRebuildPlan(catalogue(), input.changes, input.rebuildNames, input.columnOrder, input.foreignKeyEdits, input.primaryKeyEdit, input.uniqueEdits); plannedStatements = plan.sql.length; return { previewId: 'preview-' + ++next, catalogueId: input.catalogueId, target, sql: plan.sql, changedTypes: plan.changedTypes, changedDefaults: plan.changedDefaults, ...(plan.changedUniques ? { changedUniques: plan.changedUniques } : {}), ...(plan.changedPrimaryKey ? { changedPrimaryKey: plan.changedPrimaryKey } : {}), ...(plan.changedForeignKeys ? { changedForeignKeys: plan.changedForeignKeys } : {}), warnings: plan.warnings, confirmation: 'main.' + target.table, expiresAt: new Date(Date.now() + 300000).toISOString() }; }
     if (command === 'sqlite.tableRebuild.apply') return acknowledged(input);
   });
   const save = vi.fn((task: TaskRecord) => { saved.set(task.id, copy(task)); });
@@ -50,6 +50,15 @@ it('Main独立重算纯外键预览，传结构化补丁且不把关系名称或
   expect(output).toMatchObject({ changedTypes: 0, changedDefaults: 0, changedForeignKeys: 1 }); expect(output.sql.join('\n')).toContain('CONSTRAINT "PRIVATE_FK"');
   const sent = f.request.mock.calls.find(call => call[0] === 'sqlite.tableRebuild.preview')![1]; expect(sent.foreignKeyEdits).toEqual(foreignKeyEdits); expect(sent.changes).toEqual([]);
   expect((await f.apply(output.previewId)).outcome).toBe('committed'); const tasks = JSON.stringify([...f.saved.values()]); for (const secret of ['PRIVATE_FK', 'PRIVATE_PARENT', 'CONSTRAINT', 'FOREIGN KEY']) expect(tasks).not.toContain(secret);
+});
+it.each([undefined, 0, 1, 2])('Main唯一约束变化数%s须与独立完整计划相符，异常能力立即释放', async changedUniques => {
+  const f = fixture(), catalogue = await f.inspect(), original = f.request.getMockImplementation()!;
+  const uniqueEdits = [{ kind: 'add', definition: { name: 'PRIVATE_U_NAME', location: 'table', columns: [{ column: 'note', collation: null, order: null }], conflict: null } }];
+  f.request.mockImplementation(async (command, input) => { const value = await original(command, input); return command === 'sqlite.tableRebuild.preview' ? { ...value, changedUniques } : value; });
+  const call = f.main.request(f.owner, 'sqlite.tableRebuild.preview', { catalogueId: catalogue.catalogueId, changes: [], uniqueEdits, taskId: 'u-preview' });
+  if (changedUniques === 1) { const result = await call as SqliteTableRebuildPreviewOutput; expect(result.changedUniques).toBe(1); expect(f.request.mock.calls.find(([command]) => command === 'sqlite.tableRebuild.preview')![1].uniqueEdits).toEqual(uniqueEdits); expect((await f.apply(result.previewId)).outcome).toBe('committed'); }
+  else { await expect(call).rejects.toThrow(); expect(f.request.mock.calls.some(([command, input]) => command === 'sqlite.tableRebuild.release' && input.previewId)).toBe(true); }
+  expect(JSON.stringify([...f.saved.values()])).not.toContain('PRIVATE_U_NAME');
 });
 it.each([undefined, false, true])('Main主键变化标记%s必须与完整独立计划相符，异常cap立即释放', async changedPrimaryKey => {
   const f = fixture(), catalogue = await f.inspect(), original = f.request.getMockImplementation()!;

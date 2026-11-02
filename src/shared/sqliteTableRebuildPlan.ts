@@ -2,7 +2,7 @@ import { copySqliteTableRebuildColumnOrder } from './sqliteTableRebuild';
 import { buildSqliteTableCreateDefault, sqliteTableCreateColumnSchema, type SqliteTableCreateDefault } from './sqliteTableCreate';
 import { buildSqliteTableForeignKey, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from './sqliteTableForeignKeys';
 import { buildSqliteTablePrimaryKey, sqliteTablePrimaryKeyEditSchema, type SqliteTablePrimaryKeyDefinition, type SqliteTablePrimaryKeyEdit } from './sqliteTablePrimaryKey';
-import { buildSqliteTableUnique, sqliteTableUniqueEditsSchema, sqliteTableUniqueLimits, type SqliteTableUniqueDefinition } from './sqliteTableUnique';
+import { buildSqliteTableUnique, sqliteTableUniqueEditsSchema, sqliteTableUniqueLimits, type SqliteTableUniqueDefinition, type SqliteTableUniqueEdit } from './sqliteTableUnique';
 
 /** 重建编译只修改明确声明跨度；不推断数据转换、不签发执行能力，未修改约束原文保留。 */
 export const sqliteTableRebuildPlanLimits = { sqlBytes: 2 * 1024 * 1024, tokens: 300000, columns: 1024, changes: 128, nesting: 256 } as const;
@@ -10,7 +10,7 @@ export interface SqliteRebuildSourceColumn { name: string; hidden: number; }
 export interface SqliteRebuildColumnChange { column: string; declaredType?: string; default?: SqliteTableCreateDefault; }
 export interface SqliteTableRebuildDefinitionInput {
   table: string; tableSql: string; columns: readonly SqliteRebuildSourceColumn[];
-  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[]; foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[]; primaryKeyEdit?: SqliteTablePrimaryKeyEdit;
+  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[]; foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[]; primaryKeyEdit?: SqliteTablePrimaryKeyEdit; uniqueEdits?: readonly SqliteTableUniqueEdit[];
 }
 export interface SqliteTableRebuildDefinition {
   candidateSql: string;
@@ -524,6 +524,20 @@ export function compileSqliteTableRebuildCopyDefinition(input: SqliteTableRebuil
 
 /** 普通候选与带私有编号候选共享同一跨度编译，不复制或重新实现默认值/约束解析。 */
 function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn?: string, reorderedBase = false): SqliteTableRebuildDefinition {
+  // UNIQUE整批分支会复制其余选项，必须先拒绝访问器，不能让spread先调用旧主外键或顺序getter。
+  for (const key of ['primaryKeyEdit', 'foreignKeyEdits', 'columnOrder']) { const descriptor = Object.getOwnPropertyDescriptor(input, key); if (descriptor && (!descriptor.enumerable || !('value' in descriptor))) throw invalid(); }
+  const uniqueDescriptor = Object.getOwnPropertyDescriptor(input, 'uniqueEdits'); if (uniqueDescriptor && (!uniqueDescriptor.enumerable || !('value' in uniqueDescriptor))) throw invalid();
+  if (uniqueDescriptor?.value !== undefined) {
+    const edits = sqliteTableUniqueEditsSchema.parse(uniqueDescriptor.value);
+    // 先按原序号/SQL移除本批所有旧UNIQUE；PK/FK编译再移除各自原跨度，名称互换只核最终集合。
+    const removals = edits.filter(edit => edit.kind !== 'add').map(edit => ({ kind: 'remove' as const, ordinal: edit.ordinal, expectedSql: edit.expectedSql }));
+    const tableSql = removals.length ? compileSqliteTableUniques(input, removals).tableSql : input.tableSql;
+    const base = compileDefinition({ ...input, tableSql, uniqueEdits: undefined, columnOrder: undefined }, undefined, true);
+    const changedSource = { table: input.candidateName, tableSql: base.candidateSql, columns: input.columns };
+    const additions = edits.filter(edit => edit.kind !== 'remove').map(edit => ({ kind: 'add' as const, definition: edit.definition }));
+    const finalSql = additions.length ? compileSqliteTableUniques(changedSource, additions).tableSql : base.candidateSql;
+    return compileDefinition({ ...input, table: input.candidateName, tableSql: finalSql, changes: [], foreignKeyEdits: undefined, primaryKeyEdit: undefined, uniqueEdits: undefined }, ordinalColumn, true);
+  }
   const primaryDescriptor = Object.getOwnPropertyDescriptor(input, 'primaryKeyEdit'); if (primaryDescriptor && (!primaryDescriptor.enumerable || !('value' in primaryDescriptor))) throw invalid();
   if (primaryDescriptor?.value !== undefined) {
     const edit = sqliteTablePrimaryKeyEditSchema.parse(primaryDescriptor.value), original = inspectSqliteTablePrimaryKey(input).primaryKey;

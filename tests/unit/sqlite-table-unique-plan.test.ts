@@ -134,10 +134,11 @@ describe('SQLite UNIQUE准确声明与有界结构化编译', () => {
     const f = fixture('CREATE TABLE child(a TEXT UNIQUE,b INTEGER)');
     try { const output = inspect(f.input); expect(Object.isFrozen(output)).toBe(true); for (const key of output) { expect(Object.isFrozen(key)).toBe(true); expect(Object.isFrozen(key.names)).toBe(true); expect(Object.isFrozen(key.columns)).toBe(true); expect(Object.isFrozen(key.columns[0])).toBe(true); } } finally { f.db.close(); }
   });
-  it('预览IPC仍拒绝尚未接入的uniqueEdits，声明编译不授予写能力', () => {
+  it('预览IPC仅增加结构化uniqueEdits，仍拒绝任意SQL和额外执行内容', () => {
     const valid = { catalogueId: 'c', taskId: 't', changes: [{ column: 'a', declaredType: 'TEXT' }] };
     expect(sqliteTableRebuildPreviewSchema.safeParse(valid).success).toBe(true);
-    expect(sqliteTableRebuildPreviewSchema.safeParse({ ...valid, uniqueEdits: [{ kind: 'add', definition: design() }] }).success).toBe(false);
+    expect(sqliteTableRebuildPreviewSchema.safeParse({ ...valid, changes: [], uniqueEdits: [{ kind: 'add', definition: design() }] }).success).toBe(true);
+    expect(sqliteTableRebuildPreviewSchema.safeParse({ ...valid, uniqueEdits: [{ kind: 'add', definition: { ...design(), sql: 'DROP TABLE child' } }] }).success).toBe(false);
   });
   it('唯一约束声明可供后续字段改动编译，但原写入协议并未因此开放', () => {
     const f = fixture('CREATE TABLE child(a TEXT,b INTEGER)');
@@ -153,6 +154,10 @@ describe('SQLite UNIQUE准确声明与有界结构化编译', () => {
 });
 
 describe('SQLite UNIQUE来源和结构预算保护', () => {
+  it.each(['primaryKeyEdit', 'foreignKeyEdits', 'columnOrder', 'uniqueEdits'])('组合编译先拒绝%s访问器，不能由对象复制提前调用getter', key => {
+    const f = fixture(), getter = vi.fn(() => undefined);
+    try { const input = { ...f.input, candidateName: '__dbark_rebuild_' + '4'.repeat(32), changes: [], uniqueEdits: [{ kind: 'add' as const, definition: design() }] }; Object.defineProperty(input, key, { enumerable: true, get: getter }); expect(() => compileSqliteTableRebuildDefinition(input)).toThrow(); expect(getter).not.toHaveBeenCalled(); } finally { f.db.close(); }
+  });
   it('原位置或原SQL变化、重复编辑、空批次以及名称碰撞均拒绝', () => {
     const f = fixture('CREATE TABLE child(a TEXT UNIQUE,b INTEGER)');
     try {
