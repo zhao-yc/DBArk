@@ -1,6 +1,7 @@
 import { copySqliteTableRebuildColumnOrder } from './sqliteTableRebuild';
 import { buildSqliteTableCreateDefault, sqliteTableCreateColumnSchema, type SqliteTableCreateDefault } from './sqliteTableCreate';
 import { buildSqliteTableForeignKey, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from './sqliteTableForeignKeys';
+import { buildSqliteTablePrimaryKey, sqliteTablePrimaryKeyEditSchema, type SqliteTablePrimaryKeyDefinition } from './sqliteTablePrimaryKey';
 
 /** 重建编译只修改明确声明跨度；不推断数据转换、不签发执行能力，未修改约束原文保留。 */
 export const sqliteTableRebuildPlanLimits = { sqlBytes: 2 * 1024 * 1024, tokens: 300000, columns: 1024, changes: 128, nesting: 256 } as const;
@@ -17,7 +18,7 @@ export interface SqliteTableRebuildDefinition {
 interface Token { kind: 'word' | 'quoted' | 'string' | 'number' | 'symbol'; value: string; start: number; end: number; }
 interface Span { start: number; end: number; }
 interface DefinitionSegment extends Span { column?: string; parts: Token[]; }
-interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; references: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
+interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
 const limits = sqliteTableRebuildPlanLimits, encoder = new TextEncoder();
 const fold = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 const word = (token: Token | undefined, value: string) => token?.kind === 'word' && fold(token.value) === value.toLowerCase();
@@ -114,7 +115,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
     if (symbol(parts[index], '(')) index = groupEnd(parts, index);
     else { if (parts[index].kind === 'symbol' || parts[index].kind === 'number') throw invalid(); index++; }
   }
-  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, references: [], names: [] };
+  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, references: [], primaryKeys: [], names: [] };
   while (index < parts.length) {
     const start = index;
     while (word(parts[index], 'CONSTRAINT')) { const marker = parts[index].start; if (identifier(parts[++index]) === undefined) throw invalid(); result.names.push({ name: identifier(parts[index])!, start: marker }); index++; }
@@ -129,6 +130,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
       if (!word(parts[index++], 'KEY')) throw invalid();
       if (word(parts[index], 'ASC') || word(parts[index], 'DESC')) index++;
       index = conflictEnd(parts, index); if (word(parts[index], 'AUTOINCREMENT')) index++;
+      result.primaryKeys.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) });
     } else if (word(token, 'NOT')) { if (!word(parts[index++], 'NULL')) throw invalid(); index = conflictEnd(parts, index); }
     else if (word(token, 'NULL') || word(token, 'UNIQUE')) index = conflictEnd(parts, index);
     else if (word(token, 'GENERATED') || word(token, 'AS')) {
@@ -142,7 +144,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
 }
 
 /** 校验CREATE归属与原生列顺序；仅接受普通main表，不接收CTAS、虚拟表和多语句。 */
-function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; bodyStart: number; bodyOpen: number; bodyEnd: number; columns: ColumnDefinition[]; segments: DefinitionSegment[] } {
+function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; bodyStart: number; bodyOpen: number; bodyEnd: number; columns: ColumnDefinition[]; segments: DefinitionSegment[]; strict: boolean; withoutRowid: boolean } {
   const parts = tokenize(input.tableSql); let index = 0;
   if (!word(parts[index++], 'CREATE') || !word(parts[index++], 'TABLE')) throw invalid();
   let tableToken = parts[index++];
@@ -154,11 +156,11 @@ function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; bo
     if (!symbol(parts[index], ',')) continue;
     consume(parts.slice(begin, index), rawStart, parts[index].start); begin = index + 1; rawStart = parts[index].end;
   }
-  consume(parts.slice(begin, end - 1), rawStart, parts[end - 1].start); index = end;
+  consume(parts.slice(begin, end - 1), rawStart, parts[end - 1].start); index = end; let strict = false, withoutRowid = false;
   while (index < parts.length && !symbol(parts[index], ';')) {
     // native接受重复表选项；原样保留，而不是为了输出美观重新序列化或去重。
-    if (word(parts[index], 'STRICT')) index++;
-    else if (word(parts[index], 'WITHOUT') && word(parts[index + 1], 'ROWID')) index += 2;
+    if (word(parts[index], 'STRICT')) { strict = true; index++; }
+    else if (word(parts[index], 'WITHOUT') && word(parts[index + 1], 'ROWID')) { withoutRowid = true; index += 2; }
     else throw invalid();
     if (symbol(parts[index], ',')) { index++; if (index === parts.length || symbol(parts[index], ';')) throw invalid(); } else break;
   }
@@ -166,7 +168,7 @@ function definition(input: SqliteTableRebuildDefinitionInput): { table: Span; bo
   if (index !== parts.length || columns.length !== input.columns.length || !columns.length) throw invalid();
   for (let ordinal = 0; ordinal < columns.length; ordinal++) if (columns[ordinal].name !== input.columns[ordinal].name || columns[ordinal].hidden !== input.columns[ordinal].hidden) throw invalid();
   // native DROP首列会移除其name至下一列name前的全部文字；原leading trivia须置于私有列之前。
-  return { table: { start: tableToken.start, end: tableToken.end }, bodyStart: parts[open + 1].start, bodyOpen: parts[open].end, bodyEnd: parts[end - 1].start, columns, segments };
+  return { table: { start: tableToken.start, end: tableToken.end }, bodyStart: parts[open + 1].start, bodyOpen: parts[open].end, bodyEnd: parts[end - 1].start, columns, segments, strict, withoutRowid };
 
   /** 表级约束原样保留；它们不能被当成与原生列目录同名的可编辑字段。 */
   function consume(segment: Token[], start: number, end: number): void {
@@ -289,6 +291,107 @@ export function compileSqliteTableForeignKeys(raw: ForeignKeyInput, rawEdits: un
   const tableSql = input.tableSql.slice(0, source.bodyOpen) + body + input.tableSql.slice(source.bodyEnd);
   if (encoder.encode(tableSql).length > limits.sqlBytes || tableSql === input.tableSql) throw Error('SQLite外键声明未变化或超过2MiB UTF8预算');
   return { tableSql, foreignKeys: inspectSqliteTableForeignKeys({ ...input, tableSql }), added, removed, replaced: changed };
+}
+
+export interface SqliteTablePrimaryKeySource {
+  readonly location: 'column' | 'table'; readonly column?: string; readonly sql: string; readonly names: readonly string[];
+  readonly columns: readonly Readonly<SqliteTablePrimaryKeyDefinition['columns'][number]>[];
+  readonly conflict: SqliteTablePrimaryKeyDefinition['conflict']; readonly autoIncrement: boolean;
+}
+interface PrimarySpan extends Span { segment: DefinitionSegment; value: SqliteTablePrimaryKeySource; }
+
+/** 列级DESC与表级DESC严格区分；排序规则只读原声明，不推断native行身份。 */
+function primaryValue(parts: Token[], column?: string): Omit<SqliteTablePrimaryKeySource, 'location' | 'column' | 'sql'> {
+  let index = 0; const names: string[] = [], columns: SqliteTablePrimaryKeyDefinition['columns'] = []; let autoIncrement = false;
+  while (word(parts[index], 'CONSTRAINT')) { const name = identifier(parts[++index]); if (name === undefined) throw invalid(); names.push(name); index++; }
+  if (!word(parts[index++], 'PRIMARY') || !word(parts[index++], 'KEY')) throw invalid();
+  if (column === undefined) {
+    if (!symbol(parts[index++], '(')) throw invalid();
+    /** native接受括号包围的字段及连续COLLATE；只承认字段表达式，不开放运算或函数。 */
+    function field(depth = 0): { column: string; collation: string | null } {
+      if (depth > limits.nesting) throw invalid(); let value: { column: string; collation: string | null };
+      if (symbol(parts[index], '(')) { index++; value = field(depth + 1); if (!symbol(parts[index++], ')')) throw invalid(); }
+      else { const name = identifier(parts[index++]); if (name === undefined) throw invalid(); value = { column: name, collation: null }; }
+      while (word(parts[index], 'COLLATE')) { const collation = identifier(parts[++index]); if (collation === undefined) throw invalid(); value = { ...value, collation }; index++; }
+      return value;
+    }
+    for (;;) {
+      const value = field(); let order: 'ASC' | 'DESC' | null = null;
+      if (word(parts[index], 'ASC') || word(parts[index], 'DESC')) order = parts[index++].value.toUpperCase() as 'ASC' | 'DESC';
+      columns.push({ ...value, order });
+      if (symbol(parts[index], ',')) { index++; continue; }
+      if (word(parts[index], 'AUTOINCREMENT')) { autoIncrement = true; index++; }
+      if (!symbol(parts[index++], ')')) throw invalid(); break;
+    }
+  } else {
+    let order: 'ASC' | 'DESC' | null = null; if (word(parts[index], 'ASC') || word(parts[index], 'DESC')) order = parts[index++].value.toUpperCase() as 'ASC' | 'DESC';
+    columns.push({ column, collation: null, order });
+  }
+  let conflict: SqliteTablePrimaryKeyDefinition['conflict'] = null;
+  if (word(parts[index], 'ON')) { const end = conflictEnd(parts, index); if (end === index) throw invalid(); conflict = parts[index + 2].value.toUpperCase() as NonNullable<typeof conflict>; index = end; }
+  if (column !== undefined && word(parts[index], 'AUTOINCREMENT')) { autoIncrement = true; index++; }
+  if (index !== parts.length || !columns.length || columns.length > limits.columns) throw invalid();
+  return { names: Object.freeze(names), columns: Object.freeze(columns.map(value => Object.freeze(value))), conflict, autoIncrement };
+}
+/** 从同一有界词法结果提取唯一主键跨度，不用正则搜PRIMARY或按名称替换。 */
+function primarySpan(input: ForeignKeyInput, source: ReturnType<typeof definition>): PrimarySpan | undefined {
+  const keys: PrimarySpan[] = [];
+  for (const segment of source.segments) {
+    if (segment.column !== undefined) {
+      const column = source.columns.find(column => column.name === segment.column)!;
+      for (const span of column.primaryKeys) keys.push({ ...span, segment, value: { ...primaryValue(span.parts, column.name), location: 'column', column: column.name, sql: input.tableSql.slice(span.start, span.end) } });
+    } else {
+      let index = 0; while (word(segment.parts[index], 'CONSTRAINT')) index += 2; if (!word(segment.parts[index], 'PRIMARY')) continue;
+      const start = segment.parts[0].start, end = segment.parts.at(-1)!.end;
+      keys.push({ start, end, segment, value: { ...primaryValue(segment.parts), location: 'table', sql: input.tableSql.slice(start, end) } });
+    }
+  }
+  if (keys.length > 1 || !keys.length && source.withoutRowid) throw invalid(); const key = keys[0];
+  if (key?.value.columns.some(term => !source.columns.some(column => fold(column.name) === fold(term.column) && column.hidden === 0))) throw invalid();
+  if (key?.value.autoIncrement) {
+    const term = key.value.columns[0], column = source.columns.find(column => fold(column.name) === fold(term.column)), type = column?.type && tokenize(input.tableSql.slice(column.type.start, column.type.end));
+    if (source.withoutRowid || key.value.columns.length !== 1 || !type || type.length !== 1 || fold(identifier(type[0]) ?? '') !== 'integer' || key.value.location === 'column' && term.order === 'DESC') throw invalid();
+  }
+  return key;
+}
+/** 原PK目录仅读取精确声明及表选项；ROWID身份、自增水位和完整数据仍须独立native证明。 */
+export function inspectSqliteTablePrimaryKey(raw: ForeignKeyInput): { primaryKey: Readonly<SqliteTablePrimaryKeySource> | null; withoutRowid: boolean; strict: boolean } {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] }), key = primarySpan(input, source);
+  return { primaryKey: key ? Object.freeze(key.value) : null, withoutRowid: source.withoutRowid, strict: source.strict };
+}
+/** 只修改明确主键跨度；非主键约束、列原文、注释和表选项继续保留。本API不连入执行合同。 */
+export function compileSqliteTablePrimaryKey(raw: ForeignKeyInput, rawEdit: unknown): { tableSql: string; primaryKey: Readonly<SqliteTablePrimaryKeySource> | null; withoutRowid: boolean; strict: boolean } {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] }), original = primarySpan(input, source), edit = sqliteTablePrimaryKeyEditSchema.parse(rawEdit);
+  if (edit.kind === 'add' ? !!original : !original || edit.expectedSql !== original.value.sql) throw Error('SQLite原主键声明或存在性已变化，请重新读取');
+  if (edit.kind === 'remove' && source.withoutRowid) throw Error('WITHOUT ROWID表必须保留主键，请用替换设计完整新主键');
+  const value = edit.kind === 'remove' ? undefined : edit.definition;
+  if (value?.autoIncrement) {
+    const column = source.columns.find(column => column.name === value.columns[0].column), type = column?.type && tokenize(input.tableSql.slice(column.type.start, column.type.end));
+    if (source.withoutRowid || !type || type.length !== 1 || fold(identifier(type[0]) ?? '') !== 'integer') throw Error('SQLite自增主键须为ROWID表的准确单列INTEGER声明');
+  }
+  if (value?.name !== null && value?.name !== undefined) {
+    const markers = source.columns.flatMap(column => column.names);
+    for (const segment of source.segments.filter(segment => segment.column === undefined)) { let index = 0; while (word(segment.parts[index], 'CONSTRAINT')) { markers.push({ name: identifier(segment.parts[index + 1])!, start: segment.parts[index].start }); index += 2; } }
+    if (markers.some(marker => (!original || marker.start < original.start || marker.start >= original.end) && fold(marker.name) === fold(value.name!))) throw Error('SQLite新主键名与保留的原约束名冲突');
+  }
+  // 删除表级声明时将注释移交下一片段；行内只删除原命名标记和PK约束，不碰NOT NULL等邻接约束。
+  let tableSql = input.tableSql;
+  if (original) {
+    if (original.value.location === 'column') tableSql = tableSql.slice(0, original.start) + ' ' + tableSql.slice(original.end);
+    else {
+      const chunks: string[] = []; let trivia = '';
+      for (const segment of source.segments) { if (segment === original.segment) { trivia += input.tableSql.slice(segment.start, original.start) + input.tableSql.slice(original.end, segment.end); continue; } chunks.push(trivia + input.tableSql.slice(segment.start, segment.end)); trivia = ''; }
+      if (!chunks.length) throw invalid(); chunks[chunks.length - 1] += trivia;
+      tableSql = input.tableSql.slice(0, source.bodyOpen) + chunks.join(',') + input.tableSql.slice(source.bodyEnd);
+    }
+  }
+  if (value) {
+    const fragment = buildSqliteTablePrimaryKey(value, input.columns), remaining = definition({ ...input, tableSql, candidateName: '', changes: [] });
+    if (value.location === 'column') { const column = remaining.columns.find(column => column.name === value.columns[0].column)!; tableSql = tableSql.slice(0, column.end) + ' ' + fragment + ' ' + tableSql.slice(column.end); }
+    else tableSql = tableSql.slice(0, remaining.bodyEnd) + ',\n ' + fragment + '\n' + tableSql.slice(remaining.bodyEnd);
+  }
+  if (encoder.encode(tableSql).length > limits.sqlBytes || tableSql === input.tableSql) throw Error('SQLite主键声明未变化或超过2MiB UTF8预算');
+  return { tableSql, ...inspectSqliteTablePrimaryKey({ ...input, tableSql }) };
 }
 
 export interface SqliteTableRebuildCopyDefinition extends SqliteTableRebuildDefinition { ordinalColumn: string; ordinalIndex: string; createOrdinalIndexSql: string; removeOrdinalSql: string[]; }
