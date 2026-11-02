@@ -29,7 +29,7 @@ function array(value: unknown, maximum: number): unknown[] {
 }
 
 /** 精确检查数值的canonical原文，不把看起来像数字的TEXT改成数值类型。 */
-function cellMatches(code: string, value: unknown): boolean {
+export function sqliteResultCellMatches(code: string, value: unknown): boolean {
   if (code === 'n') return value === null;
   if (code === 'b') {
     const binary = record(value, ['type', 'base64']);
@@ -73,7 +73,7 @@ export function copySqliteResultStorage(value: unknown, columns: readonly Result
       if (typeof value === 'string') units += value.length;
       else if (value && typeof value === 'object') { const binary = record(value, ['type', 'base64']); const bytes = own(binary, 'base64'); if (typeof bytes !== 'string') return invalid(); units += bytes.length; }
       if (units > sqliteResultStorageLimits.units) return large();
-      if (!cellMatches(code[column], value)) return invalid();
+      if (!sqliteResultCellMatches(code[column], value)) return invalid();
     }
     copied.push(code);
   }

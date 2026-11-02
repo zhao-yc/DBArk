@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { queryResultSortSupportsIgnoreCase, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
+import { queryResultSortScope, queryResultSortSupportsIgnoreCase, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
 import { queryResultSortZh as text } from '../locales/queryResultSort.zh-CN';
 import { errorMessage } from '../lib';
 import { UsageHelp, ErrorBox  } from './ui';
@@ -20,7 +20,7 @@ export function QueryResultSortPanel({ binding, initial, isCurrent, onApply, onC
     if (!okay) { invalid.current = true; setError(text.stale); }
     return okay;
   }
-  /** 元数据准入与原控制器一致；不猜重复显示名，也不让隐藏字段或二进制进入规则。 */
+  /** 元数据准入与原控制器一致；SQLite字节需原存储类型，不猜重复显示名或使用隐藏字段。 */
   function validate(next: Entry[]): QueryResultSortRule[] {
     if (next.length > binding.visible.length || new Set(next.map(item => item.rule.column)).size !== next.length) throw Error(text.rules);
     return next.map(({ rule }) => {
@@ -67,7 +67,7 @@ export function QueryResultSortPanel({ binding, initial, isCurrent, onApply, onC
   const available = binding.visible.filter(column => binding.reasons.has(column.key) && !binding.reasons.get(column.key) && !entries.some(item => item.rule.column === column.key));
   const pages = Math.max(1, Math.ceil(entries.length / pageSize)), currentPage = Math.min(page, pages - 1);
   return <section role="region" aria-label={text.panelTitle} aria-description={text.panelShortcuts} className="filter-panel expanded-filter-panel query-result-sort-panel" onKeyDown={keyDown} onCompositionStart={() => { composition.current = true; setComposing(true); }} onCompositionEnd={() => { composition.current = false; setComposing(false); }}>
-    <strong>{text.panelTitle}</strong><UsageHelp><p>{text.panelHint}</p><p>{text.scope}</p><p>{text.nullsHint}</p><p>{text.selection}</p><p>{text.panelShortcuts}</p></UsageHelp>
+    <strong>{text.panelTitle}</strong><UsageHelp><p>{text.panelHint}</p><p>{queryResultSortScope(binding.source)}</p><p>{text.nullsHint}</p><p>{text.selection}</p><p>{text.panelShortcuts}</p></UsageHelp>
     {!entries.length && <p>{text.panelEmpty}</p>}
     {entries.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(({ id, rule }, position) => {
       const index = currentPage * pageSize + position, order = index + 1, column = binding.visible.find(item => item.key === rule.column)!;
@@ -75,7 +75,7 @@ export function QueryResultSortPanel({ binding, initial, isCurrent, onApply, onC
         <label>{text.panelField(order)}<select aria-label={text.panelField(order)} disabled={disabled} value={rule.column} onChange={event => edit(entries.map((item, i) => i === index ? { ...item, rule: { column: event.target.value, direction: item.rule.direction, ...(item.rule.nulls ? { nulls: item.rule.nulls } : {}) } } : item))}>{binding.visible.map((item, i) => <option value={item.key} key={item.key} disabled={!!binding.reasons.get(item.key) || !binding.reasons.has(item.key) || item.key !== rule.column && entries.some(entry => entry.rule.column === item.key)}>{i + 1}. {item.name} · {item.type}</option>)}</select></label>
         <select aria-label={text.panelDirection(order)} disabled={disabled} value={rule.direction} onChange={event => edit(entries.map((item, i) => i === index ? { ...item, rule: { ...item.rule, direction: event.target.value as QueryResultSortRule['direction'] } } : item))}><option value="ASC">{text.ascending}</option><option value="DESC">{text.descending}</option></select>
         <select aria-label={text.panelNulls(order)} disabled={disabled} value={rule.nulls ?? ''} onChange={event => edit(entries.map((item, i) => { if (i !== index) return item; const { nulls, ...base } = item.rule; return { ...item, rule: event.target.value ? { ...base, nulls: event.target.value as 'FIRST' | 'LAST' } : base }; }))}><option value="">{text.nullsDefault}</option><option value="FIRST">{text.nullsFirst}</option><option value="LAST">{text.nullsLast}</option></select>
-        {queryResultSortSupportsIgnoreCase(column) && <label title={text.caseHint}><input type="checkbox" aria-label={text.panelCase(order)} disabled={disabled} checked={rule.ignoreCase === true} onChange={event => edit(entries.map((item, i) => { if (i !== index) return item; const { ignoreCase, ...base } = item.rule; return { ...item, rule: event.target.checked ? { ...base, ignoreCase: true } : base }; }))}/>{text.ignoreCaseLabel}</label>}
+        {queryResultSortSupportsIgnoreCase(column) && <label title={column.type === 'SQLITE' ? text.sqliteCaseHint : text.caseHint}><input type="checkbox" aria-label={text.panelCase(order)} disabled={disabled} checked={rule.ignoreCase === true} onChange={event => edit(entries.map((item, i) => { if (i !== index) return item; const { ignoreCase, ...base } = item.rule; return { ...item, rule: event.target.checked ? { ...base, ignoreCase: true } : base }; }))}/>{text.ignoreCaseLabel}</label>}
         <button type="button" aria-label={text.panelEarlier(order)} disabled={disabled || !index} onClick={() => move(index, -1)}>↑</button><button type="button" aria-label={text.panelLater(order)} disabled={disabled || index === entries.length - 1} onClick={() => move(index, 1)}>↓</button><button type="button" aria-label={text.panelRemove(order)} disabled={disabled} onClick={() => edit(entries.filter((_, i) => i !== index))}>×</button>
       </div>;
     })}

@@ -1,4 +1,7 @@
 export const queryResultSortZh = {
+  sqliteScope: '仅排序已返回行：NULL、数值、TEXT、BLOB依序。INTEGER与REAL按实际数值比较，TEXT按固定UTF-8字节序，BLOB按原字节；不转换存储类型，不采用数据库自定义排序规则。',
+  sqliteCaseHint: '仅TEXT采用无区域设置的Unicode小写映射，再按UTF-8字节比较；数值和BLOB保持原比较方式，不改变原文。编码键也计入预算。',
+  sqliteUnknown: '此SQLite结果缺少原存储类型，不能从显示文本猜测排序；请重新执行查询。',
   panelTitle: '多列排序', panelHint: '先编辑独立排序草稿，再一次应用；保留当前筛选，不执行或重发SQL。取消保留原排序，应用后可撤销整理。', panelEmpty: '按原返回顺序',
   panelField: (order: number) => `排序草稿第${order}字段`, panelDirection: (order: number) => `排序草稿第${order}方向`, panelNulls: (order: number) => `排序草稿第${order}NULL位置`, panelCase: (order: number) => `排序草稿第${order}忽略大小写`,
   panelAdd: '添加排序字段', panelClear: '清空排序草稿', panelCancel: '取消排序草稿', panelApply: '应用排序草稿', panelDeclined: '排序未应用，原视图保持；请核对当前结果及排序预算。',

@@ -3,11 +3,13 @@ import type { QueryResultSortRule } from '../shared/queryResultPresets';
 export type { QueryResultSortRule } from '../shared/queryResultPresets';
 import { queryResultSortZh as text } from './locales/queryResultSort.zh-CN';
 import { bindSqliteResultStorage, projectSqliteResultStorage } from '../shared/sqliteResultStorage';
+import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultComparisonKey } from './sqliteResultCompare';
 
 export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 2000000, valueUnits: 4096, units: 8 * 1024 * 1024 } as const;
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
+type SortKey = Key | SqliteResultComparisonKey;
 export interface QueryResultSortView { readonly result: QueryResult; readonly sourceIndices: readonly number[]; readonly rules: readonly QueryResultSortRule[]; }
 export interface QueryResultSortBinding {
   readonly source: QueryResult; readonly rows: QueryResult['rows']; readonly rowRefs: readonly QueryResult['rows'][number][];
@@ -33,7 +35,11 @@ function kind(type: string): Kind | undefined {
   if (base === 'TIME') return 'time';
 }
 /** 仅明确文本类型可选择大小写比较；不从单元格外观或列名猜测。 */
-export function queryResultSortSupportsIgnoreCase(column: ResultColumn): boolean { return kind(column.type) === 'text'; }
+export function queryResultSortSupportsIgnoreCase(column: ResultColumn): boolean { return kind(column.type) === 'text' || column.type === 'SQLITE'; }
+/** 动态类型仅开放排序专用分支；统计与MySQL筛选不获得伪造的列类型。 */
+function sortKind(column: ResultColumn): Kind | 'sqlite' | undefined { return column.type === 'SQLITE' ? 'sqlite' : kind(column.type); }
+/** 入口和面板共用准确说明，不能把UTF-8固定本地序误称数据库COLLATE或原MySQL文本序。 */
+export function queryResultSortScope(source: QueryResult | undefined): string { return source?.columns.some(column => column.type === 'SQLITE') ? text.sqliteScope : text.scope; }
 /** 精确十进制按数字文本比较；负零与前导/尾随零归一，但不改原值。 */
 function exact(value: string, integer: boolean): Exact {
   if (!(integer ? /^[+-]?\d+$/ : /^[+-]?\d+(?:\.\d+)?$/).test(value)) throw Error(text.value);
@@ -109,11 +115,35 @@ export { compare as compareQueryResultFilterKeys };
 /** 统计只读复用原类型分类，不扩大排序或筛选的准入语义。 */
 export { kind as queryResultSortKind };
 
+/** SQLite二进制按Base64原文计预算，比较键字节另计；普通结果保持既有计费。 */
+function valueUnits(value: CellValue, sqlite: boolean): number { return typeof value === 'string' ? value.length : sqlite && value && typeof value === 'object' ? value.base64.length : 1; }
+/** 原类型标记是唯一准入凭据；BLOB与文本键在分配前受单值上限约束。 */
+function sortingKey(value: CellValue, type: Kind | 'sqlite', column: ResultColumn, code?: string, ignoreCase = false): SortKey {
+  if (type !== 'sqlite') return key(value, type, column.type.trim().toUpperCase().endsWith(' UNSIGNED'));
+  if (code === undefined) throw Error(text.sqliteUnknown);
+  if (valueUnits(value, true) > queryResultSortLimits.valueUnits) throw Error(text.budget);
+  return sqliteResultComparisonKey(value, code, ignoreCase);
+}
+/** 编码后的比较键也计费，不把非BMP文本或BLOB解码空间排除在本地整理预算外。 */
+function keyUnits(value: SortKey): number { return value && typeof value === 'object' && 'sqlite' in value && value.storage !== 'number' ? value.bytes.byteLength : 0; }
+/** SQLite键只进入排序；既有筛选、统计和结果比较继续使用原有静态类型键合同。 */
+function compareSortingKeys(left: SortKey, right: SortKey): number {
+  if (left === null || right === null) return left === right ? 0 : left === null ? -1 : 1;
+  if (typeof left === 'object' && 'sqlite' in left) {
+    if (typeof right === 'object' && 'sqlite' in right) return compareSqliteResultKeys(left, right);
+    throw Error(text.value);
+  }
+  if (typeof right === 'object' && 'sqlite' in right) throw Error(text.value);
+  return compare(left, right);
+}
+/** 不调用二进制访问器，记录原包装的自有值以发现原地字节漂移。 */
+function binaryStamp(value: CellValue): readonly unknown[] | undefined { return value && typeof value === 'object' ? [Object.getOwnPropertyDescriptor(value, 'type')?.value, Object.getOwnPropertyDescriptor(value, 'base64')?.value] : undefined; }
+
 /** 当前结果单向租约与行索引投影；复用原选择/查找/详情合同，不向行中注入伪造主键。 */
 export class QueryResultSort {
   private binding?: QueryResultSortBinding;
   private projection?: QueryResultSortView;
-  private values?: { column: ResultColumn; values: CellValue[] }[];
+  private values?: { column: ResultColumn; values: CellValue[]; binary: (readonly unknown[] | undefined)[] }[];
   /** 只冻结本地索引、完整优先级与视图容器，绝不冻结或克隆原行对象。 */
   private project(binding: QueryResultSortBinding, sourceIndices: number[], rules: readonly QueryResultSortRule[] = []): QueryResultSortView {
     const frozenRules=Object.freeze(rules.map(rule=>Object.freeze({...rule})));
@@ -135,13 +165,13 @@ export class QueryResultSort {
     const identity = keys.every(key=>typeof key==='string'&&key.length>0) && new Set(keys).size === keys.length && new Set(visible.map(c=>c.key)).size === visible.length && new Set(source.rows).size === source.rows.length && visible.every(column=>source.columns.includes(column));
     let units=0;
     for (const column of visible) {
-      const type=kind(column.type);
+      const type=sortKind(column), position=source.columns.indexOf(column);
       if (!identity) { reasons.set(column.key,text.identity); continue; }
       if (!type) { reasons.set(column.key,text.type); continue; }
-      const unsigned=column.type.trim().toUpperCase().endsWith(' UNSIGNED');
+      if (type === 'sqlite' && !source.sqliteStorage) { reasons.set(column.key,text.sqliteUnknown); continue; }
       if (source.rows.length * visible.length > queryResultSortLimits.cells || units > queryResultSortLimits.units) { reasons.set(column.key,text.budget); continue; }
       try {
-        for (const row of source.rows) { const value=cell(row,column); units += typeof value === 'string' ? value.length : 1; if (units > queryResultSortLimits.units) throw Error(text.budget); key(value,type,unsigned); }
+        for (let index=0;index<source.rows.length;index++) { const value=cell(source.rows[index],column); units += valueUnits(value,type==='sqlite'); if (units > queryResultSortLimits.units) throw Error(text.budget); const parsed=sortingKey(value,type,column,source.sqliteStorage?.rows[index][position]); units+=keyUnits(parsed); if(units>queryResultSortLimits.units)throw Error(text.budget); }
         reasons.set(column.key,undefined);
       } catch (reason) { reasons.set(column.key,reason instanceof Error && reason.message === text.budget ? text.budget : text.value); }
     }
@@ -155,7 +185,7 @@ export class QueryResultSort {
     if (binding.source.rows !== binding.rows || binding.source.columns !== binding.columns || binding.source.truncated !== binding.truncated || binding.rows.length !== binding.rowRefs.length || binding.columns.length !== binding.metadata.length || binding.rows.some((r,i)=>r!==binding.rowRefs[i]) || binding.columns.some((c,i)=>c!==binding.columnRefs[i]||c.key!==binding.metadata[i].key||c.name!==binding.metadata[i].name||c.type!==binding.metadata[i].type) || binding.visible.length!==binding.visibleRefs.length || binding.visible.some((c,i)=>c!==binding.visibleRefs[i])) { this.invalidate(); return false; }
     if (this.values) {
       // 即使较早键已能区分所有行，也检查每个活动键，防止次级键漂移后旧复制/导出继续有效。
-      try { if (this.values.some(({column,values})=>binding.rows.some((row,i)=>!Object.is(cell(row,column),values[i])))) { this.invalidate(); return false; } } catch { this.invalidate(); return false; }
+      try { if (this.values.some(({column,values,binary})=>binding.rows.some((row,i)=>{const value=cell(row,column),stamp=binaryStamp(value);return !Object.is(value,values[i])||!!stamp&&(!binary[i]||stamp.some((part,j)=>!Object.is(part,binary[i]![j])));}))) { this.invalidate(); return false; } } catch { this.invalidate(); return false; }
     }
     return true;
   }
@@ -170,17 +200,18 @@ export class QueryResultSort {
     if (next.length>binding.visible.length || new Set(next.map(rule=>rule.column)).size!==next.length) throw Error(text.rules);
     if (next.length*binding.rows.length>queryResultSortLimits.cells) throw Error(text.budget);
     const admitted=next.map(rule=>{
-      const column=binding.visible.find(c=>c.key===rule.column),type=column&&kind(column.type);
+      const column=binding.visible.find(c=>c.key===rule.column),type=column&&sortKind(column);
       if (!column || !type || !['ASC','DESC'].includes(rule.direction)) throw Error(text.type);
       if (rule.nulls !== undefined && rule.nulls !== 'FIRST' && rule.nulls !== 'LAST') throw Error(text.nullsInvalid);
-      if (rule.ignoreCase !== undefined && (typeof rule.ignoreCase !== 'boolean' || type !== 'text')) throw Error(text.caseInvalid);
+      if (rule.ignoreCase !== undefined && (typeof rule.ignoreCase !== 'boolean' || !queryResultSortSupportsIgnoreCase(column))) throw Error(text.caseInvalid);
       const reason=binding.reasons.get(column.key); if (reason) throw Error(reason);
-      return {column,type,direction:rule.direction,nulls:rule.nulls,ignoreCase:rule.ignoreCase};
+      return {column,type,position:binding.columns.indexOf(column),direction:rule.direction,nulls:rule.nulls,ignoreCase:rule.ignoreCase};
     });
     let units=0;
-    const values=admitted.map(({column})=>({column,values:binding.rows.map(row=>{const value=cell(row,column);units+=typeof value==='string'?value.length:1;if(units>queryResultSortLimits.units)throw Error(text.budget);return value;})}));
-    const keys=admitted.map(({column,type,ignoreCase},i)=>values[i].values.map(value=>{
-      const parsed=key(value,type,column.type.trim().toUpperCase().endsWith(' UNSIGNED'));
+    const values=admitted.map(({column,type})=>{const values=binding.rows.map(row=>{const value=cell(row,column);units+=valueUnits(value,type==='sqlite');if(units>queryResultSortLimits.units)throw Error(text.budget);return value;});return{column,values,binary:values.map(binaryStamp)};});
+    const keys=admitted.map(({column,type,position,ignoreCase},i)=>values[i].values.map((value,row)=>{
+      const parsed=sortingKey(value,type,column,binding.source.sqliteStorage?.rows[row][position],ignoreCase);
+      units+=keyUnits(parsed);if(units>queryResultSortLimits.units)throw Error(text.budget);
       // 只转换控制器自有文本键；原文与转换结果共同消耗原预算，NULL与其它类型不参与转换。
       if(ignoreCase&&typeof parsed==='string'){
         const folded=parsed.toLowerCase();units+=folded.length;if(units>queryResultSortLimits.units)throw Error(text.budget);return folded;
@@ -192,7 +223,7 @@ export class QueryResultSort {
         const left=keys[i][a],right=keys[i][b],rule=admitted[i];
         // 显式空值位置独立于升降序；两个NULL仍交给下一优先级，空串不视为NULL。
         const nullOrder=left===right?0:left===null?-1:right===null?1:undefined;
-        const order=rule.nulls&&nullOrder!==undefined?(rule.nulls==='FIRST'?1:-1)*nullOrder:(rule.direction==='ASC'?1:-1)*compare(left,right);
+        const order=rule.nulls&&nullOrder!==undefined?(rule.nulls==='FIRST'?1:-1)*nullOrder:(rule.direction==='ASC'?1:-1)*compareSortingKeys(left,right);
         if(order)return order;
       }
       return a-b;

@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 查询结果新增[本地多列排序](development/sqlite-result-sort-20261102.md)：原存储类型、精确数值与固定 UTF-8／字节序，支持列头、独立草稿、优先级及撤销重做，不重发 SQL。类型、23 份 732 项相关、构建和 Windows 原工作区整例通过；完整 typed 筛选入口继续开发，暂不发布。
+
 SQLite 工具栏迁移后的[测试导航修正](development/sqlite-test-navigation-20261102.md)恢复两个父级夹具，并通过真实滚轮观察虚拟行；原编辑断言、期限和资源保护完整保留。Windows 最小窗口原生整例通过，macOS 复验继续，暂不发布。
 
 SQLite 查询结果新增[逐格类型与版本 2 快照](development/sqlite-result-storage-20261102.md)：实际回包保留动态存储类型，保存后新进程离线重开不丢 int64、TEXT、NULL 或 BLOB；旧快照兼容。本机类型、732 项相关及原工作区源码专项通过，完整本地筛选排序入口继续开发，暂不发布。

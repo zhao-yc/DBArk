@@ -4,6 +4,8 @@ import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { queryAnalyzeZh } from '../../src/renderer/locales/queryAnalyze.zh-CN';
 import { queryDatabaseSwitchZh } from '../../src/renderer/locales/queryDatabaseSwitch.zh-CN';
 import { queryTransactionSettingsZh } from '../../src/renderer/locales/queryTransactionSettings.zh-CN';
+import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultHistoryZh as sortHistoryText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -23,7 +25,7 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserv
 test.describe.configure({ timeout: 120000, retries: 0 });
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const connectionName = 'SQLite原工作区离线验收', quotedTable = '中文"航船🚢';
-const precisionSql = 'SELECT exact_int,note,nullable,payload FROM main.subject ORDER BY id;';
+const precisionSql = "SELECT exact_int,note,nullable,payload,CASE id WHEN 1 THEN 2 ELSE '2' END AS mixed FROM main.subject ORDER BY id;";
 const rolledBackSql = "INSERT INTO main.subject VALUES(10,10,'必须回滚',NULL,x'1000');";
 const committedSql = "INSERT INTO main.subject VALUES(20,20,'明确提交🚢',NULL,x'00ff');";
 const restoredSql = 'SELECT id,note FROM main.subject ORDER BY id;';
@@ -205,14 +207,35 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     const grid = query().getByRole('grid'); await step(() => expect(grid).toBeVisible());
     for (const text of ['9223372036854775807', '-9223372036854775808', '9007199254740993', '中文🚢', '0x00ff', '0xff00']) await step(() => expect(grid.getByText(text, { exact: true })).toBeVisible());
     await step(() => expect(grid.locator('.null-value')).toHaveCount(2)); expect(disk()).toEqual(baselineDisk);
-    expect((await step(audit)).resultTypes).toEqual([[{ codes: ['itnb', 'itnb'], columns: ['c0', 'c1', 'c2', 'c3'], rowCount: 2 }]]);
+    expect((await step(audit)).resultTypes).toEqual([[{ codes: ['itnbi', 'itnbt'], columns: ['c0', 'c1', 'c2', 'c3', 'c4'], rowCount: 2 }]]);
+    stage = '真实列头与独立草稿本地多列排序，原四次SQL预算不变';
+    const exactHeader = grid.getByRole('columnheader').filter({ hasText: 'exact_int' }), mixedHeader = grid.getByRole('columnheader').filter({ hasText: 'mixed' }), blobHeader = grid.getByRole('columnheader').filter({ hasText: 'payload' });
+    await step(() => expect(exactHeader).toHaveCount(1)); await step(() => expect(mixedHeader).toHaveCount(1)); await step(() => expect(blobHeader).toHaveCount(1));
+    const exactPosition = await step(() => exactHeader.getAttribute('aria-colindex')); if (!exactPosition || !/^[1-9][0-9]*$/.test(exactPosition)) throw Error('本例原精确整数列坐标缺失');
+    const shownIntegers = () => step(() => grid.locator(`[role="row"][aria-rowindex]:not([aria-rowindex="1"]) [role="gridcell"][aria-colindex="${exactPosition}"]`).allTextContents());
+    const ascending = ['-9223372036854775808', '9223372036854775807'], originalOrder = [...ascending].reverse();
+    await step(() => exactHeader.click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    await step(() => mixedHeader.click({ modifiers: [modifier] })); await step(() => expect(query().getByRole('list', { name: sortText.priorities, exact: true }).getByRole('listitem')).toHaveCount(2));
+    await step(async () => (await navigationMenuItem(query(), { name: sortText.panelTitle, exact: true }, check)).click());
+    const sorting = query().getByRole('region', { name: sortText.panelTitle, exact: true }); await step(() => expect(sorting).toBeVisible());
+    await step(() => expect(sorting.getByLabel(sortText.panelField(1), { exact: true })).toHaveValue('c0')); await step(() => expect(sorting.getByLabel(sortText.panelField(2), { exact: true })).toHaveValue('c4'));
+    await step(() => sorting.getByRole('button', { name: sortText.panelEarlier(2), exact: true }).click());
+    await step(() => sorting.getByLabel(sortText.panelNulls(1), { exact: true }).selectOption('LAST'));
+    await step(() => sorting.getByRole('button', { name: sortText.panelApply, exact: true }).click()); await step(() => expect(sorting).toHaveCount(0));
+    // 两格均显示2，INTEGER仍排在TEXT之前；优先级来自明确应用的独立草稿。
+    await step(() => expect.poll(shownIntegers).toEqual(originalOrder));
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.undo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.redo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(originalOrder));
+    await step(() => blobHeader.click()); await step(() => expect(blobHeader).toHaveAttribute('aria-sort', 'ascending'));
+    await step(() => blobHeader.click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
     stage = '原结果菜单真实保存逐格类型快照';
     await step(async () => (await navigationMenuItem(query(), { name: snapshotText.save, exact: true }, check)).click());
     await step(() => expect(query().getByText(snapshotText.saved, { exact: true })).toBeVisible());
     const savedSnapshot = JSON.parse((require('node:fs') as typeof import('node:fs')).readFileSync(snapshotPath, 'utf8'));
     // 独立JSON读取断言wire，不调用产品codec生成预期，确认大整数与字节原文未改变。
-    expect(savedSnapshot.version).toBe(2); expect(savedSnapshot.result.sqliteStorage).toEqual({ version: 1, rows: ['itnb', 'itnb'] });
-    expect(savedSnapshot.result.rows).toEqual([{ c0: '9223372036854775807', c1: '9007199254740993', c2: null, c3: { type: 'binary', base64: 'AP8=' } }, { c0: '-9223372036854775808', c1: '中文🚢', c2: null, c3: { type: 'binary', base64: '/wA=' } }]);
+    expect(savedSnapshot.version).toBe(2); expect(savedSnapshot.result.sqliteStorage).toEqual({ version: 1, rows: ['itnbi', 'itnbt'] });
+    expect(savedSnapshot.result.rows).toEqual([{ c0: '9223372036854775807', c1: '9007199254740993', c2: null, c3: { type: 'binary', base64: 'AP8=' }, c4: '2' }, { c0: '-9223372036854775808', c1: '中文🚢', c2: null, c3: { type: 'binary', base64: '/wA=' }, c4: '2' }]);
     stage = '可见事务按钮与独立只读观察';
     await step(() => query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click());
     await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeEnabled());
@@ -240,7 +263,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     expect((require('node:fs') as typeof import('node:fs')).readFileSync(snapshotPath, 'utf8')).toBe(JSON.stringify(savedSnapshot) + '\n');
     const secondFacts = await step(audit); expect(secondFacts.executions).toBe(1); expect(secondFacts.pickerCalls).toBe(0); expect(secondFacts.denied).toEqual([]); expect(secondFacts.forks.every(path => /(?:^|[\\/])sqliteWorker\.cjs$/.test(path))).toBe(true); expect(runtime.pageErrors).toEqual([]);
     expect(firstFacts.snapshots).toEqual({ saved: 1, opened: 0 }); expect(secondFacts.snapshots).toEqual({ saved: 0, opened: 1 });
-    expect(firstFacts.resultTypes).toEqual([[{ codes: ['itnb', 'itnb'], columns: ['c0', 'c1', 'c2', 'c3'], rowCount: 2 }], [{ codes: [], columns: [], rowCount: 0 }], [{ codes: [], columns: [], rowCount: 0 }]]);
+    expect(firstFacts.resultTypes).toEqual([[{ codes: ['itnbi', 'itnbt'], columns: ['c0', 'c1', 'c2', 'c3', 'c4'], rowCount: 2 }], [{ codes: [], columns: [], rowCount: 0 }], [{ codes: [], columns: [], rowCount: 0 }]]);
     expect(secondFacts.resultTypes).toEqual([[{ codes: ['it', 'it', 'it'], columns: ['c0', 'c1'], rowCount: 3 }]]);
     // 仅成功完成态手动截图，画面只包含本例合成数据；自动trace/screenshot/video始终关闭。
     await step(async () => info.attach('SQLite原工作区完成态', { body: await page.screenshot(), contentType: 'image/png' }));
