@@ -7,6 +7,7 @@ import '../../../src/renderer/styles.css';
 
 const table = (name: string, columns: string[]): TableInfo => ({ database: '合成关联库', name, objectKind: 'table', columns: columns.map(name => ({ name, type: 'BIGINT UNSIGNED', nullable: true, generated: false, extra: '', comment: '', defaultValue: null })), indexes: [], foreignKeys: [], primaryKey: ['id'], editableKey: ['id'], engine: 'InnoDB', ddl: '', comment: '' });
 const child = table('child', ['id', 'parent_id']), parent = table('parent', ['id', 'amount']);
+parent.columns[1].type = 'DECIMAL(30,4)';
 child.foreignKeys = [{ name: 'fk_parent', columns: ['parent_id'], referencedDatabase: parent.database, referencedTable: parent.name, referencedColumns: ['id'], onDelete: 'RESTRICT', onUpdate: 'RESTRICT' }];
 const calls: { command: string; input: unknown }[] = [], denied: string[] = [];
 /** 只替代数据库输入；真实TableTab、菜单、JOIN窗口、来源租约及工作区打开行为均参与。 */

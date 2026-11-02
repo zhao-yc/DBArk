@@ -1,5 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { TableInfo } from '../../shared/contracts';
+import type { FilterMode } from '../../shared/contracts';
+import { FILTER_LIMITS } from '../../shared/filtering';
+import { emptyFilterDraft, type FilterDraft } from '../tableFilters';
+import { foreignKeyJoinFiltersFromDraft, type ForeignKeyJoinFilterDraft } from '../tableForeignKeyJoinFilters';
+import { TableForeignKeyJoinFilters } from './TableForeignKeyJoinFilters';
+import { tableForeignKeyJoinFilterZh as filterText } from '../locales/tableForeignKeyJoinFilter.zh-CN';
 import { buildForeignKeyJoin, foreignKeyJoinChoices, foreignKeyJoinMetadataKey, foreignKeyJoinLimits, foreignKeyJoinResultLimit, type ForeignKeyJoinSort } from '../tableForeignKeyJoin';
 import { foreignKeyJoinPreview, revalidateForeignKeyJoin, type ForeignKeyJoinPreview, type ForeignKeyJoinTarget, TableForeignKeyJoinIntent } from '../tableForeignKeyJoinIntent';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
@@ -9,7 +15,7 @@ import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 export interface TableForeignKeyJoinServices { read(input: ForeignKeyJoinTarget & { taskId: string }): Promise<TableInfo>; cancel(taskId: string): Promise<unknown>; }
 /** 每次正式元数据读取均持有独立任务编号；取消不借普通查询或复用数据库会话。 */
 export const tableForeignKeyJoinServices: TableForeignKeyJoinServices = { read: input => invoke('metadata.table', input), cancel: taskId => invoke('query.cancel', { taskId }) };
-interface Selection { fk: string; kind: 'LEFT' | 'INNER'; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; }
+interface Selection { fk: string; kind: 'LEFT' | 'INNER'; child: string[]; parent: string[]; childSearch: string; parentSearch: string; childPage: number; parentPage: number; sort: { id: string; rule: ForeignKeyJoinSort }[]; limit: string; filters: ForeignKeyJoinFilterDraft[]; filterMode: FilterMode; }
 interface Operation { promise: Promise<void>; cancelled: boolean; read?: { taskId: string; cancelPromise?: Promise<unknown> }; cancellation?: Promise<unknown>; }
 const pageSize = 50;
 
@@ -21,7 +27,7 @@ export function TableForeignKeyJoinDialog({ intent, onOpen, onClose, onActivity,
   const origin = useRef({ intent, services, onActivity }).current;
   if (origin.intent !== intent || origin.services !== services) origin.intent.invalidate();
   const choices = useMemo(() => foreignKeyJoinChoices(origin.intent.source), [origin.intent]);
-  const [selection, setSelection] = useState<Selection>(() => ({ fk: choices[0]?.name ?? '', kind: 'LEFT', child: origin.intent.source.columns.map(column => column.name), parent: [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit) }));
+  const [selection, setSelection] = useState<Selection>(() => ({ fk: choices[0]?.name ?? '', kind: 'LEFT', child: origin.intent.source.columns.map(column => column.name), parent: [], childSearch: '', parentSearch: '', childPage: 1, parentPage: 1, sort: [], limit: String(origin.intent.limit), filters: [], filterMode: 'all' }));
   const selectionRef = useRef(selection), [parent, setParent] = useState<{ fk: string; info: TableInfo }>();
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [invalid, setInvalid] = useState(false), [message, setMessage] = useState('');
   const alive = useRef(true), closingRef = useRef(false), operation = useRef<Operation | null>(null), revision = useRef(0), consumed = useRef(false), committed = useRef<object | null>(null), ticket = {};
@@ -39,7 +45,7 @@ export function TableForeignKeyJoinDialog({ intent, onOpen, onClose, onActivity,
   const choice = choices.find(value => value.name === selection.fk);
   const preview = useMemo(() => {
     if (!parent || parent.fk !== selection.fk) return { value: undefined, error: '' };
-    try { const limit = foreignKeyJoinResultLimit(selection.limit); return { value: foreignKeyJoinPreview(origin.intent, parent.info, selection.fk, selection.kind, { childColumns: selection.child, parentColumns: selection.parent, ...(selection.sort.length ? { sort: selection.sort.map(item => item.rule) } : {}), ...(limit !== origin.intent.limit ? { limit } : {}) }), error: '' }; }
+    try { const limit = foreignKeyJoinResultLimit(selection.limit), filters = foreignKeyJoinFiltersFromDraft(selection.filters, origin.intent.source, parent.info); return { value: foreignKeyJoinPreview(origin.intent, parent.info, selection.fk, selection.kind, { childColumns: selection.child, parentColumns: selection.parent, ...(filters.length ? { filters, filterMode: selection.filterMode } : {}), ...(selection.sort.length ? { sort: selection.sort.map(item => item.rule) } : {}), ...(limit !== origin.intent.limit ? { limit } : {}) }), error: '' }; }
     catch (reason) { return { value: undefined, error: errorMessage(reason) }; }
   }, [origin.intent, parent, selection]);
   const aliases = useMemo(() => {
@@ -102,7 +108,7 @@ export function TableForeignKeyJoinDialog({ intent, onOpen, onClose, onActivity,
   function changeForeignKey(value: string): void {
     if (!current() || !rendered() || !choices.some(item => item.name === value) || value === selection.fk) return;
     cancel(); revision.current++; setParent(undefined); setError('');
-    const next = { ...selection, fk: value, child: origin.intent.source.columns.map(column => column.name), parent: [], parentSearch: '', childPage: 1, parentPage: 1, sort: [] };
+    const next = { ...selection, fk: value, child: origin.intent.source.columns.map(column => column.name), parent: [], parentSearch: '', childPage: 1, parentPage: 1, sort: [], filters: [], filterMode: 'all' as const };
     selectionRef.current = next; setSelection(next);
   }
   /** 搜索只影响本地分页；字段变化后同步废弃旧打开闭包，未选字段不会改变JOIN条件。 */
@@ -122,6 +128,16 @@ export function TableForeignKeyJoinDialog({ intent, onOpen, onClose, onActivity,
     return () => { alive.current = false; revision.current++; unsubscribe(); cancel(); document.removeEventListener('keydown', block, true); };
   }, []);
   const unavailable = invalid || !origin.intent.current() || closing || consumed.current;
+  /** 条件只在当前原窗口本地添加，未完成值保持原文并阻止打开，不降级为无筛选查询。 */
+  function addFilter(): void { if (!editable() || !parent || parent.fk !== selection.fk || selection.filters.length >= FILTER_LIMITS.conditions) return; revise({ ...selection, filters: [...selection.filters, { id: uid(), side: 'child', enabled: true, draft: emptyFilterDraft(origin.intent.source.columns[0].name) }] }); }
+  /** 原条目对象和已提交渲染均须仍有效；移除、换FK或改来源后旧输入不能落到其它条件。 */
+  function editFilter(entry: ForeignKeyJoinFilterDraft, patch: { side?: 'child' | 'parent'; enabled?: boolean; draft?: Partial<FilterDraft> }): void {
+    if (!editable() || !selection.filters.includes(entry)) return;
+    const value = { ...entry, ...(patch.side ? { side: patch.side } : {}), ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }), draft: { ...entry.draft, ...patch.draft } };
+    const filters = selection.filters.map(item => item === entry ? value : item);
+    if (filters.reduce((total,item) => total + item.draft.value.length + item.draft.upperValue.length + item.draft.valuesText.length, 0) > FILTER_LIMITS.totalCharacters) { setError(filterText.draftBudget); return; }
+    revise({ ...selection, filters });
+  }
   /** 排序身份固定为双方真实列名和本地行ID；移动位置不改变旧回调的目标。 */
   function sortColumns(side: 'child' | 'parent'): string[] { return (side === 'child' ? origin.intent.source : parent?.fk === selection.fk ? parent.info : undefined)?.columns.map(column => column.name) ?? []; }
   function availableSort(side: 'child' | 'parent', except?: string): string[] { return sortColumns(side).filter(column => !selection.sort.some(item => item.id !== except && item.rule.side === side && item.rule.column === column)); }
@@ -163,11 +179,12 @@ export function TableForeignKeyJoinDialog({ intent, onOpen, onClose, onActivity,
   }
   return <Modal title={text.title} wide onClose={close}><div className="modal-content" aria-busy={busy || closing}>
     <p>{text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
-    <label>{text.resultLimit}<input aria-label={text.resultLimit} inputMode="numeric" maxLength={6} value={selection.limit} disabled={busy || unavailable} onChange={event => revise({ ...selection, limit: event.target.value })}/></label><p>{text.limitHint}</p>
+    <label>{text.resultLimit}<input aria-label={text.resultLimit} inputMode="numeric" maxLength={128} value={selection.limit} disabled={busy || unavailable} onChange={event => revise({ ...selection, limit: event.target.value })}/></label><p>{text.limitHint}</p>
     <label>{text.fk}<select aria-label={text.fk} disabled={unavailable} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>
     <label>{text.joinKind}<select aria-label={text.joinKind} disabled={busy || unavailable} value={selection.kind} onChange={event => { if (event.target.value === 'LEFT' || event.target.value === 'INNER') revise({ ...selection, kind: event.target.value }); }}><option value="LEFT">{text.left}</option><option value="INNER">{text.inner}</option></select></label>
     <UsageHelp><p>{selection.kind === 'LEFT' ? text.leftHint : text.innerHint}</p><p>{text.relationship}</p><p>{text.aliases}</p></UsageHelp>{choice && <section aria-label={text.relationship}><ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul></section>}
     {fieldList('child', origin.intent.source)}{parent && parent.fk === selection.fk && fieldList('parent', parent.info)}
+    {parent && parent.fk === selection.fk && <TableForeignKeyJoinFilters child={origin.intent.source} parent={parent.info} entries={selection.filters} mode={selection.filterMode} disabled={busy || unavailable} onAdd={addFilter} onChange={editFilter} onMode={filterMode => revise({ ...selection, filterMode })} onRemove={entry => { if (selection.filters.includes(entry)) revise({ ...selection, filters: selection.filters.filter(item => item !== entry) }); }} onClear={() => revise({ ...selection, filters: [], filterMode: 'all' })}/>}
     {parent && parent.fk === selection.fk && <fieldset disabled={busy || unavailable} aria-label={text.sortTitle}><legend>{text.sortTitle}</legend><UsageHelp><p>{text.sortHint}</p></UsageHelp>{!selection.sort.length && <p>{text.sortEmpty}</p>}
       {selection.sort.map(({ id, rule }, index) => <div className="filter-inputs" key={id}><span>{index + 1}.</span>
         <label>{text.sortSide(index + 1)}<select aria-label={text.sortSide(index + 1)} disabled={busy || unavailable} value={rule.side} onChange={event => { const side = event.target.value; if (side !== 'child' && side !== 'parent') return; const columns = availableSort(side, id), column = columns.includes(rule.column) ? rule.column : columns[0]; if (column) editSort(id, { side, column }); }}><option value="child" disabled={!availableSort('child', id).length}>{text.sortChild}</option><option value="parent" disabled={!availableSort('parent', id).length}>{text.sortParent}</option></select></label>

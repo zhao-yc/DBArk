@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve, join } from 'node:path';
 import { tableForeignKeyJoinZh as text } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
+import { tableForeignKeyJoinFilterZh as filterText } from '../../src/renderer/locales/tableForeignKeyJoinFilter.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 const enabled = process.env.DBARK_JOIN_ORDER_NATIVE === '1';
@@ -18,10 +19,12 @@ test.beforeAll(async () => {
   server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' }); await server.listen(); const bound = server.httpServer!.address(); if (!bound || typeof bound === 'string') throw Error('JOIN夹具没有取得本地端口'); address = 'http://127.0.0.1:' + bound.port + '/tests/fixtures/join-order/index.html';
 });
 test.afterAll(async () => { await server?.close(); });
-for (const theme of ['dark', 'light'] as const) test('JOIN真实菜单、双侧排序、上限及独立草稿：' + theme, async ({}, info) => {
+for (const mode of ['dark', 'light', 'filter-dark', 'filter-light'] as const) {
+  const theme = mode.endsWith('light') ? 'light' : 'dark', filtering = mode.startsWith('filter-');
+  test('JOIN真实菜单、双侧排序、上限及独立草稿：' + mode, async ({}, info) => {
   const directory = await mkdtemp(join(tmpdir(), 'dbark-join-order-native-')), app = await electron.launch({ args: ['tests/fixtures/join-order/electron.cjs'], env: { ...process.env, DBARK_JOIN_ORDER_FIXTURE_DATA: directory, DBARK_JOIN_ORDER_FIXTURE_URL: address + '?theme=' + theme }, chromiumSandbox: true });
   const taskProcess = app.process(), pid = taskProcess.pid, exit = new Promise<{ code: number | null; signal: string | null }>(resolve => taskProcess.once('exit', (code, signal) => resolve({ code, signal }))), page = await app.firstWindow(), errors: string[] = []; page.on('pageerror', reason => errors.push(reason.message)); let accepted = false, closed = false;
-  await info.attach('JOIN组件原窗口身份', { body: JSON.stringify({ pid, directory, theme }), contentType: 'application/json' });
+  await info.attach('JOIN组件原窗口身份', { body: JSON.stringify({ pid, directory, theme, mode }), contentType: 'application/json' });
   /** 全部动作仍属本例原进程、原窗口和原120秒零重试，不使用观察超时重开。 */
   function check(): void { if (info.timeout !== 120000 || info.retry !== 0 || info.repeatEachIndex !== 0 || info.config.workers !== 1 || app.process() !== taskProcess || taskProcess.pid !== pid || closed || page.isClosed()) throw Error('JOIN原生组件原归属变化'); }
   async function step<T>(action: () => Promise<T>): Promise<T> { check(); const value = await action(); check(); return value; }
@@ -46,11 +49,25 @@ for (const theme of ['dark', 'light'] as const) test('JOIN真实菜单、双侧�
     await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText('LIMIT 43;')); const before = await evidence();
     await step(() => dialog().getByRole('button', { name: text.sortAdd, exact: true }).click()); await step(() => dialog().getByLabel(text.sortSide(1), { exact: true }).selectOption('parent')); await step(() => dialog().getByLabel(text.sortDirection(1), { exact: true }).selectOption('DESC')); await step(() => dialog().getByLabel(text.sortNulls(1), { exact: true }).selectOption('LAST'));
     await step(() => dialog().getByRole('button', { name: text.sortAdd, exact: true }).click()); await step(() => dialog().getByRole('button', { name: text.sortEarlier(2), exact: true }).click()); await step(() => dialog().getByLabel(text.resultLimit, { exact: true }).fill(''));
-    await step(() => expect(dialog().getByRole('button', { name: text.open, exact: true })).toBeDisabled()); await step(() => expect(dialog().getByRole('alert')).toContainText(text.limitInvalid)); await step(() => dialog().getByLabel(text.resultLimit, { exact: true }).fill('2'));
+    await step(() => expect(dialog().getByRole('button', { name: text.open, exact: true })).toBeDisabled()); await step(() => expect(dialog().getByRole('alert')).toContainText(text.limitInvalid));
+    await step(() => dialog().getByLabel(text.resultLimit, { exact: true }).fill('1000000')); await step(() => expect(dialog().getByLabel(text.resultLimit, { exact: true })).toHaveValue('1000000')); await step(() => expect(dialog().getByRole('button', { name: text.open, exact: true })).toBeDisabled()); await step(() => dialog().getByLabel(text.resultLimit, { exact: true }).fill('2'));
+    if (filtering) {
+      await step(() => dialog().getByRole('button', { name: filterText.add, exact: true }).click()); await step(() => expect(dialog().getByRole('button', { name: text.open, exact: true })).toBeDisabled());
+      await step(() => dialog().getByLabel(filterText.value(1), { exact: true }).fill('1e20')); await step(() => expect(dialog().getByLabel(filterText.value(1), { exact: true })).toHaveValue('1e20')); await step(() => expect(dialog().getByRole('button', { name: text.open, exact: true })).toBeDisabled()); await step(() => dialog().getByLabel(filterText.value(1), { exact: true }).fill('9007199254740993'));
+      await step(() => dialog().getByRole('button', { name: filterText.add, exact: true }).click()); await step(() => dialog().getByLabel(filterText.side(2), { exact: true }).selectOption('parent')); await step(() => dialog().getByLabel(filterText.column(2), { exact: true }).selectOption('amount')); await step(() => dialog().getByLabel(filterText.operator(2), { exact: true }).selectOption('IN')); await step(() => dialog().getByLabel(filterText.values(2), { exact: true }).fill('12.3400\n12.3500'));
+      await step(() => dialog().getByRole('button', { name: filterText.add, exact: true }).click()); await step(() => dialog().getByLabel(filterText.side(3), { exact: true }).selectOption('parent')); await step(() => dialog().getByLabel(filterText.operator(3), { exact: true }).selectOption('IS NULL')); await step(() => dialog().getByLabel(filterText.mode, { exact: true }).selectOption('any'));
+      await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText('WHERE')); await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText(' OR ')); await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText('p.`amount` IN')); await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText('p.`id` IS NULL'));
+      // NULL位置排序同样包含IS NULL，启停必须核WHERE段，不能把仍保留的排序误判为条件残留。
+      const where = async () => (await step(() => dialog().getByLabel(text.preview, { exact: true }).textContent()))?.split('\nWHERE ')[1]?.split('\nORDER BY ')[0];
+      await expect.poll(where).toContain('p.`id` IS NULL');
+      await step(() => dialog().getByLabel(filterText.enabled(3), { exact: true }).uncheck()); await expect.poll(where).not.toContain('p.`id` IS NULL'); await step(() => dialog().getByLabel(filterText.enabled(3), { exact: true }).check()); await expect.poll(where).toContain('p.`id` IS NULL');
+    }
     const suffix = 'ORDER BY c.`id` ASC, (p.`id` IS NULL) ASC, p.`id` DESC\nLIMIT 2;'; await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText(suffix)); const edited = await evidence(); expect(edited.calls.filter(call => call.command !== 'settings.save')).toEqual(before.calls.filter(call => call.command !== 'settings.save')); expect(edited.tabs).toEqual(before.tabs); expect(edited.resultLimit).toBe(43); expect(edited.dirty).toEqual(before.dirty);
-    await step(() => dialog().getByLabel(text.sortTitle, { exact: true }).scrollIntoViewIfNeeded()); const layout = await step(() => dialog().getByLabel(text.sortTitle, { exact: true }).evaluate(element => ({ width: element.clientWidth, scroll: element.scrollWidth, viewport: window.innerWidth, theme: document.documentElement.dataset.theme }))); expect(layout.scroll).toBeLessThanOrEqual(layout.width); expect(layout.viewport).toBe(1024); expect(layout.theme).toBe(theme); await info.attach('JOIN排序原生窗口-' + theme, { body: await step(() => page.screenshot()), contentType: 'image/png' });
+    const panel = filtering ? filterText.title : text.sortTitle;
+    await step(() => dialog().getByLabel(panel, { exact: true }).scrollIntoViewIfNeeded()); const layout = await step(() => dialog().getByLabel(panel, { exact: true }).evaluate(element => ({ width: element.clientWidth, scroll: element.scrollWidth, viewport: window.innerWidth, theme: document.documentElement.dataset.theme }))); expect(layout.scroll).toBeLessThanOrEqual(layout.width); expect(layout.viewport).toBe(1024); expect(layout.theme).toBe(theme); await info.attach('JOIN排序原生窗口-' + mode, { body: await step(() => page.screenshot()), contentType: 'image/png' });
     await step(() => dialog().getByRole('button', { name: text.open, exact: true }).click()); await step(() => expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText(suffix)); const final = await evidence(); expect(final.tabs).toHaveLength(2); expect(final.tabs.filter(tab => tab.kind === 'query')).toHaveLength(1); expect(final.resultLimit).toBe(43); expect(final.denied).toEqual([]); expect(final.dirty).toEqual(before.dirty); expect(final.jobs).toEqual(before.jobs); expect(Object.values(final.jobs).some(Boolean)).toBe(false); expect(final.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'parent', 'child', 'parent']); expect(final.calls.some(call => /query\.|table\.(apply|preview)/.test(call.command))).toBe(false); expect(errors).toEqual([]);
-    check(); await app.close(); closed = true; expect(await exit).toEqual({ code: 0, signal: null }); expect(taskProcess.killed).toBe(false); await info.attach('JOIN排序原生组件终态', { body: JSON.stringify({ pid, directory, theme, calls: final.calls, zeroDatabaseExecutions: true, zeroClipboardOperations: true, sourceDraftUnchanged: true, newQueryCount: 1, originalGlobalLimit: 43, normalExit: true, realDatabaseVerified: false }), contentType: 'application/json' }); accepted = true;
+    const sql = final.tabs.find(tab => tab.kind === 'query')?.sql; if (filtering) { expect(sql).toContain('WHERE'); expect(sql).toContain('p.`amount` IN'); expect(sql).toContain('p.`id` IS NULL'); expect(sql).toContain(' OR '); } else expect(sql).not.toContain('WHERE');
+    check(); await app.close(); closed = true; expect(await exit).toEqual({ code: 0, signal: null }); expect(taskProcess.killed).toBe(false); await info.attach('JOIN排序原生组件终态', { body: JSON.stringify({ pid, directory, theme, mode, sql, filtering, calls: final.calls, zeroDatabaseExecutions: true, zeroClipboardOperations: true, sourceDraftUnchanged: true, newQueryCount: 1, originalGlobalLimit: 43, normalExit: true, realDatabaseVerified: false }), contentType: 'application/json' }); accepted = true;
   } finally {
     // 失败原件保留；只请求原应用正常退出，不终止其它窗口或伪称完成清理。
     if (!closed && taskProcess.exitCode === null && taskProcess.signalCode === null) { await app.close(); closed = true; expect(await exit).toEqual({ code: 0, signal: null }); }
@@ -58,3 +75,4 @@ for (const theme of ['dark', 'light'] as const) test('JOIN真实菜单、双侧�
     if (accepted) { if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-join-order-native-')) throw Error('JOIN目录越界'); await rm(directory, { recursive: true }); }
   }
 });
+}

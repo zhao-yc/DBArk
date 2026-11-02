@@ -1,5 +1,7 @@
 # 开发与测试
 
+“按外键生成 JOIN 查询”新增[双方 WHERE 条件筛选](development/table-foreign-key-join-filter-20261102.md)：13 种运算符、AND／OR、集合／区间、NULL 及启停，复用精确值与原意图保护。213 项相关、类型／构建、六端点真实外键表 600 次 SELECT 及 Windows 四个原生组件通过，准确隔离资源已核零；派生表及首轮窗口失败保留，Mac／安装另验，暂不发布。
+
 “按外键生成 JOIN 查询”新增[双侧多列排序与行数上限](development/table-foreign-key-join-order-20261102.md)，含 NULL 位置、优先级、未输出字段和原来源保护。107 项相关、严格构建／类型、六端点 48 份只读合成 SELECT，以及 Windows 明暗原生组件两例通过；组件与实库证据分开记录，物理表完整 GUI、Mac／安装另验，暂不发布。
 
 SQLite 已有字段新增[显式 NOT NULL 编辑](development/sqlite-not-null-20261102.md)：严格布尔补丁、准确声明跨度、主键隐含规则、独立预览计数及草稿保护，复用原事务和完整数据比较。31 份相关测试分轮共 1,013 项、严格构建及 Windows 十二模式单轮通过，真实拒绝／回滚、明暗截图、旧预览与资源已核；Mac／安装另验，暂不发布。

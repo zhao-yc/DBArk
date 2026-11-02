@@ -1,18 +1,19 @@
-import type { TableInfo } from '../shared/contracts';
+import type { FilterMode, TableInfo } from '../shared/contracts';
+import { buildForeignKeyJoinWhere, type ForeignKeyJoinFilter } from './tableForeignKeyJoinFilters';
 import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-CN';
 
 export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: 'child' | 'parent'; column: string; alias: string }
 export interface ForeignKeyJoinSort { side: 'child' | 'parent'; column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; }
-export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[]; sort?: readonly ForeignKeyJoinSort[]; limit?: number; }
+export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[]; sort?: readonly ForeignKeyJoinSort[]; limit?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; }
 type Budget = { units: number };
 
 /** 只读自有数据属性；不会为了生成SELECT访问DDL、默认值、注释或调用访问器。 */
 function own(value: unknown, key: string, optional = false): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(text.invalid);
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  if (!descriptor) { if (optional) return undefined; throw Error(text.invalid); }
+  if (!descriptor) { if (optional && !(key in value)) return undefined; throw Error(text.invalid); }
   if (!descriptor.enumerable || !('value' in descriptor)) throw Error(text.invalid);
   return descriptor.value;
 }
@@ -139,12 +140,14 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName:
   if (right.database !== relation.referencedDatabase || right.name !== relation.referencedTable) throw Error(text.target);
   const parentNames = new Set(right.columns.map(column => column.name));
   if (relation.referencedColumns.some(column => !parentNames.has(column))) throw Error(text.relation);
-  let childColumns: string[], parentColumns: string[], ordering = '', resultLimit = limit;
+  let childColumns: string[], parentColumns: string[], ordering = '', resultLimit = limit, where: string | undefined;
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right.columns.map(column => column.name); }
   else {
-    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !['childColumns', 'parentColumns', 'sort', 'limit'].includes(key as string)) || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !['childColumns', 'parentColumns', 'sort', 'limit', 'filters', 'filterMode'].includes(key as string)) || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
     childColumns = selected(own(options, 'childColumns'), left.columns); parentColumns = selected(own(options, 'parentColumns'), right.columns);
     ordering = order(own(options, 'sort', true), left, right);
+    const filters = own(options, 'filters', true), mode = own(options, 'filterMode', true);
+    if (filters !== undefined || mode !== undefined) { if (mode !== undefined && mode !== 'all' && mode !== 'any') throw Error(text.invalid); where = buildForeignKeyJoinWhere(left, right, filters === undefined ? [] : filters, mode === undefined ? 'all' : mode, foreignKeyJoinLimits.sqlUnits); }
     const suppliedLimit = own(options, 'limit', true);
     if (suppliedLimit !== undefined) { if (typeof suppliedLimit !== 'number' || !Number.isSafeInteger(suppliedLimit) || suppliedLimit < 1 || suppliedLimit > foreignKeyJoinLimits.rows) throw Error(text.limitInvalid); resultLimit = suppliedLimit; }
   }
@@ -161,6 +164,7 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName:
   columns.forEach((column, index) => append(`  ${column.side === 'child' ? 'c' : 'p'}.${quote(column.column)} AS ${quote(column.alias)}${index + 1 === columns.length ? '\n' : ',\n'}`));
   append(`FROM ${quote(left.database)}.${quote(left.name)} AS c\n${kind} JOIN ${quote(right.database)}.${quote(right.name)} AS p\nON\n`);
   relation.columns.forEach((column, index) => append(`${index ? '  AND ' : '  '}c.${quote(column)} = p.${quote(relation.referencedColumns[index])}\n`));
+  if (where) append('WHERE ' + where + '\n');
   if (ordering) append('ORDER BY ' + ordering + '\n');
   append(`LIMIT ${resultLimit};`);
   return { sql, columns };

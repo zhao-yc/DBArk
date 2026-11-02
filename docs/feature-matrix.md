@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-02 源码增量：[外键 JOIN 双侧条件筛选](development/table-foreign-key-join-filter-20261102.md)支持 13 种运算符、AND／OR、NULL、集合／区间与启停，未输出列也可筛选。213 项相关、类型／构建、六端点真实外键表 600 次 SELECT 和 Windows 四个原生组件通过；原派生表及窗口失败另记，Mac／安装待验，不计完整可视化查询构建，暂不发布。
+
 2026-11-02 源码增量：[SQLite 固定结果对比](development/sqlite-result-comparison-20261102.md)支持原类型和原值匹配、四类差异及左右类型明细，NULL／重复键整份拒绝。1779 项相关、类型／构建与 Windows 原工作区两轮专项通过，未增加数据库命令；Mac／安装待验，暂不发布。
 
 2026-11-02 源码增量：[SQLite 查询结果列统计](development/sqlite-result-statistics-20261102.md)支持筛选后／勾选范围、原类型计数、不同值和极值，精确数值合计／平均；混合文本不隐式转数值。1752 项相关、类型／构建及 Windows 原工作区整例通过；Mac／安装待验，暂不发布。

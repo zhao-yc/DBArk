@@ -12,18 +12,18 @@ export const tableReadSqlText = Object.freeze({
 });
 const encoder = new TextEncoder();
 /** UTF8编码之前拒绝孤立代理项，不把原名称或原值悄然改为替代字符。 */
-function unicode(value: string): void {
+export function assertTableReadUnicode(value: string): void {
   if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)) throw Error(tableReadSqlText.unicode);
 }
 /** 与真实表页exportLiteral文本分支逐字节相同，浏览器用TextEncoder而不引入Node Buffer。 */
-function tableReadTextLiteral(value: string): string {
-  unicode(value);
+export function tableReadTextLiteral(value: string): string {
+  assertTableReadUnicode(value);
   return `_utf8mb4 X'${Array.from(encoder.encode(value), byte => byte.toString(16).padStart(2, '0')).join('')}'`;
 }
 /** 标识符独立引用，问号、反引号和点号均作为原名称保留。 */
 export function tableReadIdentifier(value: string): string {
   if (typeof value !== 'string' || !value.length || value.length > 64 || value.includes('\0')) throw Error('数据库对象名称必须为1～64个字符且不能包含NUL');
-  unicode(value); return '`' + value.replaceAll('`', '``') + '`';
+  assertTableReadUnicode(value); return '`' + value.replaceAll('`', '``') + '`';
 }
 /** 精确数值参数显式转为 DECIMAL，防止 MySQL 将字符串与 BIGINT 比较时降为 DOUBLE。 */
 function filterParameter(column: ColumnInfo, value: string, pattern: boolean): string {
@@ -42,7 +42,7 @@ function filterParameter(column: ColumnInfo, value: string, pattern: boolean): s
 }
 
 /** 表页及整范围聚合共用同一元数据白名单、启停及分组语义，不重新解析任意SQL。 */
-export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filterMode: FilterMode = 'all', filterGroup?: FilterGroup, parameterLiteral?: (value: string) => string): { where: string | undefined; params: CellValue[] } {
+export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filterMode: FilterMode = 'all', filterGroup?: FilterGroup, parameterLiteral?: (value: string) => string, columnReference?: (column: string) => string): { where: string | undefined; params: CellValue[] } {
   const admitted=copyFilterRules(filters),group=validateFilterGroup(admitted,filterMode,filterGroup);
   const columns = new Map(info.columns.map(column => [column.name, column]));
   const params: CellValue[] = [];
@@ -52,7 +52,8 @@ export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filt
   const clause = (filter:FilterRule):string => {
     const metadata = columns.get(filter.column);
     if (!metadata) throw new Error(`未知筛选字段：${filter.column}`);
-    const column = tableReadIdentifier(filter.column);
+    // JOIN只由本地受信编译器传限定列名；IPC不接受回调或任意引用SQL，原表页字节保持。
+    const column = columnReference ? columnReference(filter.column) : tableReadIdentifier(filter.column);
     if (filter.operator === 'IS NULL' || filter.operator === 'IS NOT NULL') return `${column} ${filter.operator}`;
     /** 参数按条件原顺序加入，不拆分逗号、裁剪空白或转换为 JavaScript 数值。 */
     const parameter = (value: string) => {
@@ -143,8 +144,8 @@ export function buildFilteredTableSelect(input: FilteredTableSelectInput): Filte
   const filters = copyFilterRules(input.filters);
   // 停用条件也核原Unicode，不能在重新启用时才悄悄替换损坏字符串。
   for (const filter of filters) {
-    if (typeof filter.column === 'string') unicode(filter.column);
-    for (const value of filter.values ?? (filter.value === undefined ? [] : [filter.value])) if (typeof value === 'string') unicode(value);
+    if (typeof filter.column === 'string') assertTableReadUnicode(filter.column);
+    for (const value of filter.values ?? (filter.value === undefined ? [] : [filter.value])) if (typeof value === 'string') assertTableReadUnicode(value);
   }
   let literalBytes = 0;
   const filter = buildTableFilterSql(info, filters, input.filterMode, input.filterGroup, value => {
