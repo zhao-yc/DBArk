@@ -102,18 +102,18 @@ export function appendQueryResultFilterNode(expression:QueryResultFilterGroup,no
 export function appendQueryResultFilterRule(expression:QueryResultFilterGroup,rule:QueryResultFilterRule):QueryResultFilterGroup{return appendQueryResultFilterNode(expression,rule);}
 /** 比较方式来自协议类型；未知/二进制元数据仍可做NULL判断，不按外观猜类型。 */
 export function queryResultFilterOperators(column:ResultColumn,sqliteType?:SqliteResultFilterType):readonly QueryResultFilterOperator[]{
-  if(column.type==='SQLITE')return (sqliteType??'text')==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','empty','notEmpty','null','notNull']:['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull'];
+  if(column.type==='SQLITE')return (sqliteType??'text')==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','empty','notEmpty','null','notNull','notType']:['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull','notType'];
   const kind=queryResultFilterKind(column);
   return kind==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','eq','ne','in','notIn','empty','notEmpty','null','notNull']:kind?['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull']:['null','notNull'];
 }
 /** NULL、空文本和列表条件不接受隐藏单值；面板与控制器共用同一输入要求。 */
-export function queryResultFilterNeedsValue(operator:QueryResultFilterOperator):boolean{return !['null','notNull','empty','notEmpty','in','notIn'].includes(operator);}
+export function queryResultFilterNeedsValue(operator:QueryResultFilterOperator):boolean{return !['null','notNull','empty','notEmpty','in','notIn','notType'].includes(operator);}
 /** 区间使用独立上下限原文，不复用分隔符或把精确值转成浮点数。 */
 export function queryResultFilterNeedsUpper(operator:QueryResultFilterOperator):boolean{return operator==='between'||operator==='notBetween';}
 /** 成员使用独立原文数组，逗号、换行、引号和NULL字样不承担分隔或SQL语义。 */
 export function queryResultFilterNeedsValues(operator:QueryResultFilterOperator):boolean{return operator==='in'||operator==='notIn';}
 /** 仅有实际文本原值比较时提供大小写选项，NULL和空文本判断不保留隐藏选项。 */
-export function queryResultFilterSupportsIgnoreCase(column:ResultColumn,operator:QueryResultFilterOperator,sqliteType?:SqliteResultFilterType):boolean{return (queryResultFilterKind(column)==='text'||column.type==='SQLITE'&&(sqliteType??'text')==='text')&&queryResultFilterOperators(column,sqliteType).includes(operator)&&!['null','notNull','empty','notEmpty'].includes(operator);}
+export function queryResultFilterSupportsIgnoreCase(column:ResultColumn,operator:QueryResultFilterOperator,sqliteType?:SqliteResultFilterType):boolean{return (queryResultFilterKind(column)==='text'||column.type==='SQLITE'&&(sqliteType??'text')==='text')&&queryResultFilterOperators(column,sqliteType).includes(operator)&&!['null','notNull','empty','notEmpty','notType'].includes(operator);}
 /** 只读取自有数据属性；访问器不执行，NULL判断也不解码二进制。 */
 function cell(row:QueryResult['rows'][number],column:ResultColumn):CellValue {const d=Object.getOwnPropertyDescriptor(row,column.key);if(!d||!('value'in d))throw Error(text.value);return d.value;}
 /** 当前完整源的单向租约；过滤保存原行引用，连被排除行的活动条件键也观察漂移。 */
@@ -186,7 +186,7 @@ export class QueryResultFilter {
       if(rule.enabled!==undefined&&typeof rule.enabled!=='boolean')throw Error(text.invalid);
       if(rule.ignoreCase!==undefined&&(typeof rule.ignoreCase!=='boolean'||!queryResultFilterSupportsIgnoreCase(column,rule.operator,rule.sqliteType)))throw Error(text.invalid);
       const nullable=rule.operator==='null'||rule.operator==='notNull',range=queryResultFilterNeedsUpper(rule.operator);
-      const sqlite=column.type==='SQLITE';
+      const sqlite=column.type==='SQLITE',typeOnly=rule.operator==='notType';
       if(sqlite?!nullable&&!sqliteResultFilterTypes.includes(rule.sqliteType as SqliteResultFilterType)||nullable&&rule.sqliteType!==undefined:rule.sqliteType!==undefined)throw Error(text.invalid);
       if((!queryResultFilterNeedsValue(rule.operator)&&rule.value!=='')||(range?typeof rule.upper!=='string':rule.upper!==undefined))throw Error(text.invalid);
       const memberInputs=memberSets[index];
@@ -200,7 +200,7 @@ export class QueryResultFilter {
       let literal:CellValue|null,upper:CellValue|null,key:FilterKey|null,upperKey:FilterKey|null;
       let members:{input:string;literal:CellValue;key:FilterKey}[]|undefined;
       try{
-        literal=nullable||memberInputs?null:parse(rule.value);key=nullable||memberInputs?null:makeKey(column,literal!,code);
+        literal=nullable||memberInputs||typeOnly?null:parse(rule.value);key=nullable||memberInputs||typeOnly?null:makeKey(column,literal!,code);
         upper=range?parse(rule.upper!):null;upperKey=range?makeKey(column,upper!,code):null;
         members=memberInputs?.map(input=>{const literal=parse(input);return{input,literal,key:makeKey(column,literal,code)};});
       }catch(reason){if(reason instanceof Error&&reason.message===text.budget)throw reason;throw Error(sqlite?text.sqliteValue:text.value);}
@@ -209,7 +209,7 @@ export class QueryResultFilter {
       // 下限大于上限时完整拒绝，不能猜测交换端点或把否定区间变成全量结果。
       if(range&&compareKeys(key,upperKey)>0)throw Error(text.rangeOrder);
       const wildcard=rule.operator==='like'||rule.operator==='notLike'?compileQueryResultWildcard(literal as string,spendWildcard):undefined;
-      return[{rule,index,column,position:binding.columns.indexOf(column),nullable,range,literal,key,upper,upperKey,members,wildcard,code}];
+      return[{rule,index,column,position:binding.columns.indexOf(column),nullable,typeOnly,range,literal,key,upper,upperKey,members,wildcard,code}];
     });
     if(!compiled.length){
       if(!this.current(binding)||this.projection!==previous)throw fail();this.snapshots=undefined;
@@ -217,8 +217,8 @@ export class QueryResultFilter {
     }
     const snapshots:Snapshot[]=[...new Map(compiled.map(c=>[c.column.key,c.column])).values()].map(column=>{const values=binding.rows.map(row=>cell(row,column));return{column,values,binary:values.map(binaryStamp)};});
     const prepared=new Map(snapshots.map(s=>{
-      const scalar=compiled.some(c=>c.column===s.column&&!c.nullable);
-      const codes=new Set<string|undefined>(compiled.filter(c=>c.column===s.column&&!c.nullable).map(c=>c.code)),position=binding.columns.indexOf(s.column),sqlite=s.column.type==='SQLITE';
+      const scalar=compiled.some(c=>c.column===s.column&&!c.nullable&&!c.typeOnly);
+      const codes=new Set<string|undefined>(compiled.filter(c=>c.column===s.column&&!c.nullable&&!c.typeOnly).map(c=>c.code)),position=binding.columns.indexOf(s.column),sqlite=s.column.type==='SQLITE';
       return[s.column.key,s.values.map((value,index)=>{
         const code=binding.source.sqliteStorage?.rows[index][position];if(!scalar||sqlite&&!codes.has(code))return null;
         const count=typeof value==='string'?value.length:sqlite&&value&&typeof value==='object'?value.base64.length:1;
@@ -231,8 +231,9 @@ export class QueryResultFilter {
     const foldedKeys=new Map([...folded].map(([key,values])=>{const column=binding.columns.find(column=>column.key===key)!;return[key,values.map(value=>value===null?null:makeKey(column,value,'t'))] as const;}));
     const data=new Map(snapshots.map(s=>[s.column.key,s.values])),indices:number[]=[];
     for(let i=0;i<binding.rows.length;i++){
-      const activeMatches=compiled.map(({rule,column,position,nullable,range,literal,key,upper,upperKey,members,wildcard,code})=>{
+      const activeMatches=compiled.map(({rule,column,position,nullable,typeOnly,range,literal,key,upper,upperKey,members,wildcard,code})=>{
         const value=data.get(column.key)![i];if(nullable)return rule.operator==='null'?value===null:value!==null;if(value===null)return false;
+        if(typeOnly)return binding.source.sqliteStorage!.rows[i][position]!==code;
         if(column.type==='SQLITE'&&binding.source.sqliteStorage!.rows[i][position]!==code)return false;
         const comparable=rule.ignoreCase?folded.get(column.key)![i]:value,cellKey=rule.ignoreCase?foldedKeys.get(column.key)![i]:prepared.get(column.key)![i];
         // 包含及其否定按最坏匹配量计费；前后缀按原文和条件长度计费，共用同一工作预算。

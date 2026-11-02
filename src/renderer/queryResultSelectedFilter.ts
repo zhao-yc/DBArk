@@ -1,8 +1,11 @@
-import type { CellValue, DataRow, ResultColumn } from '../shared/contracts';
+import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultCopyCell } from './queryResultHeaderCopy';
 import { captureQueryResultCellFilter } from './queryResultCellFilter';
 import { queryResultFilterLimits, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
 import { queryResultSelectedFilterZh as text } from './locales/queryResultSelectedFilter.zh-CN';
+import { queryResultFilterZh } from './locales/queryResultFilter.zh-CN';
+import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
+import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
 
 export interface QueryResultSelectedFilterCapture {
   readonly cell: Readonly<QueryResultCopyCell>;
@@ -17,6 +20,7 @@ interface Binding {
   readonly columns: readonly ResultColumn[]; readonly rows: readonly DataRow[]; readonly columnRefs: readonly ResultColumn[];
   readonly metadata: readonly ResultColumn[]; readonly rowRefs: readonly DataRow[]; readonly indices: ReadonlySet<number>;
   readonly cell: QueryResultCopyCell; readonly selectedValues: readonly CellValue[]; invalid: boolean;
+  readonly sqlite?: { identity?: QueryResult; source?: SqliteResultFilterSource; groups: readonly { type: SqliteResultFilterType; values: readonly string[] }[]; literals: readonly string[]; types: readonly (SqliteResultFilterType | undefined)[] };
 }
 const bindings = new WeakMap<QueryResultSelectedFilterCapture, Binding>();
 const setSize = Object.getOwnPropertyDescriptor(Set.prototype, 'size')!.get!;
@@ -60,7 +64,7 @@ function metadata(column: ResultColumn): ResultColumn {
 }
 
 /** 勾选决定候选集合，当前格只指定列；逐原格复用现有类型往返，不读剪贴板或截断部分值。 */
-export function captureQueryResultSelectedFilter(columns: readonly ResultColumn[], rows: readonly DataRow[], cell: QueryResultCopyCell | undefined, indices: ReadonlySet<number>): QueryResultSelectedFilterCapture {
+export function captureQueryResultSelectedFilter(columns: readonly ResultColumn[], rows: readonly DataRow[], cell: QueryResultCopyCell | undefined, indices: ReadonlySet<number>, sqliteSource?: QueryResult): QueryResultSelectedFilterCapture {
   const columnRefs = array(columns, queryResultFilterLimits.columns, 1), rowRefs = array(rows, queryResultFilterLimits.rows, 1);
   const stamp = columnRefs.map(metadata);
   if (new Set(stamp.map(column => column.key)).size !== stamp.length || new Set(rowRefs).size !== rowRefs.length || rowRefs.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw Error(text.unavailable);
@@ -69,16 +73,24 @@ export function captureQueryResultSelectedFilter(columns: readonly ResultColumn[
   const columnIndex = columnRefs.indexOf(column);
   if (columnIndex < 0) throw Error(text.unavailable);
   const selected = positions(indices, rowRefs.length), admitted = stamp[columnIndex], values: string[] = [], literals = new Set<string>(), selectedValues: CellValue[] = [];
+  const sqlite = admitted.type === 'SQLITE', source = sqlite && sqliteSource ? captureSqliteResultFilterSource(sqliteSource, columns, rows) : undefined;
+  const typedGroups = new Map<SqliteResultFilterType, Set<string>>(), typedLiterals: string[] = [], typedKinds: (SqliteResultFilterType | undefined)[] = [];
   let hasNull = false, units = 0;
   for (const selectedIndex of selected) {
     const selectedRow = rowRefs[selectedIndex];
     // 先核原格自有数据描述符；现有捕获器仅面对可信元数据副本及真实原行，不会读活动格值。
     const value = own(selectedRow, admitted.key) as CellValue;
-    const captured = captureQueryResultCellFilter([admitted], rowRefs, { index: selectedIndex, row: selectedRow, column: admitted });
+    if (sqlite && !source && value !== null) throw Error(queryResultFilterZh.sqliteUnknown);
+    const captured = sqlite ? source?.literal(selectedIndex, admitted.key) ?? { value, literal: '' } : captureQueryResultCellFilter([admitted], rowRefs, { index: selectedIndex, row: selectedRow, column: admitted });
     if (!Object.is(value, captured.value)) throw Error(text.stale);
     selectedValues.push(value); units += captured.literal.length;
     if (units > queryResultFilterLimits.units) throw Error(text.budget);
-    if (value === null) hasNull = true;
+    if (sqlite) {
+      const kind = 'sqliteType' in captured ? captured.sqliteType : undefined;
+      typedLiterals.push(captured.literal); typedKinds.push(kind);
+      if (value === null) hasNull = true;
+      else { if (!kind) throw Error(text.unavailable); let group = typedGroups.get(kind); if (!group) { group = new Set(); typedGroups.set(kind, group); } if (!group.has(captured.literal)) { group.add(captured.literal); values.push(captured.literal); } }
+    } else if (value === null) hasNull = true;
     else if (!literals.has(captured.literal)) { literals.add(captured.literal); values.push(captured.literal); }
     if (values.length + (hasNull ? 1 : 0) > queryResultFilterLimits.members) throw Error(text.budget);
   }
@@ -86,17 +98,19 @@ export function captureQueryResultSelectedFilter(columns: readonly ResultColumn[
     cell: Object.freeze({ index: index as number, row: row as DataRow, column }), indices: Object.freeze(selected),
     key: admitted.key, name: admitted.name, type: admitted.type, values: Object.freeze(values), hasNull
   });
-  bindings.set(capture, { columns, rows, columnRefs, metadata: stamp, rowRefs, indices, cell: cell!, selectedValues, invalid: false });
+  bindings.set(capture, { columns, rows, columnRefs, metadata: stamp, rowRefs, indices, cell: cell!, selectedValues, invalid: false, ...(sqlite ? { sqlite: { identity: sqliteSource, source, groups: [...typedGroups].map(([type, values]) => Object.freeze({ type, values: Object.freeze([...values]) })), literals: typedLiterals, types: typedKinds } } : {}) });
   if (!currentQueryResultSelectedFilter(capture, columns, rows)) throw Error(text.stale);
   return capture;
 }
 
 /** 任一观测漂移永久撤销，原对象恢复也不能复活旧捕获；不冻结任何源行列或选择Set。 */
-export function currentQueryResultSelectedFilter(capture: QueryResultSelectedFilterCapture, columns: readonly ResultColumn[], rows: readonly DataRow[]): boolean {
+export function currentQueryResultSelectedFilter(capture: QueryResultSelectedFilterCapture, columns: readonly ResultColumn[], rows: readonly DataRow[], sqliteSource?: QueryResult): boolean {
   const binding = bindings.get(capture);
   if (!binding || binding.invalid) return false;
   try {
     if (columns !== binding.columns || rows !== binding.rows) throw Error(text.stale);
+    if (binding.sqlite && sqliteSource && binding.sqlite.identity !== sqliteSource) throw Error(text.stale);
+    if (binding.sqlite?.source && !binding.sqlite.source.current()) throw Error(text.stale);
     if (own(binding.cell, 'index') !== capture.cell.index || own(binding.cell, 'row') !== capture.cell.row || own(binding.cell, 'column') !== capture.cell.column) throw Error(text.stale);
     const columnRefs = array(columns, queryResultFilterLimits.columns, 1), rowRefs = array(rows, queryResultFilterLimits.rows, 1);
     if (columnRefs.length !== binding.columnRefs.length || rowRefs.length !== binding.rowRefs.length || columnRefs.some((column, index) => {
@@ -105,6 +119,7 @@ export function currentQueryResultSelectedFilter(capture: QueryResultSelectedFil
     }) || rowRefs.some((row, index) => row !== binding.rowRefs[index])) throw Error(text.stale);
     const selected = positions(binding.indices, rowRefs.length);
     if (selected.length !== capture.indices.length || selected.some((index, position) => index !== capture.indices[position]) || selected.some((index, position) => !Object.is(own(rowRefs[index], capture.key), binding.selectedValues[position]))) throw Error(text.stale);
+    if (binding.sqlite?.source) for (let position = 0; position < selected.length; position++) { const typed = binding.sqlite.source.literal(selected[position], capture.key); if (typed.literal !== binding.sqlite.literals[position] || typed.sqliteType !== binding.sqlite.types[position]) throw Error(text.stale); }
     return true;
   } catch { binding.invalid = true; return false; }
 }
@@ -114,6 +129,12 @@ export function queryResultSelectedFilterNode(capture: QueryResultSelectedFilter
   const binding = bindings.get(capture);
   if (!binding || !currentQueryResultSelectedFilter(capture, binding.columns, binding.rows)) throw Error(text.stale);
   const nullable: QueryResultFilterRule = Object.freeze({ column: capture.key, operator: 'null', value: '' });
+  if (binding.sqlite) {
+    const children: QueryResultFilterRule[] = binding.sqlite.groups.map(group => Object.freeze({ column: capture.key, operator: 'in', value: '', values: group.values, sqliteType: group.type }));
+    if (capture.hasNull) children.push(nullable);
+    if (!children.length) throw Error(text.unavailable);
+    return children.length === 1 ? children[0] : Object.freeze({ mode: 'OR', children: Object.freeze(children) });
+  }
   if (!capture.values.length) return nullable;
   const member: QueryResultFilterRule = Object.freeze({ column: capture.key, operator: 'in', value: '', values: Object.freeze([...capture.values]) });
   return capture.hasNull ? Object.freeze({ mode: 'OR', children: Object.freeze([member, nullable]) }) : member;

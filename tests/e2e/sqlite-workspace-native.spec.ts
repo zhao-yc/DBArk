@@ -7,6 +7,7 @@ import { queryTransactionSettingsZh } from '../../src/renderer/locales/queryTran
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultHistoryZh as sortHistoryText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -259,6 +260,42 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await openFiltering(); await step(() => filtering.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('notNull')); await applyFiltering([]);
     await step(async () => (await navigationMenuItem(query(), { name: filterText.clear, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
     await step(() => expect(query().getByText(filterText.counts(2, 2), { exact: true })).toBeVisible());
+    expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
+    stage = '真实原格与勾选快捷条件保留SQLite存储类型，不增加SQL';
+    const mixedPosition = await step(() => mixedHeader.getAttribute('aria-colindex'));
+    if (!mixedPosition || !/^[1-9][0-9]*$/.test(mixedPosition)) throw Error('本例混合存储类型列坐标缺失');
+    /** 用实际网格定位当前TEXT格；同显示的INTEGER格仍由原逐格代码区分。 */
+    const chooseMixed = () => step(() => grid.locator(`[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="${mixedPosition}"]`).click());
+    const shortcut = async (name: string) => { await step(async () => (await navigationMenuItem(query(), { name, exact: true }, check)).click()); await step(() => expect(filtering).toBeVisible()); };
+    const clearFiltering = async () => { await step(async () => (await navigationMenuItem(query(), { name: filterText.clear, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(ascending)); };
+    await chooseMixed(); await shortcut(filterText.cellEquals);
+    await step(() => expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text'));
+    await step(() => expect(filtering.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('2'));
+    await step(() => expect.poll(shownIntegers).toEqual(ascending)); await applyFiltering([ascending[0]]); await clearFiltering();
+    await chooseMixed(); await shortcut(filterText.cellNotEquals);
+    await step(() => expect(filtering.getByLabel(filterText.groupMode('1'), { exact: true })).toHaveValue('OR'));
+    await step(() => expect(filtering.getByLabel(filterText.operator + ' 1', { exact: true })).toHaveValue('ne'));
+    await step(() => expect(filtering.getByLabel(filterText.operator + ' 2', { exact: true })).toHaveValue('notType'));
+    await step(() => expect(filtering.getByLabel(filterText.sqliteType(2), { exact: true })).toHaveValue('text'));
+    await step(() => expect.poll(shownIntegers).toEqual(ascending)); await applyFiltering([ascending[1]]); await clearFiltering();
+    for (const index of [2, 3]) await step(() => grid.locator(`[role="row"][aria-rowindex="${index}"]`).getByRole('checkbox').check());
+    await chooseMixed(); await shortcut(selectedFilterText.open);
+    await step(() => expect(filtering.getByLabel(filterText.groupMode('1'), { exact: true })).toHaveValue('OR'));
+    for (const [offset, kind] of ['text', 'integer'].entries()) {
+      const index = offset + 1;
+      await step(() => expect(filtering.getByLabel(filterText.operator + ' ' + index, { exact: true })).toHaveValue('in'));
+      await step(() => expect(filtering.getByLabel(filterText.sqliteType(index), { exact: true })).toHaveValue(kind));
+      await step(() => expect(filtering.getByLabel(filterText.member(index, 1), { exact: true })).toHaveValue('2'));
+      await step(() => expect(filtering.getByLabel(filterText.member(index, 2), { exact: true })).toHaveCount(0));
+    }
+    await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    await step(async () => info.attach('SQLite勾选同显示值保留独立类型草稿', { body: await page.screenshot(), contentType: 'image/png' }));
+    await applyFiltering(ascending);
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.undo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.redo, exact: true }, check)).click()); await openFiltering();
+    await step(() => expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text'));
+    await step(() => expect(filtering.getByLabel(filterText.sqliteType(2), { exact: true })).toHaveValue('integer'));
+    await step(() => filtering.getByRole('button', { name: filterText.cancel, exact: true }).click()); await clearFiltering();
     expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
     stage = '原结果菜单真实保存逐格类型快照';
     await step(async () => (await navigationMenuItem(query(), { name: snapshotText.save, exact: true }, check)).click());

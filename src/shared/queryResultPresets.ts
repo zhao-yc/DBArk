@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { ResultColumn } from './contracts';
 import { sqliteResultFilterTypes, type SqliteResultFilterType } from './sqliteResultStorage';
 
-export type QueryResultFilterOperator = 'contains' | 'notContains' | 'startsWith' | 'notStartsWith' | 'endsWith' | 'notEndsWith' | 'like' | 'notLike' | 'empty' | 'notEmpty' | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'between' | 'notBetween' | 'in' | 'notIn' | 'null' | 'notNull';
+export type QueryResultFilterOperator = 'contains' | 'notContains' | 'startsWith' | 'notStartsWith' | 'endsWith' | 'notEndsWith' | 'like' | 'notLike' | 'empty' | 'notEmpty' | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'between' | 'notBetween' | 'in' | 'notIn' | 'null' | 'notNull' | 'notType';
 export type QueryResultFilterMode = 'AND' | 'OR';
 export interface QueryResultFilterRule { column: string; operator: QueryResultFilterOperator; value: string; upper?: string; values?: readonly string[]; ignoreCase?: boolean; enabled?: boolean; /** SQLite非NULL条件显式选择类型，不能从字面值猜测。 */ sqliteType?: SqliteResultFilterType; }
 export interface QueryResultFilterGroup { readonly mode: QueryResultFilterMode; readonly children: readonly (QueryResultFilterRule | QueryResultFilterGroup)[]; }
@@ -12,7 +12,7 @@ export interface QueryResultOrganization { readonly expression: QueryResultFilte
 export interface QueryResultPresetValue { readonly columns: readonly ResultColumn[]; readonly visible: readonly ResultColumn[]; readonly configuration: QueryResultOrganization; readonly frozenThrough?: string; }
 export const queryResultPresetLimits = { name: 80, perConnection: 100, connections: 500, entries: 1000, entryBytes: 512 * 1024, totalBytes: 8 * 1024 * 1024, valueUnits: 128 * 1024 } as const;
 const structure = { columns: 1024, conditions: 32, groups: 16, depth: 8, members: 128, literalUnits: 4096 } as const;
-const operators = new Set<QueryResultFilterOperator>(['contains', 'notContains', 'startsWith', 'notStartsWith', 'endsWith', 'notEndsWith', 'like', 'notLike', 'empty', 'notEmpty', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'notBetween', 'in', 'notIn', 'null', 'notNull']);
+const operators = new Set<QueryResultFilterOperator>(['contains', 'notContains', 'startsWith', 'notStartsWith', 'endsWith', 'notEndsWith', 'like', 'notLike', 'empty', 'notEmpty', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'notBetween', 'in', 'notIn', 'null', 'notNull', 'notType']);
 const invalid = (): never => { throw Error('查询结果方案结构或字段无效'); };
 
 /** 只接受普通对象的自有数据属性；访问器、原型扩展及符号字段一律不执行或忽略。 */
@@ -81,6 +81,7 @@ function parseValue(input: unknown): QueryResultPresetValue {
     if (!available.has(column) || !operators.has(operator)) return invalid();
     const output: QueryResultFilterRule = { column, operator, value: string(node.value, 0, structure.literalUnits) };
     const sqlite = all.find(item => item.key === column)?.type === 'SQLITE', nullable = operator === 'null' || operator === 'notNull';
+    if (operator === 'notType' && !sqlite) return invalid();
     if (Object.hasOwn(node, 'sqliteType')) {
       if (!sqlite || nullable || !sqliteResultFilterTypes.includes(node.sqliteType as SqliteResultFilterType)) return invalid();
       output.sqliteType = node.sqliteType as SqliteResultFilterType;
@@ -90,7 +91,7 @@ function parseValue(input: unknown): QueryResultPresetValue {
     else if (node.upper !== undefined) return invalid();
     if (list) output.values = array(node.values, structure.members, 1).map(item => string(item, 0, structure.literalUnits));
     else if (node.values !== undefined) return invalid();
-    if ((list || ['null', 'notNull', 'empty', 'notEmpty'].includes(operator)) && output.value !== '') return invalid();
+    if ((list || ['null', 'notNull', 'empty', 'notEmpty', 'notType'].includes(operator)) && output.value !== '') return invalid();
     for (const key of ['ignoreCase', 'enabled'] as const) if (node[key] !== undefined) {
       if (typeof node[key] !== 'boolean') return invalid();
       output[key] = node[key];
