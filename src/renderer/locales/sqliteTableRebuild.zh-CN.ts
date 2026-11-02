@@ -1,8 +1,8 @@
 /** 字段重建与原生 ALTER 字段管理保持独立；默认值保留不等于删除 DEFAULT。 */
 export const sqliteTableRebuildZh = {
-  entry: '修改 SQLite 字段类型与默认值…', title: '修改 SQLite 字段类型与默认值',
+  entry: '修改 SQLite 字段、顺序与外键…', title: 'SQLite 字段、顺序与外键重建',
   read: '读取 SQLite 重建目录', loading: '正在处理 SQLite 表重建',
-  scope: '在独立事务中重建普通 main 表；保留原定义中的约束、生成列、索引和触发器。原管理字段入口仍使用原生 ALTER。',
+  scope: '在独立事务中重建普通 main 表；仅修改明确选择的字段、顺序和外键，保留未修改的约束、生成列、索引和触发器。原管理字段入口仍使用原生 ALTER。',
   risk: '声明类型会影响已有值的存储和约束。执行时逐行核对全部数据与精度；不能证明无损、结构变化或约束失败时整组回滚。预览不试写数据库。',
   columnOrder: 'SQLite 实际字段顺序', orderHint: '包含生成字段；移动会通过表重建改变数据库实际列顺序，列表显示顺序不能代替提交。类型和默认值草稿同时保留。',
   orderGenerated: '生成列', up: '上移', down: '下移', moveUp: (name: string) => `上移 SQLite 字段 ${name}`, moveDown: (name: string) => `下移 SQLite 字段 ${name}`,
@@ -33,7 +33,7 @@ export const sqliteTableRebuildZh = {
   designInvalid: '字段类型、默认值或实际列顺序修改无效，未执行写入。', response: 'SQLite 重建回包的原目标、设计或事务事实不一致，请核对原库；不会重放。',
   catalogueExpired: '原目录已过期，请明确放弃修改后重新读取。', previewExpired: '重建预览已过期，请重新预览；不会自动提交。',
   catalogueExpiredPreview: '原目录已过期，不能继续修改或重新预览；原预览仍可在其独立有效期内明确确认。',
-  reread: '重新读取会清除当前字段修改、实际列顺序、预览及确认。', discardRead: '放弃修改并重新读取表', keepDraft: '保留重建草稿',
+  reread: '重新读取会清除当前字段、顺序、外键及未暂存输入、预览和确认。', discardRead: '放弃修改并重新读取表', keepDraft: '保留重建草稿',
   discard: '关闭将放弃本地重建草稿，不能撤销已提交操作；未知结果必须核对原库。', discardClose: '放弃重建草稿并关闭',
   stop: '停止 SQLite 表重建任务', cancelling: '已请求停止，正在等待原请求和取消响应；不会自动重放。',
   commitBoundary: 'COMMIT 已可能发送或结果未知，正在等待原回执；停止不代表撤销提交。',

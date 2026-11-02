@@ -1,5 +1,7 @@
 # SQLite 已有外键管理：Main 与独立事务
 
+后续界面入口、草稿保护与可读失败说明见[已有外键编辑记录](sqlite-foreign-keys-ui-20261102.md)。下文保留本阶段的实际范围与原验证结果。
+
 ## 本轮实现
 
 继[声明编译](sqlite-foreign-keys-plan-20261102.md)后，外键补丁已贯通原 Main、Runtime、能力仓库和独立 writer。现有重建预览新增严格可选的 `foreignKeyEdits`，输出明确的 `changedForeignKeys`；仍为原四命令，不接受任意 SQL、文件路径或原始配置。可仅编辑外键，也可与字段类型、默认值和实际列重排共同预览。

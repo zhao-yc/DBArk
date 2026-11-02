@@ -13,7 +13,7 @@ import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import { SqliteDriverSession } from '../../src/engine/sqlite/session';
 import type { SqliteProcessExit, SqliteProcessTransport, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import type { SqliteConnectionProfile, TaskEvent, TaskRecord } from '../../src/shared/contracts';
-import { assertSqliteTableRebuildFactTransition, sqliteTableRebuildFactSchema, sqliteTableRebuildOutcomeSchema, sqliteTableRebuildLimits, type SqliteTableRebuildChange, type SqliteTableRebuildFact } from '../../src/shared/sqliteTableRebuild';
+import { assertSqliteTableRebuildFactTransition, sqliteTableRebuildFactSchema, sqliteTableRebuildOutcomeSchema, sqliteTableRebuildLimits, sqliteTableRebuildMessages, type SqliteTableRebuildChange, type SqliteTableRebuildFact } from '../../src/shared/sqliteTableRebuild';
 import { inspectSqliteTableForeignKeys } from '../../src/shared/sqliteTableRebuildPlan';
 import type { SqliteTableForeignKeyDefinition, SqliteTableForeignKeyEdit } from '../../src/shared/sqliteTableForeignKeys';
 import { buildSqliteTableRebuildPlan, type SqliteTableRebuildNames } from '../../src/shared/sqliteTableRebuildExecutionPlan';
@@ -66,6 +66,7 @@ describe('SQLite已有外键经真实独立writer重建', () => {
       expect(preview.changedForeignKeys).toBe(1); expect(schema(profile)).toEqual(originalSchema);
       const result = await main.request(owner, 'sqlite.tableRebuild.apply', { previewId: preview.previewId, confirmation: preview.confirmation, taskId: 'bridge-apply' }) as Awaited<ReturnType<typeof apply>>['result'];
       expect(result).toMatchObject({ outcome: valid ? 'committed' : 'rolled-back', fact: { commitAcknowledged: valid, rollbackAcknowledged: !valid } }); expect(typed(profile, 'SELECT * FROM target')).toEqual(before);
+      expect(result.message).toBe(valid ? sqliteTableRebuildMessages.committed : sqliteTableRebuildMessages.rolledBack + ' ' + sqliteTableRebuildMessages.foreignRows);
       if (!valid) expect(schema(profile)).toEqual(originalSchema); else expect(disk(profile, db => db.prepare('PRAGMA foreign_key_check').all())).toEqual([]);
       const summaries = JSON.stringify(saved); for (const literal of ['PRIVATE_FK_NAME', 'PRIVATE_FK_ROW', 'FOREIGN KEY', profile.sqlite.filePath!]) expect(summaries).not.toContain(literal);
       expect(requests.every(command => command.startsWith('sqlite.tableRebuild.'))).toBe(true); expect(events.some(event => event.taskId === 'bridge-apply' && event.status === (valid ? 'completed' : 'failed'))).toBe(true); noPrivateObjects(profile);
@@ -113,7 +114,7 @@ describe('SQLite已有外键经真实独立writer重建', () => {
   });
   it('父字段不是可靠唯一候选时，即使两侧现有值相同也整批回滚', async () => {
     const profile = fixture('CREATE TABLE parent(id INTEGER); INSERT INTO parent VALUES(1); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER,note TEXT); INSERT INTO target VALUES(1,1,\'原\')'), before = schema(profile);
-    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign() }] }); expect((await apply(profile, claim)).result.outcome).toBe('rolled-back'); expect(schema(profile)).toEqual(before); noPrivateObjects(profile);
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign() }] }); expect((await apply(profile, claim)).result).toMatchObject({ outcome: 'rolled-back', message: sqliteTableRebuildMessages.rolledBack + ' ' + sqliteTableRebuildMessages.foreignUnavailable }); expect(schema(profile)).toEqual(before); noPrivateObjects(profile);
   });
   it('预览后新增孤儿数据仍在写锁内全量检查，回滚保留外部新数据而非回放旧快照', async () => {
     const profile = fixture('CREATE TABLE parent(id INTEGER PRIMARY KEY); INSERT INTO parent VALUES(1); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER,note TEXT); INSERT INTO target VALUES(1,1,\'原\')');

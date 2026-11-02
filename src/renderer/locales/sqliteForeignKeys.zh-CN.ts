@@ -1,0 +1,18 @@
+export const sqliteForeignKeysZh = {
+  title: 'SQLite 外键', hint: '本地设计不修改数据库；暂存后与字段、顺序修改一起预览并集中提交。父键和当前全部数据由独立事务核验，不能确认时整批回滚。',
+  empty: '原表没有外键。', add: '新增 SQLite 外键', edit: (index: number) => `修改 SQLite 外键 ${index}`, remove: (index: number) => `标记移除 SQLite 外键 ${index}`,
+  original: '原外键 SQL', unnamed: '匿名约束', pendingRemove: '待移除', pendingReplace: '待替换', pendingAdd: '待新增',
+  pending: 'SQLite 外键修改草稿', undo: (index: number) => `撤销 SQLite 外键草稿 ${index}`, editPending: (index: number) => `编辑 SQLite 外键草稿 ${index}`,
+  editor: 'SQLite 外键编辑区', name: 'SQLite 外键约束名（留空为匿名）', parent: 'SQLite 外键父表', implicit: '使用父表原生主键（省略父字段列表）',
+  mappings: 'SQLite 外键有序字段映射', local: (index: number) => `外键本表字段 ${index}`, remote: (index: number) => `外键父表字段 ${index}`,
+  up: (index: number) => `上移外键映射 ${index}`, down: (index: number) => `下移外键映射 ${index}`, removeMapping: (index: number) => `移除外键映射 ${index}`, addMapping: '添加外键字段映射',
+  onDelete: 'SQLite 外键删除动作', onUpdate: 'SQLite 外键更新动作', deferral: 'SQLite 外键延迟检查',
+  deferrals: { 'not-deferrable': '即时（NOT DEFERRABLE）', immediate: '可延迟，初始即时', deferred: '可延迟，初始延迟' },
+  stage: '暂存 SQLite 外键修改', cancel: '取消本次外键输入', formHint: '请先暂存或取消当前外键输入，再预览整批修改。父字段逐项输入，不按逗号拆分名称。',
+  legacy: '原约束含 MATCH、旧 ON INSERT 或特殊命名标记。替换将按当前结构重新生成，请明确核对原文和新 SQL。保持不修改时原文保留。',
+  legacyAck: '我已核对特殊原文选项，确认以当前外键结构替换',
+  risk: '我已核对外键增改删、父键和级联／默认值／延迟行为，确认检查当前全部数据',
+  count: (count: number) => `本批外键修改 ${count} 项`, invalid: '外键输入、原声明或草稿已变化，请重新核对。',
+  staleForm: '原外键输入已失效，请重新打开编辑。', legacyRequired: '请先核对并确认特殊原文选项。',
+  invalidDefinition: '请填写父表并逐项选择本表字段；未使用父表主键时，每项必须填写父字段。字段不能重复，名称须完整且不超过 512 字符。',
+} as const;

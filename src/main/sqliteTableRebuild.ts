@@ -244,8 +244,9 @@ async function verifyRetained(before: RebuildFacts, after: RebuildFacts, table: 
   const normalizeForeign = changedOrder || expectedForeignKeys !== undefined;
   const expected = expectedForeignKeys === undefined ? before.foreignKeys : [...before.foreignKeys.filter(row => typeof row[0] !== 'string' || fold(row[0]) !== fold(table)), ...expectedForeignKeys];
   const foreign = (rows: SqliteValue[][]) => normalizeForeign ? normalizedForeignDefinitions(rows, table) : rows;
-  if (!equal(foreign(expected), foreign(after.foreignKeys)) || !equal(before.sequences, after.sequences)) throw Error('SQLite重建外键定义或原序列存在性/水位/rowid变化');
-  if (after.foreign.unavailable || before.foreign.unavailable && after.foreign.rows.length !== 0) throw Error('SQLite重建造成新增外键违规或无法确认完整外键安全');
+  if (!equal(foreign(expected), foreign(after.foreignKeys))) throw new ForeignKeyVerificationError(text.foreignDefinition);
+  if (!equal(before.sequences, after.sequences)) throw Error('SQLite重建原序列存在性/水位/rowid变化');
+  if (after.foreign.unavailable || before.foreign.unavailable && after.foreign.rows.length !== 0) throw new ForeignKeyVerificationError(text.foreignUnavailable);
   const violations = (facts: RebuildFacts) => facts.foreign.identities.map(value => normalizeForeign && fold(value.child) === fold(table) ? { ...value, foreignKey: foreignConstraintIdentity(facts.foreignKeys, table, value.foreignKey) } : value);
   if (!before.foreign.unavailable) await assertForeignSubset(violations(before), violations(after), table, losslessColumns, control);
   if (before.validViews.some(name => !after.validViews.includes(name))) throw Error('SQLite重建使原有效视图失效');
@@ -269,7 +270,7 @@ async function assertForeignSubset(before: ForeignViolation[], after: ForeignVio
   const grouped = new Map<string, ForeignViolation[]>(), key = (value: ForeignViolation) => JSON.stringify([value.child, value.parent, value.foreignKey, value.key.kind]); let compared = 0;
   for (const value of before) { const groupKey = key(value), values = grouped.get(groupKey); if (values) values.push(value); else grouped.set(groupKey, [value]); }
   for (const value of after) {
-    control.check(); const candidates = grouped.get(key(value)); if (!candidates?.length) throw Error('SQLite重建产生新的具体外键违规行'); let matched = -1;
+    control.check(); const candidates = grouped.get(key(value)); if (!candidates?.length) throw new ForeignKeyVerificationError(text.foreignRows); let matched = -1;
     for (let index = 0; index < candidates.length; index++) {
       const current = value.key, original = candidates[index].key;
       const same = current.kind === 'rowid' && original.kind === 'rowid' ? current.value === original.value : current.kind === 'primary-key' && original.kind === 'primary-key' && equal(current.columns, original.columns) && current.values.every((cell, ordinal) => sqliteRebuildStoredKeyEquivalent(original.values[ordinal], cell, fold(value.child) === fold(table) && losslessColumns.includes(current.columns[ordinal])));
@@ -277,7 +278,7 @@ async function assertForeignSubset(before: ForeignViolation[], after: ForeignVio
       if (++compared % 256 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); control.check(); }
       if (same) { matched = index; break; }
     }
-    if (matched < 0) throw Error('SQLite重建产生新的具体外键违规主键身份'); candidates.splice(matched, 1);
+    if (matched < 0) throw new ForeignKeyVerificationError(text.foreignRows); candidates.splice(matched, 1);
   }
 }
 /** native更名仅允许CREATE头对象名变化；用同一跨度编译器归一到另一准确名称再比完整正文。 */
@@ -297,9 +298,12 @@ export function sqliteTableRebuildNotSent(claim: SqliteTableRebuildClaim, input:
 }
 
 /** 官方12步在固定私有writer事务内完成；双验证表补足移除ordinal后的真实逐值证明。 */
+/** 只传递固定的检查类别；不将驱动错误中的业务值、SQL或路径带到结果和任务。 */
+class ForeignKeyVerificationError extends Error {}
+
 export async function applySqliteTableRebuild(driver: SqliteDriverSession, claim: SqliteTableRebuildClaim, input: SqliteTableRebuildApplyRequest, control: SqliteTableRebuildControl): Promise<SqliteTableRebuildOutcome> {
   const snapshot = claim.catalogue; let begun = false, sent = false, committed = false, rollback = false, verified = false, completedStatements = 0, warning = false;
-  let sourceRows = '0', copiedRows = '0', verifiedRows = '0', before!: RebuildFacts, candidateSql = '', candidateIndexes: Index[] = [], candidateForeignKeys: SqliteValue[][] | undefined;
+  let sourceRows = '0', copiedRows = '0', verifiedRows = '0', before!: RebuildFacts, candidateSql = '', candidateIndexes: Index[] = [], candidateForeignKeys: SqliteValue[][] | undefined, foreignDiagnostic = '';
   const fact = (phase: SqliteTableRebuildFact['phase']): SqliteTableRebuildFact => ({ operationId: input.operationId, target: { ...snapshot.target }, phase, requestedStatements: claim.compiled.sql.length, completedStatements, sourceRows, copiedRows, verifiedRows, commitMayHaveBeenSent: sent || phase === 'commit-pending', commitAcknowledged: committed, rollbackAcknowledged: rollback });
   const record = (phase: SqliteTableRebuildFact['phase']) => { const value: unknown = input.recordRebuildFact(fact(phase)); if (value && typeof (value as { then?: unknown }).then === 'function') throw Error('SQLite重建事实必须同步持久化'); };
   const check = () => { input.assertCurrent(); control.check(); };
@@ -323,7 +327,7 @@ export async function applySqliteTableRebuild(driver: SqliteDriverSession, claim
         if (claim.foreignKeyEdits) {
           const planned = compileSqliteTableRebuildDefinition({ table: snapshot.target.table, tableSql: before.catalogue.schemaSql, columns: before.columns.map(column => ({ name: column.name, hidden: column.hidden })), candidateName: names.candidate, changes: claim.changes, columnOrder: claim.columnOrder, foreignKeyEdits: claim.foreignKeyEdits });
           const normalized = (tableSql: string) => normalizeSqliteTableRebuildDefinitionName({ table: names.candidate, tableSql, columns: expected.map(column => ({ name: column.name, hidden: column.hidden })) }, names.verificationCandidate);
-          if (normalized(candidateSql) !== normalized(planned.candidateSql)) throw Error('SQLite目标外键及完整候选声明与确认计划不一致');
+          if (normalized(candidateSql) !== normalized(planned.candidateSql)) throw new ForeignKeyVerificationError(text.foreignDefinition);
           candidateForeignKeys = (await read(driver, 'SELECT ?,f.id,f.seq,f."table",f."from",f."to",f.on_update,f.on_delete,f."match" FROM pragma_foreign_key_list(?,\'main\') AS f ORDER BY f.id,f.seq LIMIT 10001', [snapshot.target.table, names.candidate], 10001, control));
           if (candidateForeignKeys.length > 10000) throw Error('SQLite目标外键完整目录超过预算');
         }
@@ -347,6 +351,7 @@ export async function applySqliteTableRebuild(driver: SqliteDriverSession, claim
     await verifyRetained(before, after, snapshot.target.table, claim.compiled.losslessColumns, { ...control, check }, claim.compiled.changedOrder, candidateForeignKeys); if (await countRows(driver, snapshot.target.table, control) !== sourceRows) throw Error('SQLite最终准确行数发生变化');
     verified = true; await assertFile(snapshot, control); record('commit-pending'); check(); control.beginCommit(); sent = true; await driver.execute('COMMIT'); committed = true; try { record('committed'); } catch { warning = true; }
   } catch (reason) {
+    if (claim.foreignKeyEdits && reason instanceof ForeignKeyVerificationError) foreignDiagnostic = reason.message;
     if (sent && reason instanceof SqliteDriverError && reason.completedStatements === 1 && reason.completedResults.length === 1 && reason.completedResults[0].index === 0 && reason.completedResults[0].rows === 0 && !reason.completedResults[0].truncated && reason.completedResults[0].transaction === false) { committed = true; warning = true; try { record('committed'); } catch { /* 真实COMMIT statementEnd不能因末回包丢失被抹去。 */ } }
   }
   if (!committed) {
@@ -356,5 +361,5 @@ export async function applySqliteTableRebuild(driver: SqliteDriverSession, claim
     if (driver.isUsable && driver.transaction === true) try { await driver.execute('ROLLBACK'); rollback = true; } catch (reason) { cleanupFailed(reason); } else if (begun) cleanupFailed(Error('SQLite重建原写事务回滚未确认'));
   }
   const outcome: SqliteTableRebuildOutcome['outcome'] = committed ? 'committed' : rollback ? 'rolled-back' : begun || sent ? 'unknown' : 'not-sent'; if (!committed) try { record(outcome); } catch { warning = true; }
-  return { operationId: input.operationId, target: { ...snapshot.target }, outcome, fact: fact(outcome), definitionVerified: committed && verified, message: committed ? text.committed : outcome === 'unknown' ? text.unknown : outcome === 'rolled-back' ? text.rolledBack : text.notSent, ...(warning ? { cleanupWarning: true } : {}) };
+  return { operationId: input.operationId, target: { ...snapshot.target }, outcome, fact: fact(outcome), definitionVerified: committed && verified, message: committed ? text.committed : outcome === 'unknown' ? text.unknown : outcome === 'rolled-back' ? text.rolledBack + (foreignDiagnostic ? ' ' + foreignDiagnostic : '') : text.notSent, ...(warning ? { cleanupWarning: true } : {}) };
 }

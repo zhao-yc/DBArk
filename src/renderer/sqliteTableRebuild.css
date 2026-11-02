@@ -13,3 +13,16 @@
 .sqlite-table-rebuild .sqlite-rebuild-order button { flex: none; }
 .sqlite-table-rebuild .sqlite-rebuild-order li > span { white-space: nowrap; }
 .sqlite-table-rebuild .sqlite-rebuild-order li button { min-height: 25px; height: 25px; padding: 2px 7px; white-space: nowrap; }
+
+/* 外键区保留单独输入与草稿列表，字段名不按逗号拆分，窄窗口允许换行。 */
+.sqlite-foreign-keys { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 8px; }
+.sqlite-foreign-keys-list { max-height: 260px; overflow: auto; }
+.sqlite-foreign-keys article { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.sqlite-foreign-key-heading, .sqlite-foreign-keys li, .sqlite-foreign-key-form-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sqlite-foreign-key-heading > span, .sqlite-foreign-keys li > span { overflow-wrap: anywhere; min-width: 0; flex: 1; }
+.sqlite-foreign-key-form { margin-top: 12px; padding: 12px; border: 1px solid var(--line); }
+.sqlite-foreign-key-mappings { max-height: 300px; overflow: auto; margin: 12px 0; }
+.sqlite-foreign-key-mapping { display: grid; grid-template-columns: 2ch minmax(110px, 1fr) auto minmax(110px, 1fr) auto auto auto; gap: 6px; align-items: end; margin-bottom: 8px; }
+.sqlite-foreign-key-mapping input, .sqlite-foreign-key-mapping select { min-width: 0; width: 100%; }
+.sqlite-foreign-key-form-actions { margin-top: 12px; }
+@media (max-width: 700px) { .sqlite-foreign-key-mapping { grid-template-columns: 2ch minmax(0, 1fr); } .sqlite-foreign-key-mapping > span:nth-child(3) { display: none; } }
