@@ -1,5 +1,7 @@
 # 开发与测试
 
+表页新增[服务器不同值按次数排序](development/table-value-frequency-20261103.md)，复用原只读任务及筛选合并，旧缺省报文保持。265 项相关、六端点 450 次只读派生查询、严格类型与 Windows 明暗组件通过，资源核清；完整物理表 UI、Mac／安装另验，暂不发布。
+
 JOIN 跨平台验收补充[准确托管 Mac 显示租约](development/foreign-key-join-display-lease-20261103.md)，保持原十二例与窗口门；旧准确 Windows／Intel 原件已回读通过，arm64 新头的切换、原生及恢复仍须实际任务证明。暂不发布。
 
 MySQL／MariaDB 高频编辑新增[本文声明跳转](development/mysql-definition-20261103.md)：复用原 AST、会话模式缓存及有界 Worker，通用渲染 provider 同时保持 SQLite 导航。187 项相关、84 项最终定向分轮通过，严格类型／构建与 Windows 三次 F12、一次 Ctrl 点击通过，原资源核清；Mac／安装另验，暂不发布。

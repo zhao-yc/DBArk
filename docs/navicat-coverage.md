@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+高频筛选新增[服务器不同值次数排序](development/table-value-frequency-20261103.md)：定位常见／少见值，冻结筛选的全部分组先排序后限量；265 项相关、六端点 450 次只读派生查询、严格类型和 Windows 明暗组件通过，资源核清。完整物理表 UI、Mac／安装及完整剖析继续，不增加完整工作包或发行计数。
+
 MySQL／MariaDB 高频编辑补齐[本文声明导航](development/mysql-definition-20261103.md)：别名、CTE／派生、WHERE／ON、作用域遮蔽及明确库限定。187 项相关、84 项最终定向分轮通过，类型／构建与 Windows 三次 F12、一次 Ctrl 点击通过、资源已核；Mac／安装及完整语义辅助继续，不增加完整工作包或发行计数，暂不发布。
 
 SQLite 高频编辑新增[本文声明导航](development/sqlite-definition-20261102.md)：准确别名、CTE／派生、遮蔽及复合分支，原模型范围、取消及零目录读取。268 项相关、47 项定向、类型／构建及 Windows 原整例通过，四次真实导航和资源已核；Mac／安装及完整语义辅助继续，不增加完整工作包或发行计数，暂不发布。
@@ -655,7 +657,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | S01 | 用户/角色/授权撤销 | 待做 | 真实权限、预览、权限不足与当前账号保护 |
 | S02 | 服务器/会话/命令监控 | 在做 | 已接正式连接选择、概要/固定状态/有限会话、串行刷新及只读独立任务；源码与RAM证据见[接线边界](development/server-monitor-integration-20261017.md)、[资源隔离与退出](development/independent-task-resource-recovery-20261017.md)，实库/原生/安装待验；取消读取与结束他人会话区分 |
 | F02 | Excel | 部分 | 0.17开发中已有XLSX有界读取、工作表/字段映射及流式导出；MySQL8.4实际1201行往返及六实例文件精度/真实警告批次回滚已验，后者174项包含XLSX/CSV/JSON，见[第二批验收](../tests/integration/acceptance-parallel-second-20261016.md)。完整工作表/类型/公式与取消矩阵、原生macOS及公开发行仍待完成 |
-| D09 | 数据概况/剖析 | 部分 | 已有全部筛选行计数／NULL／极值／数值聚合及按需非NULL不同值计数，六实例和Windows源码实证见[不同值统计](../tests/integration/acceptance-table-statistics-distinct-d63c687a-20261022.md)；分布、抽样、实际取消故障组合、安装及其它平台仍待完成 |
+| D09 | 数据概况/剖析 | 部分 | 已有全部筛选行计数／NULL／极值／数值聚合及按需非NULL不同值计数，见[不同值统计](../tests/integration/acceptance-table-statistics-distinct-d63c687a-20261022.md)；新增[常见／少见值服务器排序](development/table-value-frequency-20261103.md)，原不同值计数与筛选复用。直方图、抽样、实际取消故障组合、完整物理表UI、安装及其它平台仍待完成 |
 
 ## P2：专业数据库与工作流
 

@@ -3,6 +3,7 @@ import { copyFilterRules, FILTER_LIMITS, validateFilterGroup } from '../shared/f
 import { tableValueOptionsColumnCapability, validateTableValueOptionsOutput, type TableValueOptionsOutput } from '../shared/tableValueOptions';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import { tableValueOptionsZh as text } from './locales/tableValueOptions.zh-CN';
+import type { TableValueOptionsOrder } from '../shared/tableValueOptions';
 
 export interface TableValueOptionsConditions { filters: readonly FilterRule[]; filterMode: FilterMode; filterGroup?: FilterGroup; }
 
@@ -54,7 +55,7 @@ export function buildTableValueOptionsConditions(original: TableValueOptionsCond
   }
 }
 /** 完整绑定源元数据、搜索原文与列；回执计数只作为精确十进制字符串展示。 */
-export function checkTableValueOptionsOutput(source: TableInfo, column: string, searchPattern: string, output: TableValueOptionsOutput): void {
-  validateTableValueOptionsOutput(output, { database: source.database, table: source.name, column, searchPattern });
+export function checkTableValueOptionsOutput(source: TableInfo, column: string, searchPattern: string, output: TableValueOptionsOutput, order?: TableValueOptionsOrder): void {
+  validateTableValueOptionsOutput(output, { database: source.database, table: source.name, column, searchPattern, order });
   if (tableCopyMetadataKey(output.source) !== tableCopyMetadataKey(source)) throw Error(text.mismatch);
 }

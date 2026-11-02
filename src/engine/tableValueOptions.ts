@@ -6,18 +6,22 @@ import { consumeQueryFrames } from './queryStreamProtocol';
 import { buildTableFilterSql, identifier, inlineParameters, qualified } from './sql';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { tableStatisticsSourceIdentity } from './tableStatistics';
+import { readTableValueOptionsOrder, type TableValueOptionsOrder } from '../shared/tableValueOptions';
 
-export interface TableValueOptionsPlan { sql: string; aliases: readonly ['value', 'count', 'valueBytes', 'groupBytes']; column: ColumnInfo; capability: TableValueOptionsCapability; searchPattern?: string; }
+export interface TableValueOptionsPlan { sql: string; aliases: readonly ['value', 'count', 'valueBytes', 'groupBytes']; column: ColumnInfo; capability: TableValueOptionsCapability; searchPattern?: string; order?: TableValueOptionsOrder; }
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const unsigned = (value: unknown): value is string => typeof value === 'string' && /^(?:0|[1-9]\d{0,31})$/.test(value);
 
 /** 原列直接参与GROUP BY与ORDER BY；展示投影不反向影响原列相等、NULL或排序语义。 */
-export function planTableValueOptions(source: TableInfo, input: Pick<TableValueOptionsInput, 'column' | 'filters' | 'filterMode' | 'filterGroup' | 'searchPattern'>): TableValueOptionsPlan {
+export function planTableValueOptions(source: TableInfo, input: Pick<TableValueOptionsInput, 'column' | 'filters' | 'filterMode' | 'filterGroup' | 'searchPattern' | 'order'>): TableValueOptionsPlan {
   const matches = source.columns.filter(column => column.name === input.column);
   if (matches.length !== 1) throw Error(text.invalid);
   const column = matches[0], capability = tableValueOptionsColumnCapability(column.type), searchPattern = tableValueOptionsSearchPattern(input.searchPattern);
   if (capability === 'unsupported') throw Error(text.unsupported);
-  const filter = buildTableFilterSql(source, input.filters, input.filterMode, input.filterGroup), name = identifier(column.name), conditions = filter.where ? [`(${filter.where})`] : [], params = [...filter.params];
+  const readOrder = readTableValueOptionsOrder(input.order);
+  // 内部v/n/b/s别名不能遮蔽同名原列；仅此类字段补全原表限定，普通名称沿用旧SQL形状。
+  const rawName = identifier(column.name), name = ['v', 'n', 'b', 's'].includes(column.name.toLowerCase()) ? qualified(source.database, source.name) + '.' + rawName : rawName;
+  const filter = buildTableFilterSql(source, input.filters, input.filterMode, input.filterGroup), conditions = filter.where ? [`(${filter.where})`] : [], params = [...filter.params];
   if (searchPattern !== undefined) { conditions.push(`${name} LIKE ?`); params.push(searchPattern); }
   const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
   // 整型/DECIMAL输出显式服务器文本，避免小整型走number；浮点坚持原二进制字段，不伪造精确十进制。
@@ -25,10 +29,12 @@ export function planTableValueOptions(source: TableInfo, input: Pick<TableValueO
   const bytes = `OCTET_LENGTH(CONVERT(${value} USING utf8mb4))`;
   // ENUM/SET跨派生表可能以文本暴露，显式保留服务器原序号排序，不能在外层悄悄改成文本顺序。
   const ordinal = /^(?:ENUM|SET)\s*\(/i.test(column.type), order = ordinal ? '`g`.`s`' : '`g`.`v`';
+  const direction = readOrder === 'count-desc' ? 'DESC' : 'ASC';
+  const innerOrder = readOrder === 'value' ? name : `COUNT(*) ${direction},${name}`, outerOrder = readOrder === 'value' ? order : `\`g\`.\`n\` ${direction},${order}`;
   // 分组长度必须取组内MAX，不能让前缀相同的超长行被短代表值或PAD SPACE相等组掩盖。
-  const sql = inlineParameters(`SELECT CASE WHEN \`g\`.\`b\`<=${limits.cellBytes} THEN ${value} ELSE NULL END AS \`value\`,CAST(\`g\`.\`n\` AS CHAR) AS \`count\`,CAST(${bytes} AS CHAR) AS \`valueBytes\`,CAST(\`g\`.\`b\` AS CHAR) AS \`groupBytes\` FROM (SELECT ${name} AS \`v\`,COUNT(*) AS \`n\`,MAX(OCTET_LENGTH(CONVERT(${name} USING utf8mb4))) AS \`b\`${ordinal ? `,MIN(${name}+0) AS \`s\`` : ''} FROM ${qualified(source.database, source.name)}${where} GROUP BY ${name} ORDER BY ${name} LIMIT ${limits.groups + 1}) AS \`g\` ORDER BY ${order}`, params);
+  const sql = inlineParameters(`SELECT CASE WHEN \`g\`.\`b\`<=${limits.cellBytes} THEN ${value} ELSE NULL END AS \`value\`,CAST(\`g\`.\`n\` AS CHAR) AS \`count\`,CAST(${bytes} AS CHAR) AS \`valueBytes\`,CAST(\`g\`.\`b\` AS CHAR) AS \`groupBytes\` FROM (SELECT ${name} AS \`v\`,COUNT(*) AS \`n\`,MAX(OCTET_LENGTH(CONVERT(${name} USING utf8mb4))) AS \`b\`${ordinal ? `,MIN(${name}+0) AS \`s\`` : ''} FROM ${qualified(source.database, source.name)}${where} GROUP BY ${name} ORDER BY ${innerOrder} LIMIT ${limits.groups + 1}) AS \`g\` ORDER BY ${outerOrder}`, params);
   if (Buffer.byteLength(sql) > limits.bytes) throw Error(text.budget);
-  return { sql, aliases: ['value', 'count', 'valueBytes', 'groupBytes'], column, capability, ...(searchPattern !== undefined ? { searchPattern } : {}) };
+  return { sql, aliases: ['value', 'count', 'valueBytes', 'groupBytes'], column, capability, ...(searchPattern !== undefined ? { searchPattern } : {}), ...(input.order === undefined ? {} : { order: readOrder }) };
 }
 
 /** 解码原行必须同时满足服务器长度事实与完整原值预算；超长保护NULL不是实际NULL候选。 */
@@ -100,7 +106,7 @@ export async function readTableValueOptions(context: StructureTaskContext, input
   const truncated = rows > limits.groups;
   // metadata含仅供旧设计器使用的非枚举内部标记；按原IPC克隆行为只投影公开枚举字段。
   // 原source继续用于完整前后身份核验，不放宽回执对非枚举字段或getter的拒绝。
-  const output: TableValueOptionsOutput = { source: { ...source }, sourceDigest: hash([identity.digest, serverIdentity]), column: plan.column.name, ...(plan.searchPattern !== undefined ? { searchPattern: plan.searchPattern } : {}), values, truncated, warnings: [text.scope, text.equality, ...(plan.searchPattern !== undefined ? [text.search] : []), ...(truncated ? [text.truncated] : []), ...(plan.capability === 'floating' ? [text.approximate] : []), ...(identity.conservative ? [text.conservative] : [])] };
+  const output: TableValueOptionsOutput = { source: { ...source }, sourceDigest: hash([identity.digest, serverIdentity]), column: plan.column.name, ...(plan.searchPattern !== undefined ? { searchPattern: plan.searchPattern } : {}), ...(plan.order === undefined ? {} : { order: plan.order }), values, truncated, warnings: [text.scope, text.equality, ...(plan.order && plan.order !== 'value' ? [text.frequency] : []), ...(plan.searchPattern !== undefined ? [text.search] : []), ...(truncated ? [text.truncated] : []), ...(plan.capability === 'floating' ? [text.approximate] : []), ...(identity.conservative ? [text.conservative] : [])] };
   validateTableValueOptionsOutput(output, input);
   // 正常结束本独立事务；失败/取消保持原连接真实收尾，不重放分组或借新连接回滚。
   await structureTaskQuery(context, 'ROLLBACK AND NO CHAIN NO RELEASE'); context.checkCancelled(); return output;

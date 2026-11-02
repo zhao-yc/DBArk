@@ -55,6 +55,13 @@ beforeEach(() => {
 });
 
 describe('不同值独立只读事务、原binary流与全部前后证据', () => {
+  it.each(['count-desc', 'count-asc'] as const)('次数排序%s使用同一真实binary帧与原回包身份', async order => {
+    if (order === 'count-asc') rowValues.reverse();
+    const result = await readTableValueOptions(context, { ...input, order }, stop); expect(result.order).toBe(order); expect(result.warnings).toContain(text.frequency);
+    expect(result.values.map(value => value.count)).toEqual(order === 'count-desc' ? ['18446744073709551615', '3', '1'] : ['1', '3', '18446744073709551615']);
+    const sql = sent.find(value => value.startsWith('SELECT CASE'))!; expect(sql).toContain('ORDER BY COUNT(*) ' + (order === 'count-desc' ? 'DESC' : 'ASC'));
+    expect(sql.indexOf('ORDER BY COUNT(*)')).toBeLessThan(sql.indexOf('LIMIT 501')); expect(sent.at(-1)).toBe(controls[4]); expect(sourceReads).toBe(2); expect(identityReads).toBe(2); expect(stop).not.toHaveBeenCalled();
+  });
   it('binary execute真实帧包含NULL组及精确COUNT，前后目录和身份通过后显式ROLLBACK', async () => {
     const result = await readTableValueOptions(context, input, stop);
     expect(result.values).toEqual([{ value: null, count: '18446744073709551615' }, { value: 'Alpha', count: '3' }, { value: '中', count: '1' }]);

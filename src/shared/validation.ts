@@ -340,7 +340,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     if (input.matchValues !== undefined) try { validateReferenceValues(input.matchValues); } catch (error) { context.addIssue({ code: 'custom', path: ['matchValues'], message: error instanceof Error ? error.message : '关联值无效' }); }
   })),
   'table.incomingReferences': z.object({ ...target, taskId: id, cursor: z.string().min(1).max(2048).regex(/^[A-Za-z0-9_-]+$/).optional() }).strict(),
-  'table.valueOptions': guardedTablePage(z.object({ ...target, taskId: id, column: name, filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), searchPattern: z.string().optional() }).strict().superRefine((input, context) => {
+  'table.valueOptions': guardedTablePage(z.object({ ...target, taskId: id, column: name, filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), searchPattern: z.string().optional(), order: z.enum(['value', 'count-desc', 'count-asc']).optional() }).strict().superRefine((input, context) => {
     // 沿用表页的全集筛选预算；LIKE模式保留原空白及通配符，不补写SQL。
     try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); tableValueOptionsSearchPattern(input.searchPattern); }
     catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '服务器不同值筛选无效' }); }

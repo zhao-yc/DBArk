@@ -52,6 +52,8 @@ describe('表服务器不同值的严格IPC及Main实际发布路径', () => {
     expect(publicCommands['table.valueOptions']).toBe(true);
     const valid = { ...input, searchPattern: '  %精确_模式  ', filters: [{ column: '金额', operator: 'IN', values: ['9007199254740993.000000000001', ''], enabled: false }], filterMode: 'all', filterGroup: { mode: 'all', children: [0] } };
     expect(validateCommand('table.valueOptions', valid)).toEqual(valid);
+    for (const order of ['value', 'count-desc', 'count-asc']) expect(validateCommand('table.valueOptions', { ...input, order })).toMatchObject({ order });
+    for (const order of ['COUNT(*) DESC', '', 1, false, [], {}]) expect(() => validateCommand('table.valueOptions', { ...input, order })).toThrow();
     for (const patch of [{ sql: 'SELECT 1' }, { profile: {} }, { sessionId: '用户事务' }, { page: 1 }, { sort: [] }, { limit: 500 }, { columns: ['金额'] }, { column: '' }, { searchPattern: 'a'.repeat(257) }, { searchPattern: '\ud800' }, { searchPattern: 1 }, { filterMode: 'unknown' }, { filters: [{ column: '金额', operator: 'RAW', value: '1' }] }, { filters: [{ column: '金额', operator: 'IN', values: [] }] }, { filters: [{ column: '金额', operator: 'IS NULL', value: '' }] }, { filterMode: 'any', filterGroup: { mode: 'all', children: [] } }]) expect(() => validateCommand('table.valueOptions', { ...input, ...patch })).toThrow();
     expect(validateCommand('table.valueOptions', { ...input, searchPattern: '😀'.repeat(256) })).toMatchObject({ searchPattern: '😀'.repeat(256) });
   });

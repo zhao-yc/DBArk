@@ -1,5 +1,7 @@
 # 使用指南
 
+表页的“从服务器不同值筛选”支持按出现次数最多／最少优先读取，方便定位常见值和少见异常值。选择排序后须明确重新读取，再勾选并应用；排序针对服务器全部匹配分组，最多返回前 500 组。见[使用与验证边界](development/table-value-frequency-20261103.md)。
+
 MySQL／MariaDB SQL 正文也支持“跳转声明”：别名限定段或 CTE 引用上按 F12，或按住 Ctrl 点击，定位本文的别名、WITH 头或派生表。详见[使用及边界](development/mysql-definition-20261103.md)；SQLite 入口见[原说明](development/sqlite-definition-20261102.md)。正文和撤销状态保持，不执行 SQL、不读取目录，Mac／安装另验，暂不发布。
 
 SQLite 查询中可将鼠标停在字段上查看声明类型、main／temp 来源和生成／隐藏标记；Windows 也可将光标置于字段内，先按 Ctrl+K，再按 Ctrl+I。它不会执行查询；CTE／派生输出不猜底层类型，歧义或目录不足时不显示不确定信息。详见[字段悬停及验证范围](development/sqlite-field-hover-20261102.md)，Mac／安装另验，暂不发布。

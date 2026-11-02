@@ -6,6 +6,7 @@ import { buildTableValueOptionsConditions, checkTableValueOptionsOutput, tableVa
 import { errorMessage, uid } from '../lib';
 import { tableValueOptionsZh as text } from '../locales/tableValueOptions.zh-CN';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
+import { readTableValueOptionsOrder, type TableValueOptionsOrder } from '../../shared/tableValueOptions';
 
 export interface TableValueOptionsServices { read(input: TableValueOptionsInput): Promise<TableValueOptionsOutput>; cancel(taskId: string): Promise<unknown>; }
 export interface TableValueOptionsDialogProps {
@@ -13,14 +14,14 @@ export interface TableValueOptionsDialogProps {
   conditions: TableValueOptionsConditions; isCurrent(): boolean; services: TableValueOptionsServices;
   onApply(conditions: TableValueOptionsConditions): boolean; onClose(): void; onCleanupError(message: string): void; onActivity?(delta: 1 | -1): void;
 }
-type Draft = { column: string; query: string; exclude: boolean; selected: readonly number[]; page: number; receipt?: TableValueOptionsOutput; needsRead?: boolean; problem?: string; prompt?: 'read' | 'close' };
+type Draft = { column: string; query: string; order: TableValueOptionsOrder; exclude: boolean; selected: readonly number[]; page: number; receipt?: TableValueOptionsOutput; needsRead?: boolean; problem?: string; prompt?: 'read' | 'close' };
 type Operation = { id: string; cancelled: boolean; settled: Promise<void>; cancel?: Promise<void> };
 
 /** 显式服务器读取与本地勾选分离；原Promise终结前始终占有任务门，取消ACK不能提前解锁。 */
 export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
   const { target, source, column, conditions, services } = props;
   const origin = useRef({ target: { ...target }, source, conditions, services, sourceKey: JSON.stringify(source), conditionsKey: JSON.stringify(conditions) }).current;
-  const [draft, setDraft] = useState<Draft>({ column, query: '', exclude: false, selected: [], page: 0 }), live = useRef(draft); live.current = draft;
+  const [draft, setDraft] = useState<Draft>({ column, query: '', order: 'value', exclude: false, selected: [], page: 0 }), live = useRef(draft); live.current = draft;
   const [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [composing, setComposing] = useState(false);
   const mounted = useRef(true), invalid = useRef(false), checking = useRef(false), applying = useRef(false), closed = useRef(false), composition = useRef(false), operation = useRef<Operation | undefined>(undefined), latest = useRef(props); latest.current = props;
   const ticket = {}, committed = useRef<object | undefined>(undefined);
@@ -59,14 +60,14 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
       const info = source.columns.find(value => value.name === draft.column);
       if (!info || tableValueOptionsColumnCapability(info.type) === 'unsupported') throw Error(text.unsupported);
     } catch (reason) { problem(reason); return; }
-    const id = uid(), readColumn = draft.column, query = draft.query;
+    const id = uid(), readColumn = draft.column, query = draft.query, order = draft.order;
     const next = { ...draft, receipt: undefined, needsRead: false, selected: [], page: 0, problem: undefined, prompt: undefined }; replace(next);
     let active: Operation;
     const settled = Promise.resolve().then(async () => {
       if (!current() || active.cancelled || operation.current !== active) return;
-      const output = await origin.services.read({ ...origin.target, column: readColumn, taskId: id, ...structuredClone(origin.conditions), filters: structuredClone(origin.conditions.filters) as TableValueOptionsInput['filters'], ...(searchPattern === undefined ? {} : { searchPattern }) });
+      const output = await origin.services.read({ ...origin.target, column: readColumn, taskId: id, ...structuredClone(origin.conditions), filters: structuredClone(origin.conditions.filters) as TableValueOptionsInput['filters'], ...(searchPattern === undefined ? {} : { searchPattern }), ...(order === 'value' ? {} : { order }) });
       if (!current() || active.cancelled || operation.current !== active || live.current !== next) return;
-      checkTableValueOptionsOutput(origin.source, readColumn, query, output);
+      checkTableValueOptionsOutput(origin.source, readColumn, query, output, order);
       replace({ ...next, receipt: output });
     }).catch(reason => { if (mounted.current && !closed.current && operation.current === active && !active.cancelled && !invalid.current) replace({ ...live.current, problem: errorMessage(reason) }); }).finally(async () => {
       // 读取先终结时也保留取消门；原取消ACK结算前不能重读、关闭或释放父标签占用。
@@ -76,9 +77,9 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
     });
     active = { id, cancelled: false, settled }; operation.current = active; setBusy(true); latest.current.onActivity?.(1);
   }
-  /** 搜索或选列保留原候选与勾选供核对，标记待重读；不会误把旧回执作为新搜索结果。 */
-  function change(field: 'query' | 'column', value: string): void { if (!editable()) return; replace({ ...draft, [field]: value, needsRead: true, page: 0, prompt: undefined, problem: undefined }); }
-  const receiptMatches = !draft.needsRead && !!draft.receipt && draft.receipt.column === draft.column && (draft.receipt.searchPattern ?? '') === draft.query;
+  /** 搜索、选列或排序保留原候选与勾选供核对，标记待重读；旧回执不能冒充新条件结果。 */
+  function change(field: 'query' | 'column' | 'order', value: string): void { if (!editable() || field === 'order' && composition.current) return; if (field === 'order') { try { readTableValueOptionsOrder(value); } catch { return; } } replace({ ...draft, [field]: value, needsRead: true, page: 0, prompt: undefined, problem: undefined }); }
+  const receiptMatches = !draft.needsRead && !!draft.receipt && draft.receipt.column === draft.column && (draft.receipt.searchPattern ?? '') === draft.query && readTableValueOptionsOrder(draft.receipt.order) === draft.order;
   function toggle(id: number, checked: boolean): void {
     if (!editable() || composition.current || !receiptMatches || !draft.receipt?.values[id]) return;
     const next = new Set(draft.selected); if (checked) next.add(id); else next.delete(id);
@@ -95,7 +96,7 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
   function apply(): void {
     if (!editable() || composition.current || !receiptMatches || !draft.receipt || !draft.selected.length || draft.prompt) return;
     try {
-      checkTableValueOptionsOutput(origin.source, draft.column, draft.query, draft.receipt);
+      checkTableValueOptionsOutput(origin.source, draft.column, draft.query, draft.receipt, draft.order);
       const next = buildTableValueOptionsConditions(origin.conditions, draft.column, draft.selected.map(index => draft.receipt!.values[index].value), draft.exclude, origin.source.columns.find(info => info.name === draft.column)?.type);
       if (!editable()) return;
       applying.current = true; let accepted = false;
@@ -135,6 +136,7 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
     <p>{source.database}.{source.name}</p><p>{text.scope}</p><UsageHelp><p>{text.semantics}</p><p>{text.bounded}</p><p>{text.searchHint}</p></UsageHelp>{tableValueOptionsColumnCapability(source.columns.find(info => info.name === draft.column)?.type ?? '') === 'floating' && <p className="warning-text">{text.approximate}</p>}
     <label>{text.column}<select aria-label={text.column} value={draft.column} disabled={disabled || composing} onChange={event => change('column', event.target.value)}>{source.columns.map(info => <option key={info.name} value={info.name} disabled={tableValueOptionsColumnCapability(info.type) === 'unsupported'}>{info.name} · {info.type}</option>)}</select></label>
     <label>{text.search}<input aria-label={text.search} value={draft.query} disabled={disabled} onChange={event => change('query', event.target.value)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/></label>
+    <label>{text.order}<select aria-label={text.order} value={draft.order} disabled={disabled || composing} onChange={event => change('order', event.target.value)}><option value="value">{text.orderValue}</option><option value="count-desc">{text.orderMost}</option><option value="count-asc">{text.orderLeast}</option></select></label><p>{text.orderHint}</p>
     <label>{text.mode}<select aria-label={text.mode} value={draft.exclude ? 'exclude' : 'include'} disabled={disabled || composing} onChange={event => { if (!editable() || composition.current) return; const value = event.target.value; if (value === 'include' || value === 'exclude') replace({ ...draft, exclude: value === 'exclude', prompt: undefined }); }}><option value="include">{text.include}</option><option value="exclude">{text.exclude}</option></select></label>
     {busy && <Spinner text={text.loading}/>}<ErrorBox message={!valid ? text.stale : draft.problem}/>{closing && <p>{text.closing}</p>}
     {draft.receipt && <section aria-label={text.title}><p aria-live="polite">{text.selected(options.length, draft.selected.length)}</p>{!receiptMatches && <p className="warning-text">{text.searchPending}</p>}{draft.receipt.truncated && <p className="warning-text">{text.truncated}</p>}{draft.receipt.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}

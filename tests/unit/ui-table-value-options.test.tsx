@@ -47,7 +47,7 @@ const source = (): TableInfo => ({ database: 'db', name: 't', objectKind: 'table
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function mount(values: CellValue[] = [null, '', 'NULL', 'one'], override?: Partial<TableValueOptionsServices>) {
   const info = source(), conditions: TableValueOptionsConditions = { filters: [{ column: 'a', operator: '!=', value: 'old', enabled: false }], filterMode: 'any' }; let allowed = true;
-  const result = (input: { column: string; searchPattern?: string }): TableValueOptionsOutput => ({ source: structuredClone(info), sourceDigest: 'a'.repeat(64), column: input.column, ...(input.searchPattern ? { searchPattern: input.searchPattern } : {}), values: values.map(value => ({ value, count: '9007199254740993' })), truncated: false, warnings: ['服务器字段排序规则分组'] });
+  const result = (input: { column: string; searchPattern?: string; order?: TableValueOptionsOutput['order'] }): TableValueOptionsOutput => ({ source: structuredClone(info), sourceDigest: 'a'.repeat(64), column: input.column, ...(input.searchPattern ? { searchPattern: input.searchPattern } : {}), ...(input.order === undefined ? {} : { order: input.order }), values: values.map(value => ({ value, count: '9007199254740993' })), truncated: false, warnings: ['服务器字段排序规则分组'] });
   const read = vi.fn(async (input: Parameters<TableValueOptionsServices['read']>[0]) => result(input)), cancel = vi.fn(async () => undefined), onApply = vi.fn((_conditions: TableValueOptionsConditions) => true), onClose = vi.fn(), onCleanupError = vi.fn(), onActivity = vi.fn(), isCurrent = vi.fn(() => allowed);
   let props: TableValueOptionsDialogProps = { target: { connectionId: 'c', database: 'db', table: 't' }, source: info, column: 'a', conditions, services: { read, cancel, ...override }, isCurrent, onApply, onClose, onCleanupError, onActivity };
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
@@ -65,6 +65,21 @@ async function check(label: string, checked = true): Promise<void> { const node 
 async function mode(value: string, label: string = text.mode): Promise<void> { const node = select(label); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
 
 describe('表页服务器不同值真实React RAM交互（非原生验收）', () => {
+  it('次数排序只改草稿，显式读取才冻结到原任务；计数保留大整数字符串', async () => {
+    const f = await mount(); expect(select(text.order).value).toBe('value'); await mode('count-desc', text.order); expect(f.read).not.toHaveBeenCalled();
+    await click(text.read); expect(f.read.mock.calls[0][0].order).toBe('count-desc'); expect(document.body.textContent).toContain('9007199254740993 行'); expect(boxes()).toHaveLength(4);
+  });
+  it('排序改变及ABA撤销旧候选应用资格；明确确认后才清选择并重读', async () => {
+    const f = await mount(['one']); await click(text.read); expect(f.read.mock.calls[0][0]).not.toHaveProperty('order'); await check(text.value('one'));
+    await mode('count-desc', text.order); expect(button(text.apply).disabled).toBe(true); expect(input(text.value('one')).checked).toBe(true); await mode('value', text.order); expect(button(text.apply).disabled).toBe(true);
+    await mode('count-asc', text.order); await click(text.refresh); expect(f.read).toHaveBeenCalledOnce(); await click(text.confirmRead); expect(f.read).toHaveBeenCalledTimes(2); expect(f.read.mock.calls[1][0].order).toBe('count-asc'); expect(input(text.value('one')).checked).toBe(false);
+  });
+  it('旧排序DOM不能改写继任选择，次数请求拒绝缺少排序身份的旧成功回包', async () => {
+    const f = await mount(), old = callback(select(text.order), 'onChange'); await mode('count-desc', text.order);
+    await act(async () => old({ target: { value: 'value' } })); expect(select(text.order).value).toBe('count-desc');
+    f.read.mockImplementationOnce(async input => { const value = f.result(input); delete value.order; return value; });
+    await click(text.read); expect(f.read.mock.calls[0][0].order).toBe('count-desc'); expect(boxes()).toHaveLength(0); expect(button(text.apply).disabled).toBe(true); expect(f.onApply).not.toHaveBeenCalled();
+  });
   it('初始不查询，输入模式与选列不自动查询，未证明类型禁选', async () => { const f = await mount(); expect(f.read).not.toHaveBeenCalled(); await fill('a%'); await mode('b', text.column); expect(f.read).not.toHaveBeenCalled(); expect(select(text.column).querySelectorAll('option').find(option => option.value === 'bits')!.disabled).toBe(true); expect(button(text.apply).disabled).toBe(true); });
   it('显式读取冻结原筛选，NULL空串和文本NULL独立，计数保留完整大整数', async () => { const f = await mount(); await click(text.read); expect(f.read).toHaveBeenCalledOnce(); expect(f.read.mock.calls[0][0]).toMatchObject({ connectionId: 'c', database: 'db', table: 't', column: 'a', filters: f.conditions.filters, filterMode: 'any' }); expect(boxes().map(node => node.getAttribute('aria-label'))).toEqual([text.value(null), text.value(''), text.value('NULL'), text.value('one')]); expect(document.body.textContent).toContain('9007199254740993 行'); expect(f.onApply).not.toHaveBeenCalled(); expect(f.onActivity.mock.calls).toEqual([[1], [-1]]); });
   it('混合NULL排除与原OR完整组合，父接受后才关闭', async () => { const f = await mount(); await click(text.read); await check(text.value(null)); await check(text.value('one')); await mode('exclude'); await click(text.apply); expect(f.onApply).toHaveBeenCalledOnce(); const proposal = f.onApply.mock.calls[0][0] as unknown as TableValueOptionsConditions; expect(proposal.filters).toEqual([...f.conditions.filters, { column: 'a', operator: 'NOT IN', values: ['one'] }, { column: 'a', operator: 'IS NOT NULL' }]); expect(proposal.filterGroup).toEqual({ mode: 'all', children: [{ mode: 'any', children: [0] }, 1, 2] }); expect(f.onClose).toHaveBeenCalledOnce(); });

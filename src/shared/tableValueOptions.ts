@@ -1,9 +1,10 @@
 import type { CellValue, FilterGroup, FilterMode, FilterRule, TableInfo } from './contracts';
 
 export const tableValueOptionsLimits = { groups: 500, pageSize: 50, searchCharacters: 256, cellBytes: 256 * 1024, bytes: 8 * 1024 * 1024, metadataRows: 4096, sortBufferBytes: 8 * 1024 * 1024 } as const;
-export interface TableValueOptionsInput { connectionId: string; database: string; table: string; column: string; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; searchPattern?: string; taskId: string; }
+export type TableValueOptionsOrder = 'value' | 'count-desc' | 'count-asc';
+export interface TableValueOptionsInput { connectionId: string; database: string; table: string; column: string; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; searchPattern?: string; order?: TableValueOptionsOrder; taskId: string; }
 export interface TableValueOption { value: CellValue; count: string; }
-export interface TableValueOptionsOutput { source: TableInfo; sourceDigest: string; column: string; searchPattern?: string; values: TableValueOption[]; truncated: boolean; warnings: string[]; }
+export interface TableValueOptionsOutput { source: TableInfo; sourceDigest: string; column: string; searchPattern?: string; order?: TableValueOptionsOrder; values: TableValueOption[]; truncated: boolean; warnings: string[]; }
 export type TableValueOptionsCapability = 'text' | 'integer' | 'decimal' | 'floating' | 'temporal' | 'unsupported';
 export const tableValueOptionsMessages = {
   invalid: '服务器不同值、字段元数据或原读取来源无效，请重新读取。',
@@ -17,7 +18,15 @@ export const tableValueOptionsMessages = {
   search: '服务器LIKE使用原列语义，%和_是通配符；非空模式只显示匹配组，NULL组需清空模式后重新读取。',
   approximate: 'FLOAT、DOUBLE、REAL保留二进制协议原有限数值，属于浮点近似；不是精确十进制。',
   conservative: '复杂表定义按完整原文绑定，任何定义文本变化都会使本次候选失效。',
+  frequency: '次数排序在服务器全部匹配分组中完成后取前500组；同次数按原列顺序，不是重排当前页。',
 } as const;
+
+/** 固定排序意图不能携带SQL；缺省保留旧值序，次数排序始终使用服务器数值计数。 */
+export function readTableValueOptionsOrder(value: unknown): TableValueOptionsOrder {
+  if (value === undefined) return 'value';
+  if (value === 'value' || value === 'count-desc' || value === 'count-asc') return value;
+  throw Error(tableValueOptionsMessages.invalid);
+}
 
 /** 以原服务器字段类别决定能力；不让回包或未知类型自行升级为文本筛选。 */
 export function tableValueOptionsColumnCapability(type: string): TableValueOptionsCapability {
@@ -67,10 +76,12 @@ export function validateTableValueOptionValue(value: unknown, capability: TableV
 }
 
 /** 服务回执严格绑定原目标及LIKE模式；元数据、计数和字节必须全部可信才能参与筛选。 */
-export function validateTableValueOptionsOutput(value: unknown, expected: { database: string; table: string; column: string; searchPattern?: string }): TableValueOptionsOutput {
+export function validateTableValueOptionsOutput(value: unknown, expected: { database: string; table: string; column: string; searchPattern?: string; order?: TableValueOptionsOrder }): TableValueOptionsOutput {
   plainData(value);
   if (byteLength(JSON.stringify(value)) > tableValueOptionsLimits.bytes) throw Error(tableValueOptionsMessages.budget);
   const output = value as TableValueOptionsOutput, source = output?.source;
+  const order = readTableValueOptionsOrder(expected.order);
+  if (readTableValueOptionsOrder(output?.order) !== order) throw Error(tableValueOptionsMessages.invalid);
   if (!output || !source || source.database !== expected.database || source.name !== expected.table || output.column !== expected.column || output.searchPattern !== tableValueOptionsSearchPattern(expected.searchPattern) || output.searchPattern !== tableValueOptionsSearchPattern(output.searchPattern) || !/^[a-f0-9]{64}$/.test(output.sourceDigest) || typeof output.truncated !== 'boolean' || !Array.isArray(output.values) || output.values.length > tableValueOptionsLimits.groups || output.truncated && output.values.length !== tableValueOptionsLimits.groups || !Array.isArray(output.warnings) || !output.warnings.length || output.warnings.some(item => typeof item !== 'string' || item.length > 4096)) throw Error(tableValueOptionsMessages.invalid);
   if (!['table', 'view'].includes(String(source.objectKind)) || typeof source.engine !== 'string' || typeof source.ddl !== 'string' || !source.ddl.length || !Array.isArray(source.columns) || !source.columns.length || source.columns.length > tableValueOptionsLimits.metadataRows || !Array.isArray(source.indexes) || !Array.isArray(source.foreignKeys) || !Array.isArray(source.primaryKey) || !Array.isArray(source.editableKey)) throw Error(tableValueOptionsMessages.invalid);
   const names = new Set<string>();
@@ -93,9 +104,12 @@ export function validateTableValueOptionsOutput(value: unknown, expected: { data
   }
   const columns = source.columns.filter(column => column.name === expected.column);
   if (columns.length !== 1) throw Error(tableValueOptionsMessages.invalid);
-  const capability = tableValueOptionsColumnCapability(columns[0].type), values = new Set<string>();
+  const capability = tableValueOptionsColumnCapability(columns[0].type), values = new Set<string>(); let previousCount: bigint | undefined;
   for (const option of output.values) {
     if (!option || Reflect.ownKeys(option).length !== 2 || !Object.hasOwn(option, 'value') || typeof option.count !== 'string' || !/^[1-9]\d{0,31}$/.test(option.count)) throw Error(tableValueOptionsMessages.invalid);
+    const currentCount = BigInt(option.count);
+    if (previousCount !== undefined && (order === 'count-desc' && currentCount > previousCount || order === 'count-asc' && currentCount < previousCount)) throw Error(tableValueOptionsMessages.invalid);
+    previousCount = currentCount;
     validateTableValueOptionValue(option.value, capability);
     if (output.searchPattern !== undefined && option.value === null || option.value === null && !columns[0].nullable) throw Error(tableValueOptionsMessages.invalid);
     const key = JSON.stringify([typeof option.value, option.value]); if (values.has(key)) throw Error(tableValueOptionsMessages.invalid); values.add(key);
