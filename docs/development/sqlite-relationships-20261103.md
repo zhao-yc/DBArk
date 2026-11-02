@@ -28,7 +28,13 @@ WIN11-TEST 本轮不可达且未派发，按已有授权在本机 Windows x64 �
 - 真实worker覆盖 UTF-8／UTF-16le／UTF-16be、复合隐式主键、STRICT、WITHOUT ROWID、生成列、未确认引用、WAL并发结构变化、三个取消边界、原用户事务保持及并发上限。
 - 最终正式 Electron 专项：1通过、0跳过／失败／重试，原120秒、单worker；真实Main、真实物理文件、原菜单、三次独立读取、选择草稿、本地显示及正常退出均通过。确认合成行未变、所属进程退出码0、临时配置目录已清理。
 - 明暗截图已检查。主题由测试页面的显示属性设置；系统文件选择器仅替换准确返回路径，不能算系统对话框输入验收。未操作系统剪贴板、已装配置或服务器数据库。
-- 新专项默认1跳过，`--list`只登记1例。离线执行：`node scripts/sqlite-workspace-ci.mjs relationships`。三平台 GitHub Actions 已配置；本轮 Mac 和安装包尚未实测，不宣称全量通过，不创建 Release。
+- 新专项默认1跳过，`--list`只登记1例。离线执行：`node scripts/sqlite-workspace-ci.mjs relationships`。准确`3215df79`的三平台源码专项已按下方原件核验；安装包尚未实测，不宣称全量通过，不创建Release。
+
+### 3215df79 三平台原件
+
+[原轮41527759797](https://github.com/zhao-yc/DBArk/actions/runs/41527759797)的Windows x64、macOS Intel／ARM各1例通过；每例均保持120秒、单worker、零重试，无跳过或flaky。实际平台由原附件读取，不以runner名称猜测：Windows Node24.22.2／win32-x64（4780ms），Intel Node24.19.0／darwin-x64（17848ms），ARM Node24.22.1／darwin-arm64（18781ms）。
+
+三个原始归档与API SHA256一致，逐项核ZIP路径、长度、类型和CRC；准确源码、平台、原报告、三个真实Main／SQLite worker请求、正常退出码0及临时目录清理回执均核对。六份明暗截图已检查。仅此准确提交的源码专项，不追认后续源码、系统文件选择器输入、设置入口主题切换、服务器实库或安装版。
 
 失败原件分别保留：首轮受限运行未产生用例；新事务测试误用字段名后改为完整既有合同；首轮原生测试误计 `app.menuState` 后仅排除此声明式状态同步，保留所有其它请求断言；新CI门按既有 `*_NATIVE_TEST` 规范统一。没有提高超时、重试或资源门槛。失败临时目录保留，未重复使用。
 

@@ -1,14 +1,14 @@
 import type { CellValue, FilterGroup, FilterMode, FilterRule, TableInfo } from './contracts';
 
 export const tableStatisticsLimits = { columns: 12, metadataRows: 4096, cellBytes: 256 * 1024, bytes: 8 * 1024 * 1024 } as const;
-export interface TableStatisticsInput { connectionId: string; database: string; table: string; taskId: string; columns: string[]; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; distinct?: boolean; }
+export interface TableStatisticsInput { connectionId: string; database: string; table: string; taskId: string; columns: string[]; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; distinct?: boolean; histogram?: import('./tableHistogram').TableHistogramRequest; }
 interface StatisticsCounts { name: string; type: string; nonNull: string; nulls: string; }
 export type TableColumnStatistics = StatisticsCounts & (
   { kind: 'numeric'; min: CellValue; max: CellValue; sum: string | null; avg: string | null; approximate: boolean; distinct?: string }
   | { kind: 'ordered'; min: CellValue; max: CellValue; distinct?: string }
   | { kind: 'count-only'; reason: string }
 );
-export interface TableStatisticsOutput { source: TableInfo; sourceDigest: string; rowCount: string; columns: TableColumnStatistics[]; warnings: string[]; }
+export interface TableStatisticsOutput { source: TableInfo; sourceDigest: string; rowCount: string; columns: TableColumnStatistics[]; warnings: string[]; histogram?: import('./tableHistogram').TableHistogram; }
 export const tableStatisticsMessages = {
   invalid: '表统计字段、原服务器结果或元数据无效，请重新读取。', stale: '统计期间表或视图定义已变化，未发布混合结构的统计结果。',
   budget: '统计结果超过有界预算；MIN/MAX不会被截断或悄悄替换成NULL，请减少所选列或调整筛选。',

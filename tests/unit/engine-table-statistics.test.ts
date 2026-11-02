@@ -30,6 +30,7 @@ let warnings: unknown, eofWarnings: number | undefined, fieldPatch: ((names: str
 let mode: string, kind: 'BASE TABLE' | 'VIEW', source: string, sourceReads: number, lateSource: string | undefined, lateAt: number, metadataOverflow: boolean;
 let denied: RegExp | undefined, holdAggregate: boolean, originalEnd: ((error?: Error) => void) | undefined, killReceived: boolean, closeFails: boolean, unknownClose: boolean, extraResult: boolean;
 let requestedDistinct: boolean;
+let histogramBounds: unknown[] = [], histogramCounts: unknown[] = [], histogramHold = false, histogramWarning = false;
 const aggregates: Record<string, { suffixes: string[]; values: () => unknown[] }> = {
   big_value: { suffixes: ['nonNull', 'nulls', 'min', 'minBytes', 'max', 'maxBytes', 'sum', 'avg'], values: () => ['122', '1', '0', '1', '18446744073709551615', '20', '36893488147419103229', '302405640552615600.2377'] },
   amount: { suffixes: ['nonNull', 'nulls', 'min', 'minBytes', 'max', 'maxBytes', 'sum', 'avg'], values: () => ['122', '1', '-9007199254740993.123456789011', '30', '9007199254740993.123456789012', '29', '0.000000000001', '0.0000000000000082'] },
@@ -60,7 +61,12 @@ function connect(signal?: AbortSignal): ManagedConnection {
   const query = (...args: unknown[]) => {
     const sql = typeof args[0] === 'string' ? args[0] : (args[0] as { sql: string }).sql, callback = typeof args.at(-1) === 'function' ? args.at(-1) as (error: Error | null, rows?: unknown, fields?: unknown[]) => void : undefined, command = new EventEmitter(); sent.push(sql);
     if (!callback) {
-      const aliases = fieldPatch ? fieldPatch(rawNames()) : rawNames(), values = valuePatch ? valuePatch(rawValues()) : rawValues();
+      const histogramPhase = /AS h_min/.test(sql) ? 'bounds' : /AS `h_bin0`/.test(sql) ? 'counts' : undefined;
+      const rawAliases = histogramPhase === 'bounds' ? ['h_nonNull', 'h_nulls', 'h_min', 'h_max'] : histogramPhase === 'counts' ? ['h_nonNull', 'h_nulls', 'h_outside', 'h_bin0', 'h_bin1', 'h_bin2', 'h_bin3', 'h_bin4'] : rawNames();
+      const original = histogramPhase === 'bounds' ? [...histogramBounds] : histogramPhase === 'counts' ? [...histogramCounts] : rawValues();
+      if (histogramPhase === 'counts' && histogramHold) holdAggregate = true;
+      if (histogramPhase && histogramWarning) eofWarnings = 1;
+      const aliases = fieldPatch ? fieldPatch(rawAliases) : rawAliases, values = valuePatch ? valuePatch(original) : original;
       const fields = aliases.map((name, index) => ({ name, columnType: typeof values[index] === 'number' ? Types.DOUBLE : Buffer.isBuffer(values[index]) ? Types.BLOB : Types.VAR_STRING }));
       const packets: Packet[] = [{ target: 'command', event: 'fields', args: [fields, 0] }, ...(rows ?? [values]).map(value => ({ target: 'command' as const, event: 'result', args: [value, 0] })), { target: 'connection', event: 'dbark:session-state', args: [{ sql, warningStatus: eofWarnings }] }, ...(extraResult ? [{ target: 'command' as const, event: 'fields', args: [fields, 1] }, { target: 'command' as const, event: 'result', args: [values, 1] }, { target: 'connection' as const, event: 'dbark:session-state', args: [{ sql, warningStatus: 0 }] }] : []), { target: 'command', event: 'end', args: [] }]; active = { command, packets, ended: false };
       originalEnd = (error?: Error) => { if (active?.command !== command || active.ended) return; active.ended = true; active.packets.splice(0); paused = false; queueMicrotask(() => { if (error) command.emit('error', error); command.emit('end'); }); };
@@ -88,8 +94,38 @@ function connect(signal?: AbortSignal): ManagedConnection {
 }
 const statistics = (changes: Record<string, unknown> = {}): Promise<TableStatisticsOutput> => { const input = { connectionId: profile.id, database: 'db', table: 'subject', taskId: 'stats-' + sequence, columns: [...names], filters: [], ...changes }; requested = input.columns; requestedDistinct = changes.distinct === true; return engine.handle('table.statistics', input); };
 const aggregation = () => sent.filter(sql => /AS `dbark_statistics`$/.test(sql));
-beforeEach(async () => { sequence = sourceReads = 0; sent = []; events = []; connections = []; requested = []; requestedDistinct = false; rows = undefined; warnings = []; eofWarnings = 0; fieldPatch = valuePatch = undefined; rowCount = '123'; mode = ''; kind = 'BASE TABLE'; source = originalShow; lateAt = Infinity; lateSource = denied = originalEnd = undefined; metadataOverflow = holdAggregate = killReceived = closeFails = unknownClose = extraResult = false; driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => connect(signal)); engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile }); });
+beforeEach(async () => { sequence = sourceReads = 0; histogramBounds = ['122', '1', '0', '100']; histogramCounts = ['122', '1', '0', '10', '20', '30', '40', '22']; histogramHold = histogramWarning = false; sent = []; events = []; connections = []; requested = []; requestedDistinct = false; rows = undefined; warnings = []; eofWarnings = 0; fieldPatch = valuePatch = undefined; rowCount = '123'; mode = ''; kind = 'BASE TABLE'; source = originalShow; lateAt = Infinity; lateSource = denied = originalEnd = undefined; metadataOverflow = holdAggregate = killReceived = closeFails = unknownClose = extraResult = false; driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => connect(signal)); engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile }); });
 afterEach(async () => { holdAggregate = false; originalEnd?.(Error('合成收尾')); closeFails = false; if (unknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll(); });
+
+describe('数值分布共用原Engine独立只读资源（仅RAM）', () => {
+  it('原计数、极值和全部区间在同一只读事务，每条后即时诊断，最后核源并回滚关闭', async () => {
+    const result = await statistics({ columns: [], histogram: { column: 'id', bins: 5 } });
+    expect(result.histogram).toMatchObject({ column: 'id', type: 'int', approximate: false, nonNull: '122', nulls: '1', min: '0', max: '100', requestedBins: 5 });
+    expect(result.histogram!.ranges.map(range => range.count)).toEqual(['10', '20', '30', '40', '22']);
+    const bound = sent.findIndex(sql => /AS h_min/.test(sql)), bins = sent.findIndex(sql => /AS `h_bin0`/.test(sql)); expect(bound).toBeGreaterThan(0); expect(bins).toBeGreaterThan(bound);
+    expect(sent[bound + 1]).toBe('SHOW WARNINGS LIMIT 21'); expect(sent[bins + 1]).toBe('SHOW WARNINGS LIMIT 21'); expect(sent).toContain(controls[2]);
+    expect(sourceReads).toBe(2); expect(events.at(-1)?.status).toBe('completed'); expect(connections.at(-1)!.close).toHaveBeenCalledOnce(); expect(connections).toHaveLength(2);
+  });
+  it('全部NULL只读取极值计数，不生成额外区间命令', async () => {
+    histogramBounds = ['0', '123', null, null]; const result = await statistics({ columns: [], histogram: { column: 'id', bins: 10 } });
+    expect(result.histogram).toMatchObject({ min: null, max: null, nonNull: '0', nulls: '123', ranges: [] }); expect(sent.some(sql => /AS `h_bin0`/.test(sql))).toBe(false);
+  });
+  it.each(['row-count', 'outside', 'bin-sum', 'warning', 'definition'] as const)('%s不返回混合极值或部分分布，不重放请求，原资源严格关闭', async phase => {
+    if (phase === 'row-count') histogramBounds[0] = '121'; if (phase === 'outside') histogramCounts[2] = '1'; if (phase === 'bin-sum') histogramCounts[3] = '11'; if (phase === 'warning') histogramWarning = true; if (phase === 'definition') { lateAt = 2; lateSource = originalShow.replace('DEFAULT NULL', "DEFAULT '1'"); }
+    await expect(statistics({ columns: [], histogram: { column: 'id', bins: 5 } })).rejects.toThrow(); expect(events.at(-1)?.status).toBe('failed'); expect(sent).not.toContain(controls[2]); expect(connections.at(-1)!.close).toHaveBeenCalledOnce(); expect(connections).toHaveLength(2);
+  });
+  it('视图或非数值列在统计聚合前拒绝，避免非确定性视图多次求值混成分布', async () => {
+    await expect(statistics({ columns: [], histogram: { column: 'label', bins: 5 } })).rejects.toThrow(); expect(aggregation()).toHaveLength(0);
+    kind = 'VIEW'; source = 'CREATE VIEW subject AS SELECT 1 AS id'; await expect(statistics({ columns: [], histogram: { column: 'id', bins: 5 } })).rejects.toThrow(); expect(aggregation()).toHaveLength(0);
+  });
+  it('区间聚合取消等待原终包和strictclose，不把已读极值当成功，也不借用户会话回滚', async () => {
+    histogramHold = true; const taskId = 'stats-' + sequence; let settled = false;
+    const pending = statistics({ columns: [], histogram: { column: 'id', bins: 5 } }).finally(() => { settled = true; }), failed = expect(pending).rejects.toThrow('取消');
+    await vi.waitFor(() => expect(sent.some(sql => /AS `h_bin0`/.test(sql))).toBe(true)); const stopping = engine.handle('query.cancel', { taskId }); await vi.waitFor(() => expect(killReceived).toBe(true));
+    expect(settled).toBe(false); originalEnd!(Error('原区间聚合已取消')); await stopping; await failed; expect(events.at(-1)?.status).toBe('cancelled'); expect(sent).not.toContain(controls[2]);
+    expect(connections.every(managed => (managed.connection as unknown as { stream: { closed: boolean } }).stream.closed)).toBe(true);
+  });
+});
 
 describe('服务器全部筛选行统计真实Engine/metadata/原生事件流（仅RAM）', () => {
   it('单行聚合保UINT64/DECIMAL/微秒/NULL/二进制，FLOAT明确近似，JSON仅计数', async () => {

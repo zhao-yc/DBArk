@@ -1,0 +1,55 @@
+name: 全表数值分布源码验收
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/table-histogram.yml', 'scripts/table-histogram-ci.mjs', 'scripts/table-histogram-ci.d.mts', 'src/engine/tableHistogram.ts', 'src/engine/tableStatistics.ts', 'src/shared/tableHistogram.ts', 'src/shared/tableStatistics.ts', 'src/shared/validation.ts', 'src/renderer/components/TableStatisticsDialog.tsx', 'src/renderer/components/TableHistogramChart.tsx', 'src/renderer/components/TableTab.tsx', 'src/renderer/tableHistogram.css', 'src/renderer/tableStatisticsResult.ts', 'src/renderer/locales/tableHistogram.zh-CN.ts', 'tests/fixtures/table-histogram/**', 'tests/helpers/tableHistogramFixture.ts', 'tests/unit/*table-histogram*', 'tests/e2e/table-histogram-native.spec.ts', 'package.json', 'pnpm-lock.yaml']
+  pull_request:
+    paths: ['.github/workflows/table-histogram.yml', 'scripts/table-histogram-ci.mjs', 'scripts/table-histogram-ci.d.mts', 'src/engine/tableHistogram.ts', 'src/engine/tableStatistics.ts', 'src/shared/tableHistogram.ts', 'src/shared/tableStatistics.ts', 'src/shared/validation.ts', 'src/renderer/components/TableStatisticsDialog.tsx', 'src/renderer/components/TableHistogramChart.tsx', 'src/renderer/components/TableTab.tsx', 'src/renderer/tableHistogram.css', 'src/renderer/tableStatisticsResult.ts', 'src/renderer/locales/tableHistogram.zh-CN.ts', 'tests/fixtures/table-histogram/**', 'tests/helpers/tableHistogramFixture.ts', 'tests/unit/*table-histogram*', 'tests/e2e/table-histogram-native.spec.ts', 'package.json', 'pnpm-lock.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 原轮即使仍在采集失败原件也不被新提交取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  histogram:
+    name: 数值分布 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖和Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 单次运行区间、统计资源和界面保护单元
+        run: pnpm exec vitest run tests/unit/table-histogram.test.ts tests/unit/table-histogram-ci.test.ts tests/unit/table-statistics.test.ts tests/unit/engine-table-statistics.test.ts tests/unit/main-table-statistics.test.ts tests/unit/ui-table-statistics.test.tsx tests/unit/table-statistics-intent.test.ts tests/unit/table-statistics-full-tab.test.tsx tests/unit/table-statistics-list-guard.test.ts tests/unit/table-statistics-ui-list-guard.test.ts --maxWorkers=1
+      - name: 单次运行明暗原生组件，保留原120秒零重试
+        run: node scripts/table-histogram-ci.mjs
+      - name: 记录实际源码和平台
+        if: always()
+        run: |
+          node -e "const fs=require('node:fs');fs.mkdirSync('test-results/table-histogram',{recursive:true});fs.writeFileSync('test-results/table-histogram/platform.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version}))"
+          git rev-parse HEAD > test-results/table-histogram/head.txt
+      - name: 保存原报告、退出回执及截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: table-histogram-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/table-histogram/
+          if-no-files-found: warn

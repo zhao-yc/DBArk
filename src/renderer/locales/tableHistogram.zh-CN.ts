@@ -1,0 +1,12 @@
+export const tableHistogramZh = {
+  title: '数值直方图', optional: '数值分布（可选）', column: '分布字段', none: '不统计分布', bins: '目标区间数',
+  hint: '只统计物理表的数值列，字段和区间选择不查询服务器。点击开始后读取当前筛选全部匹配行；与上方勾选的字段统计独立。',
+  scope: 'NULL单独计数。区间左闭右开，最后一个区间包含最大值；精确数值按原小数单位量化边界。',
+  approximate: '此列为浮点类型，边界和比较采用近似数值，不代表原十进制精度。',
+  exact: '整数、DECIMAL、BIT边界保持精确十进制，不经过浮点运算。',
+  reduced: '原精度或可表示值不足时合并重复边界，实际区间可能少于目标数。',
+  range: '数值区间', count: '记录数', percentage: '非NULL占比', bar: '分布', scale: '条形按本图最大记录数缩放，占比向下保留两位小数；准确数量见表格。',
+  nulls: 'NULL记录数', nonNull: '非NULL记录数', empty: '没有非NULL数值，不生成假零值区间。',
+  mismatch: '数值分布与原请求或统计来源不符，未显示旧分布。',
+  actual: (count: number, requested: number) => `实际 ${count} / 目标 ${requested} 个区间`,
+};

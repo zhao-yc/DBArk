@@ -126,7 +126,7 @@ let memory: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-
 let TableStatisticsDialog: typeof import('../../src/renderer/components/TableStatisticsDialog')['TableStatisticsDialog'];
 const globals = ['window','document','navigator','IS_REACT_ACT_ENVIRONMENT'].map(key => [key,Object.getOwnPropertyDescriptor(globalThis,key)] as const);
 beforeAll(async()=>{
-  memory=memoryDocument();const create=memory.createElement.bind(memory);memory.createElement=name=>{const node=create(name),set=node.setAttribute.bind(node),remove=node.removeAttribute.bind(node);node.setAttribute=(key,value)=>{set(key,value);if(key==='disabled')node.disabled=true;};node.removeAttribute=key=>{remove(key);if(key==='disabled')node.disabled=false;};return node;};
+  memory=memoryDocument();const create=memory.createElement.bind(memory);memory.createElement=name=>{const node=create(name),set=node.setAttribute.bind(node),remove=node.removeAttribute.bind(node);if(name==='select')Object.defineProperty(node,'options',{get:()=>node.querySelectorAll('option')});node.setAttribute=(key,value)=>{set(key,value);if(key==='disabled')node.disabled=true;};node.removeAttribute=key=>{remove(key);if(key==='disabled')node.disabled=false;};return node;};
   ({createRoot}=await import('react-dom/client'));({TableStatisticsDialog}=await import('../../src/renderer/components/TableStatisticsDialog'));
 });
 afterEach(async()=>{if(dialogRoot){await act(async()=>dialogRoot!.unmount());dialogRoot=undefined;}memory.body.textContent='';});

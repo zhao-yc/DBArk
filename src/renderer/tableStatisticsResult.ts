@@ -3,6 +3,7 @@ import { tableStatisticsColumnKind, type TableStatisticsOutput } from '../shared
 import { TableStatisticsIntent } from './tableStatisticsIntent';
 import { cellPreview } from './lib';
 import { tableStatisticsZh as text } from './locales/tableStatistics.zh-CN';
+import { assertTableHistogram, type TableHistogramRequest } from '../shared/tableHistogram';
 
 /** 数量只做整数等式核验，不把服务器BIGINT计数或数值聚合转换成Number。 */
 function count(value: unknown): bigint { if (typeof value !== 'string' || !/^(?:0|[1-9]\d{0,19})$/.test(value)) throw Error(text.mismatch); return BigInt(value); }
@@ -13,9 +14,11 @@ function cell(value: CellValue): void {
   throw Error(text.mismatch);
 }
 /** 对象、所选字段顺序及总量全部核对后才展示，不能接纳旧源或另列的成功回包。 */
-export function checkTableStatisticsOutput(intent: TableStatisticsIntent, columns: readonly string[], output: TableStatisticsOutput, distinct = false): void {
+export function checkTableStatisticsOutput(intent: TableStatisticsIntent, columns: readonly string[], output: TableStatisticsOutput, distinct = false, histogram?: TableHistogramRequest): void {
   if (!intent.current() || JSON.stringify(output.source) !== JSON.stringify(intent.source) || !/^[a-f0-9]{64}$/.test(output.sourceDigest) || !Array.isArray(output.columns) || output.columns.length !== columns.length || !Array.isArray(output.warnings) || output.warnings.some(warning => typeof warning !== 'string')) throw Error(text.mismatch);
   const total = count(output.rowCount);
+  if (!histogram && Object.hasOwn(output, 'histogram') || histogram && intent.source.objectKind !== 'table') throw Error(text.mismatch);
+  assertTableHistogram(output.histogram, histogram, histogram ? intent.source.columns.find(column => column.name === histogram.column) : undefined, output.rowCount);
   for (let index = 0; index < columns.length; index++) {
     const result = output.columns[index], original = intent.source.columns.find(column => column.name === columns[index]);
     if (!original || result.name !== original.name || result.type !== original.type || count(result.nonNull) + count(result.nulls) !== total) throw Error(text.mismatch);

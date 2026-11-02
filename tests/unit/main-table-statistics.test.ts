@@ -58,6 +58,11 @@ describe('表数据统计Main实际分派与公开参数（仅RAM）', () => {
     for (const distinct of ['true', 1, null, {}, []]) expect(() => validateCommand('table.statistics', { ...input, distinct })).toThrow();
     const f = fixture(); await f.dispatch('table.statistics', distinctInput); expect(f.request).toHaveBeenCalledExactlyOnceWith('table.statistics', { ...distinctInput, profile: f.profile }); expect(f.history).not.toHaveBeenCalled();
   });
+  it('数值分布只增加准确列和固定区间数，Main原样透传且不记录查询历史', async () => {
+    const request = { ...input, columns: [], histogram: { column: 'amount', bins: 10 } }; expect(validateCommand('table.statistics', request)).toEqual(request);
+    const f = fixture(); await f.dispatch('table.statistics', request); expect(f.request).toHaveBeenCalledExactlyOnceWith('table.statistics', { ...request, profile: f.profile }); expect(f.history).not.toHaveBeenCalled();
+    for (const histogram of [{ column: 'amount', bins: 0 }, { column: 'amount', bins: 10, boundaries: [0, 100] }]) expect(() => validateCommand('table.statistics', { ...input, histogram })).toThrow();
+  });
   it('任务概要全部状态都不保存筛选、聚合数值或驱动错误原文', () => {
     for (const status of ['running', 'completed', 'failed', 'cancelled'] as const) {
       const message = persistedTaskMessage('table.statistics', { taskId: 't', status, progress: 0, message: '私密金额=18446744073709551615 SUM=999 驱动凭据' });

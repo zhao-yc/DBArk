@@ -1,0 +1,10 @@
+.table-histogram { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.table-histogram h3 { margin: 0 0 8px; }
+.table-histogram table { width: 100%; border-collapse: collapse; }
+.table-histogram th, .table-histogram td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.table-histogram tbody th { font-weight: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.table-histogram-plot { width: 25%; min-width: 80px; }
+.table-histogram-plot div { height: 14px; background: var(--accent); border-radius: 2px; }
+.table-histogram-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
+.table-histogram-controls label { display: flex; align-items: center; gap: 8px; white-space: nowrap; min-width: 0; }
+.table-histogram-controls select { width: auto; max-width: min(380px, 60vw); }
