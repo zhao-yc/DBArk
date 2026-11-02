@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+跨平台验收跟进：[JOIN 原生入口修复](development/foreign-key-join-ci-env-20261102.md)。原 e212 三平台均因 NODE_PATH 隔离守卫失败，尚无窗口业务通过；新增固定环境清洗运行器，保留原断言和门槛。260 项相关／类型／YAML 与 Windows 原十二例通过，新头远端及安装另验，不增加功能、完整工作包或发行计数，暂不发布。
+
 SQLite 高频编辑补齐[字段悬停](development/sqlite-field-hover-20261102.md)：准确声明、main／temp、局部输出及最近查询层来源，复用原目录与串行生命周期。235 项相关、52 项定向及 4 项独立 SQLite 裁决分轮通过，类型／构建与 Windows 原工作区整例通过，原资源核清；Mac／安装及完整语义代码辅助继续，不增加完整工作包或发行计数，暂不发布。
 
 外键 JOIN 新增[完整输出去重](development/table-foreign-key-join-distinct-20261102.md)：明细 DISTINCT、对应侧投影内排序、NULL 与模式草稿保留。373 项相关、类型／构建、六端点 360 次只读派生表查询和 Windows 十二例组件通过；新增三平台组件 CI，实际远端结果另验。物理表完整 GUI／Mac／安装及完整 O04 继续，不增加完整工作包或发行计数，暂不发布。

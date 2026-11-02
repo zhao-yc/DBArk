@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/foreign-key-join.yml'
+      - 'scripts/foreign-key-join-ci.mjs'
       - 'src/renderer/tableForeignKeyJoin*.ts'
       - 'src/renderer/components/TableForeignKeyJoin*.tsx'
       - 'src/renderer/locales/tableForeignKeyJoin*.ts'
@@ -21,6 +22,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/foreign-key-join.yml'
+      - 'scripts/foreign-key-join-ci.mjs'
       - 'src/renderer/tableForeignKeyJoin*.ts'
       - 'src/renderer/components/TableForeignKeyJoin*.tsx'
       - 'src/renderer/locales/tableForeignKeyJoin*.ts'
@@ -66,15 +68,11 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm exec install-electron
       - name: 单次运行查询生成和来源保护单元
-        run: pnpm exec vitest run tests/unit/table-foreign-key-join.test.ts tests/unit/table-foreign-key-join-filters.test.ts tests/unit/table-foreign-key-join-groups.test.ts tests/unit/table-foreign-key-join-summary.test.ts tests/unit/table-foreign-key-join-having.test.ts tests/unit/table-foreign-key-join-distinct.test.ts tests/unit/table-foreign-key-join-intent.test.ts tests/unit/ui-table-foreign-key-join.test.tsx tests/unit/join-order-native-guard.test.ts --maxWorkers=1
+        run: pnpm exec vitest run tests/unit/foreign-key-join-ci.test.ts tests/unit/table-foreign-key-join.test.ts tests/unit/table-foreign-key-join-filters.test.ts tests/unit/table-foreign-key-join-groups.test.ts tests/unit/table-foreign-key-join-summary.test.ts tests/unit/table-foreign-key-join-having.test.ts tests/unit/table-foreign-key-join-distinct.test.ts tests/unit/table-foreign-key-join-intent.test.ts tests/unit/ui-table-foreign-key-join.test.tsx tests/unit/join-order-native-guard.test.ts --maxWorkers=1
       # Vite直接加载真实渲染组件；本门不使用数据库、系统剪贴板或已安装客户端。
       # 保留原120秒、worker1、零重试及原成功/失败目录处理，不代替安装包验收。
       - name: 单次运行原十二个明暗原生组件用例
-        run: pnpm exec playwright test tests/e2e/table-foreign-key-join-order-native.spec.ts --workers=1 --retries=0 --trace=off '--reporter=list,json' --output=test-results/foreign-key-join
-        env:
-          DBARK_JOIN_ORDER_NATIVE: '1'
-          DBARK_INTEGRATION_ENABLED: '0'
-          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/foreign-key-join/report.json
+        run: node scripts/foreign-key-join-ci.mjs
       - name: 记录准确提交和实际平台
         if: always()
         run: |

@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+验收更正：[JOIN 三平台入口](development/foreign-key-join-ci-env-20261102.md)原 e212 在环境守卫阶段失败，未通过跨平台窗口；已改用固定清洗运行器，本机模拟注入后的原十二例、260 项相关和类型／YAML 通过，新头远端结果待验，不增加功能覆盖或发行计数。
+
 2026-11-02 源码增量：[SQLite 字段悬停](development/sqlite-field-hover-20261102.md)显示声明与准确 main／temp 来源，支持局部输出说明和最近查询层解析。235 项相关、52 项定向与 4 项独立 SQLite 语义分轮通过，Windows 原工作区整例通过并核清资源；Mac／安装未验，O05 仍部分，暂不发布。
 
 2026-11-02 源码增量：[外键 JOIN 完整输出去重](development/table-foreign-key-join-distinct-20261102.md)，含 DISTINCT、对应侧投影内排序及草稿保留。373 项相关、严格类型／构建、六端点 360 次只读派生表 SELECT 与 Windows 十二例组件通过；新增三平台组件 CI，Mac／安装仍待实际结果，不计完整 O04，暂不发布。
