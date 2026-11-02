@@ -1,5 +1,7 @@
 # 外键 JOIN：双侧 WHERE 条件筛选
 
+本页保留首轮平铺条件的验证记录；后续[嵌套条件组](table-foreign-key-join-groups-20261102.md)已接入混合 AND／OR、局部草稿及稳定重编号，新增证据单独记录。
+
 ## 使用方式
 
 MySQL／MariaDB 普通表的“按外键生成 JOIN 查询”明确读取父表结构后，可在“JOIN 条件筛选”中添加子表 c／父表 p 的字段条件，包括未输出字段。支持全部满足（AND）、任一满足（OR），以及等于、不等、大小比较、LIKE／NOT LIKE、IN／NOT IN、BETWEEN、IS NULL／IS NOT NULL，共 13 种运算符。

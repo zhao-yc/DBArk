@@ -1,6 +1,8 @@
 # Navicat 全功能覆盖目标
 
-外键 JOIN 源码新增[双侧多列排序与查询上限](development/table-foreign-key-join-order-20261102.md)：107 项相关、严格构建／类型、六端点 48 份合成 SELECT 与 Windows 明暗原生组件两例通过；只读服务器语义与组件证据分开，完整物理表 GUI、Mac／安装另验。O04 保持部分，任意多表、WHERE 和聚合继续，暂不发布。
+外键 JOIN 源码新增[双侧 WHERE 嵌套条件组](development/table-foreign-key-join-groups-20261102.md)：13 运算符、混合 AND／OR、16 组／8 层、局部应用／取消及稳定重编号；286 项相关、类型／构建、六端点真实外键表 840 次 SELECT、Windows 六例原生组件通过，准确资源核零。Mac／安装另验，O04 仍部分，暂不发布。
+
+前序外键 JOIN [双侧多列排序与查询上限](development/table-foreign-key-join-order-20261102.md)记录保留：107 项相关、严格构建／类型、六端点 48 份合成 SELECT 与 Windows 明暗原生组件两例通过；当前 WHERE 及分组见上方新记录。O04 保持部分，任意多表和聚合继续，暂不发布。
 
 SQLite 开发源码新增[已有字段显式 NOT NULL 编辑](development/sqlite-not-null-20261102.md)：添加／保留／移除、原显式声明与 native 标记区分、STRICT／WITHOUT ROWID／INTEGER 主键规则、整批预览及原值回滚保护。31 份相关测试分轮共 1,013 项、严格构建及 Windows 十二模式单轮通过，明暗截图、旧预览和资源核清；Mac／安装及其余 R02 能力仍待验，保持部分，不增加完整工作包或发行计数。
 
@@ -649,7 +651,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | R04 | Oracle | 待做 | 服务名/TNS、序列、包、类型、LOB 与精度 |
 | R05 | MongoDB | 待做 | 集合、索引、BSON、树/JSON、查找与聚合 |
 | R06 | Redis/Cluster/Sentinel | 待做 | 键、TTL、扫描、命令、重定向与取消 |
-| O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 新增按一条真实外键生成LEFT／INNER草稿、复合映射、双方选列及代码预览；Windows源码的LEFT精确单次实执行与INNER／自关联仅预览打开通过，见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续已接[双侧多列排序与查询上限](development/table-foreign-key-join-order-20261102.md)，服务器只读与组件证据分别记录；任意多表关系、WHERE、聚合及完整查询／视图构建仍待做，未公开发行 |
+| O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有按一条真实外键生成LEFT／INNER草稿、复合映射及双方选列；前期Windows实际执行与预览边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续接入[多列排序与行数上限](development/table-foreign-key-join-order-20261102.md)及[双方WHERE和嵌套分组](development/table-foreign-key-join-groups-20261102.md)，真实外键表840次SELECT与六个离线原生组件分别取证；任意多表、聚合／HAVING、完整查询转视图及Mac／安装继续，未公开发行 |
 | O05 | 重构/语义代码辅助 | 待做 | 引用、声明、悬停、错误、重命名保留注释字符串 |
 | E01 | ER 关系查看 | 待做 | 真实外键、复合关系、对象选择、缩放刷新 |
 | A01 | 编排/本地计划任务 | 待做 | 跨连接依赖、失败策略、进度、重复运行控制 |

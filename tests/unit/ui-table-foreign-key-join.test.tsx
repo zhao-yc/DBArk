@@ -6,6 +6,7 @@ import type { TableForeignKeyJoinServices } from '../../src/renderer/components/
 import { TableForeignKeyJoinIntent } from '../../src/renderer/tableForeignKeyJoinIntent';
 import { tableForeignKeyJoinZh as text } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 import { tableForeignKeyJoinFilterZh as filterText } from '../../src/renderer/locales/tableForeignKeyJoinFilter.zh-CN';
+import { tableFilterGroupsZh as groupText } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 
@@ -61,6 +62,39 @@ async function mount(options: { read?: TableForeignKeyJoinServices['read']; canc
   await act(async () => root!.render(options.strict ? <React.StrictMode>{view}</React.StrictMode> : view));
   return { child, parent, scope, intent, read, cancel, close, activity, opened, cleanup };
 }
+/** 三条不同来源的有效条件便于验证真实分组编辑，不直接改选择或SQL状态。 */
+async function seedGroups() { await click(text.preview); for (let i=1;i<=3;i++) { await click(filterText.add); if(i===2)await select(filterText.side(i),'parent'); await filterInput(filterText.value(i),String(i)); } }
+/** 所属组按真实可见名称选择，不猜组件内部节点ID。 */
+async function moveJoinCondition(position:number,path:string) { const node=filterControl(groupText.destination(position)),option=node.querySelectorAll('option').find(value=>value.textContent===groupText.group(path));expect(option).toBeDefined();await select(groupText.destination(position),option!.value); }
+/** 获取真实事件闭包，只用于旧渲染/重复应用反例，不改组件实现。 */
+function joinReactProps(node:MemoryNode) { const key=Object.keys(node).find(key=>key.startsWith('__reactProps$'))!;return(node as any)[key]; }
+it('JOIN分组独占本地草稿，标清双方同名字段，应用后才恢复独立打开且零预执行',async()=>{
+  const f=await mount();await seedGroups();const before=sql(),oldOpen=joinReactProps(button(text.open)).onClick,oldValue=joinReactProps(filterControl(filterText.value(1))).onChange;
+  await click(filterText.groups);expect(sql()).toBe('');expect(button(text.open).disabled).toBe(true);expect(button(text.preview).disabled).toBe(true);expect(filterControl(filterText.value(1)).disabled).toBe(true);expect(document.body.textContent).toContain('子表 c · id');expect(document.body.textContent).toContain('父表 p · id');
+  await act(async()=>{oldOpen();oldValue({target:{value:'999'}});});expect(f.read).toHaveBeenCalledOnce();expect(f.opened).not.toHaveBeenCalled();
+  await click(groupText.addGroup());await moveJoinCondition(2,'1');await moveJoinCondition(3,'1');expect(f.read).toHaveBeenCalledOnce();await click(groupText.apply);expect(sql()).not.toBe(before);expect(sql()).toContain(' OR ');expect(filterControl(filterText.value(1)).value).toBe('1');
+  await click(text.open);expect(f.read).toHaveBeenCalledTimes(3);expect(f.opened.mock.calls[0][0].options.filterGroup).toEqual({mode:'all',children:[0,{mode:'any',children:[1,2]}]});
+});
+it('取消分组保原SQL，旧Apply闭包不能应用后来重新打开的草稿',async()=>{
+  const f=await mount();await seedGroups();const before=sql();await click(filterText.groups);const oldApply=joinReactProps(button(groupText.apply)).onClick;await click(groupText.addGroup());await click(groupText.cancel);expect(sql()).toBe(before);await click(filterText.groups);await act(async()=>oldApply());expect(sql()).toBe('');expect(filterControl(groupText.title)).toBeDefined();await click(groupText.cancel);expect(sql()).toBe(before);expect(f.read).toHaveBeenCalledOnce();
+});
+it('删除重编号与无效值修正不丢分组，新增条件置根，同FK重读保留，明确平铺才移除括号',async()=>{
+  const f=await mount();await seedGroups();await click(filterText.groups);await click(groupText.addGroup());await moveJoinCondition(2,'1');await moveJoinCondition(3,'1');await click(groupText.apply);const grouped=sql();await click(text.preview);expect(sql()).toBe(grouped);await filterInput(filterText.value(1),'1e20');expect(sql()).toBe('');expect(filterControl(filterText.structure).textContent).toContain('(条件2 或 条件3)');await filterInput(filterText.value(1),'1');expect(sql()).toBe(grouped);
+  await click(filterText.remove(2));expect(filterControl(filterText.value(2)).value).toBe('3');expect(filterControl(filterText.structure).textContent).toContain('(条件2)');await click(filterText.add);await filterInput(filterText.value(3),'4');expect(filterControl(filterText.structure).textContent).toContain('且 条件3');await click(filterText.flat);expect(document.body.querySelector('[aria-label="'+filterText.structure+'"]')).toBeNull();expect(sql()).not.toContain(' OR ');expect(f.read).toHaveBeenCalledTimes(2);
+});
+it('分组根模式改变保留子组，停用不删除映射；切FK或全部清空才恢复无条件',async()=>{
+  const f=await mount();await seedGroups();await click(filterText.groups);await click(groupText.addGroup());await moveJoinCondition(2,'1');await moveJoinCondition(3,'1');await click(groupText.apply);await select(filterText.mode,'any');await toggle(filterText.enabled(2));expect(filterControl(filterText.structure).textContent).toContain('(条件1 或 (条件2 或 条件3))');expect(sql().split('\nWHERE ')[1]).not.toContain('p.`id` =');await toggle(filterText.enabled(2));expect(sql().split('\nWHERE ')[1]).toContain('p.`id` =');await select(text.fk,'fk_other');await click(text.preview);expect(sql()).not.toContain('WHERE');expect(document.body.querySelector('[aria-label="'+filterText.structure+'"]')).toBeNull();await click(filterText.add);await filterInput(filterText.value(1),'1');await click(filterText.removeAll);expect(sql()).not.toContain('WHERE');expect(f.opened).not.toHaveBeenCalled();
+});
+it('分组来源失效后不能Apply或打开，取消仅关闭局部草稿，不发请求',async()=>{
+  const f=await mount();await seedGroups();await click(filterText.groups);await act(async()=>f.intent.invalidate());expect(button(groupText.apply).disabled).toBe(true);expect(document.body.textContent).toContain(filterText.groupStale);await click(groupText.cancel);expect(f.opened).not.toHaveBeenCalled();expect(f.read).toHaveBeenCalledOnce();expect(button(text.open).disabled).toBe(true);
+});
+it('Modal捕获层让分组IME及Escape留在局部，CtrlEnter只应用草稿；关闭后恢复原Escape',async()=>{
+  const f=await mount();await seedGroups();const before=sql();await click(filterText.groups);let panel=filterControl(groupText.title);await act(async()=>joinReactProps(panel).onCompositionStart());
+  const key=async(name:string,extra:Record<string,unknown>={})=>{const target=filterControl(groupText.groupMode()),event=Object.assign(new MemoryEvent('keydown'),{key:name,...extra});await act(async()=>target.dispatchEvent(event));};
+  await key('Escape');expect(f.close).not.toHaveBeenCalled();expect(sql()).toBe('');await act(async()=>joinReactProps(filterControl(groupText.title)).onCompositionEnd());await key('Escape');expect(sql()).toBe(before);expect(f.close).not.toHaveBeenCalled();
+  await click(filterText.groups);await key('Enter',{ctrlKey:true,keyCode:13});expect(sql()).toBe(before);expect(document.body.querySelector('[aria-label="'+filterText.structure+'"]')).not.toBeNull();expect(f.read).toHaveBeenCalledOnce();expect(f.opened).not.toHaveBeenCalled();
+  const escape=Object.assign(new MemoryEvent('keydown'),{key:'Escape'});await act(async()=>button(text.close).dispatchEvent(escape));expect(f.close).toHaveBeenCalledOnce();
+});
 it('JOIN未完成条件阻止旧查询打开，精确值、父子同名列及AND/OR只改本地预览',async()=>{const f=await mount();await click(text.preview);await click(filterText.add);expect(button(text.open).disabled).toBe(true);expect(sql()).toBe('');await filterInput(filterText.value(1),'9007199254740993');await click(filterText.add);await select(filterText.side(2),'parent');await filterInput(filterText.value(2),'9007199254740994');await select(filterText.mode,'any');expect(sql()).toContain(' OR ');expect(sql()).toContain('c.`id` =');expect(sql()).toContain('p.`id` =');expect(f.read).toHaveBeenCalledOnce();await click(text.open);expect(f.read).toHaveBeenCalledTimes(3);expect(f.opened.mock.calls[0][0].options).toMatchObject({filterMode:'any',filters:[{side:'child',column:'id',operator:'=',value:'9007199254740993'},{side:'parent',column:'id',operator:'=',value:'9007199254740994'}]});});
 it('运算符切换保留单值、区间和集合输入，NULL仅传无值判断',async()=>{const f=await mount();await click(text.preview);await click(filterText.add);await filterInput(filterText.value(1),'12');await select(filterText.operator(1),'BETWEEN');await filterInput(filterText.upper(1),'14');await select(filterText.operator(1),'IN');await filterInput(filterText.values(1),'1\n2');await select(filterText.operator(1),'BETWEEN');expect(filterControl(filterText.value(1)).value).toBe('12');expect(filterControl(filterText.upper(1)).value).toBe('14');await select(filterText.operator(1),'IS NULL');expect(sql()).toContain('c.`id` IS NULL');await click(text.open);expect(f.opened.mock.calls[0][0].options.filters).toEqual([{side:'child',column:'id',operator:'IS NULL'}]);});
 it('停用显式条件去掉谓词，清空恢复原字节；同FK重读保留，切FK明确清除',async()=>{const f=await mount();await click(text.preview);const old=sql();await click(filterText.add);await filterInput(filterText.value(1),'123');const selected=sql();await click(text.preview);expect(sql()).toBe(selected);await toggle(filterText.enabled(1));expect(sql()).toBe(old);await toggle(filterText.enabled(1));expect(sql()).toBe(selected);await select(text.fk,'fk_other');await click(text.preview);expect(sql()).not.toContain('WHERE');expect(document.body.textContent).toContain(filterText.empty);expect(f.opened).not.toHaveBeenCalled();});

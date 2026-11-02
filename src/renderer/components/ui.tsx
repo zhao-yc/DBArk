@@ -9,9 +9,10 @@ export function UsageHelp({ children, className = '' }: { children: ReactNode; c
 }
 
 /** 对话框限制键盘焦点并在关闭后还原，关闭回调通过引用保持最新状态。 */
-export function Modal({ title, children, onClose, wide = false }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+export function Modal({ title, children, onClose, onEscape, wide = false }: { title: string; children: ReactNode; onClose: () => void; onEscape?: (event: KeyboardEvent) => void; wide?: boolean }) {
   const root = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose); closeRef.current = onClose;
+  const escapeRef = useRef(onEscape); escapeRef.current = onEscape;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     root.current?.querySelector<HTMLElement>('input, select, textarea, button, summary')?.focus();
@@ -19,7 +20,8 @@ export function Modal({ title, children, onClose, wide = false }: { title: strin
     const listener = (event: KeyboardEvent) => {
       // 输入法组合阶段的 Escape/Tab 属于输入法；捕获层必须先跳过，避免提前关闭弹窗或移动焦点。
       if (event.isComposing || event.keyCode === 229) return;
-      if (event.key === 'Escape') { event.stopPropagation(); closeRef.current(); }
+      // 嵌套内联草稿可把Escape留给自己的键盘/输入法保护，其它对话框仍沿原关闭行为。
+      if (event.key === 'Escape') { if (escapeRef.current) { escapeRef.current(event); return; } event.stopPropagation(); closeRef.current(); }
       if (event.key === 'Tab') {
         const elements = root.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]');
         if (!elements?.length) return;

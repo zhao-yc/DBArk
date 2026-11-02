@@ -21,7 +21,7 @@ describe.runIf(enabled)('JOIN条件只读实库语义（测试本身不创建或
       expect(identity.hostname).toBe(env.DBARK_TEST_EXPECTED_HOSTNAME);expect(String(identity.port)).toBe('3306');expect(identity.version).toBe(env.DBARK_TEST_EXPECTED_VERSION);expect(String(identity.serverId)).toBe(env.DBARK_TEST_EXPECTED_SERVER_ID);
       if(env.DBARK_TEST_EXPECTED_SERVER_UUID)expect((await execute<Record<string,unknown>[]>(own,'SELECT @@server_uuid AS uuid')).rows[0].uuid).toBe(env.DBARK_TEST_EXPECTED_SERVER_UUID);
       const physical=env.DBARK_JOIN_FILTER_PHYSICAL==='1',database=env.DBARK_JOIN_FILTER_DATABASE??'',marker=env.DBARK_JOIN_FILTER_OWNER??'';
-      let cases=foreignKeyJoinFilterReadOnlyCases();
+      const groups=env.DBARK_JOIN_GROUP_READONLY==='1';let cases=foreignKeyJoinFilterReadOnlyCases(groups);
       if(physical){
         // 仅消费已预置、准确owner的随机库；不在本测试创建/修改资源，也不关闭优化器。
         if(!/^dbark_joinfilter_[a-f0-9]{12}_(13357|13380|13384|13310|13311|13484)$/.test(database)||!database.endsWith('_'+port)||!/^dbark-joinfilter:[a-f0-9]{32}$/.test(marker))throw Error('准确JOIN物理夹具未绑定');
@@ -29,7 +29,7 @@ describe.runIf(enabled)('JOIN条件只读实库语义（测试本身不创建或
         const child=await tableInfo(own,database,'child'),parent=await tableInfo(own,database,'parent');expect(child.objectKind).toBe('table');expect(parent.objectKind).toBe('table');expect(child.foreignKeys).toMatchObject([{name:'fk',columns:['pid'],referencedDatabase:database,referencedTable:'parent',referencedColumns:['id']}]);
         cases=cases.map(test=>({...test,sql:buildForeignKeyJoin(child,parent,'fk','LEFT',43,test.options).sql}));
       }
-      const modes=[String(identity.mode),'','ANSI_QUOTES','NO_BACKSLASH_ESCAPES','ANSI_QUOTES,NO_BACKSLASH_ESCAPES'];expect(cases).toHaveLength(20);
+      const modes=[String(identity.mode),'','ANSI_QUOTES','NO_BACKSLASH_ESCAPES','ANSI_QUOTES,NO_BACKSLASH_ESCAPES'];expect(cases).toHaveLength(groups?28:20);
       for(const mode of modes){
         // 只修改本例独占会话模式；不改全局、不写库表，失败直接关闭原会话，不自动重试。
         await execute(own,'SET SESSION sql_mode=?',[mode]);const actualMode=String((await execute<Record<string,unknown>[]>(own,'SELECT @@session.sql_mode AS mode')).rows[0].mode),tokens=new Set(actualMode.split(','));

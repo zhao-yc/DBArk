@@ -9,8 +9,11 @@ import { ErrorBox, UsageHelp } from './ui';
 type Leaf = { kind: 'rule'; id: number; index: number };
 type Group = { kind: 'group'; id: number; mode: FilterMode; children: (Leaf | Group)[] };
 type EventSignal = { defaultPrevented?: boolean; nativeEvent?: { defaultPrevented?: boolean } };
+/** 只改变本地说明和条件来源摘要；调用方不能替换分组校验、编辑身份或应用协议。 */
+export interface TableFilterGroupPresentation { hint: string; stale: string; declined: string; summary(index: number, rule: FilterRule): string; }
 interface Props {
   filters: readonly FilterRule[]; mode: FilterMode; initial?: FilterGroup;
+  presentation?: TableFilterGroupPresentation;
   isCurrent(): boolean; onApply(group: FilterGroup): boolean; onClose(): void;
 }
 
@@ -34,7 +37,7 @@ function sameFilters(current: readonly FilterRule[], expected: readonly FilterRu
 }
 
 /** 内联分组审核只组合现有叶，父页确认并重新核原环境后才可能读取服务器。 */
-export function TableFilterGroupsDialog({ filters, mode, initial, isCurrent, onApply, onClose }: Props) {
+export function TableFilterGroupsDialog({ filters, mode, initial, presentation, isCurrent, onApply, onClose }: Props) {
   const sequence = useRef(0), origin = useRef({ filters, mode, initial }).current;
   const [prepared] = useState(() => {
     try {
@@ -81,7 +84,7 @@ export function TableFilterGroupsDialog({ filters, mode, initial, isCurrent, onA
       const group = validateFilterGroup(prepared.filters, draft!.mode, output(draft!))!;
       if (!current()) return;
       consumed.current = true;
-      if (!onApply(group)) { consumed.current = false; setError(text.declined); }
+      if (!onApply(group)) { consumed.current = false; setError(presentation?.declined ?? text.declined); }
     } catch (reason) { consumed.current = false; setError(errorMessage(reason)); }
   }
   /** 移动只改变叶的所属组，保留稳定叶身份及原编号；不接受外部伪造的目标ID。 */
@@ -129,7 +132,7 @@ export function TableFilterGroupsDialog({ filters, mode, initial, isCurrent, onA
           return <fieldset key={child.id} aria-label={text.group(childPath)}><legend>{text.group(childPath)}</legend>{render(child, childPath, depth + 1)}<button type="button" aria-label={text.dissolve(childPath)} disabled={disabled} onClick={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) dissolve(child.id); }}>{text.dissolve(childPath)}</button></fieldset>;
         }
         const rule = prepared.filters[child.index];
-        return <div key={child.id} className={rule.enabled === false ? 'filter-chip condition-disabled' : 'filter-chip'}><span>{text.summary(child.index + 1, filterRuleSummary(rule), rule.enabled === false)}</span><label>{text.destination(child.index + 1)}<select aria-label={text.destination(child.index + 1)} value={String(group.id)} disabled={disabled} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) moveLeaf(child, group, event.target.value); }}>{groups.map(item => <option key={item.group.id} value={String(item.group.id)}>{text.group(item.path)}</option>)}</select></label></div>;
+        return <div key={child.id} className={rule.enabled === false ? 'filter-chip condition-disabled' : 'filter-chip'}><span>{text.summary(child.index + 1, presentation?.summary(child.index, rule) ?? filterRuleSummary(rule), rule.enabled === false)}</span><label>{text.destination(child.index + 1)}<select aria-label={text.destination(child.index + 1)} value={String(group.id)} disabled={disabled} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) moveLeaf(child, group, event.target.value); }}>{groups.map(item => <option key={item.group.id} value={String(item.group.id)}>{text.group(item.path)}</option>)}</select></label></div>;
       })}
       {!!path && !group.children.length && <p>{text.emptyGroup}</p>}
       <button type="button" aria-label={text.addGroup(path)} disabled={disabled || empty || groups.length >= FILTER_LIMITS.groups || depth >= FILTER_LIMITS.depth} onClick={event => {
@@ -140,9 +143,9 @@ export function TableFilterGroupsDialog({ filters, mode, initial, isCurrent, onA
   return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title} onKeyDown={keyDown}
     onCompositionStart={() => { if (current()) { composition.current = true; setComposing(true); } }}
     onCompositionEnd={() => { if (current()) { composition.current = false; setComposing(false); } }}>
-    <strong>{text.title}</strong><UsageHelp><p>{text.hint}</p><p>{text.limits}</p><p>{text.shortcuts}</p></UsageHelp>
+    <strong>{text.title}</strong><UsageHelp><p>{presentation?.hint ?? text.hint}</p><p>{text.limits}</p><p>{text.shortcuts}</p></UsageHelp>
     {empty && <p>{text.empty}</p>}{draft && render(draft)}{composing && <p>{text.composing}</p>}
-    <ErrorBox message={error || (!valid && !consumed.current ? text.stale : '')}/>
+    <ErrorBox message={error || (!valid && !consumed.current ? presentation?.stale ?? text.stale : '')}/>
     <div className="filter-inputs"><span className="grow"/><button type="button" disabled={composing || consumed.current} onClick={cancel}>{text.cancel}</button><button type="button" className="primary" disabled={disabled || empty} onClick={apply}>{text.apply}</button></div>
   </section>;
 }
