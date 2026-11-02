@@ -212,6 +212,17 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click()); await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']));
     expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
     stage = '可编辑原格按INTEGER类型加入筛选且零读取，明确Apply后只读匹配行';
+    // 保持筛选面板展开，在真实最小窗口检查网格与底栏边界；不隐藏表单、强制点击或改DOM。
+    await step(() => application.evaluate(({ BrowserWindow }) => { const windows = BrowserWindow.getAllWindows(); if (windows.length !== 1) throw Error('原SQLite单窗口身份变化'); windows[0].setBounds({ width: 1024, height: 680 }); }));
+    await step(() => expect(table().locator('.sqlite-browse-conditions')).toBeVisible());
+    await step(() => expect.poll(() => grid().evaluate(element => {
+      const pane = element.closest('.sqlite-table-tab'), actions = pane?.querySelector('.table-action-bar'), status = pane?.querySelector('.tab-status');
+      if (!actions || !status) throw Error('原编辑底栏缺失');
+      const rect = element.getBoundingClientRect(), actionRect = actions.getBoundingClientRect(), statusRect = status.getBoundingClientRect();
+      const contained = Array.from(actions.children).every(child => { const box = child.getBoundingClientRect(); return box.left >= actionRect.left - 1 && box.right <= actionRect.right + 1 && box.top >= actionRect.top - 1 && box.bottom <= actionRect.bottom + 1; });
+      return element.clientHeight >= 96 && rect.bottom <= actionRect.top + 1 && rect.bottom <= statusRect.top + 1 && statusRect.bottom <= window.innerHeight + 1 && actions.scrollWidth <= actions.clientWidth + 1 && contained;
+    })).toBe(true));
+    await step(async () => info.attach('SQLite最小窗口筛选展开且原格可点击', { body: await page.screenshot(), contentType: 'image/png' }));
     const beforeCellFilter = operations(await step(audit), 'sqlite.tablePage').length;
     const mixedPosition = await step(() => grid().getByRole('columnheader', { name: 'mixed', exact: true }).getAttribute('aria-colindex')); if (!mixedPosition) throw Error('原mixed列位置未知');
     await step(() => grid().locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="' + mixedPosition + '"]').click());
@@ -223,6 +234,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click());
     await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']));
     expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
+    await step(() => application.evaluate(({ BrowserWindow }, bounds) => { const windows = BrowserWindow.getAllWindows(); if (windows.length !== 1) throw Error('原SQLite单窗口身份变化'); windows[0].setBounds(bounds); }, originalBounds));
     const pkPage = operations(await step(audit), 'sqlite.tablePage').at(-1); expect(pkPage?.request).toMatchObject({ connectionId: rw.id, table: pkTable, editing: true }); expect(result(pkPage?.reply)).toMatchObject({ edit: { kind: 'editable', locator: { kind: 'rowid' } } });
     // 区域起点会更新网格代次；真实F2和双击仍须打开原单元格窗口，取消保持零预览、零写入。
     const notePosition = await step(() => grid().getByRole('columnheader', { name: 'note', exact: true }).getAttribute('aria-colindex'));

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 高频表格操作修复[展开筛选时原格被底栏挡住](development/sqlite-table-height-20261102.md)：最小窗口保留可点击数据行和完整修改计数／按钮；原编辑、冲突回滚及只读表页整例通过。Mac／安装和原失败继续跟进，不增加完整工作包或发行计数。
+
 SQLite 高频查询新增[命名整理方案](development/sqlite-result-presets-20261102.md)：类型条件、多列排序、冻结边界、本机保存与新进程读回，先核完整字段再共同应用；Windows 实测没有增加数据库命令。Mac／安装和既有 CI 失败继续，不增加完整工作包或发行计数。
 
 SQLite 高频查询新增[不同值勾选](development/sqlite-result-value-options-20261102.md)：类型化完整候选、搜索计数、分页、包含／排除、先写草稿后应用；Windows 实测没有增加数据库请求。Mac／安装与命名方案继续，既有 Mac 表页超时单列，不增加完整工作包或发行计数。
