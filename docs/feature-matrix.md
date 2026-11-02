@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-02 源码增量：[SQLite 本文声明导航](development/sqlite-definition-20261102.md)支持别名、CTE、派生及作用域遮蔽／分支的 F12 和 Ctrl 点击。268 项相关与 47 项最终定向分轮通过，严格类型／构建及 Windows 原整例通过、资源核清；Mac／安装待验，O05 仍部分，暂不发布。
+
 验收更正：[JOIN 三平台入口](development/foreign-key-join-ci-env-20261102.md)原 e212 在环境守卫阶段失败，未通过跨平台窗口；已改用固定清洗运行器，本机模拟注入后的原十二例、260 项相关和类型／YAML 通过，新头远端结果待验，不增加功能覆盖或发行计数。
 
 2026-11-02 源码增量：[SQLite 字段悬停](development/sqlite-field-hover-20261102.md)显示声明与准确 main／temp 来源，支持局部输出说明和最近查询层解析。235 项相关、52 项定向与 4 项独立 SQLite 语义分轮通过，Windows 原工作区整例通过并核清资源；Mac／安装未验，O05 仍部分，暂不发布。

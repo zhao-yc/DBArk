@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { SqliteCompletionWorkerClient, type SqliteCompletionWorkerPort } from '../../src/renderer/sqliteCompletionWorkerClient';
-import { analyzeSqliteCompletion } from '../../src/shared/sqliteCompletionAnalysis';
+import { analyzeSqliteCompletion, type SqliteAnalysisIntent } from '../../src/shared/sqliteCompletionAnalysis';
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(reason:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
 class Port implements SqliteCompletionWorkerPort {
  onmessage:((event:MessageEvent)=>void)|null=null;onerror:((event:ErrorEvent)=>void)|null=null;onmessageerror:((event:MessageEvent)=>void)|null=null;
  posted:unknown[]=[];termination=vi.fn<()=>void|Promise<unknown>>(()=>undefined);postMessage(value:unknown){this.posted.push(value);}terminate(){return this.termination();}
  emit(data:unknown){this.onmessage?.({data}as MessageEvent);}ready(){this.emit({type:'dbark-sqlite-completion-ready',version:1});}
- reply(){const message=this.posted.at(-1)as{id:number;source:string;offset:number;intent?:'hover'};this.emit({id:message.id,result:analyzeSqliteCompletion(message.source,message.offset,message.intent)});}
+ reply(){const message=this.posted.at(-1)as{id:number;source:string;offset:number;intent?:SqliteAnalysisIntent};this.emit({id:message.id,result:analyzeSqliteCompletion(message.source,message.offset,message.intent)});}
 }
 const clients:SqliteCompletionWorkerClient[]=[];
 function fixture(timeout=1500,startup=8000){const ports:Port[]=[],create=vi.fn(()=>{const port=new Port();ports.push(port);return port;}),client=new SqliteCompletionWorkerClient(create,timeout,startup);clients.push(client);return{ports,create,client};}
@@ -14,6 +14,9 @@ async function flush(){await Promise.resolve();await Promise.resolve();await Pro
 /** Client使用真实算法与RAM消息端口，仅验证协议/回收顺序，不冒充原生CPU隔离或线程时限。 */
 afterEach(async()=>{for(const client of clients.splice(0))await client.dispose();vi.useRealTimers();});
 it('真实ready握手前不传SQL，完成后真实terminate再交付且每次analyze新Worker',async()=>{const f=fixture(),source='SELECT t.name FROM actual t',offset=source.indexOf('name')+2,pending=f.client.analyze(source,offset);await flush();const first=f.ports[0];expect(first.posted).toEqual([]);first.ready();expect(first.posted).toEqual([{id:expect.any(Number),source,offset}]);const retired=deferred<void>();first.termination.mockReturnValue(retired.promise);let settled=false;void pending.then(()=>{settled=true;});first.reply();await flush();expect(first.termination).toHaveBeenCalledOnce();expect(settled).toBe(false);retired.resolve(undefined);expect(await pending).toMatchObject({status:'ready',target:{prefix:'na'},qualifiers:['t']});const next=f.client.analyze('SELECT x',8);await flush();expect(f.ports).toHaveLength(2);f.ports[1].ready();f.ports[1].reply();expect((await next).status).toBe('ready');});
+it('声明意图仅携本文范围，真实terminate完成前不交付',async()=>{
+ const f=fixture(),source='SELECT s.id FROM subject AS s',run=f.client.analyze(source,8,undefined,'definition');await flush();const port=f.ports[0];port.ready();expect(port.posted[0]).toEqual({id:expect.any(Number),source,offset:8,intent:'definition'});const retired=deferred<void>();port.termination.mockReturnValue(retired.promise);port.reply();let ended=false;void run.then(()=>ended=true);await flush();expect(ended).toBe(false);retired.resolve(undefined);expect(await run).toMatchObject({status:'ready',definition:{start:28,end:29}});expect(port.termination).toHaveBeenCalledOnce();
+});
 it('悬停明确传完整词意图，真实terminate前不交付；旧补全仍只携三个原字段',async()=>{
  const f=fixture(),source='SELECT t.field_name FROM subject t',offset=source.indexOf('field_name')+2,run=f.client.analyze(source,offset,undefined,'hover');await flush();const port=f.ports[0];expect(port.posted).toEqual([]);port.ready();expect(port.posted[0]).toEqual({id:expect.any(Number),source,offset,intent:'hover'});const retired=deferred<void>();port.termination.mockReturnValue(retired.promise);port.reply();let settled=false;void run.then(()=>settled=true);await flush();expect(settled).toBe(false);retired.resolve(undefined);expect(await run).toMatchObject({status:'ready',target:{prefix:'field_name'}});expect(port.termination).toHaveBeenCalledOnce();
 });

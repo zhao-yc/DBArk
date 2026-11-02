@@ -16,7 +16,7 @@ type Desktop = typeof import('./desktop-fixture');
 interface Fact { command: string; request: Record<string, unknown>; reply?: unknown; failure?: string; }
 interface WorkerTrace { id: number; sent: { kind: string; id?: string; frame?: number; control?: string }[]; received: { kind: string; id?: string; frame?: number }[]; exit?: number; kills: number; }
 interface Audit { pending: number; denied: string[]; pickerIds: string[]; profiles: Record<string, boolean>; sessions: string[]; commands: string[]; operations: Fact[]; workers: WorkerTrace[]; }
-interface AnalysisTrace { id: number; url: string; posted: number; ready: number; replied: number; terminated: number; errors: number; status?: string; reason?: string; intent?: 'hover'; }
+interface AnalysisTrace { id: number; url: string; posted: number; ready: number; replied: number; terminated: number; errors: number; status?: string; reason?: string; intent?: 'hover' | 'definition'; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：须DBARK_SQLITE_COMPLETION_NATIVE_TEST=1、integration=0，仅使用独占合成SQLite文件');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -93,7 +93,7 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
   const observeAnalysis = () => step(() => page.evaluate(() => {
     const root = window as Window & { __sqliteCompletionAnalysis?: { records: AnalysisTrace[]; check(): void; restore(): void } }; if (root.__sqliteCompletionAnalysis) throw Error('原分析观察器已存在'); const Native = window.Worker, records: AnalysisTrace[] = [], releases: (() => void)[] = [];
     class Observed extends Native { constructor(url: string | URL, options?: WorkerOptions) { super(url, options); if (!String(url).includes('sqliteCompletion.worker')) return; const worker = this, record: AnalysisTrace = { id: records.length + 1, url: String(url), posted: 0, ready: 0, replied: 0, terminated: 0, errors: 0 }; records.push(record); const post = worker.postMessage, terminate = worker.terminate;
-      const wrappedPost = ((...args: unknown[]) => { record.posted++; const raw = args[0]; if (raw && typeof raw === 'object' && 'intent' in raw && raw.intent === 'hover') record.intent = 'hover'; return Reflect.apply(post, worker, args); }) as typeof worker.postMessage, wrappedTerminate = () => { record.terminated++; return Reflect.apply(terminate, worker, []); };
+      const wrappedPost = ((...args: unknown[]) => { record.posted++; const raw = args[0]; if (raw && typeof raw === 'object' && 'intent' in raw && (raw.intent === 'hover' || raw.intent === 'definition')) record.intent = raw.intent; return Reflect.apply(post, worker, args); }) as typeof worker.postMessage, wrappedTerminate = () => { record.terminated++; return Reflect.apply(terminate, worker, []); };
       const message = (event: MessageEvent) => { const raw = event.data; if (raw?.type === 'dbark-sqlite-completion-ready' && raw.version === 1) record.ready++; else if (Number.isSafeInteger(raw?.id) && raw.result && typeof raw.result === 'object') { record.replied++; if (typeof raw.result.status === 'string') record.status = raw.result.status; if (typeof raw.result.reason === 'string') record.reason = raw.result.reason; } }, error = () => { record.errors++; }; worker.postMessage = wrappedPost; worker.terminate = wrappedTerminate; worker.addEventListener('message', message); worker.addEventListener('error', error); worker.addEventListener('messageerror', error); releases.push(() => { if (worker.postMessage !== wrappedPost || worker.terminate !== wrappedTerminate) throw Error('原分析Worker观察器已变化'); worker.postMessage = post; worker.terminate = terminate; worker.removeEventListener('message', message); worker.removeEventListener('error', error); worker.removeEventListener('messageerror', error); });
     } }
     window.Worker = Observed; const state = { records, check() { if (root.__sqliteCompletionAnalysis !== state || window.Worker !== Observed) throw Error('原分析观察器已变化'); }, restore() { state.check(); if (records.some(record => record.terminated !== 1 || record.errors)) throw Error('真实分析Worker未完成释放'); for (const release of releases) release(); window.Worker = Native; delete root.__sqliteCompletionAnalysis; } }; root.__sqliteCompletionAnalysis = state;
@@ -134,6 +134,30 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     await expectSql(original.source); await info.attach('SQLite字段悬停-' + expected[0], { body: await step(() => page.screenshot()), contentType: 'image/png' });
     await step(() => page.keyboard.press('Escape')); await settleMetadata();
   };
+  /** 只读核对实际Monaco的模型、光标及版本，不用setPosition或直接调用导航provider。 */
+  const navigationModel = () => step(() => page.evaluate(() => {
+    const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+    const editors = api?.editor.getEditors().filter(editor => { const node = editor.getContainerDomNode(), query = node.closest('.query-tab'); return node.isConnected && !!query && node.getClientRects().length > 0 && query.getClientRects().length > 0; });
+    if (editors?.length !== 1) throw Error('声明导航缺少准确原编辑器'); const editor = editors[0], model = editor.getModel(), position = editor.getPosition(); if (!model || !position || model.isDisposed()) throw Error('声明导航原模型失效');
+    return { uri: model.uri.toString(), version: model.getVersionId(), source: model.getValue(), offset: model.getOffsetAt(position), canUndo: model.canUndo(), canRedo: model.canRedo() };
+  }));
+  const navigationProof: { gesture: 'F12' | 'modifier-click'; source: string; target: number; before: Awaited<ReturnType<typeof navigationModel>>; after: Awaited<ReturnType<typeof navigationModel>> }[] = [];
+  const navigate = async (marked: string, anchor: string, delta: number, gesture: 'F12' | 'modifier-click' = 'F12') => {
+    const input = await at(marked); await settleMetadata(); const before = await navigationModel(), target = input.source.indexOf(anchor) + delta;
+    if (target < delta || input.source.indexOf(anchor) !== input.source.lastIndexOf(anchor)) throw Error('声明预期锚点不唯一'); const calls = completionFacts(await step(audit)).length, worker = (await analysis()).at(-1)?.id ?? 0;
+    if (gesture === 'F12') await step(() => page.keyboard.press('F12'));
+    else {
+      const point = await step(() => page.evaluate(offset => {
+        const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco, editors = api?.editor.getEditors().filter(editor => editor.hasTextFocus()); if (editors?.length !== 1) throw Error('点击导航缺少原聚焦编辑器');
+        const editor = editors[0], model = editor.getModel(), node = editor.getDomNode(); if (!model || !node) throw Error('点击导航原模型缺失'); const position = editor.getScrolledVisiblePosition(model.getPositionAt(offset)); if (!position) throw Error('点击导航原文字不可见'); const box = node.getBoundingClientRect(); return { x: box.left + position.left + 2, y: box.top + position.top + position.height / 2 };
+      }, input.prefix.length));
+      await step(() => page.keyboard.down(modifier));
+      try { await step(() => page.mouse.click(point.x, point.y)); } finally { await step(() => page.keyboard.up(modifier)); }
+    }
+    await step(() => expect.poll(async () => (await navigationModel()).offset).toBe(target)); await settleMetadata();
+    const after = await navigationModel(); expect({ ...after, offset: before.offset }).toEqual(before); expect(completionFacts(await step(audit))).toHaveLength(calls);
+    expect((await analysis()).some(record => record.id > worker && record.intent === 'definition' && record.status === 'ready' && record.terminated === 1)).toBe(true); navigationProof.push({ gesture, source: input.source, target, before, after });
+  };
   const succeeded = (fact: Fact) => !!fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true;
   const lastColumns = (facts: Audit, sessionId?: string, schema?: 'main' | 'temp') => completionFacts(facts).filter(fact => succeeded(fact) && fact.request.kind === 'columns' && fact.request.table === 'subject' && fact.request.sessionId === sessionId && fact.request.schema === schema).at(-1)!;
   try {
@@ -151,6 +175,13 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     stage = '无session真实字段悬停不执行SQL或建立session';
     await showHover('SELECT s.ma|in_marker FROM subject s', ['main_marker', hoverText.permanent, hoverText.declaredType + '："TEXT"']);
     await showHover('WITH local_only(field_name) AS (SELECT 1) SELECT l.fi|eld_name FROM local_only l', ['field_name', hoverText.cte, hoverText.unknown]);
+    stage = '真实F12只导航本文别名、CTE及派生声明，保持模型版本/撤销和零目录增量';
+    await navigate('SELECT |s.id FROM subject AS s', ' AS s', 4);
+    await navigate('WITH local_cte(id) AS (SELECT 1) SELECT * FROM |local_cte', 'WITH local_cte', 5);
+    await navigate('SELECT |d.id FROM (SELECT * FROM subject) AS d', ' AS d', 4);
+    await navigate('SELECT |click_alias.id FROM subject AS click_alias', ' AS click_alias', 4, 'modifier-click');
+    await info.attach('SQLite本文声明真实导航窗口', { body: await step(() => page.screenshot()), contentType: 'image/png' });
+    await info.attach('SQLite本文声明真实导航原件', { body: JSON.stringify({ navigationProof, directoryReadsAdded: 0, queryExecutionsAdded: 0, modelVersionUnchanged: true, undoRedoUnchanged: true }), contentType: 'application/json' });
     await metadataReadOnly(baseline, statelessBefore);
     const statelessFacts = await step(audit); expect(completionFacts(statelessFacts).length).toBeGreaterThan(0); expect(completionFacts(statelessFacts).every(fact => fact.request.sessionId === undefined)).toBe(true); for (const fact of completionFacts(statelessFacts)) { sqliteCompletionInputSchema.parse(fact.request); if (succeeded(fact)) sqliteCompletionOutputSchema.parse(result(fact.reply)); else expect(operations(statelessFacts, 'query.cancel').some(cancel => cancel.request.taskId === fact.request.taskId), '失败元数据必须有同编号真实取消请求，不能忽略无缘失败').toBe(true); expect(fact.request).not.toHaveProperty('sql'); expect(fact.request).not.toHaveProperty('source'); }
     stage = '用户明确执行TEMP脚本并在原查询事务创建未提交DDL；独立观察仍只见原主文件';
