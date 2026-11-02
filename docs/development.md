@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 已有外键管理推进至[声明定位与增改删编译](development/sqlite-foreign-keys-plan-20261102.md)：结构模型、准确原文／位置、复合字段和真实 SQLite 动作核对已完成，Main／事务／界面接续。488 项相关、类型／构建及原重建两整例通过；尚无新用户入口，不计可用功能，暂不发布。
+
 SQLite 查询结果新增[固定结果对比](development/sqlite-result-comparison-20261102.md)：明确原类型匹配键、四类差异、同显示值类型变化及明细；不重查。1779 项相关、类型／构建及 Windows 原工作区真实滚动专项通过；Mac／安装另验，暂不发布。
 
 SQLite 查询结果新增[列统计](development/sqlite-result-statistics-20261102.md)：筛选后／勾选范围、精确数值、混合类型计数与原字节极值，不重查；1752 项相关、类型／构建及 Windows 原工作区整例通过。Mac／安装另验，暂不发布。

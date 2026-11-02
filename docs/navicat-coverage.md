@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 已有约束设计推进至[外键声明编译](development/sqlite-foreign-keys-plan-20261102.md)：准确区分行内／表级、重名／重复声明，生成结构化增改删并保留未改片段。488 项相关、类型／构建及原重建成功／回滚通过；Main／新外键事务／界面继续，不能算已可用 R02 外键管理或完整工作包。
+
 SQLite 高频查询补齐[固定结果对比](development/sqlite-result-comparison-20261102.md)：明确键、完整类型帧、四类差异和原类型明细；同原文的类型变化也识别。Windows 原整例与相关回归通过；完整库表比较同步及 Mac／安装继续，不增加完整工作包或发行计数。
 
 SQLite 高频查询补齐[列统计](development/sqlite-result-statistics-20261102.md)：当前结果和勾选范围的原类型计数、不同值、极值与精确数值聚合；不重查且明确混合值语义。Windows 原整例与相关回归通过，Mac／安装另验，不增加完整工作包或发行计数。
