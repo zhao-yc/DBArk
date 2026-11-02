@@ -6,6 +6,7 @@ import { queryDatabaseSwitchZh } from '../../src/renderer/locales/queryDatabaseS
 import { queryTransactionSettingsZh } from '../../src/renderer/locales/queryTransactionSettings.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultHistoryZh as sortHistoryText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
+import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -228,6 +229,36 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.redo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(originalOrder));
     await step(() => blobHeader.click()); await step(() => expect(blobHeader).toHaveAttribute('aria-sort', 'ascending'));
     await step(() => blobHeader.click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
+    stage = '真实typed结果筛选只改变已返回视图，保原BLOB排序及整理历史';
+    const filtering = query().getByRole('region', { name: filterText.title, exact: true });
+    /** 原菜单与真实表单共同验证草稿；应用、撤销、清除均不补读数据库。 */
+    const openFiltering = async () => { await step(async () => (await navigationMenuItem(query(), { name: filterText.open, exact: true }, check)).click()); await step(() => expect(filtering).toBeVisible()); };
+    const applyFiltering = async (expected: string[]) => { await step(() => filtering.getByRole('button', { name: filterText.apply, exact: true }).click()); await step(() => expect(filtering).toHaveCount(0)); await step(() => expect.poll(shownIntegers).toEqual(expected)); await step(() => expect(blobHeader).toHaveAttribute('aria-sort', 'descending')); expect((await step(audit)).executions).toBe(1); };
+    await openFiltering(); await step(() => filtering.getByRole('button', { name: filterText.add, exact: true }).click());
+    await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c4'));
+    await step(() => filtering.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('eq'));
+    await step(() => filtering.getByLabel(filterText.input + ' 1', { exact: true }).fill('2'));
+    await step(() => expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text'));
+    await step(() => expect.poll(shownIntegers).toEqual(ascending)); await applyFiltering([ascending[0]]);
+    await step(() => expect(query().getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
+    await openFiltering(); await step(() => filtering.getByLabel(filterText.sqliteType(1), { exact: true }).selectOption('integer'));
+    await step(() => expect.poll(shownIntegers).toEqual([ascending[0]]));
+    // 仅成功草稿态手动截图，画面为本例合成数据；自动trace/video仍关闭。
+    await step(async () => info.attach('SQLite结果显式类型筛选草稿', { body: await page.screenshot(), contentType: 'image/png' }));
+    await applyFiltering([ascending[1]]);
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.undo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual([ascending[0]]));
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.redo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual([ascending[1]]));
+    await openFiltering(); await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c3'));
+    await step(() => filtering.getByLabel(filterText.sqliteType(1), { exact: true }).selectOption('blob'));
+    await step(() => filtering.getByLabel(filterText.input + ' 1', { exact: true }).fill('00ff')); await applyFiltering([ascending[1]]);
+    await openFiltering(); await step(() => filtering.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('between'));
+    await step(() => filtering.getByLabel(filterText.upper + ' 1', { exact: true }).fill('ff00')); await applyFiltering(ascending);
+    await openFiltering(); await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c2'));
+    await step(() => filtering.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('null')); await applyFiltering(ascending);
+    await openFiltering(); await step(() => filtering.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('notNull')); await applyFiltering([]);
+    await step(async () => (await navigationMenuItem(query(), { name: filterText.clear, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    await step(() => expect(query().getByText(filterText.counts(2, 2), { exact: true })).toBeVisible());
     expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
     stage = '原结果菜单真实保存逐格类型快照';
     await step(async () => (await navigationMenuItem(query(), { name: snapshotText.save, exact: true }, check)).click());

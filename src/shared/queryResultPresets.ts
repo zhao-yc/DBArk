@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import type { ResultColumn } from './contracts';
+import { sqliteResultFilterTypes, type SqliteResultFilterType } from './sqliteResultStorage';
 
 export type QueryResultFilterOperator = 'contains' | 'notContains' | 'startsWith' | 'notStartsWith' | 'endsWith' | 'notEndsWith' | 'like' | 'notLike' | 'empty' | 'notEmpty' | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'between' | 'notBetween' | 'in' | 'notIn' | 'null' | 'notNull';
 export type QueryResultFilterMode = 'AND' | 'OR';
-export interface QueryResultFilterRule { column: string; operator: QueryResultFilterOperator; value: string; upper?: string; values?: readonly string[]; ignoreCase?: boolean; enabled?: boolean; }
+export interface QueryResultFilterRule { column: string; operator: QueryResultFilterOperator; value: string; upper?: string; values?: readonly string[]; ignoreCase?: boolean; enabled?: boolean; /** SQLite非NULL条件显式选择类型，不能从字面值猜测。 */ sqliteType?: SqliteResultFilterType; }
 export interface QueryResultFilterGroup { readonly mode: QueryResultFilterMode; readonly children: readonly (QueryResultFilterRule | QueryResultFilterGroup)[]; }
 export interface QueryResultSortRule { column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; ignoreCase?: boolean; }
 export interface QueryResultOrganization { readonly expression: QueryResultFilterGroup; readonly sort: readonly QueryResultSortRule[]; }
@@ -75,10 +76,15 @@ function parseValue(input: unknown): QueryResultPresetValue {
   /** 所有叶（包括停用叶）保留原值及选项；仅核结构，不把数字或日期转成Main比较值。 */
   function rule(value: unknown): QueryResultFilterRule {
     if (++conditions > structure.conditions) return invalid();
-    const node = record(value, ['column', 'operator', 'value', 'upper', 'values', 'ignoreCase', 'enabled'], ['column', 'operator', 'value']);
+    const node = record(value, ['column', 'operator', 'value', 'upper', 'values', 'ignoreCase', 'enabled', 'sqliteType'], ['column', 'operator', 'value']);
     const column = string(node.column, 1, 4096), operator = node.operator as QueryResultFilterOperator;
     if (!available.has(column) || !operators.has(operator)) return invalid();
     const output: QueryResultFilterRule = { column, operator, value: string(node.value, 0, structure.literalUnits) };
+    const sqlite = all.find(item => item.key === column)?.type === 'SQLITE', nullable = operator === 'null' || operator === 'notNull';
+    if (Object.hasOwn(node, 'sqliteType')) {
+      if (!sqlite || nullable || !sqliteResultFilterTypes.includes(node.sqliteType as SqliteResultFilterType)) return invalid();
+      output.sqliteType = node.sqliteType as SqliteResultFilterType;
+    } else if (sqlite && !nullable) return invalid();
     const range = operator === 'between' || operator === 'notBetween', list = operator === 'in' || operator === 'notIn';
     if (range) output.upper = string(node.upper, 0, structure.literalUnits);
     else if (node.upper !== undefined) return invalid();

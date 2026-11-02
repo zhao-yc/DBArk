@@ -4,7 +4,9 @@ export type { QueryResultFilterOperator, QueryResultFilterMode, QueryResultFilte
 import { queryResultFilterKind, queryResultFilterKey, queryResultFilterLiteral, compareQueryResultFilterKeys, type QueryResultSortView } from './queryResultSort';
 import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
 import { compileQueryResultWildcard } from './queryResultWildcard';
-import { bindSqliteResultStorage, projectSqliteResultStorage } from '../shared/sqliteResultStorage';
+import { bindSqliteResultStorage, projectSqliteResultStorage, sqliteResultFilterTypes, type SqliteResultFilterType } from '../shared/sqliteResultStorage';
+import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultComparisonKey } from './sqliteResultCompare';
+import { sqliteResultFilterCodes, sqliteResultFilterLiteral } from './sqliteResultFilter';
 
 export const queryResultFilterLimits = Object.freeze({ rows:100000, columns:1024, conditions:32, groups:16, depth:8, members:128, work:2000000, textWork:32*1024*1024, valueUnits:4096, units:8*1024*1024 });
 export interface QueryResultFilterView { readonly result:QueryResult;readonly sourceIndices:readonly number[];readonly rules:readonly Readonly<QueryResultFilterRule>[];readonly mode:QueryResultFilterMode;readonly expression:QueryResultFilterGroup; }
@@ -14,6 +16,19 @@ export interface QueryResultFilterBinding {
   readonly storageCurrent:()=>boolean;
 }
 type Snapshot = { column:ResultColumn;values:CellValue[];binary:readonly (readonly unknown[]|undefined)[] };
+type FilterKey = ReturnType<typeof queryResultFilterKey> | SqliteResultComparisonKey;
+/** SQLite专用键不扩散到旧统计、比较和MySQL类型合同。 */
+function compareKeys(left: FilterKey, right: FilterKey): number {
+  if (left === null || right === null) return left === right ? 0 : left === null ? -1 : 1;
+  if (typeof left === 'object' && 'sqlite' in left) {
+    if (typeof right === 'object' && 'sqlite' in right) return compareSqliteResultKeys(left, right);
+    throw Error(text.value);
+  }
+  if (typeof right === 'object' && 'sqlite' in right) throw Error(text.value);
+  return compareQueryResultFilterKeys(left, right);
+}
+/** SQLite字节与UTF-8比较键也消耗原整理预算；普通结果不增加编码开销。 */
+function keyUnits(key: FilterKey): number { return key && typeof key === 'object' && 'sqlite' in key && key.storage !== 'number' ? key.bytes.length : 0; }
 /** 字节仅留自有属性描述符的值身份，NULL条件也可发现原包装漂移，不解码/调用getter。 */
 function binaryStamp(value:CellValue):readonly unknown[]|undefined{return value&&typeof value==='object'?[Object.getOwnPropertyDescriptor(value,'type')?.value,Object.getOwnPropertyDescriptor(value,'base64')?.value]:undefined;}
 const fail=()=>Error(text.stale);
@@ -44,7 +59,8 @@ function prepareExpression(expression:QueryResultFilterGroup):{rules:QueryResult
       else{
         if(rules.length>=queryResultFilterLimits.conditions)throw Error(text.budget);
         if(Object.hasOwn(child,'mode'))throw Error(text.invalid);
-        const rule={column:own(child,'column',true),operator:own(child,'operator',true),value:own(child,'value',true),upper:own(child,'upper'),values:own(child,'values'),ignoreCase:own(child,'ignoreCase'),enabled:own(child,'enabled')} as QueryResultFilterRule;
+        const sqliteType=own(child,'sqliteType');
+        const rule={column:own(child,'column',true),operator:own(child,'operator',true),value:own(child,'value',true),upper:own(child,'upper'),values:own(child,'values'),ignoreCase:own(child,'ignoreCase'),enabled:own(child,'enabled'),...(sqliteType===undefined?{}:{sqliteType})} as QueryResultFilterRule;
         children.push(rules.length);rules.push(rule);
       }
     }
@@ -85,7 +101,8 @@ export function appendQueryResultFilterNode(expression:QueryResultFilterGroup,no
 /** 原单格追加入口继续走相同AND语义与最终树预算，不另建比较或组合逻辑。 */
 export function appendQueryResultFilterRule(expression:QueryResultFilterGroup,rule:QueryResultFilterRule):QueryResultFilterGroup{return appendQueryResultFilterNode(expression,rule);}
 /** 比较方式来自协议类型；未知/二进制元数据仍可做NULL判断，不按外观猜类型。 */
-export function queryResultFilterOperators(column:ResultColumn):readonly QueryResultFilterOperator[]{
+export function queryResultFilterOperators(column:ResultColumn,sqliteType?:SqliteResultFilterType):readonly QueryResultFilterOperator[]{
+  if(column.type==='SQLITE')return (sqliteType??'text')==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','empty','notEmpty','null','notNull']:['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull'];
   const kind=queryResultFilterKind(column);
   return kind==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','eq','ne','in','notIn','empty','notEmpty','null','notNull']:kind?['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull']:['null','notNull'];
 }
@@ -96,7 +113,7 @@ export function queryResultFilterNeedsUpper(operator:QueryResultFilterOperator):
 /** 成员使用独立原文数组，逗号、换行、引号和NULL字样不承担分隔或SQL语义。 */
 export function queryResultFilterNeedsValues(operator:QueryResultFilterOperator):boolean{return operator==='in'||operator==='notIn';}
 /** 仅有实际文本原值比较时提供大小写选项，NULL和空文本判断不保留隐藏选项。 */
-export function queryResultFilterSupportsIgnoreCase(column:ResultColumn,operator:QueryResultFilterOperator):boolean{return queryResultFilterKind(column)==='text'&&queryResultFilterOperators(column).includes(operator)&&!['null','notNull','empty','notEmpty'].includes(operator);}
+export function queryResultFilterSupportsIgnoreCase(column:ResultColumn,operator:QueryResultFilterOperator,sqliteType?:SqliteResultFilterType):boolean{return (queryResultFilterKind(column)==='text'||column.type==='SQLITE'&&(sqliteType??'text')==='text')&&queryResultFilterOperators(column,sqliteType).includes(operator)&&!['null','notNull','empty','notEmpty'].includes(operator);}
 /** 只读取自有数据属性；访问器不执行，NULL判断也不解码二进制。 */
 function cell(row:QueryResult['rows'][number],column:ResultColumn):CellValue {const d=Object.getOwnPropertyDescriptor(row,column.key);if(!d||!('value'in d))throw Error(text.value);return d.value;}
 /** 当前完整源的单向租约；过滤保存原行引用，连被排除行的活动条件键也观察漂移。 */
@@ -157,32 +174,42 @@ export class QueryResultFilter {
     function spendWildcard(work:number):void{ textWork+=work;if(textWork>queryResultFilterLimits.textWork)throw Error(text.budget); }
     /** 使用无locale的Unicode小写映射；原文与映射文本共同计费，扩展长度也受原上限限制。 */
     function fold(value:string):string{const folded=value.toLowerCase();units+=folded.length;if(folded.length>queryResultFilterLimits.valueUnits||units>queryResultFilterLimits.units)throw Error(text.budget);return folded;}
+    /** 原SQLite标记或明确条件类型决定比较键，不让动态键进入MySQL公共键类型。 */
+    function makeKey(column:ResultColumn,value:CellValue,code?:string):FilterKey{
+      const key=column.type==='SQLITE'?sqliteResultComparisonKey(value,code??''):queryResultFilterKey(column,value);
+      units+=keyUnits(key);if(units>queryResultFilterLimits.units)throw Error(text.budget);return key;
+    }
     // 停用输入仍完整计费并核结构；仅生效条件解析字面值、通配模式及读取源单元格。
     const admitted=rules.map((rule,index)=>({...rule,...(memberSets[index]?{values:memberSets[index]}:{})}));
     const compiled=admitted.flatMap((rule,index)=>{
-      const column=binding.visible.find(c=>c.key===rule.column);if(!column||!queryResultFilterOperators(column).includes(rule.operator)||typeof rule.value!=='string')throw Error(text.invalid);
+      const column=binding.visible.find(c=>c.key===rule.column);if(!column||!queryResultFilterOperators(column,rule.sqliteType).includes(rule.operator)||typeof rule.value!=='string')throw Error(text.invalid);
       if(rule.enabled!==undefined&&typeof rule.enabled!=='boolean')throw Error(text.invalid);
-      if(rule.ignoreCase!==undefined&&(typeof rule.ignoreCase!=='boolean'||!queryResultFilterSupportsIgnoreCase(column,rule.operator)))throw Error(text.invalid);
+      if(rule.ignoreCase!==undefined&&(typeof rule.ignoreCase!=='boolean'||!queryResultFilterSupportsIgnoreCase(column,rule.operator,rule.sqliteType)))throw Error(text.invalid);
       const nullable=rule.operator==='null'||rule.operator==='notNull',range=queryResultFilterNeedsUpper(rule.operator);
+      const sqlite=column.type==='SQLITE';
+      if(sqlite?!nullable&&!sqliteResultFilterTypes.includes(rule.sqliteType as SqliteResultFilterType)||nullable&&rule.sqliteType!==undefined:rule.sqliteType!==undefined)throw Error(text.invalid);
       if((!queryResultFilterNeedsValue(rule.operator)&&rule.value!=='')||(range?typeof rule.upper!=='string':rule.upper!==undefined))throw Error(text.invalid);
       const memberInputs=memberSets[index];
       for(const value of memberInputs??(range?[rule.value,rule.upper!]:[rule.value])){
         if(value.length>queryResultFilterLimits.valueUnits)throw Error(text.budget);units+=value.length;if(units>queryResultFilterLimits.units)throw Error(text.budget);
       }
       if(rule.enabled===false)return [];
-      let literal:CellValue|null,upper:CellValue|null,key:ReturnType<typeof queryResultFilterKey>|null,upperKey:ReturnType<typeof queryResultFilterKey>|null;
-      let members:{input:string;literal:CellValue;key:ReturnType<typeof queryResultFilterKey>}[]|undefined;
+      if(sqlite&&!nullable&&!binding.source.sqliteStorage)throw Error(text.sqliteUnknown);
+      const code=sqlite&&!nullable?sqliteResultFilterCodes[rule.sqliteType!]:undefined;
+      const parse=(input:string)=>sqlite?sqliteResultFilterLiteral(rule.sqliteType!,input):queryResultFilterLiteral(column,input);
+      let literal:CellValue|null,upper:CellValue|null,key:FilterKey|null,upperKey:FilterKey|null;
+      let members:{input:string;literal:CellValue;key:FilterKey}[]|undefined;
       try{
-        literal=nullable||memberInputs?null:queryResultFilterLiteral(column,rule.value);key=nullable||memberInputs?null:queryResultFilterKey(column,literal!);
-        upper=range?queryResultFilterLiteral(column,rule.upper!):null;upperKey=range?queryResultFilterKey(column,upper!):null;
-        members=memberInputs?.map(input=>{const literal=queryResultFilterLiteral(column,input);return{input,literal,key:queryResultFilterKey(column,literal)};});
-      }catch{throw Error(text.value);}
+        literal=nullable||memberInputs?null:parse(rule.value);key=nullable||memberInputs?null:makeKey(column,literal!,code);
+        upper=range?parse(rule.upper!):null;upperKey=range?makeKey(column,upper!,code):null;
+        members=memberInputs?.map(input=>{const literal=parse(input);return{input,literal,key:makeKey(column,literal,code)};});
+      }catch(reason){if(reason instanceof Error&&reason.message===text.budget)throw reason;throw Error(sqlite?text.sqliteValue:text.value);}
       // 仅转换控制器自有比较键，保存的规则、源单元格和后续排序仍保留原文。
-      if(rule.ignoreCase){literal=members?null:fold(literal as string);key=literal;members=members?.map(member=>{const literal=fold(member.literal as string);return{...member,literal,key:literal};});}
+      if(rule.ignoreCase){literal=members?null:fold(literal as string);key=members?null:makeKey(column,literal!,code);members=members?.map(member=>{const literal=fold(member.literal as string);return{...member,literal,key:makeKey(column,literal,code)};});if(range){upper=fold(upper as string);upperKey=makeKey(column,upper,code);}}
       // 下限大于上限时完整拒绝，不能猜测交换端点或把否定区间变成全量结果。
-      if(range&&compareQueryResultFilterKeys(key,upperKey)>0)throw Error(text.rangeOrder);
+      if(range&&compareKeys(key,upperKey)>0)throw Error(text.rangeOrder);
       const wildcard=rule.operator==='like'||rule.operator==='notLike'?compileQueryResultWildcard(literal as string,spendWildcard):undefined;
-      return[{rule,index,column,nullable,range,literal,key,upper,upperKey,members,wildcard}];
+      return[{rule,index,column,position:binding.columns.indexOf(column),nullable,range,literal,key,upper,upperKey,members,wildcard,code}];
     });
     if(!compiled.length){
       if(!this.current(binding)||this.projection!==previous)throw fail();this.snapshots=undefined;
@@ -191,26 +218,34 @@ export class QueryResultFilter {
     const snapshots:Snapshot[]=[...new Map(compiled.map(c=>[c.column.key,c.column])).values()].map(column=>{const values=binding.rows.map(row=>cell(row,column));return{column,values,binary:values.map(binaryStamp)};});
     const prepared=new Map(snapshots.map(s=>{
       const scalar=compiled.some(c=>c.column===s.column&&!c.nullable);
-      return[s.column.key,s.values.map(value=>{if(!scalar)return null;units+=typeof value==='string'?value.length:1;if(typeof value==='string'&&value.length>queryResultFilterLimits.valueUnits||units>queryResultFilterLimits.units)throw Error(text.budget);try{return queryResultFilterKey(s.column,value);}catch{throw Error(text.value);}})] as const;
+      const codes=new Set<string|undefined>(compiled.filter(c=>c.column===s.column&&!c.nullable).map(c=>c.code)),position=binding.columns.indexOf(s.column),sqlite=s.column.type==='SQLITE';
+      return[s.column.key,s.values.map((value,index)=>{
+        const code=binding.source.sqliteStorage?.rows[index][position];if(!scalar||sqlite&&!codes.has(code))return null;
+        const count=typeof value==='string'?value.length:sqlite&&value&&typeof value==='object'?value.base64.length:1;
+        units+=count;if(count>queryResultFilterLimits.valueUnits||units>queryResultFilterLimits.units)throw Error(text.budget);
+        try{return makeKey(s.column,value,code);}catch(reason){if(reason instanceof Error&&reason.message===text.budget)throw reason;throw Error(text.value);}
+      })] as const;
     }));
     // 同一文本列的忽略大小写键只生成一次；大小写敏感条件继续使用原键。
-    const folded=new Map<string,(string|null)[]>(snapshots.filter(s=>compiled.some(c=>c.column===s.column&&c.rule.ignoreCase)).map(s=>[s.column.key,s.values.map(value=>value===null?null:fold(value as string))]));
+    const folded=new Map<string,(string|null)[]>(snapshots.filter(s=>compiled.some(c=>c.column===s.column&&c.rule.ignoreCase)).map(s=>{const position=binding.columns.indexOf(s.column);return[s.column.key,s.values.map((value,index)=>value===null||s.column.type==='SQLITE'&&binding.source.sqliteStorage!.rows[index][position]!=='t'?null:fold(value as string))];}));
+    const foldedKeys=new Map([...folded].map(([key,values])=>{const column=binding.columns.find(column=>column.key===key)!;return[key,values.map(value=>value===null?null:makeKey(column,value,'t'))] as const;}));
     const data=new Map(snapshots.map(s=>[s.column.key,s.values])),indices:number[]=[];
     for(let i=0;i<binding.rows.length;i++){
-      const activeMatches=compiled.map(({rule,column,nullable,range,literal,key,upper,upperKey,members,wildcard})=>{
+      const activeMatches=compiled.map(({rule,column,position,nullable,range,literal,key,upper,upperKey,members,wildcard,code})=>{
         const value=data.get(column.key)![i];if(nullable)return rule.operator==='null'?value===null:value!==null;if(value===null)return false;
-        const comparable=rule.ignoreCase?folded.get(column.key)![i]:value,cellKey=rule.ignoreCase?comparable as string:prepared.get(column.key)![i];
+        if(column.type==='SQLITE'&&binding.source.sqliteStorage!.rows[i][position]!==code)return false;
+        const comparable=rule.ignoreCase?folded.get(column.key)![i]:value,cellKey=rule.ignoreCase?foldedKeys.get(column.key)![i]:prepared.get(column.key)![i];
         // 包含及其否定按最坏匹配量计费；前后缀按原文和条件长度计费，共用同一工作预算。
-        const size=typeof comparable==='string'?comparable.length:1,input=typeof literal==='string'?literal.length:1;
+        const size=Math.max(typeof comparable==='string'?comparable.length:1,keyUnits(cellKey)),input=Math.max(typeof literal==='string'?literal.length:1,keyUnits(key));
         if(members){
           // 即使提前匹配也比较所有成员并计费，否定集合仍排除前面处理的NULL。
           let matched=false;
-          for(const member of members){textWork+=size+(typeof member.literal==='string'?member.literal.length:1);if(textWork>queryResultFilterLimits.textWork)throw Error(text.budget);if(compareQueryResultFilterKeys(cellKey,member.key)===0)matched=true;}
+          for(const member of members){textWork+=size+Math.max(typeof member.literal==='string'?member.literal.length:1,keyUnits(member.key));if(textWork>queryResultFilterLimits.textWork)throw Error(text.budget);if(compareKeys(cellKey,member.key)===0)matched=true;}
           return rule.operator==='in'?matched:!matched;
         }
         const containing=rule.operator==='contains'||rule.operator==='notContains',starting=rule.operator==='startsWith'||rule.operator==='notStartsWith',ending=rule.operator==='endsWith'||rule.operator==='notEndsWith';
         textWork+=containing?(input?Math.max(1,size)*input:1):size+input;
-        if(range)textWork+=size+(typeof upper==='string'?upper.length:1);
+        if(range)textWork+=size+Math.max(typeof upper==='string'?upper.length:1,keyUnits(upperKey));
         if(textWork>queryResultFilterLimits.textWork)throw Error(text.budget);
         if(wildcard){
           if(typeof comparable!=='string')throw Error(text.value);
@@ -222,9 +257,9 @@ export class QueryResultFilter {
           const matched=containing?comparable.includes(literal):starting?comparable.startsWith(literal):comparable.endsWith(literal);
           return rule.operator==='notContains'||rule.operator==='notStartsWith'||rule.operator==='notEndsWith'?!matched:matched;
         }
-        const order=compareQueryResultFilterKeys(cellKey,key);
+        const order=compareKeys(cellKey,key);
         if(range){
-          const upperOrder=compareQueryResultFilterKeys(prepared.get(column.key)![i],upperKey);
+          const upperOrder=compareKeys(cellKey,upperKey);
           return rule.operator==='between'?order>=0&&upperOrder<=0:order<0||upperOrder>0;
         }
         return rule.operator==='eq'||rule.operator==='empty'?order===0:rule.operator==='ne'||rule.operator==='notEmpty'?order!==0:rule.operator==='gt'?order>0:rule.operator==='gte'?order>=0:rule.operator==='lt'?order<0:order<=0;

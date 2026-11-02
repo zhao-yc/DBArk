@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 查询结果新增[显式类型筛选](development/sqlite-result-filter-20261102.md)：文本、整数、实数、BLOB 与 NULL、范围／列表及嵌套条件，共用原多列排序、清除与整理历史，不新增数据库请求。类型、976 项相关、构建及 Windows 原工作区整例通过；候选值／单格快捷条件与 Mac／安装继续，暂不发布。
+
 SQLite 查询结果新增[本地多列排序](development/sqlite-result-sort-20261102.md)：原存储类型、精确数值与固定 UTF-8／字节序，支持列头、独立草稿、优先级及撤销重做，不重发 SQL。类型、23 份 732 项相关、构建和 Windows 原工作区整例通过；完整 typed 筛选入口继续开发，暂不发布。
 
 SQLite 工具栏迁移后的[测试导航修正](development/sqlite-test-navigation-20261102.md)恢复两个父级夹具，并通过真实滚轮观察虚拟行；原编辑断言、期限和资源保护完整保留。Windows 最小窗口原生整例通过，macOS 复验继续，暂不发布。

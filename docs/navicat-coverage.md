@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 高频查询新增[结果显式类型筛选](development/sqlite-result-filter-20261102.md)：手工 typed 条件、范围／列表／通配、嵌套组合、NULL 和清除，保原多列排序及整理历史；Windows 原工作区实测数据库命令序列不增加。不同值候选、单格快捷条件与 Mac／安装继续，不增加完整工作包或发行计数。
+
 SQLite 高频查询新增[结果本地多列排序](development/sqlite-result-sort-20261102.md)：真实存储类型、int64／REAL 精确比较、固定 UTF-8 与原字节、列头追加优先级、独立草稿及撤销重做；不重发 SQL。Windows 原工作区整例及相关测试通过，Mac／安装和完整 typed 结果筛选另行推进，不增加 R02 完整工作包或发行计数。
 
 SQLite 原字节读取已[接入实际 worker](development/sqlite-native-runtime-20261102.md)，任意查询严格校验 TEXT 编码，保留原类型、预算、ACK、取消及写入事实；Windows 源码工作区和 3783 项相关测试通过，Mac 与打包另验。此前[批次](development/sqlite-raw-frames-20261102.md)及[语句适配器](development/sqlite-raw-statement-20261102.md)保留为接入前实证，不增加 R02 完整工作包或发行计数。

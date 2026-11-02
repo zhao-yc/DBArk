@@ -4,6 +4,8 @@ import { sqliteResultStorageZh as text } from './sqliteResultStorage.zh-CN';
 /** 每行每列一个ASCII标识：整数、实数、文本、字节、NULL；数值原文仍由原CellValue承载。 */
 export interface SqliteResultStorage { version: 1; rows: string[]; }
 export type SqliteResultStorageCode = 'i' | 'r' | 't' | 'b' | 'n';
+export const sqliteResultFilterTypes = ['text', 'integer', 'real', 'blob'] as const;
+export type SqliteResultFilterType = typeof sqliteResultFilterTypes[number];
 export const sqliteResultStorageLimits = { rows: 100000, columns: 4096, cells: 2000000, units: 16 * 1024 * 1024 } as const;
 const invalid = (): never => { throw Error(text.invalid); };
 const large = (): never => { throw Error(text.budget); };

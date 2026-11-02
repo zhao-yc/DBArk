@@ -1,4 +1,9 @@
 export const queryResultFilterZh = {
+  sqliteScope: 'SQLite条件须明确选择原存储类型；文本2、整数2和实数2分别匹配，不做数据库亲和性转换。TEXT比较按固定UTF-8字节序，BLOB填写完整十六进制字节，NULL使用独立条件；只处理已返回行。',
+  sqliteType: (index: number) => `第${index}条条件SQLite值类型`,
+  sqliteTypes: { text: 'TEXT 文本', integer: 'INTEGER 精确整数', real: 'REAL 浮点数', blob: 'BLOB 十六进制' },
+  sqliteValue: 'SQLite条件原值与所选类型不符；整数须在有符号64位范围内，BLOB须填写完整十六进制字节。',
+  sqliteUnknown: '此SQLite结果缺少原存储类型，只能判断NULL；请重新执行查询后再按类型筛选。',
   open: '筛选已返回结果', title: '本地条件筛选', scope: '仅筛选当前已返回快照，不重发 SQL。筛选先于排序；应用或清除保留多列排序，重置勾选、查找及行详情。',
   truncated: '原结果已截断，筛选不包含未返回记录。',
   counts: (source: number, matched: number) => `原返回 ${source} 行，筛选后 ${matched} 行`,
