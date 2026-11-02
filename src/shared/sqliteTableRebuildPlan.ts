@@ -583,12 +583,60 @@ function transformPrimaryKey(raw: ForeignKeyInput, rawEdit: unknown, intermediat
 export interface SqliteTableRebuildCopyDefinition extends SqliteTableRebuildDefinition { ordinalColumn: string; ordinalIndex: string; createOrdinalIndexSql: string; removeOrdinalSql: string[]; }
 /** 私有复制阶段额外加入逐行编号；不进入公开字段设计，提交前须移除并核对准确最终结构。 */
 export function compileSqliteTableRebuildCopyDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn: string): SqliteTableRebuildCopyDefinition {
+  return compileCopyDefinition(input, ordinalColumn);
+}
+/** 编号只加入已独立编译的私有声明；外部原入口仍按原规则校验修改和名称。 */
+function compileCopyDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn: string, compiledBase = false): SqliteTableRebuildCopyDefinition {
   if (ordinalColumn.length !== 54 || !/^__dbark_rebuild_order_[a-f0-9]{32}$/.test(ordinalColumn) || input.columns.some(column => fold(column.name) === ordinalColumn)) throw invalid();
-  const ordinalIndex = '__dbark_rebuild_order_index_' + ordinalColumn.slice(-32), compiled = compileDefinition(input, ordinalColumn);
+  const ordinalIndex = '__dbark_rebuild_order_index_' + ordinalColumn.slice(-32), compiled = compileDefinition(input, ordinalColumn, compiledBase);
   return { ...compiled, ordinalColumn, ordinalIndex,
     createOrdinalIndexSql: 'CREATE UNIQUE INDEX "main".' + quote(ordinalIndex) + ' ON ' + quote(input.candidateName) + '(' + quote(ordinalColumn) + ')',
     removeOrdinalSql: ['DROP INDEX "main".' + quote(ordinalIndex), 'ALTER TABLE "main".' + quote(input.candidateName) + ' DROP COLUMN ' + quote(ordinalColumn)],
   };
+}
+
+export interface SqliteTableRebuildCheckedCopyDefinition extends SqliteTableRebuildCopyDefinition {
+  /** 最终准确目标CREATE，原CHECK表达式和限定引用保持；不能将私有候选直接改名代替它。 */
+  finalSql: string;
+  /** 移除私有序号后必须核对的完整候选CREATE。 */
+  privateSql: string;
+  qualifiedCheckReferences: number;
+}
+/** 只在真实CHECK表达式跨度内将本表限定字段转为同一准确字段；不扫描字符串或改写其他声明。 */
+function privateCheckReferences(input: ForeignKeyInput, referencedTable: string): { tableSql: string; references: number } {
+  const source = definition({ ...input, candidateName: '', changes: [] }), edits: (Span & { sql: string })[] = [], columns = new Map(input.columns.map(column => [fold(column.name), column.name])); let references = 0;
+  for (const span of checkSpans(input, source)) {
+    const parts = tokenize(span.value.sql).map(token => ({ ...token, start: token.start + span.start, end: token.end + span.start })); let open = 0; while (word(parts[open], 'CONSTRAINT')) open += 2; open++; const end = groupEnd(parts, open);
+    for (let index = open + 1; index < end - 1; index++) {
+      if (identifier(parts[index]) === undefined || symbol(parts[index - 1], '.')) continue;
+      const chain: Token[] = [parts[index]]; let next = index + 1;
+      while (symbol(parts[next], '.') && identifier(parts[next + 1]) !== undefined) { chain.push(parts[next], parts[next + 1]); next += 2; }
+      // CHECK不允许子查询；只有本main表的二/三段准确字段可证明等价，其他语义留native拒绝。
+      const qualified = chain.length === 3 && fold(chain[0].value) === fold(referencedTable) || chain.length === 5 && fold(chain[0].value) === 'main' && fold(chain[2].value) === fold(referencedTable);
+      const column = qualified ? columns.get(fold(chain.at(-1)!.value)) : undefined;
+      if (column !== undefined && !symbol(parts[next], '.') && !symbol(parts[next], '(')) {
+        // 仅替换token本身，保留其间注释/换行。末段强制准确标识符，避免单引号字段变成字符串。
+        for (const token of chain.slice(0, -1)) edits.push({ start: token.start, end: token.end, sql: ' ' });
+        const token = chain.at(-1)!; edits.push({ start: token.start, end: token.end, sql: quote(column) }); references++;
+      }
+      if (chain.length > 1) index = next - 1;
+    }
+  }
+  if (!edits.length) return { tableSql: input.tableSql, references: 0 };
+  edits.sort((left, right) => left.start - right.start); const chunks: string[] = []; let position = 0;
+  for (const edit of edits) { if (edit.start < position) throw invalid(); chunks.push(input.tableSql.slice(position, edit.start), edit.sql); position = edit.end; }
+  chunks.push(input.tableSql.slice(position)); const tableSql = chunks.join(''); if (encoder.encode(tableSql).length > limits.sqlBytes) throw invalid(); return { tableSql, references };
+}
+/** 分离最终准确定义与私有CHECK求值声明；无数据库访问，也不签发新建/复制最终表的执行权。 */
+export function compileSqliteTableRebuildCheckedCopyDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn: string): SqliteTableRebuildCheckedCopyDefinition {
+  // 先沿原整批编译路径核对所有原SQL绑定及描述符，不能先spread调用未校验的约束getter。
+  const planned = compileDefinition(input), columns = planned.columnMapping.map(column => input.columns.find(original => original.name === column.name)!);
+  const plannedInput = { table: input.candidateName, tableSql: planned.candidateSql, columns }, source = definition({ ...plannedInput, candidateName: input.candidateName, changes: [] });
+  const finalSql = planned.candidateSql.slice(0, source.table.start) + quote(input.table) + planned.candidateSql.slice(source.table.end);
+  if (encoder.encode(finalSql).length > limits.sqlBytes) throw invalid();
+  const relocated = privateCheckReferences(plannedInput, input.table);
+  const copied = compileCopyDefinition({ ...plannedInput, tableSql: relocated.tableSql, candidateName: input.candidateName, changes: [] }, ordinalColumn, true);
+  return { ...copied, finalSql, privateSql: relocated.tableSql, qualifiedCheckReferences: relocated.references };
 }
 
 /** 普通候选与带私有编号候选共享同一跨度编译，不复制或重新实现默认值/约束解析。 */

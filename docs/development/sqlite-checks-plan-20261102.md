@@ -25,7 +25,7 @@ CHECK 按 SQLite 的 NUMERIC 规则判定，NULL 并不违规，不能代替 NOT
 
 独立 native 探针确认：`child.a>0`、`main.child.a>0`、`"child"."a">0` 在准确原表合法，直接搬到名为 candidate 的表均报 `no such column: child.a`。以 candidate 自限定创建再改名，`legacy_alter_table=OFF` 会重写限定名；现有独立 writer 使用的 ON 模式则报重解析错误。
 
-这不是可凭字符串替换或单独翻转开关宣布解决的边界，仍须同时保护原视图、触发器、外键、完整 SQL 和真实数据。本轮只读探针保留在 `probe-qualified.log`／`probe-rename.log`，**限定引用的私有重建尚未完成**，列为下一阶段必做项；不将原安全拒绝计为成功写入，也不把不支持限定引用改成最终交付目标。
+这不是可凭字符串替换或单独翻转开关宣布解决的边界，仍须同时保护原视图、触发器、外键、完整 SQL 和真实数据。本轮只读探针保留在 `probe-qualified.log`／`probe-rename.log`。后续已补充[限定引用私有定义与原名 CREATE 路线证明](sqlite-check-qualified-copy-20261102.md)，四种布局及晚期真实回滚的 native 内存原型通过；**Main／Runtime 的限定引用私有重建仍须接入**，不将原安全拒绝或内存原型计为用户入口成功写入，也不把不支持限定引用改成最终交付目标。
 
 ## 验证记录
 
