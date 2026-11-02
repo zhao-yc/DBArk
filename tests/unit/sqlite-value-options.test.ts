@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { sqliteTableFilterSchema, sqliteTablePageSchema, type SqliteFilterSelection } from '../../src/shared/sqliteTableBrowse';
-import { assertSqliteValueOptions, sqliteValueOptionSchema, sqliteValueOptionsSelection, type SqliteValueOptionsInput } from '../../src/shared/sqliteValueOptions';
+import { assertSqliteValueOptions, sqliteValueOptionSchema, sqliteValueOptionsInputSchema, sqliteValueOptionsSelection, type SqliteValueOptionsInput } from '../../src/shared/sqliteValueOptions';
 import { buildSqliteFilteredSelect, buildSqliteReadPlan } from '../../src/shared/sqliteReadSql';
 import { SqliteValueOptionsController } from '../../src/renderer/sqliteValueOptions';
 import { sqliteTableDraft } from '../../src/renderer/sqliteTableBrowser';
@@ -12,13 +12,42 @@ import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
 
 const request: SqliteValueOptionsInput = { connectionId: 'c', database: 'main', table: 'subject', column: 'v', schemaKey: 'a'.repeat(64), taskId: 'values', mode: 'and', filters: [], search: '' };
 const options = [{ value: { kind: 'integer' as const, value: '9223372036854775807' }, count: '2' }, { value: { kind: 'text' as const, value: '前\0🚢' }, count: '1' }, { value: { kind: 'null' as const }, count: '3' }];
+it.each(['value', 'count-desc', 'count-asc'] as const)('声明的分组排序%s往返严格请求，旧缺省请求不新增字段', order => {
+  expect(sqliteValueOptionsInputSchema.parse({ ...request, order })).toEqual({ ...request, order }); expect(sqliteValueOptionsInputSchema.parse(request)).not.toHaveProperty('order');
+  const input = { ...request, order }; expect(assertSqliteValueOptions({ request: input, values: [], truncated: false }, input).request).toEqual(input);
+});
+it.each(['', 'COUNT-DESC', 'desc', null, 1, {}])('拒绝非声明排序%j', order => { expect(sqliteValueOptionsInputSchema.safeParse({ ...request, order }).success).toBe(false); });
+it('整份回包绑定排序，次数使用64位原整数核单调性，不接受错序或串序', () => {
+  const input = { ...request, order: 'count-desc' as const }, values = [
+    { value: { kind: 'null' as const }, count: '9007199254740993' },
+    { value: { kind: 'text' as const, value: '' }, count: '9007199254740992' },
+    { value: { kind: 'text' as const, value: 'hot' }, count: '100' },
+    { value: { kind: 'text' as const, value: 'warm' }, count: '9' },
+  ];
+  expect(assertSqliteValueOptions({ request: input, values, truncated: false }, input).values).toEqual(values);
+  expect(() => assertSqliteValueOptions({ request: input, values: [...values].reverse(), truncated: false }, input)).toThrow('顺序');
+  const asc = { ...input, order: 'count-asc' as const }; expect(assertSqliteValueOptions({ request: asc, values: [...values].reverse(), truncated: false }, asc).values).toHaveLength(4);
+  expect(() => assertSqliteValueOptions({ request: input, values, truncated: false }, asc)).toThrow('原请求');
+  expect(() => assertSqliteValueOptions({ request: { ...input, order: undefined }, values, truncated: false }, input)).toThrow('原请求');
+});
 /** 可控端口只验证调度与来源，实际数据库及窗口另由原生worker和桌面专项覆盖。 */
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
-function fixture() {
-  const read = deferred<unknown>(), cancel = deferred<unknown>(), base = structuredClone(request), state = { current: true, owns: true }, release = vi.fn(), readPort = vi.fn(async () => read.promise as any), cancelPort = vi.fn(async () => cancel.promise), changed = vi.fn(), cleanup = vi.fn();
+function fixture(baseOrder?: 'count-desc') {
+  const read = deferred<unknown>(), cancel = deferred<unknown>(), base = structuredClone(request), state = { current: true, owns: true }, release = vi.fn(), readPort = vi.fn(async (_input: SqliteValueOptionsInput) => read.promise as any), cancelPort = vi.fn(async () => cancel.promise), changed = vi.fn(), cleanup = vi.fn();
+  if (baseOrder) Object.assign(base, { order: baseOrder });
   const controller = new SqliteValueOptionsController({ base, current: () => state.current, acquire: () => ({ owns: () => state.owns, release }), read: readPort, cancel: cancelPort, id: () => 'values', changed, cleanup });
   return { controller, base, state, read, cancel, release, readPort, cancelPort, changed, cleanup };
 }
+it('控制器显式次数排序只调用原任务，取消仍等待原读取及ACK两侧终态', async () => {
+  const f = fixture(), reading = f.controller.read('v', '', 'count-desc'); await Promise.resolve(); expect(f.readPort).toHaveBeenCalledExactlyOnceWith({ ...request, order: 'count-desc' });
+  const stopping = f.controller.stop(); await Promise.resolve(); f.read.resolve({ request: { ...request, order: 'count-desc' }, values: [], truncated: false }); await Promise.resolve();
+  expect(f.release).not.toHaveBeenCalled(); expect(f.controller.view.busy).toBe(true); await f.controller.read('v', '', 'count-asc'); expect(f.readPort).toHaveBeenCalledTimes(1);
+  f.cancel.resolve(undefined); await stopping; await reading; expect(f.release).toHaveBeenCalledTimes(1); expect(f.controller.view.output).toBeUndefined(); expect(f.controller.view.busy).toBe(false);
+});
+it('控制器拒绝乱序或另一排序的回包，旧缺省读取不继承base隐藏排序', async () => {
+  const f = fixture('count-desc'); const reading = f.controller.read('v', ''); await Promise.resolve(); expect(f.readPort.mock.calls[0][0]).not.toHaveProperty('order');
+  f.read.resolve({ request: { ...request, order: 'count-desc' }, values: [], truncated: false }); await reading; expect(f.controller.view.output).toBeUndefined(); expect(f.controller.view.error).not.toBe(''); expect(f.release).toHaveBeenCalledTimes(1);
+});
 it('混合类型和NULL是一条完整条件，OR/AND与NOT补集、分页和生成SQL保持精度', () => {
   const db = new DatabaseSync(':memory:'); try {
     db.exec('CREATE TABLE subject(id INTEGER PRIMARY KEY,v COLLATE NOCASE)'); const insert = db.prepare('INSERT INTO subject VALUES(?,?)');

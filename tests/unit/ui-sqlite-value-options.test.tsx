@@ -2,6 +2,7 @@ import { act } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 import { sqliteValueOptionsZh as text } from '../../src/renderer/locales/sqliteValueOptions.zh-CN';
+import type { SqliteValueOptionsInput } from '../../src/shared/sqliteValueOptions';
 
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined, Dialog: typeof import('../../src/renderer/components/SqliteValueOptionsDialog')['SqliteValueOptionsDialog'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'];
@@ -27,7 +28,7 @@ async function change(name: string, value: string | boolean) { const node = cont
 async function mount() {
   useWorkspace.setState({ activeJobs: {} }); const state = { current: true }, applied = vi.fn(() => true), closed = vi.fn(), cleanup = vi.fn();
   const calls: { command: string; input: unknown }[] = [], base = { connectionId: 'c', database: 'main' as const, table: 'subject', schemaKey: 'a'.repeat(64), mode: 'and' as const, filters: [] }, columns = ['v', 'other'];
-  const invoke = vi.fn(async (command: string, input: unknown) => { calls.push({ command, input }); if (command === 'query.cancel') return; if (command !== 'sqlite.valueOptions') throw Error('不同值RAM禁止其它IPC'); return { request: input, values: [{ value: { kind: 'integer', value: '9223372036854775807' }, count: '2' }, { value: { kind: 'text', value: '前\0🚢' }, count: '1' }, { value: { kind: 'null' }, count: '3' }, { value: { kind: 'real', value: 'Infinity' }, count: '1' }], truncated: false }; });
+  const invoke = vi.fn(async (command: string, input: unknown) => { calls.push({ command, input }); if (command === 'query.cancel') return; if (command !== 'sqlite.valueOptions') throw Error('不同值RAM禁止其它IPC'); const values = [{ value: { kind: 'integer', value: '9223372036854775807' }, count: '2' }, { value: { kind: 'text', value: '前\0🚢' }, count: '1' }, { value: { kind: 'null' }, count: '3' }, { value: { kind: 'real', value: 'Infinity' }, count: '1' }]; const order = (input as SqliteValueOptionsInput).order; if (order && order !== 'value') values.sort((a, b) => (Number(a.count) - Number(b.count)) * (order === 'count-desc' ? -1 : 1)); return { request: input, values, truncated: false }; });
   Object.assign(window, { dbark: { invoke }, confirm: vi.fn(() => true) });
   const definition = { tabId: 'values-tab', base, columns, mode: 'and' as const, current: () => state.current, onApply: applied, onClose: closed, onCleanup: cleanup }, container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container as unknown as HTMLElement);
   const render = async () => act(async () => root!.render(<Dialog {...definition}/>)); await render(); return { state, applied, closed, cleanup, calls, invoke, base, render };
@@ -41,6 +42,20 @@ it('打开、选择字段和搜索均零IPC，明确读取使用原目标，父�
 it('更改搜索取消丢弃确认保原候选和勾选；确认清空后仍须重新读取', async () => {
   const f = await mount(); await click(text.read); await change(text.choice(2), true); vi.mocked(window.confirm).mockReturnValueOnce(false); await change(text.search, 'new'); expect(control(text.search).value).toBe(''); expect(control(text.choice(2)).checked).toBe(true);
   await change(text.search, 'new'); expect(button(text.add).disabled).toBe(true); expect(f.calls).toHaveLength(1); await click(text.read); expect(f.calls).toHaveLength(2);
+});
+it('切换次数排序先确认丢弃，取消保原排序及勾选，接受后零IPC直到明确重读', async () => {
+  const f = await mount(); await click(text.read); await change(text.choice(1), true); vi.mocked(window.confirm).mockReturnValueOnce(false); await change(text.order, 'count-desc');
+  expect(control(text.order).value).toBe('value'); expect(control(text.choice(1)).checked).toBe(true); expect(f.calls).toHaveLength(1);
+  await change(text.order, 'count-desc'); expect(control(text.order).value).toBe('count-desc'); expect(button(text.add).disabled).toBe(true); expect(f.calls).toHaveLength(1);
+  await click(text.read); expect(f.calls).toHaveLength(2); expect(f.calls[1]).toMatchObject({ command: 'sqlite.valueOptions', input: { order: 'count-desc' } });
+  await change(text.choice(1), true); await click(text.add); expect(f.applied).toHaveBeenCalledWith({ column: 'v', operator: 'oneOf', selectedValues: [{ kind: 'null' }] });
+});
+it('旧排序事件经历同值ABA或组合输入后不可清掉新候选', async () => {
+  const f = await mount(), old = props(control(text.order)).onChange; await change(text.order, 'count-desc'); await change(text.order, 'value'); await click(text.read);
+  await act(async () => old({ target: { value: 'count-asc' } })); expect(control(text.order).value).toBe('value'); expect(f.calls).toHaveLength(1);
+  const modal = document.querySelectorAll('div').find(node => Object.keys(node).some(key => key.startsWith('__reactProps$')) && typeof props(node).onCompositionStart === 'function'); expect(modal).toBeDefined();
+  await act(async () => props(modal!).onCompositionStart()); await change(text.order, 'count-asc'); expect(control(text.order).value).toBe('value');
+  await act(async () => props(modal!).onCompositionEnd()); await change(text.order, 'count-asc'); expect(control(text.order).value).toBe('count-asc'); expect(f.calls).toHaveLength(1);
 });
 it('准确来源失效后旧输入和读取事件不投递后继请求，关闭仍可收尾', async () => {
   const f = await mount(), oldRead = props(button(text.read)).onClick, oldSearch = props(control(text.search)).onChange; f.state.current = false; await f.render();

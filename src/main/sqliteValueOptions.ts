@@ -17,7 +17,9 @@ export async function readSqliteValueOptions(driver: SqliteDriverSession, raw: S
     if (input.search) parameters.push(input.search, input.search);
     // 代表TEXT须逐字节核对源编码；不能把驱动替换的坏字节当成真实U+FFFD再用于筛选。
     const projected = sqliteExactTextProjection(column);
-    const sql = 'SELECT typeof(' + column + '), ' + projected + ', count(*) FROM (' + source.sql + ') AS "__dbark_values"' + search + ' GROUP BY typeof(' + column + '), ' + column + ' ORDER BY typeof(' + column + '), ' + column + ' LIMIT ' + (limits.groups + 1), rows: SqliteValue[][] = [];
+    // 在数据库完整分组后按数值次数排序，再取500+1；同次数沿原类型／列序，不重排已返回的500组。
+    const countOrder = input.order === 'count-desc' ? 'count(*) DESC, ' : input.order === 'count-asc' ? 'count(*) ASC, ' : '';
+    const sql = 'SELECT typeof(' + column + '), ' + projected + ', count(*) FROM (' + source.sql + ') AS "__dbark_values"' + search + ' GROUP BY typeof(' + column + '), ' + column + ' ORDER BY ' + countOrder + 'typeof(' + column + '), ' + column + ' LIMIT ' + (limits.groups + 1), rows: SqliteValue[][] = [];
     const result = await driver.execute(sql, { parameters, maxRows: limits.groups + 1, batchRows: 100, maxBytes: limits.bytes,
       onStatement: statement => { control.check(); if (statement.index !== 0 || statement.columns.length !== 3) throw Error('SQLite不同值返回了非预期列'); },
       onBatch: batch => { control.check(); if (batch.index !== 0 || rows.length + batch.rows.length > limits.groups + 1) throw Error('SQLite不同值超过候选上限'); rows.push(...batch.rows); },

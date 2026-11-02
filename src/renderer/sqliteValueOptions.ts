@@ -1,10 +1,10 @@
-import { sqliteValueOptionsInputSchema, assertSqliteValueOptions, sqliteValueOptionsSelection, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
+import { sqliteValueOptionsInputSchema, assertSqliteValueOptions, sqliteValueOptionsSelection, sqliteValueOptionsOrderSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput, type SqliteValueOptionsOrder } from '../shared/sqliteValueOptions';
 import { sqliteValueOptionsZh as text } from './locales/sqliteValueOptions.zh-CN';
 
 export interface SqliteValuesView { busy: boolean; stopping: boolean; error: string; output?: SqliteValueOptionsOutput; }
 interface Lease { owns(): boolean; release(): unknown; }
 interface Operation { id: string; cancelled: boolean; sent: boolean; done: Promise<void>; cancel?: Promise<void>; lease?: Lease; }
-interface Ports { base: Omit<SqliteValueOptionsInput, 'column' | 'search' | 'taskId'>; current(): boolean; acquire(): Lease; read(input: SqliteValueOptionsInput): Promise<SqliteValueOptionsOutput>; cancel(id: string): Promise<unknown>; id(): string; changed(view: SqliteValuesView): void; cleanup(reason: unknown): void; }
+interface Ports { base: Omit<SqliteValueOptionsInput, 'column' | 'search' | 'taskId' | 'order'>; current(): boolean; acquire(): Lease; read(input: SqliteValueOptionsInput): Promise<SqliteValueOptionsOutput>; cancel(id: string): Promise<unknown>; id(): string; changed(view: SqliteValuesView): void; cleanup(reason: unknown): void; }
 /** 候选读取的原Promise和取消ACK均结算后才释放自己的租约；旧页面不会接管后继请求。 */
 export class SqliteValueOptionsController {
   view: SqliteValuesView = { busy: false, stopping: false, error: '' };
@@ -17,9 +17,15 @@ export class SqliteValueOptionsController {
   /** 输入改变只清本机候选，不发送数据库请求。 */
   clear(): void { if (this.active || !this.current()) throw Error(text.unavailable); this.emit({ output: undefined, error: '' }); }
   /** 显式读取完整匹配集，严格回包必须对应原任务；关闭中迟到结果不再发布。 */
-  async read(column: string, search: string): Promise<void> {
+  async read(column: string, search: string, order: SqliteValueOptionsOrder = 'value'): Promise<void> {
     if (this.active || !this.current()) return;
-    let input: SqliteValueOptionsInput; try { input = sqliteValueOptionsInputSchema.parse({ ...this.ports.base, column, search, taskId: this.ports.id() }); } catch (reason) { this.emit({ error: reason instanceof Error ? reason.message : String(reason) }); return; }
+    let input: SqliteValueOptionsInput; try {
+      sqliteValueOptionsOrderSchema.parse(order);
+      const request: SqliteValueOptionsInput = { ...this.ports.base, column, search, taskId: this.ports.id() };
+      // 缺省沿旧协议，不从父base继承隐藏排序；显式排序仅由本次读取动作提供。
+      if (order === 'value') delete request.order; else request.order = order;
+      input = sqliteValueOptionsInputSchema.parse(request);
+    } catch (reason) { this.emit({ error: reason instanceof Error ? reason.message : String(reason) }); return; }
     const operation: Operation = { id: input.taskId, cancelled: false, sent: false, done: Promise.resolve() }; this.active = operation;
     operation.done = Promise.resolve().then(async () => {
       try {

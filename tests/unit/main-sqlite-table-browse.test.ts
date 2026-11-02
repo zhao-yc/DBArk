@@ -7,6 +7,12 @@ const page = { schemaKey: 'a'.repeat(64), target: { connectionId: profile.id, da
 
 /** 经过正式IPC校验与Main分派；只替换数据库执行边界，不打开本机文件或网络连接。 */
 describe('SQLite表页Main任务边界', () => {
+  it.each(['count-desc', 'count-asc'] as const)('次数排序%s通过原IPC原样交付并绑定晚发布门', async order => {
+    const request = { connectionId: profile.id, database: 'main', table: 'subject', column: 'n', schemaKey: 'a'.repeat(64), taskId: 'frequency', mode: 'and', filters: [], search: '', order };
+    const f = mainColumnsHarness(); Object.assign(f.context.store, { connections: () => [profile] }); f.request.mockImplementation(async (command, input) => { expect(command).toBe('sqlite.valueOptions'); expect(input).toEqual(request); return { request, values: [], truncated: false }; });
+    expect(await f.invoke('sqlite.valueOptions', request)).toEqual({ ok: true, result: { request, values: [], truncated: false } }); expect(f.request).toHaveBeenCalledTimes(1);
+    const bad = mainColumnsHarness(); Object.assign(bad.context.store, { connections: () => [profile] }); expect((await bad.invoke('sqlite.valueOptions', { ...request, order: 'DESC' })).ok).toBe(false); expect(bad.request).not.toHaveBeenCalled();
+  });
   it('不同值通过真实IPC校验与Main分派，不进入查询历史；原窗口和连接修订变化拒绝晚发布', async () => {
     const request = { connectionId: profile.id, database: 'main', table: 'subject', column: 'v', schemaKey: 'a'.repeat(64), taskId: 'value-options', mode: 'and', filters: [], search: '敏感搜索' };
     for (const mode of ['current', 'revision', 'destroyed', 'blocked'] as const) {

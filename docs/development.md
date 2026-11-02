@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 全表不同值新增[次数排序](development/sqlite-value-frequency-20261103.md)：严格可选枚举、完整分组先排序后限量、64位计数校验及原取消门。81 项相关、类型／构建、表／视图真实 worker 与 Windows 正式客户端通过；Mac／安装另验，暂不发布。
+
 结果不同值选择新增[本地次数排序](development/query-result-value-frequency-20261103.md)，完整匹配候选排序后分页，保留原编号与勾选，不增加查询。184 项相关、类型／构建及 Windows 明暗真实组件通过；完整驱动工作区、Mac／安装另验，暂不发布。
 
 表页新增[服务器不同值按次数排序](development/table-value-frequency-20261103.md)，复用原只读任务及筛选合并，旧缺省报文保持。265 项相关、六端点 450 次只读派生查询及 Windows 明暗组件另证；后续 [MySQL 8.4 物理表窗口](development/table-value-frequency-live-20261103.md)已通过并核清准确库，Mac／安装另验，暂不发布。

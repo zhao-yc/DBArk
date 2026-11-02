@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 高频数据筛选补齐[全表分组次数排序](development/sqlite-value-frequency-20261103.md)：全部匹配组排序后限量，既有勾选先确认丢弃、再明确读取。81 项相关、类型／构建、表／视图 worker 与 Windows 完整客户端通过，原数据及资源核清；Mac／安装另验，R02 仍部分，暂不发布。
+
 高频结果筛选补齐[不同值按次数整理](development/query-result-value-frequency-20261103.md)：对已返回全部匹配候选排序，保留搜索、跨页勾选与原值身份；SQLite 同显示类型独立。184 项相关、类型／构建及 Windows 明暗组件通过；完整驱动工作区、Mac／安装另验，不增加完整工作包或发行计数，暂不发布。
 
 跨平台门槛已补齐一项：准确 `0d3759b4` 的 [JOIN 原十二例](development/foreign-key-join-display-lease-20261103.md#0d3759b4-三平台实测闭合)在 Windows、Mac arm64／Intel 各通过，原几何、退出、arm64 模式恢复及上传原件均核对。仅该源码组件，后续功能、实库与安装仍分别验证，O04 保持部分，暂不发布。

@@ -10,6 +10,7 @@ import type { SqliteProcessExit, SqliteProcessTransport, SqliteValue, SqliteWork
 import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/session';
 import type { SqliteConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { SqliteTablePage, SqliteTablePageInput } from '../../src/shared/sqliteTableBrowse';
+import type { SqliteValueOptionsInput, SqliteValueOptionsOutput } from '../../src/shared/sqliteValueOptions';
 
 // 真实Node子进程代替Electron宿主，任何意外默认工厂调用立即失败，不伪造数据库结果。
 vi.mock('electron', () => ({ utilityProcess: { fork: () => { throw Error('分页测试必须注入真实Node子进程'); } } }));
@@ -161,6 +162,32 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     const first = await app.request('sqlite.valueOptions', request); expect(first.values).toHaveLength(500); expect(first.truncated).toBe(true); expect(first.values).toContainEqual({ value: { kind: 'null' }, count: '1' }); expect(first.values).toContainEqual({ value: { kind: 'real', value: 'Infinity' }, count: '1' }); expect(first.values.filter((option: { value: { value?: string } }) => option.value.value === 'A' || option.value.value === 'a')).toHaveLength(1); expect(first.values.find((option: { count: string }) => option.count === '2')).toMatchObject({ count: '2' });
     const beyond = await app.request('sqlite.valueOptions', { ...request, taskId: '第601组搜索', search: 'g0600' }); expect(beyond.values).toEqual([{ value: { kind: 'text', value: 'g0600' }, count: '2' }]); expect(beyond.truncated).toBe(false);
     for (const record of processes) { expect(await record.exited).toEqual({ code: 0, signal: null }); expect(record.kills).toBe(0); }
+  });
+  it.each(['frequency', 'frequency_view'])('%s的真实次数排序先扫描完整532组，再取500，原类型／排序规则及冻结条件保持', async table => {
+    const profile = fixture(); disk(profile, db => {
+      db.exec('CREATE TABLE frequency(id INTEGER PRIMARY KEY,n COLLATE NOCASE); CREATE VIEW frequency_view AS SELECT id,n FROM frequency');
+      const insert = db.prepare('INSERT INTO frequency(n) VALUES(?)');
+      for (let i = 0; i < 520; i++) insert.run('g' + String(i).padStart(4, '0'));
+      for (let i = 0; i < 100; i++) insert.run('zz_hot'); for (let i = 0; i < 9; i++) insert.run('yy_warm');
+      for (const value of [null, null, '', 'NULL', 'A', 'a', 2n, 2n, 2, 2, '2', '2', '2', Buffer.from('00ff', 'hex'), Buffer.from('00ff', 'hex'), Infinity, '前\0🚢']) insert.run(value);
+    });
+    const baseline = disk(profile, db => db.prepare('SELECT id,typeof(n) AS kind,hex(n) AS bytes FROM frequency ORDER BY id').all()), { app } = runtime(profile);
+    expect(baseline).toHaveLength(646);
+    const original = await page(app, input(profile, '次数原结构', { table, sort: [] })), request: SqliteValueOptionsInput = { connectionId: profile.id, database: 'main', table, column: 'n', schemaKey: original.schemaKey, taskId: '次数默认', mode: 'and', filters: [], search: '' };
+    const read = (value: SqliteValueOptionsInput) => app.request('sqlite.valueOptions', value) as Promise<SqliteValueOptionsOutput>;
+    const first = await read(request); expect(first.values).toHaveLength(500); expect(first.truncated).toBe(true); expect(first.request).not.toHaveProperty('order'); expect(first.values.some(option => option.value.kind === 'text' && option.value.value === 'zz_hot')).toBe(false);
+    const most = await read({ ...request, taskId: '最多次数', order: 'count-desc' }); expect(most.values).toHaveLength(500); expect(most.truncated).toBe(true);
+    expect(most.values.slice(0, 3)).toEqual([{ value: { kind: 'text', value: 'zz_hot' }, count: '100' }, { value: { kind: 'text', value: 'yy_warm' }, count: '9' }, { value: { kind: 'text', value: '2' }, count: '3' }]);
+    expect(most.values.slice(3, 7)).toEqual([{ value: { kind: 'blob', value: '00ff' }, count: '2' }, { value: { kind: 'integer', value: '2' }, count: '2' }, { value: { kind: 'null' }, count: '2' }, { value: { kind: 'real', value: '2' }, count: '2' }]);
+    expect(most.values[7].count).toBe('2'); expect(most.values[7].value.kind).toBe('text'); expect((most.values[7].value as { value: string }).value.toLowerCase()).toBe('a');
+    const least = await read({ ...request, taskId: '最少次数', order: 'count-asc' }); expect(least.values).toHaveLength(500); expect(least.values.every(option => option.count === '1')).toBe(true); expect(least.values[0]).toEqual({ value: { kind: 'real', value: 'Infinity' }, count: '1' });
+    const filtered = { ...request, filters: [{ column: 'id', operator: 'lte' as const, value: { kind: 'integer' as const, value: '625' } }], order: 'count-desc' as const };
+    expect((await read({ ...filtered, taskId: '冻结原条件' })).values.slice(0, 2)).toEqual([{ value: { kind: 'text', value: 'zz_hot' }, count: '100' }, { value: { kind: 'text', value: 'yy_warm' }, count: '5' }]);
+    const searched = await read({ ...filtered, taskId: '搜索后次数', search: 'warm' }); expect(searched.values).toEqual([{ value: { kind: 'text', value: 'yy_warm' }, count: '5' }]); expect(searched.truncated).toBe(false);
+    expect(disk(profile, db => db.prepare('SELECT id,typeof(n) AS kind,hex(n) AS bytes FROM frequency ORDER BY id').all())).toEqual(baseline);
+    const groups = processes.flatMap(record => record.sent).filter((message): message is Extract<SqliteWorkerRequest, { kind: 'execute' }> => message.kind === 'execute' && message.sql.includes('GROUP BY typeof('));
+    expect(groups).toHaveLength(5); expect(groups.filter(message => message.sql.includes('ORDER BY count(*) DESC, typeof('))).toHaveLength(3); expect(groups.filter(message => message.sql.includes('ORDER BY count(*) ASC, typeof('))).toHaveLength(1); expect(groups.every(message => message.sql.endsWith(' LIMIT 501') && message.options.maxRows === 501)).toBe(true);
+    for (const record of processes) { expect(await record.exited).toEqual({ code: 0, signal: null }); expect(record.kills).toBe(0); expect(record.sent.find(message => message.kind === 'open')).toMatchObject({ options: { readOnly: true } }); }
   });
   it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s候选保真实NUL/BOM/Unicode；坏编码代表值明确拒绝，不发布替代字符', async encoding => {
     const profile = fixture(encoding); disk(profile, db => { db.exec('CREATE TABLE encoded_values(id INTEGER PRIMARY KEY,v TEXT)'); const insert = db.prepare('INSERT INTO encoded_values(v) VALUES(?)'); insert.run('前\0🚢后'); insert.run('\uFEFF真实BOM'); });
@@ -337,11 +364,11 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
     expect(taskState(app, '准确取消')).toEqual({ kind: 'browse-finished' }); expect(taskState(app, '后继分页')).toEqual({ kind: 'browse-finished' });
   });
 
-  it('不同值真实阻塞分组准确取消，原用户事务仍打开，任务退出后保留编号墓碑', async () => {
+  it.each(['value', 'count-desc', 'count-asc'] as const)('不同值%s真实阻塞分组准确取消，原用户事务仍打开，任务退出后保留编号墓碑', async order => {
     const profile = fixture(); disk(profile, db => db.exec('CREATE VIEW values_expensive AS WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x AS value FROM n'));
     const reached = deferred<void>(), { app, events } = runtime(profile, () => transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.includes('GROUP BY typeof(')) reached.resolve(); }));
     const original = await page(app, input(profile, '阻塞候选原结构', { table: 'values_expensive', sort: [] })), user = await app.request('sessions.open', { connectionId: profile.id }); await app.request('query.transaction', { ...user, action: 'begin' });
-    const reading = app.request('sqlite.valueOptions', { connectionId: profile.id, database: 'main', table: 'values_expensive', column: 'value', schemaKey: original.schemaKey, taskId: '原分组取消', mode: 'and', filters: [], search: '' }).catch(reason => reason);
+    const reading = app.request('sqlite.valueOptions', { connectionId: profile.id, database: 'main', table: 'values_expensive', column: 'value', schemaKey: original.schemaKey, taskId: '原分组取消', mode: 'and', filters: [], search: '', ...(order === 'value' ? {} : { order }) }).catch(reason => reason);
     await reached.promise; await delay(50); await app.request('query.cancel', { taskId: '原分组取消' }); expect(await reading).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(processes[2].kills).toBe(1); expect(processes[1].kills).toBe(0); expect(taskState(app, '原分组取消')).toEqual({ kind: 'browse-finished' });
     expect(await app.request('query.sessionState', user)).toEqual({ transactionOpen: true, transactionKnown: true, broken: false }); await app.request('query.transaction', { ...user, action: 'rollback' }); await app.close();
   });
