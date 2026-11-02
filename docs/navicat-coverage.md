@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+验收跟进：[SQLite 原生观察端口回传](development/sqlite-native-observation-20261102.md)减少被丢弃的历史传输，保留所有业务断言、身份检查和原期限。Windows 原只读整例通过且完整分页请求／原值与上轮相同；不算新功能或完整工作包，Mac 超时仍等实际 CI 核验。
+
 SQLite 高频表格操作修复[展开筛选时原格被底栏挡住](development/sqlite-table-height-20261102.md)：最小窗口保留可点击数据行和完整修改计数／按钮；原编辑、冲突回滚及只读表页整例通过。Mac／安装和原失败继续跟进，不增加完整工作包或发行计数。
 
 SQLite 高频查询新增[命名整理方案](development/sqlite-result-presets-20261102.md)：类型条件、多列排序、冻结边界、本机保存与新进程读回，先核完整字段再共同应用；Windows 实测没有增加数据库命令。Mac／安装和既有 CI 失败继续，不增加完整工作包或发行计数。

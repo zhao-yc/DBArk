@@ -47,12 +47,25 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     const current = runtime.ownedDesktopResources(info);
     if (current.application !== application || current.page !== page || current.closed !== closed || runtime.dataDir !== directory || info.timeout !== 120000 || info.retry !== 0 || info.repeatEachIndex !== 0 || info.config.workers !== 1) throw Error('SQLite表浏览owner/profile/单次120秒期限变化');
   };
-  const audit = () => application.evaluate(() => {
-    const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: Audit & { check(): void } }).__sqliteTableBrowseNative;
-    if (!state) throw Error('原SQLite表浏览观察器不存在'); state.check();
-    return { pending: state.pending, denied: state.denied, forks: state.forks, pickerCalls: state.pickerCalls, connectionId: state.connectionId, commands: state.commands, lookups: state.lookups, pages: state.pages };
-  });
-  const step = async <T,>(action: () => Promise<T>, skipAuditAfter = false): Promise<T> => { if (stage !== reportedStage) { reportedStage = stage; console.log('SQLite表页阶段：' + stage); } check(); if (armed && !closed) await audit(); const result = await action(); check(); if (armed && !closed && !skipAuditAfter) await audit(); return result; };
+  const observation = { guardCalls: 0, guardMs: 0, snapshotCalls: 0, snapshotMs: 0 };
+  /** 每个界面边界仍执行同一个Main身份检查，不为未消费的门卫调用回传整份增长中的原页历史。 */
+  const guard = async () => {
+    const started = performance.now(); observation.guardCalls++;
+    try { await application.evaluate(() => {
+      const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: Audit & { check(): void } }).__sqliteTableBrowseNative;
+      if (!state) throw Error('原SQLite表浏览观察器不存在'); state.check();
+    }); } finally { observation.guardMs += performance.now() - started; }
+  };
+  /** 所有业务断言与最终原件仍读取完整历史；计时只作回执，不参与通过条件或延长期限。 */
+  const audit = async () => {
+    const started = performance.now(); observation.snapshotCalls++;
+    try { return await application.evaluate(() => {
+      const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: Audit & { check(): void } }).__sqliteTableBrowseNative;
+      if (!state) throw Error('原SQLite表浏览观察器不存在'); state.check();
+      return { pending: state.pending, denied: state.denied, forks: state.forks, pickerCalls: state.pickerCalls, connectionId: state.connectionId, commands: state.commands, lookups: state.lookups, pages: state.pages };
+    }); } finally { observation.snapshotMs += performance.now() - started; }
+  };
+  const step = async <T,>(action: () => Promise<T>, skipAuditAfter = false): Promise<T> => { if (stage !== reportedStage) { reportedStage = stage; console.log('SQLite表页阶段：' + stage); console.log('SQLite观察端口累计：' + JSON.stringify(observation)); } check(); if (armed && !closed) await guard(); const result = await action(); check(); if (armed && !closed && !skipAuditAfter) await guard(); return result; };
   const table = () => page.locator('.table-tab[aria-label="SQLite 只读表浏览"]:visible');
   const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
   const tasks = () => step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})));
@@ -366,6 +379,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: { restore(): void } }).__sqliteTableBrowseNative; if (!state) throw Error('原观察器已失效'); state.restore(); }), true); armed = false;
     stage = '第二owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0);
     await info.attach('SQLite表浏览原始请求回包与完成边界', { body: JSON.stringify({ platform: process.platform, rawDatabase: database, canonicalDatabaseBeforePicker: canonicalDatabase, firstPid, secondPid: originalProcess.pid, firstFacts, secondFacts, firstTasks, originalRows: baseline, finalRows: disk(), sourceRows: 34, realHeaderServerSort: true, headerCycleAndPlatformMultisortChecked: true, headerUsesAppliedFiltersModeAndLimit: true, unsubmittedDraftKeptUntilApply: true, userSqlExecutions: 0, userTransactions: 0, systemClipboardOperations: 0, generatedSelectNeverExecuted: true, sameProfileTableTabRestored: true, firstExitCode: 0, secondExitCode: originalProcess.exitCode, pickerScope: '只替换本例Main文件picker准确返回路径，未验证操作系统原生对话框输入', observationScope: '每次首窗口就绪后安装观察器至退出前撤销；重启初始读取不冒称已观察', automaticRetry: false, automaticTrace: false }), contentType: 'application/json' });
+    await info.attach('SQLite表浏览观察端口计时', { body: JSON.stringify(observation), contentType: 'application/json' });
     completed = { directory, database, platform: process.platform, firstPid, secondPid: originalProcess.pid };
   } catch (reason) {
     runtime.retainOwnedDesktopResources(info);
