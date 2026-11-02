@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits } from './sqliteCompletion';
+import type { LocalReferenceToken } from './localReferenceIndex';
 
 export type SqliteCompletionRelation = ({ kind: 'physical'; name: string; schema?: 'main' | 'temp'; alias?: string } | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
 export type SqliteAnalysisIntent = 'hover' | 'definition';
@@ -99,6 +100,19 @@ function statementAt(tokens: Token[], offset: number): { start: number; end: num
   }
   if (triggerStart >= 0 && offset >= tokens[triggerStart].start) fail('trigger');
   return { start, end: tokens.length };
+}
+
+/** 引用索引复用SQLite自己的词法、语句及trigger边界；声明位置也可选中，不借MySQL引号或名称规则。 */
+export function sqliteReferenceContext(source: string, offset: number): { status: 'ready'; target: LocalReferenceToken; tokens: LocalReferenceToken[] } | { status: 'blocked'; reason: string } {
+  try {
+    if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
+    if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
+    const tokens = lex(source, offset), statement = statementAt(tokens, offset);
+    const active = tokens.slice(statement.start, statement.end).filter(token => token.kind === 'id' && (!token.quoted || token.closed));
+    const target = active.find(token => token.start <= offset && offset <= token.end);
+    if (!target || !target.quoted && structural.has(fold(target.value))) fail('reference-target');
+    return { status: 'ready', target: { start: target.start, end: target.end, value: target.value }, tokens: active.map(token => ({ start: token.start, end: token.end, value: token.value })) };
+  } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
 }
 
 /** 仅推导SQLite可证明的简单投影名/显式alias；星号和无alias复杂表达式绝不借永久同名表补列。 */
@@ -282,7 +296,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
     if (intent === 'definition') {
       const index = tokens.findIndex(token => token.start === target.start && token.end === target.end);
       const range = (index: number | undefined) => index === undefined ? undefined : { start: tokens[index].start, end: tokens[index].end };
-      if (tokens[index + 1]?.value === '.' && parsed.syntax.includes('column') && tokens[index + 3]?.value !== '.') {
+      if (tokens[index + 1]?.value === '.' && parsed.syntax.includes('column') && !['.', '('].includes(tokens[index + 3]?.value ?? '')) {
         // 只跳准确可见绑定；三段名称的schema段、被别名遮蔽的原表名不能伪装成声明。
         const matches = parsed.bindings.filter(({ relation }) => fold(relation.alias ?? relation.name) === fold(target.prefix) && (!qualifiers.length || qualifiers.length === 1 && relation.kind === 'physical' && !relation.alias && relation.schema === fold(qualifiers[0])));
         if (matches.length === 1) { const binding = matches[0]; definition = range(binding.aliasIndex) ?? binding.declaration ?? range(binding.referenceIndex); }

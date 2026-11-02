@@ -14,6 +14,7 @@ describe('本地Worker窗口能力白名单', () => {
     port.onmessage({ data: { ...input, id: 3, intent: 'unknown' } }); expect(messages.at(-1)).toMatchObject({ id: 3, result: { status: 'blocked', reason: 'intent' } });
     const definition='SELECT s.id FROM subject s';
     port.onmessage({data:{id:4,source:definition,offset:8,mode:{},intent:'definition'}});expect(messages.at(-1)).toMatchObject({id:4,result:{status:'ready',definition:{start:25,end:26},relations:[],localRelations:[]}});
+    port.onmessage({data:{id:5,source:definition,offset:8,mode:{},intent:'references'}});expect(messages.at(-1)).toEqual({id:5,result:{status:'ready',target:{start:7,end:8},declaration:{start:25,end:26},references:[{start:7,end:8}]}});
   });
   it('缺省/错误/未知字段关闭，明确布尔能力才交付本地窗口名；握手仍是原版本', () => {
     const bundle = buildSync({ entryPoints: ['src/renderer/completion.worker.ts'], bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022', logLevel: 'silent' }).outputFiles[0].text;

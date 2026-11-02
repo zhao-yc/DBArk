@@ -35,10 +35,10 @@ test('MySQL离线真实Shift+F12引用列表与跳转，保持原模型、撤销
     window.Worker = class extends original {
       private fact: WorkerFact;
       constructor(url: string | URL, options?: WorkerOptions) {
-        super(url, options); this.fact = { posted: 0, ready: 0, replied: 0, terminated: 0, references: String(url).includes('localReferences.worker') }; facts.push(this.fact);
-        this.addEventListener('message', event => { if (event.data?.type === 'dbark-local-references-ready') this.fact.ready++; else if (event.data?.result) { this.fact.replied++; this.fact.status = event.data.result.status; this.fact.count = event.data.result.references?.length; } });
+        super(url, options); this.fact = { posted: 0, ready: 0, replied: 0, terminated: 0, references: false }; facts.push(this.fact);
+        this.addEventListener('message', event => { if (event.data?.type === 'dbark-completion-ready') this.fact.ready++; else if (event.data?.result) { this.fact.replied++; this.fact.status = event.data.result.status; this.fact.count = event.data.result.references?.length; } });
       }
-      override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions): void { if (this.fact.references) this.fact.posted++; if (Array.isArray(options)) super.postMessage(message, options); else super.postMessage(message, options); }
+      override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions): void { if (message && typeof message === 'object' && 'intent' in message && message.intent === 'references') { this.fact.references = true; this.fact.posted++; } if (Array.isArray(options)) super.postMessage(message, options); else super.postMessage(message, options); }
       override terminate(): void { this.fact.terminated++; super.terminate(); }
     };
   }));

@@ -24,6 +24,7 @@ describe('SQLite独立源码CI的原生门与环境隔离', () => {
     ['parameters', 'sqlite-parameters-native.spec.ts', 'sqlite-parameters', 'DBARK_SQLITE_PARAMETERS_NATIVE_TEST'],
     ['create', 'sqlite-create-native.spec.ts', 'sqlite-create', 'DBARK_SQLITE_CREATE_NATIVE_TEST'],
     ['completion', 'sqlite-completion-native.spec.ts', 'sqlite-completion', 'DBARK_SQLITE_COMPLETION_NATIVE_TEST'],
+    ['references', 'sqlite-completion-native.spec.ts', 'sqlite-local-references', 'DBARK_SQLITE_COMPLETION_NATIVE_TEST'],
     ['table-create', 'sqlite-table-create-native.spec.ts', 'sqlite-table-create', 'DBARK_SQLITE_TABLE_CREATE_NATIVE_TEST'],
     ['table-import', 'sqlite-table-import-native.spec.ts', 'sqlite-table-import', 'DBARK_SQLITE_TABLE_IMPORT_NATIVE_TEST'],
     ['import-new-table', 'sqlite-import-new-table-native.spec.ts', 'sqlite-import-new-table', 'DBARK_SQLITE_IMPORT_NEW_TABLE_NATIVE_TEST'],

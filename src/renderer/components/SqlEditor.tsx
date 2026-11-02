@@ -28,10 +28,12 @@ import { createSqliteCompletionProvider } from '../sqliteCompletionProvider';
 import { createSqlDefinitionProvider } from '../sqlDefinitionProvider';
 import { createMysqlDefinitionAnalysis } from '../mysqlDefinitionAnalysis';
 import { createSqlSignatureProvider } from '../sqlSignatureProvider';
-import LocalReferencesWorker from '../localReferences.worker?worker';
+import SqliteLocalReferencesWorker from '../sqliteLocalReferences.worker?worker';
 import { LocalReferencesWorkerClient } from '../localReferencesWorkerClient';
 import { createLocalReferencesAnalysis } from '../localReferencesAnalysis';
+import { createSqliteLocalReferencesAnalysis } from '../sqliteLocalReferencesAnalysis';
 import { createSqlReferencesProvider } from '../sqlReferencesProvider';
+import { SqlReferenceCompletionGuard } from '../sqlReferenceCompletionGuard';
 import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared/sqliteCompletion';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
@@ -93,6 +95,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const runRef = useRef(onExecute); runRef.current = onExecute;
   const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
+  const referenceCompletionGuard = useRef(new SqlReferenceCompletionGuard());
+  const suggestionsBlocked = () => referenceCompletionGuard.current.blocked(editorRef.current?.getDomNode() ?? null);
   /** 内置函数参数提示只分析当前模型；模式缓存之外没有数据库入口，与补全／声明线程独立。 */
   useEffect(() => {
     if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
@@ -101,15 +105,16 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const registration = monaco.languages.registerSignatureHelpProvider('sql', signatures.provider);
     return () => { registration.dispose(); signatures.dispose(); };
   }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
-  /** 本文引用复用声明语义，独占线程；只在原MySQL/MariaDB模型生效，不注册跨文件或SQLite回退。 */
+  /** 本文引用按方言复用声明语义，独占线程；SQLite不读取会话缓存或回退到MySQL解析器。 */
   useEffect(() => {
-    if (readOnly || !contentReady || dialect === 'sqlite' || !completion) return;
-    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]') && sameCompletionScope(completionRef.current, completion);
-    const worker = createLocalReferencesAnalysis({ scope: completion, current,
-      facts: () => completionServerFacts.get(completion.connectionId, completion.connectionVersion),
-      state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => new LocalReferencesWorker()),
+    if (readOnly || !contentReady || dialect !== 'sqlite' && !completion) return;
+    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]') && (!completion || sameCompletionScope(completionRef.current, completion));
+    const worker = dialect === 'sqlite' ? createSqliteLocalReferencesAnalysis({ current, create: () => new LocalReferencesWorkerClient(() => new SqliteLocalReferencesWorker(), 'sqlite') }) : createLocalReferencesAnalysis({ scope: completion!, current,
+      facts: () => completionServerFacts.get(completion!.connectionId, completion!.connectionVersion),
+      state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => new CompletionWorker()),
     });
-    const references = createSqlReferencesProvider({ worker, current, sourceLimit: completionLimits.sourceUnits, model: () => editorRef.current?.getModel() ?? null,
+    const references = createSqlReferencesProvider({ worker, current, sourceLimit: dialect === 'sqlite' ? sqliteCompletionLimits.sourceUnits : completionLimits.sourceUnits, model: () => editorRef.current?.getModel() ?? null,
+      begin: signal => referenceCompletionGuard.current.acquire(signal),
       // 走Monaco正式命令收起尚未选择的候选，不改正文；避免候选框覆盖引用列表标题。
       prepare: () => editorRef.current?.trigger('dbark.localReferences', 'hideSuggestWidget', {}),
     });
@@ -137,7 +142,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       const worker = new SqliteCompletionWorkerClient(() => new SqliteCompletionWorker());
       const provider = createSqliteCompletionProvider({ connectionId: completion.connectionId, sessionId: completion.sessionId,
         model: () => editorRef.current?.getModel() ?? null,
-        current: () => aliveRef.current && !propsRef.current.readOnly && sameCompletionScope(completionRef.current, completion) && contentRef.current?.ready === true && !document.querySelector('[role="dialog"], [role="alertdialog"]'),
+        current: () => aliveRef.current && !propsRef.current.readOnly && !suggestionsBlocked() && sameCompletionScope(completionRef.current, completion) && contentRef.current?.ready === true && !document.querySelector('[role="dialog"], [role="alertdialog"]'),
         worker, request: input => invoke('sqlite.completion', input), cancel: taskId => invoke('query.cancel', { taskId }),
         state: sessionId => invoke('query.completionState', { sessionId }), id: () => sqliteCompletionTaskPrefix + uid(), status: status => statusRef.current?.(status),
       });
@@ -157,7 +162,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const provider = monaco.languages.registerCompletionItemProvider('sql', {
       triggerCharacters:['.','`'],
       provideCompletionItems: async (model, position,_context,token) => {
-        if (disposed||readOnly||!scopeCurrent()||editorRef.current?.getModel()!==model||model.isDisposed()||token.isCancellationRequested)return{suggestions:[]};
+        if (disposed||readOnly||suggestionsBlocked()||!scopeCurrent()||editorRef.current?.getModel()!==model||model.isDisposed()||token.isCancellationRequested)return{suggestions:[]};
         hover?.cancel();
         active?.abort();const controller=new AbortController();active=controller;statusRef.current?.('idle');
         if(model.getValueLength()>completionLimits.sourceUnits){statusRef.current?.('limited');return{suggestions:[]};}
@@ -165,7 +170,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         // 无会话草稿复用既有连接检查的事实；不为能力判断新增SQL或主动建立查询会话。
         const openedFacts=completion.sessionId?undefined:completionServerFacts.get(completion.connectionId,completion.connectionVersion);
         /** 每次await后核对模型与版本，标签切换、连接修订和编辑取消都不能交付旧建议。 */
-        const current=()=>!disposed&&scopeCurrent()&&!controller.signal.aborted&&!model.isDisposed()&&editorRef.current?.getModel()===model&&model.getVersionId()===version&&active===controller&&(!!completion.sessionId||completionServerFacts.get(completion.connectionId,completion.connectionVersion)===openedFacts);
+        const current=()=>!disposed&&!suggestionsBlocked()&&scopeCurrent()&&!controller.signal.aborted&&!model.isDisposed()&&editorRef.current?.getModel()===model&&model.getVersionId()===version&&active===controller&&(!!completion.sessionId||completionServerFacts.get(completion.connectionId,completion.connectionVersion)===openedFacts);
         try{
           const cached=completion.sessionId?await invoke('query.completionState',{sessionId:completion.sessionId}):undefined;if(!current())return{suggestions:[]};
           const cachedDialect=cached?.dialect;if(cachedDialect==='sqlite')return{suggestions:[]};

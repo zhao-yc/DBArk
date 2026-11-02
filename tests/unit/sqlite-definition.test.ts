@@ -40,7 +40,7 @@ it.each([
   'SELECT |s.id FROM first s JOIN second s ON 1', 'SELECT |main.subject.id FROM main.subject',
   'SELECT 1 FROM |subject', 'SELECT 1 FROM main.|subject', 'WITH |c(n) AS (SELECT 1) SELECT * FROM c',
   'SELECT 1 AS |s FROM subject', 'SELECT "|s.id" FROM subject s', "SELECT '|s.id' FROM subject s", 'SELECT -- |s.id\n1 FROM subject s',
-  'SELECT :|s FROM subject s', 'SELECT |COUNT(id) FROM subject', 'SELECT [|s.id FROM subject s',
+  'SELECT :|s FROM subject s', 'SELECT |COUNT(id) FROM subject', 'SELECT |s.f() FROM subject s', 'SELECT [|s.id FROM subject s',
   'SELECT s.id FROM subject s UNION ALL SELECT t.id FROM second t ORDER BY |s.id',
 ])('不把字段、外部对象、声明或不确定范围冒充本文定义：%s', marked => {
   const f = input(marked); expect(analyzeSqliteCompletion(f.source, f.offset, 'definition').status).toBe('blocked');

@@ -81,6 +81,6 @@ it('超预算不读取正文；卸载幂等等待底层dispose', async () => {
   const pending = deferred<void>(); f.worker.dispose.mockReturnValue(pending.promise); const close = f.registration.dispose(); expect(f.registration.dispose()).toBe(close); pending.resolve(); await close; expect(f.worker.dispose).toHaveBeenCalledOnce();
 });
 it('有效请求先收起候选再解析，准备期间模型失效不再建立请求', async () => {
-  const f = providerFixture(); await f.invoke(); expect(f.prepare).toHaveBeenCalledOnce(); expect(f.prepare.mock.invocationCallOrder[0]).toBeLessThan(f.worker.analyze.mock.invocationCallOrder[0]);
+  const f = providerFixture(); await f.invoke(); expect(f.prepare).toHaveBeenCalledTimes(2); expect(f.prepare.mock.invocationCallOrder[0]).toBeLessThan(f.worker.analyze.mock.invocationCallOrder[0]); expect(f.prepare.mock.invocationCallOrder[1]).toBeGreaterThan(f.worker.analyze.mock.invocationCallOrder[0]);
   f.prepare.mockImplementationOnce(() => f.invalidate()); expect(await f.invoke()).toBeNull(); expect(f.worker.analyze).toHaveBeenCalledOnce(); await f.registration.dispose();
 });

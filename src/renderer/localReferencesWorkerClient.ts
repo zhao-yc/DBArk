@@ -2,17 +2,19 @@ import type { CompletionLexicalMode } from '../shared/completionLexical';
 import type { CompletionScopeCapabilities } from '../shared/completionCapabilities';
 import { validLocalReferences, type LocalReferences } from '../shared/localReferences';
 import { completionLimits } from '../shared/sqlCompletion';
+import { validSqliteLocalReferences } from '../shared/sqliteLocalReferences';
+import { sqliteCompletionLimits } from '../shared/sqliteCompletion';
 
 type WorkerPort = Pick<Worker, 'postMessage' | 'terminate' | 'onmessage' | 'onerror' | 'onmessageerror'>;
 
 /** 一次引用请求独占线程；启动8秒与分析2秒分开，正文只在握手后发送，终态准确释放所属线程。 */
 export class LocalReferencesWorkerClient {
   private active?: { stop(reason: string): void }; private disposed = false;
-  constructor(private readonly create: () => WorkerPort) {}
+  constructor(private readonly create: () => WorkerPort, private readonly dialect: 'mysql' | 'sqlite' = 'mysql') {}
   /** 输入绑定不可变快照；旧线程回包不能结束或污染继任请求。 */
   analyze(source: string, offset: number, mode: CompletionLexicalMode, signal: AbortSignal, capabilities: CompletionScopeCapabilities): Promise<LocalReferences> {
     if (this.disposed || signal.aborted) return Promise.resolve({ status: 'blocked', reason: 'cancelled' });
-    if (source.length > completionLimits.sourceUnits) return Promise.resolve({ status: 'blocked', reason: 'budget' });
+    if (source.length > (this.dialect === 'sqlite' ? sqliteCompletionLimits : completionLimits).sourceUnits) return Promise.resolve({ status: 'blocked', reason: 'budget' });
     this.active?.stop('replaced');
     return new Promise(resolve => {
       const snapshot = { ansiQuotes: mode.ansiQuotes, noBackslashEscapes: mode.noBackslashEscapes };
@@ -33,15 +35,16 @@ export class LocalReferencesWorkerClient {
         worker.onmessage = event => {
           if (finished) return;
           const message = event.data;
-          if (message?.type === 'dbark-local-references-unavailable') { owner.stop('worker'); return; }
-          if (message?.type === 'dbark-local-references-ready') {
+          const prefix = this.dialect === 'sqlite' ? 'dbark-sqlite-local-references' : 'dbark-completion';
+          if (message?.type === prefix + '-unavailable') { owner.stop('worker'); return; }
+          if (message?.type === prefix + '-ready') {
             if (message.version !== 1) { owner.stop('worker'); return; }
             if (sent) return;
             sent = true; clearTimeout(timer); timer = setTimeout(() => owner.stop('timeout'), 2000);
-            try { worker!.postMessage({ id: 1, source, offset, mode: snapshot, capabilities: facts }); } catch { owner.stop('worker'); }
+            try { worker!.postMessage(this.dialect === 'sqlite' ? { id: 1, source, offset } : { id: 1, source, offset, mode: snapshot, capabilities: facts, intent: 'references' }); } catch { owner.stop('worker'); }
             return;
           }
-          if (!sent || message?.id !== 1 || !validLocalReferences(message.result, source, offset, snapshot)) { owner.stop('worker'); return; }
+          if (!sent || message?.id !== 1 || !(this.dialect === 'sqlite' ? validSqliteLocalReferences(message.result, source, offset) : validLocalReferences(message.result, source, offset, snapshot))) { owner.stop('worker'); return; }
           finish(message.result);
         };
         worker.onerror = event => { event.preventDefault(); owner.stop('worker'); };

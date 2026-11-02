@@ -9,7 +9,7 @@ function fixture() {
   const create = vi.fn(() => { const worker = { postMessage: vi.fn(), terminate: vi.fn(), onmessage: null, onerror: null, onmessageerror: null }; workers.push(worker); return worker; });
   const client = new LocalReferencesWorkerClient(create), signal = new AbortController();
   const run = () => client.analyze(source, 8, {}, signal.signal, {});
-  const ready = (index = 0) => workers[index].onmessage?.({ data: { type: 'dbark-local-references-ready', version: 1 } } as MessageEvent);
+  const ready = (index = 0) => workers[index].onmessage?.({ data: { type: 'dbark-completion-ready', version: 1 } } as MessageEvent);
   const reply = (index = 0, result: unknown = analyzeLocalReferences(source, 8)) => workers[index].onmessage?.({ data: { id: 1, result } } as MessageEvent);
   return { workers, create, client, signal, run, ready, reply };
 }
@@ -29,14 +29,14 @@ it.each(['abort', 'dispose'] as const)('%s立即释放启动线程且不发正�
 });
 it('旧线程迟到消息与重复ready不影响继任owner', async () => {
   const f = fixture(), first = f.run(), old = f.workers[0].onmessage!, second = f.run(); expect(await first).toEqual({ status: 'blocked', reason: 'replaced' });
-  old({ data: { type: 'dbark-local-references-ready', version: 1 } } as MessageEvent); expect(f.workers[1].postMessage).not.toHaveBeenCalled();
+  old({ data: { type: 'dbark-completion-ready', version: 1 } } as MessageEvent); expect(f.workers[1].postMessage).not.toHaveBeenCalled();
   f.ready(1); f.ready(1); expect(f.workers[1].postMessage).toHaveBeenCalledOnce(); f.reply(1); expect(await second).toMatchObject({ status: 'ready' }); expect(f.workers.map(worker => worker.terminate.mock.calls.length)).toEqual([1, 1]);
 });
 it.each(['forged', 'early', 'version', 'messageerror', 'error'] as const)('拒绝%s并释放准确线程', async action => {
   const f = fixture(), result = f.run(), worker = f.workers[0];
   if (action === 'forged') { f.ready(); f.reply(0, { status: 'ready', uri: 'file:///x' }); }
   else if (action === 'early') f.reply();
-  else if (action === 'version') worker.onmessage!({ data: { type: 'dbark-local-references-ready', version: 2 } } as MessageEvent);
+  else if (action === 'version') worker.onmessage!({ data: { type: 'dbark-completion-ready', version: 2 } } as MessageEvent);
   else if (action === 'error') worker.onerror!({ preventDefault() {} } as ErrorEvent);
   else worker.onmessageerror!();
   expect(await result).toEqual({ status: 'blocked', reason: 'worker' }); expect(worker.terminate).toHaveBeenCalledOnce();
