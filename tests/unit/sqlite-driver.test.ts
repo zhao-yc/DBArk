@@ -214,6 +214,14 @@ it.each([false, true])('真实只读collation_list及TVF可用，赋值始终拒
   expect((await collect(session, 'SELECT count(*) FROM subject')).rows).toEqual([[{ type: 'integer', value: '0' }]]); await session.close(); expect(session.isClosed).toBe(true);
 });
 
+/** CHECK只新增实际状态读取；prepare阶段任何赋值/括号形式都必须仍拒绝。 */
+it.each([false, true])('CHECK实际开启状态可读但全部setter仍零statement拒绝（readonly=%s）', async readOnly => {
+  const { path } = fixture(), session = await open(path, readOnly), header = vi.fn();
+  expect((await collect(session, 'PRAGMA main.ignore_check_constraints')).rows).toEqual([[{ type: 'integer', value: '0' }]]);
+  for (const sql of ['PRAGMA ignore_check_constraints=ON', 'PRAGMA main.ignore_check_constraints=1', 'PRAGMA ignore_check_constraints(ON)', 'EXPLAIN PRAGMA ignore_check_constraints=ON', 'PRAGMA ignore_check_constraints=OFF']) await expect(session.execute(sql, { parameters: [], onStatement: header })).rejects.toMatchObject({ completedStatements: 0, sessionClosed: false });
+  expect(header).not.toHaveBeenCalled(); expect((await collect(session, 'PRAGMA main.ignore_check_constraints')).rows).toEqual([[{ type: 'integer', value: '0' }]]); await session.close(); expect(session.isClosed).toBe(true);
+});
+
 /** 原生ALTER依赖重写保护仅新增模式读取；prepare阶段任何赋值/括号形式都必须仍拒绝。 */
 it.each([false, true])('legacy_alter_table原值0可只读检查，所有开启写法零statement拒绝（readonly=%s）', async readOnly => {
   const { path } = fixture(), session = await open(path, readOnly), header = vi.fn();

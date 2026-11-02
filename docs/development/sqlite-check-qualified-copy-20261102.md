@@ -2,6 +2,8 @@
 
 ## 解决的问题和当前边界
 
+后续已将本路线接入[Main／Runtime 独立事务](sqlite-check-engine-20261102.md)，包括固定最终复制步骤、完整定义核验、检查状态和真实晚期回滚。本页保留当时的纯编译／内存原型范围，不代替新编辑区验收。
+
 接续 [CHECK 声明编译](sqlite-checks-plan-20261102.md)。原表合法的 `child.a`、`main.child.a` 等 CHECK 引用不能直接搬进随机私有表，且现有 `legacy_alter_table=ON` 下不能靠重新限定再改名解决。
 
 本轮新增 `compileSqliteTableRebuildCheckedCopyDefinition`，分开生成私有复制定义与最终原名定义，并以 native 内存原型证明“原名 CREATE 后显式复制”路线。**Main／Runtime 事务尚未接入此路线，未增加 IPC、预览输入、CHECK 写权限或用户入口**。不能将 SQL 字符串、内存原型或既有窗口回归当成新功能验收。

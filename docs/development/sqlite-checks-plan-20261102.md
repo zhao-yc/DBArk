@@ -2,6 +2,8 @@
 
 ## 本阶段实现
 
+后续已完成[Main／Runtime 受限预览与独立事务接入](sqlite-check-engine-20261102.md)。本页保留声明编译阶段的历史边界与原始验证；编辑区和平台验收仍按后续记录推进。
+
 新增 `src/shared/sqliteTableChecks.ts` 与原表重建编译器中的 CHECK 声明读取、增改删及组合编译。**尚无新 CHECK 用户入口、预览契约或写权限**；Main 原 `sqlite.tableRebuild.preview` 仍拒绝额外 `checkEdits`，不能用本阶段的 SQL 字符串冒充可提交能力。
 
 - 结构定义只有约束名、行内／表级位置、行内准确附着字段和表达式。普通及已有生成字段可承载 CHECK，声明位置不限制表达式引用其它本表字段。

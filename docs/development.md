@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 已有 CHECK 已接入[受限预览与独立事务](development/sqlite-check-engine-20261102.md)：Main／Runtime 独立重算、原名 CREATE 与最终显式复制、完整 CHECK 定义、四次 worker 比较及检查开启状态保护。919 项相关回归、类型／构建及原八个 Windows 窗口整例通过，晚期真实回滚、旧预览及资源已核；编辑区、Mac 及安装继续，不计完整可用 CHECK 或发行，暂不发布。
+
 SQLite CHECK 新增[限定引用私有定义与原名重建证明](development/sqlite-check-qualified-copy-20261102.md)：只在真实 CHECK 表达式内迁移本表字段，最终原名表达式保持，四种布局和原表删除后的真实回滚已有 native 内存证明。31 项新专项、858 项相关、类型／构建和原八个窗口整例通过，旧预览及资源核清；Main／Runtime 与编辑区仍须接入，未开放新写入口，暂不发布。
 
 SQLite 源码验收新增[管理专项按职责分片](development/sqlite-ci-management-shards-20261102.md)：原管理作业确认超过 20 分钟上限，现按结构管理／表重建／记录操作拆分，原 27 专项每平台各一次，所有时限、断言及资源门保持。61 项配置守卫、严格类型和独立 YAML 对照通过；远端三平台新轮另验，旧取消保留，暂不发布。

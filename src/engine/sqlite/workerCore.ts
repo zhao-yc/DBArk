@@ -29,7 +29,7 @@ function readablePragma(first: string | null, second: string | null): boolean {
   if (!name) return false;
   if (['table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list', 'integrity_check', 'quick_check', 'foreign_key_check'].includes(name)) return true;
   // FTS5的data_version和ALTER保护模式均只允许无赋值读取，不扩大任何PRAGMA写授权。
-  return second === null && ['database_list', 'table_list', 'collation_list', 'compile_options', 'foreign_keys', 'query_only', 'legacy_alter_table', 'schema_version', 'data_version', 'user_version', 'page_count', 'page_size', 'freelist_count', 'encoding', 'journal_mode'].includes(name);
+  return second === null && ['database_list', 'table_list', 'collation_list', 'compile_options', 'foreign_keys', 'query_only', 'legacy_alter_table', 'ignore_check_constraints', 'schema_version', 'data_version', 'user_version', 'page_count', 'page_size', 'freelist_count', 'encoding', 'journal_mode'].includes(name);
 }
 
 /** 仅跳过SQLite明确的空白、分号和注释；语句边界始终由原生prepare/sourceSQL决定。 */
@@ -175,6 +175,8 @@ export class SqliteWorkerCore {
       opened.exec(rebuild ? 'PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=ON' : 'PRAGMA foreign_keys=ON');
       const foreignKeys = opened.prepare('PRAGMA foreign_keys').get(); if (!foreignKeys || Object.values(foreignKeys)[0] !== (rebuild ? 0 : 1)) throw invalid();
       if (rebuild && Object.values(opened.prepare('PRAGMA legacy_alter_table').get() ?? {})[0] !== 1) throw invalid();
+      // 只核原生实际开启状态，不添加关闭CHECK的setter或继承其他连接的假定。
+      if (Object.values(opened.prepare('PRAGMA ignore_check_constraints').get() ?? {})[0] !== 0) throw invalid();
       // 强制读取真实主库头；只读取sqlite_version常量不能替代文件格式验证。
       const schema = opened.prepare('PRAGMA main.schema_version').get(); if (!schema || typeof Object.values(schema)[0] !== 'number') throw invalid();
       const versionRow = opened.prepare('SELECT sqlite_version() AS version').get();
@@ -227,7 +229,7 @@ export class SqliteWorkerCore {
     this.restoringRebuildFlags = true;
     try {
       this.db.exec('PRAGMA legacy_alter_table=OFF; PRAGMA foreign_keys=ON');
-      if (Object.values(this.db.prepare('PRAGMA legacy_alter_table').get() ?? {})[0] !== 0 || Object.values(this.db.prepare('PRAGMA foreign_keys').get() ?? {})[0] !== 1) throw invalid();
+      if (Object.values(this.db.prepare('PRAGMA legacy_alter_table').get() ?? {})[0] !== 0 || Object.values(this.db.prepare('PRAGMA foreign_keys').get() ?? {})[0] !== 1 || Object.values(this.db.prepare('PRAGMA ignore_check_constraints').get() ?? {})[0] !== 0) throw invalid();
     } finally { this.restoringRebuildFlags = false; }
   }
 

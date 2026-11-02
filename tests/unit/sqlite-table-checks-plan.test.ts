@@ -105,8 +105,9 @@ describe('SQLite CHECK组合编译与准确来源保护', () => {
   it('冻结原声明和名称数组，外部不能改写已读取身份', () => {
     const f = fixture('CREATE TABLE child(a CHECK(a>0),b INTEGER)'); try { const keys = inspect(f.input); expect(Object.isFrozen(keys)).toBe(true); expect(Object.isFrozen(keys[0])).toBe(true); expect(Object.isFrozen(keys[0].names)).toBe(true); } finally { f.db.close(); }
   });
-  it('旧预览契约仍拒绝checkEdits，内部声明编译没有签发新写权限', () => {
-    const valid = { catalogueId: 'c', taskId: 't', changes: [{ column: 'a', declaredType: 'INTEGER' }] }; expect(sqliteTableRebuildPreviewSchema.safeParse(valid).success).toBe(true); expect(sqliteTableRebuildPreviewSchema.safeParse({ ...valid, checkEdits: [{ kind: 'add', definition: design() }] }).success).toBe(false);
+  it('预览只接受有界checkEdits，不能透传原始SQL或关闭检查的权限', () => {
+    const valid = { catalogueId: 'c', taskId: 't', changes: [], checkEdits: [{ kind: 'add', definition: design() }] }; expect(sqliteTableRebuildPreviewSchema.safeParse(valid).success).toBe(true);
+    for (const extra of [{ sql: '任意SQL' }, { ignore_check_constraints: true }, { path: '其他文件' }, { checkEdits: [] }, { checkEdits: [{ kind: 'add', definition: { ...design(), ignore: true } }] }]) expect(sqliteTableRebuildPreviewSchema.safeParse({ ...valid, ...extra }).success).toBe(false);
   });
 });
 
