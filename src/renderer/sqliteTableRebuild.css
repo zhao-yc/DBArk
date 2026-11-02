@@ -26,3 +26,16 @@
 .sqlite-foreign-key-mapping input, .sqlite-foreign-key-mapping select { min-width: 0; width: 100%; }
 .sqlite-foreign-key-form-actions { margin-top: 12px; }
 @media (max-width: 700px) { .sqlite-foreign-key-mapping { grid-template-columns: 2ch minmax(0, 1fr); } .sqlite-foreign-key-mapping > span:nth-child(3) { display: none; } }
+
+/* 主键草稿与原表重建共用滚动容器，窄窗口字段分行，不预留隐藏控件空间。 */
+.sqlite-primary-key { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 8px; }
+.sqlite-primary-key p { overflow-wrap: anywhere; }
+.sqlite-primary-key-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.sqlite-primary-key-form { border: 1px solid var(--line); padding: 12px; margin-top: 12px; }
+.sqlite-primary-key-form > label { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0; }
+.sqlite-primary-key-form > label input { flex: none; }
+.sqlite-primary-key-form > .warning-text { display: block; margin-top: 12px; }
+.sqlite-primary-key-fields { max-height: 300px; overflow: auto; margin: 12px 0; }
+.sqlite-primary-key-field { display: grid; grid-template-columns: repeat(3, minmax(110px, 1fr)) auto auto auto; gap: 6px; align-items: end; margin-bottom: 8px; }
+.sqlite-primary-key-field input, .sqlite-primary-key-field select { min-width: 0; width: 100%; }
+@media (max-width: 700px) { .sqlite-primary-key-field { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

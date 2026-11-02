@@ -1,5 +1,7 @@
 # SQLite 已有主键：组合计划与独立事务
 
+后续原表重建窗口已接入[主键编辑区与草稿保护](sqlite-primary-key-ui-20261102.md)。下文保留事务阶段的原实现及验收范围。
+
 ## 本轮实现
 
 继[准确声明编译](sqlite-primary-key-plan-20261102.md)后，已有表主键增改删贯通原四条表重建命令、Main、Runtime、能力仓库与独立 writer。预览新增严格可选 `primaryKeyEdit`，输出明确 `changedPrimaryKey`；字段类型、默认值、实际列顺序、主键和外键可同批设计。Main 独立重算 SQL、风险及变化标记，Runtime 保存独立副本并计入预览内存预算，领取后再次完整重算，篡改主键补丁在 BEGIN 前拒绝。

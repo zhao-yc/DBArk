@@ -1,5 +1,6 @@
-import type { SqliteTableRebuildInspectOutput } from '../shared/sqliteTableRebuild';
-import { compileSqliteTableForeignKeys, inspectSqliteTableForeignKeys, type SqliteTableForeignKeySource } from '../shared/sqliteTableRebuildPlan';
+import type { SqliteTableRebuildInspectOutput, SqliteTableRebuildChange } from '../shared/sqliteTableRebuild';
+import type { SqliteTablePrimaryKeyEdit } from '../shared/sqliteTablePrimaryKey';
+import { compileSqliteTableForeignKeys, compileSqliteTableRebuildDefinition, inspectSqliteTableForeignKeys, type SqliteTableForeignKeySource } from '../shared/sqliteTableRebuildPlan';
 import { sqliteTableForeignKeyDefinitionSchema, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from '../shared/sqliteTableForeignKeys';
 import { sqliteTableCreateActions } from '../shared/sqliteTableCreate';
 import { sqliteForeignKeysZh as text } from './locales/sqliteForeignKeys.zh-CN';
@@ -52,18 +53,24 @@ export function updateSqliteForeignKeyForm(form: SqliteForeignKeyForm, action: S
   return { ...form, mappings };
 }
 /** 暂存前试编译整组本地补丁，冲突、未知字段和超预算不会改写原队列；不发送IPC。 */
-export function stageSqliteForeignKeyForm(catalogue: SqliteTableRebuildInspectOutput, edits: readonly SqliteTableForeignKeyEdit[], form: SqliteForeignKeyForm): SqliteTableForeignKeyEdit[] {
+export function stageSqliteForeignKeyForm(catalogue: SqliteTableRebuildInspectOutput, edits: readonly SqliteTableForeignKeyEdit[], form: SqliteForeignKeyForm, primary?: { primaryKeyEdit: SqliteTablePrimaryKeyEdit; changes: readonly SqliteTableRebuildChange[] }): SqliteTableForeignKeyEdit[] {
   if (sqliteForeignKeyNeedsAcknowledgement(form) && !form.legacyAccepted) throw Error(text.legacyRequired);
   const parsedDefinition = sqliteTableForeignKeyDefinitionSchema.safeParse({ name: form.name === '' ? null : form.name, columns: form.mappings.map(row => row.local), referencedTable: form.parent, referencedColumns: form.implicit ? [] : form.mappings.map(row => row.parent), onDelete: form.onDelete, onUpdate: form.onUpdate, deferral: form.deferral });
   if (!parsedDefinition.success) throw Error(text.invalidDefinition);
   const definition = parsedDefinition.data;
   const value: SqliteTableForeignKeyEdit = form.original ? { kind: 'replace', ordinal: form.original.ordinal, expectedSql: form.original.sql, definition } : { kind: 'add', definition }, next = [...edits];
   if (form.editing) { const index = next.indexOf(form.editing); if (index < 0) throw Error(text.staleForm); next[index] = value; } else next.push(value);
-  const parsed = sqliteTableForeignKeyEditsSchema.parse(next); compileSqliteTableForeignKeys(sqliteForeignKeySource(catalogue), parsed); return parsed;
+  const parsed = sqliteTableForeignKeyEditsSchema.parse(next);
+  if (primary) compileSqliteTableRebuildDefinition({ ...sqliteForeignKeySource(catalogue), ...primary, foreignKeyEdits: parsed, candidateName: '__dbark_rebuild_' + '0'.repeat(32) });
+  else compileSqliteTableForeignKeys(sqliteForeignKeySource(catalogue), parsed);
+  return parsed;
 }
 /** 标记移除沿用原声明身份；撤销只是删除本地补丁，原库和其它字段草稿不变。 */
-export function removeSqliteForeignKey(catalogue: SqliteTableRebuildInspectOutput, edits: readonly SqliteTableForeignKeyEdit[], ordinal: number): SqliteTableForeignKeyEdit[] {
+export function removeSqliteForeignKey(catalogue: SqliteTableRebuildInspectOutput, edits: readonly SqliteTableForeignKeyEdit[], ordinal: number, primary?: { primaryKeyEdit: SqliteTablePrimaryKeyEdit; changes: readonly SqliteTableRebuildChange[] }): SqliteTableForeignKeyEdit[] {
   const original = inspectSqliteTableForeignKeys(sqliteForeignKeySource(catalogue))[ordinal]; if (!original) throw Error(text.invalid);
   const next = [...edits.filter(edit => edit.kind === 'add' || edit.ordinal !== ordinal), { kind: 'remove' as const, ordinal, expectedSql: original.sql }];
-  const parsed = sqliteTableForeignKeyEditsSchema.parse(next); compileSqliteTableForeignKeys(sqliteForeignKeySource(catalogue), parsed); return parsed;
+  const parsed = sqliteTableForeignKeyEditsSchema.parse(next);
+  if (primary) compileSqliteTableRebuildDefinition({ ...sqliteForeignKeySource(catalogue), ...primary, foreignKeyEdits: parsed, candidateName: '__dbark_rebuild_' + '0'.repeat(32) });
+  else compileSqliteTableForeignKeys(sqliteForeignKeySource(catalogue), parsed);
+  return parsed;
 }
