@@ -5,6 +5,7 @@ import type { SqliteConnectionProfile } from '../../src/shared/contracts';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
 import type { SqliteTableImportInspectOutput } from '../../src/shared/sqliteTableImport';
 import { sqliteTableImportZh as text } from '../../src/renderer/locales/sqliteTableImport.zh-CN';
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
 
 const { request, sequence } = vi.hoisted(() => ({ request: vi.fn(), sequence: { value: 0 } }));
 vi.mock('../../src/renderer/lib', async original => ({ ...await original<object>(), invoke: request, uid: () => 'import-parent-' + ++sequence.value }));
@@ -17,15 +18,16 @@ let uiCommands: typeof import('../../src/renderer/uiCommands')['uiCommands'];
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], baseline: ReturnType<typeof useWorkspace.getState>, Tab: typeof import('../../src/renderer/components/SqliteTableTab')['SqliteTableTab'];
+let restoreNavigationMenu: () => void = () => {};
 beforeAll(async () => {
-  document = memoryDocument(); Object.defineProperty(window, 'dbark', { configurable: true, value: { onTask: () => () => {} } }); const create = document.createElement.bind(document);
+  document = memoryDocument(); restoreNavigationMenu = installNavigationMenuRamPort(document); Object.defineProperty(window, 'dbark', { configurable: true, value: { onTask: () => () => {} } }); const create = document.createElement.bind(document);
   document.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key, value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key); if (key === 'disabled') node.disabled = false; }; if (name === 'select') Object.defineProperty(node, 'options', { get: () => node.querySelectorAll('option') }); if (name === 'option') Object.defineProperty(node, 'value', { configurable: true, get: () => node.getAttribute('value') ?? node.textContent, set: value => node.attributes.set('value', value) }); return node; };
   ({ useWorkspace } = await import('../../src/renderer/store')); ({ uiCommands } = await import('../../src/renderer/uiCommands')); baseline = useWorkspace.getState(); ({ createRoot } = await import('react-dom/client')); ({ SqliteTableTab: Tab } = await import('../../src/renderer/components/SqliteTableTab'));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } document.body.textContent = ''; uiCommands.setBlocked(true); useWorkspace.setState(baseline, true); request.mockReset(); });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenu(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 function props(node: MemoryNode): Record<string, any> { const key = Object.keys(node).find(name => name.startsWith('__reactProps$')); if (!key) throw Error('缺少React事件端口'); return (node as any)[key]; }
-function button(label: string) { const node = document.querySelectorAll('button').find(node => node.textContent === label || node.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
+function button(label: string) { const node = navigationMenuRamButton(document.body, label) ?? document.querySelectorAll('button').find(node => node.textContent === label || node.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
 async function click(label: string) { const node = button(label); expect(node.disabled, label).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 async function input(label: string, value: string) { const node = document.querySelector('[aria-label="' + label + '"]'); expect(node).not.toBeNull(); await act(async () => props(node!).onChange({ target: { value } })); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }

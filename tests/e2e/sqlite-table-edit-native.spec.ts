@@ -115,7 +115,17 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
   /** 通过指定连接真实树层级打开对象，不依靠重复名字碰巧选中另一个连接。 */
   const openObject = async (name: string, object: string) => { const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row .tree-label').filter({ hasText: name }) }); await step(() => expect(connection).toHaveCount(1)); const databaseRow = connection.locator('.database-row .tree-label').filter({ hasText: /^main$/ }); if (!await step(() => databaseRow.isVisible())) await step(() => connection.locator('.connection-row .tree-label').filter({ hasText: name }).click()); const objectRow = connection.locator('.object-row .tree-label').filter({ hasText: object }); if (!await step(() => objectRow.isVisible())) await step(() => databaseRow.click()); await step(() => objectRow.dblclick()); await step(() => expect(table()).toBeVisible()); };
   /** 只从可访问列头读取实际网格值；不把后端回包或草稿内存冒称为已展示内容。 */
-  const columnValues = (column: string) => step(async () => { const header = grid().getByRole('columnheader').filter({ hasText: new RegExp('^' + column + '(?:[1-9]|\\s|$)') }); await expect(header).toHaveCount(1); check(); const position = await header.getAttribute('aria-colindex'); check(); if (!position || !/^[1-9][0-9]*$/.test(position)) throw Error('编辑网格原列位置未知'); return grid().locator(`[role="row"][aria-rowindex]:not([aria-rowindex="1"]) [role="gridcell"][aria-colindex="${position}"]`).allTextContents(); });
+  const columnValues = (column: string) => step(async () => {
+    const header = grid().getByRole('columnheader').filter({ hasText: new RegExp('^' + column + '(?:[1-9]|\\s|$)') }); await expect(header).toHaveCount(1); check();
+    const position = await header.getAttribute('aria-colindex'); check(); if (!position || !/^[1-9][0-9]*$/.test(position)) throw Error('编辑网格原列位置未知');
+    // 窄屏的高筛选面板可能挤掉网格视区；真实收起后观察，再恢复原草稿面板，不改页面或SQL。
+    const reveal = await grid().evaluate(node => node.clientHeight < 35) && await table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible(); check();
+    const toggle = async () => { const button = await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check); check(); await button.click(); check(); };
+    if (reveal) await toggle();
+    const values = await (require('./sqlite-grid-navigation') as typeof import('./sqlite-grid-navigation')).readSqliteGridColumn(page, grid(), Number(position), check);
+    if (reveal) { await toggle(); await expect(table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true })).toBeVisible(); check(); }
+    return values;
+  });
   const select = (row: number) => step(() => grid().getByRole('button', { name: `选择 SQLite 第 ${row} 行`, exact: true }).click());
   /** 先经真实排序控件确定页内行序，不能把SQLite未指定ORDER BY的扫描顺序当作定位合同。 */
   const sortPage = async (columns: string[]) => {
@@ -180,6 +190,8 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     stage = '可写Grid真实id列头降序、移除、升序均读取服务端新原页';
     await headerSortPk([{ column: 'id', direction: 'desc' }], ['INTEGER · 999', 'INTEGER · 4', 'INTEGER · 3', 'INTEGER · 2', 'INTEGER · 1']); await headerSortPk([]); await headerSortPk([{ column: 'id', direction: 'asc' }], ['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']); expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
     stage = '可编辑范围筛选仍是独立只读分页，不产生编辑预览或写入';
+    // 在实际原生最小窗口复现CI窄屏，不放大窗口来绕过虚拟行；成功观察后恢复原尺寸。
+    const originalBounds = await step(() => application.evaluate(({ BrowserWindow }) => { const windows = BrowserWindow.getAllWindows(); if (windows.length !== 1) throw Error('原SQLite单窗口身份变化'); const before = windows[0].getBounds(); windows[0].setBounds({ width: 1024, height: 680 }); return before; }));
     if (!await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible())) await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click());
     const rangeBefore = operations(await step(audit), 'sqlite.tablePage').length;
     await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await step(() => table().getByLabel('SQLite 筛选 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 筛选 1 运算符', { exact: true }).selectOption('between')); await step(() => table().getByLabel('SQLite 筛选 1 值类型', { exact: true }).selectOption('integer')); await step(() => table().getByLabel('SQLite 筛选 1 条件值', { exact: true }).fill('2')); await step(() => table().getByLabel('SQLite 筛选 1 结束值', { exact: true }).fill('4'));
@@ -188,6 +200,8 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await step(() => table().getByLabel('SQLite 筛选 1 运算符', { exact: true }).selectOption('notBetween')); await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click()); await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 999']));
     await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click()); await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']));
     expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
+    expect(operations(await step(audit), 'sqlite.tablePage')).toHaveLength(rangeBefore + 3);
+    await step(() => application.evaluate(({ BrowserWindow }, bounds) => { const windows = BrowserWindow.getAllWindows(); if (windows.length !== 1) throw Error('原SQLite单窗口身份变化'); windows[0].setBounds(bounds); }, originalBounds));
     stage = '可编辑IN/NOT IN列表仍为独立只读分页，清除恢复准确原页';
     if (!await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible())) await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click());
     const listBefore = operations(await step(audit), 'sqlite.tablePage').length;

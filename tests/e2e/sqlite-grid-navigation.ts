@@ -29,3 +29,40 @@ export async function readSqliteGridHeaders(page: Page, grid: Locator, check: ()
   }
   return [...headers].sort((left, right) => left[0] - right[0]).map(([index, label]) => ({ index, label }));
 }
+
+/** 真实滚轮遍历本页虚拟行，按aria位置读完整列；不把当前视口当全页或从IPC补造显示值。 */
+export async function readSqliteGridColumn(page: Page, grid: Locator, column: number, check: () => void): Promise<string[]> {
+  if (!Number.isSafeInteger(column) || column < 1 || column > 1024) throw Error('SQLite合成网格列位置无效');
+  check();
+  const geometry = await grid.evaluate(node => ({ top: node.scrollTop, maximum: node.scrollHeight - node.clientHeight, step: Math.max(1, Math.floor(node.clientHeight / 2)), count: Number(node.getAttribute('aria-rowcount')) })); check();
+  if (!Number.isSafeInteger(geometry.count) || geometry.count < 1 || geometry.count > 10001 || geometry.maximum < 0 || Math.ceil(geometry.maximum / geometry.step) > 32) throw Error('SQLite合成网格逐行观察超出本例预算');
+  const values = new Map<number, string>();
+  /** 只采集本轮真实渲染的准确列；交叠行原值变化即失败，不拼接两次不同结果。 */
+  const collect = async () => {
+    check();
+    const rows = await grid.locator(`[role="row"][aria-rowindex]:not([aria-rowindex="1"]) [role="gridcell"][aria-colindex="${column}"]`).evaluateAll(nodes => nodes.map(node => ({ index: Number(node.closest('[role="row"]')?.getAttribute('aria-rowindex')), value: node.textContent ?? '' }))); check();
+    for (const row of rows) {
+      if (!Number.isSafeInteger(row.index) || row.index < 2 || row.index > geometry.count) throw Error('SQLite虚拟行缺少准确aria位置');
+      if (values.has(row.index)) expect(row.value).toBe(values.get(row.index)); values.set(row.index, row.value);
+    }
+  };
+  /** 原滚轮滚动当前网格，不设置scrollTop、修改产品DOM或向业务入口投递请求。 */
+  const scroll = async (target: number) => {
+    check(); await grid.hover(); check(); const top = await grid.evaluate(node => node.scrollTop); check();
+    if (Math.abs(top - target) > 0.5) { await page.mouse.wheel(0, target - top); check(); }
+    await expect.poll(async () => { check(); const top = await grid.evaluate(node => node.scrollTop); check(); return top; }).toBeCloseTo(target, 0); check();
+  };
+  await collect();
+  if (values.size < geometry.count - 1) {
+    for (let target = 0;; target = Math.min(geometry.maximum, target + geometry.step)) {
+      await scroll(target); await collect();
+      if (values.size === geometry.count - 1 || target === geometry.maximum) break;
+    }
+    expect(values.size, '滚动后仍须核全页原值，不能缩减预期行集合').toBe(geometry.count - 1);
+    await scroll(geometry.top);
+  }
+  expect(await grid.getAttribute('aria-rowcount')).toBe(String(geometry.count)); check();
+  return Array.from({ length: geometry.count - 1 }, (_, index) => {
+    const value = values.get(index + 2); if (value === undefined) throw Error('SQLite虚拟行观察存在位置缺口'); return value;
+  });
+}
