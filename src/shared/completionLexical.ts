@@ -22,7 +22,7 @@ export function quoteCompletionIdentifier(value:string):string{if(!completionIde
 const blocked=(reason:Extract<CompletionLexicalResult,{status:'blocked'}>['reason']):CompletionLexicalResult=>({status:'blocked',reason});
 
 /** 单个确定模式的纯词法扫描，不执行SQL、不读取连接，也不记录用户文本。 */
-function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number):CompletionLexicalResult{
+function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number,signature?:'mysql'|'sqlite'):CompletionLexicalResult{
   const statements:Statement[]=[],regions:Region[]=[];let current:Statement={start:0,end:source.length,tokens:[],executable:false};
   let index=0,depth=0,total=0,delimiter=';',lineStart=true,hasCode=false;
   /** 限制全文件token数与括号深度，避免大脚本在每次键盘输入时无限分配。 */
@@ -32,7 +32,7 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
   }
   while(index<source.length){
     // 客户端DELIMITER仅在独立行且当前语句无代码时生效，注释/字符串不能伪造指令。
-    if(lineStart&&!hasCode){
+    if(signature!=='sqlite'&&lineStart&&!hasCode){
       const end=source.indexOf('\n',index),lineEnd=end<0?source.length:end+1,line=source.slice(index,lineEnd);
       const directive=/^[\t\r ]*DELIMITER[\t ]+(\S+)[\t\r ]*(?:\n)?$/i.exec(line);
       if(directive){
@@ -46,20 +46,20 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
     }
     if(space(char)){lineStart=char==='\n'||lineStart;index++;continue;}
     lineStart=false;
-    if(char==='#'||char==='-'&&next==='-'&&/[\x00-\x20\x7f]/.test(source[index+2]??' ')){
+    if(char==='#'&&signature!=='sqlite'||char==='-'&&next==='-'&&(signature==='sqlite'||/[\x00-\x20\x7f]/.test(source[index+2]??' '))){
       const start=index,end=source.indexOf('\n',index);index=end<0?source.length:end;
       regions.push({start,end:index,kind:'comment',open:true});continue;
     }
     if(char==='/'&&next==='*'){
       const start=index,end=source.indexOf('*/',index+2);index=end<0?source.length:end+2;
-      if(source[start+2]==='!'||source.slice(start+2,start+4)==='M!'){current.executable=true;hasCode=true;}
+      if(signature!=='sqlite'&&(source[start+2]==='!'||source.slice(start+2,start+4)==='M!')){current.executable=true;hasCode=true;}
       regions.push({start,end:index,kind:'comment',open:end<0});continue;
     }
-    if(char==='`'||char==='"'||char==="'"){
-      const start=index++,identifier=char==='`'||char==='"'&&ansiQuotes;let value='',closed=false;
+    if(char==='`'||char==='"'||char==="'"||signature==='sqlite'&&char==='['){
+      const start=index++,identifier=char==='`'||char==='['||char==='"'&&ansiQuotes,close=char==='['?']':char;let value='',closed=false;
       while(index<source.length){
         const item=source[index++];
-        if(item===char){if(source[index]===char){value+=char;index++;}else{closed=true;break;}}
+        if(item===close){if(char!=='['&&source[index]===close){value+=close;index++;}else{closed=true;break;}}
         else if(item==='\\'&&!identifier&&!noBackslashEscapes&&index<source.length){value+=item+source[index++];}
         else value+=item;
       }
@@ -82,6 +82,8 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
   const statement=statements.find(item=>offset>=item.start&&offset<=item.end);
   if(!statement)return blocked('directive');
   if(statement.executable)return blocked('executable-comment');
+  // 参数提示读取完整调用栈，光标可在字符串／数字实参内；普通补全仍走原目标与字面量拒绝规则。
+  if(signature)return{status:'ready',statement:{start:statement.start,end:statement.end},tokens:statement.tokens,target:{start:offset,end:offset,prefix:'',qualifiers:[],quoted:false}};
   const token=statement.tokens.find(item=>offset>=item.start&&(offset<item.end||offset===item.end&&(item.kind==='word'||item.kind==='identifier'||!item.closed)));
   if(token?.kind==='string')return blocked('string');
   if(token&&(token.kind==='number'||token.kind==='symbol'&&offset>token.start))return blocked('identifier');
@@ -118,5 +120,17 @@ export function completionLexicalContext(source:string,offset:number,mode:Comple
   if(source.includes('\0'))return blocked('identifier');
   const results:CompletionLexicalResult[]=[];
   for(const quotes of mode.ansiQuotes===undefined?[false,true]:[mode.ansiQuotes])for(const escapes of mode.noBackslashEscapes===undefined?[false,true]:[mode.noBackslashEscapes])results.push(scan(source,offset,quotes,escapes,prefixUnits));
+  const first=JSON.stringify(results[0]);return results.every(value=>JSON.stringify(value)===first)?results[0]:blocked('ambiguous');
+}
+
+/** 复用有界词法与DELIMITER；SQLite单独采用无转义字符串、方括号及无需空白的--规则。 */
+export function signatureLexicalContext(source:string,offset:number,dialect:'mysql'|'mariadb'|'sqlite',mode:CompletionLexicalMode={}):CompletionLexicalResult{
+  if(typeof source!=='string'||source.length>completionLimits.sourceUnits)return blocked('budget');
+  if(!Number.isSafeInteger(offset)||offset<0||offset>source.length||offset>0&&offset<source.length&&/[\uD800-\uDBFF]/.test(source[offset-1])&&/[\uDC00-\uDFFF]/.test(source[offset]))return blocked('position');
+  if(source.includes('\0'))return blocked('identifier');
+  if(dialect==='sqlite')return scan(source,offset,true,true,completionLimits.aliasUnits,'sqlite');
+  if(dialect!=='mysql'&&dialect!=='mariadb')return blocked('ambiguous');
+  const results:CompletionLexicalResult[]=[];
+  for(const quotes of mode.ansiQuotes===undefined?[false,true]:[mode.ansiQuotes])for(const escapes of mode.noBackslashEscapes===undefined?[false,true]:[mode.noBackslashEscapes])results.push(scan(source,offset,quotes,escapes,completionLimits.aliasUnits,'mysql'));
   const first=JSON.stringify(results[0]);return results.every(value=>JSON.stringify(value)===first)?results[0]:blocked('ambiguous');
 }

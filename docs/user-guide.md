@@ -1,5 +1,7 @@
 # 使用指南
 
+SQL 编辑器新增[常用函数参数提示](development/sql-signatures-20261103.md)：输入函数括号或逗号即可查看签名和当前参数，支持嵌套及方言差异；Windows 可按 `Ctrl+Shift+Space` 手动查看。只读本地语法资料，不执行 SQL；完整函数语义、Mac／安装另验。
+
 SQLite 表／视图的不同值筛选现可按次数最多／最少读取，针对全部匹配分组排序后限量。切换不查询；已有勾选先确认丢弃，再明确重读，仍须先加入草稿后应用。见[SQLite 次数排序](development/sqlite-value-frequency-20261103.md)。
 
 查询结果的“从结果选择值”支持按次数最多／最少整理不同值。同次数沿首次出现顺序，切换保留勾选；先写入条件草稿，再应用筛选，不重新查询。次数仅涵盖已返回行；SQLite 同显示的存储类型分开选择。见[使用范围](development/query-result-value-frequency-20261103.md)。

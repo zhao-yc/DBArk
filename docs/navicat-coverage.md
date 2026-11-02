@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+高频 SQL 编辑新增[常用函数参数提示](development/sql-signatures-20261103.md)：MySQL／MariaDB 与 SQLite 的固定签名、参数高亮、嵌套及快捷键，不执行 SQL。198 项相关、类型／构建和 Windows 三方言完整客户端通过，模型／源文件保持、资源核清；Mac／安装及完整语义辅助另验，O05 保持部分，不增加完整工作包或发行计数，暂不发布。
+
 SQLite 高频数据筛选补齐[全表分组次数排序](development/sqlite-value-frequency-20261103.md)：全部匹配组排序后限量，既有勾选先确认丢弃、再明确读取。81 项相关、类型／构建、表／视图 worker 与 Windows 完整客户端通过，原数据及资源核清；Mac／安装另验，R02 仍部分，暂不发布。
 
 高频结果筛选补齐[不同值按次数整理](development/query-result-value-frequency-20261103.md)：对已返回全部匹配候选排序，保留搜索、跨页勾选与原值身份；SQLite 同显示类型独立。184 项相关、类型／构建及 Windows 明暗组件通过；完整驱动工作区、Mac／安装另验，不增加完整工作包或发行计数，暂不发布。

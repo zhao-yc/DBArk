@@ -27,6 +27,7 @@ import { SqliteCompletionWorkerClient } from '../sqliteCompletionWorkerClient';
 import { createSqliteCompletionProvider } from '../sqliteCompletionProvider';
 import { createSqlDefinitionProvider } from '../sqlDefinitionProvider';
 import { createMysqlDefinitionAnalysis } from '../mysqlDefinitionAnalysis';
+import { createSqlSignatureProvider } from '../sqlSignatureProvider';
 import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared/sqliteCompletion';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
@@ -49,7 +50,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object; indentation?: ReturnType<typeof bindEditorIndentation> } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat });
   const completionRef = useRef(completion);
-  useLayoutEffect(() => { completionRef.current = completion; });
+  const dialectRef = useRef(dialect);
+  useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
   const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, ...editorIndentationOptions(tabSize, insertSpaces), ...editorWordWrapOptions(wordWrap), renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
@@ -87,6 +89,14 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const runRef = useRef(onExecute); runRef.current = onExecute;
   const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
+  /** 内置函数参数提示只分析当前模型；模式缓存之外没有数据库入口，与补全／声明线程独立。 */
+  useEffect(() => {
+    if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
+    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]') && (!completion || sameCompletionScope(completionRef.current, completion));
+    const signatures = createSqlSignatureProvider({ model: () => editorRef.current?.getModel() ?? null, current, dialect, scope: completion, state: sessionId => invoke('query.completionState', { sessionId }) });
+    const registration = monaco.languages.registerSignatureHelpProvider('sql', signatures.provider);
+    return () => { registration.dispose(); signatures.dispose(); };
+  }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   /** 声明导航独立于元数据补全；MySQL只读既有会话模式缓存，不为F12建立连接或执行SQL。 */
   useEffect(() => {
     if (readOnly || !contentReady || dialect !== 'sqlite' && !completion) return;

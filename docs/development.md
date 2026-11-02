@@ -1,5 +1,7 @@
 # 开发与测试
 
+查询编辑新增[常用函数参数提示](development/sql-signatures-20261103.md)：固定方言签名、有界词法参数定位、Monaco 原提示及模型／会话守卫；无会话零 IPC，已有 MySQL 会话仅读模式缓存。198 项相关、类型／构建与 Windows 三方言原工作区整例通过，失败原件分别保留；Mac／安装及完整语义辅助另验，暂不发布。
+
 SQLite 全表不同值新增[次数排序](development/sqlite-value-frequency-20261103.md)：严格可选枚举、完整分组先排序后限量、64位计数校验及原取消门。81 项相关、类型／构建、表／视图真实 worker 与 Windows 正式客户端通过；Mac／安装另验，暂不发布。
 
 结果不同值选择新增[本地次数排序](development/query-result-value-frequency-20261103.md)，完整匹配候选排序后分页，保留原编号与勾选，不增加查询。184 项相关、类型／构建及 Windows 明暗真实组件通过；完整驱动工作区、Mac／安装另验，暂不发布。
