@@ -102,7 +102,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
           return { ...result, suggestions: result.suggestions.map(item => ({ ...item, kind: completionKinds[item.kind], ...(item.trigger ? { command: { id: 'editor.action.triggerSuggest', title: '' } } : {}) })) };
         },
       });
-      return () => { registration.dispose(); void provider.dispose().catch(() => {}); };
+      const hoverRegistration = monaco.languages.registerHoverProvider('sql', { provideHover: (model, position, token) => provider.provideHover(model, position, token) });
+      return () => { hoverRegistration.dispose(); registration.dispose(); void provider.dispose().catch(() => {}); };
     }
     const worker=new CompletionWorkerClient(()=>new CompletionWorker()),directory=new CompletionDirectory(completion.connectionId,completion.connectionVersion,{request:input=>invoke('metadata.completion',input),cancel:taskId=>invoke('query.cancel',{taskId}),id:uid});
     let active:AbortController|undefined,disposed=false;

@@ -3,6 +3,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
 import { sqliteCompletionInputSchema, sqliteCompletionOutputSchema } from '../../src/shared/sqliteCompletion';
+import { sqliteFieldHoverZh as hoverText } from '../../src/renderer/locales/sqliteFieldHover.zh-CN';
 
 // 默认与--list只注册跳过项；不加载desktop、NodeSQLite、文件或系统剪贴板。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list=')), active = !listing && process.env.DBARK_SQLITE_COMPLETION_NATIVE_TEST === '1';
@@ -15,7 +16,7 @@ type Desktop = typeof import('./desktop-fixture');
 interface Fact { command: string; request: Record<string, unknown>; reply?: unknown; failure?: string; }
 interface WorkerTrace { id: number; sent: { kind: string; id?: string; frame?: number; control?: string }[]; received: { kind: string; id?: string; frame?: number }[]; exit?: number; kills: number; }
 interface Audit { pending: number; denied: string[]; pickerIds: string[]; profiles: Record<string, boolean>; sessions: string[]; commands: string[]; operations: Fact[]; workers: WorkerTrace[]; }
-interface AnalysisTrace { id: number; url: string; posted: number; ready: number; replied: number; terminated: number; errors: number; status?: string; reason?: string; }
+interface AnalysisTrace { id: number; url: string; posted: number; ready: number; replied: number; terminated: number; errors: number; status?: string; reason?: string; intent?: 'hover'; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：须DBARK_SQLITE_COMPLETION_NATIVE_TEST=1、integration=0，仅使用独占合成SQLite文件');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -92,7 +93,7 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
   const observeAnalysis = () => step(() => page.evaluate(() => {
     const root = window as Window & { __sqliteCompletionAnalysis?: { records: AnalysisTrace[]; check(): void; restore(): void } }; if (root.__sqliteCompletionAnalysis) throw Error('原分析观察器已存在'); const Native = window.Worker, records: AnalysisTrace[] = [], releases: (() => void)[] = [];
     class Observed extends Native { constructor(url: string | URL, options?: WorkerOptions) { super(url, options); if (!String(url).includes('sqliteCompletion.worker')) return; const worker = this, record: AnalysisTrace = { id: records.length + 1, url: String(url), posted: 0, ready: 0, replied: 0, terminated: 0, errors: 0 }; records.push(record); const post = worker.postMessage, terminate = worker.terminate;
-      const wrappedPost = ((...args: unknown[]) => { record.posted++; return Reflect.apply(post, worker, args); }) as typeof worker.postMessage, wrappedTerminate = () => { record.terminated++; return Reflect.apply(terminate, worker, []); };
+      const wrappedPost = ((...args: unknown[]) => { record.posted++; const raw = args[0]; if (raw && typeof raw === 'object' && 'intent' in raw && raw.intent === 'hover') record.intent = 'hover'; return Reflect.apply(post, worker, args); }) as typeof worker.postMessage, wrappedTerminate = () => { record.terminated++; return Reflect.apply(terminate, worker, []); };
       const message = (event: MessageEvent) => { const raw = event.data; if (raw?.type === 'dbark-sqlite-completion-ready' && raw.version === 1) record.ready++; else if (Number.isSafeInteger(raw?.id) && raw.result && typeof raw.result === 'object') { record.replied++; if (typeof raw.result.status === 'string') record.status = raw.result.status; if (typeof raw.result.reason === 'string') record.reason = raw.result.reason; } }, error = () => { record.errors++; }; worker.postMessage = wrappedPost; worker.terminate = wrappedTerminate; worker.addEventListener('message', message); worker.addEventListener('error', error); worker.addEventListener('messageerror', error); releases.push(() => { if (worker.postMessage !== wrappedPost || worker.terminate !== wrappedTerminate) throw Error('原分析Worker观察器已变化'); worker.postMessage = post; worker.terminate = terminate; worker.removeEventListener('message', message); worker.removeEventListener('error', error); worker.removeEventListener('messageerror', error); });
     } }
     window.Worker = Observed; const state = { records, check() { if (root.__sqliteCompletionAnalysis !== state || window.Worker !== Observed) throw Error('原分析观察器已变化'); }, restore() { state.check(); if (records.some(record => record.terminated !== 1 || record.errors)) throw Error('真实分析Worker未完成释放'); for (const release of releases) release(); window.Worker = Native; delete root.__sqliteCompletionAnalysis; } }; root.__sqliteCompletionAnalysis = state;
@@ -123,6 +124,16 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
   const passiveState = (sessionId: string) => step(() => page.evaluate(async sessionId => ({ state: await window.dbark.invoke('query.sessionState', { sessionId }), completion: await window.dbark.invoke('query.completionState', { sessionId }) }), sessionId));
   const metadataReadOnly = async (expectedDisk: ReturnType<typeof disk>, before: { tasks: Awaited<ReturnType<typeof tasks>>; history: Awaited<ReturnType<typeof history>>; executions: number; sessions: number }) => { expect(await tasks()).toEqual(before.tasks); expect(await history()).toEqual(before.history); const facts = await step(audit); expect(operations(facts, 'query.execute')).toHaveLength(before.executions); expect(operations(facts, 'sessions.open')).toHaveLength(before.sessions); expect(disk()).toEqual(expectedDisk); };
   const settleMetadata = () => step(() => expect.poll(async () => { const facts = await audit(), records = await analysis(); return facts.pending === 0 && records.every(record => record.terminated === 1); }).toBe(true));
+  /** 真实Monaco悬停快捷键与完整词中光标；不直接调用provider、设置model或伪造hover内容。 */
+  const showHover = async (marked: string, expected: string[]) => {
+    const original = await at(marked); await settleMetadata(); const before = (await analysis()).at(-1)?.id ?? 0;
+    await step(() => page.keyboard.press(modifier + '+K')); await step(() => page.keyboard.press(modifier + '+I'));
+    const tooltip = page.locator('.monaco-hover:visible');
+    for (const value of expected) await step(() => expect(tooltip).toContainText(value));
+    await step(() => expect.poll(async () => (await analysis()).some(record => record.id > before && record.intent === 'hover' && record.status === 'ready' && record.terminated === 1)).toBe(true));
+    await expectSql(original.source); await info.attach('SQLite字段悬停-' + expected[0], { body: await step(() => page.screenshot()), contentType: 'image/png' });
+    await step(() => page.keyboard.press('Escape')); await settleMetadata();
+  };
   const succeeded = (fact: Fact) => !!fact.reply && typeof fact.reply === 'object' && 'ok' in fact.reply && fact.reply.ok === true;
   const lastColumns = (facts: Audit, sessionId?: string, schema?: 'main' | 'temp') => completionFacts(facts).filter(fact => succeeded(fact) && fact.request.kind === 'columns' && fact.request.table === 'subject' && fact.request.sessionId === sessionId && fact.request.schema === schema).at(-1)!;
   try {
@@ -137,11 +148,17 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
     await choose('SELECT * FROM subj|suffix', 'subject', 'SELECT * FROM "subject"');
     await choose('SELECT * FROM 中|suffix', quotedTable, 'SELECT * FROM "中文""航船🚢"');
     await choose('SELECT u.字|suffix FROM "中文""航船🚢" AS u', quotedColumn, 'SELECT u."字段""列🚢" FROM "中文""航船🚢" AS u'); await settleMetadata(); await metadataReadOnly(baseline, statelessBefore);
+    stage = '无session真实字段悬停不执行SQL或建立session';
+    await showHover('SELECT s.ma|in_marker FROM subject s', ['main_marker', hoverText.permanent, hoverText.declaredType + '："TEXT"']);
+    await showHover('WITH local_only(field_name) AS (SELECT 1) SELECT l.fi|eld_name FROM local_only l', ['field_name', hoverText.cte, hoverText.unknown]);
+    await metadataReadOnly(baseline, statelessBefore);
     const statelessFacts = await step(audit); expect(completionFacts(statelessFacts).length).toBeGreaterThan(0); expect(completionFacts(statelessFacts).every(fact => fact.request.sessionId === undefined)).toBe(true); for (const fact of completionFacts(statelessFacts)) { sqliteCompletionInputSchema.parse(fact.request); if (succeeded(fact)) sqliteCompletionOutputSchema.parse(result(fact.reply)); else expect(operations(statelessFacts, 'query.cancel').some(cancel => cancel.request.taskId === fact.request.taskId), '失败元数据必须有同编号真实取消请求，不能忽略无缘失败').toBe(true); expect(fact.request).not.toHaveProperty('sql'); expect(fact.request).not.toHaveProperty('source'); }
     stage = '用户明确执行TEMP脚本并在原查询事务创建未提交DDL；独立观察仍只见原主文件';
     await execute(bootstrapSql, 1); const sessionA = (await step(audit)).sessions[0]; expect(typeof sessionA).toBe('string'); await step(() => query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeEnabled()); await execute(transactionalSql, 2); await settleMetadata(); const beforeAState = await passiveState(sessionA); expect(beforeAState.state).toEqual({ transactionOpen: true, transactionKnown: true, broken: false }); expect(disk()).toEqual(baseline);
     const beforeAMetadata = { tasks: await tasks(), history: await history(), executions: 2, sessions: 1 }, aCompletionStart = completionFacts(await step(audit)).length;
     stage = '原session同名TEMP优先，显式main与temp严格分离，未提交DDL仅本会话可见';
+    await showHover('SELECT s.te|mp_marker FROM subject s', ['temp_marker', hoverText.temporary, hoverText.declaredType + '："TEXT"']);
+    await showHover('SELECT m.ma|in_marker FROM main.subject m', ['main_marker', hoverText.permanent]);
     await choose('SELECT s.| FROM subject AS s', 'temp_marker', 'SELECT s."temp_marker" FROM subject AS s', 'main_marker'); const shadow = lastColumns(await step(audit), sessionA); expect(sqliteCompletionOutputSchema.parse(result(shadow.reply)).entries.map(entry => entry.name).sort()).toEqual(['id', 'temp_marker']); expect(sqliteCompletionOutputSchema.parse(result(shadow.reply)).entries.every(entry => entry.schema === 'temp')).toBe(true);
     await choose('SELECT m.| FROM main.subject AS m', 'main_marker', 'SELECT m."main_marker" FROM main.subject AS m', 'temp_marker'); const main = lastColumns(await step(audit), sessionA, 'main'); expect(sqliteCompletionOutputSchema.parse(result(main.reply)).entries.every(entry => entry.schema === 'main')).toBe(true);
     await choose('SELECT t.| FROM temp.subject AS t', 'temp_marker', 'SELECT t."temp_marker" FROM temp.subject AS t', 'main_marker'); const temp = lastColumns(await step(audit), sessionA, 'temp'); expect(sqliteCompletionOutputSchema.parse(result(temp.reply)).entries.every(entry => entry.schema === 'temp')).toBe(true);

@@ -3,6 +3,7 @@ import { sqliteCompletionInputSchema, sqliteCompletionOutputSchema, sqliteComple
 import type { SqliteCompletionAnalysis } from '../shared/sqliteCompletionAnalysis';
 import { sameCompletionState } from './completionContext';
 import { sqliteCompletionSuggestions, type SqliteCompletionItem } from './sqliteCompletionSuggestions';
+import { sqliteFieldHover } from './sqliteFieldHover';
 
 interface Position { lineNumber: number; column: number; }
 interface Disposable { dispose(): void; }
@@ -16,16 +17,18 @@ type Status = 'idle' | 'partial' | 'limited' | 'unavailable' | 'startupTimeout' 
 interface Ports {
   connectionId: string; sessionId?: string;
   model(): SqliteCompletionModel | null; current(): boolean;
-  worker: { analyze(source: string, offset: number, signal?: AbortSignal): Promise<SqliteCompletionAnalysis>; cancel(): Promise<void>; dispose(): Promise<void> };
+  worker: { analyze(source: string, offset: number, signal?: AbortSignal, intent?: 'hover'): Promise<SqliteCompletionAnalysis>; cancel(): Promise<void>; dispose(): Promise<void> };
   request(input: SqliteCompletionInput): Promise<unknown>; cancel(taskId: string): Promise<unknown>;
   state(sessionId: string): Promise<CompletionSessionState>; id(): string; status(status: Status): void;
 }
 interface Pending { sent: boolean; work: Promise<unknown>; cancel?: Promise<unknown>; }
-interface Operation { controller: AbortController; pending: Map<string, Pending>; done: Promise<void>; finish(): void; workerStop?: Promise<void>; }
+interface Operation { intent?: 'hover'; controller: AbortController; pending: Map<string, Pending>; done: Promise<void>; finish(): void; workerStop?: Promise<void>; }
 export interface SqliteCompletionSuggestion extends SqliteCompletionItem {
   range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
   filterText: string; sortText: string;
 }
+interface CompletionResult { suggestions: SqliteCompletionSuggestion[]; incomplete?: boolean; }
+interface HoverResult { range: SqliteCompletionSuggestion['range']; contents: { value: string; isTrusted: false; supportHtml: false }[]; }
 const stale = () => Object.assign(new Error('SQLite补全原来源已失效'), { name: 'AbortError' });
 
 /** SQLite独立provider：只读目录请求与原模型／会话代次绑定，不执行建议或借用MySQL分析器。 */
@@ -38,17 +41,17 @@ export function createSqliteCompletionProvider(ports: Ports) {
     for (const [id, pending] of operation.pending) if (pending.sent) pending.cancel ??= Promise.resolve().then(() => ports.cancel(id)).catch(() => {});
     return Promise.allSettled([operation.done, operation.workerStop, ...[...operation.pending.values()].flatMap(pending => pending.cancel ? [pending.cancel] : [])]).then(() => undefined);
   }
-  return {
-    triggerCharacters: ['.', '"', '`', '['],
     /** 所有await之后重新核模型、版本及同一provider；新编辑、切会话和取消不交付旧结果。 */
-    async provideCompletionItems(model: SqliteCompletionModel, position: Position, _context: unknown, token: Token): Promise<{ suggestions: SqliteCompletionSuggestion[]; incomplete?: boolean }> {
-      const empty = () => ({ suggestions: [] as SqliteCompletionSuggestion[] });
+    async function provide(model: SqliteCompletionModel, position: Position, token: Token, intent?: 'hover'): Promise<CompletionResult | HoverResult | null> {
+      const empty = () => null;
       let version: number;
       try { if (disposed || !ports.current() || ports.model() !== model || model.isDisposed() || token.isCancellationRequested) return empty(); version = model.getVersionId(); } catch { return empty(); }
+      // 键盘补全优先；悬停不能撤销仍在分析或读取的补全，也不另开并发会话目录。
+      if (intent === 'hover' && active && active.intent !== 'hover') return empty();
       const previous = active;
       if (previous) void abort(previous);
       let finish!: () => void;
-      const operation: Operation = { controller: new AbortController(), pending: new Map(), done: new Promise(resolve => { finish = resolve; }), finish: () => finish() };
+      const operation: Operation = { intent, controller: new AbortController(), pending: new Map(), done: new Promise(resolve => { finish = resolve; }), finish: () => finish() };
       active = operation;
       const current = () => { try { return !disposed && active === operation && !operation.controller.signal.aborted && ports.current() && ports.model() === model && !model.isDisposed() && model.getVersionId() === version; } catch { return false; } };
       const stop = () => { void abort(operation); };
@@ -57,15 +60,15 @@ export function createSqliteCompletionProvider(ports: Ports) {
       try {
         cancellation = token.onCancellationRequested(stop); change = model.onDidChangeContent(stop);
         if (previous) await previous.done;
-        if (!current()) return empty(); ports.status('idle');
-        if (model.getValueLength() > sqliteCompletionLimits.sourceUnits) { ports.status('limited'); return empty(); }
+        if (!current()) return empty(); if (!intent) ports.status('idle');
+        if (model.getValueLength() > sqliteCompletionLimits.sourceUnits) { if (!intent) ports.status('limited'); return empty(); }
         if (ports.sessionId) {
           state = await ports.state(ports.sessionId); if (!current()) return empty();
           if (state.dialect !== 'sqlite' || state.busy || state.broken || !state.databaseKnown || state.database !== 'main' || !Number.isSafeInteger(state.objectsRevision) || state.objectsRevision! < 0) return empty();
         }
         const source = model.getValue(), offset = model.getOffsetAt(position);
-        const analysis = await ports.worker.analyze(source, offset, operation.controller.signal); if (!current()) return empty();
-        if (analysis.status === 'blocked') { ports.status(analysis.reason === 'budget' ? 'limited' : analysis.reason === 'startup-timeout' ? 'startupTimeout' : analysis.reason === 'timeout' ? 'analysisTimeout' : analysis.reason === 'worker' ? 'unavailable' : 'idle'); return empty(); }
+        const analysis = await ports.worker.analyze(source, offset, operation.controller.signal, intent); if (!current()) return empty();
+        if (analysis.status === 'blocked') { if (!intent) ports.status(analysis.reason === 'budget' ? 'limited' : analysis.reason === 'startup-timeout' ? 'startupTimeout' : analysis.reason === 'timeout' ? 'analysisTimeout' : analysis.reason === 'worker' ? 'unavailable' : 'idle'); return empty(); }
         /** 每个请求在发送前登记，取消发生在微任务投递前时不发送；不保存SQL或目录正文。 */
         const load = async (query: SqliteCompletionLookup) => {
           if (!current()) throw stale();
@@ -83,17 +86,29 @@ export function createSqliteCompletionProvider(ports: Ports) {
           } finally { if (pending.cancel) await pending.cancel; operation.pending.delete(input.taskId); }
         };
         // 目录串行读取，原物理会话不允许并发；一致stamp防止把跨DDL目录拼成一组建议。
-        const result = await sqliteCompletionSuggestions(analysis, { load }); if (!current()) return empty();
+        const result = intent ? undefined : await sqliteCompletionSuggestions(analysis, { load });
+        const content = intent ? await sqliteFieldHover(analysis, { load }) : undefined;
+        if (!current()) return empty();
         if (stamp !== undefined) await load({ kind: 'stamp', prefix: '' });
         if (ports.sessionId) {
           const latest = await ports.state(ports.sessionId); if (!current() || !state || !sameCompletionState(state, latest)) return empty();
         }
         if (!current()) return empty();
         const start = model.getPositionAt(analysis.target.start), end = model.getPositionAt(analysis.target.end), range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
-        ports.status(result.incomplete ? 'partial' : 'idle');
-        return { incomplete: result.incomplete, suggestions: result.items.map((item, index) => ({ ...item, range, filterText: analysis.target.quoted ? source[analysis.target.start] + item.label : item.label, sortText: (item.kind === 'keyword' ? '9' : '0') + String(index).padStart(4, '0') })) };
-      } catch { if (current()) ports.status('unavailable'); return empty(); }
+        if (intent) return content ? { range, contents: [{ value: content, isTrusted: false, supportHtml: false }] } : empty();
+        ports.status(result!.incomplete ? 'partial' : 'idle');
+        return { incomplete: result!.incomplete, suggestions: result!.items.map((item, index) => ({ ...item, range, filterText: analysis.target.quoted ? source[analysis.target.start] + item.label : item.label, sortText: (item.kind === 'keyword' ? '9' : '0') + String(index).padStart(4, '0') })) };
+      } catch { if (current() && !intent) ports.status('unavailable'); return empty(); }
       finally { cancellation?.dispose(); change?.dispose(); if (operation.workerStop) await operation.workerStop; if (active === operation) active = undefined; operation.finish(); }
+    }
+  return {
+    triggerCharacters: ['.', '"', '`', '['],
+    /** 两种入口复用原串行占门、目录stamp与原会话状态核验；只交付对应的有界结果。 */
+    async provideCompletionItems(model: SqliteCompletionModel, position: Position, _context: unknown, token: Token): Promise<CompletionResult> {
+      const result = await provide(model, position, token); return result && 'suggestions' in result ? result : { suggestions: [] };
+    },
+    async provideHover(model: SqliteCompletionModel, position: Position, token: Token): Promise<HoverResult | null> {
+      const result = await provide(model, position, token, 'hover'); return result && 'contents' in result ? result : null;
     },
     /** 退出编辑器后同时等待原目录任务和分析线程；其它provider的任务不在本对象内。 */
     dispose(): Promise<void> { if (closeWork) return closeWork; disposed = true; const operation = active; closeWork = (async () => { if (operation) await abort(operation); await ports.worker.dispose(); })(); return closeWork; },

@@ -1,5 +1,7 @@
 # 使用指南
 
+SQLite 查询中可将鼠标停在字段上查看声明类型、main／temp 来源和生成／隐藏标记；Windows 也可将光标置于字段内，先按 Ctrl+K，再按 Ctrl+I。它不会执行查询；CTE／派生输出不猜底层类型，歧义或目录不足时不显示不确定信息。详见[字段悬停及验证范围](development/sqlite-field-hover-20261102.md)，Mac／安装另验，暂不发布。
+
 JOIN 明细查询可勾选“去重完整输出行（DISTINCT）”，按全部已选字段的组合去重，再排序及限制行数。去重时排序字段须在对应侧输出中；取消输出不会丢掉原排序草稿，请按提示修正。切换聚合会暂存明细去重，切回恢复；仍需审阅 SQL 并自行执行。详见[去重使用与验证范围](development/table-foreign-key-join-distinct-20261102.md)，暂不发布。
 
 JOIN 聚合查询新增“HAVING 聚合后筛选”，可对已选分组字段和指标设置区间、集合、NULL、启停及嵌套 AND／OR。条件跟随原指标改名，删除后同名新指标不能继承旧条件；WHERE 在聚合前生效，两者分别编辑。明确应用分组只更新预览，打开独立查询后仍需自行执行。详见[HAVING 使用与验证范围](development/table-foreign-key-join-having-20261102.md)，暂不发布。

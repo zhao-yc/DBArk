@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits } from './sqliteCompletion';
 
-export type SqliteCompletionRelation = { kind: 'physical'; name: string; schema?: 'main' | 'temp'; alias?: string } | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true };
+export type SqliteCompletionRelation = ({ kind: 'physical'; name: string; schema?: 'main' | 'temp'; alias?: string } | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
 export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; unqualifiedColumns?: true } | { status: 'blocked'; reason: string };
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number };
 type Cte = { name: string; columns?: string[]; start: number; end: number };
-type Binding = { relation: SqliteCompletionRelation; start: number; end: number; aliasIndex?: number; unknown?: boolean };
+type Binding = { relation: SqliteCompletionRelation; start: number; end: number; aliasIndex?: number; unknown?: boolean; level?: number };
 type Ready = Extract<SqliteCompletionAnalysis, { status: 'ready' }>;
 const unicode = (value: string) => !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 const idStart = (character: string) => !!character && (/[A-Za-z_]/.test(character) || character.codePointAt(0)! >= 128);
@@ -60,8 +60,14 @@ function lex(source: string, offset: number): Token[] {
 }
 
 /** 全引号范围替换；prefix只解码光标之前的原文，UTF16坐标不转换成码点下标。 */
-function targetAt(source: string, tokens: Token[], offset: number): Ready['target'] {
+function targetAt(source: string, tokens: Token[], offset: number, intent?: 'hover'): Ready['target'] {
   const token = tokens.find(item => item.kind === 'id' && item.start <= offset && offset <= item.end);
+  // 悬停解析完整标识符而不是光标前缀；未闭合引用、关键字和函数名不能冒充字段。
+  if (intent === 'hover') {
+    const index = token ? tokens.indexOf(token) : -1;
+    if (!token || token.quoted && !token.closed || !token.quoted && structural.has(fold(token.value)) || tokens[index + 1]?.value === '(' || ['as', 'collate', 'over', 'window'].some(word => keyword(tokens[index - 1], word))) fail('hover-target');
+    return { start: token.start, end: token.end, prefix: token.value, quoted: !!token.quoted };
+  }
   if (!token) return { start: offset, end: offset, prefix: '', quoted: false };
   const quote = token.quoted ? source[token.start] : '', end = token.quoted && token.closed ? Math.min(offset, token.end - 1) : offset;
   let prefix = source.slice(token.start + (token.quoted ? 1 : 0), Math.max(token.start + (token.quoted ? 1 : 0), end));
@@ -116,11 +122,12 @@ function projectionColumns(tokens: Token[], start: number, end: number): string[
 }
 
 /** 纯分析入口不读取文件、会话、IPC或数据库；预算与未知语法均以固定原因阻断。 */
-export function analyzeSqliteCompletion(source: string, offset: number): SqliteCompletionAnalysis {
+export function analyzeSqliteCompletion(source: string, offset: number, intent?: 'hover'): SqliteCompletionAnalysis {
   try {
     if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
     if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
-    const tokens = lex(source, offset), target = targetAt(source, tokens, offset), statement = statementAt(tokens, offset), beforeTarget = tokens.filter(token => token.end <= target.start), qualifiers: string[] = [];
+    if (intent !== undefined && intent !== 'hover') fail('input');
+    const tokens = lex(source, offset), target = targetAt(source, tokens, offset, intent), statement = statementAt(tokens, offset), beforeTarget = tokens.filter(token => token.end <= target.start), qualifiers: string[] = [];
     let q = beforeTarget.length - 1;
     while (q >= 1 && beforeTarget[q].value === '.' && beforeTarget[q - 1].kind === 'id') { qualifiers.unshift(beforeTarget[q - 1].value); q -= 2; }
     if (qualifiers.length > 2) fail('qualifier');
@@ -154,6 +161,7 @@ export function analyzeSqliteCompletion(source: string, offset: number): SqliteC
       if (level > limits.depth) fail('budget');
       const parsed = withClause(start, end, inherited), ctes = parsed.ctes, head = parsed.head, base = tokens[head]?.depth ?? tokens[start]?.depth ?? 0;
       for (const cte of parsed.declared) if (offset >= (tokens[cte.start]?.start ?? source.length) && offset <= (tokens[cte.end]?.start ?? source.length)) return scope(cte.start, cte.end, ctes, [], level + 1);
+      if (intent === 'hover' && target.start < (tokens[head]?.start ?? source.length)) fail('hover-target');
       if (head >= end) return { bindings: [], ctes, syntax: ['keyword'] };
       const command = fold(tokens[head].value);
       if (!['select', 'update', 'insert', 'replace', 'delete'].includes(command) || tokens[head].quoted) {
@@ -190,7 +198,7 @@ export function analyzeSqliteCompletion(source: string, offset: number): SqliteC
           binding.end = at;
         }
         if (binding.aliasIndex !== undefined && relevant(binding.aliasIndex, binding.aliasIndex + 1)) aliasContext = true;
-        if (++relationBudget > limits.relations) fail('budget'); own.push(binding); return at;
+        if (++relationBudget > limits.relations) fail('budget'); binding.level = level; own.push(binding); return at;
       }
       let index = head + 1;
       if (command === 'update' || command === 'insert' || command === 'replace') {
@@ -210,6 +218,18 @@ export function analyzeSqliteCompletion(source: string, offset: number): SqliteC
         const finish = tokens[at].pair ?? end;
         if (offset >= (tokens[at + 1]?.start ?? source.length) && offset <= (tokens[finish]?.start ?? source.length)) return scope(at + 1, finish, ctes, derived.some(item => item.start === at + 1) ? [] : [...own, ...outer], level + 1);
         at = finish;
+      }
+      // SQLite允许部分子句引用输出别名；未证明其血缘时不显示同名物理列的类型。
+      if (intent === 'hover' && command === 'select' && !qualifiers.length) {
+        let finish = end;
+        for (let i = head + 1; i < end; i++) if (tokens[i].depth === base && ['from', 'union', 'except', 'intersect'].some(word => keyword(tokens[i], word))) { finish = i; break; }
+        for (let i = head + 1, begin = head + 1; i <= finish; i++) if (i === finish || tokens[i].depth === base && tokens[i].value === ',') {
+          const part = tokens.slice(begin, i); begin = i + 1;
+          if (keyword(part[0], 'distinct') || keyword(part[0], 'all')) part.shift();
+          const last = part.at(-1), prior = part.at(-2);
+          const alias = last?.kind === 'id' && (keyword(prior, 'as') || part.length > 1 && prior?.value !== '.' && (prior?.value === ')' || ['id', 'number', 'string'].includes(prior?.kind ?? '')) && !structural.has(fold(last.value)) && !['collate', 'escape', 'is', 'like', 'glob', 'regexp', 'match', 'over', 'filter'].some(word => keyword(prior, word))) ? last : undefined;
+          if (alias && fold(alias.value) === fold(target.prefix)) fail('output-alias');
+        }
       }
       const aliases = new Set<string>(); for (const binding of own) { const name = fold(binding.relation.alias ?? binding.relation.name), previous = own.find(item => item !== binding && aliases.has(name) && fold(item.relation.alias ?? item.relation.name) === name); if (previous && !(qualifiers.length === 2 && binding.relation.kind === 'physical' && previous.relation.kind === 'physical' && !binding.relation.alias && !previous.relation.alias && !!binding.relation.schema && !!previous.relation.schema && binding.relation.schema !== previous.relation.schema)) fail('ambiguous'); aliases.add(name); }
       const bindings = [...own, ...outer.filter(binding => !aliases.has(fold(binding.relation.alias ?? binding.relation.name)))];
@@ -249,7 +269,7 @@ export function analyzeSqliteCompletion(source: string, offset: number): SqliteC
     }
     const parsed = scope(statement.start, statement.end, new Map(), [], 0);
     const declarations: SqliteCompletionRelation[] = [...parsed.ctes.values()].map(cte => ({ kind: 'local', source: 'cte', name: cte.name, columns: cte.columns ?? [], declaration: true }));
-    const relations = [...parsed.bindings.map(binding => binding.relation), ...declarations];
+    const relations = [...parsed.bindings.map(binding => intent === 'hover' ? { ...binding.relation, scopeDepth: binding.level! } : binding.relation), ...declarations];
     if (relations.length > limits.relations) fail('budget');
     if (parsed.syntax.includes('relation') && qualifiers.some(name => !['main', 'temp'].includes(fold(name))) || qualifiers.length === 2 && !['main', 'temp'].includes(fold(qualifiers[0]))) fail('schema');
     return { status: 'ready', target, syntax: parsed.syntax, qualifiers, relations, ...(parsed.unqualified ? { unqualifiedColumns: true } : {}) };
@@ -257,26 +277,28 @@ export function analyzeSqliteCompletion(source: string, offset: number): SqliteC
 }
 
 const nameSchema = z.string().min(1).max(limits.nameUnits).refine(unicode), relationSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('physical'), name: nameSchema, schema: z.enum(['main', 'temp']).optional(), alias: nameSchema.optional() }).strict(),
-  z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived']), name: nameSchema, alias: nameSchema.optional(), columns: z.array(nameSchema).max(limits.entries).refine(columns => new Set(columns.map(fold)).size === columns.length), declaration: z.literal(true).optional() }).strict(),
+  z.object({ kind: z.literal('physical'), name: nameSchema, schema: z.enum(['main', 'temp']).optional(), alias: nameSchema.optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
+  z.object({ kind: z.literal('local'), source: z.enum(['cte', 'derived']), name: nameSchema, alias: nameSchema.optional(), columns: z.array(nameSchema).max(limits.entries).refine(columns => new Set(columns.map(fold)).size === columns.length), declaration: z.literal(true).optional(), scopeDepth: z.number().int().min(0).max(limits.depth).optional() }).strict(),
 ]);
 const resultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('blocked'), reason: z.string().regex(/^[a-z-]{1,64}$/) }).strict(),
-  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.prefixUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations), unqualifiedColumns: z.literal(true).optional() }).strict(),
+  z.object({ status: z.literal('ready'), target: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(), prefix: z.string().max(limits.nameUnits).refine(unicode), quoted: z.boolean() }).strict(), syntax: z.array(z.enum(['relation', 'column', 'keyword'])).min(1).max(3).refine(value => new Set(value).size === value.length), qualifiers: z.array(nameSchema).max(2), relations: z.array(relationSchema).max(limits.relations), unqualifiedColumns: z.literal(true).optional() }).strict(),
 ]);
 /** Client只核有界回包形状与原范围，不在渲染线程重新解析整份用户SQL。 */
-export function validateSqliteCompletionAnalysis(raw: unknown, source: string, offset: number): SqliteCompletionAnalysis {
+export function validateSqliteCompletionAnalysis(raw: unknown, source: string, offset: number, intent?: 'hover'): SqliteCompletionAnalysis {
   const value = resultSchema.parse(raw) as SqliteCompletionAnalysis;
   if (new TextEncoder().encode(JSON.stringify(value)).length > limits.outputBytes) fail('budget');
   if (value.status === 'blocked') return value;
   if (value.relations.some(relation => relation.kind === 'local' && relation.declaration && relation.source !== 'cte')) fail('response');
+  if (value.relations.some(relation => intent === 'hover' ? (relation.kind !== 'local' || !relation.declaration) && relation.scopeDepth === undefined : relation.scopeDepth !== undefined)) fail('response');
   const target = value.target;
   if (target.start > offset || target.end < offset || target.end > source.length || !boundary(source, target.start) || !boundary(source, target.end) || !boundary(source, offset)) fail('response');
   const rawName = source.slice(target.start, target.end), quote = rawName[0], quoted = ['"', '\u0060', '['].includes(quote ?? '');
   if (target.quoted !== quoted || rawName.length > limits.nameUnits * 2 + 2) fail('response');
-  let prefix = source.slice(target.start + (quoted ? 1 : 0), offset);
-  if (quoted) { const close = quote === '[' ? ']' : quote; if (rawName.endsWith(close) && offset === target.end) prefix = prefix.slice(0, -1); if (quote !== '[') prefix = prefix.split(quote + quote).join(quote); }
+  const end = intent === 'hover' ? target.end : offset;
+  let prefix = source.slice(target.start + (quoted ? 1 : 0), end);
+  if (quoted) { const close = quote === '[' ? ']' : quote; if (intent === 'hover' && !rawName.endsWith(close)) fail('response'); if (rawName.endsWith(close) && end === target.end) prefix = prefix.slice(0, -1); if (quote !== '[') prefix = prefix.split(quote + quote).join(quote); }
   else if (rawName && (!idStart(String.fromCodePoint(rawName.codePointAt(0)!)) || !Array.from(rawName).every(idPart)) || !quoted && (idPart(source[target.end] ?? '') || target.start > 0 && idPart(source[target.start - 1]))) fail('response');
-  if (prefix !== target.prefix || value.unqualifiedColumns && (!value.syntax.includes('column') || value.qualifiers.length)) fail('response');
+  if (prefix !== target.prefix || !prefix && intent === 'hover' || prefix.length > (intent === 'hover' ? limits.nameUnits : limits.prefixUnits) || value.unqualifiedColumns && (!value.syntax.includes('column') || value.qualifiers.length)) fail('response');
   return value;
 }

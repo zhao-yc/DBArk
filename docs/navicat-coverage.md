@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 高频编辑补齐[字段悬停](development/sqlite-field-hover-20261102.md)：准确声明、main／temp、局部输出及最近查询层来源，复用原目录与串行生命周期。235 项相关、52 项定向及 4 项独立 SQLite 裁决分轮通过，类型／构建与 Windows 原工作区整例通过，原资源核清；Mac／安装及完整语义代码辅助继续，不增加完整工作包或发行计数，暂不发布。
+
 外键 JOIN 新增[完整输出去重](development/table-foreign-key-join-distinct-20261102.md)：明细 DISTINCT、对应侧投影内排序、NULL 与模式草稿保留。373 项相关、类型／构建、六端点 360 次只读派生表查询和 Windows 十二例组件通过；新增三平台组件 CI，实际远端结果另验。物理表完整 GUI／Mac／安装及完整 O04 继续，不增加完整工作包或发行计数，暂不发布。
 
 外键 JOIN 新增[HAVING 聚合后筛选](development/table-foreign-key-join-having-20261102.md)：13 运算符、独立嵌套组和稳定输出身份，改名跟随、同名重建不接管。354 项相关、类型／构建、六端点最终 2130 次严格模式查询及 Windows 十例组件通过，准确资源核零；任意多表、高级聚合及 Mac／安装继续，O04 部分，暂不发布。
@@ -658,7 +660,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | R05 | MongoDB | 待做 | 集合、索引、BSON、树/JSON、查找与聚合 |
 | R06 | Redis/Cluster/Sentinel | 待做 | 键、TTL、扫描、命令、重定向与取消 |
 | O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有单外键LEFT／INNER、复合映射、选列、多列排序／上限、嵌套WHERE、GROUP BY及七种聚合；前期Windows实际执行与预览边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续接入[嵌套HAVING与稳定输出绑定](development/table-foreign-key-join-having-20261102.md)，六端点最终2130次严格模式查询与十个离线组件分别取证；高级聚合、任意多表、完整查询转视图及Mac／安装继续，未公开发行 |
-| O05 | 重构/语义代码辅助 | 待做 | 引用、声明、悬停、错误、重命名保留注释字符串 |
+| O05 | 重构/语义代码辅助 | 部分 | MySQL 字段悬停已有[前期记录](../tests/integration/acceptance-sql-field-hover-7f926c4-20261021.md)，SQLite 新增[字段悬停](development/sqlite-field-hover-20261102.md)及最近查询层来源保护；引用、声明导航、错误、重命名和完整平台组合继续，不以单项悬停代替完整代码辅助 |
 | E01 | ER 关系查看 | 待做 | 真实外键、复合关系、对象选择、缩放刷新 |
 | A01 | 编排/本地计划任务 | 待做 | 跨连接依赖、失败策略、进度、重复运行控制 |
 | A02 | 通知/导出附件 | 待做 | 用户配置后发送，秘密隔离及实际结果 |

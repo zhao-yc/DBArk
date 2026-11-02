@@ -6,7 +6,7 @@ export interface SqliteCompletionWorkerPort {
   onmessage: ((event: MessageEvent) => void) | null; onerror: ((event: ErrorEvent) => void) | null; onmessageerror: ((event: MessageEvent) => void) | null;
 }
 interface Pending {
-  id: number; worker: SqliteCompletionWorkerPort; phase: 'starting' | 'analyzing'; request?: { id: number; source: string; offset: number };
+  id: number; worker: SqliteCompletionWorkerPort; phase: 'starting' | 'analyzing'; request?: { id: number; source: string; offset: number; intent?: 'hover' };
   timer: ReturnType<typeof setTimeout>; validate?: (value: unknown) => SqliteCompletionAnalysis; current(): boolean; resolve(value: SqliteCompletionAnalysis): void; detach(): void;
 }
 /** 每次分析独占Worker，真实终止完成后才交付终态或创建后继线程，不复用SQL正文缓存。 */
@@ -16,17 +16,17 @@ export class SqliteCompletionWorkerClient {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 1500 || !Number.isInteger(startupTimeoutMs) || startupTimeoutMs < 1 || startupTimeoutMs > 8000) throw Error('SQLite补全线程期限无效');
   }
   /** 新意图先撤旧回调，握手前保留有界快照；替换与Abort均不允许迟到结果复活。 */
-  async analyze(source: string, offset: number, signal?: AbortSignal): Promise<SqliteCompletionAnalysis> {
+  async analyze(source: string, offset: number, signal?: AbortSignal, intent?: 'hover'): Promise<SqliteCompletionAnalysis> {
     const id = ++this.serial; await this.stop({ status: 'blocked', reason: 'replaced' });
     if (this.disposed) return { status: 'blocked', reason: 'disposed' };
     if (id !== this.serial || signal?.aborted) return { status: 'blocked', reason: 'cancelled' };
-    if (typeof source !== 'string' || source.length > sqliteCompletionLimits.sourceUnits || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length) return { status: 'blocked', reason: 'input' };
+    if (typeof source !== 'string' || source.length > sqliteCompletionLimits.sourceUnits || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || intent !== undefined && intent !== 'hover') return { status: 'blocked', reason: 'input' };
     return new Promise(resolve => {
       let worker: SqliteCompletionWorkerPort;
       try { worker = this.createWorker(); } catch { resolve({ status: 'blocked', reason: 'worker' }); return; }
       const deadline = (phase: Pending['phase']) => setTimeout(() => { if (this.pending?.id === id && this.pending.phase === phase) void this.stop({ status: 'blocked', reason: phase === 'starting' ? 'startup-timeout' : 'timeout' }); }, phase === 'starting' ? this.startupTimeoutMs : this.timeoutMs);
       const abort = () => { if (this.pending?.id === id) { this.serial++; void this.stop({ status: 'blocked', reason: 'cancelled' }); } };
-      this.pending = { id, worker, phase: 'starting', request: { id, source, offset }, timer: deadline('starting'), validate: value => validateSqliteCompletionAnalysis(value, source, offset), current: () => id === this.serial && !this.disposed && !signal?.aborted, resolve, detach: () => signal?.removeEventListener('abort', abort) };
+      this.pending = { id, worker, phase: 'starting', request: { id, source, offset, ...(intent ? { intent } : {}) }, timer: deadline('starting'), validate: value => validateSqliteCompletionAnalysis(value, source, offset, intent), current: () => id === this.serial && !this.disposed && !signal?.aborted, resolve, detach: () => signal?.removeEventListener('abort', abort) };
       signal?.addEventListener('abort', abort, { once: true });
       worker.onmessage = event => {
         const pending = this.pending; if (!pending || pending.id !== id || pending.worker !== worker) return;
