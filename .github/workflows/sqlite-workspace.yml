@@ -8,6 +8,8 @@ on:
       - 'src/**'
       - 'tests/e2e/**'
       - 'tests/helpers/**'
+      - 'tests/unit/sqlite-ci-shards.test.ts'
+      - 'tests/unit/sqlite-offline-ci.test.ts'
       - 'scripts/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -21,6 +23,8 @@ on:
       - 'src/**'
       - 'tests/e2e/**'
       - 'tests/helpers/**'
+      - 'tests/unit/sqlite-ci-shards.test.ts'
+      - 'tests/unit/sqlite-offline-ci.test.ts'
       - 'scripts/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -47,7 +51,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, macos-15-intel]
-        suite: [workspace, management]
+        # 管理原整组已触发20分钟作业上限；按业务分组，不改变单例门槛。
+        suite: [workspace, management-schema, management-rebuild, management-data]
         include:
           - os: windows-latest
             label: Windows x64
@@ -71,6 +76,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: 安装Electron运行时
         run: pnpm exec install-electron
+      - name: 核对完整分片覆盖和离线门槛
+        run: pnpm exec vitest run tests/unit/sqlite-ci-shards.test.ts tests/unit/sqlite-offline-ci.test.ts
       - name: 构建当前源码
         run: pnpm build
       - name: 单次运行SQLite原工作区真实专项
@@ -112,52 +119,52 @@ jobs:
         if: matrix.suite == 'workspace'
         run: node scripts/sqlite-workspace-ci.mjs table-create
       - name: 单次运行SQLite现有表CSV与JSON导入原生专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-schema'
         run: node scripts/sqlite-workspace-ci.mjs table-import
       - name: 单次运行SQLite文件导入为新表原生专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-schema'
         run: node scripts/sqlite-workspace-ci.mjs import-new-table
       - name: 单次运行SQLite已有表索引管理原生专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-schema'
         run: node scripts/sqlite-workspace-ci.mjs indexes
       - name: 单次运行SQLite已有表字段管理原生专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-schema'
         run: node scripts/sqlite-workspace-ci.mjs columns
       - name: 单次运行SQLite已有表重命名原生专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-schema'
         run: node scripts/sqlite-workspace-ci.mjs table-rename
       - name: 单次运行SQLite已有表清空删除原生专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-schema'
         run: node scripts/sqlite-workspace-ci.mjs table-maintenance
       - name: 单次运行SQLite视图触发器管理原生专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-schema'
         run: node scripts/sqlite-workspace-ci.mjs objects
       - name: 单次运行SQLite字段类型默认值重建原生专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-rebuild'
         run: node scripts/sqlite-workspace-ci.mjs table-rebuild
       - name: 单次运行SQLite复制与粘贴新增草稿专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-data'
         run: node scripts/sqlite-workspace-ci.mjs clipboard
       - name: 单次运行SQLite当前单元格区域粘贴专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-data'
         run: node scripts/sqlite-workspace-ci.mjs range-paste
       - name: 单次运行SQLite实际列顺序重建专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-rebuild'
         run: node scripts/sqlite-workspace-ci.mjs table-reorder
       - name: 单次运行SQLite当前页查找替换专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-data'
         run: node scripts/sqlite-workspace-ci.mjs table-find
       - name: 单次运行SQLite复制当前记录专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-data'
         run: node scripts/sqlite-workspace-ci.mjs table-duplicate
       - name: 单次运行SQLite勾选批量删除专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-data'
         run: node scripts/sqlite-workspace-ci.mjs table-remove-selected
       - name: 单次运行SQLite勾选记录多字段填充专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-data'
         run: node scripts/sqlite-workspace-ci.mjs table-fill
       - name: 单次运行SQLite已应用筛选生成查询专项
-        if: matrix.suite == 'management'
+        if: matrix.suite == 'management-data'
         run: node scripts/sqlite-workspace-ci.mjs filtered-select
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
