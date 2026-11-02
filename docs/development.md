@@ -1,5 +1,7 @@
 # 开发与测试
 
+外键 JOIN 新增[分组与聚合查询](development/table-foreign-key-join-summary-20261102.md)：独立明细／聚合草稿、GROUP BY、七种函数、自定义别名与指标排序，原 WHERE 先行且不自动执行。321 项相关、严格类型／构建、六端点 1320 次严格分组模式 SELECT 和 Windows 八例组件通过，准确资源核零；HAVING、Mac／安装继续，暂不发布。
+
 外键 JOIN 新增[嵌套条件组](development/table-foreign-key-join-groups-20261102.md)：混合 AND／OR、最多 16 组／8 层、局部草稿、稳定重编号及键盘／IME 路由。286 项相关、严格类型／构建、六端点真实表 840 次 SELECT 和 Windows 六例原生组件通过；六隔离库及窗口资源已核零，Mac／安装另验，暂不发布。
 
 “按外键生成 JOIN 查询”新增[双方 WHERE 条件筛选](development/table-foreign-key-join-filter-20261102.md)：13 种运算符、AND／OR、集合／区间、NULL 及启停，复用精确值与原意图保护。213 项相关、类型／构建、六端点真实外键表 600 次 SELECT 及 Windows 四个原生组件通过，准确隔离资源已核零；派生表及首轮窗口失败保留，Mac／安装另验，暂不发布。

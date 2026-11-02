@@ -1,5 +1,7 @@
 # 使用指南
 
+JOIN 预览父表后可勾选“生成分组聚合查询”，独立添加分组字段与 COUNT(*)、COUNT、COUNT DISTINCT、SUM、AVG、MIN、MAX；没有分组字段时为全体汇总。指标支持别名与排序，WHERE 在汇总前生效；切回明细恢复原字段和排序。父值可能因多条子行重复参与合计，请先审阅使用说明和完整 SQL，再打开独立查询执行。详见[聚合说明与验证范围](development/table-foreign-key-join-summary-20261102.md)，暂不发布。
+
 JOIN 条件填好后，可点“组合 JOIN 条件”添加 AND／OR 子组，并移动已有条件，表达“条件1 且（条件2 或 条件3）”。分组编辑期间不能打开旧查询；明确应用只更新预览，取消保留原 SQL。删改值及启停保留括号，只有“恢复平铺条件”才移除组。详见[嵌套分组及验证范围](development/table-foreign-key-join-groups-20261102.md)，暂不发布。
 
 MySQL／MariaDB 表页的“按外键生成 JOIN 查询”新增双方 WHERE 条件筛选：先预览父表结构，再选子表 c／父表 p 的字段，支持 AND／OR、区间、逐行集合、NULL 及逐项启停。LEFT JOIN 的父表条件可能排除未匹配子行；无效输入会阻止打开，不会静默忽略条件。预览后打开独立查询再自行执行，原表页筛选与草稿保持。详见[JOIN 条件说明及验收范围](development/table-foreign-key-join-filter-20261102.md)，Mac／安装另验，暂不发布。

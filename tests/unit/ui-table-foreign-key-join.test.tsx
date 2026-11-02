@@ -7,6 +7,7 @@ import { TableForeignKeyJoinIntent } from '../../src/renderer/tableForeignKeyJoi
 import { tableForeignKeyJoinZh as text } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 import { tableForeignKeyJoinFilterZh as filterText } from '../../src/renderer/locales/tableForeignKeyJoinFilter.zh-CN';
 import { tableFilterGroupsZh as groupText } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
+import { tableForeignKeyJoinSummaryZh as summaryText } from '../../src/renderer/locales/tableForeignKeyJoinSummary.zh-CN';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 
@@ -62,6 +63,26 @@ async function mount(options: { read?: TableForeignKeyJoinServices['read']; canc
   await act(async () => root!.render(options.strict ? <React.StrictMode>{view}</React.StrictMode> : view));
   return { child, parent, scope, intent, read, cancel, close, activity, opened, cleanup };
 }
+it('聚合开启为空时拒绝旧明细，分组/COUNT/SUM/WHERE及指标排序只改变独立草稿',async()=>{
+  const f=await mount();await click(text.preview);const old=sql(),oldOpen=joinReactProps(button(text.open)).onClick;await toggle(summaryText.enabled);expect(sql()).toBe('');expect(button(text.open).disabled).toBe(true);await act(async()=>oldOpen());expect(f.read).toHaveBeenCalledOnce();
+  await click(summaryText.addAggregate);expect(sql()).toContain('COUNT(*)');expect(sql()).not.toContain('GROUP BY');await click(summaryText.addGroup);await select(summaryText.groupSide(1),'parent');await click(summaryText.addAggregate);await select(summaryText.fn(2),'SUM');await select(summaryText.side(2),'parent');await select(summaryText.column(2),'note');await filterInput(summaryText.alias(2),'总额');await click(text.sortAdd);await select(text.sortSide(1),'aggregate');await select(text.sortColumn(1),'总额');await select(text.sortDirection(1),'DESC');await select(text.sortNulls(1),'LAST');
+  await click(filterText.add);await filterInput(filterText.value(1),'9007199254740993');expect(sql()).toContain('GROUP BY p.`id`');expect(sql()).toContain('ORDER BY (SUM(p.`note`) IS NULL) ASC, SUM(p.`note`) DESC');expect(sql()).not.toBe(old);expect(f.read).toHaveBeenCalledOnce();await click(text.open);expect(f.read).toHaveBeenCalledTimes(3);expect(f.opened.mock.calls[0][0].options.summary).toEqual({groups:[{side:'parent',column:'id'}],aggregates:[{fn:'COUNT_ALL',alias:summaryText.defaultAlias(1)},{fn:'SUM',side:'parent',column:'note',alias:'总额'}]});
+});
+it('明细/聚合选列排序分别保留，切回后SQL逐字恢复，关闭模式的旧指标回调无效',async()=>{
+  const f=await mount();await click(text.preview);await toggle(text.parentSelect('note'));await click(text.sortAdd);await select(text.sortDirection(1),'DESC');const old=sql();await toggle(summaryText.enabled);await click(summaryText.addAggregate);await filterInput(summaryText.alias(1),'行数');await click(text.sortAdd);const aggregate=sql(),oldInput=joinReactProps(filterControl(summaryText.alias(1))).onChange;await toggle(summaryText.enabled);expect(sql()).toBe(old);await act(async()=>oldInput({target:{value:'乱入'}}));expect(sql()).toBe(old);await toggle(summaryText.enabled);expect(sql()).toBe(aggregate);expect(filterControl(summaryText.alias(1)).value).toBe('行数');expect(f.read).toHaveBeenCalledOnce();
+});
+it('别名未完成及已绑定别名改名均阻止旧SQL，失效排序保留原目标直到明确修正',async()=>{
+  const f=await mount();await click(text.preview);await toggle(summaryText.enabled);await click(summaryText.addAggregate);await click(text.sortAdd);await filterInput(summaryText.alias(1),'');expect(sql()).toBe('');await filterInput(summaryText.alias(1),'x'.repeat(65));expect(filterControl(summaryText.alias(1)).value.length).toBe(65);expect(sql()).toBe('');await filterInput(summaryText.alias(1),'新别名');expect(sql()).toBe('');expect(filterControl(text.sortColumn(1)).value).toBe(summaryText.defaultAlias(1));expect(document.body.textContent).toContain(summaryText.staleColumn(summaryText.defaultAlias(1)));await select(text.sortColumn(1),'新别名');expect(sql()).toContain('ORDER BY COUNT(*) ASC');expect(f.read).toHaveBeenCalledOnce();
+});
+it('SUM文本拒绝且隐藏来源草稿保留，同FK重读保持，切FK清空聚合防旧目标',async()=>{
+  const f=await mount();f.parent.columns[1].type='TEXT';await click(text.preview);await toggle(summaryText.enabled);await click(summaryText.addAggregate);await select(summaryText.fn(1),'SUM');await select(summaryText.side(1),'parent');await select(summaryText.column(1),'note');expect(sql()).toBe('');expect(document.body.textContent).toContain(summaryText.numeric);await select(summaryText.fn(1),'COUNT_ALL');expect(sql()).toContain('COUNT(*)');await select(summaryText.fn(1),'SUM');expect(filterControl(summaryText.column(1)).value).toBe('note');expect(sql()).toBe('');await select(summaryText.column(1),'id');const good=sql();await click(text.preview);expect(sql()).toBe(good);await select(text.fk,'fk_other');await click(text.preview);expect(sql()).toBe('');expect(document.body.textContent).toContain(summaryText.empty);expect(f.opened).not.toHaveBeenCalled();
+});
+it('聚合移动不改变排序指标身份，删除后的旧别名输入不能修改后继',async()=>{
+  const f=await mount();await click(text.preview);await toggle(summaryText.enabled);await click(summaryText.addAggregate);await filterInput(summaryText.alias(1),'甲');const old=joinReactProps(filterControl(summaryText.alias(1))).onChange;await click(summaryText.addAggregate);await filterInput(summaryText.alias(2),'乙');await select(summaryText.fn(2),'MAX');await click(text.sortAdd);await select(text.sortColumn(1),'乙');await click(summaryText.earlier(2));expect(filterControl(summaryText.alias(1)).value).toBe('乙');expect(sql()).toContain('ORDER BY MAX(c.`id`) ASC');await click(summaryText.remove(2));await act(async()=>old({target:{value:'错改'}}));expect(filterControl(summaryText.alias(1)).value).toBe('乙');await click(text.open);expect(f.opened.mock.calls[0][0].options.summary.aggregates).toEqual([{fn:'MAX',side:'child',column:'id',alias:'乙'}]);
+});
+it('正在双表核验时旧聚合输入不能改原回执，仍只打开原指标',async()=>{
+  const f=await mount();await click(text.preview);await toggle(summaryText.enabled);await click(summaryText.addAggregate);const expected=sql(),old=joinReactProps(filterControl(summaryText.alias(1))).onChange,pending=deferred<TableInfo>();f.read.mockImplementationOnce(()=>pending.promise);await click(text.open);await act(async()=>old({target:{value:'新指标'}}));await act(async()=>pending.resolve(f.child));expect(f.opened).toHaveBeenCalledOnce();expect(f.opened.mock.calls[0][0].sql).toBe(expected);
+});
 /** 三条不同来源的有效条件便于验证真实分组编辑，不直接改选择或SQL状态。 */
 async function seedGroups() { await click(text.preview); for (let i=1;i<=3;i++) { await click(filterText.add); if(i===2)await select(filterText.side(i),'parent'); await filterInput(filterText.value(i),String(i)); } }
 /** 所属组按真实可见名称选择，不猜组件内部节点ID。 */
@@ -165,7 +186,9 @@ it('StrictMode初次清理不毒死原意图，显式父读仍单次而没有自
 });
 it('宽表默认全选超输出预算仍可分页精简，每侧只挂50字段且清本侧不改关系', async () => {
   const f = await mount({ width: 600 }); await click(text.preview); expect(document.body.textContent).toContain(text.budget); expect(button(text.open).disabled).toBe(true);
-  expect(document.body.querySelectorAll('input').filter(node => node.type === 'checkbox')).toHaveLength(100);
+  // 聚合模式有独立开关；宽表门槛仍分别核两侧真实选列各50项，不把开关误算成字段。
+  const lists=[text.childFields,text.parentFields].map(label=>document.body.querySelectorAll('fieldset').find(node=>node.querySelector('legend')?.textContent===label)!);
+  expect(lists.map(node=>node.querySelectorAll('input').filter(input=>input.type==='checkbox').length)).toEqual([50,50]);
   const fieldset = document.body.querySelectorAll('fieldset').find(node => node.querySelector('legend')?.textContent === text.parentFields)!, clear = fieldset.querySelectorAll('button').find(node => node.textContent === text.clearFields)!;
   await act(async () => { clear.dispatchEvent(new MemoryEvent('click')); }); expect(sql()).toContain('c.`parent_id` = p.`id`'); expect(sql()).not.toContain('p.`note` AS'); expect(button(text.open).disabled).toBe(false); expect(f.read).toHaveBeenCalledOnce();
 });
