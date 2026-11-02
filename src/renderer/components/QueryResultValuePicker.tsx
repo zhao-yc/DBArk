@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { QueryResultFilterGroup, QueryResultFilterRule } from '../queryResultFilter';
-import { queryResultValueOptionsLimits, queryResultValueOptionsNode, searchQueryResultValueOptions, type QueryResultValueOptions } from '../queryResultValueOptions';
+import { queryResultValueOptionLabel, queryResultValueOptionsLimits, queryResultValueOptionsNode, searchQueryResultValueOptions, type QueryResultValueOption, type QueryResultValueOptions } from '../queryResultValueOptions';
 import { queryResultValueOptionsZh as text } from '../locales/queryResultValueOptions.zh-CN';
 import { UsageHelp, ErrorBox  } from './ui';
 
@@ -92,20 +92,19 @@ export function QueryResultValuePicker({ capture, isCurrent, onApply, onClose }:
     if (applyKey) apply(); else close();
   }
   /** 展示用 JSON 保留空串、引号和换行区别；省略仅影响展示，不修改选值原文。 */
-  function label(literal: string | null): string {
-    if (literal === null || literal === '') return text.value(literal);
-    const json = JSON.stringify(literal); return json.length > 80 ? json.slice(0, 80) + text.displayTruncated : json;
+  function label(entry: QueryResultValueOption): string {
+    const full = queryResultValueOptionLabel(entry); return full.length > 80 ? full.slice(0, 80) + text.displayTruncated : full;
   }
   return <section role="region" aria-label={text.title} className="query-result-value-picker" onKeyDown={keyDown}>
-    <strong>{text.title}</strong><p>{text.column(capture.column.name, capture.column.type)}</p><UsageHelp><p>{text.hint}</p><p>{text.shortcuts}</p></UsageHelp>
+    <strong>{text.title}</strong><p>{text.column(capture.column.name, capture.column.type)}</p><UsageHelp><p>{text.hint}</p>{capture.column.type==='SQLITE'&&<p>{text.sqliteHint}</p>}<p>{text.shortcuts}</p></UsageHelp>
     <p aria-live="polite">{text.counts(capture.rows, capture.entries.length, matches.length, draft.selected.length)}</p>
     <div className="query-result-value-picker-controls"><label>{text.search}<input aria-label={text.search} value={draft.query} disabled={!valid} onChange={event => search(event.target.value)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/></label>
       <label>{text.mode}<select aria-label={text.mode} value={draft.mode} disabled={!valid || composing} onChange={event => { const mode = event.target.value; if (mode === 'include' || mode === 'exclude') replace({ ...draft, mode, problem: undefined }); }}><option value="include">{text.include}</option><option value="exclude">{text.exclude}</option></select></label>
       <button type="button" disabled={!valid || composing || !!searchError || !matches.length} onClick={selectMatches}>{text.selectMatches}</button><button type="button" disabled={!valid || composing || !draft.selected.length} onClick={() => replace({ ...draft, selected: [], problem: undefined })}>{text.clear}</button></div>
     <div className="query-result-value-picker-list">{visible.map(id => {
-      const entry = capture.entries[id], full = text.value(entry.literal), shortened = full.length > 80;
+      const entry = capture.entries[id], full = queryResultValueOptionLabel(entry), shortened = full.length > 80;
       // 完整只读详情在label之外，展开原生details不会误勾选；同前缀候选可核对真实尾部。
-      return <div key={id} className="query-result-value-picker-option-row"><label className="query-result-value-picker-option" title={full}><input type="checkbox" title={full} aria-label={label(entry.literal)} checked={selected.has(id)} disabled={!valid || composing || !!searchError} onChange={event => toggle(id, event.target.checked)}/><code>{label(entry.literal)}</code><span>{text.occurrences(entry.count)}</span></label>{shortened&&<details><summary>{text.completeValue(id+1)}</summary><pre>{full}</pre></details>}</div>;
+      return <div key={id} className="query-result-value-picker-option-row"><label className="query-result-value-picker-option" title={full}><input type="checkbox" title={full} aria-label={label(entry)} checked={selected.has(id)} disabled={!valid || composing || !!searchError} onChange={event => toggle(id, event.target.checked)}/><code>{label(entry)}</code><span>{text.occurrences(entry.count)}</span></label>{shortened&&<details><summary>{text.completeValue(id+1)}</summary><pre>{full}</pre></details>}</div>;
     })}{!matches.length && !searchError && <p>{text.empty}</p>}</div>
     <div className="query-result-value-picker-pages"><button type="button" disabled={!valid || composing || page === 0 || !!searchError} onClick={() => replace({ ...draft, page: page - 1, problem: undefined })}>{text.previous}</button><span>{text.page(page + 1, pages)}</span><button type="button" disabled={!valid || composing || page + 1 >= pages || !!searchError} onClick={() => replace({ ...draft, page: page + 1, problem: undefined })}>{text.next}</button></div>
     <ErrorBox message={!valid ? text.stale : searchError ?? draft.problem}/><div className="query-result-filter-actions">{composing && <span>{text.composing}</span>}<button type="button" disabled={composing} onClick={close}>{text.cancel}</button><button type="button" className="primary" aria-keyshortcuts="Control+Enter Meta+Enter" disabled={!valid || composing || !!searchError || !draft.selected.length} onClick={apply}>{text.apply}</button></div>

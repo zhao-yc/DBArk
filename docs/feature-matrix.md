@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-02 源码增量：[SQLite 查询结果不同值勾选](development/sqlite-result-value-options-20261102.md)已支持原全量候选、类型／计数、搜索分页和包含／排除，先审阅后应用；Windows 专项、1714 项相关及类型／构建通过，不重查。当前 Mac／安装待验；上一提交 Mac 查询首例通过、表页超时独立保留，暂不发布。
+
 2026-11-02 源码增量：[SQLite 原格与勾选值快捷条件](development/sqlite-result-shortcuts-20261102.md)支持等值／排除、类型化 IN 分组、NULL 和整理历史；Windows 原工作区专项、1671 项相关测试及类型／构建通过，不重查。不同值候选与 Mac／安装待补，暂不发布。
 
 2026-11-02 源码增量：[SQLite 查询结果显式类型筛选](development/sqlite-result-filter-20261102.md)已接入手工条件、范围／列表、NULL、嵌套与整理撤销，保多列排序且不重查。Windows 专项通过；候选值／单格快捷入口和 Mac／安装待补，不据此增加完整工作包或发布计数。

@@ -8,6 +8,7 @@ import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryR
 import { queryResultHistoryZh as sortHistoryText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
+import { queryResultValueOptionsZh as valueText } from '../../src/renderer/locales/queryResultValueOptions.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -296,6 +297,42 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text'));
     await step(() => expect(filtering.getByLabel(filterText.sqliteType(2), { exact: true })).toHaveValue('integer'));
     await step(() => filtering.getByRole('button', { name: filterText.cancel, exact: true }).click()); await clearFiltering();
+    expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
+    stage = '真实不同值候选按原全量返回与类型勾选，仍须审阅后应用';
+    const picker = filtering.getByRole('region', { name: valueText.title, exact: true });
+    /** 候选入口只读原返回范围；即使当前筛选只剩一行，原另一类型仍可选。 */
+    const openValues = async () => { await step(() => filtering.getByRole('button', { name: valueText.openCondition(1), exact: true }).click()); await step(() => expect(picker).toBeVisible()); };
+    const writeValues = async () => { await step(() => picker.getByRole('button', { name: valueText.apply, exact: true }).click()); await step(() => expect(picker).toHaveCount(0)); expect((await step(audit)).executions).toBe(1); };
+    await openFiltering(); await step(() => filtering.getByRole('button', { name: filterText.add, exact: true }).click());
+    await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c4')); await openValues();
+    await step(() => expect(picker.getByRole('checkbox', { name: valueText.sqliteValue('2', 'integer'), exact: true })).toBeVisible());
+    await step(() => picker.getByRole('checkbox', { name: valueText.sqliteValue('2', 'text'), exact: true }).check());
+    await step(() => expect.poll(shownIntegers).toEqual(ascending)); await writeValues();
+    await step(() => expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text')); await applyFiltering([ascending[0]]);
+    await openFiltering(); await openValues();
+    await step(() => expect(picker.getByText(valueText.counts(2, 2, 2, 0), { exact: true })).toBeVisible());
+    await step(() => picker.getByRole('checkbox', { name: valueText.sqliteValue('2', 'text'), exact: true }).check());
+    await step(() => picker.getByLabel(valueText.mode, { exact: true }).selectOption('exclude')); await writeValues();
+    await step(() => expect.poll(shownIntegers).toEqual([ascending[0]])); await applyFiltering([ascending[1]]); await clearFiltering();
+    await openFiltering(); await step(() => filtering.getByRole('button', { name: filterText.add, exact: true }).click());
+    await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c4')); await openValues();
+    await step(() => picker.getByRole('checkbox', { name: valueText.sqliteValue('2', 'text'), exact: true }).check());
+    await step(() => picker.getByLabel(valueText.search, { exact: true }).fill('INTEGER'));
+    await step(() => expect(picker.getByText(valueText.counts(2, 2, 1, 1), { exact: true })).toBeVisible());
+    await step(() => picker.getByRole('button', { name: valueText.selectMatches, exact: true }).click());
+    await step(() => picker.getByLabel(valueText.search, { exact: true }).fill(''));
+    await step(() => expect(picker.getByText(valueText.counts(2, 2, 2, 2), { exact: true })).toBeVisible());
+    await step(async () => info.attach('SQLite不同值候选保留同显示值的原类型', { body: await page.screenshot(), contentType: 'image/png' }));
+    await writeValues(); await step(() => expect(filtering.getByLabel(filterText.groupMode('1'), { exact: true })).toHaveValue('OR')); await applyFiltering(ascending); await clearFiltering();
+    await openFiltering(); await step(() => filtering.getByRole('button', { name: filterText.add, exact: true }).click());
+    await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c3')); await openValues();
+    await step(() => picker.getByRole('checkbox', { name: valueText.sqliteValue('00ff', 'blob'), exact: true }).check()); await writeValues();
+    await step(() => expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('blob')); await applyFiltering([ascending[1]]); await clearFiltering();
+    await openFiltering(); await step(() => filtering.getByRole('button', { name: filterText.add, exact: true }).click());
+    await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c2')); await openValues();
+    await step(() => expect(picker.getByText(valueText.counts(2, 1, 1, 0), { exact: true })).toBeVisible());
+    await step(() => picker.getByRole('checkbox', { name: valueText.nullValue, exact: true }).check());
+    await step(() => picker.getByLabel(valueText.mode, { exact: true }).selectOption('exclude')); await writeValues(); await applyFiltering([]); await clearFiltering();
     expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
     stage = '原结果菜单真实保存逐格类型快照';
     await step(async () => (await navigationMenuItem(query(), { name: snapshotText.save, exact: true }, check)).click());

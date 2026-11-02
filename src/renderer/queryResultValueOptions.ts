@@ -2,13 +2,15 @@ import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultFilterGroup, QueryResultFilterRule } from '../shared/queryResultPresets';
 import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultFilterKind, queryResultFilterLiteral } from './queryResultSort';
 import { queryResultValueOptionsZh as text } from './locales/queryResultValueOptions.zh-CN';
+import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
+import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
 
 export const queryResultValueOptionsLimits = Object.freeze({ rows: 100000, columns: 1024, entries: 2000, members: 128, valueUnits: 4096, units: 8 * 1024 * 1024, textWork: 32 * 1024 * 1024 });
-export interface QueryResultValueOption { readonly id: number; readonly literal: string | null; readonly count: number; }
+export interface QueryResultValueOption { readonly id: number; readonly literal: string | null; readonly count: number; readonly sqliteType?: SqliteResultFilterType; }
 export interface QueryResultValueOptions { readonly column: Readonly<ResultColumn>; readonly entries: readonly QueryResultValueOption[]; readonly rows: number; }
 type Key = ReturnType<typeof queryResultFilterKey>;
 type Rows = readonly QueryResult['rows'][number][];
-type Binding = { live: boolean; columns: readonly ResultColumn[]; rows: Rows; columnRefs: ResultColumn[]; metadata: ResultColumn[]; rowRefs: QueryResult['rows'][number][]; cells: CellValue[]; selected: ResultColumn; };
+type Binding = { live: boolean; columns: readonly ResultColumn[]; rows: Rows; columnRefs: ResultColumn[]; metadata: ResultColumn[]; rowRefs: QueryResult['rows'][number][]; cells: CellValue[]; selected: ResultColumn; sqlite?: { identity: QueryResult; source: SqliteResultFilterSource; literals: readonly (string | null)[] }; };
 const bindings = new WeakMap<QueryResultValueOptions, Binding>();
 
 /** 只接受自有数据属性；拒绝稀疏数组和访问器，不触发源对象 getter。 */
@@ -39,10 +41,10 @@ function keyUnits(key: Key): number {
 }
 /** NULL 和空串使用独立显示标签，文本 NULL 仍保留真实原文。 */
 export function queryResultValueOptionLabel(entry: QueryResultValueOption): string {
-  return text.value(entry.literal);
+  return entry.sqliteType ? text.sqliteValue(entry.literal!, entry.sqliteType) : text.value(entry.literal);
 }
 /** 从完整已返回行捕获不同值；整份超限或坏值即拒绝，不产生前 N 项候选。 */
-export function captureQueryResultValueOptions(columns: readonly ResultColumn[], rows: Rows, column: ResultColumn): QueryResultValueOptions {
+export function captureQueryResultValueOptions(columns: readonly ResultColumn[], rows: Rows, column: ResultColumn, sqliteSource?: QueryResult): QueryResultValueOptions {
   const columnCount = length(columns, queryResultValueOptionsLimits.columns), rowCount = length(rows, queryResultValueOptionsLimits.rows);
   if (!columnCount) throw Error(text.invalid);
   const columnRefs: ResultColumn[] = [], copied: ResultColumn[] = [], keys = new Set<string>();
@@ -56,9 +58,11 @@ export function captureQueryResultValueOptions(columns: readonly ResultColumn[],
     if (reference === column) { selected = reference; selectedMeta = item; }
   }
   if (!selected || !selectedMeta) throw Error(text.invalid);
-  if (!queryResultFilterKind(selectedMeta)) throw Error(text.unsupported);
+  const sqlite = selectedMeta.type === 'SQLITE';
+  if (!sqlite && !queryResultFilterKind(selectedMeta) || sqlite && !sqliteSource) throw Error(text.unsupported);
+  const source = sqlite ? captureSqliteResultFilterSource(sqliteSource, columns, rows) : undefined;
   const selectedColumn = selectedMeta, rowRefs: QueryResult['rows'][number][] = [], cells: CellValue[] = [], seenRows = new Set<object>();
-  const entries: { id: number; literal: string | null; count: number }[] = [], sorted: { key: Key; id: number }[] = [];
+  const entries: { id: number; literal: string | null; count: number; sqliteType?: SqliteResultFilterType }[] = [], sorted: { key: Key; id: number }[] = [], typedSeen = new Map<string, number>(), typedLiterals: (string | null)[] = [];
   /** 键比较复用原比较器；二分索引避免行数乘候选总数的线性扫描。 */
   function compare(left: Key, right: Key): number {
     work += keyUnits(left) + keyUnits(right);
@@ -70,6 +74,22 @@ export function captureQueryResultValueOptions(columns: readonly ResultColumn[],
     if (!row || typeof row !== 'object' || Array.isArray(row) || seenRows.has(row)) throw Error(text.invalid);
     seenRows.add(row); rowRefs.push(row);
     const value = own(row, selectedColumn.key) as CellValue;
+    if (source) {
+      const typed = source.literal(index, selectedColumn.key), literal = value === null ? null : typed.literal;
+      if (!Object.is(value, typed.value)) throw Error(text.stale);
+      units += literal === null ? 1 : literal.length;
+      if (units > queryResultValueOptionsLimits.units) throw Error(text.budget);
+      cells.push(value); typedLiterals.push(literal);
+      // 类型进入不同值身份；REAL的正负零沿实际比较等值，其余canonical原文无需数值转换。
+      const identity = value === null ? 'null' : `${typed.sqliteType}:${typed.sqliteType === 'real' ? String(Number(literal)) : literal}`;
+      const previous = typedSeen.get(identity);
+      if (previous !== undefined) entries[previous].count++;
+      else {
+        if (entries.length >= queryResultValueOptionsLimits.entries) throw Error(text.budget);
+        const id = entries.length; typedSeen.set(identity, id); entries.push({ id, literal, count: 1, ...(typed.sqliteType ? { sqliteType: typed.sqliteType } : {}) });
+      }
+      continue;
+    }
     if (value !== null && typeof value !== 'string' && typeof value !== 'number') throw Error(text.unsupported);
     const literal = value === null ? null : String(value);
     if (literal !== null && literal.length > queryResultValueOptionsLimits.valueUnits) throw Error(text.budget);
@@ -94,16 +114,17 @@ export function captureQueryResultValueOptions(columns: readonly ResultColumn[],
     }
   }
   const capture: QueryResultValueOptions = Object.freeze({ column: Object.freeze({ ...selectedColumn }), entries: Object.freeze(entries.map(entry => Object.freeze(entry))), rows: rowCount });
-  bindings.set(capture, { live: true, columns, rows, columnRefs, metadata: copied, rowRefs, cells, selected });
+  bindings.set(capture, { live: true, columns, rows, columnRefs, metadata: copied, rowRefs, cells, selected, ...(source ? { sqlite: { identity: sqliteSource!, source, literals: typedLiterals } } : {}) });
   if (!currentQueryResultValueOptions(capture, columns, rows)) throw Error(text.stale);
   return capture;
 }
 /** 原数组、全部列元数据、全部行位置及目标格任一漂移即永久失效；恢复原值也不复活。 */
-export function currentQueryResultValueOptions(capture: QueryResultValueOptions, columns: readonly ResultColumn[], rows: Rows): boolean {
+export function currentQueryResultValueOptions(capture: QueryResultValueOptions, columns: readonly ResultColumn[], rows: Rows, sqliteSource?: QueryResult): boolean {
   const binding = bindings.get(capture);
   if (!binding?.live) return false;
   try {
     if (columns !== binding.columns || rows !== binding.rows || length(columns, queryResultValueOptionsLimits.columns) !== binding.columnRefs.length || length(rows, queryResultValueOptionsLimits.rows) !== binding.rowRefs.length) throw Error(text.stale);
+    if (binding.sqlite && (sqliteSource && binding.sqlite.identity !== sqliteSource || !binding.sqlite.source.current())) throw Error(text.stale);
     for (let index = 0; index < binding.columnRefs.length; index++) {
       const reference = own(columns, String(index)), actual = metadata(reference), saved = binding.metadata[index];
       if (reference !== binding.columnRefs[index] || actual.key !== saved.key || actual.name !== saved.name || actual.type !== saved.type) throw Error(text.stale);
@@ -111,6 +132,7 @@ export function currentQueryResultValueOptions(capture: QueryResultValueOptions,
     for (let index = 0; index < binding.rowRefs.length; index++) {
       const reference = own(rows, String(index));
       if (reference !== binding.rowRefs[index] || !Object.is(own(reference as object, capture.column.key), binding.cells[index])) throw Error(text.stale);
+      if (binding.sqlite && binding.cells[index] !== null && typeof binding.cells[index] === 'object' && binding.sqlite.source.literal(index, capture.column.key).literal !== binding.sqlite.literals[index]) throw Error(text.stale);
     }
     return true;
   } catch { binding.live = false; return false; }
@@ -126,16 +148,26 @@ export function queryResultValueOptionsNode(capture: QueryResultValueOptions, id
   if (mode !== 'include' && mode !== 'exclude') throw Error(text.invalid);
   const count = length(ids, queryResultValueOptionsLimits.members);
   if (!count) throw Error(text.selection);
-  const seen = new Set<number>(), values: string[] = []; let nullable = false;
+  const seen = new Set<number>(), values: string[] = [], groups = new Map<SqliteResultFilterType, string[]>(); let nullable = false;
   for (let index = 0; index < count; index++) {
     const id = own(ids, String(index));
     if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0 || Object.is(id, -0) || id >= capture.entries.length || seen.has(id)) throw Error(text.selection);
-    seen.add(id); const literal = capture.entries[id].literal;
+    seen.add(id); const entry = capture.entries[id], literal = entry.literal;
     if (literal === null) nullable = true; else values.push(literal);
+    if (entry.sqliteType && literal !== null) { let group = groups.get(entry.sqliteType); if (!group) { group = []; groups.set(entry.sqliteType, group); } group.push(literal); }
   }
   /** 输出仅包含原共享契约字段，冻结自有树与成员数组。 */
   const rule = (operator: QueryResultFilterRule['operator']): QueryResultFilterRule => Object.freeze({ column: capture.column.key, operator, value: '', ...(operator === 'in' || operator === 'notIn' ? { values: Object.freeze(values) } : {}) });
   if (!values.length) return rule(mode === 'include' ? 'null' : 'notNull');
+  if (capture.column.type === 'SQLITE') {
+    /** 排除混合类型用各类型补集的AND；未勾NULL时单独保留NULL，不能遗漏其它存储类。 */
+    const group = (mode: 'AND' | 'OR', children: readonly (QueryResultFilterRule | QueryResultFilterGroup)[]): QueryResultFilterRule | QueryResultFilterGroup => children.length === 1 ? children[0] : Object.freeze({ mode, children: Object.freeze(children) });
+    const typed = [...groups].map(([sqliteType, values]) => Object.freeze({ column: capture.column.key, operator: mode === 'include' ? 'in' as const : 'notIn' as const, value: '', values: Object.freeze(values), sqliteType }));
+    if (mode === 'include') return group('OR', [...typed, ...(nullable ? [rule('null')] : [])]);
+    const complements = typed.map(leaf => group('OR', [leaf, Object.freeze({ column: capture.column.key, operator: 'notType' as const, value: '', sqliteType: leaf.sqliteType })]));
+    const nonnull = group('AND', complements);
+    return nullable ? nonnull : group('OR', [nonnull, rule('null')]);
+  }
   if (mode === 'include' && !nullable) return rule('in');
   return Object.freeze({ mode: mode === 'include' || !nullable ? 'OR' : 'AND', children: Object.freeze([rule(mode === 'include' ? 'in' : 'notIn'), rule(mode === 'include' || !nullable ? 'null' : 'notNull')]) });
 }

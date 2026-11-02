@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 查询结果新增[不同值勾选](development/sqlite-result-value-options-20261102.md)：原返回全行、类型与计数、搜索／分页、包含／排除及草稿审阅，不重查。类型、59 份 1714 项相关、构建和 Windows 原工作区整例通过；上一提交两种 Mac 查询首例通过、后续表页超时独立记录，暂不发布。
+
 SQLite 查询结果新增[原格与勾选值快捷条件](development/sqlite-result-shortcuts-20261102.md)：保留实际存储类型，排除当前格仍保留其它非 NULL 类型，混合勾选生成类型化 OR／IN 草稿；不重查。类型、58 份 1671 项相关、构建及 Windows 原工作区整例通过；不同值候选与 Mac／安装继续，暂不发布。
 
 SQLite 查询结果新增[显式类型筛选](development/sqlite-result-filter-20261102.md)：文本、整数、实数、BLOB 与 NULL、范围／列表及嵌套条件，共用原多列排序、清除与整理历史，不新增数据库请求。类型、976 项相关、构建及 Windows 原工作区整例通过；候选值／单格快捷条件与 Mac／安装继续，暂不发布。

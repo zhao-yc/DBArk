@@ -14,6 +14,8 @@ export const queryResultValueOptionsZh = Object.freeze({
   selectMatches: '勾选全部搜索匹配值',
   clear: '清空勾选',
   value: (literal: string | null) => literal === null ? 'NULL（空值）' : literal === '' ? '""（空字符串）' : JSON.stringify(literal),
+  sqliteValue: (literal: string, type: 'text' | 'integer' | 'real' | 'blob') => type === 'blob' ? `BLOB · 0x${literal}` : `${type.toUpperCase()} · ${literal === '' ? '""（空字符串）' : JSON.stringify(literal)}`,
+  sqliteHint: 'SQLite候选按原存储类型分别计数与勾选；同显示的文本、整数和实数互不合并。BLOB使用完整十六进制，NULL独立处理；排除勾选值保留所有未选值。',
   occurrences: (count: number) => `${count} 行`,
   selectionLimit: '最多勾选 128 种值；请缩小搜索范围后选择。',
   empty: '没有匹配的不同值。',

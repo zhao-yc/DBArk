@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { QueryResult } from '../../src/shared/contracts';
-import { QueryResultFilter, type QueryResultFilterGroup } from '../../src/renderer/queryResultFilter';
+import { QueryResultFilter, type QueryResultFilterGroup, type QueryResultFilterRule } from '../../src/renderer/queryResultFilter';
 import { queryResultFilterZh as text } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultValueOptionsZh as valuesText } from '../../src/renderer/locales/queryResultValueOptions.zh-CN';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
@@ -13,8 +13,18 @@ beforeAll(async () => {
   document = memoryDocument(); Object.defineProperty(document, 'oninput', { value: null, configurable: true }); const create = document.createElement.bind(document);
   document.createElement = name => {
     const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); if (name === 'input') node.type = 'text';
-    if (name === 'select') Object.defineProperty(node, 'options', { get: () => node.querySelectorAll('option') });
-    if (name === 'option') Object.assign(node, { selected: false, defaultSelected: false });
+    // React的updateOptions逐项写selected；标准value必须反映真实选中option，不能读RAM空字符串。
+    if (name === 'select') Object.defineProperties(node, {
+      options: { get: () => node.querySelectorAll('option') },
+      value: { configurable: true, get: () => node.querySelectorAll('option').find(option => Reflect.get(option, 'selected'))?.value ?? '', set: value => { for (const option of node.querySelectorAll('option')) Reflect.set(option, 'selected', option.value === value); } }
+    });
+    if (name === 'option') {
+      let selected = false;
+      Object.defineProperties(node, {
+        value: { configurable: true, get: () => node.getAttribute('value') ?? node.textContent },
+        selected: { configurable: true, get: () => selected, set: value => { selected = !!value; if (selected && node.parentNode?.tagName === 'SELECT') for (const sibling of node.parentNode.childNodes) if (sibling !== node) Reflect.set(sibling, 'selected', false); } }
+      });
+    }
     // 仅补标准HTML布尔属性反射，不提供布局、数据库、系统输入或伪造组件状态。
     node.setAttribute = (key, value) => { set(key, value); if (key === 'disabled') node.disabled = true; if (key === 'type') node.type = value; };
     node.removeAttribute = key => { remove(key); if (key === 'disabled') node.disabled = false; }; return node;
@@ -25,8 +35,8 @@ afterEach(async () => { if (root) { await act(async () => root!.unmount()); root
 afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
 
 /** 完整原结果与生效投影分开；生产Panel/Picker/筛选器均使用真实实现，调用IPC立即失败。 */
-async function mount(expression: QueryResultFilterGroup = { mode: 'AND', children: [{ column: 'kind', operator: 'eq', value: 'A' }] }) {
-  const source: QueryResult = { columns: [{ key: 'id', name: '编号', type: 'BIGINT' }, { key: 'kind', name: '分类', type: 'VARCHAR' }], rows: [{ id: '1', kind: 'A' }, { id: '2', kind: 'B' }, { id: '3', kind: null }, { id: '4', kind: '' }], truncated: true, elapsedMs: 1, statement: '原SQL不变' };
+async function mount(expression: QueryResultFilterGroup = { mode: 'AND', children: [{ column: 'kind', operator: 'eq', value: 'A' }] }, input?: QueryResult) {
+  const source: QueryResult = input ?? { columns: [{ key: 'id', name: '编号', type: 'BIGINT' }, { key: 'kind', name: '分类', type: 'VARCHAR' }], rows: [{ id: '1', kind: 'A' }, { id: '2', kind: 'B' }, { id: '3', kind: null }, { id: '4', kind: '' }], truncated: true, elapsedMs: 1, statement: '原SQL不变' };
   const filter = new QueryResultFilter(), binding = filter.bind(source, ['内存父结果'])!, initial = filter.applyExpression(binding, filter.view(binding)!, expression);
   const onApply = vi.fn(), onClose = vi.fn(), invoke = vi.fn(() => { throw Error('选择器不能执行IPC'); }); let available = true;
   Object.assign(window, { dbark: { invoke } }); const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as unknown as Element);
@@ -40,10 +50,40 @@ function props(node: MemoryNode): Record<string, any> { const key = Object.keys(
 async function click(label: string, aria = false): Promise<void> { const node = aria ? named(label) : button(label); expect(node.disabled, label).toBe(false); await act(async () => { node.dispatchEvent(new MemoryEvent('click')); }); }
 async function check(literal: string | null): Promise<void> { const node = named(valuesText.value(literal)); expect(node.disabled).toBe(false); await act(async () => { props(node).onChange({ target: { checked: true } }); }); }
 async function mode(value: 'include' | 'exclude'): Promise<void> { await act(async () => props(named(valuesText.mode)).onChange({ target: { value } })); }
+/** 所有字段同为SQLite，逐格类型决定候选；已有筛选只显示TEXT的2。 */
+function sqliteSource(): QueryResult {
+  return { columns: [{ key: 'id', name: '同名', type: 'SQLITE' }, { key: 'kind', name: '同名', type: 'SQLITE' }], rows: ['2', '2', '2', null, { type: 'binary' as const, base64: 'AP8=' }].map((kind, index) => ({ id: String(index), kind })), sqliteStorage: { version: 1, rows: ['ii', 'ir', 'it', 'in', 'ib'] }, statement: '原SQL不变', elapsedMs: 1, truncated: true };
+}
+const sqliteExpression: QueryResultFilterGroup = { mode: 'AND', children: [{ column: 'kind', operator: 'eq', value: '2', sqliteType: 'text' }] };
 /** 合成键盘标志只验证冒泡和组合守卫，不当作原生键盘或输入法证据。 */
 function key(patch: Record<string, unknown> = {}) { return { key: 'Escape', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: false, keyCode: 27, defaultPrevented: false, nativeEvent: {}, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...patch }; }
 
 describe('结果条件面板集成不同值选择草稿', () => {
+  it.each(['include', 'exclude'] as const)('SQLite%s候选含原全部类型，按类型明确勾选，先写草稿后应用且无IPC', async matching => {
+    const f = await mount(sqliteExpression, sqliteSource()), before = structuredClone(f.source); expect(f.initial.sourceIndices).toEqual([2]);
+    await click(valuesText.openCondition(1), true);
+    for (const type of ['integer', 'real', 'text'] as const) expect(named(valuesText.sqliteValue('2', type)).disabled).toBe(false);
+    expect(named(valuesText.sqliteValue('00ff', 'blob')).disabled).toBe(false);
+    for (const type of ['integer', 'text'] as const) await act(async () => props(named(valuesText.sqliteValue('2', type))).onChange({ target: { checked: true } }));
+    await mode(matching); await click(valuesText.apply); expect(f.onApply).not.toHaveBeenCalled(); expect(f.initial.sourceIndices).toEqual([2]);
+    await click(text.apply); const expression = f.onApply.mock.calls[0][0];
+    expect(f.filter.applyExpression(f.binding, f.initial, expression).sourceIndices).toEqual(matching === 'include' ? [0, 2] : [1, 3, 4]);
+    expect(f.source).toEqual(before); expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it('SQLite类型代码漂移拒绝旧候选，取消不覆盖原草稿', async () => {
+    const f = await mount(sqliteExpression, sqliteSource()); await click(valuesText.openCondition(1), true);
+    await act(async () => props(named(valuesText.sqliteValue('2', 'integer'))).onChange({ target: { checked: true } })); const apply = props(button(valuesText.apply)).onClick;
+    f.source.sqliteStorage!.rows[0] = 'it'; await act(async () => apply()); expect(f.onApply).not.toHaveBeenCalled(); expect(document.body.textContent).toContain(valuesText.stale);
+    await click(valuesText.cancel); expect(named(text.input + ' 1').value).toBe('2'); expect(named(text.sqliteType(1)).value).toBe('text');
+  });
+  it('SQLite混合五类替换超过最终树预算时保留完整原草稿及勾选', async () => {
+    const f = await mount({ mode: 'AND', children: Array.from({ length: 30 }, () => ({ ...sqliteExpression.children[0] } as QueryResultFilterRule)) }, sqliteSource());
+    await click(valuesText.openCondition(1), true);
+    for (const type of ['integer', 'real', 'text'] as const) await act(async () => props(named(valuesText.sqliteValue('2', type))).onChange({ target: { checked: true } }));
+    await check(null); await act(async () => props(named(valuesText.sqliteValue('00ff', 'blob'))).onChange({ target: { checked: true } }));
+    await click(valuesText.apply); expect(f.onApply).not.toHaveBeenCalled(); expect(document.body.textContent).toContain(text.budget); expect(named(valuesText.sqliteValue('2', 'integer')).checked).toBe(true);
+    await click(valuesText.cancel); await click(text.apply); expect(f.onApply.mock.calls[0][0].children).toHaveLength(30);
+  });
   it('从原返回全行取值，确认仅替换本条草稿；外层应用后才变化原视图', async () => {
     const f = await mount(), before = structuredClone(f.source); expect(f.initial.sourceIndices).toEqual([0]);
     await click(valuesText.openCondition(1), true); expect(named(valuesText.title).getAttribute('role')).toBe('region'); expect(document.querySelector('[role="dialog"]')).toBeNull();
