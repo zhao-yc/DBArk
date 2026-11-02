@@ -1,5 +1,7 @@
 # SQLite 已有 UNIQUE 约束：组合计划与独立事务
 
+后续进展：[UNIQUE 原表重建编辑区](sqlite-unique-ui-20261102.md)已接入原声明查看、增改删和全批风险确认；本文件保留独立事务阶段当时边界和验收。
+
 ## 实现
 
 在[声明模型与编译](sqlite-unique-plan-20261102.md)之后，UNIQUE 编辑已接入原 `sqlite.tableRebuild.preview/apply/release` 能力链。新增受限 `uniqueEdits` 与 `changedUniques`，不新增任意 SQL、文件路径或独立写入通道；编辑区仍待接入，本阶段不等于完整可用 UNIQUE 管理。

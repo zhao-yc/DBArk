@@ -39,3 +39,20 @@
 .sqlite-primary-key-field { display: grid; grid-template-columns: repeat(3, minmax(110px, 1fr)) auto auto auto; gap: 6px; align-items: end; margin-bottom: 8px; }
 .sqlite-primary-key-field input, .sqlite-primary-key-field select { min-width: 0; width: 100%; }
 @media (max-width: 700px) { .sqlite-primary-key-field { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* UNIQUE与原主外键共用父滚动容器，原声明列表有界，长名称及确认文案可换行。 */
+.sqlite-uniques { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 8px; }
+.sqlite-uniques p { overflow-wrap: anywhere; }
+.sqlite-uniques-list { max-height: 260px; overflow: auto; }
+.sqlite-uniques article { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.sqlite-unique-heading, .sqlite-uniques li, .sqlite-unique-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sqlite-unique-heading > span, .sqlite-uniques li > span { overflow-wrap: anywhere; min-width: 0; flex: 1; }
+.sqlite-unique-form { border: 1px solid var(--line); padding: 12px; margin-top: 12px; }
+.sqlite-unique-form > label { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0; }
+.sqlite-unique-form > label input { flex: none; }
+.sqlite-unique-form > .warning-text { display: block; margin-top: 12px; }
+.sqlite-unique-fields { max-height: 300px; overflow: auto; margin: 12px 0; }
+.sqlite-unique-field { display: grid; grid-template-columns: repeat(3, minmax(110px, 1fr)) auto auto auto; gap: 6px; align-items: end; margin-bottom: 8px; }
+.sqlite-unique-field input, .sqlite-unique-field select { min-width: 0; width: 100%; }
+.sqlite-unique-actions { margin-top: 12px; }
+@media (max-width: 700px) { .sqlite-unique-field { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

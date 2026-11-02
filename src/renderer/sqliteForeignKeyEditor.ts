@@ -1,5 +1,7 @@
 import type { SqliteTableRebuildInspectOutput, SqliteTableRebuildChange } from '../shared/sqliteTableRebuild';
 import type { SqliteTablePrimaryKeyEdit } from '../shared/sqliteTablePrimaryKey';
+import type { SqliteTableUniqueEdit } from '../shared/sqliteTableUnique';
+type ConstraintContext = { primaryKeyEdit?: SqliteTablePrimaryKeyEdit; uniqueEdits?: readonly SqliteTableUniqueEdit[]; changes: readonly SqliteTableRebuildChange[] };
 import { compileSqliteTableForeignKeys, compileSqliteTableRebuildDefinition, inspectSqliteTableForeignKeys, type SqliteTableForeignKeySource } from '../shared/sqliteTableRebuildPlan';
 import { sqliteTableForeignKeyDefinitionSchema, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from '../shared/sqliteTableForeignKeys';
 import { sqliteTableCreateActions } from '../shared/sqliteTableCreate';
@@ -53,7 +55,7 @@ export function updateSqliteForeignKeyForm(form: SqliteForeignKeyForm, action: S
   return { ...form, mappings };
 }
 /** 暂存前试编译整组本地补丁，冲突、未知字段和超预算不会改写原队列；不发送IPC。 */
-export function stageSqliteForeignKeyForm(catalogue: SqliteTableRebuildInspectOutput, edits: readonly SqliteTableForeignKeyEdit[], form: SqliteForeignKeyForm, primary?: { primaryKeyEdit: SqliteTablePrimaryKeyEdit; changes: readonly SqliteTableRebuildChange[] }): SqliteTableForeignKeyEdit[] {
+export function stageSqliteForeignKeyForm(catalogue: SqliteTableRebuildInspectOutput, edits: readonly SqliteTableForeignKeyEdit[], form: SqliteForeignKeyForm, primary?: ConstraintContext): SqliteTableForeignKeyEdit[] {
   if (sqliteForeignKeyNeedsAcknowledgement(form) && !form.legacyAccepted) throw Error(text.legacyRequired);
   const parsedDefinition = sqliteTableForeignKeyDefinitionSchema.safeParse({ name: form.name === '' ? null : form.name, columns: form.mappings.map(row => row.local), referencedTable: form.parent, referencedColumns: form.implicit ? [] : form.mappings.map(row => row.parent), onDelete: form.onDelete, onUpdate: form.onUpdate, deferral: form.deferral });
   if (!parsedDefinition.success) throw Error(text.invalidDefinition);
@@ -66,7 +68,7 @@ export function stageSqliteForeignKeyForm(catalogue: SqliteTableRebuildInspectOu
   return parsed;
 }
 /** 标记移除沿用原声明身份；撤销只是删除本地补丁，原库和其它字段草稿不变。 */
-export function removeSqliteForeignKey(catalogue: SqliteTableRebuildInspectOutput, edits: readonly SqliteTableForeignKeyEdit[], ordinal: number, primary?: { primaryKeyEdit: SqliteTablePrimaryKeyEdit; changes: readonly SqliteTableRebuildChange[] }): SqliteTableForeignKeyEdit[] {
+export function removeSqliteForeignKey(catalogue: SqliteTableRebuildInspectOutput, edits: readonly SqliteTableForeignKeyEdit[], ordinal: number, primary?: ConstraintContext): SqliteTableForeignKeyEdit[] {
   const original = inspectSqliteTableForeignKeys(sqliteForeignKeySource(catalogue))[ordinal]; if (!original) throw Error(text.invalid);
   const next = [...edits.filter(edit => edit.kind === 'add' || edit.ordinal !== ordinal), { kind: 'remove' as const, ordinal, expectedSql: original.sql }];
   const parsed = sqliteTableForeignKeyEditsSchema.parse(next);
