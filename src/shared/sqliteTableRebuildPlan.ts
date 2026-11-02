@@ -3,6 +3,7 @@ import { buildSqliteTableCreateDefault, sqliteTableCreateColumnSchema, type Sqli
 import { buildSqliteTableForeignKey, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from './sqliteTableForeignKeys';
 import { buildSqliteTablePrimaryKey, sqliteTablePrimaryKeyEditSchema, type SqliteTablePrimaryKeyDefinition, type SqliteTablePrimaryKeyEdit } from './sqliteTablePrimaryKey';
 import { buildSqliteTableUnique, sqliteTableUniqueEditsSchema, sqliteTableUniqueLimits, type SqliteTableUniqueDefinition, type SqliteTableUniqueEdit } from './sqliteTableUnique';
+import { buildSqliteTableCheck, sqliteTableCheckEditsSchema, sqliteTableCheckLimits, type SqliteTableCheckEdit } from './sqliteTableChecks';
 
 /** 重建编译只修改明确声明跨度；不推断数据转换、不签发执行能力，未修改约束原文保留。 */
 export const sqliteTableRebuildPlanLimits = { sqlBytes: 2 * 1024 * 1024, tokens: 300000, columns: 1024, changes: 128, nesting: 256 } as const;
@@ -10,7 +11,7 @@ export interface SqliteRebuildSourceColumn { name: string; hidden: number; }
 export interface SqliteRebuildColumnChange { column: string; declaredType?: string; default?: SqliteTableCreateDefault; }
 export interface SqliteTableRebuildDefinitionInput {
   table: string; tableSql: string; columns: readonly SqliteRebuildSourceColumn[];
-  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[]; foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[]; primaryKeyEdit?: SqliteTablePrimaryKeyEdit; uniqueEdits?: readonly SqliteTableUniqueEdit[];
+  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[]; foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[]; primaryKeyEdit?: SqliteTablePrimaryKeyEdit; uniqueEdits?: readonly SqliteTableUniqueEdit[]; checkEdits?: readonly SqliteTableCheckEdit[];
 }
 export interface SqliteTableRebuildDefinition {
   candidateSql: string;
@@ -19,7 +20,7 @@ export interface SqliteTableRebuildDefinition {
 interface Token { kind: 'word' | 'quoted' | 'string' | 'number' | 'symbol'; value: string; start: number; end: number; }
 interface Span { start: number; end: number; }
 interface DefinitionSegment extends Span { column?: string; parts: Token[]; }
-interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; notNull: boolean; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; uniques: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
+interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; notNull: boolean; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; uniques: (Span & { parts: Token[] })[]; checks: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
 const limits = sqliteTableRebuildPlanLimits, encoder = new TextEncoder();
 const fold = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 const word = (token: Token | undefined, value: string) => token?.kind === 'word' && fold(token.value) === value.toLowerCase();
@@ -116,7 +117,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
     if (symbol(parts[index], '(')) index = groupEnd(parts, index);
     else { if (parts[index].kind === 'symbol' || parts[index].kind === 'number') throw invalid(); index++; }
   }
-  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, notNull: false, references: [], primaryKeys: [], uniques: [], names: [] };
+  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, notNull: false, references: [], primaryKeys: [], uniques: [], checks: [], names: [] };
   while (index < parts.length) {
     const start = index;
     while (word(parts[index], 'CONSTRAINT')) { const marker = parts[index].start; if (identifier(parts[++index]) === undefined) throw invalid(); result.names.push({ name: identifier(parts[index])!, start: marker }); index++; }
@@ -124,7 +125,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
     if (index === parts.length) { result.end = parts[start].start; break; }
     const token = parts[index++];
     if (word(token, 'DEFAULT')) { index = defaultEnd(parts, index); result.defaults.push({ start: parts[start].start, end: parts[index - 1].end }); }
-    else if (word(token, 'CHECK')) index = groupEnd(parts, index);
+    else if (word(token, 'CHECK')) { index = groupEnd(parts, index); result.checks.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) }); }
     else if (word(token, 'COLLATE')) { if (identifier(parts[index++]) === undefined) throw invalid(); }
     else if (word(token, 'REFERENCES')) { index = foreignEnd(parts, index); result.references.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) }); }
     else if (word(token, 'PRIMARY')) {
@@ -293,6 +294,74 @@ export function compileSqliteTableForeignKeys(raw: ForeignKeyInput, rawEdits: un
   const tableSql = input.tableSql.slice(0, source.bodyOpen) + body + input.tableSql.slice(source.bodyEnd);
   if (encoder.encode(tableSql).length > limits.sqlBytes || tableSql === input.tableSql) throw Error('SQLite外键声明未变化或超过2MiB UTF8预算');
   return { tableSql, foreignKeys: inspectSqliteTableForeignKeys({ ...input, tableSql }), added, removed, replaced: changed };
+}
+
+export interface SqliteTableCheckSource {
+  readonly ordinal: number; readonly location: 'column' | 'table'; readonly column?: string;
+  readonly sql: string; readonly names: readonly string[]; readonly expression: string;
+  readonly legacyConflict: 'ROLLBACK' | 'ABORT' | 'FAIL' | 'IGNORE' | 'REPLACE' | null;
+}
+interface CheckSpan extends Span { segment: DefinitionSegment; value: Omit<SqliteTableCheckSource, 'ordinal'>; }
+/** 原表达式按括号内部准确切片；表级兼容ON CONFLICT只记录，不暗示其会改变CHECK行为。 */
+function checkValue(input: ForeignKeyInput, parts: Token[], column?: string): Omit<SqliteTableCheckSource, 'ordinal' | 'location' | 'column' | 'sql'> {
+  let index = 0; const names: string[] = [];
+  while (word(parts[index], 'CONSTRAINT')) { const name = identifier(parts[++index]); if (name === undefined) throw invalid(); names.push(name); index++; }
+  if (!word(parts[index++], 'CHECK')) throw invalid(); const open = index, end = groupEnd(parts, index); index = end;
+  const expression = input.tableSql.slice(parts[open].end, parts[end - 1].start); if (!expression.trim()) throw invalid();
+  let legacyConflict: SqliteTableCheckSource['legacyConflict'] = null;
+  if (word(parts[index], 'ON')) { if (column !== undefined) throw invalid(); const end = conflictEnd(parts, index); if (end === index) throw invalid(); legacyConflict = parts[index + 2].value.toUpperCase() as NonNullable<typeof legacyConflict>; index = end; }
+  if (index !== parts.length) throw invalid(); return { names: Object.freeze(names), expression, legacyConflict };
+}
+/** 只按真实声明跨度排序，表达式内的CHECK、DEFAULT、括号、字符串及注释不会变成另一约束。 */
+function checkSpans(input: ForeignKeyInput, source: ReturnType<typeof definition>): CheckSpan[] {
+  const output: CheckSpan[] = [];
+  for (const segment of source.segments) {
+    if (segment.column !== undefined) {
+      const column = source.columns.find(column => column.name === segment.column)!;
+      for (const span of column.checks) output.push({ ...span, segment, value: { ...checkValue(input, span.parts, column.name), location: 'column', column: column.name, sql: input.tableSql.slice(span.start, span.end) } });
+    } else {
+      let index = 0; while (word(segment.parts[index], 'CONSTRAINT')) index += 2; if (!word(segment.parts[index], 'CHECK')) continue;
+      const start = segment.parts[0].start, end = segment.parts.at(-1)!.end; output.push({ start, end, segment, value: { ...checkValue(input, segment.parts), location: 'table', sql: input.tableSql.slice(start, end) } });
+    }
+  }
+  if (output.length > sqliteTableCheckLimits.checks) throw invalid(); return output.sort((left, right) => left.start - right.start);
+}
+/** CHECK没有PRAGMA独立编号目录；仅从准确普通表原SQL与原字段读取声明，不执行表达式。 */
+export function inspectSqliteTableChecks(raw: ForeignKeyInput): readonly SqliteTableCheckSource[] {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] });
+  return Object.freeze(checkSpans(input, source).map((span, ordinal) => Object.freeze({ ordinal, ...span.value })));
+}
+/** 生成候选声明而非可执行能力；表达式含义、历史违规和运行函数仍须后续独立事务完整验证。 */
+export function compileSqliteTableChecks(raw: ForeignKeyInput, rawEdits: unknown): { tableSql: string; checks: readonly SqliteTableCheckSource[]; added: number; removed: number; replaced: number } {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] }), originals = checkSpans(input, source), edits = sqliteTableCheckEditsSchema.parse(rawEdits);
+  const replaced = new Set<CheckSpan>(), additions: { location: 'table' | 'column'; column?: string; sql: string }[] = [], names = new Set<string>(); let added = 0, removed = 0, changed = 0;
+  for (const edit of edits) {
+    if (edit.kind !== 'add') { const original = originals[edit.ordinal]; if (!original || original.value.sql !== edit.expectedSql) throw Error('SQLite原检查约束声明或位置已变化，请重新读取'); replaced.add(original); }
+    if (edit.kind === 'remove') { removed++; continue; }
+    additions.push({ location: edit.definition.location, ...(edit.definition.location === 'column' ? { column: edit.definition.column } : {}), sql: buildSqliteTableCheck(edit.definition, input.columns) });
+    if (edit.definition.name !== null) { const key = fold(edit.definition.name); if (names.has(key)) throw Error('SQLite新检查约束名不能重复'); names.add(key); }
+    if (edit.kind === 'add') added++; else changed++;
+  }
+  // 所有约束共享声明命名空间，只释放本批准确删除的跨度，不能按重复名字批量排除。
+  const markers = source.columns.flatMap(column => column.names);
+  for (const segment of source.segments.filter(segment => segment.column === undefined)) { let index = 0; while (word(segment.parts[index], 'CONSTRAINT')) { markers.push({ name: identifier(segment.parts[index + 1])!, start: segment.parts[index].start }); index += 2; } }
+  for (const marker of markers) if (![...replaced].some(span => marker.start >= span.start && marker.start < span.end) && names.has(fold(marker.name))) throw Error('SQLite新检查约束名与保留的原约束名冲突');
+  const chunks: string[] = []; let trivia = '';
+  for (const segment of source.segments) {
+    const spans = [...replaced].filter(span => span.segment === segment).sort((left, right) => left.start - right.start);
+    if (segment.column === undefined && spans.length) { trivia += input.tableSql.slice(segment.start, spans[0].start) + input.tableSql.slice(spans[0].end, segment.end); continue; }
+    let sql = '', boundary = segment.start; for (const span of spans) { sql += input.tableSql.slice(boundary, span.start) + ' '; boundary = span.end; }
+    chunks.push(trivia + sql + input.tableSql.slice(boundary, segment.end)); trivia = '';
+  }
+  if (!chunks.length) throw invalid(); chunks[chunks.length - 1] += trivia;
+  let tableSql = input.tableSql.slice(0, source.bodyOpen) + chunks.join(',') + input.tableSql.slice(source.bodyEnd);
+  for (const addition of additions) {
+    const remaining = definition({ ...input, tableSql, candidateName: '', changes: [] }), position = addition.location === 'column' ? remaining.columns.find(column => column.name === addition.column)!.end : remaining.bodyEnd;
+    const sql = addition.location === 'column' ? ' ' + addition.sql + ' ' : ',\n ' + addition.sql + '\n';
+    if (encoder.encode(tableSql).length + encoder.encode(sql).length > limits.sqlBytes) throw Error('SQLite检查约束SQL超过2MiB UTF8预算'); tableSql = tableSql.slice(0, position) + sql + tableSql.slice(position);
+  }
+  if (encoder.encode(tableSql).length > limits.sqlBytes || tableSql === input.tableSql) throw Error('SQLite检查约束声明未变化或超过2MiB UTF8预算');
+  return { tableSql, checks: inspectSqliteTableChecks({ ...input, tableSql }), added, removed, replaced: changed };
 }
 
 export interface SqliteTableUniqueSource {
@@ -524,8 +593,20 @@ export function compileSqliteTableRebuildCopyDefinition(input: SqliteTableRebuil
 
 /** 普通候选与带私有编号候选共享同一跨度编译，不复制或重新实现默认值/约束解析。 */
 function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn?: string, reorderedBase = false): SqliteTableRebuildDefinition {
-  // UNIQUE整批分支会复制其余选项，必须先拒绝访问器，不能让spread先调用旧主外键或顺序getter。
-  for (const key of ['primaryKeyEdit', 'foreignKeyEdits', 'columnOrder']) { const descriptor = Object.getOwnPropertyDescriptor(input, key); if (descriptor && (!descriptor.enumerable || !('value' in descriptor))) throw invalid(); }
+  // 整批分支会复制其余选项，必须先拒绝访问器，不能让spread先调用其他约束或顺序getter。
+  for (const key of ['primaryKeyEdit', 'foreignKeyEdits', 'uniqueEdits', 'checkEdits', 'columnOrder']) { const descriptor = Object.getOwnPropertyDescriptor(input, key); if (descriptor && (!descriptor.enumerable || !('value' in descriptor))) throw invalid(); }
+  const checkDescriptor = Object.getOwnPropertyDescriptor(input, 'checkEdits');
+  if (checkDescriptor?.value !== undefined) {
+    const edits = sqliteTableCheckEditsSchema.parse(checkDescriptor.value);
+    // 四类约束均从原目录绑定。先释放准确旧CHECK，再编译其他改动，最后核最终CHECK命名空间。
+    const removals = edits.filter(edit => edit.kind !== 'add').map(edit => ({ kind: 'remove' as const, ordinal: edit.ordinal, expectedSql: edit.expectedSql }));
+    const tableSql = removals.length ? compileSqliteTableChecks(input, removals).tableSql : input.tableSql;
+    const base = compileDefinition({ ...input, tableSql, checkEdits: undefined, columnOrder: undefined }, undefined, true);
+    const changedSource = { table: input.candidateName, tableSql: base.candidateSql, columns: input.columns };
+    const additions = edits.filter(edit => edit.kind !== 'remove').map(edit => ({ kind: 'add' as const, definition: edit.definition }));
+    const finalSql = additions.length ? compileSqliteTableChecks(changedSource, additions).tableSql : base.candidateSql;
+    return compileDefinition({ ...input, table: input.candidateName, tableSql: finalSql, changes: [], foreignKeyEdits: undefined, primaryKeyEdit: undefined, uniqueEdits: undefined, checkEdits: undefined }, ordinalColumn, true);
+  }
   const uniqueDescriptor = Object.getOwnPropertyDescriptor(input, 'uniqueEdits'); if (uniqueDescriptor && (!uniqueDescriptor.enumerable || !('value' in uniqueDescriptor))) throw invalid();
   if (uniqueDescriptor?.value !== undefined) {
     const edits = sqliteTableUniqueEditsSchema.parse(uniqueDescriptor.value);
