@@ -55,9 +55,32 @@ async function click(label: string): Promise<void> { const node = button(label);
 async function fill(value: string): Promise<void> { const node = input(); expect(node.disabled).toBe(false); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('input')); }); expect(input().value).toBe(value); }
 async function check(label: string, value = true): Promise<void> { const node = input(label); expect(node.disabled).toBe(false); await act(async () => { node.checked = value; node.dispatchEvent(new MemoryEvent('click')); }); expect(input(label).checked).toBe(value); }
 async function mode(value: string): Promise<void> { const node = document.querySelector('select')!; await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
+/** 新排序控件以明确标签定位，匹配方式原入口保持。 */
+async function order(value: string): Promise<void> { const node = document.querySelectorAll('select').find(item => item.getAttribute('aria-label') === text.order)!; await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
 async function key(values: Record<string, unknown>): Promise<MemoryEvent> { const event = Object.assign(new MemoryEvent('keydown'), values); await act(async () => { input().dispatchEvent(event); }); return event; }
 
 describe('已返回不同值选择器真实 React RAM 交互（非原生验收）', () => {
+  it('次数排序跨原末页回到首页，勾选仍写入原编号且父草稿未提前改变', async () => {
+    const f = await mount([...Array.from({ length: 55 }, (_, i) => 'rare' + i), ...Array(100).fill('hot'), ...Array(9).fill('warm')]);
+    await click(text.next); await check('"hot"'); await order('count-desc'); expect(document.body.textContent).toContain(text.page(1, 2));
+    expect(boxes().slice(0, 2).map(node => node.getAttribute('aria-label'))).toEqual(['"hot"', '"warm"']); expect(input('"hot"').checked).toBe(true); expect(f.onApply).not.toHaveBeenCalled();
+    await order('count-asc'); await order('source'); await click(text.apply); expect(f.onApply).toHaveBeenCalledWith(queryResultValueOptionsNode(f.capture, [55], 'include'));
+  });
+  it('排序与搜索保持完整勾选，清搜索恢复全部候选，不按当前页重计数', async () => {
+    const f = await mount(['z', 'a', 'a', null, null, null, '', 'NULL']); await check('"z"'); await order('count-desc'); expect(boxes()[0].getAttribute('aria-label')).toBe(text.nullValue);
+    await fill('NULL'); expect(boxes().map(node => node.getAttribute('aria-label'))).toEqual([text.nullValue, '"NULL"']); await click(text.selectMatches); await fill('');
+    expect(input('"z"').checked).toBe(true); expect(input(text.nullValue).checked).toBe(true); expect(input('"NULL"').checked).toBe(true); await click(text.apply);
+    expect(f.onApply).toHaveBeenCalledWith(queryResultValueOptionsNode(f.capture, [0, 2, 4], 'include'));
+  });
+  it('排序 ABA 撤销旧勾选、写入及排序事件，当前草稿仍可明确应用', async () => {
+    const f = await mount(); await check('"one"'); const oldApply = callback(button(text.apply)), oldBox = callback(input('"one"'), 'onChange'), oldOrder = callback(document.querySelectorAll('select').find(node => node.getAttribute('aria-label') === text.order)!, 'onChange');
+    await order('count-desc'); await order('source'); await act(async () => { oldApply(); oldBox({ target: { checked: false } }); oldOrder({ target: { value: 'count-asc' } }); });
+    expect(input('"one"').checked).toBe(true); expect(f.onApply).not.toHaveBeenCalled(); await click(text.apply); expect(f.onApply).toHaveBeenCalledOnce();
+  });
+  it('组合输入和失效父租约拒绝排序，拒绝后不触发父写入', async () => {
+    const f = await mount(); await check('"one"'); await act(async () => { callback(input(), 'onCompositionStart')(); }); await order('count-desc'); expect(boxes()[0].getAttribute('aria-label')).toBe(text.nullValue);
+    await act(async () => { callback(input(), 'onCompositionEnd')(); }); await f.allowed(false); await order('count-desc'); expect(f.onApply).not.toHaveBeenCalled(); expect(button(text.apply).disabled).toBe(true); expect(document.body.textContent).toContain(text.stale);
+  });
   it('以 region 显示完整计数，NULL、空串、文本 NULL 独立，初始不写入', async () => {
     const f = await mount(); expect(document.querySelector('section')!.getAttribute('role')).toBe('region'); expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(boxes().map(node => node.getAttribute('aria-label'))).toEqual([text.nullValue, text.emptyValue, '"NULL"', '"one"']); expect(boxes().every(node => !node.checked)).toBe(true);

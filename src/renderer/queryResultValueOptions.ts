@@ -8,6 +8,7 @@ import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
 export const queryResultValueOptionsLimits = Object.freeze({ rows: 100000, columns: 1024, entries: 2000, members: 128, valueUnits: 4096, units: 8 * 1024 * 1024, textWork: 32 * 1024 * 1024 });
 export interface QueryResultValueOption { readonly id: number; readonly literal: string | null; readonly count: number; readonly sqliteType?: SqliteResultFilterType; }
 export interface QueryResultValueOptions { readonly column: Readonly<ResultColumn>; readonly entries: readonly QueryResultValueOption[]; readonly rows: number; }
+export type QueryResultValueOptionsOrder = 'source' | 'count-desc' | 'count-asc';
 type Key = ReturnType<typeof queryResultFilterKey>;
 type Rows = readonly QueryResult['rows'][number][];
 type Binding = { live: boolean; columns: readonly ResultColumn[]; rows: Rows; columnRefs: ResultColumn[]; metadata: ResultColumn[]; rowRefs: QueryResult['rows'][number][]; cells: CellValue[]; selected: ResultColumn; sqlite?: { identity: QueryResult; source: SqliteResultFilterSource; literals: readonly (string | null)[] }; };
@@ -172,8 +173,9 @@ export function queryResultValueOptionsNode(capture: QueryResultValueOptions, id
   return Object.freeze({ mode: mode === 'include' || !nullable ? 'OR' : 'AND', children: Object.freeze([rule(mode === 'include' ? 'in' : 'notIn'), rule(mode === 'include' || !nullable ? 'null' : 'notNull')]) });
 }
 /** 仅搜索标签和原字面值；完整返回编号供界面分页，搜索预算失败不返回部分结果。 */
-export function searchQueryResultValueOptions(capture: QueryResultValueOptions, query: string): readonly number[] {
+export function searchQueryResultValueOptions(capture: QueryResultValueOptions, query: string, order: QueryResultValueOptionsOrder = 'source'): readonly number[] {
   current(capture);
+  if (order !== 'source' && order !== 'count-desc' && order !== 'count-asc') throw Error(text.invalid);
   if (typeof query !== 'string') throw Error(text.invalid);
   if (query.length > queryResultValueOptionsLimits.valueUnits) throw Error(text.searchBudget);
   const needle = query.toLowerCase();
@@ -185,5 +187,8 @@ export function searchQueryResultValueOptions(capture: QueryResultValueOptions, 
     if (work > queryResultValueOptionsLimits.textWork) throw Error(text.searchBudget);
     return { id: entry.id, label, literal };
   });
-  return Object.freeze(prepared.filter(entry => entry.label.includes(needle) || entry.literal.includes(needle)).map(entry => entry.id));
+  const matches = prepared.filter(entry => entry.label.includes(needle) || entry.literal.includes(needle));
+  // 对完整匹配集合排序后再交给界面分页；只移动编号，不改原候选、精确字面值或勾选身份。
+  if (order !== 'source') matches.sort((left, right) => (order === 'count-desc' ? -1 : 1) * (capture.entries[left.id].count - capture.entries[right.id].count) || left.id - right.id);
+  return Object.freeze(matches.map(entry => entry.id));
 }

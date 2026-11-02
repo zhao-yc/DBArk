@@ -59,6 +59,15 @@ const sqliteExpression: QueryResultFilterGroup = { mode: 'AND', children: [{ col
 function key(patch: Record<string, unknown> = {}) { return { key: 'Escape', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: false, keyCode: 27, defaultPrevented: false, nativeEvent: {}, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...patch }; }
 
 describe('结果条件面板集成不同值选择草稿', () => {
+  it('按次数整理仍从原全结果取值，SQLite同显示类型仅在父明确应用后替换', async () => {
+    const source = sqliteSource(); source.rows.push({ id: '5', kind: '2' }, { id: '6', kind: '2' }); source.sqliteStorage!.rows.push('it', 'it');
+    const before = structuredClone(source), f = await mount(sqliteExpression, source); expect(f.initial.sourceIndices).toEqual([2, 5, 6]);
+    await click(valuesText.openCondition(1), true); await act(async () => props(named(valuesText.order)).onChange({ target: { value: 'count-desc' } }));
+    const choices = named(valuesText.title).querySelectorAll('input').filter(node => node.type === 'checkbox'); expect(choices[0].getAttribute('aria-label')).toBe(valuesText.sqliteValue('2', 'text'));
+    await act(async () => props(named(valuesText.sqliteValue('2', 'real'))).onChange({ target: { checked: true } })); await click(valuesText.apply);
+    expect(f.onApply).not.toHaveBeenCalled(); expect(f.initial.sourceIndices).toEqual([2, 5, 6]); await click(text.apply);
+    const expression = f.onApply.mock.calls[0][0]; expect(f.filter.applyExpression(f.binding, f.initial, expression).sourceIndices).toEqual([1]); expect(source).toEqual(before); expect(f.invoke).not.toHaveBeenCalled();
+  });
   it.each(['include', 'exclude'] as const)('SQLite%s候选含原全部类型，按类型明确勾选，先写草稿后应用且无IPC', async matching => {
     const f = await mount(sqliteExpression, sqliteSource()), before = structuredClone(f.source); expect(f.initial.sourceIndices).toEqual([2]);
     await click(valuesText.openCondition(1), true);

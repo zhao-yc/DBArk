@@ -1,5 +1,7 @@
 # 使用指南
 
+查询结果的“从结果选择值”支持按次数最多／最少整理不同值。同次数沿首次出现顺序，切换保留勾选；先写入条件草稿，再应用筛选，不重新查询。次数仅涵盖已返回行；SQLite 同显示的存储类型分开选择。见[使用范围](development/query-result-value-frequency-20261103.md)。
+
 表页的“从服务器不同值筛选”支持按出现次数最多／最少优先读取，方便定位常见值和少见异常值。选择排序后须明确重新读取，再勾选并应用；排序针对服务器全部匹配分组，最多返回前 500 组。见[使用与验证边界](development/table-value-frequency-20261103.md)。
 
 MySQL／MariaDB SQL 正文也支持“跳转声明”：别名限定段或 CTE 引用上按 F12，或按住 Ctrl 点击，定位本文的别名、WITH 头或派生表。详见[使用及边界](development/mysql-definition-20261103.md)；SQLite 入口见[原说明](development/sqlite-definition-20261102.md)。正文和撤销状态保持，不执行 SQL、不读取目录，Mac／安装另验，暂不发布。

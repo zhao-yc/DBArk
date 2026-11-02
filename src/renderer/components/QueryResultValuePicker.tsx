@@ -1,14 +1,14 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { QueryResultFilterGroup, QueryResultFilterRule } from '../queryResultFilter';
-import { queryResultValueOptionLabel, queryResultValueOptionsLimits, queryResultValueOptionsNode, searchQueryResultValueOptions, type QueryResultValueOption, type QueryResultValueOptions } from '../queryResultValueOptions';
+import { queryResultValueOptionLabel, queryResultValueOptionsLimits, queryResultValueOptionsNode, searchQueryResultValueOptions, type QueryResultValueOption, type QueryResultValueOptions, type QueryResultValueOptionsOrder } from '../queryResultValueOptions';
 import { queryResultValueOptionsZh as text } from '../locales/queryResultValueOptions.zh-CN';
 import { UsageHelp, ErrorBox  } from './ui';
 
-type Draft = { query: string; mode: 'include' | 'exclude'; selected: readonly number[]; page: number; problem?: string };
+type Draft = { query: string; mode: 'include' | 'exclude'; order: QueryResultValueOptionsOrder; selected: readonly number[]; page: number; problem?: string };
 /** 不同值勾选只写入所属条件草稿；源捕获、父级租约和每次草稿身份共同拒绝迟到事件。 */
 export function QueryResultValuePicker({ capture, isCurrent, onApply, onClose }: { capture: QueryResultValueOptions; isCurrent(): boolean; onApply(node: QueryResultFilterRule | QueryResultFilterGroup): void; onClose(): void }) {
   const owner = useRef(capture), latestCapture = useRef(capture), invalid = useRef(false), closed = useRef(false), mounted = useRef(true), checking = useRef(false), composition = useRef(false), busy = useRef(false);
-  const [draft, setDraft] = useState<Draft>({ query: '', mode: 'include', selected: [], page: 0 }), [composing, setComposing] = useState(false), live = useRef(draft);
+  const [draft, setDraft] = useState<Draft>({ query: '', mode: 'include', order: 'source', selected: [], page: 0 }), [composing, setComposing] = useState(false), live = useRef(draft);
   live.current = draft; latestCapture.current = capture;
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   if (capture !== owner.current) invalid.current = true;
@@ -38,12 +38,16 @@ export function QueryResultValuePicker({ capture, isCurrent, onApply, onClose }:
   }
   let matches: readonly number[] = [], searchError: string | undefined;
   const valid = current();
-  if (valid) try { matches = searchQueryResultValueOptions(capture, draft.query); } catch (reason) { searchError = reason instanceof Error ? reason.message : text.error; }
+  if (valid) try { matches = searchQueryResultValueOptions(capture, draft.query, draft.order); } catch (reason) { searchError = reason instanceof Error ? reason.message : text.error; }
   const pages = Math.max(1, Math.ceil(matches.length / 50)), page = Math.min(draft.page, pages - 1), visible = matches.slice(page * 50, (page + 1) * 50), selected = new Set(draft.selected);
   /** 搜索完整匹配成功后才替换原搜索；分页不缩小搜索集合，也不改已勾选值。 */
   function search(query: string): void {
     if (!actionCurrent()) return;
     try { searchQueryResultValueOptions(capture, query); replace({ ...draft, query, page: 0, problem: undefined }, true); } catch (reason) { problem(reason); }
+  }
+  /** 切换只改本地展示序并回到首页；保留搜索、完整勾选与父条件，旧事件仍受原草稿代次约束。 */
+  function order(value: string): void {
+    if (value === 'source' || value === 'count-desc' || value === 'count-asc') replace({ ...draft, order: value, page: 0, problem: undefined });
   }
   /** 逐项勾选明确限定 128 种；超出时保留原集合，不静默丢弃已有值。 */
   function toggle(id: number, checked: boolean): void {
@@ -56,7 +60,7 @@ export function QueryResultValuePicker({ capture, isCurrent, onApply, onClose }:
   function selectMatches(): void {
     if (!actionCurrent() || composition.current) return;
     try {
-      const ids = [...new Set([...draft.selected, ...searchQueryResultValueOptions(capture, draft.query)])];
+      const ids = [...new Set([...draft.selected, ...searchQueryResultValueOptions(capture, draft.query, draft.order)])];
       if (ids.length > queryResultValueOptionsLimits.members) throw Error(text.selection);
       replace({ ...draft, selected: ids, problem: undefined });
     } catch (reason) { problem(reason); }
@@ -100,7 +104,9 @@ export function QueryResultValuePicker({ capture, isCurrent, onApply, onClose }:
     <p aria-live="polite">{text.counts(capture.rows, capture.entries.length, matches.length, draft.selected.length)}</p>
     <div className="query-result-value-picker-controls"><label>{text.search}<input aria-label={text.search} value={draft.query} disabled={!valid} onChange={event => search(event.target.value)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/></label>
       <label>{text.mode}<select aria-label={text.mode} value={draft.mode} disabled={!valid || composing} onChange={event => { const mode = event.target.value; if (mode === 'include' || mode === 'exclude') replace({ ...draft, mode, problem: undefined }); }}><option value="include">{text.include}</option><option value="exclude">{text.exclude}</option></select></label>
+      <label>{text.order}<select aria-label={text.order} value={draft.order} disabled={!valid || composing} onChange={event => order(event.target.value)}><option value="source">{text.orderSource}</option><option value="count-desc">{text.orderMost}</option><option value="count-asc">{text.orderLeast}</option></select></label>
       <button type="button" disabled={!valid || composing || !!searchError || !matches.length} onClick={selectMatches}>{text.selectMatches}</button><button type="button" disabled={!valid || composing || !draft.selected.length} onClick={() => replace({ ...draft, selected: [], problem: undefined })}>{text.clear}</button></div>
+    <p>{text.orderHint}</p>
     <div className="query-result-value-picker-list">{visible.map(id => {
       const entry = capture.entries[id], full = queryResultValueOptionLabel(entry), shortened = full.length > 80;
       // 完整只读详情在label之外，展开原生details不会误勾选；同前缀候选可核对真实尾部。
