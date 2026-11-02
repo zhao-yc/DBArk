@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import initSqlJs, { type Database } from 'sql.js';
 import { LocalStore } from '../../src/main/storage';
+import type { ConnectionProfile } from '../../src/shared/contracts';
 import { exportConnectionProfile, copyConnectionProfile } from '../../src/shared/connectionTransfer';
 import { queryResultPresetDocumentSchema, queryResultPresetLimits, queryResultPresetSaveSchema, validateQueryResultPresetBudget, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue } from '../../src/shared/queryResultPresets';
 
@@ -32,10 +33,10 @@ function packet(snapshot: QueryResultPresetStoredSnapshot, connectionId = target
 }
 
 /** 使用真实SQLite临时文件，不连接数据库服务、Electron窗口或系统凭据。 */
-async function fixture() {
+async function fixture(connection: ConnectionProfile = profile) {
   const directory = mkdtempSync(join(tmpdir(), 'dbark-query-result-presets-')); directories.push(directory);
   const file = join(directory, 'local.sqlite'), store = await LocalStore.open(file, wasm, protector);
-  store.saveConnection(profile);
+  store.saveConnection(connection);
   return { file, store };
 }
 
@@ -53,6 +54,27 @@ function document(count = 0) {
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('查询结果命名方案真实SQLite与CAS', () => {
+  it('SQLite方案保留类型分组、notType、精确值与排序，重启后读回且不绑定结果行或SQL', async () => {
+    const connection: ConnectionProfile = { id: target.connectionId, name: 'SQLite离线', dialect: 'sqlite', color: '#ffffff', group: '', sqlite: { filePath: 'C:\\dbark-isolated\\subject.sqlite', readOnly: true, busyTimeoutMs: 300 } };
+    const { file, store } = await fixture(connection), fields = ['a', 'b'].map(key => ({ key, name: '同名', type: 'SQLITE' }));
+    const typed: QueryResultPresetValue = { columns: fields, visible: [fields[1], fields[0]], frozenThrough: 'b', configuration: { expression: { mode: 'AND', children: [{ mode: 'OR', children: [{ column: 'a', operator: 'notIn', value: '', values: ['9223372036854775807'], sqliteType: 'integer' }, { column: 'a', operator: 'notType', value: '', sqliteType: 'integer' }, { column: 'a', operator: 'null', value: '' }] }, { column: 'b', operator: 'eq', value: '保留\0🚢', sqliteType: 'text', enabled: false }] }, sort: [{ column: 'a', direction: 'DESC', nulls: 'LAST' }, { column: 'b', direction: 'ASC', ignoreCase: true }] } };
+    const saved = store.saveQueryResultPreset({ ...packet(store.queryResultPresets(target)), name: 'SQLite精确整理', value: typed }); store.close();
+    const reopened = await LocalStore.open(file, wasm, protector); try {
+      const current = reopened.queryResultPresets(target); expect(current.entries).toEqual(saved.entries); expect(reopened.selectedQueryResultPreset({ ...packet(current), id: current.entries[0].id })).toEqual(typed);
+      expect(JSON.stringify(current.entries)).not.toContain('subject.sqlite'); expect(Object.keys(current.entries[0].value).sort()).toEqual(['columns', 'configuration', 'frozenThrough', 'visible']);
+    } finally { reopened.close(); }
+  });
+  it.each(['filePath', 'readOnly', 'busyTimeoutMs'] as const)('SQLite连接%s变更撤销旧CAS；恢复原值不能复活，明确覆盖后才能应用', async field => {
+    const connection: Extract<ConnectionProfile, { dialect: 'sqlite' }> = { id: target.connectionId, name: 'SQLite离线', dialect: 'sqlite', color: '#ffffff', group: '', sqlite: { filePath: 'C:\\dbark-isolated\\first.sqlite', readOnly: true, busyTimeoutMs: 300 } };
+    const { store } = await fixture(connection); try {
+      const saved = store.saveQueryResultPreset({ ...packet(store.queryResultPresets(target)), name: '方案', value }), id = saved.entries[0].id;
+      const changed = structuredClone(connection); if (field === 'filePath') changed.sqlite.filePath = 'C:\\dbark-isolated\\second.sqlite'; else if (field === 'readOnly') changed.sqlite.readOnly = false; else changed.sqlite.busyTimeoutMs++;
+      store.saveConnection(changed); expect(() => store.selectedQueryResultPreset({ ...packet(saved), id })).toThrow('变化');
+      const current = store.queryResultPresets(target); expect(current.entries[0].connectionDigest).not.toBe(current.source.connectionDigest); expect(() => store.selectedQueryResultPreset({ ...packet(current), id })).toThrow();
+      store.saveConnection(connection); expect(() => store.selectedQueryResultPreset({ ...packet(saved), id })).toThrow('变化');
+      const fresh = store.saveQueryResultPreset({ ...packet(store.queryResultPresets(target)), replaceId: id, name: '方案', value }); expect(store.selectedQueryResultPreset({ ...packet(fresh), id })).toEqual(value);
+    } finally { store.close(); }
+  });
   it('完整元数据、显隐顺序、停用嵌套筛选和全部排序选项重启后准确读回', async () => {
     const { file, store } = await fixture(), saved = store.saveQueryResultPreset({ ...packet(store.queryResultPresets(target)), name: '  精确整理  ', value });
     const id = saved.entries[0].id;

@@ -112,6 +112,18 @@ async function choose(value = id) { const node = document.querySelector('select'
 /** 仅捕获旧渲染的真实按钮闭包，用于验证迟到事件不能跨快照或草稿重放。 */
 function oldClick(label: string): () => void { const node = button(label) as any; return node[Object.keys(node).find(key => key.startsWith('__reactProps$'))!].onClick; }
 function commands() { return invoke.mock.calls.map(call => call[0]); }
+it('SQLite方案预览明确显示各值类型与其它类型判断，保存和回读应用不改写类型或原文', async () => {
+  const columns = [{ key: 'a', name: '同名', type: 'SQLITE' }];
+  const value = queryResultPresetValueSchema.parse({ columns, visible: columns, configuration: { expression: { mode: 'OR', children: [
+    ...(['integer', 'real', 'text', 'blob'] as const).map(sqliteType => ({ column: 'a', operator: 'in', value: '', values: [sqliteType === 'blob' ? '00ff' : '2'], sqliteType })),
+    { column: 'a', operator: 'notType', value: '', sqliteType: 'integer', enabled: false }, { column: 'a', operator: 'null', value: '' }
+  ] }, sort: [{ column: 'a', direction: 'DESC', nulls: 'LAST' }] } });
+  props = { ...props, value }; await mount(); await name('SQLite类型方案'); await click(text.create);
+  const preview = document.querySelector('[aria-label="' + text.preview + '"]')!;
+  for (const type of ['integer', 'real', 'text', 'blob'] as const) expect(preview.textContent).toContain(filterText.sqliteTypes[type]);
+  expect(preview.textContent).toContain(filterText.operators.notType); expect(preview.textContent).toContain('00ff');
+  await click(text.apply); expect(props.onApply).toHaveBeenCalledWith(value); expect(commands()).toEqual(['result.presets.list', 'result.presets.save', 'result.presets.read']);
+});
 function defer() { let resolve!: (value: unknown) => void, reject!: (reason: Error) => void; const promise = new Promise<unknown>((ok, fail) => { resolve = ok; reject = fail; }); nextResponse = () => promise; return { resolve, reject }; }
 async function settle(action: () => void) { await act(async () => { action(); await Promise.resolve(); }); }
 

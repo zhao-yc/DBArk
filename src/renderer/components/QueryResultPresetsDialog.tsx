@@ -19,6 +19,7 @@ function frozenSummary(value:QueryResultPresetValue):string {
 function ExpressionPreview({ group, value }: { group: QueryResultFilterGroup; value: QueryResultPresetValue }) {
   return <ul><li><strong>{group.mode === 'AND' ? filterText.and : filterText.or}</strong>{!group.children.length && <span> · {text.noFilters}</span>}<ul>{group.children.map((node, index) => 'children' in node ? <li key={index}><ExpressionPreview group={node} value={value}/></li> : <li key={index}>
     {node.enabled === false && <strong>{text.disabled} · </strong>}{value.columns.find(column => column.key === node.column)?.name || node.column} · {filterText.operators[node.operator]}
+    {node.sqliteType && <span> · {filterText.sqliteTypes[node.sqliteType]}</span>}
     {node.values ? <span> [{node.values.map(item => JSON.stringify(item)).join(', ')}]</span> : node.upper !== undefined ? <span> {JSON.stringify(node.value)} ～ {JSON.stringify(node.upper)}</span> : node.value !== '' ? <span> {JSON.stringify(node.value)}</span> : null}
     {node.ignoreCase && <span> · {text.ignoreCase}</span>}
   </li>)}</ul></li></ul>;

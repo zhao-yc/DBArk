@@ -9,6 +9,7 @@ import { queryResultHistoryZh as sortHistoryText } from '../../src/renderer/loca
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultValueOptionsZh as valueText } from '../../src/renderer/locales/queryResultValueOptions.zh-CN';
+import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -50,7 +51,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
   let owner = runtime.ownedDesktopResources(info), application = owner.application, page = owner.page, originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'sqlite-workspace-native.sqlite'), snapshotPath = join(directory, 'sqlite-result-types.dbark-result.json');
   const snapshotText = (require('../../src/renderer/locales/queryResultSnapshot.zh-CN') as typeof import('../../src/renderer/locales/queryResultSnapshot.zh-CN')).queryResultSnapshotUiZh;
-  let closed = false, armed = false, stage = '独立磁盘准备';
+  let closed = false, armed = false, stage = '独立磁盘准备', savedPresetId = '';
   /** 每个异步边界都核准确owner、profile、期限及单例配置，不借共享全局旧句柄继续操作。 */
   const check = () => {
     const current = runtime.ownedDesktopResources(info);
@@ -123,6 +124,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
         snapshotRequest = command.endsWith('.save') ? 'save' : 'open';
       }
       if (/clipboard/i.test(command) || command === 'files.path' || command.startsWith('table.') || command.startsWith('schema.') || command.startsWith('serverMonitor.')) return deny(command);
+      if (command.startsWith('result.presets.') && value?.connectionId !== state.connectionId) return deny('非本例连接整理方案');
       if (command === 'files.choose') {
         if (input.profileId || value?.purpose !== 'sqlite-database' || typeof value.sqliteConnectionId !== 'string' || !value.sqliteConnectionId || state.connectionId && state.connectionId !== value.sqliteConnectionId) return deny('SQLite文件用途/连接归属');
         state.connectionId = value.sqliteConnectionId; pickerRequest = true;
@@ -334,6 +336,31 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => picker.getByRole('checkbox', { name: valueText.nullValue, exact: true }).check());
     await step(() => picker.getByLabel(valueText.mode, { exact: true }).selectOption('exclude')); await writeValues(); await applyFiltering([]); await clearFiltering();
     expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
+    stage = '命名整理方案经原Main保存、重命名和回读，筛选排序一起应用';
+    await openFiltering(); await step(() => filtering.getByRole('button', { name: filterText.add, exact: true }).click());
+    await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c4'));
+    await step(() => filtering.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('eq'));
+    await step(() => filtering.getByLabel(filterText.input + ' 1', { exact: true }).fill('2')); await applyFiltering([ascending[0]]);
+    const presets = () => page.getByRole('dialog', { name: presetText.title, exact: true });
+    const openPresets = async () => { await step(async () => (await navigationMenuItem(query(), { name: presetText.open, exact: true }, check)).click()); await step(() => expect(presets().getByLabel(presetText.choose, { exact: true })).toBeEnabled()); };
+    const closePresets = async () => { await step(() => presets().getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(presets()).toHaveCount(0)); };
+    await openPresets(); await step(() => presets().getByLabel(presetText.name, { exact: true }).fill('SQLite类型整理'));
+    await step(() => presets().getByRole('button', { name: presetText.create, exact: true }).click());
+    await step(() => expect(presets().getByRole('button', { name: presetText.apply, exact: true })).toBeEnabled());
+    savedPresetId = await step(() => presets().getByLabel(presetText.choose, { exact: true }).inputValue()); if (!/^[a-f0-9-]{36}$/.test(savedPresetId)) throw Error('本例方案未返回准确编号');
+    await step(() => expect(presets().getByRole('region', { name: presetText.preview, exact: true })).toContainText(filterText.sqliteTypes.text));
+    await step(() => presets().getByLabel(presetText.name, { exact: true }).fill('类型与原排序'));
+    await step(() => presets().getByRole('button', { name: presetText.rename, exact: true }).click());
+    await step(() => expect(presets().getByRole('option', { name: '类型与原排序', exact: true })).toHaveCount(1));
+    await closePresets(); await clearFiltering(); await step(() => exactHeader.click()); await step(() => exactHeader.click());
+    await step(() => expect.poll(shownIntegers).toEqual(originalOrder));
+    await openPresets(); await step(() => presets().getByLabel(presetText.choose, { exact: true }).selectOption(savedPresetId));
+    await step(async () => info.attach('SQLite整理方案原值类型及排序预览', { body: await page.screenshot(), contentType: 'image/png' }));
+    await step(() => presets().getByRole('button', { name: presetText.apply, exact: true }).click());
+    await step(() => expect(presets()).toHaveCount(0)); await step(() => expect.poll(shownIntegers).toEqual([ascending[0]])); await step(() => expect(blobHeader).toHaveAttribute('aria-sort', 'descending'));
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.undo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(originalOrder));
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.redo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual([ascending[0]])); await clearFiltering();
+    expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
     stage = '原结果菜单真实保存逐格类型快照';
     await step(async () => (await navigationMenuItem(query(), { name: snapshotText.save, exact: true }, check)).click());
     await step(() => expect(query().getByText(snapshotText.saved, { exact: true })).toBeVisible());
@@ -366,6 +393,22 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(query().getByText(snapshotText.opened, { exact: true })).toBeVisible());
     await step(() => expect(query().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible());
     expect((require('node:fs') as typeof import('node:fs')).readFileSync(snapshotPath, 'utf8')).toBe(JSON.stringify(savedSnapshot) + '\n');
+    stage = '新owner从本机持久化方案应用到原类型快照，随后准确删除本例方案';
+    await step(async () => (await navigationMenuItem(query(), { name: presetText.open, exact: true }, check)).click());
+    const restoredPresets = page.getByRole('dialog', { name: presetText.title, exact: true });
+    await step(() => expect(restoredPresets.getByLabel(presetText.choose, { exact: true })).toBeEnabled());
+    await step(() => restoredPresets.getByLabel(presetText.choose, { exact: true }).selectOption(savedPresetId));
+    await step(() => expect(restoredPresets.getByRole('region', { name: presetText.preview, exact: true })).toContainText(filterText.sqliteTypes.text));
+    await step(() => restoredPresets.getByRole('button', { name: presetText.apply, exact: true }).click());
+    await step(() => expect(restoredPresets).toHaveCount(0));
+    await step(() => expect(query().getByRole('grid').getByText('-9223372036854775808', { exact: true })).toBeVisible());
+    await step(() => expect(query().getByRole('grid').getByText('9223372036854775807', { exact: true })).toHaveCount(0));
+    await step(async () => (await navigationMenuItem(query(), { name: presetText.open, exact: true }, check)).click());
+    await step(() => expect(restoredPresets.getByLabel(presetText.choose, { exact: true })).toBeEnabled());
+    await step(() => restoredPresets.getByLabel(presetText.choose, { exact: true }).selectOption(savedPresetId));
+    await step(() => restoredPresets.getByRole('button', { name: presetText.remove, exact: true }).click());
+    await step(() => expect(restoredPresets.getByText(presetText.empty, { exact: true })).toBeVisible());
+    await step(() => restoredPresets.getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(restoredPresets).toHaveCount(0));
     const secondFacts = await step(audit); expect(secondFacts.executions).toBe(1); expect(secondFacts.pickerCalls).toBe(0); expect(secondFacts.denied).toEqual([]); expect(secondFacts.forks.every(path => /(?:^|[\\/])sqliteWorker\.cjs$/.test(path))).toBe(true); expect(runtime.pageErrors).toEqual([]);
     expect(firstFacts.snapshots).toEqual({ saved: 1, opened: 0 }); expect(secondFacts.snapshots).toEqual({ saved: 0, opened: 1 });
     expect(firstFacts.resultTypes).toEqual([[{ codes: ['itnbi', 'itnbt'], columns: ['c0', 'c1', 'c2', 'c3', 'c4'], rowCount: 2 }], [{ codes: [], columns: [], rowCount: 0 }], [{ codes: [], columns: [], rowCount: 0 }]]);
