@@ -6,7 +6,8 @@ import { sqliteExportTextFunction, type SqliteFileIdentity, type SqliteValue } f
 import { readSqliteTableCatalogue, quoteSqliteIdentifier as q, type SqliteTableCatalogue, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 import { sqliteTableHasAutoincrement } from './sqliteSchemaExport';
 import { buildSqliteTableCreateDefault } from '../shared/sqliteTableCreate';
-import { normalizeSqliteTableRebuildDefinitionName } from '../shared/sqliteTableRebuildPlan';
+import { compileSqliteTableRebuildDefinition, normalizeSqliteTableRebuildDefinitionName } from '../shared/sqliteTableRebuildPlan';
+import type { SqliteTableForeignKeyEdit } from '../shared/sqliteTableForeignKeys';
 import { buildSqliteTableRebuildPlan, copySqliteTableRebuildNames, type SqliteTableRebuildNames } from '../shared/sqliteTableRebuildExecutionPlan';
 import { sqliteRebuildStoredKeyEquivalent, type SqliteRebuildComparisonInput } from '../engine/sqlite/rebuildComparison';
 import { sqliteTableRebuildInspectionSchema, sqliteTableRebuildEditsSchema, sqliteTableRebuildLimits as limits, sqliteTableRebuildMessages as text, type SqliteTableRebuildInspectInput, type SqliteTableRebuildInspectOutput, type SqliteTableRebuildPreviewInput, type SqliteTableRebuildPreviewOutput, type SqliteTableRebuildApplyInput, type SqliteTableRebuildReleaseInput, type SqliteTableRebuildChange, type SqliteTableRebuildFact, type SqliteTableRebuildOutcome } from '../shared/sqliteTableRebuild';
@@ -170,7 +171,7 @@ export async function verifySqliteTableRebuild(driver: SqliteDriverSession, snap
 
 type Compiled = ReturnType<typeof buildSqliteTableRebuildPlan>;
 export interface SqliteTableRebuildCatalogue extends SqliteTableRebuildSnapshot { id: string; expires: number; bytes: number; }
-export interface SqliteTableRebuildClaim { id: string; catalogue: SqliteTableRebuildCatalogue; compiled: Compiled; changes: SqliteTableRebuildChange[]; columnOrder?: string[]; expires: number; bytes: number; confirmed: boolean; }
+export interface SqliteTableRebuildClaim { id: string; catalogue: SqliteTableRebuildCatalogue; compiled: Compiled; changes: SqliteTableRebuildChange[]; columnOrder?: string[]; foreignKeyEdits?: SqliteTableForeignKeyEdit[]; expires: number; bytes: number; confirmed: boolean; }
 /** sqlite_sequence的目标存在性与原rowid/水位精确保留，不把复制后的MAX(id)冒充原序列。 */
 function targetSequence(facts: RebuildFacts, table: string): SqliteValue[] | undefined {
   const values = facts.sequences.filter(row => row[1] === table); if (values.length > 1) throw Error('SQLite重建目标有重复序列，无法准确恢复');
@@ -208,11 +209,11 @@ export class SqliteTableRebuild {
     return { check: () => { if (released || this.revoked.has(value)) throw Error(stale); }, release: () => { if (released) return; released = true; const count = this.pins.get(value)!; if (count > 1) this.pins.set(value, count - 1); else { this.pins.delete(value); if (this.catalogues.get(value.id) !== value) this.catalogueBytes -= value.bytes; } } };
   }
   /** 预览仅编译固定计划，不CREATE候选或尝试用户默认值表达式。 */
-  preview(catalogue: SqliteTableRebuildCatalogue, rawChanges: SqliteTableRebuildChange[], names: SqliteTableRebuildNames, columnOrder?: readonly string[]): SqliteTableRebuildPreviewOutput {
-    if (this.revoked.has(catalogue)) throw Error(stale); const changes = sqliteTableRebuildEditsSchema.parse(rawChanges), compiled = buildSqliteTableRebuildPlan(publicSource(catalogue), changes, names, columnOrder); this.prune(); const bytes = Buffer.byteLength(JSON.stringify({ catalogue, compiled, changes }));
+  preview(catalogue: SqliteTableRebuildCatalogue, rawChanges: SqliteTableRebuildChange[], names: SqliteTableRebuildNames, columnOrder?: readonly string[], foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[]): SqliteTableRebuildPreviewOutput {
+    if (this.revoked.has(catalogue)) throw Error(stale); const changes = sqliteTableRebuildEditsSchema.parse(rawChanges), compiled = buildSqliteTableRebuildPlan(publicSource(catalogue), changes, names, columnOrder, foreignKeyEdits); this.prune(); const bytes = Buffer.byteLength(JSON.stringify({ catalogue, compiled, changes, ...(compiled.foreignKeyEdits ? { foreignKeyEdits: compiled.foreignKeyEdits } : {}) }));
     if (this.previews.size >= limits.previews || this.previewBytes + bytes > limits.previewBytes) throw Error('SQLite重建预览能力预算已满');
-    const value: SqliteTableRebuildClaim = { id: randomUUID(), catalogue, compiled, changes: structuredClone(changes), ...(compiled.columnOrder ? { columnOrder: [...compiled.columnOrder] } : {}), expires: Date.now() + limits.previewLifetimeMs, bytes, confirmed: false }; this.previews.set(value.id, value); this.previewBytes += bytes;
-    return { previewId: value.id, catalogueId: catalogue.id, target: { ...catalogue.target }, sql: [...compiled.sql], confirmation: 'main.' + catalogue.target.table, changedTypes: compiled.changedTypes, changedDefaults: compiled.changedDefaults, ...(compiled.changedOrder ? { changedOrder: true as const } : {}), warnings: [...compiled.warnings], expiresAt: new Date(value.expires).toISOString() };
+    const value: SqliteTableRebuildClaim = { id: randomUUID(), catalogue, compiled, changes: structuredClone(changes), ...(compiled.columnOrder ? { columnOrder: [...compiled.columnOrder] } : {}), ...(compiled.foreignKeyEdits ? { foreignKeyEdits: structuredClone(compiled.foreignKeyEdits) } : {}), expires: Date.now() + limits.previewLifetimeMs, bytes, confirmed: false }; this.previews.set(value.id, value); this.previewBytes += bytes;
+    return { previewId: value.id, catalogueId: catalogue.id, target: { ...catalogue.target }, sql: [...compiled.sql], confirmation: 'main.' + catalogue.target.table, changedTypes: compiled.changedTypes, changedDefaults: compiled.changedDefaults, ...(compiled.changedOrder ? { changedOrder: true as const } : {}), ...(compiled.changedForeignKeys ? { changedForeignKeys: compiled.changedForeignKeys } : {}), warnings: [...compiled.warnings], expiresAt: new Date(value.expires).toISOString() };
   }
   /** 确认失败也消费准确preview，不能把同一次确认自动重放。 */
   claim(input: SqliteTableRebuildApplyInput): SqliteTableRebuildClaim { this.prune(); const value = this.previews.get(input.previewId); if (!value) throw Error(stale); this.dropPreview(value.id); return { ...value, confirmed: input.confirmation === 'main.' + value.catalogue.target.table }; }
@@ -233,16 +234,19 @@ function expectedColumns(snapshot: SqliteTableRebuildSnapshot, changes: SqliteTa
 }
 function userColumns(columns: Column[], ordinal?: string): Column[] { return columns.filter(column => column.name !== ordinal).map((column, cid) => ({ ...column, cid })); }
 /** 精确原生对象列表只允许计划目标及其附属索引/触发器发生重建。 */
-async function verifyRetained(before: RebuildFacts, after: RebuildFacts, table: string, losslessColumns: string[], control: SqliteTableBrowseControl, changedOrder = false): Promise<void> {
+async function verifyRetained(before: RebuildFacts, after: RebuildFacts, table: string, losslessColumns: string[], control: SqliteTableBrowseControl, changedOrder = false, expectedForeignKeys?: SqliteValue[][]): Promise<void> {
   const owned = (object: { type: string; name: string; table: string }) => object.type === 'table' && object.name === table || ['index', 'trigger'].includes(object.type) && fold(object.table) === fold(table);
   const original = before.objects.filter(object => !owned(object)), current = after.objects.filter(object => !owned(object)); if (!equal(original, current)) throw Error('SQLite重建使非目标schema对象定义发生变化');
   for (const root of before.roots.filter(root => !owned(root))) if (!equal(root, after.roots.find(value => value.type === root.type && value.name === root.name))) throw Error('SQLite重建使非目标对象rootpage发生变化');
   for (const object of before.objects.filter(object => ['index', 'trigger'].includes(object.type) && fold(object.table) === fold(table) && object.sql !== null)) if (!equal(object, after.objects.find(value => value.type === object.type && value.name === object.name))) throw Error('SQLite原附属索引或触发器未按准确原SQL恢复');
   const explicit = (facts: RebuildFacts) => facts.objects.filter(object => ['index', 'trigger'].includes(object.type) && fold(object.table) === fold(table) && object.sql !== null); if (!equal(explicit(before), explicit(after))) throw Error('SQLite重建出现非计划附属索引或触发器');
-  const foreign = (facts: RebuildFacts) => changedOrder ? normalizedForeignDefinitions(facts.foreignKeys, table) : facts.foreignKeys;
-  if (!equal(foreign(before), foreign(after)) || !equal(before.sequences, after.sequences)) throw Error('SQLite重建外键定义或原序列存在性/水位/rowid变化');
+  // 只有完整计划和native候选都核过的新目标外键可变；其他表的外键仍来自准确原目录。
+  const normalizeForeign = changedOrder || expectedForeignKeys !== undefined;
+  const expected = expectedForeignKeys === undefined ? before.foreignKeys : [...before.foreignKeys.filter(row => typeof row[0] !== 'string' || fold(row[0]) !== fold(table)), ...expectedForeignKeys];
+  const foreign = (rows: SqliteValue[][]) => normalizeForeign ? normalizedForeignDefinitions(rows, table) : rows;
+  if (!equal(foreign(expected), foreign(after.foreignKeys)) || !equal(before.sequences, after.sequences)) throw Error('SQLite重建外键定义或原序列存在性/水位/rowid变化');
   if (after.foreign.unavailable || before.foreign.unavailable && after.foreign.rows.length !== 0) throw Error('SQLite重建造成新增外键违规或无法确认完整外键安全');
-  const violations = (facts: RebuildFacts) => facts.foreign.identities.map(value => changedOrder && fold(value.child) === fold(table) ? { ...value, foreignKey: foreignConstraintIdentity(facts.foreignKeys, table, value.foreignKey) } : value);
+  const violations = (facts: RebuildFacts) => facts.foreign.identities.map(value => normalizeForeign && fold(value.child) === fold(table) ? { ...value, foreignKey: foreignConstraintIdentity(facts.foreignKeys, table, value.foreignKey) } : value);
   if (!before.foreign.unavailable) await assertForeignSubset(violations(before), violations(after), table, losslessColumns, control);
   if (before.validViews.some(name => !after.validViews.includes(name))) throw Error('SQLite重建使原有效视图失效');
 }
@@ -295,14 +299,14 @@ export function sqliteTableRebuildNotSent(claim: SqliteTableRebuildClaim, input:
 /** 官方12步在固定私有writer事务内完成；双验证表补足移除ordinal后的真实逐值证明。 */
 export async function applySqliteTableRebuild(driver: SqliteDriverSession, claim: SqliteTableRebuildClaim, input: SqliteTableRebuildApplyRequest, control: SqliteTableRebuildControl): Promise<SqliteTableRebuildOutcome> {
   const snapshot = claim.catalogue; let begun = false, sent = false, committed = false, rollback = false, verified = false, completedStatements = 0, warning = false;
-  let sourceRows = '0', copiedRows = '0', verifiedRows = '0', before!: RebuildFacts, candidateSql = '', candidateIndexes: Index[] = [];
+  let sourceRows = '0', copiedRows = '0', verifiedRows = '0', before!: RebuildFacts, candidateSql = '', candidateIndexes: Index[] = [], candidateForeignKeys: SqliteValue[][] | undefined;
   const fact = (phase: SqliteTableRebuildFact['phase']): SqliteTableRebuildFact => ({ operationId: input.operationId, target: { ...snapshot.target }, phase, requestedStatements: claim.compiled.sql.length, completedStatements, sourceRows, copiedRows, verifiedRows, commitMayHaveBeenSent: sent || phase === 'commit-pending', commitAcknowledged: committed, rollbackAcknowledged: rollback });
   const record = (phase: SqliteTableRebuildFact['phase']) => { const value: unknown = input.recordRebuildFact(fact(phase)); if (value && typeof (value as { then?: unknown }).then === 'function') throw Error('SQLite重建事实必须同步持久化'); };
   const check = () => { input.assertCurrent(); control.check(); };
   const compare = async (request: SqliteRebuildComparisonInput) => { check(); const result = await driver.rebuildCompare(request, { onProgress: () => { check(); } }); check(); if (result.sourceRows !== sourceRows || result.candidateRows !== sourceRows || result.verifiedRows !== sourceRows) throw Error('SQLite重建全量比较数量与写锁内COUNT不一致'); };
   try {
     check(); if (!claim.confirmed || snapshot.profile.sqlite.readOnly || driver.readOnly || !driver.isRebuildWriter || driver.transaction !== false || !equal(driver.identity, snapshot.identity) || driver.version !== snapshot.version) throw Error(stale);
-    copySqliteTableRebuildNames(claim.compiled.names); if (!equal(buildSqliteTableRebuildPlan(publicSource(snapshot), claim.changes, claim.compiled.names, claim.columnOrder), claim.compiled)) throw Error(stale); await assertFile(snapshot, control); record('not-sent');
+    copySqliteTableRebuildNames(claim.compiled.names); if (!equal(buildSqliteTableRebuildPlan(publicSource(snapshot), claim.changes, claim.compiled.names, claim.columnOrder, claim.foreignKeyEdits), claim.compiled)) throw Error(stale); await assertFile(snapshot, control); record('not-sent');
     try { await driver.execute('BEGIN IMMEDIATE'); begun = true; } catch (reason) { if (reason instanceof SqliteDriverError && reason.completedStatements === 1 && reason.completedResults[0]?.transaction === true) begun = true; throw reason; }
     check(); await assertFile(snapshot, control); before = await readFacts(driver, snapshot.target.table, control); if (!sameFacts(snapshot.facts, before)) throw Error(stale); sourceRows = await countRows(driver, snapshot.target.table, control); record('writing');
     const names = claim.compiled.names, sourceFields = before.columns.map(column => column.name), identity = claim.compiled.candidateRowIdentity, expected = expectedColumns(snapshot, claim.changes, claim.columnOrder), fields = expected.map(column => column.name);
@@ -316,6 +320,13 @@ export async function applySqliteTableRebuild(driver: SqliteDriverSession, claim
         if (!equal(await readColumns(driver, names.candidate, control), expected)) throw Error('SQLite移除内部序号后完整用户字段定义不一致');
         await compare(comparison(names.candidate, names.verificationCandidate, names.verificationOrdinal, fields, identity, identity));
         const rows = await read(driver, 'SELECT ' + exact('sql') + ' FROM main.sqlite_schema WHERE type=\'table\' AND name=? COLLATE BINARY', [names.candidate], 1, control); if (rows.length !== 1 || typeof rows[0][0] !== 'string') throw Error('SQLite候选最终定义无法确认'); candidateSql = rows[0][0] as string;
+        if (claim.foreignKeyEdits) {
+          const planned = compileSqliteTableRebuildDefinition({ table: snapshot.target.table, tableSql: before.catalogue.schemaSql, columns: before.columns.map(column => ({ name: column.name, hidden: column.hidden })), candidateName: names.candidate, changes: claim.changes, columnOrder: claim.columnOrder, foreignKeyEdits: claim.foreignKeyEdits });
+          const normalized = (tableSql: string) => normalizeSqliteTableRebuildDefinitionName({ table: names.candidate, tableSql, columns: expected.map(column => ({ name: column.name, hidden: column.hidden })) }, names.verificationCandidate);
+          if (normalized(candidateSql) !== normalized(planned.candidateSql)) throw Error('SQLite目标外键及完整候选声明与确认计划不一致');
+          candidateForeignKeys = (await read(driver, 'SELECT ?,f.id,f.seq,f."table",f."from",f."to",f.on_update,f.on_delete,f."match" FROM pragma_foreign_key_list(?,\'main\') AS f ORDER BY f.id,f.seq LIMIT 10001', [snapshot.target.table, names.candidate], 10001, control));
+          if (candidateForeignKeys.length > 10000) throw Error('SQLite目标外键完整目录超过预算');
+        }
         candidateIndexes = await readIndexes(driver, names.candidate, control);
       }
       if (step.role === 'verification-drop') {
@@ -333,7 +344,7 @@ export async function applySqliteTableRebuild(driver: SqliteDriverSession, claim
     const after = await readFacts(driver, snapshot.target.table, control); if (!equal(after.columns, expected) || before.strict !== after.strict || before.withoutRowid !== after.withoutRowid || before.autoIncrement !== after.autoIncrement || !sameDefinition(candidateSql, after.catalogue.schemaSql, claim)) throw Error('SQLite最终表定义、字段或表选项与已验证候选不一致');
     const originalIndexes = claim.compiled.changedOrder ? reorderedIndexes(before.indexes, before.columns, expected) : before.indexes;
     const automatic = (indexes: Index[]) => indexes.filter(index => index.origin !== 'c').map(({ name: _name, ...index }) => JSON.stringify(index)).sort(); if (!equal(automatic(candidateIndexes), automatic(after.indexes)) || !equal(originalIndexes.filter(index => index.origin === 'c'), after.indexes.filter(index => index.origin === 'c'))) throw Error('SQLite原生自动索引或原explicit索引后验不一致');
-    await verifyRetained(before, after, snapshot.target.table, claim.compiled.losslessColumns, { ...control, check }, claim.compiled.changedOrder); if (await countRows(driver, snapshot.target.table, control) !== sourceRows) throw Error('SQLite最终准确行数发生变化');
+    await verifyRetained(before, after, snapshot.target.table, claim.compiled.losslessColumns, { ...control, check }, claim.compiled.changedOrder, candidateForeignKeys); if (await countRows(driver, snapshot.target.table, control) !== sourceRows) throw Error('SQLite最终准确行数发生变化');
     verified = true; await assertFile(snapshot, control); record('commit-pending'); check(); control.beginCommit(); sent = true; await driver.execute('COMMIT'); committed = true; try { record('committed'); } catch { warning = true; }
   } catch (reason) {
     if (sent && reason instanceof SqliteDriverError && reason.completedStatements === 1 && reason.completedResults.length === 1 && reason.completedResults[0].index === 0 && reason.completedResults[0].rows === 0 && !reason.completedResults[0].truncated && reason.completedResults[0].transaction === false) { committed = true; warning = true; try { record('committed'); } catch { /* 真实COMMIT statementEnd不能因末回包丢失被抹去。 */ } }

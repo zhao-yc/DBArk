@@ -9,6 +9,14 @@ function inspection(): SqliteTableRebuildInspectOutput { return { catalogueId: '
 const change = { column: 'note', declaredType: '', default: { kind: 'text' as const, value: "引号'🚢\0; DEFAULT SQL" } };
 
 describe('SQLite表重建严格合同', () => {
+  it('纯外键补丁可预览而空编辑和额外SQL仍拒绝，变化计数须与非空变更一致', () => {
+    const foreignKeyEdits = [{ kind: 'add', definition: { name: null, columns: ['note'], referencedTable: 'parent', referencedColumns: [], onDelete: 'SET NULL', onUpdate: 'CASCADE', deferral: 'deferred' } }];
+    expect(validateCommand('sqlite.tableRebuild.preview', { catalogueId: 'c', changes: [], foreignKeyEdits, taskId: 't' })).toEqual({ catalogueId: 'c', changes: [], foreignKeyEdits, taskId: 't' });
+    expect(sqliteTableRebuildPreviewSchema.safeParse({ catalogueId: 'c', changes: [], foreignKeyEdits: [], taskId: 't' }).success).toBe(false);
+    expect(sqliteTableRebuildPreviewSchema.safeParse({ catalogueId: 'c', changes: [], foreignKeyEdits: [{ ...foreignKeyEdits[0], sql: 'DROP TABLE target' }], taskId: 't' }).success).toBe(false);
+    const output = { previewId: 'p', catalogueId: 'c', target, sql: ['计划'], confirmation: 'main.' + target.table, changedTypes: 0, changedDefaults: 0, changedForeignKeys: 1, warnings: [], expiresAt: '2030-01-01T00:00:00Z' };
+    expect(sqliteTableRebuildPreviewOutputSchema.safeParse(output).success).toBe(true); expect(sqliteTableRebuildPreviewOutputSchema.safeParse({ ...output, changedForeignKeys: 0 }).success).toBe(false);
+  });
   it('四命令仅接收typed补丁及准确cap确认，不暴露私有随机名、任意SQL、路径或回执', () => {
     const inspect = { ...target, taskId: 'inspect' }, preview = { catalogueId: 'c', changes: [change], taskId: 'preview' }, apply = { previewId: 'p', taskId: 'apply', confirmation: 'main.' + target.table };
     for (const command of ['sqlite.tableRebuild.inspect', 'sqlite.tableRebuild.preview', 'sqlite.tableRebuild.apply', 'sqlite.tableRebuild.release'] as const) expect(publicCommands[command]).toBe(true);

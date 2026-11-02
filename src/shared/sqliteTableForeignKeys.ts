@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { sqliteTableCreateActions } from './sqliteTableCreate';
 
-/** 已有表外键编辑的有界结构模型；此阶段不接入IPC或签发写能力。 */
+/** 已有表外键编辑的有界结构模型；复用重建预览链，模型本身不签发写能力。 */
 export const sqliteTableForeignKeyLimits = { edits: 128, keys: 1024, parts: 1024, bytes: 2 * 1024 * 1024 } as const;
 const encoder = new TextEncoder();
 const fold = (value: string) => value.replace(/[A-Z]/g, character => character.toLowerCase());

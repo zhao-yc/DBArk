@@ -1,14 +1,14 @@
 import { copySqliteTableRebuildColumnOrder } from './sqliteTableRebuild';
 import { buildSqliteTableCreateDefault, sqliteTableCreateColumnSchema, type SqliteTableCreateDefault } from './sqliteTableCreate';
-import { buildSqliteTableForeignKey, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition } from './sqliteTableForeignKeys';
+import { buildSqliteTableForeignKey, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from './sqliteTableForeignKeys';
 
-/** 重建编译只修改声明跨度；不推断数据转换、不签发执行能力，也不重新序列化既有约束。 */
+/** 重建编译只修改明确声明跨度；不推断数据转换、不签发执行能力，未修改约束原文保留。 */
 export const sqliteTableRebuildPlanLimits = { sqlBytes: 2 * 1024 * 1024, tokens: 300000, columns: 1024, changes: 128, nesting: 256 } as const;
 export interface SqliteRebuildSourceColumn { name: string; hidden: number; }
 export interface SqliteRebuildColumnChange { column: string; declaredType?: string; default?: SqliteTableCreateDefault; }
 export interface SqliteTableRebuildDefinitionInput {
   table: string; tableSql: string; columns: readonly SqliteRebuildSourceColumn[];
-  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[];
+  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[]; foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[];
 }
 export interface SqliteTableRebuildDefinition {
   candidateSql: string;
@@ -304,6 +304,12 @@ export function compileSqliteTableRebuildCopyDefinition(input: SqliteTableRebuil
 
 /** 普通候选与带私有编号候选共享同一跨度编译，不复制或重新实现默认值/约束解析。 */
 function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn?: string, reorderedBase = false): SqliteTableRebuildDefinition {
+  const foreignDescriptor = Object.getOwnPropertyDescriptor(input, 'foreignKeyEdits'); if (foreignDescriptor && (!foreignDescriptor.enumerable || !('value' in foreignDescriptor))) throw invalid();
+  if (foreignDescriptor?.value !== undefined) {
+    // 先完成准确原外键跨度变更，再沿原类型/default及实际重排路径编译，不靠伪造字段补丁开门。
+    const foreign = compileSqliteTableForeignKeys(input, foreignDescriptor.value);
+    return compileDefinition({ ...input, tableSql: foreign.tableSql, foreignKeyEdits: undefined }, ordinalColumn, true);
+  }
   const orderDescriptor = Object.getOwnPropertyDescriptor(input, 'columnOrder'); if (orderDescriptor && (!orderDescriptor.enumerable || !('value' in orderDescriptor))) throw invalid();
   const rawOrder = orderDescriptor?.value;
 

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 已有外键管理推进至[Main／独立事务链](development/sqlite-foreign-keys-engine-20261102.md)：原能力链接受结构化补丁，完整候选声明及具体外键违规均须核验；真实 Main→worker 成功／回滚、516 项相关及原窗口回归通过。新编辑区与 GUI 接续，不增加完整 R02 或发行计数。
+
 SQLite 已有约束设计推进至[外键声明编译](development/sqlite-foreign-keys-plan-20261102.md)：准确区分行内／表级、重名／重复声明，生成结构化增改删并保留未改片段。488 项相关、类型／构建及原重建成功／回滚通过；Main／新外键事务／界面继续，不能算已可用 R02 外键管理或完整工作包。
 
 SQLite 高频查询补齐[固定结果对比](development/sqlite-result-comparison-20261102.md)：明确键、完整类型帧、四类差异和原类型明细；同原文的类型变化也识别。Windows 原整例与相关回归通过；完整库表比较同步及 Mac／安装继续，不增加完整工作包或发行计数。

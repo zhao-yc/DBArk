@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 已有外键管理已[贯通 Main 与独立 writer](development/sqlite-foreign-keys-engine-20261102.md)：结构化预览、两级重算、完整候选及外键语义／具体违规核对，支持增改删与类型／顺序组合。516 项相关、类型／构建及原 Windows 重建两整例通过；新编辑区、诊断和 GUI 接续，尚不计完整可用功能，暂不发布。
+
 SQLite 已有外键管理推进至[声明定位与增改删编译](development/sqlite-foreign-keys-plan-20261102.md)：结构模型、准确原文／位置、复合字段和真实 SQLite 动作核对已完成，Main／事务／界面接续。488 项相关、类型／构建及原重建两整例通过；尚无新用户入口，不计可用功能，暂不发布。
 
 SQLite 查询结果新增[固定结果对比](development/sqlite-result-comparison-20261102.md)：明确原类型匹配键、四类差异、同显示值类型变化及明细；不重查。1779 项相关、类型／构建及 Windows 原工作区真实滚动专项通过；Mac／安装另验，暂不发布。

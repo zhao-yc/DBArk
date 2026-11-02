@@ -1,5 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fork, type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { SqliteRuntime } from '../../src/main/sqliteRuntime';
+import { SqliteTableRebuildMain } from '../../src/main/sqliteTableRebuildMain';
+import type { ColumnsInvocation } from '../../src/main/columnsMainCapabilities';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,8 +12,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import { SqliteDriverSession } from '../../src/engine/sqlite/session';
 import type { SqliteProcessExit, SqliteProcessTransport, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
-import type { SqliteConnectionProfile } from '../../src/shared/contracts';
+import type { SqliteConnectionProfile, TaskEvent, TaskRecord } from '../../src/shared/contracts';
 import { assertSqliteTableRebuildFactTransition, sqliteTableRebuildFactSchema, sqliteTableRebuildOutcomeSchema, sqliteTableRebuildLimits, type SqliteTableRebuildChange, type SqliteTableRebuildFact } from '../../src/shared/sqliteTableRebuild';
+import { inspectSqliteTableForeignKeys } from '../../src/shared/sqliteTableRebuildPlan';
+import type { SqliteTableForeignKeyDefinition, SqliteTableForeignKeyEdit } from '../../src/shared/sqliteTableForeignKeys';
 import { buildSqliteTableRebuildPlan, type SqliteTableRebuildNames } from '../../src/shared/sqliteTableRebuildExecutionPlan';
 import { SqliteTableRebuild, inspectSqliteTableRebuild, verifySqliteTableRebuild, applySqliteTableRebuild, type SqliteTableRebuildClaim, type SqliteTableRebuildControl, type SqliteTableRebuildSnapshot } from '../../src/main/sqliteTableRebuild';
 
@@ -35,13 +41,90 @@ function transport(observe?: (message: SqliteWorkerResponse, forward: () => void
 function control(check: () => void = () => {}): SqliteTableRebuildControl { return { check, beginCleanup: () => {}, cleanupFailed: () => {}, beginCommit: () => {} }; }
 async function open(profile: SqliteConnectionProfile, rebuild = false, create: () => SqliteProcessTransport = transport) { const options = { path: profile.sqlite.filePath!, readOnly: !rebuild, busyTimeoutMs: profile.sqlite.busyTimeoutMs }, session = await (rebuild ? SqliteDriverSession.openRebuild(create, options) : SqliteDriverSession.open(create, options)); sessions.add(session); return session; }
 async function inspect(profile: SqliteConnectionProfile): Promise<SqliteTableRebuildSnapshot> { const driver = await open(profile), snapshot = await inspectSqliteTableRebuild(driver, profile, 'target', control()); await driver.close(); return snapshot; }
-async function prepare(profile: SqliteConnectionProfile, changes: SqliteTableRebuildChange[] = [{ column: 'note', default: { kind: 'text', value: '新默认' } }]) {
-  const snapshot = await inspect(profile), store = new SqliteTableRebuild(), inspection = store.publish(snapshot), catalogue = store.catalogue(inspection.catalogueId), rebuildNames = names(), plan = store.preview(catalogue, changes, rebuildNames), claim = store.claim({ previewId: plan.previewId, confirmation: plan.confirmation, taskId: '重建提交' }); expect(plan.sql).toEqual(buildSqliteTableRebuildPlan(inspection, changes, rebuildNames).sql); return { snapshot, store, inspection, catalogue, plan, claim };
+async function prepare(profile: SqliteConnectionProfile, changes: SqliteTableRebuildChange[] = [{ column: 'note', default: { kind: 'text', value: '新默认' } }], options: { order?: string[]; foreignKeyEdits?: SqliteTableForeignKeyEdit[] } = {}) {
+  const snapshot = await inspect(profile), store = new SqliteTableRebuild(), inspection = store.publish(snapshot), catalogue = store.catalogue(inspection.catalogueId), rebuildNames = names(), plan = store.preview(catalogue, changes, rebuildNames, options.order, options.foreignKeyEdits), claim = store.claim({ previewId: plan.previewId, confirmation: plan.confirmation, taskId: '重建提交' }); expect(plan.sql).toEqual(buildSqliteTableRebuildPlan(inspection, changes, rebuildNames, options.order, options.foreignKeyEdits).sql); return { snapshot, store, inspection, catalogue, plan, claim };
 }
 async function apply(profile: SqliteConnectionProfile, claim: SqliteTableRebuildClaim, options: { control?: SqliteTableRebuildControl; create?: () => SqliteProcessTransport; record?(fact: SqliteTableRebuildFact): void } = {}) {
   const writer = await open(profile, true, options.create), facts: SqliteTableRebuildFact[] = [], result = await applySqliteTableRebuild(writer, claim, { previewId: claim.id, confirmation: 'main.target', taskId: '重建提交', operationId: randomUUID(), assertCurrent: () => {}, recordRebuildFact: fact => { sqliteTableRebuildFactSchema.parse(fact); if (facts.length) assertSqliteTableRebuildFactTransition(facts.at(-1)!, fact); options.record?.(fact); facts.push(structuredClone(fact)); } }, options.control ?? control()); const parsed = sqliteTableRebuildOutcomeSchema.parse(result); if (writer.isUsable && writer.transaction === false) await writer.close(); return { result: parsed, facts, writer };
 }
 function noPrivateObjects(profile: SqliteConnectionProfile) { expect(disk(profile, db => db.prepare("SELECT name FROM main.sqlite_schema WHERE name LIKE '__dbark_rebuild_%'").all())).toEqual([]); }
+
+describe('SQLite已有外键经真实独立writer重建', () => {
+  const foreign = (patch: Partial<SqliteTableForeignKeyDefinition> = {}): SqliteTableForeignKeyDefinition => ({ name: 'fk_new', columns: ['pid'], referencedTable: 'parent', referencedColumns: ['id'], onDelete: 'RESTRICT', onUpdate: 'CASCADE', deferral: 'deferred', ...patch });
+  /** 本组在外层清理之前等待真实退出，明确证明没有依赖kill兜底来使测试通过。 */
+  afterEach(async () => { for (const process of processes) { expect(await process.exited).toEqual({ code: 0, signal: null }); expect(process.kills).toBe(0); } });
+  it.each([true, false])('实际Main→Runtime→worker完整外键能力链，WR父关系有效=%s，保任务隐私及正常退出', async valid => {
+    const profile = fixture(`CREATE TABLE parent(id INTEGER PRIMARY KEY); INSERT INTO parent VALUES(1); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER,note TEXT) WITHOUT ROWID; INSERT INTO target VALUES(7,${valid ? 1 : 99},'PRIVATE_FK_ROW')`), before = typed(profile, 'SELECT * FROM target'), originalSchema = schema(profile), tasks = new Map<string, TaskRecord>(), saved: TaskRecord[] = [], events: TaskEvent[] = [], requests: string[] = [], epoch = {};
+    const emit = (event: TaskEvent) => { events.push(structuredClone(event)); const task = tasks.get(event.taskId); if (task) { const next = { ...task, status: event.status, progress: event.progress, message: event.message }; tasks.set(next.id, next); saved.push(structuredClone(next)); } };
+    const runtime = new SqliteRuntime({ resolveProfile: id => id === profile.id ? profile : undefined, createTransport: transport, emit });
+    const owner = { owner: { document: {}, contents: new EventEmitter() } } as ColumnsInvocation;
+    const main = new SqliteTableRebuildMain({ assert(value) { if (value !== owner) throw Error('其他文档'); }, same: (left, right) => left === right, revision: () => 1, epoch: () => epoch, available: () => {}, closing: () => false, profile: id => id === profile.id ? profile : undefined,
+      request: (command, input) => { requests.push(command); return runtime.request(command, input); }, task: id => tasks.get(id), replace: task => tasks.set(task.id, task), save: task => { saved.push(structuredClone(task)); }, event: emit });
+    try {
+      const inspected = await main.request(owner, 'sqlite.tableRebuild.inspect', { connectionId: profile.id, database: 'main', table: 'target', taskId: 'bridge-inspect' }) as Awaited<ReturnType<typeof prepare>>['inspection'];
+      const preview = await main.request(owner, 'sqlite.tableRebuild.preview', { catalogueId: inspected.catalogueId, changes: [], foreignKeyEdits: [{ kind: 'add', definition: foreign({ name: 'PRIVATE_FK_NAME' }) }], taskId: 'bridge-preview' }) as Awaited<ReturnType<typeof prepare>>['plan'];
+      expect(preview.changedForeignKeys).toBe(1); expect(schema(profile)).toEqual(originalSchema);
+      const result = await main.request(owner, 'sqlite.tableRebuild.apply', { previewId: preview.previewId, confirmation: preview.confirmation, taskId: 'bridge-apply' }) as Awaited<ReturnType<typeof apply>>['result'];
+      expect(result).toMatchObject({ outcome: valid ? 'committed' : 'rolled-back', fact: { commitAcknowledged: valid, rollbackAcknowledged: !valid } }); expect(typed(profile, 'SELECT * FROM target')).toEqual(before);
+      if (!valid) expect(schema(profile)).toEqual(originalSchema); else expect(disk(profile, db => db.prepare('PRAGMA foreign_key_check').all())).toEqual([]);
+      const summaries = JSON.stringify(saved); for (const literal of ['PRIVATE_FK_NAME', 'PRIVATE_FK_ROW', 'FOREIGN KEY', profile.sqlite.filePath!]) expect(summaries).not.toContain(literal);
+      expect(requests.every(command => command.startsWith('sqlite.tableRebuild.'))).toBe(true); expect(events.some(event => event.taskId === 'bridge-apply' && event.status === (valid ? 'completed' : 'failed'))).toBe(true); noPrivateObjects(profile);
+    } finally { await main.drain(); await runtime.close(); }
+  });
+  it('仅新增FK也必须完整复制核验，保原rowid、精确值、索引、触发器、入向关系与序列', async () => {
+    const profile = fixture("CREATE TABLE parent(id INTEGER PRIMARY KEY); INSERT INTO parent VALUES(10); CREATE TABLE target(id INTEGER PRIMARY KEY AUTOINCREMENT,pid INTEGER,note TEXT,amount,gen TEXT AS(coalesce(note,'空')) STORED); INSERT INTO target VALUES(1,10,'中文🚢',9223372036854775807),(2,NULL,NULL,X'00ff'),(9000,NULL,'高水位',NULL); DELETE FROM target WHERE id=9000; CREATE INDEX kept ON target(pid,note); CREATE TABLE incoming(pid INTEGER REFERENCES target(id) ON DELETE CASCADE); INSERT INTO incoming VALUES(1); CREATE TABLE audit(n TEXT); CREATE TRIGGER kept_delete AFTER DELETE ON target BEGIN INSERT INTO audit VALUES('不能执行'); END; CREATE VIEW kept_view AS SELECT * FROM target"), before = typed(profile), sequence = disk(profile, db => db.prepare('SELECT rowid,* FROM sqlite_sequence').all());
+    const { claim, plan } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign() }] }); expect(plan).toMatchObject({ changedTypes: 0, changedDefaults: 0, changedForeignKeys: 1 });
+    const outcome = await apply(profile, claim); expect(outcome.result).toMatchObject({ outcome: 'committed', definitionVerified: true, fact: { copiedRows: '2', verifiedRows: '2', commitAcknowledged: true } }); expect(typed(profile)).toEqual(before);
+    disk(profile, db => { expect(db.prepare('PRAGMA foreign_key_list(target)').get()).toMatchObject({ table: 'parent', from: 'pid', to: 'id', on_update: 'CASCADE', on_delete: 'RESTRICT' }); expect(db.prepare('SELECT rowid,* FROM sqlite_sequence').all()).toEqual(sequence); expect(db.prepare('SELECT * FROM incoming').all()).toEqual([{ pid: 1 }]); expect(db.prepare('SELECT * FROM audit').all()).toEqual([]); const kept = db.prepare('SELECT * FROM kept_view'); kept.setReadBigInts(true); expect(kept.all()).toHaveLength(2); db.exec('PRAGMA foreign_keys=ON; BEGIN;'); expect(() => db.exec('DELETE FROM parent WHERE id=10')).toThrow(/FOREIGN KEY/); db.exec('UPDATE parent SET id=11 WHERE id=10'); expect(db.prepare('SELECT pid FROM target WHERE id=1').get()!.pid).toBe(11); db.exec('ROLLBACK'); }); expect(typed(profile)).toEqual(before); noPrivateObjects(profile);
+  });
+  it('新增FK遇到原孤儿行整批回滚，不能以复制成功或行数相等代替关系检查', async () => {
+    const profile = fixture('CREATE TABLE parent(id INTEGER PRIMARY KEY); INSERT INTO parent VALUES(1); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER,note TEXT); INSERT INTO target VALUES(1,99,\'原\')'), before = schema(profile), rows = typed(profile, 'SELECT * FROM target');
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign() }] }); expect((await apply(profile, claim)).result).toMatchObject({ outcome: 'rolled-back', fact: { rollbackAcknowledged: true, commitAcknowledged: false } }); expect(schema(profile)).toEqual(before); expect(typed(profile, 'SELECT * FROM target')).toEqual(rows); noPrivateObjects(profile);
+  });
+  it('新增self FK在候选改回原名后仍指向准确原表，重建不触发CASCADE而未来删除生效', async () => {
+    const profile = fixture('CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER,note TEXT); INSERT INTO target VALUES(1,NULL,\'父\'),(2,1,\'子\')'), before = typed(profile, 'SELECT * FROM target ORDER BY id');
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign({ referencedTable: 'TARGET', onDelete: 'CASCADE' }) }] }); expect((await apply(profile, claim)).result.outcome).toBe('committed'); expect(typed(profile, 'SELECT * FROM target ORDER BY id')).toEqual(before);
+    disk(profile, db => { expect(db.prepare('PRAGMA foreign_key_list(target)').get()!.table).toBe('target'); db.exec('PRAGMA foreign_keys=ON; BEGIN; DELETE FROM target WHERE id=1'); expect(db.prepare('SELECT count(*) AS n FROM target').get()!.n).toBe(0); db.exec('ROLLBACK'); }); expect(typed(profile, 'SELECT * FROM target ORDER BY id')).toEqual(before); noPrivateObjects(profile);
+  });
+  it('替换inline FK为新动作并保留另一外键，native编号变化不当作未知约束漂移', async () => {
+    const profile = fixture('CREATE TABLE parent(id INTEGER PRIMARY KEY); INSERT INTO parent VALUES(1); CREATE TABLE other(id INTEGER PRIMARY KEY); INSERT INTO other VALUES(2); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER CONSTRAINT old_fk REFERENCES parent(id) ON DELETE CASCADE,otherid INTEGER REFERENCES other(id),note TEXT); INSERT INTO target VALUES(7,1,2,\'原\')'), snapshot = await inspect(profile), old = inspectSqliteTableForeignKeys({ table: 'target', tableSql: snapshot.facts.catalogue.schemaSql, columns: snapshot.facts.columns });
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'replace', ordinal: 0, expectedSql: old[0].sql, definition: foreign({ name: 'old_fk', onDelete: 'RESTRICT' }) }] }); expect((await apply(profile, claim)).result.outcome).toBe('committed');
+    disk(profile, db => { const keys = db.prepare('PRAGMA foreign_key_list(target)').all(); expect(keys).toHaveLength(2); expect(keys.find(key => key.table === 'parent')!.on_delete).toBe('RESTRICT'); expect(keys.find(key => key.table === 'other')!.from).toBe('otherid'); }); noPrivateObjects(profile);
+  });
+  it('移除错误引用可修复原不可检查关系，保留原数据与未计划对象', async () => {
+    const profile = fixture('PRAGMA foreign_keys=OFF; CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES missing(id),note TEXT); INSERT INTO target VALUES(1,99,\'保留\'); PRAGMA foreign_keys=ON'), snapshot = await inspect(profile), old = inspectSqliteTableForeignKeys({ table: 'target', tableSql: snapshot.facts.catalogue.schemaSql, columns: snapshot.facts.columns }), before = typed(profile, 'SELECT * FROM target');
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'remove', ordinal: 0, expectedSql: old[0].sql }] }); expect((await apply(profile, claim)).result.outcome).toBe('committed'); expect(disk(profile, db => db.prepare('PRAGMA foreign_key_check').all())).toEqual([]); expect(typed(profile, 'SELECT * FROM target')).toEqual(before); noPrivateObjects(profile);
+  });
+  it('移除一项可保留另一项原具体违规，按完整语义对应而非旧native编号', async () => {
+    const profile = fixture('PRAGMA foreign_keys=OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE other(id INTEGER PRIMARY KEY); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES parent(id),otherid INTEGER REFERENCES other(id),note TEXT); INSERT INTO target VALUES(1,98,99,\'原违规\')'), snapshot = await inspect(profile), old = inspectSqliteTableForeignKeys({ table: 'target', tableSql: snapshot.facts.catalogue.schemaSql, columns: snapshot.facts.columns });
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'remove', ordinal: 0, expectedSql: old[0].sql }] }); expect((await apply(profile, claim)).result.outcome).toBe('committed'); expect(disk(profile, db => db.prepare('PRAGMA foreign_key_check').all())).toMatchObject([{ table: 'target', rowid: 1, parent: 'other' }]); noPrivateObjects(profile);
+  });
+  it('改为另一父关系但违规条数相同仍回滚，不能把旧错误借给新约束', async () => {
+    const profile = fixture('PRAGMA foreign_keys=OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE other(id INTEGER PRIMARY KEY); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES parent(id),note TEXT); INSERT INTO target VALUES(1,99,\'原\')'), before = schema(profile), snapshot = await inspect(profile), old = inspectSqliteTableForeignKeys({ table: 'target', tableSql: snapshot.facts.catalogue.schemaSql, columns: snapshot.facts.columns });
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'replace', ordinal: 0, expectedSql: old[0].sql, definition: foreign({ referencedTable: 'other' }) }] }); expect((await apply(profile, claim)).result.outcome).toBe('rolled-back'); expect(schema(profile)).toEqual(before); noPrivateObjects(profile);
+  });
+  it('新增相同语义的重复坏FK仍增加违规多重性，不能借归一合并通过', async () => {
+    const profile = fixture('PRAGMA foreign_keys=OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER REFERENCES parent(id),note TEXT); INSERT INTO target VALUES(1,99,\'原\')'), before = schema(profile);
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign({ onDelete: 'NO ACTION', onUpdate: 'NO ACTION', deferral: 'not-deferrable' }) }] }); expect((await apply(profile, claim)).result.outcome).toBe('rolled-back'); expect(schema(profile)).toEqual(before); noPrivateObjects(profile);
+  });
+  it('外键与类型及列重排共同提交，WR复合主键和父亲和性／NOCASE语义保持', async () => {
+    const profile = fixture("CREATE TABLE parent(a TEXT COLLATE NOCASE,b INTEGER,PRIMARY KEY(a,b)) WITHOUT ROWID; INSERT INTO parent VALUES('A',10); CREATE TABLE target(a TEXT,b INTEGER,note INTEGER,PRIMARY KEY(a,b)) WITHOUT ROWID; INSERT INTO target VALUES('a',10,7)");
+    const { claim } = await prepare(profile, [{ column: 'note', declaredType: 'TEXT' }], { order: ['note', 'b', 'a'], foreignKeyEdits: [{ kind: 'add', definition: foreign({ columns: ['a', 'b'], referencedColumns: [] }) }] }); expect((await apply(profile, claim)).result.outcome).toBe('committed'); disk(profile, db => { expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]); expect(db.prepare('PRAGMA table_info(target)').all().map(column => column.name)).toEqual(['note', 'b', 'a']); expect(db.prepare('SELECT a,b,note,typeof(note) AS storage FROM target').get()).toEqual({ a: 'a', b: 10, note: '7', storage: 'text' }); }); noPrivateObjects(profile);
+  });
+  it('父字段不是可靠唯一候选时，即使两侧现有值相同也整批回滚', async () => {
+    const profile = fixture('CREATE TABLE parent(id INTEGER); INSERT INTO parent VALUES(1); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER,note TEXT); INSERT INTO target VALUES(1,1,\'原\')'), before = schema(profile);
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign() }] }); expect((await apply(profile, claim)).result.outcome).toBe('rolled-back'); expect(schema(profile)).toEqual(before); noPrivateObjects(profile);
+  });
+  it('预览后新增孤儿数据仍在写锁内全量检查，回滚保留外部新数据而非回放旧快照', async () => {
+    const profile = fixture('CREATE TABLE parent(id INTEGER PRIMARY KEY); INSERT INTO parent VALUES(1); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER,note TEXT); INSERT INTO target VALUES(1,1,\'原\')');
+    const { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign() }] }); disk(profile, db => db.exec('INSERT INTO target VALUES(2,99,\'预览后外部新增\')')); const before = typed(profile, 'SELECT * FROM target ORDER BY id');
+    expect((await apply(profile, claim)).result).toMatchObject({ outcome: 'rolled-back', fact: { sourceRows: '2', copiedRows: '2', rollbackAcknowledged: true } }); expect(typed(profile, 'SELECT * FROM target ORDER BY id')).toEqual(before); expect(disk(profile, db => db.prepare('PRAGMA foreign_key_list(target)').all())).toEqual([]); noPrivateObjects(profile);
+  });
+  it('领取后篡改外键补丁在BEGIN前拒绝，原schema及数据不变', async () => {
+    const profile = fixture('CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE target(id INTEGER PRIMARY KEY,pid INTEGER,note TEXT)'), before = schema(profile), { claim } = await prepare(profile, [], { foreignKeyEdits: [{ kind: 'add', definition: foreign() }] });
+    (claim.foreignKeyEdits![0] as { kind: 'add'; definition: SqliteTableForeignKeyDefinition }).definition.onDelete = 'CASCADE'; expect((await apply(profile, claim)).result).toMatchObject({ outcome: 'not-sent', fact: { completedStatements: 0 } }); expect(schema(profile)).toEqual(before); noPrivateObjects(profile);
+  });
+});
 
 describe('SQLite完整表重建事务、依赖与物理数据保护', () => {
   it('default-only完整重建保留所有typed行/生成列/附属SQL/序列高水位，未来行才见新默认', async () => {
