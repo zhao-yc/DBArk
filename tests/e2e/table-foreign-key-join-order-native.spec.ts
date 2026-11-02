@@ -38,14 +38,18 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
     // Windows缩放会对原生客户区取整；按实际CSS视口校准本例唯一窗口，保留精确1024断言。
     const measured = await step(() => page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })));
     const sizing: { width: number; height: number }[] = [], requested = { width: 1024, height: 680 };
+    /** 仅采集原唯一窗口与显示几何，不读标题/URL/正文，不切分辨率或修改原尺寸门槛。 */
+    const geometry = async () => ({ measured, sizing: [...sizing], requested: { ...requested }, page: await step(() => page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio }))), native: await step(() => app.evaluate(({ BrowserWindow, screen }) => { const windows = BrowserWindow.getAllWindows(); if (windows.length !== 1) throw Error('不是原唯一窗口'); const window = windows[0], bounds = window.getBounds(), display = screen.getDisplayMatching(bounds); return { bounds, contentBounds: window.getContentBounds(), contentSize: window.getContentSize(), zoom: window.webContents.getZoomFactor(), display: { bounds: display.bounds, workArea: display.workArea, scaleFactor: display.scaleFactor } }; })) });
+    await info.attach('JOIN组件初始显示几何', { body: JSON.stringify(await geometry()), contentType: 'application/json' });
     // 保留请求基准，避免把已经取整的getContentSize再次当作请求；只校准原窗口，最多四步。
     for (let index = 0; index < 4; index++) {
       const actual = await step(() => page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))); sizing.push(actual); if (actual.width === 1024 && actual.height === 680) break;
-      if (Math.abs(actual.width - 1024) > 32 || Math.abs(actual.height - 680) > 32) throw Error('JOIN原窗口尺寸无法确认'); requested.width += 1024 - actual.width; requested.height += 680 - actual.height;
+      if (Math.abs(actual.width - 1024) > 32 || Math.abs(actual.height - 680) > 32) { await info.attach('JOIN组件失败显示几何', { body: JSON.stringify(await geometry()), contentType: 'application/json' }); throw Error('JOIN原窗口尺寸无法确认'); } requested.width += 1024 - actual.width; requested.height += 680 - actual.height;
       await step(() => app.evaluate(({ BrowserWindow }, requested) => { const windows = BrowserWindow.getAllWindows(); if (windows.length !== 1) throw Error('不是原唯一窗口'); windows[0].setContentSize(requested.width, requested.height); }, requested));
       await step(() => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))));
     }
     await info.attach('JOIN组件原尺寸请求', { body: JSON.stringify({ measured, sizing, originalRequest: { width: 1024, height: 680 } }), contentType: 'application/json' });
+    await info.attach('JOIN组件校准后显示几何', { body: JSON.stringify(await geometry()), contentType: 'application/json' });
     await step(() => expect.poll(() => page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 1024, height: 680 }));
     await info.attach('JOIN组件视口校准', { body: JSON.stringify({ measured, target: { width: 1024, height: 680 }, originalDpiPreserved: true }), contentType: 'application/json' });
     await step(async () => (await navigationMenuItem(page.locator('.table-tab'), { name: text.entry, exact: true }, check)).click()); await step(() => dialog().getByRole('button', { name: text.preview, exact: true }).click());
