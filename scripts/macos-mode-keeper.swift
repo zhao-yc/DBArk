@@ -26,7 +26,13 @@ let desktopJob = environment["GITHUB_REPOSITORY"] == "zhao-yc/DBArk" && environm
     ["refs/heads/main", "refs/heads/codex/query-result-range-filter-20261020"].contains(desktopRef) &&
     environment["GITHUB_WORKFLOW_REF"] == "zhao-yc/DBArk/.github/workflows/ci.yml@" + desktopRef &&
     ["push", "workflow_dispatch"].contains(environment["GITHUB_EVENT_NAME"] ?? "")
-guard environment["GITHUB_ACTIONS"] == "true", sourceBranch || installedJob || desktopJob,
+// JOIN源码只新增准确main托管job，不借desktop或冻结安装入口放行其它工作流/PR/本机。
+let joinJob = environment["GITHUB_REPOSITORY"] == "zhao-yc/DBArk" && environment["GITHUB_JOB"] == "join-components" &&
+    environment["GITHUB_REF"] == "refs/heads/main" &&
+    environment["GITHUB_WORKFLOW_REF"] == "zhao-yc/DBArk/.github/workflows/foreign-key-join.yml@refs/heads/main" &&
+    ["push", "workflow_dispatch"].contains(environment["GITHUB_EVENT_NAME"] ?? "")
+
+guard environment["GITHUB_ACTIONS"] == "true", sourceBranch || installedJob || desktopJob || joinJob,
       environment["MODE_KEEPER_RUNNER_ENVIRONMENT"] == "github-hosted" else {
     FileHandle.standardError.write(Data("会话作用域仅限已批准源码分支或指定arm64安装托管job\n".utf8)); exit(78)
 }

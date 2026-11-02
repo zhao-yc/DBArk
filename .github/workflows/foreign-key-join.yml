@@ -6,6 +6,9 @@ on:
     paths:
       - '.github/workflows/foreign-key-join.yml'
       - 'scripts/foreign-key-join-ci.mjs'
+      - 'scripts/foreign-key-join-macos-ci.mjs'
+      - 'scripts/macos-mode-keeper.swift'
+      - 'scripts/macos-mode-keeper-policy.mjs'
       - 'src/renderer/tableForeignKeyJoin*.ts'
       - 'src/renderer/components/TableForeignKeyJoin*.tsx'
       - 'src/renderer/locales/tableForeignKeyJoin*.ts'
@@ -23,6 +26,9 @@ on:
     paths:
       - '.github/workflows/foreign-key-join.yml'
       - 'scripts/foreign-key-join-ci.mjs'
+      - 'scripts/foreign-key-join-macos-ci.mjs'
+      - 'scripts/macos-mode-keeper.swift'
+      - 'scripts/macos-mode-keeper-policy.mjs'
       - 'src/renderer/tableForeignKeyJoin*.ts'
       - 'src/renderer/components/TableForeignKeyJoin*.tsx'
       - 'src/renderer/locales/tableForeignKeyJoin*.ts'
@@ -68,10 +74,40 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm exec install-electron
       - name: 单次运行查询生成和来源保护单元
-        run: pnpm exec vitest run tests/unit/foreign-key-join-ci.test.ts tests/unit/table-foreign-key-join.test.ts tests/unit/table-foreign-key-join-filters.test.ts tests/unit/table-foreign-key-join-groups.test.ts tests/unit/table-foreign-key-join-summary.test.ts tests/unit/table-foreign-key-join-having.test.ts tests/unit/table-foreign-key-join-distinct.test.ts tests/unit/table-foreign-key-join-intent.test.ts tests/unit/ui-table-foreign-key-join.test.tsx tests/unit/join-order-native-guard.test.ts --maxWorkers=1
+        run: pnpm exec vitest run tests/unit/foreign-key-join-ci.test.ts tests/unit/foreign-key-join-macos-ci.test.ts tests/unit/table-foreign-key-join.test.ts tests/unit/table-foreign-key-join-filters.test.ts tests/unit/table-foreign-key-join-groups.test.ts tests/unit/table-foreign-key-join-summary.test.ts tests/unit/table-foreign-key-join-having.test.ts tests/unit/table-foreign-key-join-distinct.test.ts tests/unit/table-foreign-key-join-intent.test.ts tests/unit/ui-table-foreign-key-join.test.tsx tests/unit/join-order-native-guard.test.ts tests/unit/macos-mode-keeper-images.test.ts --maxWorkers=1
+      - name: 标记准确main托管arm64 JOIN显示租约
+        id: join-display-context
+        if: >-
+          runner.os == 'macOS' && runner.arch == 'ARM64' && github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        shell: bash
+        run: echo 'enabled=true' >> "$GITHUB_OUTPUT"
+      - name: 核对上下文并编译JOIN临时显示租约
+        if: steps.join-display-context.outputs.enabled == 'true'
+        shell: bash
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e "import { requireJoinKeeperCI } from './scripts/foreign-key-join-macos-ci.mjs'; requireJoinKeeperCI([], process.platform, process.arch, process.env)"
+          mkdir -p .cache/foreign-key-join-keeper test-results/foreign-key-join-display-lease
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -m
+            printf 'ImageOS=%s\nImageVersion=%s\n' "${ImageOS:-未知}" "${ImageVersion:-未知}"
+            /usr/bin/xcrun swiftc --version
+          } > test-results/foreign-key-join-display-lease/context.log 2>&1
+          cat test-results/foreign-key-join-display-lease/context.log
+          /usr/bin/xcrun swiftc scripts/macos-mode-keeper.swift -o .cache/foreign-key-join-keeper/keeper > test-results/foreign-key-join-display-lease/compile.log 2>&1
+      - name: 临时显示租约内单次运行原十二例并核对恢复
+        if: steps.join-display-context.outputs.enabled == 'true'
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: node scripts/foreign-key-join-macos-ci.mjs
       # Vite直接加载真实渲染组件；本门不使用数据库、系统剪贴板或已安装客户端。
       # 保留原120秒、worker1、零重试及原成功/失败目录处理，不代替安装包验收。
       - name: 单次运行原十二个明暗原生组件用例
+        if: steps.join-display-context.outputs.enabled != 'true'
         run: node scripts/foreign-key-join-ci.mjs
       - name: 记录准确提交和实际平台
         if: always()
@@ -83,5 +119,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: foreign-key-join-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/foreign-key-join/
+          path: |
+            test-results/foreign-key-join/
+            test-results/foreign-key-join-display-lease/
           if-no-files-found: warn
