@@ -28,6 +28,10 @@ import { createSqliteCompletionProvider } from '../sqliteCompletionProvider';
 import { createSqlDefinitionProvider } from '../sqlDefinitionProvider';
 import { createMysqlDefinitionAnalysis } from '../mysqlDefinitionAnalysis';
 import { createSqlSignatureProvider } from '../sqlSignatureProvider';
+import LocalReferencesWorker from '../localReferences.worker?worker';
+import { LocalReferencesWorkerClient } from '../localReferencesWorkerClient';
+import { createLocalReferencesAnalysis } from '../localReferencesAnalysis';
+import { createSqlReferencesProvider } from '../sqlReferencesProvider';
 import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared/sqliteCompletion';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
@@ -96,6 +100,21 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const signatures = createSqlSignatureProvider({ model: () => editorRef.current?.getModel() ?? null, current, dialect, scope: completion, state: sessionId => invoke('query.completionState', { sessionId }) });
     const registration = monaco.languages.registerSignatureHelpProvider('sql', signatures.provider);
     return () => { registration.dispose(); signatures.dispose(); };
+  }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
+  /** 本文引用复用声明语义，独占线程；只在原MySQL/MariaDB模型生效，不注册跨文件或SQLite回退。 */
+  useEffect(() => {
+    if (readOnly || !contentReady || dialect === 'sqlite' || !completion) return;
+    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]') && sameCompletionScope(completionRef.current, completion);
+    const worker = createLocalReferencesAnalysis({ scope: completion, current,
+      facts: () => completionServerFacts.get(completion.connectionId, completion.connectionVersion),
+      state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => new LocalReferencesWorker()),
+    });
+    const references = createSqlReferencesProvider({ worker, current, sourceLimit: completionLimits.sourceUnits, model: () => editorRef.current?.getModel() ?? null,
+      // 走Monaco正式命令收起尚未选择的候选，不改正文；避免候选框覆盖引用列表标题。
+      prepare: () => editorRef.current?.trigger('dbark.localReferences', 'hideSuggestWidget', {}),
+    });
+    const registration = monaco.languages.registerReferenceProvider('sql', references.provider);
+    return () => { registration.dispose(); void references.dispose().catch(() => {}); };
   }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   /** 声明导航独立于元数据补全；MySQL只读既有会话模式缓存，不为F12建立连接或执行SQL。 */
   useEffect(() => {

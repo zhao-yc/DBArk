@@ -1,5 +1,7 @@
 # 使用指南
 
+MySQL／MariaDB 查询编辑器新增[本文关系引用](development/local-references-20261103.md)：在别名、CTE 声明或关系限定段按 `Shift+F12` 查看声明及已确认使用位置，双击跳转并选中原词，不执行 SQL。支持作用域遮蔽和 UNION 分支；当前不包含字段／变量、跨库依赖或 SQLite 引用，Mac／安装另验。
+
 MySQL／MariaDB 物理表可从“表格操作 → 设计与结构 → 查看表关系图”查看主外键、复合映射和自引用。明确选择后读取其它表，支持缩放、刷新及关联键字段显示；未读目标用虚线标明。详见[关系图使用范围](development/relationship-diagram-20261103.md)，不修改数据库。
 
 SQL 编辑器新增[常用函数参数提示](development/sql-signatures-20261103.md)：输入函数括号或逗号即可查看签名和当前参数，支持嵌套及方言差异；Windows 可按 `Ctrl+Shift+Space` 手动查看。只读本地语法资料，不执行 SQL；完整函数语义、Mac／安装另验。

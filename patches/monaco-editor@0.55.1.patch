@@ -1,5 +1,29 @@
+diff --git a/esm/vs/base/browser/ui/tree/abstractTree.js b/esm/vs/base/browser/ui/tree/abstractTree.js
+index d0e779fe9ea13d9297a8aa20aa7dafde5e118092..cf27d43036507aec6eae371a9e3dd7c406d44b6d 100644
+--- a/esm/vs/base/browser/ui/tree/abstractTree.js
++++ b/esm/vs/base/browser/ui/tree/abstractTree.js
+@@ -25,6 +25,7 @@ import '../toggle/toggle.js';
+ import { isFilterResult, getVisibleState } from './indexTreeModel.js';
+ import { TreeMouseEventTarget } from './tree.js';
+ import { Delayer, disposableTimeout } from '../../../common/async.js';
++import { CancellationError, errorHandler } from '../../../common/errors.js';
+ import { Codicon } from '../../../common/codicons.js';
+ import { ThemeIcon } from '../../../common/themables.js';
+ import { SetMap } from '../../../common/map.js';
+@@ -2008,6 +2009,11 @@ class AbstractTree {
+                     set.add(node);
+                 }
+                 activeNodesEmitter.fire([...set.values()]);
++            }).catch(error => {
++                // 树销毁会取消这一延时Promise；只消费真实取消，其它错误仍走正式报告通道。
++                if (!(error instanceof CancellationError)) {
++                    errorHandler.onUnexpectedError(error);
++                }
+             });
+         }));
+         this.onDidChangeActiveNodesRelay.input = activeNodesEmitter.event;
 diff --git a/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js b/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
-index 9687c56..c0200da 100644
+index 9687c56e44f9dac9525009b8639f45d02fdb2e93..c0200da20bb5ebc2c3e70c88adea00ce4727b04f 100644
 --- a/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
 +++ b/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
 @@ -2,7 +2,7 @@ import { localize2 } from '../../../../nls.js';
