@@ -52,8 +52,8 @@ export function buildForeignKeyJoinWhere(child: Source, parent: Source, raw: unk
 }
 
 /** 用本地稳定ID映射已有组；值尚未有效也能修正或删除，不借值/列名猜测同名条件身份。 */
-export function foreignKeyJoinGroupAfterChange(previous: readonly ForeignKeyJoinFilterDraft[], next: readonly ForeignKeyJoinFilterDraft[], group: FilterGroup | undefined, mode: FilterMode): FilterGroup | undefined {
-  const ids = (entries: readonly ForeignKeyJoinFilterDraft[]) => { const values = entries.map(entry => entry.id); if (values.some(id => typeof id !== 'string' || !id.length || id.length > 256) || new Set(values).size !== values.length) throw Error(text.invalid); return values; };
+export function foreignKeyJoinGroupAfterChange(previous: readonly { id: string }[], next: readonly { id: string }[], group: FilterGroup | undefined, mode: FilterMode): FilterGroup | undefined {
+  const ids = (entries: readonly { id: string }[]) => { const values = entries.map(entry => entry.id); if (values.some(id => typeof id !== 'string' || !id.length || id.length > 256) || new Set(values).size !== values.length) throw Error(text.invalid); return values; };
   const oldIds = ids(previous), nextIds = ids(next), rules: FilterRule[] = oldIds.map(column => ({ column, operator: 'IS NULL' })), identities = new Map(oldIds.map((id,index) => [id,rules[index]]));
   return tableFilterGroupAfterChange(rules, nextIds.map(id => identities.get(id) ?? { column: id, operator: 'IS NULL' }), group, mode);
 }

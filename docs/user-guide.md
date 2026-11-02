@@ -1,5 +1,7 @@
 # 使用指南
 
+JOIN 聚合查询新增“HAVING 聚合后筛选”，可对已选分组字段和指标设置区间、集合、NULL、启停及嵌套 AND／OR。条件跟随原指标改名，删除后同名新指标不能继承旧条件；WHERE 在聚合前生效，两者分别编辑。明确应用分组只更新预览，打开独立查询后仍需自行执行。详见[HAVING 使用与验证范围](development/table-foreign-key-join-having-20261102.md)，暂不发布。
+
 JOIN 预览父表后可勾选“生成分组聚合查询”，独立添加分组字段与 COUNT(*)、COUNT、COUNT DISTINCT、SUM、AVG、MIN、MAX；没有分组字段时为全体汇总。指标支持别名与排序，WHERE 在汇总前生效；切回明细恢复原字段和排序。父值可能因多条子行重复参与合计，请先审阅使用说明和完整 SQL，再打开独立查询执行。详见[聚合说明与验证范围](development/table-foreign-key-join-summary-20261102.md)，暂不发布。
 
 JOIN 条件填好后，可点“组合 JOIN 条件”添加 AND／OR 子组，并移动已有条件，表达“条件1 且（条件2 或 条件3）”。分组编辑期间不能打开旧查询；明确应用只更新预览，取消保留原 SQL。删改值及启停保留括号，只有“恢复平铺条件”才移除组。详见[嵌套分组及验证范围](development/table-foreign-key-join-groups-20261102.md)，暂不发布。

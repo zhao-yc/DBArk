@@ -1,10 +1,12 @@
 # Navicat 全功能覆盖目标
 
-外键 JOIN 新增[分组聚合](development/table-foreign-key-join-summary-20261102.md)：七种函数、有序 GROUP BY、别名与指标排序，保明细草稿和原 WHERE。321 项相关、类型／构建、六端点 1320 次严格分组模式查询与 Windows 八例组件通过；HAVING、任意多表及 Mac／安装继续，O04 部分，暂不发布。
+外键 JOIN 新增[HAVING 聚合后筛选](development/table-foreign-key-join-having-20261102.md)：13 运算符、独立嵌套组和稳定输出身份，改名跟随、同名重建不接管。354 项相关、类型／构建、六端点最终 2130 次严格模式查询及 Windows 十例组件通过，准确资源核零；任意多表、高级聚合及 Mac／安装继续，O04 部分，暂不发布。
+
+前序[分组聚合](development/table-foreign-key-join-summary-20261102.md)记录保留：七种函数、有序 GROUP BY、别名与指标排序，保明细草稿和原 WHERE；321 项相关、类型／构建、六端点 1320 次查询和 Windows 八例组件通过。当前 HAVING 见上方新记录，O04 仍部分，暂不发布。
 
 外键 JOIN 源码新增[双侧 WHERE 嵌套条件组](development/table-foreign-key-join-groups-20261102.md)：13 运算符、混合 AND／OR、16 组／8 层、局部应用／取消及稳定重编号；286 项相关、类型／构建、六端点真实外键表 840 次 SELECT、Windows 六例原生组件通过，准确资源核零。Mac／安装另验，O04 仍部分，暂不发布。
 
-前序外键 JOIN [双侧多列排序与查询上限](development/table-foreign-key-join-order-20261102.md)记录保留：107 项相关、严格构建／类型、六端点 48 份合成 SELECT 与 Windows 明暗原生组件两例通过；当前 WHERE、分组及聚合见上方新记录。O04 保持部分，任意多表、HAVING 和高级聚合继续，暂不发布。
+前序外键 JOIN [双侧多列排序与查询上限](development/table-foreign-key-join-order-20261102.md)记录保留：107 项相关、严格构建／类型、六端点 48 份合成 SELECT 与 Windows 明暗原生组件两例通过；当前 WHERE、聚合及 HAVING 见上方新记录。O04 保持部分，任意多表和高级聚合继续，暂不发布。
 
 SQLite 开发源码新增[已有字段显式 NOT NULL 编辑](development/sqlite-not-null-20261102.md)：添加／保留／移除、原显式声明与 native 标记区分、STRICT／WITHOUT ROWID／INTEGER 主键规则、整批预览及原值回滚保护。31 份相关测试分轮共 1,013 项、严格构建及 Windows 十二模式单轮通过，明暗截图、旧预览和资源核清；Mac／安装及其余 R02 能力仍待验，保持部分，不增加完整工作包或发行计数。
 
@@ -653,7 +655,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | R04 | Oracle | 待做 | 服务名/TNS、序列、包、类型、LOB 与精度 |
 | R05 | MongoDB | 待做 | 集合、索引、BSON、树/JSON、查找与聚合 |
 | R06 | Redis/Cluster/Sentinel | 待做 | 键、TTL、扫描、命令、重定向与取消 |
-| O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有单外键LEFT／INNER、复合映射、选列、多列排序／上限及嵌套WHERE；前期Windows实际执行与预览边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续接入[GROUP BY及七种聚合](development/table-foreign-key-join-summary-20261102.md)，六端点1320次严格分组查询与八个离线组件分别取证；HAVING、高级聚合、任意多表、完整查询转视图及Mac／安装继续，未公开发行 |
+| O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有单外键LEFT／INNER、复合映射、选列、多列排序／上限、嵌套WHERE、GROUP BY及七种聚合；前期Windows实际执行与预览边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续接入[嵌套HAVING与稳定输出绑定](development/table-foreign-key-join-having-20261102.md)，六端点最终2130次严格模式查询与十个离线组件分别取证；高级聚合、任意多表、完整查询转视图及Mac／安装继续，未公开发行 |
 | O05 | 重构/语义代码辅助 | 待做 | 引用、声明、悬停、错误、重命名保留注释字符串 |
 | E01 | ER 关系查看 | 待做 | 真实外键、复合关系、对象选择、缩放刷新 |
 | A01 | 编排/本地计划任务 | 待做 | 跨连接依赖、失败策略、进度、重复运行控制 |

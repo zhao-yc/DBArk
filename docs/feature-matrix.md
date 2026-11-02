@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-02 源码增量：[外键 JOIN HAVING](development/table-foreign-key-join-having-20261102.md)支持聚合后 13 种条件、嵌套 AND／OR、NULL、启停和输出身份绑定，改名跟随、同名重建须重选。354 项相关、类型／构建、六端点最终 2130 次 SELECT 及 Windows 十例组件通过；Mac／安装和完整 O04 另验，暂不发布。
+
 2026-11-02 源码增量：[外键 JOIN 分组聚合](development/table-foreign-key-join-summary-20261102.md)支持有序分组、COUNT／COUNT DISTINCT／SUM／AVG／MIN／MAX、自定义别名和聚合排序，切换明细保原草稿。321 项相关、类型／构建、六端点 1320 次 ONLY_FULL_GROUP_BY 查询及 Windows 八例组件通过；HAVING 和 Mac／安装另验，不计完整 O04，暂不发布。
 
 2026-11-02 源码增量：[外键 JOIN 嵌套条件组](development/table-foreign-key-join-groups-20261102.md)支持混合括号、局部应用／取消、原值启停与稳定重编号；未提交组阻止打开旧 SQL。286 项相关、类型／构建、六端点真实表 840 次 SELECT 和 Windows 六个组件用例通过，准确隔离资源已核零；Mac／安装及完整可视化构建另验，暂不发布。
