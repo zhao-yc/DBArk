@@ -12,6 +12,7 @@ import { queryResultValueOptionsZh as valueText } from '../../src/renderer/local
 import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -399,6 +400,36 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     // 独立JSON读取断言wire，不调用产品codec生成预期，确认大整数与字节原文未改变。
     expect(savedSnapshot.version).toBe(2); expect(savedSnapshot.result.sqliteStorage).toEqual({ version: 1, rows: ['itnbi', 'itnbt'] });
     expect(savedSnapshot.result.rows).toEqual([{ c0: '9223372036854775807', c1: '9007199254740993', c2: null, c3: { type: 'binary', base64: 'AP8=' }, c4: '2' }, { c0: '-9223372036854775808', c1: '中文🚢', c2: null, c3: { type: 'binary', base64: '/wA=' }, c4: '2' }]);
+    stage = '两份真实固定副本按原混合类型键对比，不追加查询';
+    await step(async () => (await navigationMenuItem(query(), { name: zh.query.pinResult, exact: true }, check)).click());
+    await step(() => query().getByRole('button', { name: zh.query.currentResults, exact: true }).click());
+    await step(async () => (await navigationMenuItem(query(), { name: zh.query.pinResult, exact: true }, check)).click());
+    await step(async () => (await navigationMenuItem(query(), { name: comparisonText.open, exact: true }, check)).click());
+    const comparison = page.getByRole('dialog', { name: comparisonText.title, exact: true });
+    await step(() => expect(comparison.getByRole('button', { name: comparisonText.start, exact: true })).toBeDisabled());
+    await step(() => comparison.getByRole('checkbox', { name: comparisonText.key('c4'), exact: true }).check());
+    await step(() => comparison.getByRole('button', { name: comparisonText.start, exact: true }).click());
+    await step(() => expect(comparison.getByLabel(comparisonText.equal, { exact: true })).toHaveText('2'));
+    await step(() => expect(comparison.getByLabel(comparisonText.changed, { exact: true })).toHaveText('0'));
+    await step(() => comparison.getByLabel(comparisonText.filter, { exact: true }).selectOption('all'));
+    await step(() => comparison.getByRole('button', { name: comparisonText.details(0), exact: true }).click());
+    await step(() => expect(comparison.getByLabel(comparisonText.leftValue + ' c4', { exact: true })).toHaveText(comparisonText.leftValue + '："2" · INTEGER'));
+    await step(() => comparison.hover()); await step(() => page.mouse.wheel(0, 900));
+    await step(() => expect(comparison.getByLabel(comparisonText.leftValue + ' c4', { exact: true })).toBeVisible());
+    await step(async () => info.attach('SQLite固定结果原类型明细', { body: await page.screenshot(), contentType: 'image/png' }));
+    await step(() => comparison.getByRole('checkbox', { name: comparisonText.key('c4'), exact: true }).uncheck());
+    await step(() => comparison.getByRole('checkbox', { name: comparisonText.key('c3'), exact: true }).check());
+    await step(() => comparison.getByRole('button', { name: comparisonText.start, exact: true }).click());
+    await step(() => expect(comparison.getByLabel(comparisonText.equal, { exact: true })).toHaveText('2'));
+    await step(() => comparison.getByRole('checkbox', { name: comparisonText.key('c3'), exact: true }).uncheck());
+    await step(() => comparison.getByRole('checkbox', { name: comparisonText.key('c2'), exact: true }).check());
+    await step(() => comparison.getByRole('button', { name: comparisonText.start, exact: true }).click());
+    await step(() => expect(comparison.getByText(comparisonText.keyNull('left'), { exact: true })).toBeVisible());
+    await step(() => expect(comparison.getByLabel(comparisonText.equal, { exact: true })).toHaveCount(0));
+    await step(() => comparison.getByRole('button', { name: comparisonText.close, exact: true }).click());
+    await step(() => expect(comparison).toHaveCount(0));
+    await step(() => query().getByRole('button', { name: zh.query.currentResults, exact: true }).click());
+    expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
     stage = '可见事务按钮与独立只读观察';
     await step(() => query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click());
     await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeEnabled());

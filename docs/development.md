@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 查询结果新增[固定结果对比](development/sqlite-result-comparison-20261102.md)：明确原类型匹配键、四类差异、同显示值类型变化及明细；不重查。1779 项相关、类型／构建及 Windows 原工作区真实滚动专项通过；Mac／安装另验，暂不发布。
+
 SQLite 查询结果新增[列统计](development/sqlite-result-statistics-20261102.md)：筛选后／勾选范围、精确数值、混合类型计数与原字节极值，不重查；1752 项相关、类型／构建及 Windows 原工作区整例通过。Mac／安装另验，暂不发布。
 
 SQLite 查询结果新增[临时整理](development/sqlite-result-memory-20261102.md)：本标签暂存完整配置，重新查询后明确应用，保留类型条件、多列排序和整步撤销；失败／无列结果仍可主动丢弃。类型／构建、1728 项相关及 Windows 原工作区专项通过；Mac 与安装继续，暂不发布。

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQLite 高频查询补齐[固定结果对比](development/sqlite-result-comparison-20261102.md)：明确键、完整类型帧、四类差异和原类型明细；同原文的类型变化也识别。Windows 原整例与相关回归通过；完整库表比较同步及 Mac／安装继续，不增加完整工作包或发行计数。
+
 SQLite 高频查询补齐[列统计](development/sqlite-result-statistics-20261102.md)：当前结果和勾选范围的原类型计数、不同值、极值与精确数值聚合；不重查且明确混合值语义。Windows 原整例与相关回归通过，Mac／安装另验，不增加完整工作包或发行计数。
 
 SQLite 高频查询补齐[临时整理](development/sqlite-result-memory-20261102.md)：当前标签保存、明确应用和丢弃筛选排序配置，沿新原行与逐格类型处理，不重发 SQL；Windows 专项与相关回归通过。Mac／安装另验，不增加完整工作包或发行计数。

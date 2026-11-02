@@ -1417,6 +1417,25 @@ async function comparisonReady():Promise<void>{
   expect(document.querySelector('output[aria-label="'+comparisonText.added+'"]')).not.toBeNull();
 }
 function compared(label:string):string{return document.querySelector('output[aria-label="'+label+'"]')!.textContent;}
+it('SQLite固定结果对比：真实入口固定两代，四类变化与同显示值类型明细准确，比较不重查',async()=>{
+  await mountSqliteMemory();await click(zh.query.pinResult);
+  original={...original,rows:[structuredClone(original.rows[0]),structuredClone(original.rows[1]),{...structuredClone(original.rows[2]),id:'1'}],sqliteStorage:{version:1,rows:['iib','iib','inb']}};
+  await click(zh.query.text010);await click(zh.query.pinResult);await click(comparisonText.open);expect(button(comparisonText.start).disabled).toBe(true);await comparisonKey('id');await click(comparisonText.start);await comparisonReady();
+  for(const kind of ['added','removed','changed','equal'] as const)expect(compared(comparisonText[kind])).toBe('1');
+  await click(comparisonText.details(1));const left=document.querySelector('[aria-label="'+comparisonText.leftValue+' value"]')!,right=document.querySelector('[aria-label="'+comparisonText.rightValue+' value"]')!;
+  expect(left.textContent).toBe(comparisonText.leftValue+'："2" · TEXT');expect(right.textContent).toBe(comparisonText.rightValue+'："2" · INTEGER');expect(document.body.textContent).toContain('9007199254740993');
+  original.sqliteStorage!.rows[1]='ttb';await act(async()=>store.setState({settings:{...store.getState().settings,resultLimit:999}}));expect(compared(comparisonText.changed)).toBe('1');await click(zh.common.close);expect(commands.filter(c=>c==='query.execute')).toHaveLength(2);expect(exports).toEqual([]);
+});
+it('SQLite固定结果对比：混合类型键可选并各自匹配，REAL正负零不互相配对',async()=>{
+  await mount(result=>{result.columns=[{key:'id',name:'同名',type:'SQLITE'}];result.rows=[{id:'2'},{id:'2'},{id:'2'},{id:{type:'binary',base64:'Mg=='}},{id:'-0'},{id:'0'}];result.sqliteStorage={version:1,rows:['i','r','t','b','r','r']};},'sqlite');await click(zh.query.pinResult);
+  original={...original,rows:original.rows.slice().reverse(),sqliteStorage:{version:1,rows:original.sqliteStorage!.rows.slice().reverse()}};await click(zh.query.text010);await click(zh.query.pinResult);await click(comparisonText.open);await comparisonKey('id');await click(comparisonText.start);await comparisonReady();expect(compared(comparisonText.equal)).toBe('6');expect(compared(comparisonText.added)).toBe('0');await click(zh.common.close);expect(commands.filter(c=>c==='query.execute')).toHaveLength(2);
+});
+it('SQLite固定结果对比：NULL键完整拒绝，重新明确选择字节键可开始，旧连接回调不能复活窗口',async()=>{
+  await mountSqliteMemory();await click(zh.query.pinResult);await click(zh.query.text010);await click(zh.query.pinResult);await click(comparisonText.open);await comparisonKey('value');await click(comparisonText.start);
+  for(let attempt=0;attempt<100&&!document.body.textContent.includes(comparisonText.keyNull('left'));attempt++)await act(async()=>{await new Promise(resolve=>setTimeout(resolve,5));});
+  expect(document.body.textContent).toContain(comparisonText.keyNull('left'));expect(document.querySelector('output[aria-label="'+comparisonText.equal+'"]')).toBeNull();await comparisonKey('value',false);await comparisonKey('payload');await click(comparisonText.start);await comparisonReady();expect(compared(comparisonText.equal)).toBe('3');
+  const close=reactProps(button(zh.common.close)).onClick;await act(async()=>store.setState({connectionVersions:{c:2}}));expect(document.querySelector('[data-query-result-comparison-owner]')).toBeNull();await click(comparisonText.open);await act(async()=>close());expect(document.querySelector('[data-query-result-comparison-owner]')).not.toBeNull();expect(commands.filter(c=>c==='query.execute')).toHaveLength(2);
+});
 it('固定结果对比：需要两份固定快照和明确匹配键，未选键不开始且不执行SQL',async()=>{
   await mount();expect(button(comparisonText.open).disabled).toBe(true);await click(zh.query.pinResult);expect(button(comparisonText.open).disabled).toBe(true);
   await click(zh.query.text010);await click(zh.query.pinResult);await click(comparisonText.open);

@@ -1,6 +1,7 @@
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
 import { queryResultFilterKey, queryResultSortKind } from './queryResultSort';
 import { queryResultComparisonZh as text } from './locales/queryResultComparison.zh-CN';
+import { bindSqliteResultStorage, copySqliteResultStorage, type SqliteResultStorageCode } from '../shared/sqliteResultStorage';
 
 export const queryResultComparisonLimits = { rows: 100000, columns: 1024, cells: 2000000, units: 16 * 1024 * 1024, valueUnits: 4096, keys: 8, batchRows: 512, batchUnits: 32768 } as const;
 export interface QueryResultComparisonCapture {
@@ -14,10 +15,11 @@ export type ComparisonRow = QueryResultComparisonRow;
 export interface QueryResultComparisonResult {
   readonly added: number; readonly removed: number; readonly changed: number; readonly equal: number; readonly rows: readonly QueryResultComparisonRow[];
 }
-export interface QueryResultComparisonValue { readonly column: string; readonly name: string; readonly left?: CellValue; readonly right?: CellValue; readonly changed: boolean; }
+export interface QueryResultComparisonValue { readonly column: string; readonly name: string; readonly left?: CellValue; readonly right?: CellValue; readonly leftType?: SqliteResultStorageCode; readonly rightType?: SqliteResultStorageCode; readonly changed: boolean; }
 interface Source {
   result: QueryResult; columns: readonly ResultColumn[]; columnRefs: readonly ResultColumn[]; rows: readonly DataRow[]; rowRefs: readonly DataRow[];
   raw: readonly (readonly CellValue[])[]; values: readonly (readonly CellValue[])[]; units: readonly number[]; truncated: boolean;
+  sqlite?: { readonly codes: readonly string[]; current(): boolean };
 }
 interface Binding { left: Source; right: Source; metadata: readonly ResultColumn[]; keyIndices: readonly number[]; binaryPrototypes: WeakMap<object, object | null>; invalid: boolean; }
 interface Owner { capture?: QueryResultComparisonCapture; active: boolean; }
@@ -52,6 +54,8 @@ function metadata(column: ResultColumn): Readonly<ResultColumn> {
 export function queryResultComparisonKeyReason(column: ResultColumn): string | undefined {
   try {
     const admitted = metadata(column), kind = queryResultSortKind(admitted.type);
+    // SQLite只在开始时按完整类型帧准入，列声明本身不猜测逐格值或隐式转换。
+    if (admitted.type === 'SQLITE') return undefined;
     return !kind || kind === 'float' || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(admitted.type.trim()) ? text.keyUnsupported : undefined;
   } catch (reason) { return reason instanceof Error && reason.message === text.budget ? text.budget : text.identity; }
 }
@@ -81,6 +85,8 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
   const leftRefs = array(leftColumns, queryResultComparisonLimits.columns, 1), rightRefs = array(rightColumns, queryResultComparisonLimits.columns, 1);
   const columns = leftRefs.map(metadata), rightMetadata = rightRefs.map(metadata);
   if (columns.length !== rightMetadata.length || new Set(columns.map(column => column.key)).size !== columns.length || rightMetadata.some((column, index) => column.key !== columns[index].key || column.name !== columns[index].name || column.type !== columns[index].type)) throw Error(text.identity);
+  const sqlite = columns.some(column => column.type === 'SQLITE');
+  if (sqlite && columns.some(column => column.type !== 'SQLITE')) throw Error(text.identity);
   const keyRefs = array(keys, queryResultComparisonLimits.keys, 1);
   if (keyRefs.some(key => typeof key !== 'string') || new Set(keyRefs).size !== keyRefs.length) throw Error(text.selectKeys);
   const keyIndices = keyRefs.map(key => columns.findIndex(column => column.key === key));
@@ -108,7 +114,9 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
       }
       raw.push(Object.freeze(original)); values.push(Object.freeze(copied)); rowUnits.push(currentUnits);
     }
-    return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, raw: Object.freeze(raw), values: Object.freeze(values), units: Object.freeze(rowUnits), truncated };
+    // 缺失类型帧不能把旧快照中的数字外观猜为INTEGER；准入与最终复核均不读取SQL正文。
+    const storage = sqlite ? { codes: Object.freeze(copySqliteResultStorage(own(result, 'sqliteStorage'), refs, rowRefs).rows), current: bindSqliteResultStorage(result) } : undefined;
+    return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, raw: Object.freeze(raw), values: Object.freeze(values), units: Object.freeze(rowUnits), truncated, sqlite: storage };
   }
   const capture = Object.freeze({ columns: Object.freeze(columns), keys: Object.freeze(keyRefs), leftCount: leftRowRefs.length, rightCount: rightRowRefs.length, leftTruncated: own(left, 'truncated') as boolean, rightTruncated: own(right, 'truncated') as boolean });
   const binding: Binding = { left: source(left, leftColumns, leftRefs, leftRows, leftRowRefs, 'left'), right: source(right, rightColumns, rightRefs, rightRows, rightRowRefs, 'right'), metadata: columns, keyIndices: Object.freeze(keyIndices), binaryPrototypes: prototypes, invalid: false };
@@ -144,6 +152,7 @@ export function currentQueryResultComparison(capture: QueryResultComparisonCaptu
   if (!binding || binding.invalid) return false;
   try {
     if (left !== binding.left.result || right !== binding.right.result || !structure(binding.left, binding) || !structure(binding.right, binding)) throw Error(text.stale);
+    if (binding.left.sqlite && !binding.left.sqlite.current() || binding.right.sqlite && !binding.right.sqlite.current()) throw Error(text.stale);
     for (const source of [binding.left, binding.right]) for (let index = 0; index < source.rowRefs.length; index++) if (!currentRow(source, index, binding)) throw Error(text.stale);
     return true;
   } catch { binding.invalid = true; return false; }
@@ -153,6 +162,8 @@ function key(source: Source, index: number, binding: Binding, side: 'left' | 'ri
   return JSON.stringify(binding.keyIndices.map(columnIndex => {
     const value = source.values[index][columnIndex];
     if (value === null) throw Error(text.keyNull(side));
+    // SQLite匹配键按原存储类型和规范原值组成元组；包括REAL、完整BLOB及正负零，不走SQL隐式数值转换。
+    if (source.sqlite) return [source.sqlite.codes[index][columnIndex], value && typeof value === 'object' ? value.base64 : value];
     try {
       const parsed = queryResultFilterKey(binding.metadata[columnIndex], value);
       return parsed && typeof parsed === 'object' ? ['exact', parsed.negative, parsed.whole, parsed.fraction] : [typeof parsed, parsed];
@@ -165,8 +176,8 @@ export function queryResultComparisonValues(capture: QueryResultComparisonCaptur
   if (!binding || !owner?.active || owner.capture !== capture || !currentQueryResultComparison(capture, binding.left.result, binding.right.result)) throw Error(text.stale);
   const changed = new Set(row.changedColumns);
   return Object.freeze(binding.metadata.map((column, index) => Object.freeze({ column: column.key, name: column.name,
-    ...(row.leftIndex === undefined ? {} : { left: binding.left.values[row.leftIndex][index] }),
-    ...(row.rightIndex === undefined ? {} : { right: binding.right.values[row.rightIndex][index] }), changed: changed.has(column.key) })));
+    ...(row.leftIndex === undefined ? {} : { left: binding.left.values[row.leftIndex][index], ...(binding.left.sqlite ? { leftType: binding.left.sqlite.codes[row.leftIndex][index] as SqliteResultStorageCode } : {}) }),
+    ...(row.rightIndex === undefined ? {} : { right: binding.right.values[row.rightIndex][index], ...(binding.right.sqlite ? { rightType: binding.right.sqlite.codes[row.rightIndex][index] as SqliteResultStorageCode } : {}) }), changed: changed.has(column.key) })));
 }
 
 export class QueryResultComparisonScan {
@@ -219,7 +230,7 @@ export class QueryResultComparisonScan {
           const leftIndex = this.leftMap.get(identity);
           if (leftIndex === undefined) this.addedRows.push(Object.freeze({ kind: 'added', rightIndex: index, changedColumns: Object.freeze([]) }));
           else {
-            const changedColumns = binding.metadata.filter((_, column) => !binding.keyIndices.includes(column) && !equal(binding.left.values[leftIndex][column], binding.right.values[index][column])).map(column => column.key);
+            const changedColumns = binding.metadata.filter((_, column) => !binding.keyIndices.includes(column) && (binding.left.sqlite?.codes[leftIndex][column] !== binding.right.sqlite?.codes[index][column] || !equal(binding.left.values[leftIndex][column], binding.right.values[index][column]))).map(column => column.key);
             this.leftRows[leftIndex] = Object.freeze({ kind: changedColumns.length ? 'changed' : 'equal', leftIndex, rightIndex: index, changedColumns: Object.freeze(changedColumns) });
           }
         }
