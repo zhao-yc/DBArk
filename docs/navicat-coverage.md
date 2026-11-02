@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+跨平台门槛已补齐一项：准确 `0d3759b4` 的 [JOIN 原十二例](development/foreign-key-join-display-lease-20261103.md#0d3759b4-三平台实测闭合)在 Windows、Mac arm64／Intel 各通过，原几何、退出、arm64 模式恢复及上传原件均核对。仅该源码组件，后续功能、实库与安装仍分别验证，O04 保持部分，暂不发布。
+
 高频筛选新增[服务器不同值次数排序](development/table-value-frequency-20261103.md)：定位常见／少见值，冻结筛选的全部分组先排序后限量；265 项相关、六端点 450 次只读派生查询、严格类型和 Windows 明暗组件通过，资源核清。完整物理表 UI、Mac／安装及完整剖析继续，不增加完整工作包或发行计数。
 
 MySQL／MariaDB 高频编辑补齐[本文声明导航](development/mysql-definition-20261103.md)：别名、CTE／派生、WHERE／ON、作用域遮蔽及明确库限定。187 项相关、84 项最终定向分轮通过，类型／构建与 Windows 三次 F12、一次 Ctrl 点击通过、资源已核；Mac／安装及完整语义辅助继续，不增加完整工作包或发行计数，暂不发布。
@@ -667,7 +669,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | R04 | Oracle | 待做 | 服务名/TNS、序列、包、类型、LOB 与精度 |
 | R05 | MongoDB | 待做 | 集合、索引、BSON、树/JSON、查找与聚合 |
 | R06 | Redis/Cluster/Sentinel | 待做 | 键、TTL、扫描、命令、重定向与取消 |
-| O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有单外键LEFT／INNER、复合映射、选列、多列排序／上限、嵌套WHERE、GROUP BY及七种聚合；前期Windows实际执行与预览边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续接入[嵌套HAVING与稳定输出绑定](development/table-foreign-key-join-having-20261102.md)，六端点最终2130次严格模式查询与十个离线组件分别取证；高级聚合、任意多表、完整查询转视图及Mac／安装继续，未公开发行 |
+| O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有单外键LEFT／INNER、复合映射、选列、多列排序／上限、嵌套WHERE、GROUP BY及七种聚合；前期实库边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续[嵌套HAVING](development/table-foreign-key-join-having-20261102.md)与六端点2130次严格查询另证；准确0d的[三平台十二组件例与arm64显示恢复](development/foreign-key-join-display-lease-20261103.md)已核。高级聚合、任意多表、完整查询转视图、完整Mac实库及安装继续，未公开发行 |
 | O05 | 重构/语义代码辅助 | 部分 | MySQL 已有[字段悬停](../tests/integration/acceptance-sql-field-hover-7f926c4-20261021.md)及[本文声明导航](development/mysql-definition-20261103.md)，SQLite 已有[字段悬停](development/sqlite-field-hover-20261102.md)及[本文声明导航](development/sqlite-definition-20261102.md)；物理对象定义导航、查找引用、诊断、重命名和完整平台组合继续，不以单项能力代替完整代码辅助 |
 | E01 | ER 关系查看 | 待做 | 真实外键、复合关系、对象选择、缩放刷新 |
 | A01 | 编排/本地计划任务 | 待做 | 跨连接依赖、失败策略、进度、重复运行控制 |
