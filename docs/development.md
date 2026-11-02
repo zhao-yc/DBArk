@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 字段重建验收[补齐本机列布局读取](development/sqlite-rebuild-observer-20261102.md)：原 Mac 失败准确记录总白名单漏掉 `sqlite.tableLayout.get`，原字段／目标限制和全部断言保持。Windows 成功／回滚两整例、381 项相关及类型检查通过，cap 与 worker 核验完成；Mac 仍待本提交实际 CI，暂不发布。
+
 SQLite 原生验收新增[观察端口回传调整](development/sqlite-native-observation-20261102.md)：逐边界仍执行原 Main 检查，完整业务断言继续读全量回执。原 288 个断言及退出门保留，Windows 同产品只读整例从上轮约 109 秒到本轮 37.8 秒，分页请求与原值完整一致；Mac 实测继续，暂不发布。
 
 SQLite 表格新增[筛选展开后的可操作高度修复](development/sqlite-table-height-20261102.md)：筛选区内部滚动、网格保留数据行、窄窗口底栏完整换行。Windows 最小窗口原编辑整例及原只读表页整例通过，类型／构建及 113 项相关通过；Mac 超时与重建失败仍独立跟进，暂不发布。
