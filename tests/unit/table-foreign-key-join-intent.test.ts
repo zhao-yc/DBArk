@@ -13,6 +13,18 @@ function tables() {
 function fixture() { const source = tables(), identity = {}, intent = new TableForeignKeyJoinIntent(source.child, 'connection', 77, [identity], () => true); return { ...source, identity, intent, preview: () => foreignKeyJoinPreview(intent, source.parent, 'fk', 'LEFT', { childColumns: ['id'], parentColumns: ['value'] }) }; }
 
 describe('外键JOIN原结构与前置核验租约', () => {
+  it('排序和上限共同冻结并参与打开前双表重核，旧字符串不能改写显式选择', async () => {
+    const f=fixture(),options={childColumns:['id'],parentColumns:[],sort:[{side:'parent' as const,column:'value',direction:'DESC' as const,nulls:'LAST' as const}],limit:3},preview=foreignKeyJoinPreview(f.intent,f.parent,'fk','LEFT',options),read=vi.fn(async(target:ForeignKeyJoinTarget)=>target.table===f.child.name?f.child:f.parent);options.sort[0].column='id';expect(preview.options.sort![0].column).toBe('value');expect(Object.isFrozen(preview.options.sort![0])).toBe(true);await revalidateForeignKeyJoin(f.intent,preview,read,()=>true);expect(read).toHaveBeenCalledTimes(2);expect(f.intent.consume(preview)).toContain('p.`value` DESC\nLIMIT 3;');
+  });
+  it('伪造预览中的排序或上限不会沿用旧SQL消费一次打开能力', () => {
+    const f=fixture(),preview=f.preview();for(const options of [{...preview.options,limit:2},{...preview.options,sort:[{side:'child' as const,column:'id',direction:'DESC' as const}]}])expect(()=>f.intent.consume({...preview,options})).toThrow(text.stale);expect(f.intent.current()).toBe(true);
+  });
+  it('预览在复制选项前拒绝排序及上限getter，不调用任意访问器', () => {
+    const f=fixture(),getter=vi.fn(()=>5),options={childColumns:['id'],parentColumns:[]};Object.defineProperty(options,'limit',{enumerable:true,get:getter});expect(()=>foreignKeyJoinPreview(f.intent,f.parent,'fk','LEFT',options)).toThrow();expect(getter).not.toHaveBeenCalled();
+  });
+  it('不可枚举上限或排序不会在structuredClone时丢失并悄悄回退为默认查询', () => {
+    const f=fixture();for(const [key,value]of [['limit',2],['sort',[{side:'child',column:'id',direction:'DESC'}]]]as const){const options={childColumns:['id'],parentColumns:[]};Object.defineProperty(options,key,{value,enumerable:false});expect(()=>foreignKeyJoinPreview(f.intent,f.parent,'fk','LEFT',options)).toThrow();}
+  });
   it('固定只读结构不持有行或DDL条件，前置串行读同连接双方结构后仅消费一次', async () => {
     const f = fixture(), preview = f.preview(), read = vi.fn(async (target: ForeignKeyJoinTarget) => target.table === f.child.name ? f.child : f.parent);
     await revalidateForeignKeyJoin(f.intent, preview, read, () => true);

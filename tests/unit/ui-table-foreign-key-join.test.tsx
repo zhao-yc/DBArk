@@ -44,6 +44,8 @@ async function click(label: string) { const node = button(label); expect(node.di
 async function select(label: string, value: string) { const node = document.body.querySelectorAll('select').find(node => node.getAttribute('aria-label') === label)!; expect(node).toBeDefined(); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
 async function toggle(label: string) { const node = document.body.querySelectorAll('input').find(node => node.getAttribute('aria-label') === label)!; expect(node).toBeDefined(); await act(async () => { node.checked = !node.checked; node.dispatchEvent(new MemoryEvent('click')); }); }
 function sql() { return document.body.querySelectorAll('section').find(node => node.getAttribute('aria-label') === text.preview)?.textContent ?? ''; }
+/** 原React受控输入事件用于文本上限测试，不替换组件状态或生成器。 */
+async function limitInput(value: string) { const node=document.body.querySelectorAll('input').find(node=>node.getAttribute('aria-label')===text.resultLimit)!;expect(node).toBeDefined();expect(node.disabled).toBe(false);const key=Object.keys(node).find(key=>key.startsWith('__reactProps$'))!;await act(async()=>{(node as any)[key].onChange({target:{value}});}); }
 async function mount(options: { read?: TableForeignKeyJoinServices['read']; cancel?: TableForeignKeyJoinServices['cancel']; strict?: boolean; width?: number } = {}) {
   const { child, parent } = tables(), scope = {};
   if (options.width) for (const table of [child, parent]) for (let index = 0; index < options.width; index++) table.columns.push({ ...table.columns[0], name: 'wide_' + index });
@@ -55,6 +57,21 @@ async function mount(options: { read?: TableForeignKeyJoinServices['read']; canc
   await act(async () => root!.render(options.strict ? <React.StrictMode>{view}</React.StrictMode> : view));
   return { child, parent, scope, intent, read, cancel, close, activity, opened, cleanup };
 }
+it('双侧同名列排序、NULL位置、优先级和上限只改草稿，打开仍重核两表', async () => {
+  const f=await mount();await click(text.preview);await click(text.sortAdd);await select(text.sortSide(1),'parent');await select(text.sortDirection(1),'DESC');await select(text.sortNulls(1),'LAST');await click(text.sortAdd);await click(text.sortEarlier(2));await limitInput('2');expect(sql()).toContain('ORDER BY c.`id` ASC, (p.`id` IS NULL) ASC, p.`id` DESC\nLIMIT 2;');expect(f.read).toHaveBeenCalledOnce();expect(f.opened).not.toHaveBeenCalled();await click(text.open);expect(f.read).toHaveBeenCalledTimes(3);expect(f.opened.mock.calls[0][0].options).toMatchObject({limit:2,sort:[{side:'child',column:'id',direction:'ASC'},{side:'parent',column:'id',direction:'DESC',nulls:'LAST'}]});
+});
+it('无效上限原文保留并撤销旧可打开预览，修正后不自动读取或执行', async () => {
+  const f=await mount();await click(text.preview);await limitInput('');expect(sql()).toBe('');expect(button(text.open).disabled).toBe(true);expect(document.body.textContent).toContain(text.limitInvalid);await limitInput('1e2');expect(button(text.open).disabled).toBe(true);await limitInput('100000');expect(sql()).toContain('LIMIT 100000;');expect(f.read).toHaveBeenCalledOnce();expect(f.opened).not.toHaveBeenCalled();await limitInput('43');expect(button(text.open).disabled).toBe(false);
+});
+it('排序重读保留选择和优先级，切换外键明确清空排序而保留自定义上限', async () => {
+  const f=await mount();await click(text.preview);await click(text.sortAdd);await select(text.sortSide(1),'parent');await select(text.sortColumn(1),'note');await limitInput('7');const before=sql();await click(text.preview);expect(sql()).toBe(before);await select(text.fk,'fk_other');expect(sql()).toBe('');await click(text.preview);expect(sql()).not.toContain('ORDER BY');expect(sql()).toContain('LIMIT 7;');expect(f.opened).not.toHaveBeenCalled();
+});
+it('排序移除与清空不遗留NULL分桶或隐式主键，旧条目按钮不能作用于移位后的项', async () => {
+  const f=await mount();await click(text.preview);await click(text.sortAdd);await click(text.sortAdd);const old=button(text.sortRemove(1));const key=Object.keys(old).find(key=>key.startsWith('__reactProps$'))!,handler=(old as any)[key].onClick;await click(text.sortEarlier(2));await act(async()=>handler());expect(sql()).toContain('ORDER BY c.`parent_id` ASC, c.`id` ASC');await click(text.sortRemove(1));expect(sql()).toContain('ORDER BY c.`id` ASC');await select(text.sortNulls(1),'FIRST');await select(text.sortNulls(1),'DEFAULT');expect(sql()).not.toContain('IS NULL');await click(text.sortClear);expect(sql()).not.toContain('ORDER BY');expect(f.read).toHaveBeenCalledOnce();
+});
+it('正在打开时新排序与上限不能改变原回执，原读取完成后仅打开原草稿', async () => {
+  const f=await mount();await click(text.preview);await click(text.sortAdd);await limitInput('4');const before=sql(),pending=deferred<TableInfo>();f.read.mockImplementationOnce(()=>pending.promise);await click(text.open);expect(button(text.sortAdd).disabled).toBe(true);const node=document.body.querySelectorAll('input').find(node=>node.getAttribute('aria-label')===text.resultLimit)!;expect(node.disabled).toBe(true);await act(async()=>pending.resolve(f.child));expect(f.opened).toHaveBeenCalledOnce();expect(f.opened.mock.calls[0][0].sql).toBe(before);expect(f.opened.mock.calls[0][0].options.limit).toBe(4);
+});
 it('显式预览才读父目录，默认LEFT和两侧全选，精简字段不丢ON且打开前重核双表', async () => {
   const f = await mount(); expect(f.read).not.toHaveBeenCalled(); await click(text.preview); expect(f.read).toHaveBeenCalledOnce();
   expect(sql()).toContain('LEFT JOIN'); expect(sql()).toContain('c.`parent_id` = p.`id`'); expect(sql()).toContain('p.`note`'); expect(sql()).toContain('LIMIT 43;');

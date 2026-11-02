@@ -1,5 +1,7 @@
 # 使用指南
 
+MySQL／MariaDB 表页的“按外键生成 JOIN 查询”可设置双方多列排序、优先级、NULL 位置及 1～100000 的查询上限；未输出字段也能排序。预览后明确打开独立查询草稿，不自动执行、不继承原表页筛选，也不修改全局上限；实际执行仍受工作区结果上限约束。详见[JOIN 排序说明及验收范围](development/table-foreign-key-join-order-20261102.md)，暂不发布。
+
 SQLite 普通 `main` 表右键进入“修改 SQLite 字段、顺序与约束…”，读取后可选择字段的“显式 NOT NULL 处理”：保持、添加或保留、移除。移除声明不会取消 STRICT／WITHOUT ROWID 主键的隐含非空规则；INTEGER PRIMARY KEY 输入 NULL 仍可能生成 ROWID。完整预览并确认独立风险后提交，旧 NULL 不会被默认值回填，不满足新约束时整批回滚并保留草稿。详见[非空编辑说明及验收范围](development/sqlite-not-null-20261102.md)，Mac／安装另验，暂不发布。
 
 SQLite 普通 `main` 表可右键进入“修改 SQLite 字段、顺序与约束…”。明确读取后，在“SQLite 检查约束”区查看原文，新增、修改、标记移除或撤销 CHECK。填写单个表达式，可选择表级或行内附着字段；替换先核对原文，再暂存并与字段、主外键和 UNIQUE 统一预览。核对完整 SQL、CHECK 风险及准确目标后提交。NULL 不一定违反 CHECK，不能代替 NOT NULL；已有坏行可能导致整批回滚，草稿会保留，不会自动重试。详见[CHECK 编辑流程与验收范围](development/sqlite-check-ui-20261102.md)，Mac／安装另验，暂不发布。

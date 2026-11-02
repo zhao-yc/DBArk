@@ -36,6 +36,8 @@ export class TableForeignKeyJoinIntent {
 /** 原目录回包需满足真实父目标；helper同时检查对应FK字段存在且关系方向匹配。 */
 export function foreignKeyJoinPreview(intent: TableForeignKeyJoinIntent, parent: TableInfo, foreignKey: string, kind: 'LEFT' | 'INNER', options: ForeignKeyJoinOptions): ForeignKeyJoinPreview {
   if (!intent.current()) throw Error(text.stale);
+  // 在structuredClone之前检查新排序及上限的自有数据属性，不能先执行输入访问器。
+  buildForeignKeyJoin(intent.source, parent, foreignKey, kind, intent.limit, options);
   const target = immutable(structuredClone(parent)), selection = immutable(structuredClone(options));
   const result = buildForeignKeyJoin(intent.source, target, foreignKey, kind, intent.limit, selection);
   return Object.freeze({ parent: target, parentKey: foreignKeyJoinMetadataKey(target), childKey: intent.metadataKey, foreignKey, kind, options: selection, sql: result.sql });

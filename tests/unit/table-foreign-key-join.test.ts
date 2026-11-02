@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildForeignKeyJoin, foreignKeyJoinChoices, foreignKeyJoinLimits, foreignKeyJoinMetadataKey, type ForeignKeyJoinOptions } from '../../src/renderer/tableForeignKeyJoin';
+import { buildForeignKeyJoin, foreignKeyJoinChoices, foreignKeyJoinLimits, foreignKeyJoinMetadataKey, foreignKeyJoinResultLimit, type ForeignKeyJoinOptions } from '../../src/renderer/tableForeignKeyJoin';
 import { tableForeignKeyJoinZh as text } from '../../src/renderer/locales/tableForeignKeyJoin.zh-CN';
 import type { ColumnInfo, TableInfo } from '../../src/shared/contracts';
 import { splitSql } from '../../src/engine/sql';
@@ -99,6 +99,33 @@ describe('按一条真实外键生成独立JOIN SELECT', () => {
     choices[0].columns.reverse(); choices[0].referencedTable = '伪造'; expect(child).toEqual(before);
     expect(buildForeignKeyJoin(child, parent, 'fk_parent', 'LEFT', 50).sql).toContain('c.`parent_id` = p.`pid`');
   });
+});
+
+describe('JOIN双侧排序与显式行数上限', () => {
+  it('同名字段按双方身份区别，未输出字段可排序，优先级和NULL分桶不改原值', () => {
+    const { child, parent } = fixture(), result = buildForeignKeyJoin(child, parent, 'fk_parent', 'LEFT', 50, { childColumns: ['id'], parentColumns: [], sort: [{ side: 'parent', column: 'name', direction: 'DESC', nulls: 'LAST' }, { side: 'child', column: 'name', direction: 'ASC', nulls: 'FIRST' }, { side: 'parent', column: 'pid', direction: 'ASC' }], limit: 7 });
+    expect(result.sql).toContain('ORDER BY (p.`name` IS NULL) ASC, p.`name` DESC, (c.`name` IS NULL) DESC, c.`name` ASC, p.`pid` ASC\nLIMIT 7;'); expect(result.columns).toHaveLength(1); expect(result.sql).not.toMatch(/CAST|COALESCE|<=>/); expect(splitSql(result.sql)).toHaveLength(1); expect(namedParameterTokens(result.sql,{ansiQuotes:false,noBackslashEscapes:false})).toEqual([]);
+  });
+  it('缺省、空排序及缺省可选值严格保持原SQL字节，不补猜测的稳定键', () => {
+    const { child, parent } = fixture(), options = { childColumns: ['id'], parentColumns: [] }, before = buildForeignKeyJoin(child, parent, 'fk_parent', 'LEFT', 37, options).sql;
+    for (const extra of [{ sort: [] }, { sort: undefined, limit: undefined }, { limit: 37 }]) expect(buildForeignKeyJoin(child, parent, 'fk_parent', 'LEFT', 37, { ...options, ...extra }).sql).toBe(before);
+  });
+  it('排序内特殊标识符仍独立引用，四种SQL模式都是同一条零参数SELECT', () => {
+    const { child, parent } = fixture(); child.columns[0].name = '名` :fake;🚢';
+    const result = buildForeignKeyJoin(child, parent, 'fk_parent', 'INNER', 1, { childColumns: [], parentColumns: ['name'], sort: [{ side: 'child', column: child.columns[0].name, direction: 'DESC' }] }); expect(result.sql).toContain('ORDER BY c.`名`` :fake;🚢` DESC');
+    for (const ansiQuotes of [false,true]) for (const noBackslashEscapes of [false,true]) { expect(splitSql(result.sql,noBackslashEscapes,ansiQuotes)).toHaveLength(1); expect(namedParameterTokens(result.sql,{ansiQuotes,noBackslashEscapes})).toEqual([]); }
+  });
+  it.each([{side:'else',column:'id',direction:'ASC'},{side:'child',column:'missing',direction:'ASC'},{side:'parent',column:'id',direction:'ASC'},{side:'child',column:'id',direction:'desc'},{side:'child',column:'id',direction:'ASC',nulls:'DEFAULT'},{side:'child',column:'id',direction:'ASC',extra:'SELECT'}])('错误排序整次拒绝，不过滤为另一条查询：%j', rule => {
+    const {child,parent}=fixture(); expect(()=>buildForeignKeyJoin(child,parent,'fk_parent','LEFT',50,{childColumns:['id'],parentColumns:[],sort:[rule] as any})).toThrow();
+  });
+  it('重复字段、稀疏数组、超预算和访问器均拒绝且getter零调用', () => {
+    const {child,parent}=fixture(), options={childColumns:['id'],parentColumns:[]}, rule={side:'child' as const,column:'id',direction:'ASC' as const}; expect(()=>buildForeignKeyJoin(child,parent,'fk_parent','LEFT',50,{...options,sort:[rule,rule]})).toThrow(text.sortInvalid);
+    for(const sort of [new Array(2),Array.from({length:21},()=>rule)]) expect(()=>buildForeignKeyJoin(child,parent,'fk_parent','LEFT',50,{...options,sort})).toThrow();
+    let reads=0;const item={...rule};Object.defineProperty(item,'nulls',{enumerable:true,get(){reads++;return'FIRST';}});expect(()=>buildForeignKeyJoin(child,parent,'fk_parent','LEFT',50,{...options,sort:[item]})).toThrow();const supplied={...options};Object.defineProperty(supplied,'limit',{enumerable:true,get(){reads++;return 10;}});expect(()=>buildForeignKeyJoin(child,parent,'fk_parent','LEFT',50,supplied)).toThrow();expect(reads).toBe(0);
+  });
+  it.each(['','0','01','-1','1.5','1e2',' 2','100001','1234567','NaN'])('行数文本%s保留为无效，不静默转换', value => expect(()=>foreignKeyJoinResultLimit(value)).toThrow(text.limitInvalid));
+  it.each([1,100000])('有效上限边界%s可覆盖原默认值，不修改输出和关联', limit => { const {child,parent}=fixture(); expect(foreignKeyJoinResultLimit(String(limit))).toBe(limit);expect(buildForeignKeyJoin(child,parent,'fk_parent','LEFT',50,{childColumns:['id'],parentColumns:[],limit}).sql).toMatch(new RegExp('LIMIT '+limit+';$')); });
+  it.each([0,-1,1.5,100001,'7',null,NaN])('结构化上限%j严格拒绝，不能通过字符串或非整数进入SQL', limit => {const {child,parent}=fixture();expect(()=>buildForeignKeyJoin(child,parent,'fk_parent','LEFT',50,{childColumns:['id'],parentColumns:[],limit:limit as number})).toThrow(text.limitInvalid);});
 });
 
 describe('结构身份、目标及生成预算', () => {

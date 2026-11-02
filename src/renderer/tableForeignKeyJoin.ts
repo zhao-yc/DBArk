@@ -1,10 +1,11 @@
 import type { TableInfo } from '../shared/contracts';
 import { tableForeignKeyJoinZh as text } from './locales/tableForeignKeyJoin.zh-CN';
 
-export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sqlUnits: 256 * 1024 } as const;
+export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingColumns: 4096, metadataUnits: 2 * 1024 * 1024, outputColumns: 1024, sorts: 20, rows: 100000, sqlUnits: 256 * 1024 } as const;
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: 'child' | 'parent'; column: string; alias: string }
-export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[] }
+export interface ForeignKeyJoinSort { side: 'child' | 'parent'; column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; }
+export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[]; sort?: readonly ForeignKeyJoinSort[]; limit?: number; }
 type Budget = { units: number };
 
 /** 只读自有数据属性；不会为了生成SELECT访问DDL、默认值、注释或调用访问器。 */
@@ -12,7 +13,7 @@ function own(value: unknown, key: string, optional = false): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(text.invalid);
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   if (!descriptor) { if (optional) return undefined; throw Error(text.invalid); }
-  if (!('value' in descriptor)) throw Error(text.invalid);
+  if (!descriptor.enumerable || !('value' in descriptor)) throw Error(text.invalid);
   return descriptor.value;
 }
 
@@ -110,6 +111,26 @@ function alias(side: 'child' | 'parent', ordinal: number, name: string): string 
   return prefix + suffix;
 }
 
+/** 输入期间保留原文本；只接受完整十进制整数，不将空值、指数或小数默默改成默认上限。 */
+export function foreignKeyJoinResultLimit(value: string): number {
+  if (typeof value !== 'string' || !/^[1-9]\d{0,5}$/.test(value)) throw Error(text.limitInvalid);
+  const limit = Number(value); if (limit > foreignKeyJoinLimits.rows) throw Error(text.limitInvalid); return limit;
+}
+
+/** 排序字段按双方真实目录独立定位，允许同名和未输出字段，不读取任意SQL或猜测补键。 */
+function order(raw: unknown, child: { columns: { name: string }[] }, parent: { columns: { name: string }[] }): string {
+  if (raw === undefined) return '';
+  const seen = new Set<string>(), names = { child: new Set(child.columns.map(column => column.name)), parent: new Set(parent.columns.map(column => column.name)) };
+  return array(raw, foreignKeyJoinLimits.sorts).flatMap(value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Reflect.ownKeys(value).some(key => !['side', 'column', 'direction', 'nulls'].includes(key as string))) throw Error(text.sortInvalid);
+    const side = own(value, 'side'), column = own(value, 'column'), direction = own(value, 'direction'), nulls = own(value, 'nulls', true);
+    if (side !== 'child' && side !== 'parent' || typeof column !== 'string' || !names[side].has(column) || direction !== 'ASC' && direction !== 'DESC' || nulls !== undefined && nulls !== 'FIRST' && nulls !== 'LAST') throw Error(text.sortInvalid);
+    const key = JSON.stringify([side, column]); if (seen.has(key)) throw Error(text.sortInvalid); seen.add(key);
+    const reference = (side === 'child' ? 'c.' : 'p.') + quote(column), term = reference + ' ' + direction;
+    return nulls === undefined ? [term] : ['(' + reference + ' IS NULL) ' + (nulls === 'FIRST' ? 'DESC' : 'ASC'), term];
+  }).join(', ');
+}
+
 /** 生成MySQL/MariaDB独立只读单语句；不猜测主键、不继承父页条件，也不执行SQL。 */
 export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName: string, kind: 'LEFT' | 'INNER', limit: number, options?: ForeignKeyJoinOptions): { sql: string; columns: ForeignKeyJoinColumn[] } {
   if (kind !== 'LEFT' && kind !== 'INNER' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100000) throw Error(text.invalid);
@@ -118,11 +139,14 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName:
   if (right.database !== relation.referencedDatabase || right.name !== relation.referencedTable) throw Error(text.target);
   const parentNames = new Set(right.columns.map(column => column.name));
   if (relation.referencedColumns.some(column => !parentNames.has(column))) throw Error(text.relation);
-  let childColumns: string[], parentColumns: string[];
+  let childColumns: string[], parentColumns: string[], ordering = '', resultLimit = limit;
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right.columns.map(column => column.name); }
   else {
-    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).length !== 2 || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !['childColumns', 'parentColumns', 'sort', 'limit'].includes(key as string)) || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
     childColumns = selected(own(options, 'childColumns'), left.columns); parentColumns = selected(own(options, 'parentColumns'), right.columns);
+    ordering = order(own(options, 'sort', true), left, right);
+    const suppliedLimit = own(options, 'limit', true);
+    if (suppliedLimit !== undefined) { if (typeof suppliedLimit !== 'number' || !Number.isSafeInteger(suppliedLimit) || suppliedLimit < 1 || suppliedLimit > foreignKeyJoinLimits.rows) throw Error(text.limitInvalid); resultLimit = suppliedLimit; }
   }
   const count = childColumns.length + parentColumns.length;
   if (!count) throw Error(text.columns);
@@ -137,6 +161,7 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName:
   columns.forEach((column, index) => append(`  ${column.side === 'child' ? 'c' : 'p'}.${quote(column.column)} AS ${quote(column.alias)}${index + 1 === columns.length ? '\n' : ',\n'}`));
   append(`FROM ${quote(left.database)}.${quote(left.name)} AS c\n${kind} JOIN ${quote(right.database)}.${quote(right.name)} AS p\nON\n`);
   relation.columns.forEach((column, index) => append(`${index ? '  AND ' : '  '}c.${quote(column)} = p.${quote(relation.referencedColumns[index])}\n`));
-  append(`LIMIT ${limit};`);
+  if (ordering) append('ORDER BY ' + ordering + '\n');
+  append(`LIMIT ${resultLimit};`);
   return { sql, columns };
 }
