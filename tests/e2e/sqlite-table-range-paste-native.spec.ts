@@ -1,3 +1,4 @@
+import { navigationMenuItem } from './navigation-menu';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
@@ -145,10 +146,10 @@ test('真实矩形按位置覆盖原行、old/new预览、单步undo/redo、Main
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))), rw = profiles.find(profile => profile.name === rwName), ro = profiles.find(profile => profile.name === roName);
     if (!rw || rw.dialect !== 'sqlite' || !ro || ro.dialect !== 'sqlite') throw Error('本例区域SQLite连接缺失');
     expect(rw.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: false }); expect(ro.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: true }); await openTable(rwName); await step(() => expect(grid()).toBeVisible());
-    await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click()); await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id'));
+    await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id'));
     const beforeSort = operations(await step(audit), 'sqlite.tablePage').length; await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click());
     await step(() => expect.poll(async () => { const reads = operations(await audit(), 'sqlite.tablePage'); return reads.length === beforeSort + 1 && reads.at(-1)?.reply !== undefined; }).toBe(true));
-    await step(() => expect(grid().getByRole('button', { name: '选择 SQLite 第 2 行', exact: true })).toBeVisible()); await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click()); await counts(0);
+    await step(() => expect(grid().getByRole('button', { name: '选择 SQLite 第 2 行', exact: true })).toBeVisible()); await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); await counts(0);
     const sourcePage = operations(await step(audit), 'sqlite.tablePage').at(-1); expect((result(sourcePage?.reply).columns as { name: string }[]).map(column => column.name)).toEqual(columns);
     stage = '无准确数据起点不得打开区域窗口，行头不能冒充数据格';
     await step(() => grid().getByRole('button', { name: '选择 SQLite 第 1 行', exact: true }).click()); expect(await dispatchPaste(packet([[{ kind: 'text', value: conflictMarker }]]))).toBe(true);

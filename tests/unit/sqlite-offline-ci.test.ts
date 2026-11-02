@@ -14,6 +14,7 @@ describe('SQLite独立源码CI的原生门与环境隔离', () => {
   it.each([
     ['workspace', 'sqlite-workspace-native.spec.ts', 'sqlite-workspace', 'DBARK_SQLITE_WORKSPACE_NATIVE_TEST'],
     ['table', 'sqlite-table-browse-native.spec.ts', 'sqlite-table-browse', 'DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST'],
+    ['table-toolbar', 'sqlite-table-toolbar-native.spec.ts', 'sqlite-table-toolbar', 'DBARK_SQLITE_TABLE_TOOLBAR_NATIVE_TEST'],
     ['export', 'sqlite-table-export-native.spec.ts', 'sqlite-table-export', 'DBARK_SQLITE_TABLE_EXPORT_NATIVE_TEST'],
     ['edit', 'sqlite-table-edit-native.spec.ts', 'sqlite-table-edit', 'DBARK_SQLITE_TABLE_EDIT_NATIVE_TEST'],
     ['schema-export', 'sqlite-schema-export-native.spec.ts', 'sqlite-schema-export', 'DBARK_SQLITE_SCHEMA_EXPORT_NATIVE_TEST'],

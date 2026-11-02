@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 表格新增[自适应操作栏](development/sqlite-table-toolbar-20261102.md)：完整按钮按空间进入“更多”，修复固定单行撑开根容器的路径；原业务处理器及菜单失效保护保持，三平台验收继续，暂不发布。
+
 分组菜单新增[聚焦与背景滚动修正](development/action-menu-focus-20261102.md)：程序聚焦不滚动工作区，键盘只滚动本层菜单；来源、权限及外部关闭保护保持。Windows 源码原导航、表页和索引验证通过，三平台专项继续，暂不发布。
 
 SQLite 原字节读取已[接入实际 worker](development/sqlite-native-runtime-20261102.md)：查询结果保留原存储类型，坏 TEXT 明确失败；固定资源构建、摘要校验和私有调用隔离已接线。Windows 源码工作区及相关测试通过，Mac 与打包范围另行验收，暂不发布。此前[语句适配器](development/sqlite-raw-statement-20261102.md)与[有界批次](development/sqlite-raw-frames-20261102.md)记录保留为接入前的独立证据。

@@ -1,3 +1,4 @@
+import { navigationMenuItem } from './navigation-menu';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
@@ -40,7 +41,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
   let owner = runtime.ownedDesktopResources(info), application = owner.application, page = owner.page, originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'sqlite-table-browse-native.sqlite');
   await info.attach('SQLite本例启动所有权', { body: JSON.stringify({ directory, database, pid: originalProcess.pid, platform: process.platform }), contentType: 'application/json' });
-  let closed = false, armed = false, stage = '独占合成库准备';
+  let closed = false, armed = false, stage = '独占合成库准备', reportedStage = '';
   /** 每个异步边界都只承认本例准确owner与120秒单次期限。 */
   const check = () => {
     const current = runtime.ownedDesktopResources(info);
@@ -51,7 +52,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     if (!state) throw Error('原SQLite表浏览观察器不存在'); state.check();
     return { pending: state.pending, denied: state.denied, forks: state.forks, pickerCalls: state.pickerCalls, connectionId: state.connectionId, commands: state.commands, lookups: state.lookups, pages: state.pages };
   });
-  const step = async <T,>(action: () => Promise<T>, skipAuditAfter = false): Promise<T> => { check(); if (armed && !closed) await audit(); const result = await action(); check(); if (armed && !closed && !skipAuditAfter) await audit(); return result; };
+  const step = async <T,>(action: () => Promise<T>, skipAuditAfter = false): Promise<T> => { if (stage !== reportedStage) { reportedStage = stage; console.log('SQLite表页阶段：' + stage); } check(); if (armed && !closed) await audit(); const result = await action(); check(); if (armed && !closed && !skipAuditAfter) await audit(); return result; };
   const table = () => page.locator('.table-tab[aria-label="SQLite 只读表浏览"]:visible');
   const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
   const tasks = () => step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})));
@@ -129,7 +130,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     return result.rows;
   };
   /** 展开/收起都点击真实产品入口，收起后给网格足够空间展示完整五行。 */
-  const controls = async (open: boolean) => { const visible = await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible()); if (visible !== open) await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click()); };
+  const controls = async (open: boolean) => { const visible = await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible()); if (visible !== open) await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); };
   const apply = async (expected: number[]) => {
     const before = (await step(audit)).pages.length;
     await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click());
@@ -324,7 +325,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     // UI切换先于原400ms设置落盘；必须等真实Main持久态确认，不能用旧查询activeId作重启基线。
     await step(() => expect.poll(async () => (await settings()).activeTabId).toBe(tableTab.id));
     stage = '只读列布局隐藏重排调宽冻结并保存'; const beforeLayout = await step(audit);
-    await step(() => table().getByRole('button', { name: layoutText.entry, exact: true }).click());
+    await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: layoutText.entry, exact: true }, check)).click());
     const layoutModal = () => page.getByRole('dialog', { name: layoutText.title, exact: true });
     await step(() => layoutModal().getByRole('checkbox', { name: layoutFields.visible + ' nullable', exact: true }).uncheck());
     await step(() => layoutModal().getByRole('button', { name: layoutFields.down + ' id', exact: true }).click());
@@ -345,7 +346,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     stage = '第一owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); const firstPid = originalProcess.pid;
     stage = '同profile重启恢复表页'; await runtime.restartOwnedDesktop(info); owner = runtime.ownedDesktopResources(info); application = owner.application; page = owner.page; originalProcess = application.process(); closed = false; check(); expect(originalProcess.pid).not.toBe(firstPid);
     await arm(profile.id); armed = true; await step(() => expect(table().getByRole('grid')).toBeVisible()); expect(await settings()).toEqual(persisted); expect(await history()).toEqual([]); expect(disk()).toEqual(baseline);
-    await step(() => expect(table().getByRole('button', { name: layoutText.entry, exact: true })).toBeEnabled()); await assertLayout();
+    await step(async () => expect((await navigationMenuItem(table().locator('.toolbar'), { name: layoutText.entry, exact: true }, check))).toBeEnabled()); await assertLayout();
     expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(profiles); expect((await tasks()).every(task => (task.kind === 'sqlite.tablePage' || task.kind === 'sqlite.valueOptions' && task.id === lookupTaskId) && task.status === 'completed')).toBe(true);
     // 恢复时首轮读取可能先于观察器安装；只证明安装后的显式刷新，绝不补写先前fork事实。
     const restoredPages = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: '刷新 SQLite 表数据', exact: true }).click()); await step(() => expect.poll(async () => (await audit()).pages.length).toBe(restoredPages + 1));

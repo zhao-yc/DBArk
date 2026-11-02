@@ -1,3 +1,4 @@
+import { navigationMenuItem } from './navigation-menu';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
@@ -119,10 +120,10 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
   /** 先经真实排序控件确定页内行序，不能把SQLite未指定ORDER BY的扫描顺序当作定位合同。 */
   const sortPage = async (columns: string[]) => {
     const before = operations(await step(audit), 'sqlite.tablePage').length;
-    await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click());
+    await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click());
     for (const [index, column] of columns.entries()) { await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel(`SQLite 排序 ${index + 1} 字段`, { exact: true }).selectOption(column)); await step(() => table().getByLabel(`SQLite 排序 ${index + 1} 方向`, { exact: true }).selectOption('asc')); }
     await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click()); await step(() => expect.poll(async () => { const pages = operations(await audit(), 'sqlite.tablePage'); return pages.length === before + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true));
-    await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click()); await step(() => expect(grid()).toBeVisible());
+    await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); await step(() => expect(grid()).toBeVisible());
   };
   /** 可写页列头仍只读取服务端新快照；每次真实点击必须准确产生一次offset0请求。 */
   const headerSortPk = async (sort: { column: 'id'; direction: 'asc' | 'desc' }[], expected?: string[]) => {
@@ -179,7 +180,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     stage = '可写Grid真实id列头降序、移除、升序均读取服务端新原页';
     await headerSortPk([{ column: 'id', direction: 'desc' }], ['INTEGER · 999', 'INTEGER · 4', 'INTEGER · 3', 'INTEGER · 2', 'INTEGER · 1']); await headerSortPk([]); await headerSortPk([{ column: 'id', direction: 'asc' }], ['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']); expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
     stage = '可编辑范围筛选仍是独立只读分页，不产生编辑预览或写入';
-    if (!await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible())) await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click());
+    if (!await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible())) await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click());
     const rangeBefore = operations(await step(audit), 'sqlite.tablePage').length;
     await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await step(() => table().getByLabel('SQLite 筛选 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 筛选 1 运算符', { exact: true }).selectOption('between')); await step(() => table().getByLabel('SQLite 筛选 1 值类型', { exact: true }).selectOption('integer')); await step(() => table().getByLabel('SQLite 筛选 1 条件值', { exact: true }).fill('2')); await step(() => table().getByLabel('SQLite 筛选 1 结束值', { exact: true }).fill('4'));
     expect(operations(await step(audit), 'sqlite.tablePage')).toHaveLength(rangeBefore);
@@ -188,7 +189,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click()); await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 4', 'INTEGER · 999']));
     expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
     stage = '可编辑IN/NOT IN列表仍为独立只读分页，清除恢复准确原页';
-    if (!await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible())) await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click());
+    if (!await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).isVisible())) await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click());
     const listBefore = operations(await step(audit), 'sqlite.tablePage').length;
     await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await step(() => table().getByLabel('SQLite 筛选 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 筛选 1 运算符', { exact: true }).selectOption('in')); await step(() => table().getByLabel('SQLite 筛选 1 值类型', { exact: true }).selectOption('integer')); await step(() => table().getByLabel('SQLite 筛选 1 条件值', { exact: true }).fill('1'));
     await step(() => table().getByRole('button', { name: '添加 SQLite 筛选 1 列表值', exact: true }).click()); await step(() => table().getByLabel('SQLite 筛选 1 列表值 2', { exact: true }).fill('4')); expect(operations(await step(audit), 'sqlite.tablePage')).toHaveLength(listBefore);
@@ -222,7 +223,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
       expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toEqual([]); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]); expect(disk()).toEqual(baseline);
     }
     stage = '可写列布局及重排矩形粘贴的准确原字段'; const beforeLayout = await step(audit);
-    await step(() => table().getByRole('button', { name: layoutText.entry, exact: true }).click()); const layoutModal = () => page.getByRole('dialog', { name: layoutText.title, exact: true });
+    await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: layoutText.entry, exact: true }, check)).click()); const layoutModal = () => page.getByRole('dialog', { name: layoutText.title, exact: true });
     await step(() => layoutModal().getByRole('checkbox', { name: layoutFields.visible + ' nullable', exact: true }).uncheck());
     await step(() => layoutModal().getByRole('button', { name: layoutFields.up + ' note', exact: true }).click());
     for (let index = 0; index < 3; index++) await step(() => layoutModal().getByRole('button', { name: layoutFields.up + ' payload', exact: true }).click());
@@ -237,7 +238,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     const rangeModal = () => page.getByRole('dialog', { name: rangeText.title, exact: true }); await step(() => expect(rangeModal()).toBeVisible()); await step(() => rangeModal().getByRole('button', { name: rangeText.preview, exact: true }).click()); await step(() => rangeModal().getByRole('button', { name: rangeText.stage, exact: true }).click()); await step(() => expect(rangeModal()).toBeHidden()); await counts(0, 1, 0);
     const mappedPreview = await openPreview({ insert: 0, update: 1, delete: 0 }); expect(mappedPreview.fact?.request.changes).toEqual([{ kind: 'update', row: 0, values: [{ column: 'note', value: { kind: 'text', value: pastedNote } }, { column: 'payload', value: { kind: 'blob', value: 'aaff00' } }] }]); expect(disk()).toEqual(baseline);
     await step(() => preview().getByRole('button', { name: '关闭 SQLite 修改预览', exact: true }).click()); await step(() => expect(preview()).toBeHidden()); await step(() => table().getByRole('button', { name: '撤销 SQLite 草稿', exact: true }).click()); await counts(0, 0, 0); expect(disk()).toEqual(baseline);
-    await step(() => table().getByRole('button', { name: layoutText.entry, exact: true }).click()); const resetsBefore = operations(await step(audit), 'sqlite.tableLayout.reset').length;
+    await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: layoutText.entry, exact: true }, check)).click()); const resetsBefore = operations(await step(audit), 'sqlite.tableLayout.reset').length;
     await confirm(() => layoutModal().getByRole('button', { name: layoutFields.reset, exact: true }).click(), layoutText.reset, 1); expect(operations(await step(audit), 'sqlite.tableLayout.reset')).toHaveLength(resetsBefore);
     await confirm(() => layoutModal().getByRole('button', { name: layoutFields.reset, exact: true }).click(), layoutText.reset); await step(() => expect(layoutModal().getByText(layoutFields.saved, { exact: true })).toBeVisible()); await step(() => expect.poll(async () => operations(await audit(), 'sqlite.tableLayout.reset').length).toBe(resetsBefore + 1));
     await step(() => layoutModal().locator('.modal-footer').getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(layoutModal()).toBeHidden()); await step(() => expect(grid().getByRole('columnheader', { name: 'id', exact: true })).toHaveAttribute('aria-colindex', '3')); expect(disk()).toEqual(baseline);
@@ -249,7 +250,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     stage = '脏页列头排序取消原确认，准确增改删草稿/行序/排序均保留且零请求';
     const beforePresets = await step(audit), presetDraftIds = await columnValues('id');
     // 原流程可能已展开条件；只在关闭时展开，不能用盲目toggle把真实入口藏掉。
-    if (!(await step(() => table().locator('.sqlite-browse-conditions').isVisible()))) await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click());
+    if (!(await step(() => table().locator('.sqlite-browse-conditions').isVisible()))) await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click());
     await step(() => table().getByRole('button', { name: presetText.entry, exact: true }).click());
     const presetPanel = () => table().getByRole('group', { name: presetText.title, exact: true });
     await step(() => expect(presetPanel().getByRole('button', { name: presetText.save, exact: true })).toBeEnabled());
@@ -261,7 +262,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await step(() => expect(presetPanel().getByText(presetText.saved, { exact: true })).toBeVisible());
     await confirm(() => presetPanel().getByRole('button', { name: presetText.remove, exact: true }).click(), presetText.confirmRemove('脏页方案'), 1);
     await confirm(() => presetPanel().getByRole('button', { name: presetText.remove, exact: true }).click(), presetText.confirmRemove('脏页方案'));
-    await step(() => expect(presetPanel().getByText(presetText.removed, { exact: true })).toBeVisible()); await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click());
+    await step(() => expect(presetPanel().getByText(presetText.removed, { exact: true })).toBeVisible()); await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click());
     await counts(1, 1, 1); expect(await columnValues('id')).toEqual(presetDraftIds); const afterPresets = await step(audit);
     for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterPresets, command)).toHaveLength(operations(beforePresets, command).length);
     for (const [command, count] of [['sqlite.tablePresets.save', 2], ['sqlite.tablePresets.read', 1], ['sqlite.tablePresets.delete', 1]] as const) {
@@ -271,7 +272,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await step(() => (require('./sqlite-grid-navigation') as typeof import('./sqlite-grid-navigation')).revealSqliteEditColumn(page, grid(), 0, check)); const beforeHeaderCancel = await step(audit), draftIds = await columnValues('id'), headerBeforeCancel = grid().getByRole('columnheader').filter({ hasText: /^id(?:[1-9]|\s|$)/ }); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending'));
     await confirm(() => headerBeforeCancel.click(), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1); await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending')); const afterHeaderCancel = await step(audit); for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterHeaderCancel, command)).toHaveLength(operations(beforeHeaderCancel, command).length); expect(disk()).toEqual(baseline);
     stage = '脏页不同值只读已提交原文，加入和删除筛选草稿均保整批增改删';
-    await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click()); const beforeValues = await step(audit), valuesDraftIds = await columnValues('id');
+    await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); const beforeValues = await step(audit), valuesDraftIds = await columnValues('id');
     const conditionSnapshot = () => table().locator('[aria-label^="SQLite 筛选 "]').evaluateAll(nodes => nodes.map(node => ({ label: node.getAttribute('aria-label'), value: (node as HTMLInputElement).value, checked: (node as HTMLInputElement).checked })));
     const originalConditions = await step(conditionSnapshot), filterCount = await step(() => table().getByRole('combobox', { name: /^SQLite 筛选 \d+ 运算符$/ }).count());
     await step(() => table().getByRole('button', { name: valuesText.entry, exact: true }).click()); const valuesModal = () => page.getByRole('dialog', { name: valuesText.title, exact: true }); await step(() => expect(valuesModal()).toBeVisible());
@@ -282,7 +283,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await counts(1, 1, 1); expect(await columnValues('id')).toEqual(valuesDraftIds); await step(() => expect(table().getByLabel(`SQLite 筛选 ${filterCount + 1} 运算符`, { exact: true })).toHaveValue('oneOf'));
     await step(() => table().getByRole('button', { name: `删除 SQLite 筛选 ${filterCount + 1}`, exact: true }).click()); expect(await step(conditionSnapshot)).toEqual(originalConditions);
     const afterValues = await step(audit); for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterValues, command)).toHaveLength(operations(beforeValues, command).length);
-    expect(disk()).toEqual(baseline); await step(() => table().getByRole('button', { name: '筛选与排序', exact: true }).click()); await counts(1, 1, 1);
+    expect(disk()).toEqual(baseline); await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); await counts(1, 1, 1);
     stage = 'SQL预览取消零写入且保留草稿'; const canceledPreview = await openPreview({ insert: 1, update: 1, delete: 1 }); expect(canceledPreview.output.target).toEqual({ connectionId: rw.id, database: 'main', table: pkTable }); expect(canceledPreview.output.sql).toEqual(expect.arrayContaining([expect.stringMatching(/UPDATE /), expect.stringMatching(/INSERT INTO /), expect.stringMatching(/DELETE FROM /)]));
     // 精确确认新增defaulted没有进入写入合同，而非用显式NULL/默认文本碰巧得到相同结果。
     expect(canceledPreview.fact?.request.changes).toEqual([

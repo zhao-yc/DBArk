@@ -6,23 +6,35 @@ on:
     paths:
       - '.github/workflows/action-menu-focus.yml'
       - 'src/renderer/components/ActionMenu.tsx'
+      - 'src/renderer/components/SqliteTableTab.tsx'
+      - 'src/renderer/components/AdaptiveToolbar.tsx'
+      - 'src/renderer/locales/sqliteTableBrowse.zh-CN.ts'
+      - 'src/renderer/navigation.css'
       - 'src/renderer/actionMenuFocus.ts'
       - 'src/renderer/actionMenu.css'
       - 'tests/unit/action-menu-*.test.*'
       - 'tests/e2e/navigation-menu*.ts'
       - 'tests/e2e/navigation-workbench.spec.ts'
       - 'tests/e2e/sqlite-table-browse-native.spec.ts'
+      - 'tests/e2e/sqlite-table-toolbar-native.spec.ts'
+      - 'scripts/sqlite-workspace-ci.mjs'
       - 'tests/e2e/sqlite-indexes-native.spec.ts'
   pull_request:
     paths:
       - '.github/workflows/action-menu-focus.yml'
       - 'src/renderer/components/ActionMenu.tsx'
+      - 'src/renderer/components/SqliteTableTab.tsx'
+      - 'src/renderer/components/AdaptiveToolbar.tsx'
+      - 'src/renderer/locales/sqliteTableBrowse.zh-CN.ts'
+      - 'src/renderer/navigation.css'
       - 'src/renderer/actionMenuFocus.ts'
       - 'src/renderer/actionMenu.css'
       - 'tests/unit/action-menu-*.test.*'
       - 'tests/e2e/navigation-menu*.ts'
       - 'tests/e2e/navigation-workbench.spec.ts'
       - 'tests/e2e/sqlite-table-browse-native.spec.ts'
+      - 'tests/e2e/sqlite-table-toolbar-native.spec.ts'
+      - 'scripts/sqlite-workspace-ci.mjs'
       - 'tests/e2e/sqlite-indexes-native.spec.ts'
   workflow_dispatch:
 
@@ -58,7 +70,9 @@ jobs:
         run: pnpm exec vitest run tests/unit/action-menu-state.test.tsx tests/unit/action-menu-focus.test.ts --maxWorkers=1
       - name: 构建准确源码
         run: pnpm build
-      # 三份原spec原样执行，不改期限、断言、fixture或失败现场保留规则。
+      - name: 单次验证最小窗口表工具栏明暗与600侧栏
+        run: node scripts/sqlite-workspace-ci.mjs table-toolbar
+      # 三份原spec原断言继续执行，不改期限、fixture或失败现场保留规则。
       - name: 单次验证原表页菜单与完整分页筛选排序
         run: node scripts/sqlite-workspace-ci.mjs table
       - name: 单次验证原索引两例
@@ -81,6 +95,7 @@ jobs:
           name: action-menu-focus-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/sqlite-table-browse/
+            test-results/sqlite-table-toolbar/
             test-results/sqlite-indexes/
             test-results/action-menu-focus-navigation/
             .cache/action-menu-focus-head.txt
