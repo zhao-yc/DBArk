@@ -2,6 +2,7 @@ import { copySqliteTableRebuildColumnOrder } from './sqliteTableRebuild';
 import { buildSqliteTableCreateDefault, sqliteTableCreateColumnSchema, type SqliteTableCreateDefault } from './sqliteTableCreate';
 import { buildSqliteTableForeignKey, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from './sqliteTableForeignKeys';
 import { buildSqliteTablePrimaryKey, sqliteTablePrimaryKeyEditSchema, type SqliteTablePrimaryKeyDefinition, type SqliteTablePrimaryKeyEdit } from './sqliteTablePrimaryKey';
+import { buildSqliteTableUnique, sqliteTableUniqueEditsSchema, sqliteTableUniqueLimits, type SqliteTableUniqueDefinition } from './sqliteTableUnique';
 
 /** 重建编译只修改明确声明跨度；不推断数据转换、不签发执行能力，未修改约束原文保留。 */
 export const sqliteTableRebuildPlanLimits = { sqlBytes: 2 * 1024 * 1024, tokens: 300000, columns: 1024, changes: 128, nesting: 256 } as const;
@@ -18,7 +19,7 @@ export interface SqliteTableRebuildDefinition {
 interface Token { kind: 'word' | 'quoted' | 'string' | 'number' | 'symbol'; value: string; start: number; end: number; }
 interface Span { start: number; end: number; }
 interface DefinitionSegment extends Span { column?: string; parts: Token[]; }
-interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; notNull: boolean; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
+interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; notNull: boolean; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; uniques: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
 const limits = sqliteTableRebuildPlanLimits, encoder = new TextEncoder();
 const fold = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 const word = (token: Token | undefined, value: string) => token?.kind === 'word' && fold(token.value) === value.toLowerCase();
@@ -115,7 +116,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
     if (symbol(parts[index], '(')) index = groupEnd(parts, index);
     else { if (parts[index].kind === 'symbol' || parts[index].kind === 'number') throw invalid(); index++; }
   }
-  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, notNull: false, references: [], primaryKeys: [], names: [] };
+  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, notNull: false, references: [], primaryKeys: [], uniques: [], names: [] };
   while (index < parts.length) {
     const start = index;
     while (word(parts[index], 'CONSTRAINT')) { const marker = parts[index].start; if (identifier(parts[++index]) === undefined) throw invalid(); result.names.push({ name: identifier(parts[index])!, start: marker }); index++; }
@@ -132,7 +133,8 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
       index = conflictEnd(parts, index); if (word(parts[index], 'AUTOINCREMENT')) index++;
       result.primaryKeys.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) });
     } else if (word(token, 'NOT')) { if (!word(parts[index++], 'NULL')) throw invalid(); result.notNull = true; index = conflictEnd(parts, index); }
-    else if (word(token, 'NULL') || word(token, 'UNIQUE')) index = conflictEnd(parts, index);
+    else if (word(token, 'NULL')) index = conflictEnd(parts, index);
+    else if (word(token, 'UNIQUE')) { index = conflictEnd(parts, index); result.uniques.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) }); }
     else if (word(token, 'GENERATED') || word(token, 'AS')) {
       if (result.hidden !== 0) throw invalid();
       if (word(token, 'GENERATED')) { if (!word(parts[index++], 'ALWAYS') || !word(parts[index++], 'AS')) throw invalid(); }
@@ -291,6 +293,100 @@ export function compileSqliteTableForeignKeys(raw: ForeignKeyInput, rawEdits: un
   const tableSql = input.tableSql.slice(0, source.bodyOpen) + body + input.tableSql.slice(source.bodyEnd);
   if (encoder.encode(tableSql).length > limits.sqlBytes || tableSql === input.tableSql) throw Error('SQLite外键声明未变化或超过2MiB UTF8预算');
   return { tableSql, foreignKeys: inspectSqliteTableForeignKeys({ ...input, tableSql }), added, removed, replaced: changed };
+}
+
+export interface SqliteTableUniqueSource {
+  readonly ordinal: number; readonly location: 'column' | 'table'; readonly column?: string;
+  readonly sql: string; readonly names: readonly string[];
+  readonly columns: readonly Readonly<SqliteTableUniqueDefinition['columns'][number]>[];
+  readonly conflict: SqliteTableUniqueDefinition['conflict'];
+}
+interface UniqueSpan extends Span { segment: DefinitionSegment; value: Omit<SqliteTableUniqueSource, 'ordinal'>; }
+
+/** 仅识别UNIQUE真实字段引用；括号及连续COLLATE保留原文，不将表达式当字段。 */
+function uniqueValue(parts: Token[], column?: string): Omit<SqliteTableUniqueSource, 'ordinal' | 'location' | 'column' | 'sql'> {
+  let index = 0; const names: string[] = [], columns: SqliteTableUniqueDefinition['columns'] = [];
+  while (word(parts[index], 'CONSTRAINT')) { const name = identifier(parts[++index]); if (name === undefined) throw invalid(); names.push(name); index++; }
+  if (!word(parts[index++], 'UNIQUE')) throw invalid();
+  if (column === undefined) {
+    if (!symbol(parts[index++], '(')) throw invalid();
+    /** 已有字段可被多层括号包围；COLLATE只读取实际最后声明，不重写原表达形式。 */
+    function field(depth = 0): { column: string; collation: string | null } {
+      if (depth > limits.nesting) throw invalid(); let value: { column: string; collation: string | null };
+      if (symbol(parts[index], '(')) { index++; value = field(depth + 1); if (!symbol(parts[index++], ')')) throw invalid(); }
+      else { const name = identifier(parts[index++]); if (name === undefined) throw invalid(); value = { column: name, collation: null }; }
+      while (word(parts[index], 'COLLATE')) { const collation = identifier(parts[++index]); if (collation === undefined) throw invalid(); value = { ...value, collation }; index++; }
+      return value;
+    }
+    for (;;) {
+      const value = field(); let order: 'ASC' | 'DESC' | null = null;
+      if (word(parts[index], 'ASC') || word(parts[index], 'DESC')) order = parts[index++].value.toUpperCase() as 'ASC' | 'DESC';
+      columns.push({ ...value, order }); if (columns.length > sqliteTableUniqueLimits.parts) throw invalid();
+      if (symbol(parts[index], ',')) { index++; continue; }
+      if (!symbol(parts[index++], ')')) throw invalid(); break;
+    }
+  } else columns.push({ column, collation: null, order: null });
+  let conflict: SqliteTableUniqueDefinition['conflict'] = null;
+  if (word(parts[index], 'ON')) { const end = conflictEnd(parts, index); if (end === index) throw invalid(); conflict = parts[index + 2].value.toUpperCase() as NonNullable<typeof conflict>; index = end; }
+  if (index !== parts.length || !columns.length) throw invalid();
+  return { names: Object.freeze(names), columns: Object.freeze(columns.map(value => Object.freeze(value))), conflict };
+}
+/** 声明位置而非自动索引编号决定原目标：SQLite可能合并多条相同UNIQUE的自动索引。 */
+function uniqueSpans(input: ForeignKeyInput, source: ReturnType<typeof definition>): UniqueSpan[] {
+  const output: UniqueSpan[] = [];
+  for (const segment of source.segments) {
+    if (segment.column !== undefined) {
+      const column = source.columns.find(column => column.name === segment.column)!;
+      for (const span of column.uniques) output.push({ ...span, segment, value: { ...uniqueValue(span.parts, column.name), location: 'column', column: column.name, sql: input.tableSql.slice(span.start, span.end) } });
+    } else {
+      let index = 0; while (word(segment.parts[index], 'CONSTRAINT')) index += 2; if (!word(segment.parts[index], 'UNIQUE')) continue;
+      const start = segment.parts[0].start, end = segment.parts.at(-1)!.end;
+      output.push({ start, end, segment, value: { ...uniqueValue(segment.parts), location: 'table', sql: input.tableSql.slice(start, end) } });
+    }
+  }
+  if (output.length > sqliteTableUniqueLimits.keys || output.some(span => span.value.columns.some(term => !source.columns.some(column => fold(column.name) === fold(term.column))))) throw invalid();
+  return output.sort((left, right) => left.start - right.start);
+}
+/** 只读准确原声明，返回冻结的序号、位置、字段和冲突策略，不读取数据库或生成执行令牌。 */
+export function inspectSqliteTableUniques(raw: ForeignKeyInput): readonly SqliteTableUniqueSource[] {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] });
+  return Object.freeze(uniqueSpans(input, source).map((span, ordinal) => Object.freeze({ ordinal, ...span.value })));
+}
+/** 仅编译声明增改删；完整复制、约束语义、父键、事务ACK及写授权仍由后续独立重建链证明。 */
+export function compileSqliteTableUniques(raw: ForeignKeyInput, rawEdits: unknown): { tableSql: string; uniques: readonly SqliteTableUniqueSource[]; added: number; removed: number; replaced: number } {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] }), originals = uniqueSpans(input, source), edits = sqliteTableUniqueEditsSchema.parse(rawEdits);
+  const replaced = new Set<UniqueSpan>(), additions: { definition: SqliteTableUniqueDefinition; sql: string }[] = [], newNames = new Set<string>(); let added = 0, removed = 0, changed = 0;
+  for (const edit of edits) {
+    if (edit.kind !== 'add') { const original = originals[edit.ordinal]; if (!original || original.value.sql !== edit.expectedSql) throw Error('SQLite原唯一约束声明或位置已变化，请重新读取'); replaced.add(original); }
+    if (edit.kind === 'remove') { removed++; continue; }
+    additions.push({ definition: edit.definition, sql: buildSqliteTableUnique(edit.definition, input.columns) });
+    if (edit.definition.name !== null) { const key = fold(edit.definition.name); if (newNames.has(key)) throw Error('SQLite新唯一约束名不能重复'); newNames.add(key); }
+    if (edit.kind === 'add') added++; else changed++;
+  }
+  // 所有约束共享命名空间；只排除本批明确删除的准确跨度，不能用名称批量误删。
+  const markers = source.columns.flatMap(column => column.names);
+  for (const segment of source.segments.filter(segment => segment.column === undefined)) { let index = 0; while (word(segment.parts[index], 'CONSTRAINT')) { const start = segment.parts[index].start, name = identifier(segment.parts[++index]); if (name === undefined) throw invalid(); markers.push({ name, start }); index++; } }
+  for (const marker of markers) if (![...replaced].some(span => marker.start >= span.start && marker.start < span.end) && newNames.has(fold(marker.name))) throw Error('SQLite新唯一约束名与保留的原约束名冲突');
+  const chunks: string[] = []; let trivia = '';
+  for (const segment of source.segments) {
+    const spans = [...replaced].filter(span => span.segment === segment).sort((left, right) => left.start - right.start);
+    if (segment.column === undefined && spans.length) { trivia += input.tableSql.slice(segment.start, spans[0].start) + input.tableSql.slice(spans[0].end, segment.end); continue; }
+    let sql = '', boundary = segment.start;
+    for (const span of spans) { sql += input.tableSql.slice(boundary, span.start) + ' '; boundary = span.end; }
+    chunks.push(trivia + sql + input.tableSql.slice(boundary, segment.end)); trivia = '';
+  }
+  if (!chunks.length) throw invalid(); chunks[chunks.length - 1] += trivia;
+  let tableSql = input.tableSql.slice(0, source.bodyOpen) + chunks.join(',') + input.tableSql.slice(source.bodyEnd);
+  // 重新划定当前列尾，避开原末尾孤立CONSTRAINT标记；同列多条声明保持本批明确顺序。
+  for (const addition of additions) {
+    const remaining = definition({ ...input, tableSql, candidateName: '', changes: [] });
+    const position = addition.definition.location === 'column' ? remaining.columns.find(column => column.name === addition.definition.columns[0].column)!.end : remaining.bodyEnd;
+    const sql = addition.definition.location === 'column' ? ' ' + addition.sql + ' ' : ',\n ' + addition.sql + '\n';
+    if (encoder.encode(tableSql).length + encoder.encode(sql).length > limits.sqlBytes) throw Error('SQLite唯一约束SQL超过2MiB UTF8预算');
+    tableSql = tableSql.slice(0, position) + sql + tableSql.slice(position);
+  }
+  if (encoder.encode(tableSql).length > limits.sqlBytes || tableSql === input.tableSql) throw Error('SQLite唯一约束声明未变化或超过2MiB UTF8预算');
+  return { tableSql, uniques: inspectSqliteTableUniques({ ...input, tableSql }), added, removed, replaced: changed };
 }
 
 export interface SqliteTablePrimaryKeySource {
