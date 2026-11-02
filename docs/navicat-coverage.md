@@ -2,7 +2,7 @@
 
 跨平台门槛已补齐一项：准确 `0d3759b4` 的 [JOIN 原十二例](development/foreign-key-join-display-lease-20261103.md#0d3759b4-三平台实测闭合)在 Windows、Mac arm64／Intel 各通过，原几何、退出、arm64 模式恢复及上传原件均核对。仅该源码组件，后续功能、实库与安装仍分别验证，O04 保持部分，暂不发布。
 
-高频筛选新增[服务器不同值次数排序](development/table-value-frequency-20261103.md)：定位常见／少见值，冻结筛选的全部分组先排序后限量；265 项相关、六端点 450 次只读派生查询、严格类型和 Windows 明暗组件通过，资源核清。完整物理表 UI、Mac／安装及完整剖析继续，不增加完整工作包或发行计数。
+高频筛选新增[服务器不同值次数排序](development/table-value-frequency-20261103.md)：定位常见／少见值，全部分组先排序后限量；265 项相关、六端点 450 次只读派生查询及 Windows 明暗组件另证。后续 [MySQL 8.4 真实物理表窗口](development/table-value-frequency-live-20261103.md)已通过 633 行／525 组、热门值跨 500 组、整页虚拟滚动、NULL／空文本／LIKE 及丢稿确认，准确库核清；Mac／安装及完整剖析继续，不增加完整工作包或发行计数。
 
 MySQL／MariaDB 高频编辑补齐[本文声明导航](development/mysql-definition-20261103.md)：别名、CTE／派生、WHERE／ON、作用域遮蔽及明确库限定。187 项相关、84 项最终定向分轮通过，类型／构建与 Windows 三次 F12、一次 Ctrl 点击通过、资源已核；Mac／安装及完整语义辅助继续，不增加完整工作包或发行计数，暂不发布。
 

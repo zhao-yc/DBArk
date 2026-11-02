@@ -1,6 +1,6 @@
 # 开发与测试
 
-表页新增[服务器不同值按次数排序](development/table-value-frequency-20261103.md)，复用原只读任务及筛选合并，旧缺省报文保持。265 项相关、六端点 450 次只读派生查询、严格类型与 Windows 明暗组件通过，资源核清；完整物理表 UI、Mac／安装另验，暂不发布。
+表页新增[服务器不同值按次数排序](development/table-value-frequency-20261103.md)，复用原只读任务及筛选合并，旧缺省报文保持。265 项相关、六端点 450 次只读派生查询及 Windows 明暗组件另证；后续 [MySQL 8.4 物理表窗口](development/table-value-frequency-live-20261103.md)已通过并核清准确库，Mac／安装另验，暂不发布。
 
 JOIN 的准确 `0d3759b4` 已通过[三平台原十二例及 arm64 显示恢复](development/foreign-key-join-display-lease-20261103.md#0d3759b4-三平台实测闭合)，原窗口门、时限及业务断言保持；全部几何、退出回执、报告摘要与上传原件已核。仅源码组件，不代替实库、安装及后续功能验收，暂不发布。
 
