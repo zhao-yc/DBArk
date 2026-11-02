@@ -55,6 +55,65 @@ async function apply(profile: SqliteConnectionProfile, claim: SqliteTableRebuild
 }
 function noPrivateObjects(profile: SqliteConnectionProfile) { expect(disk(profile, db => db.prepare("SELECT name FROM main.sqlite_schema WHERE name LIKE '__dbark_rebuild_%'").all())).toEqual([]); }
 
+describe('SQLite显式NOT NULL独立事务与原值保护', () => {
+  /** 正常收尾必须来自原worker退出回执，不能依赖通用夹具的强制清理。 */
+  afterEach(async () => { for (const process of processes) { expect(await process.exited).toEqual({ code: 0, signal: null }); expect(process.kills).toBe(0); } });
+  it.each([true, false])('真实Main→Runtime→worker能力链，旧值全部非空=%s且任务不保存原值', async valid => {
+    const profile = fixture(`CREATE TABLE target(id INTEGER PRIMARY KEY,note TEXT DEFAULT 'PRIVATE_NN_DEFAULT');INSERT INTO target VALUES(1,'PRIVATE_NN_ROW'),(2,${valid ? "'另一行'" : 'NULL'})`), before = typed(profile, 'SELECT rowid,* FROM target'), oldSchema = schema(profile), tasks = new Map<string, TaskRecord>(), saved: TaskRecord[] = [], epoch = {};
+    const emit = (event: TaskEvent) => { const task = tasks.get(event.taskId); if (task) { const next = { ...task, status: event.status, progress: event.progress, message: event.message }; tasks.set(next.id, next); saved.push(structuredClone(next)); } };
+    const runtime = new SqliteRuntime({ resolveProfile: id => id === profile.id ? profile : undefined, createTransport: transport, emit }), owner = { owner: { document: {}, contents: new EventEmitter() } } as ColumnsInvocation;
+    const main = new SqliteTableRebuildMain({ assert(value) { if (value !== owner) throw Error('其他文档'); }, same: (left, right) => left === right, revision: () => 1, epoch: () => epoch, available: () => {}, closing: () => false, profile: id => id === profile.id ? profile : undefined, request: (command, input) => runtime.request(command, input), task: id => tasks.get(id), replace: task => tasks.set(task.id, task), save: task => { saved.push(structuredClone(task)); }, event: emit });
+    try {
+      const inspection = await main.request(owner, 'sqlite.tableRebuild.inspect', { connectionId: profile.id, database: 'main', table: 'target', taskId: 'nn-inspect' }) as Awaited<ReturnType<typeof prepare>>['inspection'];
+      const preview = await main.request(owner, 'sqlite.tableRebuild.preview', { catalogueId: inspection.catalogueId, changes: [{ column: 'note', notNull: true }], taskId: 'nn-preview' }) as Awaited<ReturnType<typeof prepare>>['plan'];
+      expect(preview).toMatchObject({ changedNotNull: 1, changedTypes: 0, changedDefaults: 0 }); expect(schema(profile)).toEqual(oldSchema);
+      expect(processes.flatMap(process => process.sent).some(message => message.kind === 'execute' && /^(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE|COMMIT)\b/i.test(message.sql))).toBe(false);
+      const result = await main.request(owner, 'sqlite.tableRebuild.apply', { previewId: preview.previewId, confirmation: preview.confirmation, taskId: 'nn-apply' }) as Awaited<ReturnType<typeof apply>>['result'];
+      expect(result).toMatchObject({ outcome: valid ? 'committed' : 'rolled-back', fact: { commitAcknowledged: valid, rollbackAcknowledged: !valid, sourceRows: '2', copiedRows: valid ? '2' : '0', verifiedRows: valid ? '2' : '0' } });
+      expect(typed(profile, 'SELECT rowid,* FROM target')).toEqual(before); if (!valid) expect(schema(profile)).toEqual(oldSchema);
+      if (valid) disk(profile, db => { expect(() => db.exec('INSERT INTO target VALUES(3,NULL)')).toThrow(/NOT NULL/); expect(db.prepare('PRAGMA table_xinfo(target)').all()[1].notnull).toBe(1); });
+      for (const secret of ['PRIVATE_NN_ROW', 'PRIVATE_NN_DEFAULT', 'CREATE TABLE', profile.sqlite.filePath!]) expect(JSON.stringify(saved)).not.toContain(secret);
+      noPrivateObjects(profile);
+    } finally { await main.drain(); await runtime.close(); }
+  });
+  it('同批移除重复具名NOT NULL、给另一字段添加，保留NULL声明、默认值、生成列、索引和序列', async () => {
+    const profile = fixture("CREATE TABLE target(id INTEGER PRIMARY KEY AUTOINCREMENT,note TEXT CONSTRAINT keep_null NULL ON CONFLICT IGNORE CONSTRAINT nn1 NOT NULL ON CONFLICT FAIL CONSTRAINT nn2 NOT NULL,amount BLOB DEFAULT X'01',gen TEXT GENERATED ALWAYS AS(note||':'||id) STORED,UNIQUE(note,id));CREATE INDEX kept_index ON target(note);CREATE TABLE audit(value TEXT);CREATE VIEW kept_view AS SELECT note,amount FROM target;CREATE TRIGGER kept_trigger AFTER UPDATE ON target BEGIN INSERT INTO audit VALUES('不应触发');END;INSERT INTO target(id,note,amount) VALUES(1,'中文🚢',9223372036854775807),(2,'另一行',X'00ff'),(9000,'水位',X'01');DELETE FROM target WHERE id=9000"), before = typed(profile), { claim, plan } = await prepare(profile, [{ column: 'note', notNull: false }, { column: 'amount', notNull: true }]);
+    expect(plan.changedNotNull).toBe(2); expect((await apply(profile, claim)).result).toMatchObject({ outcome: 'committed', definitionVerified: true }); expect(typed(profile)).toEqual(before); expect(processes.flatMap(process => process.sent).filter(message => message.kind === 'rebuildCompare')).toHaveLength(4);
+    disk(profile, db => { const sql = String(db.prepare("SELECT sql FROM sqlite_schema WHERE name='target'").get()!.sql); expect(sql).toContain('CONSTRAINT keep_null NULL ON CONFLICT IGNORE'); expect(sql).not.toContain('nn1'); expect(sql).not.toContain('nn2'); expect(db.prepare('SELECT * FROM audit').all()).toEqual([]); const view = db.prepare('SELECT * FROM kept_view'); view.setReadBigInts(true); expect(view.all()).toHaveLength(2); expect(db.prepare("SELECT seq FROM sqlite_sequence WHERE name='target'").get()!.seq).toBe(9000); db.exec('BEGIN;INSERT INTO target(note,amount) VALUES(NULL,5)'); expect(() => db.exec("INSERT INTO target(note,amount) VALUES('x',NULL)")).toThrow(/NOT NULL/); db.exec('ROLLBACK'); }); noPrivateObjects(profile);
+  });
+  it('添加NOT NULL不能用DEFAULT代填旧NULL，必须由OR ABORT整批拒绝', async () => {
+    const profile = fixture(`CREATE TABLE target(id INTEGER PRIMARY KEY,note TEXT DEFAULT '代填');INSERT INTO target VALUES(1,'原'),(2,NULL)`), before = typed(profile, 'SELECT rowid,* FROM target'), oldSchema = schema(profile), { claim } = await prepare(profile, [{ column: 'note', notNull: true }]);
+    expect(claim.compiled.candidate.candidateSql).toContain('NOT NULL'); const result = (await apply(profile, claim)).result;
+    expect(result).toMatchObject({ outcome: 'rolled-back', fact: { completedStatements: 2, copiedRows: '0', verifiedRows: '0', rollbackAcknowledged: true } }); expect(schema(profile)).toEqual(oldSchema); expect(typed(profile, 'SELECT rowid,* FROM target')).toEqual(before); noPrivateObjects(profile);
+  });
+  it.each(['IGNORE', 'REPLACE'])('已有显式NOT NULL ON CONFLICT %s及默认值完整保留，未来写入仍遵循原策略', async policy => {
+    const profile = fixture(`CREATE TABLE target(id INTEGER PRIMARY KEY,note TEXT CONSTRAINT nn NOT NULL ON CONFLICT ${policy} DEFAULT '代填');INSERT INTO target VALUES(1,'原'),(2,'另一行')`), before = typed(profile, 'SELECT rowid,* FROM target'), { claim } = await prepare(profile, [{ column: 'note', notNull: true }]);
+    expect((await apply(profile, claim)).result.outcome).toBe('committed'); expect(typed(profile, 'SELECT rowid,* FROM target')).toEqual(before);
+    disk(profile, db => { expect(String(db.prepare("SELECT sql FROM sqlite_schema WHERE name='target'").get()!.sql)).toContain('CONSTRAINT nn NOT NULL ON CONFLICT ' + policy + " DEFAULT '代填'"); db.exec('BEGIN;INSERT INTO target VALUES(3,NULL)'); expect(db.prepare('SELECT note FROM target WHERE id=3').all()).toEqual(policy === 'IGNORE' ? [] : [{ note: '代填' }]); db.exec('ROLLBACK'); }); noPrivateObjects(profile);
+  });
+  it.each(['VIRTUAL', 'STORED'])('生成列%s含旧NULL时添加NOT NULL真实拒绝并恢复原目录', async kind => {
+    const profile = fixture(`CREATE TABLE target(id INTEGER PRIMARY KEY,note TEXT,gen TEXT GENERATED ALWAYS AS(note) ${kind});INSERT INTO target(id,note) VALUES(1,'原'),(2,NULL)`), oldSchema = schema(profile), before = typed(profile, 'SELECT rowid,* FROM target'), { claim } = await prepare(profile, [{ column: 'gen', notNull: true }]);
+    expect((await apply(profile, claim)).result.outcome).toBe('rolled-back'); expect(schema(profile)).toEqual(oldSchema); expect(typed(profile, 'SELECT rowid,* FROM target')).toEqual(before); noPrivateObjects(profile);
+  });
+  it.each(['', ' STRICT', ' WITHOUT ROWID'])('移除显式声明保留%s主键隐含规则，最终native元数据准确', async suffix => {
+    const profile = fixture(`CREATE TABLE target(id TEXT NOT NULL PRIMARY KEY,note TEXT);`.replace(');', ')' + suffix + ';') + "INSERT INTO target VALUES('a','原'),('b',NULL)"), before = typed(profile, 'SELECT * FROM target ORDER BY id'), { claim } = await prepare(profile, [{ column: 'id', notNull: false }]);
+    expect((await apply(profile, claim)).result.outcome).toBe('committed'); expect(typed(profile, 'SELECT * FROM target ORDER BY id')).toEqual(before);
+    disk(profile, db => { expect(db.prepare('PRAGMA table_xinfo(target)').all()[0].notnull).toBe(suffix ? 1 : 0); db.exec('BEGIN'); if (suffix) expect(() => db.exec("INSERT INTO target VALUES(NULL,'新')")).toThrow(/NOT NULL/); else db.exec("INSERT INTO target VALUES(NULL,'新')"); db.exec('ROLLBACK'); }); noPrivateObjects(profile);
+  });
+  it.each([true, false])('INTEGER主键显式NOT NULL=%s不改变NULL输入生成ROWID的原生行为', async notNull => {
+    const profile = fixture(`CREATE TABLE target(id INTEGER PRIMARY KEY${notNull ? '' : ' NOT NULL'},note TEXT);INSERT INTO target VALUES(1,'原'),(2,NULL)`), before = typed(profile, 'SELECT rowid,* FROM target'), { claim } = await prepare(profile, [{ column: 'id', notNull }]);
+    expect((await apply(profile, claim)).result.outcome).toBe('committed'); expect(typed(profile, 'SELECT rowid,* FROM target')).toEqual(before); disk(profile, db => { expect(db.prepare('PRAGMA table_xinfo(target)').all()[0].notnull).toBe(notNull ? 1 : 0); db.exec('BEGIN;INSERT INTO target VALUES(NULL,\'新\')'); expect(db.prepare("SELECT id FROM target WHERE note='新'").get()!.id).toBe(3); db.exec('ROLLBACK'); }); noPrivateObjects(profile);
+  });
+  it.each(['patch', 'count', 'sql'] as const)('领取后篡改NOT NULL %s在BEGIN前拒绝，不自动重放', async kind => {
+    const profile = fixture(), oldSchema = schema(profile), before = typed(profile), { claim } = await prepare(profile, [{ column: 'note', notNull: false }]);
+    if (kind === 'patch') claim.changes[0].notNull = true; else if (kind === 'count') claim.compiled.changedNotNull = 2; else claim.compiled.sql[0] += ' ';
+    expect((await apply(profile, claim)).result.outcome).toBe('not-sent'); expect(processes.flatMap(process => process.sent).some(message => message.kind === 'execute' && message.sql === 'BEGIN IMMEDIATE')).toBe(false); expect(schema(profile)).toEqual(oldSchema); expect(typed(profile)).toEqual(before); noPrivateObjects(profile);
+  });
+  it('只读连接允许显式NOT NULL设计预览但拒绝写入', async () => {
+    const profile = fixture(); profile.sqlite.readOnly = true; const oldSchema = schema(profile), { claim, plan } = await prepare(profile, [{ column: 'note', notNull: true }]); expect(plan.changedNotNull).toBe(1); expect((await apply(profile, claim)).result.outcome).toBe('not-sent'); expect(schema(profile)).toEqual(oldSchema); noPrivateObjects(profile);
+  });
+});
+
 describe('SQLite已有CHECK独立事务与限定引用保护', () => {
   const check = (expression = 'main.target.id>0', patch: { name?: string; location?: 'table' } | { name?: string; location: 'column'; column: string } = {}): SqliteTableCheckDefinition => patch.location === 'column' ? { location: 'column', column: patch.column, name: patch.name ?? 'changed_check', expression } : { location: 'table', name: patch.name ?? 'changed_check', expression };
   /** 每轮只从真实worker读取原声明；编辑必须绑定准确序号和原SQL。 */

@@ -1,4 +1,4 @@
-import { copySqliteTableRebuildColumnOrder } from './sqliteTableRebuild';
+import { copySqliteTableRebuildColumnOrder, sqliteTableRebuildEditsSchema } from './sqliteTableRebuild';
 import { buildSqliteTableCreateDefault, sqliteTableCreateColumnSchema, type SqliteTableCreateDefault } from './sqliteTableCreate';
 import { buildSqliteTableForeignKey, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from './sqliteTableForeignKeys';
 import { buildSqliteTablePrimaryKey, sqliteTablePrimaryKeyEditSchema, type SqliteTablePrimaryKeyDefinition, type SqliteTablePrimaryKeyEdit } from './sqliteTablePrimaryKey';
@@ -8,7 +8,7 @@ import { buildSqliteTableCheck, sqliteTableCheckEditsSchema, sqliteTableCheckLim
 /** 重建编译只修改明确声明跨度；不推断数据转换、不签发执行能力，未修改约束原文保留。 */
 export const sqliteTableRebuildPlanLimits = { sqlBytes: 2 * 1024 * 1024, tokens: 300000, columns: 1024, changes: 128, nesting: 256 } as const;
 export interface SqliteRebuildSourceColumn { name: string; hidden: number; }
-export interface SqliteRebuildColumnChange { column: string; declaredType?: string; default?: SqliteTableCreateDefault; }
+export interface SqliteRebuildColumnChange { column: string; declaredType?: string; default?: SqliteTableCreateDefault; notNull?: boolean; }
 export interface SqliteTableRebuildDefinitionInput {
   table: string; tableSql: string; columns: readonly SqliteRebuildSourceColumn[];
   candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[]; foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[]; primaryKeyEdit?: SqliteTablePrimaryKeyEdit; uniqueEdits?: readonly SqliteTableUniqueEdit[]; checkEdits?: readonly SqliteTableCheckEdit[];
@@ -20,7 +20,7 @@ export interface SqliteTableRebuildDefinition {
 interface Token { kind: 'word' | 'quoted' | 'string' | 'number' | 'symbol'; value: string; start: number; end: number; }
 interface Span { start: number; end: number; }
 interface DefinitionSegment extends Span { column?: string; parts: Token[]; }
-interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; notNull: boolean; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; uniques: (Span & { parts: Token[] })[]; checks: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
+interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; notNull: boolean; notNulls: Span[]; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; uniques: (Span & { parts: Token[] })[]; checks: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
 const limits = sqliteTableRebuildPlanLimits, encoder = new TextEncoder();
 const fold = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 const word = (token: Token | undefined, value: string) => token?.kind === 'word' && fold(token.value) === value.toLowerCase();
@@ -117,7 +117,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
     if (symbol(parts[index], '(')) index = groupEnd(parts, index);
     else { if (parts[index].kind === 'symbol' || parts[index].kind === 'number') throw invalid(); index++; }
   }
-  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, notNull: false, references: [], primaryKeys: [], uniques: [], checks: [], names: [] };
+  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, notNull: false, notNulls: [], references: [], primaryKeys: [], uniques: [], checks: [], names: [] };
   while (index < parts.length) {
     const start = index;
     while (word(parts[index], 'CONSTRAINT')) { const marker = parts[index].start; if (identifier(parts[++index]) === undefined) throw invalid(); result.names.push({ name: identifier(parts[index])!, start: marker }); index++; }
@@ -133,7 +133,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
       if (word(parts[index], 'ASC') || word(parts[index], 'DESC')) index++;
       index = conflictEnd(parts, index); if (word(parts[index], 'AUTOINCREMENT')) index++;
       result.primaryKeys.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) });
-    } else if (word(token, 'NOT')) { if (!word(parts[index++], 'NULL')) throw invalid(); result.notNull = true; index = conflictEnd(parts, index); }
+    } else if (word(token, 'NOT')) { if (!word(parts[index++], 'NULL')) throw invalid(); result.notNull = true; index = conflictEnd(parts, index); result.notNulls.push({ start: parts[start].start, end: parts[index - 1].end }); }
     else if (word(token, 'NULL')) index = conflictEnd(parts, index);
     else if (word(token, 'UNIQUE')) { index = conflictEnd(parts, index); result.uniques.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) }); }
     else if (word(token, 'GENERATED') || word(token, 'AS')) {
@@ -194,6 +194,24 @@ export function normalizeSqliteTableRebuildDefinitionName(input: Pick<SqliteTabl
 }
 
 type ForeignKeyInput = Pick<SqliteTableRebuildDefinitionInput, 'table' | 'tableSql' | 'columns'>;
+/** 显式声明不同于STRICT/WR主键隐含属性，也不同于整数主键自动生成ROWID的NULL输入规则。 */
+export function inspectSqliteTableNotNull(raw: ForeignKeyInput): readonly { readonly column: string; readonly explicitNotNull: boolean; readonly sql: readonly string[] }[] {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] });
+  return Object.freeze(source.columns.map(column => Object.freeze({ column: column.name, explicitNotNull: column.notNull, sql: Object.freeze(column.notNulls.map(span => input.tableSql.slice(span.start, span.end))) })));
+}
+/** 只编辑明确字段的完整NOT NULL跨度；移除所有重复声明，保留独立NULL、其命名及其它约束。 */
+function compileNotNull(input: SqliteTableRebuildDefinitionInput, changes: readonly SqliteRebuildColumnChange[]): string {
+  const source = definition(input), edits: (Span & { sql: string })[] = [];
+  for (const change of changes) {
+    if (change.notNull === undefined) continue;
+    const column = source.columns.find(column => fold(column.name) === fold(change.column)); if (!column) throw invalid();
+    if (!change.notNull) for (const span of column.notNulls) edits.push({ ...span, sql: ' ' });
+    else if (!column.notNull) edits.push({ start: column.end, end: column.end, sql: ' NOT NULL ' });
+  }
+  edits.sort((left, right) => left.start - right.start); const chunks: string[] = []; let position = 0;
+  for (const edit of edits) { if (edit.start < position) throw invalid(); chunks.push(input.tableSql.slice(position, edit.start), edit.sql); position = edit.end; }
+  chunks.push(input.tableSql.slice(position)); const tableSql = chunks.join(''); if (encoder.encode(tableSql).length > limits.sqlBytes) throw invalid(); return tableSql;
+}
 export interface SqliteTableForeignKeySource {
   readonly ordinal: number; readonly location: 'column' | 'table'; readonly column?: string;
   readonly sql: string; readonly names: readonly string[]; readonly columns: readonly string[];
@@ -642,7 +660,13 @@ export function compileSqliteTableRebuildCheckedCopyDefinition(input: SqliteTabl
 /** 普通候选与带私有编号候选共享同一跨度编译，不复制或重新实现默认值/约束解析。 */
 function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn?: string, reorderedBase = false): SqliteTableRebuildDefinition {
   // 整批分支会复制其余选项，必须先拒绝访问器，不能让spread先调用其他约束或顺序getter。
-  for (const key of ['primaryKeyEdit', 'foreignKeyEdits', 'uniqueEdits', 'checkEdits', 'columnOrder']) { const descriptor = Object.getOwnPropertyDescriptor(input, key); if (descriptor && (!descriptor.enumerable || !('value' in descriptor))) throw invalid(); }
+  for (const key of ['changes', 'primaryKeyEdit', 'foreignKeyEdits', 'uniqueEdits', 'checkEdits', 'columnOrder']) { const descriptor = Object.getOwnPropertyDescriptor(input, key); if (descriptor && (!descriptor.enumerable || !('value' in descriptor))) throw invalid(); }
+  const parsedChanges = sqliteTableRebuildEditsSchema.parse(input.changes);
+  if (parsedChanges.some(change => change.notNull !== undefined)) {
+    // 先释放准确NOT NULL命名，再处理其它约束，允许完整计划复用本批释放的名字。
+    const tableSql = compileNotNull(input, parsedChanges), changes = parsedChanges.map(({ notNull: _notNull, ...change }) => change).filter(change => change.declaredType !== undefined || change.default !== undefined);
+    return compileDefinition({ ...input, tableSql, changes }, ordinalColumn, true);
+  }
   const checkDescriptor = Object.getOwnPropertyDescriptor(input, 'checkEdits');
   if (checkDescriptor?.value !== undefined) {
     const edits = sqliteTableCheckEditsSchema.parse(checkDescriptor.value);
