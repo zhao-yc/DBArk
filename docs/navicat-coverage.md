@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+外键 JOIN 新增[完整输出去重](development/table-foreign-key-join-distinct-20261102.md)：明细 DISTINCT、对应侧投影内排序、NULL 与模式草稿保留。373 项相关、类型／构建、六端点 360 次只读派生表查询和 Windows 十二例组件通过；新增三平台组件 CI，实际远端结果另验。物理表完整 GUI／Mac／安装及完整 O04 继续，不增加完整工作包或发行计数，暂不发布。
+
 外键 JOIN 新增[HAVING 聚合后筛选](development/table-foreign-key-join-having-20261102.md)：13 运算符、独立嵌套组和稳定输出身份，改名跟随、同名重建不接管。354 项相关、类型／构建、六端点最终 2130 次严格模式查询及 Windows 十例组件通过，准确资源核零；任意多表、高级聚合及 Mac／安装继续，O04 部分，暂不发布。
 
 前序[分组聚合](development/table-foreign-key-join-summary-20261102.md)记录保留：七种函数、有序 GROUP BY、别名与指标排序，保明细草稿和原 WHERE；321 项相关、类型／构建、六端点 1320 次查询和 Windows 八例组件通过。当前 HAVING 见上方新记录，O04 仍部分，暂不发布。

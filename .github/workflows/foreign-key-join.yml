@@ -1,0 +1,89 @@
+name: 外键JOIN源码组件验收
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/foreign-key-join.yml'
+      - 'src/renderer/tableForeignKeyJoin*.ts'
+      - 'src/renderer/components/TableForeignKeyJoin*.tsx'
+      - 'src/renderer/locales/tableForeignKeyJoin*.ts'
+      - 'src/renderer/components/TableFilterGroupsDialog.tsx'
+      - 'src/shared/filtering.ts'
+      - 'src/shared/contracts.ts'
+      - 'src/engine/sql.ts'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'tests/fixtures/join-order/**'
+      - 'tests/e2e/table-foreign-key-join-order-native.spec.ts'
+      - 'tests/unit/*foreign-key-join*'
+      - 'tests/unit/join-order-native-guard.test.ts'
+  pull_request:
+    paths:
+      - '.github/workflows/foreign-key-join.yml'
+      - 'src/renderer/tableForeignKeyJoin*.ts'
+      - 'src/renderer/components/TableForeignKeyJoin*.tsx'
+      - 'src/renderer/locales/tableForeignKeyJoin*.ts'
+      - 'src/renderer/components/TableFilterGroupsDialog.tsx'
+      - 'src/shared/filtering.ts'
+      - 'src/shared/contracts.ts'
+      - 'src/engine/sql.ts'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'tests/fixtures/join-order/**'
+      - 'tests/e2e/table-foreign-key-join-order-native.spec.ts'
+      - 'tests/unit/*foreign-key-join*'
+      - 'tests/unit/join-order-native-guard.test.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 各轮原进程均保留终态，不以新提交取消正在采集的失败现场。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  join-components:
+    name: JOIN组件 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖和Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 单次运行查询生成和来源保护单元
+        run: pnpm exec vitest run tests/unit/table-foreign-key-join.test.ts tests/unit/table-foreign-key-join-filters.test.ts tests/unit/table-foreign-key-join-groups.test.ts tests/unit/table-foreign-key-join-summary.test.ts tests/unit/table-foreign-key-join-having.test.ts tests/unit/table-foreign-key-join-distinct.test.ts tests/unit/table-foreign-key-join-intent.test.ts tests/unit/ui-table-foreign-key-join.test.tsx tests/unit/join-order-native-guard.test.ts --maxWorkers=1
+      # Vite直接加载真实渲染组件；本门不使用数据库、系统剪贴板或已安装客户端。
+      # 保留原120秒、worker1、零重试及原成功/失败目录处理，不代替安装包验收。
+      - name: 单次运行原十二个明暗原生组件用例
+        run: pnpm exec playwright test tests/e2e/table-foreign-key-join-order-native.spec.ts --workers=1 --retries=0 --trace=off '--reporter=list,json' --output=test-results/foreign-key-join
+        env:
+          DBARK_JOIN_ORDER_NATIVE: '1'
+          DBARK_INTEGRATION_ENABLED: '0'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/foreign-key-join/report.json
+      - name: 记录准确提交和实际平台
+        if: always()
+        run: |
+          node -e "require('node:fs').mkdirSync('test-results/foreign-key-join',{recursive:true});require('node:fs').writeFileSync('test-results/foreign-key-join/platform.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version}))"
+          git rev-parse HEAD > test-results/foreign-key-join/head.txt
+      - name: 保留原始报告、截图和退出回执
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foreign-key-join-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/foreign-key-join/
+          if-no-files-found: warn

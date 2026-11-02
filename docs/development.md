@@ -1,5 +1,7 @@
 # 开发与测试
 
+外键 JOIN 新增[明细完整输出去重](development/table-foreign-key-join-distinct-20261102.md)：DISTINCT、投影内排序校验及模式草稿保留。373 项相关、严格类型／构建、六端点 360 次零写入派生表 SELECT 与 Windows 十二例组件通过；新增三平台独立组件 CI，远端实际结果另验，Mac／安装未验，暂不发布。
+
 外键 JOIN 新增[HAVING 聚合后筛选](development/table-foreign-key-join-having-20261102.md)：13 运算符、嵌套组、启停、按稳定输出身份跟随改名并防同名重建接管，WHERE／HAVING 独立。354 项相关、严格类型／构建、六端点最终 2130 次严格模式 SELECT 及 Windows 十例组件通过，准确资源核零；Mac／安装另验，暂不发布。
 
 外键 JOIN 新增[分组与聚合查询](development/table-foreign-key-join-summary-20261102.md)：独立明细／聚合草稿、GROUP BY、七种函数、自定义别名与指标排序，原 WHERE 先行且不自动执行。321 项相关、严格类型／构建、六端点 1320 次严格分组模式 SELECT 和 Windows 八例组件通过，准确资源核零；HAVING、Mac／安装继续，暂不发布。

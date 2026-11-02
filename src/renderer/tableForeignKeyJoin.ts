@@ -10,7 +10,7 @@ export const foreignKeyJoinLimits = { columns: 4096, foreignKeys: 512, mappingCo
 export interface ForeignKeyJoinChoice { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[] }
 export interface ForeignKeyJoinColumn { side: 'child' | 'parent' | 'aggregate'; column: string; alias: string }
 export interface ForeignKeyJoinSort { side: 'child' | 'parent' | 'aggregate'; column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; }
-export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[]; sort?: readonly ForeignKeyJoinSort[]; limit?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
+export interface ForeignKeyJoinOptions { childColumns: readonly string[]; parentColumns: readonly string[]; distinct?: boolean; sort?: readonly ForeignKeyJoinSort[]; limit?: number; filters?: readonly ForeignKeyJoinFilter[]; filterMode?: FilterMode; filterGroup?: FilterGroup; summary?: ForeignKeyJoinSummary; having?: ForeignKeyJoinHaving; }
 type Budget = { units: number };
 
 /** 只读自有数据属性；不会为了生成SELECT访问DDL、默认值、注释或调用访问器。 */
@@ -122,8 +122,8 @@ export function foreignKeyJoinResultLimit(value: string): number {
   const limit = Number(value); if (limit > foreignKeyJoinLimits.rows) throw Error(text.limitInvalid); return limit;
 }
 
-/** 排序字段按双方真实目录独立定位，允许同名和未输出字段，不读取任意SQL或猜测补键。 */
-function order(raw: unknown, child: { columns: { name: string }[] }, parent: { columns: { name: string }[] }, summary?: ReturnType<typeof buildForeignKeyJoinSummary>): string {
+/** 排序按双方真实目录独立定位；普通明细允许未输出列，去重只接受完整投影内的列，不猜测补键。 */
+function order(raw: unknown, child: { columns: { name: string }[] }, parent: { columns: { name: string }[] }, summary?: ReturnType<typeof buildForeignKeyJoinSummary>, projected?: ReadonlySet<string>): string {
   if (raw === undefined) return '';
   const seen = new Set<string>(), names = { child: new Set(child.columns.map(column => column.name)), parent: new Set(parent.columns.map(column => column.name)) };
   return array(raw, foreignKeyJoinLimits.sorts).flatMap(value => {
@@ -132,6 +132,8 @@ function order(raw: unknown, child: { columns: { name: string }[] }, parent: { c
     if (side !== 'child' && side !== 'parent' && side !== 'aggregate' || typeof column !== 'string' || direction !== 'ASC' && direction !== 'DESC' || nulls !== undefined && nulls !== 'FIRST' && nulls !== 'LAST') throw Error(text.sortInvalid);
     if (side === 'aggregate' ? !summary?.aggregateAliases.has(column) : !names[side].has(column)) throw Error(text.sortInvalid);
     if (summary && side !== 'aggregate' && !summary.keys.has(JSON.stringify([side,column]))) throw Error(summaryText.sort);
+    // DISTINCT按完整输出去重；不能偷偷追加排序字段，否则会改变去重集合及结果行数。
+    if (projected && !projected.has(JSON.stringify([side, column]))) throw Error(text.distinctSort);
     const key = JSON.stringify([side, column]); if (seen.has(key)) throw Error(text.sortInvalid); seen.add(key);
     // 聚合排序绑定原表达式，避免别名与输入列同名或在NULL分桶表达式中被服务器另作解析。
     const reference = side === 'aggregate' ? summary!.aggregateReferences.get(column)! : (side === 'child' ? 'c.' : 'p.') + quote(column), term = reference + ' ' + direction;
@@ -147,18 +149,22 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName:
   if (right.database !== relation.referencedDatabase || right.name !== relation.referencedTable) throw Error(text.target);
   const parentNames = new Set(right.columns.map(column => column.name));
   if (relation.referencedColumns.some(column => !parentNames.has(column))) throw Error(text.relation);
-  let childColumns: string[], parentColumns: string[], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, resultLimit = limit, where: string | undefined;
+  let childColumns: string[], parentColumns: string[], rawSort: unknown, rawSummary: unknown, rawHaving: unknown, distinct = false, resultLimit = limit, where: string | undefined;
   if (options === undefined) { childColumns = left.columns.map(column => column.name); parentColumns = right.columns.map(column => column.name); }
   else {
-    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !['childColumns', 'parentColumns', 'sort', 'limit', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'].includes(key as string)) || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).some(key => !['childColumns', 'parentColumns', 'distinct', 'sort', 'limit', 'filters', 'filterMode', 'filterGroup', 'summary', 'having'].includes(key as string)) || !Object.hasOwn(options, 'childColumns') || !Object.hasOwn(options, 'parentColumns')) throw Error(text.invalid);
     childColumns = selected(own(options, 'childColumns'), left.columns); parentColumns = selected(own(options, 'parentColumns'), right.columns);
     rawSort = own(options, 'sort', true); rawSummary = own(options, 'summary', true); rawHaving = own(options, 'having', true);
+    const suppliedDistinct = own(options, 'distinct', true);
+    if (suppliedDistinct !== undefined) distinct = flag(suppliedDistinct);
     const filters = own(options, 'filters', true), mode = own(options, 'filterMode', true), group = own(options, 'filterGroup', true);
     if (filters !== undefined || mode !== undefined || group !== undefined) { if (mode !== undefined && mode !== 'all' && mode !== 'any') throw Error(text.invalid); where = buildForeignKeyJoinWhere(left, right, filters === undefined ? [] : filters, mode === undefined ? 'all' : mode, foreignKeyJoinLimits.sqlUnits, group as FilterGroup | undefined); }
     const suppliedLimit = own(options, 'limit', true);
     if (suppliedLimit !== undefined) { if (typeof suppliedLimit !== 'number' || !Number.isSafeInteger(suppliedLimit) || suppliedLimit < 1 || suppliedLimit > foreignKeyJoinLimits.rows) throw Error(text.limitInvalid); resultLimit = suppliedLimit; }
   }
-  const summary = rawSummary === undefined ? undefined : buildForeignKeyJoinSummary(left,right,rawSummary,foreignKeyJoinColumnAlias), ordering = order(rawSort,left,right,summary);
+  if (distinct && rawSummary !== undefined) throw Error(text.distinctMode);
+  const projected = distinct ? new Set([...childColumns.map(column => JSON.stringify(['child', column])), ...parentColumns.map(column => JSON.stringify(['parent', column]))]) : undefined;
+  const summary = rawSummary === undefined ? undefined : buildForeignKeyJoinSummary(left,right,rawSummary,foreignKeyJoinColumnAlias), ordering = order(rawSort,left,right,summary,projected);
   if(rawHaving!==undefined&&!summary)throw Error(havingText.requiresSummary);
   const having=rawHaving===undefined?undefined:buildForeignKeyJoinHaving(summary!.outputs,rawHaving,foreignKeyJoinLimits.sqlUnits);
   const count = childColumns.length + parentColumns.length;
@@ -169,7 +175,7 @@ export function buildForeignKeyJoin(child: TableInfo, parent: TableInfo, fkName:
     const ordinals = new Map(metadata.columns.map((column, index) => [column.name, index + 1]));
     for (const column of selectedColumns) columns.push({ side, column, alias: foreignKeyJoinColumnAlias(side, ordinals.get(column)!, column) });
   }
-  let sql = 'SELECT\n';
+  let sql = distinct ? 'SELECT DISTINCT\n' : 'SELECT\n';
   const append = (part: string) => { if (sql.length + part.length > foreignKeyJoinLimits.sqlUnits) throw Error(text.budget); sql += part; };
   columns.forEach((column, index) => append(`  ${summary ? summary.expressions[index] : (column.side === 'child' ? 'c' : 'p')+'.'+quote(column.column)+' AS '+quote(column.alias)}${index + 1 === columns.length ? '\n' : ',\n'}`));
   append(`FROM ${quote(left.database)}.${quote(left.name)} AS c\n${kind} JOIN ${quote(right.database)}.${quote(right.name)} AS p\nON\n`);

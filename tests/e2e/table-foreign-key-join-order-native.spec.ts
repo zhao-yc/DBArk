@@ -22,8 +22,8 @@ test.beforeAll(async () => {
   server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' }); await server.listen(); const bound = server.httpServer!.address(); if (!bound || typeof bound === 'string') throw Error('JOIN夹具没有取得本地端口'); address = 'http://127.0.0.1:' + bound.port + '/tests/fixtures/join-order/index.html';
 });
 test.afterAll(async () => { await server?.close(); });
-for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark', 'group-light', 'summary-dark', 'summary-light', 'having-dark', 'having-light'] as const) {
-  const having = mode.startsWith('having-'), summarizing = mode.startsWith('summary-') || having, theme = mode.endsWith('light') ? 'light' : 'dark', grouping = mode.startsWith('group-') || summarizing, filtering = mode.startsWith('filter-') || grouping;
+for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark', 'group-light', 'summary-dark', 'summary-light', 'having-dark', 'having-light', 'distinct-dark', 'distinct-light'] as const) {
+  const distinct = mode.startsWith('distinct-'), having = mode.startsWith('having-'), summarizing = mode.startsWith('summary-') || having, theme = mode.endsWith('light') ? 'light' : 'dark', grouping = mode.startsWith('group-') || summarizing, filtering = mode.startsWith('filter-') || grouping;
   test('JOIN真实菜单、双侧排序、上限及独立草稿：' + mode, async ({}, info) => {
   const directory = await mkdtemp(join(tmpdir(), 'dbark-join-order-native-')), app = await electron.launch({ args: ['tests/fixtures/join-order/electron.cjs'], env: { ...process.env, DBARK_JOIN_ORDER_FIXTURE_DATA: directory, DBARK_JOIN_ORDER_FIXTURE_URL: address + '?theme=' + theme }, chromiumSandbox: true });
   const taskProcess = app.process(), pid = taskProcess.pid, exit = new Promise<{ code: number | null; signal: string | null }>(resolve => taskProcess.once('exit', (code, signal) => resolve({ code, signal }))), page = await app.firstWindow(), errors: string[] = []; page.on('pageerror', reason => errors.push(reason.message)); let accepted = false, closed = false;
@@ -95,11 +95,33 @@ for (const mode of ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark'
       await step(()=>region().getByLabel(groupText.groupMode(),{exact:true}).focus());await step(()=>page.keyboard.press(process.platform==='darwin'?'Meta+Enter':'Control+Enter'));await step(()=>expect(region()).toHaveCount(0));await step(()=>expect(dialog().getByLabel(havingText.structure,{exact:true})).toHaveText('(条件1 且 (条件2 或 条件3))'));await step(()=>expect(dialog().getByLabel(filterText.structure,{exact:true})).toHaveText('(条件1 且 (条件2 或 条件3))'));
       const sql=await step(()=>dialog().getByLabel(text.preview,{exact:true}).textContent());expect(sql).toContain('COUNT(*) >=');expect(sql).toContain('SUM(p.`amount`) BETWEEN');expect(sql!.indexOf('\nHAVING ')).toBeGreaterThan(sql!.indexOf('\nGROUP BY '));await step(()=>dialog().getByLabel(summaryText.enabled,{exact:true}).uncheck());await step(()=>expect(dialog().getByLabel(text.preview,{exact:true})).not.toContainText('HAVING'));await step(()=>dialog().getByLabel(summaryText.enabled,{exact:true}).check());await step(()=>expect(dialog().getByLabel(text.preview,{exact:true})).toHaveText(sql!));
     }
+    if (distinct) {
+      const plain = await step(() => dialog().getByLabel(text.preview, { exact: true }).textContent());
+      await step(() => dialog().getByLabel(text.distinct, { exact: true }).check());
+      await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toHaveText(plain!.replace('SELECT\n', 'SELECT DISTINCT\n')));
+      await step(() => dialog().getByLabel(text.childSelect('id'), { exact: true }).uncheck());
+      await step(() => expect(dialog().getByRole('alert')).toContainText(text.distinctSort));
+      await step(() => expect(dialog().getByRole('button', { name: text.open, exact: true })).toBeDisabled());
+      await step(() => dialog().getByLabel(text.distinct, { exact: true }).uncheck());
+      await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText('ORDER BY c.`id` ASC'));
+      await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).not.toContainText('c.`id` AS `c_1_id`'));
+      await step(() => dialog().getByLabel(text.distinct, { exact: true }).check());
+      await step(() => dialog().getByLabel(text.childSelect('id'), { exact: true }).check());
+      await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText('SELECT DISTINCT\n'));
+      const selected = await step(() => dialog().getByLabel(text.preview, { exact: true }).textContent());
+      await step(() => dialog().getByLabel(summaryText.enabled, { exact: true }).check());
+      await step(() => dialog().getByRole('button', { name: summaryText.addAggregate, exact: true }).click());
+      await step(() => expect(dialog().getByLabel(text.distinct, { exact: true })).toHaveCount(0));
+      await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).not.toContainText('DISTINCT'));
+      await step(() => dialog().getByLabel(summaryText.enabled, { exact: true }).uncheck());
+      await step(() => expect(dialog().getByLabel(text.distinct, { exact: true })).toBeChecked());
+      await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toHaveText(selected!));
+    }
     const suffix = summarizing ? 'ORDER BY (SUM(p.`amount`) IS NULL) ASC, SUM(p.`amount`) DESC, p.`id` ASC\nLIMIT 2;' : 'ORDER BY c.`id` ASC, (p.`id` IS NULL) ASC, p.`id` DESC\nLIMIT 2;'; await step(() => expect(dialog().getByLabel(text.preview, { exact: true })).toContainText(suffix)); const edited = await evidence(); expect(edited.calls.filter(call => call.command !== 'settings.save')).toEqual(before.calls.filter(call => call.command !== 'settings.save')); expect(edited.tabs).toEqual(before.tabs); expect(edited.resultLimit).toBe(43); expect(edited.dirty).toEqual(before.dirty);
     const panel = having ? havingText.title : summarizing ? summaryText.title : filtering ? filterText.title : text.sortTitle;
     await step(() => dialog().getByLabel(panel, { exact: true }).scrollIntoViewIfNeeded()); const layout = await step(() => dialog().getByLabel(panel, { exact: true }).evaluate(element => ({ width: element.clientWidth, scroll: element.scrollWidth, viewport: window.innerWidth, theme: document.documentElement.dataset.theme }))); expect(layout.scroll).toBeLessThanOrEqual(layout.width); expect(layout.viewport).toBe(1024); expect(layout.theme).toBe(theme); await info.attach('JOIN排序原生窗口-' + mode, { body: await step(() => page.screenshot()), contentType: 'image/png' });
     await step(() => dialog().getByRole('button', { name: text.open, exact: true }).click()); await step(() => expect(page.getByLabel('本例独立查询SQL', { exact: true })).toContainText(suffix)); const final = await evidence(); expect(final.tabs).toHaveLength(2); expect(final.tabs.filter(tab => tab.kind === 'query')).toHaveLength(1); expect(final.resultLimit).toBe(43); expect(final.denied).toEqual([]); expect(final.dirty).toEqual(before.dirty); expect(final.jobs).toEqual(before.jobs); expect(Object.values(final.jobs).some(Boolean)).toBe(false); expect(final.calls.filter(call => call.command === 'metadata.table').map(call => call.input.table)).toEqual(['child', 'parent', 'child', 'parent']); expect(final.calls.some(call => /query\.|table\.(apply|preview)/.test(call.command))).toBe(false); expect(errors).toEqual([]);
-    const sql = final.tabs.find(tab => tab.kind === 'query')?.sql; if (filtering) { expect(sql).toContain('WHERE'); expect(sql).toContain('p.`amount` IN'); expect(sql).toContain('p.`id` IS NULL'); expect(sql).toContain(' OR '); } else expect(sql).not.toContain('WHERE');
+    const sql = final.tabs.find(tab => tab.kind === 'query')?.sql; if (distinct) expect(sql).toMatch(/^SELECT DISTINCT\n/); if (filtering) { expect(sql).toContain('WHERE'); expect(sql).toContain('p.`amount` IN'); expect(sql).toContain('p.`id` IS NULL'); expect(sql).toContain(' OR '); } else expect(sql).not.toContain('WHERE');
     check(); await app.close(); closed = true; expect(await exit).toEqual({ code: 0, signal: null }); expect(taskProcess.killed).toBe(false); await info.attach('JOIN排序原生组件终态', { body: JSON.stringify({ pid, directory, theme, mode, sql, filtering, grouping, summarizing, having, calls: final.calls, zeroDatabaseExecutions: true, zeroClipboardOperations: true, sourceDraftUnchanged: true, newQueryCount: 1, originalGlobalLimit: 43, normalExit: true, realDatabaseVerified: false }), contentType: 'application/json' }); accepted = true;
   } finally {
     // 失败原件保留；只请求原应用正常退出，不终止其它窗口或伪称完成清理。

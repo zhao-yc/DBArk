@@ -64,6 +64,31 @@ async function mount(options: { read?: TableForeignKeyJoinServices['read']; canc
   await act(async () => root!.render(options.strict ? <React.StrictMode>{view}</React.StrictMode> : view));
   return { child, parent, scope, intent, read, cancel, close, activity, opened, cleanup };
 }
+it('去重仅改变独立投影并保留WHERE与上限，关闭恢复原SQL，不自动读库', async () => {
+  const f = await mount(); await click(text.preview); await click(filterText.add); await filterInput(filterText.value(1), '9007199254740993'); await limitInput('2');
+  const before = sql(); await toggle(text.distinct); expect(sql()).toBe(before.replace('SELECT\n', 'SELECT DISTINCT\n')); expect(f.read).toHaveBeenCalledOnce();
+  await toggle(text.distinct); expect(sql()).toBe(before); await toggle(text.distinct); await click(text.open);
+  expect(f.opened.mock.calls[0][0].options.distinct).toBe(true); expect(f.read).toHaveBeenCalledTimes(3);
+});
+it('去重拒绝未输出排序并保留草稿，重新选中原字段后恢复，不偷偷追加输出', async () => {
+  const f = await mount(); await click(text.preview); await click(text.sortAdd); await toggle(text.childSelect('id'));
+  const before = sql(); expect(before).toContain('ORDER BY c.`id` ASC'); expect(before).not.toContain('c.`id` AS `c_1_id`');
+  await toggle(text.distinct); expect(sql()).toBe(''); expect(button(text.open).disabled).toBe(true); expect(document.body.textContent).toContain(text.distinctSort);
+  await toggle(text.distinct); expect(sql()).toBe(before); await toggle(text.distinct); await toggle(text.childSelect('id'));
+  expect(sql()).toContain('SELECT DISTINCT\n'); expect(sql()).toContain('ORDER BY c.`id` ASC'); expect(f.read).toHaveBeenCalledOnce();
+});
+it('去重在汇总模式隐藏保留；旧隐藏回调不能改后继，换FK清空去重选择', async () => {
+  const f = await mount(); await click(text.preview); await toggle(text.distinct); const before = sql(), old = joinReactProps(filterControl(text.distinct)).onChange;
+  await toggle(summaryText.enabled); await click(summaryText.addAggregate); expect(sql()).not.toContain('DISTINCT');
+  expect(document.body.querySelector('[aria-label="' + text.distinct + '"]')).toBeNull(); await act(async () => old({ target: { checked: false } }));
+  await toggle(summaryText.enabled); expect(sql()).toBe(before); await click(text.preview); expect(sql()).toBe(before);
+  await select(text.fk, 'fk_other'); await click(text.preview); expect(sql()).not.toContain('DISTINCT'); expect(filterControl(text.distinct).checked).toBe(false); expect(f.opened).not.toHaveBeenCalled();
+});
+it('正式结构核验期间旧去重回调不能改原回执', async () => {
+  const f = await mount(); await click(text.preview); await toggle(text.distinct); const before = sql(), old = joinReactProps(filterControl(text.distinct)).onChange, pending = deferred<TableInfo>();
+  f.read.mockImplementationOnce(() => pending.promise); await click(text.open); await act(async () => old({ target: { checked: false } })); await act(async () => pending.resolve(f.child));
+  expect(f.opened).toHaveBeenCalledOnce(); expect(f.opened.mock.calls[0][0].sql).toBe(before); expect(f.opened.mock.calls[0][0].options.distinct).toBe(true);
+});
 /** 通过真实控件选择指标，不猜内部稳定输出ID或修改草稿。 */
 async function havingTarget(n:number,label:string){const selector=filterControl(havingText.target(n)),option=selector.querySelectorAll('option').find(option=>option.textContent===label);expect(option).toBeDefined();await select(havingText.target(n),option!.value);}
 /** 明确建立COUNT汇总及一条待填写HAVING，原数据仍由正式组件持有。 */
