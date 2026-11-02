@@ -1,0 +1,55 @@
+name: 表关系图源码组件验收
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/relationship-diagram.yml', 'scripts/relationship-diagram-ci.mjs', 'src/renderer/relationshipDiagram*', 'src/renderer/components/RelationshipDiagramDialog.tsx', 'src/renderer/components/TableTab.tsx', 'src/renderer/locales/relationshipDiagram.zh-CN.ts', 'tests/fixtures/relationship-diagram/**', 'tests/helpers/relationshipDiagramFixture.ts', 'tests/e2e/relationship-diagram-native.spec.ts', 'tests/unit/relationship-diagram*', 'package.json', 'pnpm-lock.yaml']
+  pull_request:
+    paths: ['.github/workflows/relationship-diagram.yml', 'scripts/relationship-diagram-ci.mjs', 'src/renderer/relationshipDiagram*', 'src/renderer/components/RelationshipDiagramDialog.tsx', 'src/renderer/components/TableTab.tsx', 'src/renderer/locales/relationshipDiagram.zh-CN.ts', 'tests/fixtures/relationship-diagram/**', 'tests/helpers/relationshipDiagramFixture.ts', 'tests/e2e/relationship-diagram-native.spec.ts', 'tests/unit/relationship-diagram*', 'package.json', 'pnpm-lock.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 不以新提交取消仍在采集的原测试轮次。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  diagram-components:
+    name: 关系图组件 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖和Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 单次运行结构、取消与组件保护单元
+        run: pnpm exec vitest run tests/unit/relationship-diagram.test.ts tests/unit/relationship-diagram-reader.test.ts tests/unit/relationship-diagram-dialog.test.tsx tests/unit/relationship-diagram-ci.test.ts tests/unit/table-statistics-full-tab.test.tsx tests/unit/table-value-options-full-tab.test.tsx --maxWorkers=1
+      - name: 单次运行明暗原生组件，保留原120秒零重试
+        run: node scripts/relationship-diagram-ci.mjs
+      - name: 记录实际源码和平台
+        if: always()
+        run: |
+          node -e "const fs=require('node:fs');fs.mkdirSync('test-results/relationship-diagram',{recursive:true});fs.writeFileSync('test-results/relationship-diagram/platform.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version}))"
+          git rev-parse HEAD > test-results/relationship-diagram/head.txt
+      - name: 保留原报告、截图和退出回执
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relationship-diagram-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/relationship-diagram/
+          if-no-files-found: warn

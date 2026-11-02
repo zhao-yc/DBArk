@@ -120,6 +120,7 @@ import { afterAll, afterEach, beforeAll } from 'vitest';
 import { memoryDocument } from '../fixtures/memory-dom';
 import type { TableStatisticsServices } from '../../src/renderer/components/TableStatisticsDialog';
 import { tableStatisticsZh as statisticsText } from '../../src/renderer/locales/tableStatistics.zh-CN';
+import { relationshipDiagramZh as relationshipText } from '../../src/renderer/locales/relationshipDiagram.zh-CN';
 
 let memory: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], dialogRoot: ReturnType<typeof createRoot> | undefined;
 let TableStatisticsDialog: typeof import('../../src/renderer/components/TableStatisticsDialog')['TableStatisticsDialog'];
@@ -151,4 +152,15 @@ it('完整TableTab的视图入口可达，活动标签与连接ABA同步永久�
 });
 it('统计模态实际阻止父表新操作，原取消回调只关闭原实例而不清草稿',async()=>{
   const f=await fixture();await f.change('保留草稿');await f.click(statisticsText.title);const dialog=f.all('TableStatisticsDialog')[0];expect(f.button(zh.common.add).props.disabled).toBe(true);expect(f.button(statisticsText.title).props.disabled).toBe(true);dialog.props.onClose();await f.render();expect(f.grid().rows[0].data.note).toBe('保留草稿');expect(f.all('TableStatisticsDialog')).toHaveLength(0);expect(f.button(statisticsText.title).props.disabled).toBe(false);
+});
+
+it('关系图正式表页入口不读库，自己的忙碌计数不撤销来源且父草稿保持', async () => {
+  const f = await fixture(); await f.change('保留关系图父草稿'); const before = f.invoke.mock.calls.length;
+  await f.click(relationshipText.entry); const element = f.all('RelationshipDiagramDialog')[0]; expect(element.props.source).toBe(f.info); expect(element.props.current()).toBe(true); expect(f.invoke.mock.calls).toHaveLength(before);
+  element.props.onActivity(1); await f.render(); expect(element.props.current()).toBe(true); expect(f.button(relationshipText.entry).props.disabled).toBe(true);
+  element.props.onActivity(-1); element.props.onClose(); await f.render(); expect(f.grid().rows[0].data.note).toBe('保留关系图父草稿'); expect(f.all('RelationshipDiagramDialog')).toHaveLength(0);
+});
+it('关系图旧表页按钮在活动标签已切走而尚未渲染时不能打开旧窗口', async () => {
+  const f = await fixture(), old = f.button(relationshipText.entry).props.onClick, before = f.invoke.mock.calls.length;
+  f.workspace.settings.activeTabId = 'other'; await old(); await f.render(); expect(f.all('RelationshipDiagramDialog')).toHaveLength(0); expect(f.invoke.mock.calls).toHaveLength(before);
 });

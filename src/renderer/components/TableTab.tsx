@@ -62,6 +62,8 @@ import { ChildReferenceDialog } from './ChildReferenceDialog';
 import { ChildReferenceIntent } from '../childReferenceIntent';
 import { childReferencesZh } from '../locales/childReferences.zh-CN';
 import { TableStatisticsDialog } from './TableStatisticsDialog';
+import { RelationshipDiagramDialog } from './RelationshipDiagramDialog';
+import { relationshipDiagramZh } from '../locales/relationshipDiagram.zh-CN';
 import { TableStatisticsIntent } from '../tableStatisticsIntent';
 import { tableStatisticsZh } from '../locales/tableStatistics.zh-CN';
 import { TableValueOptionsDialog } from './TableValueOptionsDialog';
@@ -240,6 +242,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [referenceDialog, setReferenceDialogState] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse' } | null>(null);
   const [childReferenceDialog, setChildReferenceDialog] = useState<ChildReferenceIntent | null>(null), childReferenceIntent = useRef<ChildReferenceIntent | null>(null);
   const [tableStatisticsDialog, setTableStatisticsDialog] = useState<TableStatisticsIntent | null>(null), tableStatisticsIntent = useRef<TableStatisticsIntent | null>(null);
+  const [relationshipDialog, setRelationshipDialog] = useState<{ source: TableInfo; current(): boolean } | null>(null), relationshipRef = useRef<typeof relationshipDialog>(null);
   const [tableValueOptionsDialog, setTableValueOptionsDialog] = useState<{ intent: TableStatisticsIntent; column: string } | null>(null), tableValueOptionsIntent = useRef<TableStatisticsIntent | null>(null);
   /** 关联窗口即使打开后关闭，也永久推进原方案的上下文代次。 */
   function setReferenceDialog(next:typeof referenceDialog){filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate();batchFillIntent.current?.invalidate();presetUiEpoch.current++;setReferenceDialogState(next);}
@@ -639,6 +642,13 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   /** 原窗口原任务结算后才关闭；旧关闭回调不能关闭后续统计实例。 */
   function closeTableStatistics(intent: TableStatisticsIntent) { if (tableStatisticsIntent.current !== intent) return; intent.invalidate(); tableStatisticsIntent.current = null; presetUiEpoch.current++; setTableStatisticsDialog(null); }
+  /** 关系图只捕获原结构与连接；自己的读取计数不撤销自身，也不访问父表的数据行。 */
+  function openRelationshipDiagram() {
+    if (tableReadAction.current !== tableReadRender || blockedRef.current || relationshipRef.current || !connection || info?.objectKind !== 'table' || externalStale || gridEditing || record.hasInput() || useWorkspace.getState().settings.activeTabId !== tab.id || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const source = info, profile = connection, version = connectionVersion, generation = loadGeneration.current, originalTab = useWorkspace.getState().settings.tabs.find(item => item.id === tab.id);
+    const owner: { source: TableInfo; current(): boolean } = { source, current() { const state = useWorkspace.getState(); return mounted.current && relationshipRef.current === owner && state.settings.activeTabId === tab.id && state.settings.tabs.find(item => item.id === tab.id) === originalTab && state.connections.find(item => item.id === tab.connectionId) === profile && (state.connectionVersions[tab.connectionId] ?? 0) === version && recordContextRef.current.info === source && loadGeneration.current === generation && !recordControllerRef.current?.hasInput() && !activeGridEditor.current; } };
+    relationshipRef.current = owner; presetUiEpoch.current++; setRelationshipDialog(owner);
+  }
   /** 候选绑定原页、原条件和连接；读取不碰父草稿，也不要求活动行。 */
   function openTableValueOptions() {
     if (tableReadAction.current !== tableReadRender || blockedRef.current || tableValueOptionsIntent.current || !connection || !info || !['table', 'view'].includes(info.objectKind ?? '') || !page || externalStale || gridEditing || record.hasInput() || document.querySelector('[role="dialog"]') || useWorkspace.getState().settings.activeTabId !== tab.id) return;
@@ -1355,6 +1365,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button aria-label={referenceZh.browse} title={referenceZh.browse} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.length} onClick={() => openReference('browse')}>{referenceZh.browse}</button>
 <button aria-label={childReferencesZh.title} title={childReferencesZh.title} disabled={blocked || !connection || !referenceRow || referenceRow.deleted || referenceRow.inserted || info?.objectKind !== 'table' || !page || externalStale || gridEditing || record.hasInput()} onClick={openChildReferences}>{childReferencesZh.title}</button></ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.structure}><button disabled={!info || blocked} onClick={() => onDesign(!info?.engine)}><SlidersHorizontal size={14}/>{info && !info.engine ? zh.table.text007 : zh.table.text008}</button>
+<button aria-label={relationshipDiagramZh.entry} disabled={info?.objectKind !== 'table' || blocked || externalStale || gridEditing || record.hasInput()} onClick={openRelationshipDiagram}>{relationshipDiagramZh.entry}</button>
 <button title={columnPatchZh.title} aria-label={columnPatchZh.title} disabled={!info?.engine || blocked} onClick={onColumnPatches}>{columnPatchZh.title}</button>
 <button title={indexPatchZh.title} aria-label={indexPatchZh.title} disabled={!info?.engine || blocked} onClick={onIndexPatches}>{indexPatchZh.title}</button>
 <button title={foreignKeyPatchZh.title} aria-label={foreignKeyPatchZh.title} disabled={!info?.engine || blocked} onClick={onForeignKeyPatches}>{foreignKeyPatchZh.title}</button>
@@ -1389,6 +1400,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     {childReferenceDialog && <ChildReferenceDialog base={base} intent={childReferenceDialog} onClose={() => closeChildReferences(childReferenceDialog)} onActivity={referenceActivity}/>}
     {foreignKeyJoinDialog && <TableForeignKeyJoinDialog intent={foreignKeyJoinDialog} onOpen={preview => openForeignKeyJoinQuery(foreignKeyJoinDialog, preview)} onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog)} onActivity={foreignKeyJoinActivity} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
     {tableStatisticsDialog && <TableStatisticsDialog base={base} intent={tableStatisticsDialog} onClose={() => closeTableStatistics(tableStatisticsDialog)} onActivity={referenceActivity}/>}
+    {relationshipDialog && <RelationshipDiagramDialog connectionId={tab.connectionId} source={relationshipDialog.source} current={relationshipDialog.current} onActivity={referenceActivity} onClose={() => { if (relationshipRef.current === relationshipDialog) { relationshipRef.current = null; presetUiEpoch.current++; setRelationshipDialog(null); } }}/>}
     {tableValueOptionsDialog && <TableValueOptionsDialog target={base} source={tableValueOptionsDialog.intent.source} column={tableValueOptionsDialog.column} conditions={tableValueOptionsDialog.intent.conditions} isCurrent={() => tableValueOptionsDialog.intent.current()} services={tableValueOptionsServices} onApply={next => applyTableValueOptions(tableValueOptionsDialog.intent, next)} onClose={() => closeTableValueOptions(tableValueOptionsDialog.intent)} onCleanupError={message => useWorkspace.getState().notify(message, true)} onActivity={referenceActivity}/>}
     {filteredUpdateDialog && <TableFilteredUpdateDialog intent={filteredUpdateDialog} initialColumn={selection?.key} onActivity={referenceActivity} onClose={result => closeFilteredUpdate(filteredUpdateDialog,result)} onCommitted={(result,changed) => useWorkspace.getState().notify(changed?filteredUpdateText.committedChanged(result.rows):filteredUpdateText.committed(result.rows),changed)} onCleanupError={message => useWorkspace.getState().notify(message,true)}/>}
     {filteredDeleteDialog && <TableFilteredDeleteDialog intent={filteredDeleteDialog} onActivity={referenceActivity} onClose={result => closeFilteredDelete(filteredDeleteDialog,result)} onCommitted={(result,changed) => useWorkspace.getState().notify(changed?filteredDeleteText.committedChanged(result.rows):filteredDeleteText.committed(result.rows),changed)} onCleanupError={message => useWorkspace.getState().notify(message,true)}/>}

@@ -1,5 +1,7 @@
 # 使用指南
 
+MySQL／MariaDB 物理表可从“表格操作 → 设计与结构 → 查看表关系图”查看主外键、复合映射和自引用。明确选择后读取其它表，支持缩放、刷新及关联键字段显示；未读目标用虚线标明。详见[关系图使用范围](development/relationship-diagram-20261103.md)，不修改数据库。
+
 SQL 编辑器新增[常用函数参数提示](development/sql-signatures-20261103.md)：输入函数括号或逗号即可查看签名和当前参数，支持嵌套及方言差异；Windows 可按 `Ctrl+Shift+Space` 手动查看。只读本地语法资料，不执行 SQL；完整函数语义、Mac／安装另验。
 
 SQLite 表／视图的不同值筛选现可按次数最多／最少读取，针对全部匹配分组排序后限量。切换不查询；已有勾选先确认丢弃，再明确重读，仍须先加入草稿后应用。见[SQLite 次数排序](development/sqlite-value-frequency-20261103.md)。

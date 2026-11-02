@@ -1,0 +1,15 @@
+export const relationshipDiagramZh = {
+  title: '表关系图', entry: '查看表关系图', catalog: '读取表目录', read: '读取所选表', refresh: '刷新图中表', stop: '停止读取', close: '关闭',
+  search: '搜索表名', selected: '已选择', selectVisible: '选择本页', clear: '清空选择', previous: '上一页', next: '下一页',
+  fields: '显示全部字段', zoomOut: '缩小关系图', zoomIn: '放大关系图', fit: '适应宽度', viewport: '表关系图，可使用滚动条移动',
+  scope: '只展示目录声明的外键，不推测业务关系或一对一基数。箭头从引用表指向被引用表；复合映射按原顺序显示。',
+  readScope: '表选择仅修改草稿，点击读取后才访问结构。外部或未选入图的目标仅为外键声明，不代表已核实存在。分次读取不构成事务一致快照。',
+  external: '目标结构未读取', primary: '主键', foreign: '外键', nullable: '可空', required: '非空', noKeys: '没有关联键字段，可切换显示全部字段。',
+  noRelations: '当前图中没有外键声明。', noTables: '没有匹配的表。', stale: '原表、标签或连接已变化，请关闭后重新打开。',
+  invalid: '关系图结构不完整、重复或超过显示上限；请减少表选择，或刷新结构后重试。', busy: '上一轮结构读取尚未结束。', cancelled: '已停止读取，未替换原关系图。',
+  selectionChanged: '表选择已改变；当前仍显示上一次读取的结构。', catalogChanged: '目录读取成功；表选择仍须明确读取。',
+  limit: '每次最多读取40张表、2000个字段及300个外键；超限整份拒绝，不截断关系。',
+  progress: (done: number, total: number) => `已读取 ${done} / ${total} 张表`,
+  counts: (tables: number, external: number, edges: number) => `${tables} 张已读表 · ${external} 个未读目标 · ${edges} 个外键`,
+  mappings: '字段映射', update: '更新规则', remove: '删除规则', sameTable: '自引用', tableList: '选择关系图中的表',
+};

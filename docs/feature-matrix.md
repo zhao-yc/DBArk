@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-03 源码增量：[MySQL／MariaDB 表关系图](development/relationship-diagram-20261103.md)支持选表、主外键、复合映射、自引用、未读目标、缩放与刷新，只读结构。49 项相关与 Windows 原生组件分层验收，三平台 CI 已接；实库／安装／完整 ER 能力另验，E01 部分，暂不发布。
+
 2026-11-03 源码增量：[SQL 常用函数参数提示](development/sql-signatures-20261103.md)支持签名、参数高亮、嵌套及方言差异，不执行 SQL。198 项相关、类型／构建与 Windows 三方言完整客户端通过；Mac／安装、实库界面及完整语义辅助另验，O05 仍部分，暂不发布。
 
 2026-11-03 源码增量：[SQLite 全表不同值次数排序](development/sqlite-value-frequency-20261103.md)支持常见／少见值优先，原类型、条件及取消隔离保持。81 项相关、类型／构建、真实表／视图 worker 和 Windows 完整客户端通过；Mac／安装另验，不计完整 R02，暂不发布。
