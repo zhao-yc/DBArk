@@ -10,6 +10,7 @@ import { queryResultFilterZh as filterText } from '../../src/renderer/locales/qu
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultValueOptionsZh as valueText } from '../../src/renderer/locales/queryResultValueOptions.zh-CN';
 import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
+import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -341,6 +342,8 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c4'));
     await step(() => filtering.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('eq'));
     await step(() => filtering.getByLabel(filterText.input + ' 1', { exact: true }).fill('2')); await applyFiltering([ascending[0]]);
+    await step(async () => (await navigationMenuItem(query(), { name: memoryText.save, exact: true }, check)).click());
+    await step(() => expect(query().getByText(memoryText.saved, { exact: true })).toBeVisible());
     const presets = () => page.getByRole('dialog', { name: presetText.title, exact: true });
     const openPresets = async () => { await step(async () => (await navigationMenuItem(query(), { name: presetText.open, exact: true }, check)).click()); await step(() => expect(presets().getByLabel(presetText.choose, { exact: true })).toBeEnabled()); };
     const closePresets = async () => { await step(() => presets().getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(presets()).toHaveCount(0)); };
@@ -361,6 +364,13 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.undo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(originalOrder));
     await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.redo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual([ascending[0]])); await clearFiltering();
     expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
+    stage = '仅当前标签暂存原类型条件和排序，明确应用并整步撤销重做';
+    await step(async () => (await navigationMenuItem(query(), { name: memoryText.apply, exact: true }, check)).click());
+    await step(() => expect.poll(shownIntegers).toEqual([ascending[0]])); await step(() => expect(blobHeader).toHaveAttribute('aria-sort', 'descending'));
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.undo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.redo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual([ascending[0]])); await clearFiltering();
+    await step(() => expect(query().getByText(memoryText.saved, { exact: true })).toBeVisible());
+    expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
     stage = '原结果菜单真实保存逐格类型快照';
     await step(async () => (await navigationMenuItem(query(), { name: snapshotText.save, exact: true }, check)).click());
     await step(() => expect(query().getByText(snapshotText.saved, { exact: true })).toBeVisible());
@@ -372,6 +382,11 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click());
     await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeEnabled());
     await execute(rolledBackSql, 2); expect(disk()).toEqual(baselineDisk);
+    await step(() => expect(query().getByText(memoryText.saved, { exact: true })).toBeVisible());
+    await step(async () => expect(await navigationMenuItem(query(), { name: memoryText.apply, exact: true }, check)).toBeDisabled());
+    await step(() => page.keyboard.press('Escape'));
+    await step(async () => (await navigationMenuItem(query(), { name: memoryText.clear, exact: true }, check)).click());
+    await step(() => expect(query().getByText(memoryText.saved, { exact: true })).toHaveCount(0));
     await step(() => query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click());
     await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeDisabled()); expect(disk()).toEqual(baselineDisk);
     stage = '明确自动提交写入及重启前未执行草稿'; await execute(committedSql, 3);

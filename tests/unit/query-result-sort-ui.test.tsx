@@ -49,14 +49,20 @@ beforeAll(async()=>{
 afterEach(async()=>{vi.useRealTimers();if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();ports.grids=[];ports.scroll.mockClear();document.body.textContent='';});
 afterAll(()=>{ restoreNavigationMenuPort();for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只返回本地常量；query.execute是RAM服务端口，禁止网络、DB、实际文件或剪贴板。 */
-async function mount(prepare?: (result: QueryResult) => void){
+async function mount(prepare?: (result: QueryResult) => void,dialect:'mysql'|'sqlite'='mysql'){
   commands=[];exports=[];original={columns:[{key:'id',name:'同名',type:'LONGLONG'},{key:'value',name:'同名',type:'NEWDECIMAL'},{key:'words',name:'原文',type:'VAR_STRING'},{key:'bytes',name:'字节',type:'BLOB'}],rows:[{id:'18446744073709551615',value:'0.12345678901234567891',words:'晚行',bytes:{type:'binary',base64:'AA=='}},{id:'9007199254740993',value:'0.12345678901234567890',words:'中行',bytes:{type:'binary',base64:'AP8='}},{id:'2',value:'-0.00000000000000000001',words:'早行',bytes:{type:'binary',base64:''}}],truncated:true,elapsedMs:1,statement:'SELECT 原SQL'};
   prepare?.(original);
-  (window as any).dbark={onMenu:()=>()=>{},onTask:(callback:any)=>{events=callback;return()=>{};},invoke:async(command:string,input:any)=>{commands.push(command);if(['settings.save','connections.open','sessions.close'].includes(command))return;if(command==='sessions.open')return{sessionId:'s'};if(command==='query.completionState')return{databaseKnown:true,database:null,temporaryObjects:[]};if(command==='query.execute')return{results:[original,{...original,rows:original.rows.slice().reverse()}],elapsedMs:1,transactionOpen:false};if(command==='files.choose')return{token:'ram',name:'内存文件'};if(command==='files.exportResult'){exports.push(structuredClone(input));return{rows:input.result.rows.length};}throw Error('禁止外界命令：'+command);}};
-  store.setState({settings:{theme:'light',sidebarWidth:260,resultLimit:1000,pageSize:100,activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',title:'查询',sql:'SELECT 原SQL',databaseContext:{state:'known',database:null}}]},connections:[{id:'c',name:'RAM',group:'',color:'',dialect:'mysql',host:'offline.invalid',port:1,user:'ram'}],connectionVersions:{c:1},activeJobs:{},dirtyTabs:{}});
+  (window as any).dbark={onMenu:()=>()=>{},onTask:(callback:any)=>{events=callback;return()=>{};},invoke:async(command:string,input:any)=>{commands.push(command);if(['settings.save','connections.open','sessions.close'].includes(command))return;if(command==='sessions.open')return{sessionId:dialect==='sqlite'?'sqlite:ram':'s'};if(command==='query.completionState')return{databaseKnown:true,database:dialect==='sqlite'?'main':null,temporaryObjects:[]};if(command==='query.execute')return{results:[original,{...original,rows:original.rows.slice().reverse(),...(original.sqliteStorage?{sqliteStorage:{version:1,rows:original.sqliteStorage.rows.slice().reverse()}}:{})}],elapsedMs:1,transactionOpen:false};if(command==='files.choose')return{token:'ram',name:'内存文件'};if(command==='files.exportResult'){exports.push(structuredClone(input));return{rows:input.result.rows.length};}throw Error('禁止外界命令：'+command);}};
+  store.setState({settings:{theme:'light',sidebarWidth:260,resultLimit:1000,pageSize:100,activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',title:'查询',sql:'SELECT 原SQL',databaseContext:{state:'known',database:dialect==='sqlite'?'main':null}}]},connections:[dialect==='sqlite'?{id:'c',name:'RAM SQLite',group:'',color:'',dialect:'sqlite',sqlite:{filePath:'ram-only.sqlite',readOnly:true,busyTimeoutMs:0}}:{id:'c',name:'RAM',group:'',color:'',dialect:'mysql',host:'offline.invalid',port:1,user:'ram'}],connectionVersions:{c:1},activeJobs:{},dirtyTabs:{}});
   function Harness(){return store(s=>s.settings.tabs).map(tab=><QueryTab key={tab.id} tab={tab} onHistory={()=>{}}/>);}const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(<Harness/>));await click(zh.query.text010);
 }
 function grid(){return ports.grids.at(-1)!;}
+/** SQLite使用真实QueryTab分支与逐格代码；只把执行结果作为RAM服务端口返回，不访问本机文件。 */
+async function mountSqliteMemory(){await mount(result=>{
+  result.columns=['id','value','payload'].map(key=>({key,name:'同名',type:'SQLITE'}));
+  result.rows=[{id:'9223372036854775807',value:'2',payload:{type:'binary',base64:'AP8='}},{id:'9007199254740993',value:'2',payload:{type:'binary',base64:'/wA='}},{id:'-9223372036854775808',value:null,payload:{type:'binary',base64:''}}];
+  result.sqliteStorage={version:1,rows:['iib','itb','inb']};
+},'sqlite');}
 
 /** 只读真实审核面板的候选输入框，不调用生成器重算测试期望。 */
 function selectedFilterMembers(condition = 1): string[] {
@@ -287,6 +293,26 @@ it('筛选排序联动：全部排序列均不支持时仍可应用NULL筛选，
   await click(filterText.open); await addFilterRule(1, 'id', 'null'); await click(filterText.apply);
   expect(grid().rows).toEqual([original.rows[0]]); expect(grid().sortColumns).toEqual([]);
   await click(filterText.clear); expect(grid().rows).toBe(original.rows); expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+it('SQLite暂存：新结果不自动套用，明确应用沿新原行完整恢复类型条件和排序，一步撤销重做',async()=>{
+  await mountSqliteMemory();await click(filterText.open);await addFilterRule(1,'id','gte','9007199254740993');await setFilterField(filterText.sqliteType(1),'integer');await click(filterText.apply);await headerAction('id');
+  expect(grid().rows).toEqual([original.rows[1],original.rows[0]]);await act(async()=>grid().onSelectedRowsChange(new Set([0])));await click(memoryText.save);expect(grid().selectedRows.size).toBe(1);
+  original={...original,columns:original.columns.map(column=>({...column})),rows:[{id:'9007199254740995',value:'2',payload:{type:'binary',base64:'AP8='}},{id:'9007199254740994',value:'2',payload:{type:'binary',base64:'/wA='}},{id:'-9223372036854775808',value:null,payload:{type:'binary',base64:''}}],sqliteStorage:{version:1,rows:['iib','itb','inb']}};
+  const before=structuredClone(original);await click(zh.query.text010);expect(grid().rows).toBe(original.rows);expect(grid().sortColumns).toEqual([]);expect(document.body.textContent).toContain(memoryText.saved);
+  await click(memoryText.apply);expect(grid().rows).toEqual([original.rows[1],original.rows[0]]);expect(grid().rows[0]).toBe(original.rows[1]);expect(grid().selectedRows.size).toBe(0);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
+  await click(historyText.undo);expect(grid().rows).toBe(original.rows);expect(grid().sortColumns).toEqual([]);await click(historyText.redo);expect(grid().rows).toEqual([original.rows[1],original.rows[0]]);
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.sqliteType(1)+'"]')!.value).toBe('integer');expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('9007199254740993');await click(filterText.cancel);
+  const rows=grid().rows;await click(memoryText.clear);expect(grid().rows).toBe(rows);expect(document.body.textContent).not.toContain(memoryText.saved);expect(original).toEqual(before);expect(commands.filter(command=>command==='query.execute')).toHaveLength(2);
+});
+it.each(['failed','no-columns'] as const)('SQLite暂存：后续查询%s仍允许主动丢弃，原回调不能删除新代次',async mode=>{
+  await mountSqliteMemory();await headerAction('id');await click(memoryText.save);const oldDiscard=reactProps(button(memoryText.clear)).onClick,previous=window.dbark.invoke;
+  (window.dbark as any).invoke=async(command:any,input:any)=>{if(command==='query.execute'){if(mode==='failed')throw Error('本例预期SQLite失败');return{results:[{columns:[],rows:[],elapsedMs:0,statement:'状态'}],elapsedMs:0};}return previous(command,input);};
+  await click(zh.query.text010);expect(document.body.textContent).toContain(memoryText.saved);expect(button(memoryText.apply).disabled).toBe(true);await act(async()=>oldDiscard());expect(document.body.textContent).toContain(memoryText.saved);await click(memoryText.clear);expect(document.body.textContent).not.toContain(memoryText.saved);
+});
+it('SQLite暂存：字段变化不套用，连接配置变代清除暂存并拒绝原应用回调',async()=>{
+  await mountSqliteMemory();await headerAction('id');await click(memoryText.save);const apply=reactProps(button(memoryText.apply)).onClick;
+  original={...original,columns:original.columns.map((column,index)=>({...column,name:index===0?'新字段':column.name}))};await click(zh.query.text010);expect(button(memoryText.apply).disabled).toBe(true);expect(document.body.textContent).toContain(memoryText.saved);
+  await act(async()=>apply());expect(grid().rows).toBe(original.rows);await act(async()=>store.setState({connectionVersions:{c:2}}));expect(document.body.textContent).not.toContain(memoryText.saved);await act(async()=>apply());expect(commands.filter(command=>command==='query.execute')).toHaveLength(2);
 });
 it.each(['failed', 'no-columns'] as const)('暂存整理：后续查询%s仍显示暂存并允许主动丢弃', async mode => {
   await mount(); await sort(); await click(memoryText.save); const oldDiscard = reactProps(button(memoryText.clear)).onClick;
