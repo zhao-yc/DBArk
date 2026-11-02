@@ -1,0 +1,58 @@
+name: SQLite表关系图源码验收
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/sqlite-relationships.yml', 'scripts/sqlite-workspace-ci.mjs', 'src/**', 'tests/e2e/sqlite-relationships-native.spec.ts', 'tests/unit/*relationship*', 'tests/unit/sqlite-table-browse.test.ts', 'tests/unit/sqlite-offline-ci.test.ts', 'package.json', 'pnpm-lock.yaml']
+  pull_request:
+    paths: ['.github/workflows/sqlite-relationships.yml', 'scripts/sqlite-workspace-ci.mjs', 'src/**', 'tests/e2e/sqlite-relationships-native.spec.ts', 'tests/unit/*relationship*', 'tests/unit/sqlite-table-browse.test.ts', 'tests/unit/sqlite-offline-ci.test.ts', 'package.json', 'pnpm-lock.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 不取消仍在运行或保留失败现场的前轮。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  relationships:
+    name: SQLite关系图 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖和Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 构建当前源码
+        run: pnpm build
+      - name: 单次运行目录、原读取资源和界面保护单元
+        # 构建先生成当前平台原生SQLite资源，真实worker测试不能依赖开发机缓存。
+        run: pnpm exec vitest run tests/unit/sqlite-relationships.test.ts tests/unit/sqlite-relationship-dialog.test.tsx tests/unit/main-sqlite-relationships.test.ts tests/unit/sqlite-table-browse.test.ts tests/unit/sqlite-offline-ci.test.ts --maxWorkers=1
+      - name: 单次真实Main及物理表专项，原120秒零重试
+        run: node scripts/sqlite-workspace-ci.mjs relationships
+      - name: 记录准确源码与实际平台
+        if: always()
+        run: |
+          node -e "const fs=require('node:fs');fs.mkdirSync('test-results/sqlite-relationships',{recursive:true});fs.writeFileSync('test-results/sqlite-relationships/platform.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version}))"
+          git rev-parse HEAD > test-results/sqlite-relationships/head.txt
+      - name: 保存原始报告和明暗截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite-relationships-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/sqlite-relationships/
+          if-no-files-found: warn

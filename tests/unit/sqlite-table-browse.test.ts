@@ -11,6 +11,9 @@ import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/
 import type { SqliteConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { SqliteTablePage, SqliteTablePageInput } from '../../src/shared/sqliteTableBrowse';
 import type { SqliteValueOptionsInput, SqliteValueOptionsOutput } from '../../src/shared/sqliteValueOptions';
+import { randomUUID } from 'node:crypto';
+import type { SqliteRelationshipsInput, SqliteRelationshipsOutput } from '../../src/shared/sqliteRelationships';
+import { captureSqliteRelationshipDiagram } from '../../src/renderer/sqliteRelationshipDiagram';
 
 // 真实Node子进程代替Electron宿主，任何意外默认工厂调用立即失败，不伪造数据库结果。
 vi.mock('electron', () => ({ utilityProcess: { fork: () => { throw Error('分页测试必须注入真实Node子进程'); } } }));
@@ -87,6 +90,74 @@ function input(profile: SqliteConnectionProfile, taskId: string, patch: Partial<
 function page(app: SqliteRuntime, value: SqliteTablePageInput): Promise<SqliteTablePage> { return app.request('sqlite.tablePage', value); }
 /** 从真实结果合同取id原文，避免测试把64位数值转成Number。 */
 function ids(value: SqliteTablePage): unknown[] { return value.result.rows.map(row => row.c0); }
+
+describe('SQLite关系图真实只读worker', () => {
+  /** 锚点来自正式物理表分页，不自行拼出目录摘要。 */
+  async function request(app: SqliteRuntime, profile: SqliteConnectionProfile, tables = ['mix']): Promise<SqliteRelationshipsInput> {
+    const original = await page(app, input(profile, randomUUID()));
+    return { connectionId: profile.id, database: 'main', taskId: randomUUID(), anchor: { table: 'mix', schemaKey: original.schemaKey }, tables };
+  }
+  it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s复合隐式父键、WITHOUT ROWID、STRICT、生成列和有问题声明均保留目录事实', async encoding => {
+    const profile = fixture(encoding);
+    disk(profile, db => db.exec('CREATE TABLE Parent(a TEXT,b INTEGER,PRIMARY KEY(b,a)) WITHOUT ROWID; CREATE TABLE child(x,y,FOREIGN KEY(x,y) REFERENCES PARENT ON UPDATE CASCADE); CREATE TABLE strict_parent(id INTEGER PRIMARY KEY) STRICT; CREATE TABLE implicit_child(x REFERENCES strict_parent); CREATE TABLE bad(x REFERENCES absent,y REFERENCES Parent(no_such_column)); CREATE TABLE self(id INTEGER PRIMARY KEY,p REFERENCES SELF);'));
+    const { app, events } = runtime(profile), source = await request(app, profile, ['mix', 'Parent', 'child', 'strict_parent', 'implicit_child', 'bad', 'self']);
+    const value: SqliteRelationshipsOutput = await app.request('sqlite.relationships', source);
+    expect(value.tables.map(table => table.name)).toEqual(source.tables); expect(value.request).toEqual(source); expect(value.schemaVersion).toMatch(/^\d+$/);
+    expect(value.tables[2].foreignKeys[0]).toMatchObject({ columns: ['x', 'y'], referencedTable: 'PARENT', referencedColumns: null, onUpdate: 'CASCADE' });
+    expect(value.tables[0].columns.find(column => column.name === 'doubled')?.hidden).toBe(2); expect(value.tables[0].columns.find(column => column.name === 'stored')?.hidden).toBe(3);
+    const graph = captureSqliteRelationshipDiagram(value, source); expect(graph.edges.find(edge => edge.key.referencedTable === 'Parent' && edge.key.implicit)?.key.referencedColumns).toEqual(['b', 'a']);
+    expect(graph.edges.some(edge => edge.key.warning)).toBe(true); expect(graph.nodes.filter(node => node.external).map(node => node.name)).toEqual(['absent']);
+    expect(taskState(app, source.taskId)).toEqual({ kind: 'browse-finished' }); expect(events.at(-1)).toMatchObject({ status: 'completed', rows: 7 });
+    const record = processes.at(-1)!; await record.exited;
+    const sql = record.sent.filter(message => message.kind === 'execute').map(message => message.sql);
+    expect(sql[0]).toBe('BEGIN'); expect(sql.at(-1)).toBe('ROLLBACK'); expect(sql.some(sql => /foreign_key_check|foreign_keys\s*=|\b(?:INSERT|UPDATE|DELETE|ATTACH)\b/i.test(sql))).toBe(false);
+  });
+  it('所选表在同一快照读取，WAL并发结构提交不会混入后一张表', async () => {
+    const profile = fixture(); disk(profile, db => db.exec('CREATE TABLE parent(id INTEGER PRIMARY KEY)'));
+    let changed = false;
+    const { app } = runtime(profile, () => transport((message, forward) => {
+      if (!changed && message.kind === 'statement' && message.sql.includes('pragma_foreign_key_list')) { changed = true; disk(profile, db => db.exec('ALTER TABLE parent ADD COLUMN later TEXT')); }
+      forward();
+    }));
+    const source = await request(app, profile, ['mix', 'parent']), value: SqliteRelationshipsOutput = await app.request('sqlite.relationships', source);
+    expect(changed).toBe(true); expect(value.tables[1].columns.map(column => column.name)).toEqual(['id']);
+    const fresh: SqliteRelationshipsOutput = await app.request('sqlite.relationships', { ...source, taskId: randomUUID() }); expect(fresh.tables[1].columns.map(column => column.name)).toEqual(['id', 'later']);
+  });
+  it('锚点已变、视图或缺表整份失败，不发布部分图或保留读资源', async () => {
+    const profile = fixture(), { app, events } = runtime(profile), source = await request(app, profile);
+    disk(profile, db => db.exec('ALTER TABLE mix ADD COLUMN changed TEXT'));
+    for (const target of [source, { ...source, anchor: { ...source.anchor, schemaKey: 'f'.repeat(64) } }]) {
+      await expect(app.request('sqlite.relationships', { ...target, taskId: randomUUID() })).rejects.toThrow('结构已变化'); expect(events.at(-1)?.status).toBe('failed');
+    }
+    const fresh = await request(app, profile);
+    for (const table of ['mix_view', 'absent']) await expect(app.request('sqlite.relationships', { ...fresh, taskId: randomUUID(), tables: ['mix', table] })).rejects.toThrow();
+    for (const record of processes) await record.exited;
+  });
+  it.each(['opening', 'foreign', 'rollback'] as const)('%s取消仅本图准确资源，原用户事务仍存活，编号保留墓碑', async phase => {
+    const profile = fixture(), reached = deferred<void>(); let armed = false, paused = false, release!: () => void;
+    const { app, events } = runtime(profile, () => transport((message, forward) => {
+      const match = phase === 'opening' ? message.kind === 'opened' : message.kind === 'statement' && (phase === 'foreign' ? message.sql.includes('pragma_foreign_key_list') : message.sql === 'ROLLBACK');
+      if (armed && !paused && match) { paused = true; release = forward; reached.resolve(); } else forward();
+    }));
+    const source = await request(app, profile), user = await app.request('sessions.open', { connectionId: profile.id }); await app.request('query.transaction', { ...user, action: 'begin' }); armed = true;
+    const reading = app.request('sqlite.relationships', source).catch(reason => reason); await reached.promise;
+    const stopping = app.request('query.cancel', { taskId: source.taskId }); if (phase === 'rollback') release(); await stopping;
+    expect(await reading).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(taskState(app, source.taskId)).toEqual({ kind: 'browse-finished' });
+    const state = await app.request('query.sessionState', user); expect(state).toEqual({ transactionOpen: true, transactionKnown: true, broken: false }); await app.request('query.transaction', { ...user, action: 'rollback' });
+    const sent = processes[1].sent.length; await app.request('query.cancel', { taskId: source.taskId }); expect(processes[1].sent).toHaveLength(sent); expect(processes[1].kills).toBe(0);
+    await expect(app.request('sqlite.relationships', source)).rejects.toThrow('编号已经使用');
+  });
+  it('两轮准确任务退出前拒绝第三轮，不为超量请求创建worker', async () => {
+    const profile = fixture(); let armed = false; const releases: (() => void)[] = [], reached = deferred<void>();
+    const { app } = runtime(profile, () => transport((message, forward) => { if (armed && message.kind === 'opened') { releases.push(forward); if (releases.length === 2) reached.resolve(); } else forward(); }));
+    const source = await request(app, profile); armed = true;
+    const first = app.request('sqlite.relationships', source), second = app.request('sqlite.relationships', { ...source, taskId: randomUUID() });
+    await reached.promise; const count = processes.length;
+    await expect(app.request('sqlite.relationships', { ...source, taskId: randomUUID() })).rejects.toThrow('并发上限'); expect(processes).toHaveLength(count);
+    armed = false; releases.forEach(release => release()); await Promise.all([first, second]);
+    await expect(app.request('sqlite.relationships', { ...source, taskId: randomUUID() })).resolves.toMatchObject({ tables: [{ name: 'mix' }] });
+  });
+});
 /** 只检查新browse任务是否退化为轻量墓碑，不开放产品调试API或触碰真实进程对象。 */
 function taskState(app: SqliteRuntime, taskId: string): unknown { return (app as unknown as { tasks: Map<string, unknown> }).tasks.get(taskId); }
 /** 核每个已完成任务都正常ROLLBACK并关闭准确只读进程，且无COUNT与整表无界读取。 */

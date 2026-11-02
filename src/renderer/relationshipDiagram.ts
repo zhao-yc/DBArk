@@ -2,13 +2,15 @@ import type { TableInfo } from '../shared/contracts';
 import { relationshipDiagramZh as text } from './locales/relationshipDiagram.zh-CN';
 
 export const relationshipDiagramLimits = { tables: 40, columns: 2000, foreignKeys: 300, parts: 64, targets: 100, catalog: 20000, page: 50 } as const;
-export interface DiagramColumn { name: string; type: string; nullable: boolean; }
-export interface DiagramForeignKey { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[]; onUpdate: string; onDelete: string; }
-export interface DiagramTable { database: string; name: string; columns: DiagramColumn[]; primaryKey: string[]; foreignKeys: DiagramForeignKey[]; }
+export interface DiagramColumn { name: string; type: string; nullable: boolean; notNullDeclared?: boolean; }
+export interface DiagramForeignKey { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[]; onUpdate: string; onDelete: string; implicit?: boolean; warning?: string; }
+export interface DiagramTable { database: string; name: string; columns: DiagramColumn[]; primaryKey: string[]; foreignKeys: DiagramForeignKey[]; sqlite?: boolean; }
 export interface DiagramNode { id: string; database: string; name: string; external: boolean; columns: DiagramColumn[]; primaryKey: string[]; foreignColumns: string[]; x: number; y: number; width: number; height: number; }
 export interface DiagramEdge { id: string; source: string; target: string; key: DiagramForeignKey; path: string; }
 export interface RelationshipDiagram { nodes: DiagramNode[]; edges: DiagramEdge[]; width: number; height: number; tables: DiagramTable[]; }
 export const diagramTableId = (database: string, table: string) => JSON.stringify([database, table]);
+/** 只有SQLite名称使用ASCII折叠；MySQL原精确身份和跨库规则保持不变。 */
+const tableId = (table: DiagramTable, database = table.database, name = table.name) => diagramTableId(database, table.sqlite ? name.replace(/[A-Z]/g, character => character.toLowerCase()) : name);
 const fail = (): never => { throw Error(text.invalid); };
 /** 只读取普通自有数据字段；数据库文字不参与DOM编号、样式或可执行内容。 */
 function own(value: unknown, key: string): unknown { if (!value || typeof value !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return fail(); const field = Object.getOwnPropertyDescriptor(value, key); return field && Object.hasOwn(field, 'value') ? field.value : fail(); }
@@ -37,15 +39,15 @@ export function buildRelationshipDiagram(tables: readonly DiagramTable[], allFie
   if (!Array.isArray(tables as unknown) || !tables.length || tables.length > relationshipDiagramLimits.tables || tables.reduce((count, table) => count + table.columns.length, 0) > relationshipDiagramLimits.columns || tables.reduce((count, table) => count + table.foreignKeys.length, 0) > relationshipDiagramLimits.foreignKeys) return fail();
   const nodes: DiagramNode[] = [], byId = new Map<string, DiagramNode>(), edges: DiagramEdge[] = [], relevant = new Map<string, Set<string>>();
   for (const table of tables) {
-    const id = diagramTableId(table.database, table.name); if (byId.has(id)) return fail();
+    const id = tableId(table); if (byId.has(id)) return fail();
     const node: DiagramNode = { id, database: table.database, name: table.name, external: false, columns: table.columns, primaryKey: table.primaryKey, foreignColumns: [...new Set(table.foreignKeys.flatMap(key => key.columns))], x: 0, y: 0, width: 300, height: 0 };
     byId.set(id, node); nodes.push(node); relevant.set(id, new Set([...node.primaryKey, ...node.foreignColumns]));
   }
   for (const table of tables) for (const key of table.foreignKeys) {
-    const source = diagramTableId(table.database, table.name), target = diagramTableId(key.referencedDatabase, key.referencedTable);
+    const source = tableId(table), target = tableId(table, key.referencedDatabase, key.referencedTable);
     let node = byId.get(target);
     if (!node) { if (nodes.length - tables.length >= relationshipDiagramLimits.targets) return fail(); node = { id: target, database: key.referencedDatabase, name: key.referencedTable, external: true, columns: [], primaryKey: [], foreignColumns: [], x: 0, y: 0, width: 300, height: 0 }; byId.set(target, node); nodes.push(node); }
-    if (!node.external && key.referencedColumns.some(name => !node!.columns.some(column => column.name === name))) return fail();
+    if (!table.sqlite && !node.external && key.referencedColumns.some(name => !node!.columns.some(column => column.name === name))) return fail();
     for (const name of key.referencedColumns) relevant.get(target)?.add(name);
     edges.push({ id: JSON.stringify([source, key.name]), source, target, key, path: '' });
   }

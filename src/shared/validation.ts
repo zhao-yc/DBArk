@@ -7,6 +7,7 @@ import { sqliteTableRebuildInspectSchema, sqliteTableRebuildPreviewSchema, sqlit
 import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsApplySchema, sqliteColumnsReleaseSchema } from './sqliteColumns';
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteValueOptionsInputSchema } from './sqliteValueOptions';
+import { sqliteRelationshipsInputSchema } from './sqliteRelationships';
 import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from './sqliteImportSource';
 import { sqliteIndexesInspectSchema, sqliteIndexesPreviewSchema, sqliteIndexesApplySchema, sqliteIndexesReleaseSchema } from './sqliteIndexes';
 import { sqliteTableCreatePreviewSchema, sqliteTableCreateApplySchema, sqliteTableCreateReleaseSchema } from './sqliteTableCreate';
@@ -216,6 +217,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tablePresets.list': sqliteTablePresetTargetSchema, 'sqlite.tablePresets.save': sqliteTablePresetSaveSchema, 'sqlite.tablePresets.delete': sqliteTablePresetSelectSchema, 'sqlite.tablePresets.read': sqliteTablePresetSelectSchema,
   'sqlite.tablePage': sqliteTablePageSchema,
   'sqlite.valueOptions': sqliteValueOptionsInputSchema,
+  'sqlite.relationships': sqliteRelationshipsInputSchema,
   'sqlite.tableExport': sqliteTableExportSchema,
   'sqlite.tableEdit.preview': sqliteTableEditPreviewSchema,
   'sqlite.tableEdit.apply': sqliteTableEditApplySchema,

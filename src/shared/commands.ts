@@ -7,6 +7,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.tableLayout.get': true, 'sqlite.tableLayout.save': true, 'sqlite.tableLayout.reset': true,
   'sqlite.tablePresets.list': true, 'sqlite.tablePresets.save': true, 'sqlite.tablePresets.delete': true, 'sqlite.tablePresets.read': true,
   'sqlite.tablePage': true,
+  'sqlite.relationships': true,
   'sqlite.valueOptions': true,
   'sqlite.tableExport': true,
   'sqlite.tableEdit.preview': true,
