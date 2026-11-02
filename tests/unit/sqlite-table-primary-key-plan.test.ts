@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { buildSqliteTablePrimaryKey, sqliteTablePrimaryKeyEditSchema, sqliteTablePrimaryKeyLimits, sqlitePrimaryKeyConflicts, type SqliteTablePrimaryKeyDefinition } from '../../src/shared/sqliteTablePrimaryKey';
-import { compileSqliteTablePrimaryKey as compile, inspectSqliteTablePrimaryKey as inspect, inspectSqliteTableForeignKeys, type SqliteRebuildSourceColumn } from '../../src/shared/sqliteTableRebuildPlan';
+import { compileSqliteTablePrimaryKey as compile, inspectSqliteTablePrimaryKey as inspect, inspectSqliteTableRebuildKeyLayout, compileSqliteTableRebuildDefinition, compileSqliteTableRebuildCopyDefinition, inspectSqliteTableForeignKeys, type SqliteRebuildSourceColumn } from '../../src/shared/sqliteTableRebuildPlan';
 import { sqliteTableRebuildPreviewSchema } from '../../src/shared/sqliteTableRebuild';
 
 const design = (patch: Partial<SqliteTablePrimaryKeyDefinition> = {}): SqliteTablePrimaryKeyDefinition => ({ name: 'new_pk', location: 'table', columns: [{ column: 'a', collation: null, order: null }], conflict: null, autoIncrement: false, ...patch });
@@ -17,6 +17,22 @@ function fixture(sql = 'CREATE TABLE child(a TEXT,b INTEGER)') {
 function indexes(db: DatabaseSync) { return db.prepare('PRAGMA index_list(child)').all().filter(index => index.origin === 'pk').map(index => db.prepare('SELECT name,coll,"desc","key" FROM pragma_index_xinfo(?) ORDER BY seqno').all(index.name)); }
 
 describe('SQLite主键准确声明定位与结构化编译', () => {
+  it.each([
+    'CREATE TABLE child(a INTEGER PRIMARY KEY,b TEXT)', 'CREATE TABLE child(a INTEGER PRIMARY KEY DESC,b TEXT)',
+    'CREATE TABLE child(a INTEGER,b TEXT,PRIMARY KEY(a DESC))', 'CREATE TABLE child(a TEXT PRIMARY KEY,b INTEGER) STRICT',
+    'CREATE TABLE child(a TEXT NOT NULL PRIMARY KEY,b INTEGER) STRICT', 'CREATE TABLE child(a TEXT,b INTEGER,PRIMARY KEY(b,a)) WITHOUT ROWID,STRICT',
+    'CREATE TABLE child(a INTEGER,b TEXT,PRIMARY KEY(a DESC AUTOINCREMENT))', 'CREATE TABLE child(a TEXT NULL NOT NULL NULL,b INTEGER)',
+  ])('最终PK及隐含可空性计划与native完整目录一致：%s', sql => {
+    const f = fixture(sql); try { const layout = inspectSqliteTableRebuildKeyLayout(f.input); expect(layout.columns).toEqual(f.db.prepare('PRAGMA table_xinfo(child)').all().map(row => ({ name: row.name, primaryKey: row.pk, notNull: !!row.notnull }))); const indexes = f.db.prepare('PRAGMA index_list(child)').all(); if (!sql.includes('WITHOUT ROWID')) expect(layout.rowIdentity).toEqual({ kind: 'rowid', source: sql.includes('INTEGER') && !sql.includes('PRIMARY KEY DESC') && sql.includes('PRIMARY KEY') && !indexes.some(row => row.origin === 'pk') ? 'a' : '_rowid_' }); } finally { f.db.close(); }
+  });
+  it('主键／外键／类型／默认值／顺序同批从原声明绑定，约束名互换不产生假冲突', () => {
+    const f = fixture('CREATE TABLE child(a INT CONSTRAINT old_pk PRIMARY KEY,b INTEGER CONSTRAINT old_fk REFERENCES parent(id),g TEXT AS(a||b) VIRTUAL)');
+    try {
+      const pk = inspect(f.input).primaryKey!, fk = inspectSqliteTableForeignKeys(f.input)[0], candidateName = '__dbark_rebuild_' + '1'.repeat(32), input = { ...f.input, candidateName, changes: [{ column: 'a', declaredType: 'INTEGER', default: { kind: 'integer' as const, value: '7' } }], columnOrder: ['g', 'b', 'a'], primaryKeyEdit: { kind: 'replace' as const, expectedSql: pk.sql, definition: design({ name: 'old_fk', location: 'column', autoIncrement: true }) }, foreignKeyEdits: [{ kind: 'replace' as const, ordinal: 0, expectedSql: fk.sql, definition: { name: 'old_pk', columns: ['b'], referencedTable: 'parent', referencedColumns: ['id'], onDelete: 'RESTRICT' as const, onUpdate: 'CASCADE' as const, deferral: 'deferred' as const } }] };
+      const output = compileSqliteTableRebuildDefinition(input), db = new DatabaseSync(':memory:'); try { db.exec(output.candidateSql); const rows = db.prepare('SELECT * FROM pragma_table_xinfo(?) ORDER BY cid').all(candidateName); expect(rows.map(row => [row.name, row.type, row.pk, row.dflt_value])).toEqual([['g', 'TEXT', 0, null], ['b', 'INTEGER', 0, null], ['a', 'INTEGER', 1, '7']]); expect(output.candidateSql).toContain('CONSTRAINT "old_fk" PRIMARY KEY AUTOINCREMENT'); expect(output.candidateSql).toContain('CONSTRAINT "old_pk" FOREIGN KEY'); } finally { db.close(); }
+      const copied = compileSqliteTableRebuildCopyDefinition(input, '__dbark_rebuild_order_' + '2'.repeat(32)); expect(copied.columnMapping.map(column => [column.name, column.copy])).toEqual([['g', false], ['b', true], ['a', true]]); expect(copied.candidateSql).toContain('INTEGER NOT NULL');
+    } finally { f.db.close(); }
+  });
   it('无PK时不把字符串、注释、CHECK或外键中的PRIMARY KEY解释成主键', () => {
     const f = fixture(`CREATE TABLE child(a TEXT DEFAULT 'PRIMARY KEY(a)',b INTEGER CHECK(b>0) REFERENCES parent,/* PRIMARY KEY(b) */g TEXT AS(a||' PRIMARY KEY') VIRTUAL)`);
     try { expect(inspect(f.input)).toEqual({ primaryKey: null, strict: false, withoutRowid: false }); } finally { f.db.close(); }
@@ -102,10 +118,11 @@ describe('SQLite主键准确声明定位与结构化编译', () => {
     const constraint = kind === 'CHECK' ? 'CHECK(b>0)' : kind === 'UNIQUE' ? 'UNIQUE(b)' : 'FOREIGN KEY(b) REFERENCES parent(id)', f = fixture(`CREATE TABLE child(a TEXT,b INTEGER,CONSTRAINT kept ${constraint})`);
     try { expect(() => compile(f.input, { kind: 'add', definition: design({ name: 'kept' }) })).toThrow(/约束名冲突/); } finally { f.db.close(); }
   });
-  it('新编译器不开放原重建IPC的主键输入，未接入完整事务证明前严格拒绝', () => {
+  it('主键结构合同沿原重建IPC接入，拒绝额外SQL及未声明执行内容', () => {
     const original = { catalogueId: 'owned', taskId: 'preview', changes: [{ column: 'a', declaredType: 'TEXT' }] };
     expect(sqliteTableRebuildPreviewSchema.safeParse(original).success).toBe(true);
-    expect(sqliteTableRebuildPreviewSchema.safeParse({ ...original, primaryKeyEdit: { kind: 'add', definition: design() } }).success).toBe(false);
+    expect(sqliteTableRebuildPreviewSchema.safeParse({ ...original, changes: [], primaryKeyEdit: { kind: 'add', definition: design() } }).success).toBe(true);
+    expect(sqliteTableRebuildPreviewSchema.safeParse({ ...original, primaryKeyEdit: { kind: 'add', definition: design(), sql: 'DROP TABLE child' } }).success).toBe(false);
   });
   it.each([
     'CREATE TABLE child(a TEXT,b INTEGER,PRIMARY KEY(+a))', 'CREATE TABLE child(a TEXT,b INTEGER,PRIMARY KEY(lower(a)))',

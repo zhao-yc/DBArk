@@ -16,6 +16,19 @@ function control() { return { check: vi.fn(), yield: vi.fn(async () => { await P
 function copy(db: DatabaseSync): void { db.exec('INSERT OR ABORT INTO candidate(id,value,ordinal) SELECT id,value,ROW_NUMBER() OVER(ORDER BY id COLLATE BINARY ASC) FROM source'); }
 
 describe('SQLite私有全量比较的原生数据与精度', () => {
+  it('整数主键迁移只放开物理号差异，全部原typed值仍完整逐项证明', async () => fixture(async (db, input) => {
+    db.exec("INSERT INTO source(rowid,id,value) VALUES(-7,42,'原'),(100,2,X'00ff'); INSERT INTO candidate SELECT id,value,ROW_NUMBER() OVER(ORDER BY rowid) FROM source");
+    const request = { ...input, sourceOrder: ['_rowid_'], rowid: undefined, rowidTransition: { source: '_rowid_', candidate: 'id' } };
+    // 生产调用删除旧rowid能力，迁移标记与原物理号相等能力互斥。
+    delete request.rowid;
+    expect((await compare(db, request, control())).verifiedRows).toBe('2'); db.exec("UPDATE candidate SET value='篡改' WHERE id=42"); await expect(compare(db, request, control())).rejects.toMatchObject({ code: valueMismatch });
+  }, 'CREATE TABLE source(id INTEGER,value); CREATE TABLE candidate(id INTEGER PRIMARY KEY,value,ordinal INTEGER NOT NULL UNIQUE)'));
+  it.each(['coexist', 'source-not-rowid', 'candidate-not-rowid', 'same-identity'] as const)('行身份迁移%s不能免除真实来源、整数候选或互斥能力校验', async kind => fixture(async (db, input) => {
+    db.exec("INSERT INTO source VALUES(7,'原'); INSERT INTO candidate VALUES(7,'原',1)");
+    const request = { ...input, rowidTransition: kind === 'source-not-rowid' ? { source: 'value', candidate: 'id' } : kind === 'candidate-not-rowid' ? { source: 'id', candidate: 'value' } : { source: 'id', candidate: 'id' } };
+    if (kind !== 'coexist') delete (request as Partial<typeof input>).rowid;
+    await expect(compare(db, request, control())).rejects.toMatchObject({ code: kind === 'coexist' ? 'SQLITE_REBUILD_COMPARISON_INPUT_INVALID' : 'SQLITE_REBUILD_COMPARISON_ROWID_INVALID' });
+  }));
   it('混合NULL/int64/REAL/TEXT/NUL/BLOB全量逐值核对，不改变两表或事务', async () => fixture(async (db, input) => {
     const insert = db.prepare('INSERT INTO source(id,value) VALUES(?,?)'), values: SQLInputValue[] = [null, 9223372036854775807n, -9223372036854775808n, 1.25, Infinity, '中文🚢\0尾\0', new Uint8Array([0, 255, 128])]; values.forEach((value, index) => insert.run(BigInt(index + 1), value)); copy(db); const before = db.prepare('SELECT id,typeof(value) AS kind,hex(value) AS bytes FROM candidate ORDER BY id').all(), c = control();
     expect(await compare(db, input, c)).toEqual({ sourceRows: '7', candidateRows: '7', verifiedRows: '7', columnGroups: 1 }); expect(db.prepare('SELECT id,typeof(value) AS kind,hex(value) AS bytes FROM candidate ORDER BY id').all()).toEqual(before); expect(db.isTransaction).toBe(true); expect(c.progress.mock.calls.at(-1)).toEqual(['7']);

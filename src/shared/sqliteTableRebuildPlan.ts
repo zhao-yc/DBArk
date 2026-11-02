@@ -1,7 +1,7 @@
 import { copySqliteTableRebuildColumnOrder } from './sqliteTableRebuild';
 import { buildSqliteTableCreateDefault, sqliteTableCreateColumnSchema, type SqliteTableCreateDefault } from './sqliteTableCreate';
 import { buildSqliteTableForeignKey, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from './sqliteTableForeignKeys';
-import { buildSqliteTablePrimaryKey, sqliteTablePrimaryKeyEditSchema, type SqliteTablePrimaryKeyDefinition } from './sqliteTablePrimaryKey';
+import { buildSqliteTablePrimaryKey, sqliteTablePrimaryKeyEditSchema, type SqliteTablePrimaryKeyDefinition, type SqliteTablePrimaryKeyEdit } from './sqliteTablePrimaryKey';
 
 /** 重建编译只修改明确声明跨度；不推断数据转换、不签发执行能力，未修改约束原文保留。 */
 export const sqliteTableRebuildPlanLimits = { sqlBytes: 2 * 1024 * 1024, tokens: 300000, columns: 1024, changes: 128, nesting: 256 } as const;
@@ -9,7 +9,7 @@ export interface SqliteRebuildSourceColumn { name: string; hidden: number; }
 export interface SqliteRebuildColumnChange { column: string; declaredType?: string; default?: SqliteTableCreateDefault; }
 export interface SqliteTableRebuildDefinitionInput {
   table: string; tableSql: string; columns: readonly SqliteRebuildSourceColumn[];
-  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[]; foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[];
+  candidateName: string; changes: readonly SqliteRebuildColumnChange[]; columnOrder?: readonly string[]; foreignKeyEdits?: readonly SqliteTableForeignKeyEdit[]; primaryKeyEdit?: SqliteTablePrimaryKeyEdit;
 }
 export interface SqliteTableRebuildDefinition {
   candidateSql: string;
@@ -18,7 +18,7 @@ export interface SqliteTableRebuildDefinition {
 interface Token { kind: 'word' | 'quoted' | 'string' | 'number' | 'symbol'; value: string; start: number; end: number; }
 interface Span { start: number; end: number; }
 interface DefinitionSegment extends Span { column?: string; parts: Token[]; }
-interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
+interface ColumnDefinition { name: string; type?: Span; insertion: number; end: number; defaults: Span[]; hidden: number; notNull: boolean; references: (Span & { parts: Token[] })[]; primaryKeys: (Span & { parts: Token[] })[]; names: { name: string; start: number }[]; }
 const limits = sqliteTableRebuildPlanLimits, encoder = new TextEncoder();
 const fold = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 const word = (token: Token | undefined, value: string) => token?.kind === 'word' && fold(token.value) === value.toLowerCase();
@@ -115,7 +115,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
     if (symbol(parts[index], '(')) index = groupEnd(parts, index);
     else { if (parts[index].kind === 'symbol' || parts[index].kind === 'number') throw invalid(); index++; }
   }
-  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, references: [], primaryKeys: [], names: [] };
+  const result: ColumnDefinition = { name, type: index > 1 ? { start: parts[1].start, end: parts[index - 1].end } : undefined, insertion: parts[0].end, end: parts.at(-1)!.end, defaults: [], hidden: 0, notNull: false, references: [], primaryKeys: [], names: [] };
   while (index < parts.length) {
     const start = index;
     while (word(parts[index], 'CONSTRAINT')) { const marker = parts[index].start; if (identifier(parts[++index]) === undefined) throw invalid(); result.names.push({ name: identifier(parts[index])!, start: marker }); index++; }
@@ -131,7 +131,7 @@ function columnDefinition(parts: Token[]): ColumnDefinition {
       if (word(parts[index], 'ASC') || word(parts[index], 'DESC')) index++;
       index = conflictEnd(parts, index); if (word(parts[index], 'AUTOINCREMENT')) index++;
       result.primaryKeys.push({ start: parts[start].start, end: parts[index - 1].end, parts: parts.slice(start, index) });
-    } else if (word(token, 'NOT')) { if (!word(parts[index++], 'NULL')) throw invalid(); index = conflictEnd(parts, index); }
+    } else if (word(token, 'NOT')) { if (!word(parts[index++], 'NULL')) throw invalid(); result.notNull = true; index = conflictEnd(parts, index); }
     else if (word(token, 'NULL') || word(token, 'UNIQUE')) index = conflictEnd(parts, index);
     else if (word(token, 'GENERATED') || word(token, 'AS')) {
       if (result.hidden !== 0) throw invalid();
@@ -334,7 +334,7 @@ function primaryValue(parts: Token[], column?: string): Omit<SqliteTablePrimaryK
   return { names: Object.freeze(names), columns: Object.freeze(columns.map(value => Object.freeze(value))), conflict, autoIncrement };
 }
 /** 从同一有界词法结果提取唯一主键跨度，不用正则搜PRIMARY或按名称替换。 */
-function primarySpan(input: ForeignKeyInput, source: ReturnType<typeof definition>): PrimarySpan | undefined {
+function primarySpan(input: ForeignKeyInput, source: ReturnType<typeof definition>, intermediate = false): PrimarySpan | undefined {
   const keys: PrimarySpan[] = [];
   for (const segment of source.segments) {
     if (segment.column !== undefined) {
@@ -346,7 +346,7 @@ function primarySpan(input: ForeignKeyInput, source: ReturnType<typeof definitio
       keys.push({ start, end, segment, value: { ...primaryValue(segment.parts), location: 'table', sql: input.tableSql.slice(start, end) } });
     }
   }
-  if (keys.length > 1 || !keys.length && source.withoutRowid) throw invalid(); const key = keys[0];
+  if (keys.length > 1 || !keys.length && source.withoutRowid && !intermediate) throw invalid(); const key = keys[0];
   if (key?.value.columns.some(term => !source.columns.some(column => fold(column.name) === fold(term.column) && column.hidden === 0))) throw invalid();
   if (key?.value.autoIncrement) {
     const term = key.value.columns[0], column = source.columns.find(column => fold(column.name) === fold(term.column)), type = column?.type && tokenize(input.tableSql.slice(column.type.start, column.type.end));
@@ -359,11 +359,32 @@ export function inspectSqliteTablePrimaryKey(raw: ForeignKeyInput): { primaryKey
   const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] }), key = primarySpan(input, source);
   return { primaryKey: key ? Object.freeze(key.value) : null, withoutRowid: source.withoutRowid, strict: source.strict };
 }
+/** 最终声明推导计划内PK和隐含可空性；实际候选仍逐项对照native目录，不能用计划自证。 */
+export function inspectSqliteTableRebuildKeyLayout(raw: ForeignKeyInput): {
+  columns: { name: string; primaryKey: number; notNull: boolean }[];
+  rowIdentity: { kind: 'rowid'; source: string } | { kind: 'primary-key'; columns: string[] };
+  autoIncrement: boolean;
+} {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] }), primary = primarySpan(input, source)?.value;
+  const names = primary?.columns.map(term => source.columns.find(column => fold(column.name) === fold(term.column))!.name) ?? [];
+  const alias = primary && names.length === 1 && !source.withoutRowid && !(primary.location === 'column' && primary.columns[0].order === 'DESC') && (() => { const column = source.columns.find(column => column.name === names[0])!, tokens = column.type ? tokenize(input.tableSql.slice(column.type.start, column.type.end)) : []; return tokens.length === 1 && fold(identifier(tokens[0]) ?? '') === 'integer'; })() ? names[0] : undefined;
+  const rowid = alias ?? ['_rowid_', 'rowid', 'oid'].find(name => !source.columns.some(column => fold(column.name) === name));
+  if (!source.withoutRowid && rowid === undefined) throw Error('SQLite新主键使真实ROWID不可访问，无法证明完整行身份');
+  return {
+    columns: source.columns.map(column => { const index = names.indexOf(column.name); return { name: column.name, primaryKey: index < 0 ? 0 : index + 1, notNull: column.notNull || index >= 0 && (source.withoutRowid || source.strict && alias !== column.name) }; }),
+    rowIdentity: source.withoutRowid ? { kind: 'primary-key', columns: names } : { kind: 'rowid', source: rowid! }, autoIncrement: primary?.autoIncrement ?? false,
+  };
+}
 /** 只修改明确主键跨度；非主键约束、列原文、注释和表选项继续保留。本API不连入执行合同。 */
 export function compileSqliteTablePrimaryKey(raw: ForeignKeyInput, rawEdit: unknown): { tableSql: string; primaryKey: Readonly<SqliteTablePrimaryKeySource> | null; withoutRowid: boolean; strict: boolean } {
-  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] }), original = primarySpan(input, source), edit = sqliteTablePrimaryKeyEditSchema.parse(rawEdit);
+  const output = transformPrimaryKey(raw, rawEdit);
+  return { tableSql: output, ...inspectSqliteTablePrimaryKey({ ...raw, tableSql: output }) };
+}
+/** 组合变更仅允许内部短暂缺少WR主键；该中间SQL从不进入候选或公开执行能力。 */
+function transformPrimaryKey(raw: ForeignKeyInput, rawEdit: unknown, intermediate = false): string {
+  const input = foreignInput(raw), source = definition({ ...input, candidateName: '', changes: [] }), original = primarySpan(input, source, intermediate), edit = sqliteTablePrimaryKeyEditSchema.parse(rawEdit);
   if (edit.kind === 'add' ? !!original : !original || edit.expectedSql !== original.value.sql) throw Error('SQLite原主键声明或存在性已变化，请重新读取');
-  if (edit.kind === 'remove' && source.withoutRowid) throw Error('WITHOUT ROWID表必须保留主键，请用替换设计完整新主键');
+  if (edit.kind === 'remove' && source.withoutRowid && !intermediate) throw Error('WITHOUT ROWID表必须保留主键，请用替换设计完整新主键');
   const value = edit.kind === 'remove' ? undefined : edit.definition;
   if (value?.autoIncrement) {
     const column = source.columns.find(column => column.name === value.columns[0].column), type = column?.type && tokenize(input.tableSql.slice(column.type.start, column.type.end));
@@ -391,7 +412,7 @@ export function compileSqliteTablePrimaryKey(raw: ForeignKeyInput, rawEdit: unkn
     else tableSql = tableSql.slice(0, remaining.bodyEnd) + ',\n ' + fragment + '\n' + tableSql.slice(remaining.bodyEnd);
   }
   if (encoder.encode(tableSql).length > limits.sqlBytes || tableSql === input.tableSql) throw Error('SQLite主键声明未变化或超过2MiB UTF8预算');
-  return { tableSql, ...inspectSqliteTablePrimaryKey({ ...input, tableSql }) };
+  return tableSql;
 }
 
 export interface SqliteTableRebuildCopyDefinition extends SqliteTableRebuildDefinition { ordinalColumn: string; ordinalIndex: string; createOrdinalIndexSql: string; removeOrdinalSql: string[]; }
@@ -407,6 +428,20 @@ export function compileSqliteTableRebuildCopyDefinition(input: SqliteTableRebuil
 
 /** 普通候选与带私有编号候选共享同一跨度编译，不复制或重新实现默认值/约束解析。 */
 function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColumn?: string, reorderedBase = false): SqliteTableRebuildDefinition {
+  const primaryDescriptor = Object.getOwnPropertyDescriptor(input, 'primaryKeyEdit'); if (primaryDescriptor && (!primaryDescriptor.enumerable || !('value' in primaryDescriptor))) throw invalid();
+  if (primaryDescriptor?.value !== undefined) {
+    const edit = sqliteTablePrimaryKeyEditSchema.parse(primaryDescriptor.value), original = inspectSqliteTablePrimaryKey(input).primaryKey;
+    if (edit.kind === 'add' ? !!original : !original || original.sql !== edit.expectedSql) throw Error('SQLite原主键声明或存在性已变化，请重新读取');
+    const flags = definition(input); if (edit.kind === 'remove' && flags.withoutRowid) throw Error('WITHOUT ROWID表必须保留主键，请用替换设计完整新主键');
+    // 先释放准确原PK跨度，再应用FK和字段补丁，最后添加新PK；互换约束名只核最终保留集合。
+    let tableSql = original ? transformPrimaryKey(input, { kind: 'remove', expectedSql: original.sql }, true) : input.tableSql;
+    const base = compileDefinition({ ...input, tableSql, primaryKeyEdit: undefined, columnOrder: undefined }, undefined, true);
+    const changedSource = { table: input.candidateName, tableSql: base.candidateSql, columns: input.columns };
+    tableSql = edit.kind === 'remove' ? base.candidateSql : transformPrimaryKey(changedSource, { kind: 'add', definition: edit.definition }, true);
+    // 最终公开候选必须已有完整合法PK，不能让中间缺失状态逃出。
+    inspectSqliteTablePrimaryKey({ ...changedSource, tableSql });
+    return compileDefinition({ ...input, table: input.candidateName, tableSql, changes: [], foreignKeyEdits: undefined, primaryKeyEdit: undefined }, ordinalColumn, true);
+  }
   const foreignDescriptor = Object.getOwnPropertyDescriptor(input, 'foreignKeyEdits'); if (foreignDescriptor && (!foreignDescriptor.enumerable || !('value' in foreignDescriptor))) throw invalid();
   if (foreignDescriptor?.value !== undefined) {
     // 先完成准确原外键跨度变更，再沿原类型/default及实际重排路径编译，不靠伪造字段补丁开门。
@@ -416,7 +451,7 @@ function compileDefinition(input: SqliteTableRebuildDefinitionInput, ordinalColu
   const orderDescriptor = Object.getOwnPropertyDescriptor(input, 'columnOrder'); if (orderDescriptor && (!orderDescriptor.enumerable || !('value' in orderDescriptor))) throw invalid();
   const rawOrder = orderDescriptor?.value;
 
-  if (!input.table || !validText(input.table) || /^sqlite_/i.test(input.table) || input.candidateName.length !== 48 || !/^__dbark_rebuild_[a-f0-9]{32}$/.test(input.candidateName) || fold(input.table) === input.candidateName || !input.columns.length || input.columns.length > limits.columns || !input.changes.length && !reorderedBase && rawOrder === undefined || input.changes.length > limits.changes) throw invalid();
+  if (!input.table || !validText(input.table) || /^sqlite_/i.test(input.table) || input.candidateName.length !== 48 || !/^__dbark_rebuild_[a-f0-9]{32}$/.test(input.candidateName) || fold(input.table) === input.candidateName && !reorderedBase || !input.columns.length || input.columns.length > limits.columns || !input.changes.length && !reorderedBase && rawOrder === undefined || input.changes.length > limits.changes) throw invalid();
   if (new Set(input.columns.map(column => fold(column.name))).size !== input.columns.length || input.columns.some(column => !column.name || !validText(column.name) || ![0, 2, 3].includes(column.hidden))) throw invalid();
   if (rawOrder !== undefined) {
     const order = copySqliteTableRebuildColumnOrder(rawOrder, input.columns.map(column => column.name));
