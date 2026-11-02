@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 查询结果新增[列统计](development/sqlite-result-statistics-20261102.md)：筛选后／勾选范围、精确数值、混合类型计数与原字节极值，不重查；1752 项相关、类型／构建及 Windows 原工作区整例通过。Mac／安装另验，暂不发布。
+
 SQLite 查询结果新增[临时整理](development/sqlite-result-memory-20261102.md)：本标签暂存完整配置，重新查询后明确应用，保留类型条件、多列排序和整步撤销；失败／无列结果仍可主动丢弃。类型／构建、1728 项相关及 Windows 原工作区专项通过；Mac 与安装继续，暂不发布。
 
 SQLite 字段重建验收[补齐本机列布局读取](development/sqlite-rebuild-observer-20261102.md)：原 Mac 失败准确记录总白名单漏掉 `sqlite.tableLayout.get`，原字段／目标限制和全部断言保持。Windows 成功／回滚两整例、381 项相关及类型检查通过，cap 与 worker 核验完成；Mac 仍待本提交实际 CI，暂不发布。

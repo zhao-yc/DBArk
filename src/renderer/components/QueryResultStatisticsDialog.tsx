@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { DataRow, ResultColumn } from '../../shared/contracts';
+import type { DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
 import { captureQueryResultStatistics, currentQueryResultStatistics, QueryResultStatisticsScan, type QueryResultStatisticsCapture, type QueryResultStatisticsResult } from '../queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../locales/queryResultStatistics.zh-CN';
 import { errorMessage } from '../lib';
@@ -8,6 +8,7 @@ import { UsageHelp, ErrorBox, Modal  } from './ui';
 interface Props {
   columns: ResultColumn[]; rows: DataRow[]; initialColumn: ResultColumn;
   selectedIndices: ReadonlySet<number>; truncated: boolean; owner: string;
+  sqliteSource?: QueryResult;
   isCurrent(): boolean; onClose(): void;
 }
 type Request = { column: string; scope: 'all' | 'selected' };
@@ -15,13 +16,13 @@ type Operation = { request: Request; capture: QueryResultStatisticsCapture; scan
 type View = { request: Request; processed: number; total: number; result?: QueryResultStatisticsResult; error?: string };
 
 /** 仅统计当前已返回快照；分批让出界面线程，切列、取消和来源变化永久撤销旧计算。 */
-export function QueryResultStatisticsDialog({ columns, rows, initialColumn, selectedIndices, truncated, owner, isCurrent, onClose }: Props) {
-  const origin = useRef({ columns, rows, initialColumn, owner }).current;
-  const latest = useRef({ columns, rows, initialColumn, owner, isCurrent }); latest.current = { columns, rows, initialColumn, owner, isCurrent };
+export function QueryResultStatisticsDialog({ columns, rows, initialColumn, selectedIndices, truncated, owner, sqliteSource, isCurrent, onClose }: Props) {
+  const origin = useRef({ columns, rows, initialColumn, owner, sqliteSource }).current;
+  const latest = useRef({ columns, rows, initialColumn, owner, sqliteSource, isCurrent }); latest.current = { columns, rows, initialColumn, owner, sqliteSource, isCurrent };
   const [prepared] = useState(() => {
     try {
       const indices: ReadonlySet<number> = new Set<number>(Set.prototype.values.call(selectedIndices));
-      const capture = captureQueryResultStatistics(columns, rows, initialColumn, indices.size ? indices : undefined);
+      const capture = captureQueryResultStatistics(columns, rows, initialColumn, indices.size ? indices : undefined, sqliteSource);
       // 捕获已经核过全部元数据；仍只读自有数据描述符，不执行列字段访问器。
       const options = columns.map(column => ({ key: Object.getOwnPropertyDescriptor(column, 'key')!.value as string, name: Object.getOwnPropertyDescriptor(column, 'name')!.value as string }));
       return { indices, capture, options, error: '' };
@@ -39,7 +40,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     if (!alive.current || invalid.current || closed.current) return false;
     const current = latest.current;
     let valid = false;
-    try { valid = current.columns === origin.columns && current.rows === origin.rows && current.initialColumn === origin.initialColumn && current.owner === origin.owner && current.isCurrent() === true; } catch {}
+    try { valid = current.columns === origin.columns && current.rows === origin.rows && current.initialColumn === origin.initialColumn && current.owner === origin.owner && current.sqliteSource === origin.sqliteSource && current.isCurrent() === true; } catch {}
     if (!valid) invalid.current = true;
     return valid;
   }
@@ -58,7 +59,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     try {
       const column = origin.columns.find(value => Object.getOwnPropertyDescriptor(value, 'key')?.value === request.column);
       if (!column) throw Error(text.stale);
-      const capture = request === firstRequest ? prepared.capture : captureQueryResultStatistics(origin.columns, origin.rows, column, request.scope === 'selected' ? prepared.indices : undefined);
+      const capture = request === firstRequest ? prepared.capture : captureQueryResultStatistics(origin.columns, origin.rows, column, request.scope === 'selected' ? prepared.indices : undefined, origin.sqliteSource);
       lastCapture.current = capture;
       active = { request, capture, scan: new QueryResultStatisticsScan(capture) }; operation.current = active;
       setView({ request, processed: 0, total: capture.rowCount });
@@ -105,11 +106,11 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
   const result = valid && current ? view.result : undefined;
   const labels = ['count', 'nonNull', 'nulls', 'distinct', 'min', 'max', 'sum', 'average'] as const;
   return <div data-query-result-statistics-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
-    <p>{text.notice}</p><UsageHelp><p>{text.hint}</p></UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
+    <p>{text.notice}</p><UsageHelp><p>{sqliteSource ? text.sqliteHint : text.hint}</p></UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs"><label>{text.column}<select aria-label={text.column} value={request.column} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...request, column: event.target.value }); }}>{prepared.options.map(column => <option key={column.key} value={column.key}>{column.name || column.key} · {column.key}</option>)}</select></label>
       <label>{text.scope}<select aria-label={text.scope} value={request.scope} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (event.target.value === 'all' || event.target.value === 'selected')) change({ ...request, scope: event.target.value }); }}><option value="all">{text.all}</option><option value="selected" disabled={!prepared.indices.size}>{text.selected}</option></select></label></div>
     {!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={current ? view.error : undefined}/>
     {valid && current && !view.result && !view.error && <p role="status">{text.scanning} {text.progress(view.processed, view.total)}</p>}
-    {result && <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>}
+    {result && <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.sqliteTypes && <dl aria-label={text.sqliteTypes}>{(['integer', 'real', 'text', 'blob', 'null'] as const).map(kind => <div key={kind}><dt>{kind.toUpperCase()}</dt><dd aria-label={text.sqliteTypeCount(kind)}>{result.sqliteTypes![kind]}</dd></div>)}</dl>}{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>}
   </div><footer className="modal-footer"><span className="grow"/><button onClick={close}>{result ? text.close : text.cancel}</button></footer></Modal></div>;
 }

@@ -11,6 +11,7 @@ import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/ren
 import { queryResultValueOptionsZh as valueText } from '../../src/renderer/locales/queryResultValueOptions.zh-CN';
 import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
+import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 
 // 默认及--list只注册一例；此时不加载desktop、NodeSQLite、文件操作或认证帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -234,6 +235,26 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.redo, exact: true }, check)).click()); await step(() => expect.poll(shownIntegers).toEqual(originalOrder));
     await step(() => blobHeader.click()); await step(() => expect(blobHeader).toHaveAttribute('aria-sort', 'ascending'));
     await step(() => blobHeader.click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
+    stage = '真实列统计沿原类型核精确整数、混合值和完整字节，不补发SQL';
+    const statistics = () => page.getByRole('dialog', { name: statisticsText.title, exact: true });
+    await step(() => query().getByRole('button', { name: statisticsText.open, exact: true }).click());
+    await step(() => expect(statistics().getByLabel(statisticsText.sum, { exact: true })).toHaveText('-1'));
+    await step(() => expect(statistics().getByLabel(statisticsText.average, { exact: true })).toHaveText('-0.5'));
+    await step(() => expect(statistics().getByLabel(statisticsText.sqliteTypeCount('integer'), { exact: true })).toHaveText('2'));
+    await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c4'));
+    await step(() => expect(statistics().getByLabel(statisticsText.distinct, { exact: true })).toHaveText('2'));
+    await step(() => expect(statistics().getByLabel(statisticsText.sum, { exact: true })).toHaveText(statisticsText.unavailable));
+    await step(() => expect(statistics().getByLabel(statisticsText.sqliteTypeCount('text'), { exact: true })).toHaveText('1'));
+    await step(async () => info.attach('SQLite混合存储列统计', { body: await page.screenshot(), contentType: 'image/png' }));
+    await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c3'));
+    await step(() => expect(statistics().getByLabel(statisticsText.min, { exact: true })).toHaveText("X'00ff'"));
+    await step(() => expect(statistics().getByLabel(statisticsText.max, { exact: true })).toHaveText("X'ff00'"));
+    await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c2'));
+    await step(() => expect(statistics().getByLabel(statisticsText.nulls, { exact: true })).toHaveText('2'));
+    await step(() => expect(statistics().getByLabel(statisticsText.distinct, { exact: true })).toHaveText('0'));
+    await step(() => statistics().getByRole('button', { name: statisticsText.close, exact: true }).click());
+    await step(() => expect(statistics()).toHaveCount(0)); await step(() => expect.poll(shownIntegers).toEqual(ascending));
     expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
     stage = '真实typed结果筛选只改变已返回视图，保原BLOB排序及整理历史';
     const filtering = query().getByRole('region', { name: filterText.title, exact: true });

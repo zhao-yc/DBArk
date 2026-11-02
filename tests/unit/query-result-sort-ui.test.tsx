@@ -1342,6 +1342,23 @@ it('列统计：无活动格时统计首列，精确BIGINT总和与循环平均�
   expect(statistic(statisticsText.sum)).toBe('18455751272964292610');expect(statistic(statisticsText.average)).toContain('6151917090988097536.666666666666666667');
   expect(document.body.textContent).toContain(statisticsText.truncated);await click(zh.common.close);expect(grid().rows).toBe(rows);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);expect(exports).toEqual([]);
 });
+it('SQLite列统计：真实入口支持勾选与切列，混合存储不猜测数字文本，字节显示完整HEX',async()=>{
+  await mountSqliteMemory();await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));await chooseFilterCell(0,'id');const rows=grid().rows;
+  await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.count)).toBe('2');expect(statistic(statisticsText.sum)).toBe('9232379236109516800');expect(statistic(statisticsText.average)).toBe('4616189618054758400');expect(statistic(statisticsText.sqliteTypeCount('integer'))).toBe('2');
+  await setFilterField(statisticsText.column,'value');await statisticsReady();expect(statistic(statisticsText.distinct)).toBe('2');expect(statistic(statisticsText.min)).toBe('2');expect(statistic(statisticsText.max)).toBe('2');expect(statistic(statisticsText.sum)).toBe('—');expect(statistic(statisticsText.sqliteTypeCount('integer'))).toBe('1');expect(statistic(statisticsText.sqliteTypeCount('text'))).toBe('1');
+  await setFilterField(statisticsText.scope,'all');await statisticsReady();expect(statistic(statisticsText.count)).toBe('3');expect(statistic(statisticsText.nulls)).toBe('1');expect(statistic(statisticsText.sqliteTypeCount('null'))).toBe('1');
+  await setFilterField(statisticsText.column,'payload');await statisticsReady();expect(statistic(statisticsText.distinct)).toBe('3');expect(statistic(statisticsText.min)).toBe("X''");expect(statistic(statisticsText.max)).toBe("X'ff00'");
+  expect(document.body.textContent).toContain(statisticsText.truncated);await click(zh.common.close);expect(grid().rows).toBe(rows);expect(grid().selectedRows.size).toBe(0);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);expect(exports).toEqual([]);
+});
+it('SQLite列统计：只统计已筛选行，关闭保持排序与整理撤销，原类型漂移撤销指标',async()=>{
+  await mountSqliteMemory();await headerAction('id');await click(filterText.open);await addFilterRule(1,'id','gte','9007199254740993');await setFilterField(filterText.sqliteType(1),'integer');await click(filterText.apply);const rows=grid().rows;
+  await chooseFilterCell(0,'id');await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.count)).toBe('2');expect(statistic(statisticsText.sum)).toBe('9232379236109516800');await click(zh.common.close);expect(grid().rows).toBe(rows);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
+  await click(historyText.undo);expect(grid().rows).toHaveLength(3);await click(statisticsText.open);await statisticsReady();original.sqliteStorage!.rows[0]='ttb';await act(async()=>store.setState({settings:{...store.getState().settings,resultLimit:999}}));expect(document.querySelector('[aria-label="'+statisticsText.sum+'"]')).toBeNull();expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+});
+it('SQLite列统计：连接变代撤销原窗口，旧关闭不能影响后续窗口',async()=>{
+  await mountSqliteMemory();await click(statisticsText.open);await statisticsReady();const close=reactProps(button(zh.common.close)).onClick;
+  await act(async()=>store.setState({connectionVersions:{c:2}}));expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();await click(statisticsText.open);await statisticsReady();const owner=document.querySelector('[data-query-result-statistics-owner]')!.getAttribute('data-query-result-statistics-owner');await act(async()=>close());expect(document.querySelector('[data-query-result-statistics-owner]')!.getAttribute('data-query-result-statistics-owner')).toBe(owner);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+});
 it('列统计：默认已接纳勾选快照，切换列和全部范围保留20位DECIMAL与原结果',async()=>{
   await mount();await act(async()=>grid().onSelectedRowsChange(new Set([2,0])));await chooseFilterCell(1,'value');const rows=grid().rows;
   await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.count)).toBe('2');expect(statistic(statisticsText.sum)).toBe('0.12345678901234567890');expect(statistic(statisticsText.average)).toBe('0.06172839450617283945');

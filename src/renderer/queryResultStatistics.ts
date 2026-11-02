@@ -1,6 +1,8 @@
-import type { CellValue, DataRow, ResultColumn } from '../shared/contracts';
+import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
 import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultSortKind, queryResultSortLimits } from './queryResultSort';
 import { queryResultStatisticsZh as text } from './locales/queryResultStatistics.zh-CN';
+import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
+import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultComparisonKey } from './sqliteResultCompare';
 
 export interface QueryResultStatisticsCapture {
   readonly column: Readonly<ResultColumn>;
@@ -11,12 +13,15 @@ export interface QueryResultStatisticsResult {
   readonly count: number; readonly nonNull: number; readonly nulls: number;
   readonly distinct?: number; readonly min?: string; readonly max?: string; readonly sum?: string; readonly average?: string;
   readonly approximate: boolean; readonly floatInput: boolean; readonly averageRounded: boolean; readonly reason?: string;
+  readonly sqliteTypes?: Readonly<Record<'integer' | 'real' | 'text' | 'blob' | 'null', number>>;
 }
-type Key = ReturnType<typeof queryResultFilterKey>;
+type OrdinaryKey = ReturnType<typeof queryResultFilterKey>;
+type Key = OrdinaryKey | SqliteResultComparisonKey;
 interface ValueStamp { value: unknown; units: number; prototype?: object | null; fields?: readonly (readonly [PropertyKey, unknown])[]; }
 interface Binding {
   columns: readonly ResultColumn[]; rows: readonly DataRow[]; columnRefs: readonly ResultColumn[]; metadata: readonly ResultColumn[];
   rowRefs: readonly DataRow[]; indices: readonly number[]; selection?: ReadonlySet<number>; values: readonly ValueStamp[]; invalid: boolean;
+  sqlite?: SqliteResultFilterSource;
 }
 const bindings = new WeakMap<QueryResultStatisticsCapture, Binding>();
 const setSize = Object.getOwnPropertyDescriptor(Set.prototype, 'size')!.get!;
@@ -84,7 +89,7 @@ function sameValue(value: unknown, before: ValueStamp): boolean {
 }
 
 /** 捕获原行列与当前范围；只冻结自有快照，不克隆或冻结来源。 */
-export function captureQueryResultStatistics(columns: readonly ResultColumn[], rows: readonly DataRow[], column: ResultColumn, indices?: ReadonlySet<number>): QueryResultStatisticsCapture {
+export function captureQueryResultStatistics(columns: readonly ResultColumn[], rows: readonly DataRow[], column: ResultColumn, indices?: ReadonlySet<number>, sqliteSource?: QueryResult): QueryResultStatisticsCapture {
   const columnRefs = array(columns, queryResultSortLimits.columns, 1), rowRefs = array(rows, queryResultSortLimits.rows);
   const descriptions = columnRefs.map(metadata), columnIndex = columnRefs.indexOf(column);
   if (columnIndex < 0 || new Set(descriptions.map(item => item.key)).size !== columnRefs.length || new Set(rowRefs).size !== rowRefs.length || rowRefs.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw Error(text.invalid);
@@ -92,8 +97,9 @@ export function captureQueryResultStatistics(columns: readonly ResultColumn[], r
   let units = 0;
   const charge = (length: number) => { if (length > queryResultSortLimits.valueUnits) throw Error(text.budget); units += length; if (units > queryResultSortLimits.units) throw Error(text.budget); };
   const values = positionsInScope.map(index => stamp(own(rowRefs[index], admitted.key), charge));
+  const sqlite = sqliteSource ? captureSqliteResultFilterSource(sqliteSource, columns, rows) : undefined;
   const capture = Object.freeze({ column: admitted, rowCount: positionsInScope.length, selected: indices !== undefined });
-  bindings.set(capture, { columns, rows, columnRefs, metadata: descriptions, rowRefs, indices: positionsInScope, selection: indices, values, invalid: false });
+  bindings.set(capture, { columns, rows, columnRefs, metadata: descriptions, rowRefs, indices: positionsInScope, selection: indices, values, invalid: false, sqlite });
   if (!currentQueryResultStatistics(capture, columns, rows)) throw Error(text.stale);
   return capture;
 }
@@ -115,7 +121,7 @@ export function currentQueryResultStatistics(capture: QueryResultStatisticsCaptu
   const binding = bindings.get(capture);
   if (!binding || binding.invalid) return false;
   try {
-    if (columns !== binding.columns || rows !== binding.rows || !currentStructure(binding)) throw Error(text.stale);
+    if (columns !== binding.columns || rows !== binding.rows || !currentStructure(binding) || binding.sqlite && !binding.sqlite.current()) throw Error(text.stale);
     for (let index = 0; index < binding.rowRefs.length; index++) if (own(rows, String(index)) !== binding.rowRefs[index]) throw Error(text.stale);
     if (binding.selection) {
       const selected = positions(binding.selection, binding.rowRefs.length);
@@ -157,10 +163,25 @@ function exactAverage(sum: Decimal, count: number): Decimal | undefined {
   return { coefficient, scale };
 }
 /** 不同值沿用原比较键：精确数值归一、文本区分大小写、时间保留返回字段语义。 */
-function identity(key: Key): string {
+function identity(key: OrdinaryKey): string {
   if (key === null) return 'null';
   if (typeof key === 'object') return `e:${key.negative ? '-' : ''}${key.whole}.${key.fraction}`;
   return `${typeof key}:${String(key)}`;
+}
+
+/** SQLite数值按数学值归一，TEXT与BLOB分域；整数永不转Number，完整字节不依赖显示文字。 */
+function sqliteIdentity(key: SqliteResultComparisonKey): string {
+  if (key.storage === 'number') return 'number:' + (typeof key.value === 'bigint' || Number.isInteger(key.value) ? BigInt(key.value).toString() : String(key.value));
+  return key.storage + ':' + Array.from(key.bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+/** 两种来源绝不交叉比较；SQLite沿已准入逐格类型使用数值、UTF-8和原字节顺序。 */
+function compareKeys(left: Key, right: Key): number {
+  if (left && typeof left === 'object' && 'sqlite' in left) {
+    if (!right || typeof right !== 'object' || !('sqlite' in right)) throw Error(text.invalid);
+    return compareSqliteResultKeys(left, right);
+  }
+  if (right && typeof right === 'object' && 'sqlite' in right) throw Error(text.invalid);
+  return compareQueryResultFilterKeys(left, right);
 }
 
 export class QueryResultStatisticsScan {
@@ -177,13 +198,17 @@ export class QueryResultStatisticsScan {
   private maximum?: { key: Key; literal: string };
   private sum: Decimal = { coefficient: 0n, scale: 0 };
   private reason?: string;
+  private sqliteTypes?: Record<'integer' | 'real' | 'text' | 'blob' | 'null', number>;
+  private numericOnly = true;
+  private finiteNumbers = true;
   private readonly kind: ReturnType<typeof queryResultSortKind>;
   /** 私有WeakMap拒绝伪造capture；声明为字节的列即使返回字符串也不参加值聚合。 */
   constructor(capture: QueryResultStatisticsCapture) {
     const binding = bindings.get(capture);
     if (!binding || !currentQueryResultStatistics(capture, binding.columns, binding.rows)) throw Error(text.stale);
     this.binding = binding; this.capture = capture; this.total = capture.rowCount; this.kind = queryResultSortKind(capture.column.type);
-    if (!this.kind || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(capture.column.type.trim())) this.reason = text.unsupported;
+    if (binding.sqlite) this.sqliteTypes = { integer: 0, real: 0, text: 0, blob: 0, null: 0 };
+    else if (!this.kind || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(capture.column.type.trim())) this.reason = text.unsupported;
   }
   /** 取消释放不同值集合及部分聚合，不能通过后续step/result复活旧结果。 */
   cancel(): void { this.cancelled = true; this.distinct.clear(); this.minimum = undefined; this.maximum = undefined; this.published = undefined; this.sum = { coefficient: 0n, scale: 0 }; this.binding = undefined; this.capture = undefined; }
@@ -205,14 +230,32 @@ export class QueryResultStatisticsScan {
         if (row !== binding.rowRefs[index] || binding.selection && !Set.prototype.has.call(binding.selection, index)) throw Error(text.stale);
         const value = own(row, capture.column.key);
         if (!sameValue(value, before)) throw Error(text.stale);
-        if (value === null) { this.nulls++; continue; }
+        if (value === null) {
+          this.nulls++;
+          if (binding.sqlite && !this.reason) { try { binding.sqlite.literal(index, capture.column.key); this.sqliteTypes!.null++; } catch { this.rejectValues(text.value); } }
+          continue;
+        }
         if (this.reason) continue;
         try {
-          const key = queryResultFilterKey(capture.column, value as CellValue), literal = String(value);
-          this.distinct.add(identity(key));
-          if (!this.minimum || compareQueryResultFilterKeys(key, this.minimum.key) < 0) this.minimum = { key, literal };
-          if (!this.maximum || compareQueryResultFilterKeys(key, this.maximum.key) > 0) this.maximum = { key, literal };
-          if (this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'float') {
+          let key: Key, literal: string, numeric: boolean;
+          if (binding.sqlite) {
+            const cell = binding.sqlite.literal(index, capture.column.key), type = cell.sqliteType;
+            if (!type) throw Error(text.value);
+            this.sqliteTypes![type]++;
+            key = sqliteResultComparisonKey(value as CellValue, ({ integer: 'i', real: 'r', text: 't', blob: 'b' } as const)[type]);
+            if (!key) throw Error(text.value);
+            literal = type === 'blob' ? `X'${cell.literal}'` : cell.literal;
+            this.distinct.add(sqliteIdentity(key));
+            numeric = type === 'integer' || type === 'real';
+            this.numericOnly &&= numeric;
+            if (type === 'real' && !Number.isFinite(Number(value))) { this.finiteNumbers = false; numeric = false; }
+          } else {
+            key = queryResultFilterKey(capture.column, value as CellValue); literal = String(value); this.distinct.add(identity(key));
+            numeric = this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'float';
+          }
+          if (!this.minimum || compareKeys(key, this.minimum.key) < 0) this.minimum = { key, literal };
+          if (!this.maximum || compareKeys(key, this.maximum.key) > 0) this.maximum = { key, literal };
+          if (numeric) {
             const next = decimal(value as string | number), scale = Math.max(next.scale, this.sum.scale);
             this.sum = { coefficient: this.sum.coefficient * 10n ** BigInt(scale - this.sum.scale) + next.coefficient * 10n ** BigInt(scale - next.scale), scale };
           }
@@ -227,11 +270,12 @@ export class QueryResultStatisticsScan {
   }
   /** 有限AVG先约分精确扩展；仅循环小数按最大原尺度或18位，用BigInt商余数实现half-away。 */
   private finish(): void {
-    const count = this.total, nonNull = count - this.nulls, floatInput = this.kind === 'float' && nonNull > 0;
-    if (!nonNull) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false }); return; }
+    const count = this.total, nonNull = count - this.nulls, floatInput = this.sqliteTypes ? this.sqliteTypes.real > 0 : this.kind === 'float' && nonNull > 0;
+    const types = this.sqliteTypes && !this.reason ? { sqliteTypes: Object.freeze({ ...this.sqliteTypes }) } : {};
+    if (!nonNull && (!this.sqliteTypes || !this.reason)) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false, ...types }); return; }
     if (this.reason) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, approximate: false, floatInput: false, averageRounded: false, reason: this.reason }); return; }
     let sum: string | undefined, average: string | undefined, averageRounded = false;
-    if (this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'float') {
+    if (this.sqliteTypes ? this.numericOnly && this.finiteNumbers : this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'float') {
       sum = display(this.sum.coefficient, this.sum.scale);
       const finite = exactAverage(this.sum, nonNull);
       if (finite) average = display(finite.coefficient, finite.scale);
@@ -244,7 +288,8 @@ export class QueryResultStatisticsScan {
         average = display(quotient, scale);
       }
     }
-    this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, approximate: floatInput || averageRounded, floatInput, averageRounded });
+    const reason = this.sqliteTypes && (!this.numericOnly || !this.finiteNumbers) ? text.sqliteNumericOnly : undefined;
+    this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, approximate: floatInput || averageRounded, floatInput, averageRounded, ...types, ...(reason ? { reason } : {}) });
     this.distinct.clear(); this.minimum = undefined; this.maximum = undefined;
   }
   /** 最后发布仍核源，调用方无需信任较早某一帧的current判断。 */
