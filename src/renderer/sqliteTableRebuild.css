@@ -56,3 +56,17 @@
 .sqlite-unique-field input, .sqlite-unique-field select { min-width: 0; width: 100%; }
 .sqlite-unique-actions { margin-top: 12px; }
 @media (max-width: 700px) { .sqlite-unique-field { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* CHECK表达式始终在有界原文和多行输入内展示，确认文案与标题不占用同一行。 */
+.sqlite-checks { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 8px; }
+.sqlite-checks p, .sqlite-checks strong { overflow-wrap: anywhere; }
+.sqlite-checks-list { max-height: 260px; overflow: auto; }
+.sqlite-checks article, .sqlite-checks li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.sqlite-check-heading, .sqlite-check-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sqlite-check-heading > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.sqlite-check-form { border: 1px solid var(--line); padding: 12px; margin-top: 12px; min-width: 0; }
+.sqlite-check-form textarea { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; resize: vertical; font-family: var(--font-mono, monospace); }
+.sqlite-check-form > label:not(.field) { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0; }
+.sqlite-check-form > label:not(.field) input { flex: none; }
+.sqlite-check-form > .warning-text { display: block; margin-top: 12px; }
+.sqlite-check-actions { margin-top: 12px; }

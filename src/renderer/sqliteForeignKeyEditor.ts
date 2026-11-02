@@ -1,7 +1,8 @@
 import type { SqliteTableRebuildInspectOutput, SqliteTableRebuildChange } from '../shared/sqliteTableRebuild';
 import type { SqliteTablePrimaryKeyEdit } from '../shared/sqliteTablePrimaryKey';
 import type { SqliteTableUniqueEdit } from '../shared/sqliteTableUnique';
-type ConstraintContext = { primaryKeyEdit?: SqliteTablePrimaryKeyEdit; uniqueEdits?: readonly SqliteTableUniqueEdit[]; changes: readonly SqliteTableRebuildChange[] };
+import type { SqliteTableCheckEdit } from '../shared/sqliteTableChecks';
+type ConstraintContext = { primaryKeyEdit?: SqliteTablePrimaryKeyEdit; uniqueEdits?: readonly SqliteTableUniqueEdit[]; checkEdits?: readonly SqliteTableCheckEdit[]; changes: readonly SqliteTableRebuildChange[] };
 import { compileSqliteTableForeignKeys, compileSqliteTableRebuildDefinition, inspectSqliteTableForeignKeys, type SqliteTableForeignKeySource } from '../shared/sqliteTableRebuildPlan';
 import { sqliteTableForeignKeyDefinitionSchema, sqliteTableForeignKeyEditsSchema, sqliteTableForeignKeyLimits, type SqliteTableForeignKeyDefinition, type SqliteTableForeignKeyEdit } from '../shared/sqliteTableForeignKeys';
 import { sqliteTableCreateActions } from '../shared/sqliteTableCreate';

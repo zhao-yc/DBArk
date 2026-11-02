@@ -2,6 +2,8 @@
 
 ## 本阶段实现
 
+后续已接入[原表重建 CHECK 编辑区](sqlite-check-ui-20261102.md)，包含本地草稿、原文确认、整批预览和真实窗口成功／晚期回滚。本页保留当时的后端阶段边界，不替代后续平台和安装验收。
+
 接续 [声明编译](sqlite-checks-plan-20261102.md) 与 [限定引用原名重建证明](sqlite-check-qualified-copy-20261102.md)，将 CHECK 增改删接入原 `sqlite.tableRebuild.preview`／`apply` 能力链。**编辑界面尚未接入**，本页记录后端事务能力，不能代替新 CHECK 窗口、Mac 或安装验收。
 
 - 原预览只新增有界结构化 `checkEdits` 和准确 `changedChecks` 计数；原序号、完整 SQL、表达式及整批输入仍按既有预算校验，未知 SQL／路径／关闭检查选项拒绝。没有新增任意 SQL 写口。

@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQLite 已有 CHECK 已接入[原表重建编辑区](development/sqlite-check-ui-20261102.md)：完整原文、增改删、多行表达式及四类约束共同预览，准确原文与独立风险确认，完整草稿和来源保护。952 项相关、严格构建及 Windows 十模式分轮验收通过；真实最终 CHECK 拒绝／回滚、明暗截图、旧预览及资源核清。Mac／安装另验，暂不发布。
+
 SQLite 已有 CHECK 已接入[受限预览与独立事务](development/sqlite-check-engine-20261102.md)：Main／Runtime 独立重算、原名 CREATE 与最终显式复制、完整 CHECK 定义、四次 worker 比较及检查开启状态保护。919 项相关回归、类型／构建及原八个 Windows 窗口整例通过，晚期真实回滚、旧预览及资源已核；编辑区、Mac 及安装继续，不计完整可用 CHECK 或发行，暂不发布。
 
 SQLite CHECK 新增[限定引用私有定义与原名重建证明](development/sqlite-check-qualified-copy-20261102.md)：只在真实 CHECK 表达式内迁移本表字段，最终原名表达式保持，四种布局和原表删除后的真实回滚已有 native 内存证明。31 项新专项、858 项相关、类型／构建和原八个窗口整例通过，旧预览及资源核清；Main／Runtime 与编辑区仍须接入，未开放新写入口，暂不发布。

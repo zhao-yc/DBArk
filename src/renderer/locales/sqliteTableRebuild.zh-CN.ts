@@ -2,7 +2,7 @@
 export const sqliteTableRebuildZh = {
   entry: '修改 SQLite 字段、顺序与约束…', title: 'SQLite 字段、顺序与约束重建',
   read: '读取 SQLite 重建目录', loading: '正在处理 SQLite 表重建',
-  scope: '在独立事务中重建普通 main 表；仅修改明确选择的字段、顺序、主键、外键和 UNIQUE 声明，保留未修改的约束、生成列、索引和触发器。原管理字段入口仍使用原生 ALTER。',
+  scope: '在独立事务中重建普通 main 表；仅修改明确选择的字段、顺序、主键、外键、UNIQUE 和 CHECK 声明，保留未修改的约束、生成列、索引和触发器。原管理字段入口仍使用原生 ALTER。',
   risk: '声明类型会影响已有值的存储和约束。执行时逐行核对全部数据与精度；不能证明无损、结构变化或约束失败时整组回滚。预览不试写数据库。',
   columnOrder: 'SQLite 实际字段顺序', orderHint: '包含生成字段；移动会通过表重建改变数据库实际列顺序，列表显示顺序不能代替提交。类型和默认值草稿同时保留。',
   orderGenerated: '生成列', up: '上移', down: '下移', moveUp: (name: string) => `上移 SQLite 字段 ${name}`, moveDown: (name: string) => `下移 SQLite 字段 ${name}`,

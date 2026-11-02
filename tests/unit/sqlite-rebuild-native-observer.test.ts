@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { sqliteTableCheckEditsSchema } from '../../src/shared/sqliteTableChecks';
 
 const source = readFileSync(new URL('../e2e/sqlite-table-rebuild-native.spec.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('sqlite-table-rebuild-native.spec.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -16,7 +17,7 @@ async function fixture() {
   const ipcMain = { _invokeHandlers: new Map([['dbark:request', original]]) }, dialog = { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() }, utilityProcess = { fork: forkSpy };
   const ports = { ipcMain, BrowserWindow: { getAllWindows: () => [window] }, dialog, utilityProcess };
   const exports: { arm?: (profiles: Record<string, boolean>) => Promise<void> } = {};
-  const scope: Record<string, unknown> = { exports, structuredClone, step: async (action: () => Promise<unknown>) => action(), application: { evaluate: async (callback: (channels: typeof ports, input: unknown) => unknown, input: unknown) => callback(ports, input) }, database: 'C:\\fixture-owned\\subject.sqlite', connectionName: '本例SQLite', tableName: 'subject', defaultText: '本例默认', mode: 'success', successful: true, foreign: false, foreignEdits: undefined, primary: false, primaryEdit: undefined, unique: false, uniqueEdits: undefined };
+  const scope: Record<string, unknown> = { exports, structuredClone, step: async (action: () => Promise<unknown>) => action(), application: { evaluate: async (callback: (channels: typeof ports, input: unknown) => unknown, input: unknown) => callback(ports, input) }, database: 'C:\\fixture-owned\\subject.sqlite', connectionName: '本例SQLite', tableName: 'subject', defaultText: '本例默认', mode: 'success', successful: true, foreign: false, foreignEdits: undefined, primary: false, primaryEdit: undefined, unique: false, uniqueEdits: undefined, checks: false, checkEdits: undefined };
   const code = ts.transpileModule('exports.arm = ' + declarations[0].initializer!.getText(ast) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   runInNewContext(code, scope); await exports.arm!({ owned: false });
   const send = (command: string, input: unknown, event = { sender: webContents, senderFrame: frame }) => (ipcMain._invokeHandlers.get('dbark:request')! as (event: unknown, payload: unknown) => Promise<unknown>)(event, { command, input });
@@ -25,6 +26,17 @@ async function fixture() {
 const target = { connectionId: 'owned', database: 'main', table: 'subject' };
 
 describe('SQLite字段重建原生观察器的本机列布局读取', () => {
+  it.each([true, false])('实际spec的CHECK白名单保持合同规范化后的准确JSON顺序，成功=%s', successful => {
+    const declarations: ts.VariableDeclaration[] = [];
+    function visit(node: ts.Node): void { if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'checkEdits') declarations.push(node); ts.forEachChild(node, visit); }
+    visit(ast); expect(declarations).toHaveLength(1);
+    const scope = { exports: {} as { value?: unknown }, successful, tableName: '限定"表', quote: (name: string) => '"' + name.replaceAll('"', '""') + '"' };
+    const code = ts.transpileModule('exports.value = ' + declarations[0].initializer!.getText(ast) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+    runInNewContext(code, scope); const value = JSON.parse(JSON.stringify(scope.exports.value)); expect(JSON.stringify(sqliteTableCheckEditsSchema.parse(value))).toBe(JSON.stringify(value));
+  });
+  it('旧字段模式拒绝额外CHECK补丁，不能因新增模式而放宽原准确设计保护', async () => {
+    const f = await fixture(); await expect(f.send('sqlite.tableRebuild.preview', { catalogueId: '本例目录', taskId: '本例预览', changes: [{ column: 'note', declaredType: 'VARCHAR(64)', default: { kind: 'text', value: '本例默认' } }], checkEdits: [{ kind: 'add', definition: { location: 'table', name: null, expression: '1' } }] })).rejects.toThrow('非本例准确字段设计'); expect(f.original).not.toHaveBeenCalled(); expect(f.forkSpy).not.toHaveBeenCalled();
+  });
   it('准确本例三字段读取透传原Main，原请求与回包保留，不启动worker或签发其它能力', async () => {
     const f = await fixture(); await expect(f.send('sqlite.tableLayout.get', target)).resolves.toEqual({ ok: true, result: { preferences: undefined } });
     expect(f.original).toHaveBeenCalledTimes(1); expect(f.original.mock.calls[0][1]).toEqual({ command: 'sqlite.tableLayout.get', input: target });

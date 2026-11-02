@@ -1,0 +1,16 @@
+export const sqliteCheckZh = {
+  title: 'SQLite 检查约束', empty: '原表没有声明 CHECK 约束。', original: '原检查约束 SQL', unnamed: '匿名检查约束',
+  hint: '按准确原声明位置区分重名和重复 CHECK；表达式可引用本表其他字段，行内位置不限制其只检查附着字段。',
+  add: '新增 SQLite 检查约束', edit: (index: number) => `修改检查约束 ${index}`, remove: (index: number) => `标记移除检查约束 ${index}`,
+  pending: 'SQLite 检查约束修改草稿', pendingAdd: '待新增检查约束', pendingReplace: '待替换检查约束', pendingRemove: '待移除检查约束', editPending: (index: number) => `继续编辑检查约束草稿 ${index}`, undo: (index: number) => `撤销检查约束草稿 ${index}`,
+  editor: 'SQLite 检查约束编辑区', name: 'SQLite 检查约束名（留空为匿名）', location: 'SQLite 检查约束声明位置', column: 'SQLite 检查约束附着字段', locations: { column: '行内', table: '表级' }, expression: 'SQLite 检查约束表达式',
+  expressionHint: '填写单个表达式，最多 64KiB UTF-8、64 层括号；不写 CHECK 外壳，不使用参数或语句分隔符。可引用本表字段，实际函数及语义由 SQLite 校验。',
+  stage: '暂存 SQLite 检查约束修改', cancel: '取消本次检查约束输入', formHint: '先暂存或取消当前输入，再预览整批修改。切换声明位置保留表达式和原字段选择；已有生成字段也可附着 CHECK。',
+  deferred: '暂存只校验表达式隔离、结构与准确原声明，不求值；同批名称交换与完整组合由整批预览统一核对，暂存不代表可提交。',
+  legacy: '替换会按当前结构重新生成；连续命名及旧兼容子句可能规范化。请核对完整原文、表达式和整批 SQL。', legacyAck: '我已核对原检查约束表达式，确认以当前结构替换',
+  legacyConflict: (value: string) => `原 ON CONFLICT ${value} 是旧兼容语法，不能改变 CHECK 的默认检查行为；新声明不提供此设置。`,
+  risk: '我已核对 CHECK 表达式、全部原行与 NULL 语义，确认本批检查约束变化',
+  riskHint: 'CHECK 按 SQLite 数值规则检查，结果为 NULL 时可以通过，不能代替 NOT NULL。新增或收紧规则可能因已有数据而整批回滚；不会忽略检查、跳行或替换原行。',
+  count: (count: number) => `本批包含 ${count} 项 CHECK 声明修改。`,
+  invalid: '检查约束原声明或草稿已变化，请重新打开编辑。', staleForm: '原检查约束输入已失效，请重新打开编辑。', invalidDefinition: '请核对准确附着字段和单个有界表达式；不能含参数、多语句、未结束的引号或注释。', legacyRequired: '请先核对并确认原检查约束表达式。',
+} as const;
