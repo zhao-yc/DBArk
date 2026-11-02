@@ -2,17 +2,18 @@ import type {CompletionAnalysis} from '../shared/completionAnalysis';
 import type {CompletionLexicalMode} from '../shared/completionLexical';
 import {completionLimits} from '../shared/sqlCompletion';
 import type {CompletionScopeCapabilities} from '../shared/completionCapabilities';
+import { validCompletionDefinition } from '../shared/completionDefinitionResult';
 
 type WorkerPort=Pick<Worker,'postMessage'|'terminate'|'onmessage'|'onerror'|'onmessageerror'>;
 type Phase='starting'|'analyzing';
-interface Request{id:number;source:string;offset:number;mode:CompletionLexicalMode;capabilities?:CompletionScopeCapabilities;intent?:'hover'}
-interface Pending{id:number;phase:Phase;request?:Request;resolve:(value:CompletionAnalysis)=>void;timer:ReturnType<typeof setTimeout>;detach:()=>void}
+interface Request{id:number;source:string;offset:number;mode:CompletionLexicalMode;capabilities?:CompletionScopeCapabilities;intent?:'hover'|'definition'}
+interface Pending{id:number;phase:Phase;request?:Request;resolve:(value:CompletionAnalysis)=>void;timer:ReturnType<typeof setTimeout>;detach:()=>void;validate?:(value:unknown)=>boolean}
 /** 本地模块启动与用户文本解析分别限时，等待就绪时不向线程传递SQL。 */
 export class CompletionWorkerClient{
   private worker?:WorkerPort;private pending?:Pending;private serial=0;private disposed=false;private ready=false;
   constructor(private readonly createWorker:()=>WorkerPort,private readonly timeoutMs=2000,private readonly startupTimeoutMs=8000){}
   /** 绑定不可变快照；替换、取消、超时和卸载仍终止整个旧线程。 */
-  analyze(source:string,offset:number,mode:CompletionLexicalMode={},signal?:AbortSignal,capabilities?:CompletionScopeCapabilities,intent?:'hover'):Promise<CompletionAnalysis>{
+  analyze(source:string,offset:number,mode:CompletionLexicalMode={},signal?:AbortSignal,capabilities?:CompletionScopeCapabilities,intent?:'hover'|'definition'):Promise<CompletionAnalysis>{
     if(this.disposed)return Promise.resolve({status:'blocked',reason:'disposed'});
     if(signal?.aborted)return Promise.resolve({status:'blocked',reason:'cancelled'});
     if(source.length>completionLimits.sourceUnits)return Promise.resolve({status:'blocked',reason:'budget'});
@@ -22,6 +23,8 @@ export class CompletionWorkerClient{
       // 能力与模式绑定同一编辑快照，等待线程启动期间调用方不能改写本次作用域。
       this.pending={id,phase,request:{id,source,offset,mode:{ansiQuotes:mode.ansiQuotes,noBackslashEscapes:mode.noBackslashEscapes},...(capabilities===undefined?{}:{capabilities:{lateralDerivedTables:capabilities.lateralDerivedTables===true,windowFunctions:capabilities.windowFunctions===true,insertRowAliases:capabilities.insertRowAliases===true}}),...(intent?{intent}:{})},resolve,timer:this.deadline(id,phase),detach:()=>signal?.removeEventListener('abort',abort)};
       signal?.addEventListener('abort',abort,{once:true});
+      // 仅导航保留有界原文校验闭包；完成、替换或取消时随pending一并释放。
+      if(intent==='definition'){const snapshot={ansiQuotes:mode.ansiQuotes,noBackslashEscapes:mode.noBackslashEscapes};this.pending.validate=value=>validCompletionDefinition(value,source,offset,snapshot);}
       try{
         if(!this.worker){
           const worker=this.createWorker();this.worker=worker;
@@ -35,6 +38,7 @@ export class CompletionWorkerClient{
             if(!this.pending||event.data?.id!==this.pending.id)return;
             if(!this.ready||this.pending.phase!=='analyzing'){this.reset('worker');return;}
             const value=event.data.result as CompletionAnalysis|undefined;
+            if(this.pending.validate&&!this.pending.validate(value)){this.reset('worker');return;}
             if(value?.status==='ready'||value?.status==='blocked')this.finish(value);else this.reset('worker');
           };
           worker.onerror=event=>{event.preventDefault();if(worker===this.worker)this.reset('worker');};

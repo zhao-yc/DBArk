@@ -12,6 +12,15 @@ function fixture(){
 
 afterEach(()=>vi.useRealTimers());
 describe('编辑器补全线程生命周期',()=>{
+  it('声明意图核验原文范围，拒绝外部URI与伪造目标并准确终止线程',async()=>{
+    const source='SELECT s.id FROM subject s',valid={status:'ready',target:{start:7,end:8,prefix:'s',quoted:false,qualifiers:[]},definition:{start:25,end:26},syntax:[],keywords:[],relations:[],localRelations:[],columnMode:'expression',incomplete:false};
+    for(const result of [valid,{...valid,uri:'command:danger'},{...valid,definition:{start:9,end:11}},{...valid,target:{...valid.target,end:9}}]){
+      const f=fixture(),request=f.client.analyze(source,8,{},undefined,undefined,'definition');f.ready();expect(f.ports[0].postMessage.mock.lastCall?.[0].intent).toBe('definition');
+      const port=f.ports[0];port.onmessage?.({data:{id:port.postMessage.mock.lastCall?.[0].id,result}});
+      if(result===valid)await expect(request).resolves.toEqual(valid);else{await expect(request).resolves.toEqual({status:'blocked',reason:'worker'});expect(port.terminate).toHaveBeenCalledOnce();}
+      f.client.dispose();expect(port.terminate).toHaveBeenCalledOnce();
+    }
+  });
   it('悬停显式意图只发给本地worker，普通补全报文保持原形状',async()=>{
     const f=fixture(),hover=f.client.analyze('SELECT amount FROM t',9,{},undefined,undefined,'hover');f.ready();expect(f.ports[0].postMessage.mock.lastCall?.[0]).toMatchObject({intent:'hover'});f.reply();await hover;
     const ordinary=f.client.analyze('SELECT id FROM t',8);expect(f.ports[0].postMessage.mock.lastCall?.[0]).not.toHaveProperty('intent');f.reply();await ordinary;f.client.dispose();

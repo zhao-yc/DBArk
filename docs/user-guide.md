@@ -1,6 +1,6 @@
 # 使用指南
 
-SQLite SQL 正文新增“跳转声明”：将光标放在别名限定段或 CTE 引用上按 F12，或按住 Ctrl 点击，定位本文的 FROM／JOIN 别名、WITH 头或派生表声明。正文和撤销状态保持，不执行 SQL、不读取目录。详见[声明导航及验证范围](development/sqlite-definition-20261102.md)，Mac／安装另验，暂不发布。
+MySQL／MariaDB SQL 正文也支持“跳转声明”：别名限定段或 CTE 引用上按 F12，或按住 Ctrl 点击，定位本文的别名、WITH 头或派生表。详见[使用及边界](development/mysql-definition-20261103.md)；SQLite 入口见[原说明](development/sqlite-definition-20261102.md)。正文和撤销状态保持，不执行 SQL、不读取目录，Mac／安装另验，暂不发布。
 
 SQLite 查询中可将鼠标停在字段上查看声明类型、main／temp 来源和生成／隐藏标记；Windows 也可将光标置于字段内，先按 Ctrl+K，再按 Ctrl+I。它不会执行查询；CTE／派生输出不猜底层类型，歧义或目录不足时不显示不确定信息。详见[字段悬停及验证范围](development/sqlite-field-hover-20261102.md)，Mac／安装另验，暂不发布。
 

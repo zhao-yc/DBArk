@@ -23,9 +23,10 @@ export interface CompletionOutputAliases{clause:'order'|'group'|'having';union:b
 export interface CompletionAnalysisReady{
   status:'ready';target:CompletionLexicalContext['target'];syntax:CompletionSyntax[];keywords:string[];
   relations:CompletionRelation[];localRelations:string[];columnMode:'expression'|'insert-list';incomplete:boolean;windowNames?:string[];outputAliases?:CompletionOutputAliases;
+  definition?:{start:number;end:number};
 }
 export type CompletionAnalysis=CompletionAnalysisReady|{status:'blocked';reason:string};
-interface Cte{name:string;columns?:string[];start:number;end:number;bodyStart:number;bodyEnd:number;scopeEnd:number;recursive:boolean}
+interface Cte{name:string;nameStart:number;columns?:string[];start:number;end:number;bodyStart:number;bodyEnd:number;scopeEnd:number;recursive:boolean}
 interface Projection{columns:string[];catalogs:CompletionCatalogSource[];incomplete:boolean}
 
 /** 第三方默认错误监听器可能输出完整SQL；补全解析只在本地静默失败。 */
@@ -90,14 +91,14 @@ function collectCtes(tokens:CompletionToken[],end:number):Cte[]{
       const name=tokens[index];if(!nameToken(name))break;index++;let columns:string[]|undefined;
       if(tokens[index]?.value==='('){const finish=close.get(index);if(finish===undefined)break;const list=tokens.slice(index+1,finish);if(!list.length||list.some((token,i)=>i%2===0?!nameToken(token):token.value!==',')||list.length%2!==1)break;columns=list.filter((_,i)=>i%2===0).map(token=>token.value);index=finish+1;}
       if(!keyword(tokens[index],'AS')||tokens[index+1]?.value!=='(')break;index++;const finish=close.get(index);if(finish===undefined)break;
-      result.push({name:name.value,columns,start:withToken.start,end:tokens[finish].end,bodyStart:tokens[index].end,bodyEnd:tokens[finish].start,scopeEnd,recursive});index=finish+1;if(tokens[index]?.value!==',')break;index++;
+      result.push({name:name.value,nameStart:name.start,columns,start:withToken.start,end:tokens[finish].end,bodyStart:tokens[index].end,bodyEnd:tokens[finish].start,scopeEnd,recursive});index=finish+1;if(tokens[index]?.value!==',')break;index++;
     }
   }
   return result;
 }
 
 /** SQL补全语义分析在可终止worker内调用；返回结构有界，异常不包含SQL正文。 */
-export function analyzeCompletion(source:string,offset:number,mode:CompletionLexicalMode={},capabilities:CompletionScopeCapabilities={}):CompletionAnalysis{
+export function analyzeCompletion(source:string,offset:number,mode:CompletionLexicalMode={},capabilities:CompletionScopeCapabilities={},intent?:'definition'):CompletionAnalysis{
   const lexical=completionLexicalContext(source,offset,mode,completionLimits.aliasUnits);if(lexical.status!=='ready')return lexical;
   const lateralCount=completionLateralTokens(lexical.tokens).length;
   if(lateralCount>completionLimits.entries)return{status:'blocked',reason:'budget'};
@@ -179,7 +180,7 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
       const branch=completionBranchAt(branches,scope,at);return !branch||contains(branch.select.start,branch.end,entityAt);
     }
     /** 相同作用域内重复名称不任取一张表；内层遮蔽外层，并保留合法关联子查询祖先。 */
-    function visible(at:number):CommonEntityContext[]{
+    function visible(at:number,includeDuplicates=false):CommonEntityContext[]{
       const boundaries=tables.filter(entity=>entity.declareType===1&&contains(entity.position.startIndex,entity.position.endIndex+1,at));
       const cteBoundary=ctes.filter(cte=>contains(cte.bodyStart,cte.bodyEnd,at)).sort((a,b)=>b.bodyStart-a.bodyStart)[0];
       const candidates=tables.filter(entity=>{
@@ -197,14 +198,43 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
       }).sort((a,b)=>b.belongStmt.scopeDepth-a.belongStmt.scopeDepth||b.belongStmt.position.startIndex-a.belongStmt.position.startIndex);
       const selected=new Map<string,{scope:string;items:CommonEntityContext[]}>();
       for(const entity of candidates){const name=relationName(entity);if(!name)continue;const key=scopeKey(entity.belongStmt),old=selected.get(name);if(!old)selected.set(name,{scope:key,items:[entity]});else if(old.scope===key)old.items.push(entity);}
-      const visible=[...selected.values()].flatMap(value=>value.items.length===1?value.items:[]);if(visible.length>completionLimits.entries)truncated=true;return visible.slice(0,completionLimits.entries);
+      const visible=[...selected.values()].flatMap(value=>includeDuplicates||value.items.length===1?value.items:[]);if(visible.length>completionLimits.entries)truncated=true;return visible.slice(0,completionLimits.entries);
     }
     /** 表别名覆盖原名称；没有别名时只使用真实表名这一段。 */
-    function relationName(entity:CommonEntityContext):string|undefined{if(entity._alias)return entityName(entity._alias.text)?.[0];return entityName(entity.text)?.at(-1);}
+    function relationName(entity:CommonEntityContext):string|undefined{if(entity._alias)return intent==='definition'?aliasName(entity._alias):entityName(entity._alias.text)?.[0];return entityName(entity.text)?.at(-1);}
     /** WITH的前向引用与未声明递归自引用都不回退成物理表请求。 */
     function cteFor(entity:CommonEntityContext,name:string):Cte|null|undefined{
       const at=entity.position.startIndex,candidates=ctes.filter(cte=>cte.name===name&&contains(cte.start,cte.scopeEnd,at)).sort((a,b)=>b.start-a.start);if(!candidates.length)return undefined;
       const cte=candidates[0];if(at<cte.end&&!(cte.recursive&&contains(cte.bodyStart,cte.bodyEnd,at)))return null;return cte;
+    }
+    // 本文导航只用同一AST的可见来源；不生成目录请求，也不把物理表名当作外部对象定义。
+    if(intent==='definition'){
+      if(!targetToken||!targetToken.closed||!['word','identifier'].includes(targetToken.kind)||!completionAliasIdentifier(targetToken.value)||lexical.tokens.some(token=>!token.closed)||parser.validate(normalized.text).length)return{status:'blocked',reason:'syntax'};
+      const index=lexical.tokens.indexOf(targetToken),qualifiers=lexical.target.qualifiers;
+      if(['@',':'].includes(lexical.tokens[index-1]?.value??''))return{status:'blocked',reason:'syntax'};
+      let declaration:CompletionToken|undefined;
+      if(lexical.tokens[index+1]?.value==='.'&&qualifiers.length<=1){
+        // 完整AST确认查询作用域；收集器不保证保留WHERE/ON列，限定链还需排除表头、函数与schema段。
+        const tableHeader=tables.some(entity=>entity.declareType===0&&contains(entity.position.startIndex,entity.position.endIndex+1,normalized.caret));
+        if(tableHeader||!nameToken(lexical.tokens[index+2])&&lexical.tokens[index+2]?.value!=='*')return{status:'blocked',reason:'syntax'};
+        if(['.','('].includes(lexical.tokens[index+3]?.value??''))return{status:'blocked',reason:'syntax'};
+        const matches=visible(normalized.caret,true).filter(entity=>relationName(entity)===targetToken.value&&(!qualifiers.length||!entity._alias&&entityName(entity.text)?.length===2&&entityName(entity.text)?.[0]===qualifiers[0]));
+        if(truncated)return{status:'blocked',reason:'budget'};
+        if(matches.length!==1)return{status:'blocked',reason:'ambiguous'};
+        const entity=matches[0],parts=entityName(entity.text);
+        if(!entity._alias&&parts?.length===1&&cteFor(entity,parts[0])===null)return{status:'blocked',reason:'syntax'};
+        declaration=normalized.origins.get(entity._alias?.startIndex??entity.position.startIndex);
+        // db.table的声明应选table词，而非schema词；范围始终回到原文token。
+        if(!entity._alias&&parts?.length===2){const head=normalized.origins.get(entity.position.startIndex),at=lexical.tokens.indexOf(head!);declaration=at>=0?lexical.tokens[at+2]:undefined;}
+      }else if(!qualifiers.length){
+        const references=tables.filter(entity=>entity.declareType===0&&entity.position.startIndex===normalized.caret&&entityName(entity.text)?.join('.')===normalized.sentinel);
+        if(references.length!==1)return{status:'blocked',reason:'syntax'};
+        const cte=cteFor(references[0],targetToken.value);
+        if(!cte||ctes.filter(item=>item.name===cte.name&&item.start===cte.start).length!==1)return{status:'blocked',reason:'syntax'};
+        declaration=normalized.origins.get(cte.nameStart);
+      }
+      if(!declaration||declaration.value!==targetToken.value||declaration.start===targetToken.start)return{status:'blocked',reason:'syntax'};
+      return{status:'ready',target:{...lexical.target,prefix:targetToken.value},syntax:[],keywords:[],relations:[],localRelations:[],columnMode:'expression',incomplete:false,definition:{start:declaration.start,end:declaration.end}};
     }
     /** 解析表达式的投影列；星号只产出实际目录来源，绝不执行SELECT探测列。 */
     function rawProjection(query:CommonEntityContext|undefined,visited:Set<CommonEntityContext>,depth:number):Projection{

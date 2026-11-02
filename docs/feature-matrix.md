@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-03 源码增量：[MySQL／MariaDB 本文声明导航](development/mysql-definition-20261103.md)支持别名、CTE、派生、WHERE／ON 和明确库限定的来源跳转。187 项相关、84 项最终定向分轮通过，类型／构建及 Windows 四次真实导航通过，原资源核清；嵌套 WITH、Mac／安装及完整语义辅助继续，O05 仍部分，暂不发布。
+
 2026-11-02 源码增量：[SQLite 本文声明导航](development/sqlite-definition-20261102.md)支持别名、CTE、派生及作用域遮蔽／分支的 F12 和 Ctrl 点击。268 项相关与 47 项最终定向分轮通过，严格类型／构建及 Windows 原整例通过、资源核清；Mac／安装待验，O05 仍部分，暂不发布。
 
 验收更正：[JOIN 三平台入口](development/foreign-key-join-ci-env-20261102.md)原 e212 在环境守卫阶段失败，未通过跨平台窗口；已改用固定清洗运行器，本机模拟注入后的原十二例、260 项相关和类型／YAML 通过，新头远端结果待验，不增加功能覆盖或发行计数。

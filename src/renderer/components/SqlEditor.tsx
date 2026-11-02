@@ -25,8 +25,9 @@ import { createSqlFieldHoverProvider } from '../sqlFieldHoverProvider';
 import SqliteCompletionWorker from '../sqliteCompletion.worker?worker';
 import { SqliteCompletionWorkerClient } from '../sqliteCompletionWorkerClient';
 import { createSqliteCompletionProvider } from '../sqliteCompletionProvider';
-import { createSqliteDefinitionProvider } from '../sqliteDefinitionProvider';
-import { sqliteCompletionTaskPrefix } from '../../shared/sqliteCompletion';
+import { createSqlDefinitionProvider } from '../sqlDefinitionProvider';
+import { createMysqlDefinitionAnalysis } from '../mysqlDefinitionAnalysis';
+import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared/sqliteCompletion';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export type { SqlCompletionScope } from '../completionContext';
@@ -86,16 +87,20 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const runRef = useRef(onExecute); runRef.current = onExecute;
   const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
-  /** 声明导航只依赖本文模型，独立于查询会话及元数据补全，不为F12建立连接或读取目录。 */
+  /** 声明导航独立于元数据补全；MySQL只读既有会话模式缓存，不为F12建立连接或执行SQL。 */
   useEffect(() => {
-    if (dialect !== 'sqlite' || readOnly || !contentReady) return;
-    const worker = new SqliteCompletionWorkerClient(() => new SqliteCompletionWorker());
-    const navigation = createSqliteDefinitionProvider({ worker, model: () => editorRef.current?.getModel() ?? null,
-      current: () => aliveRef.current && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]'),
+    if (readOnly || !contentReady || dialect !== 'sqlite' && !completion) return;
+    const current = () => aliveRef.current && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]') && (dialect === 'sqlite' || sameCompletionScope(completionRef.current, completion));
+    const worker = dialect === 'sqlite' ? new SqliteCompletionWorkerClient(() => new SqliteCompletionWorker()) : createMysqlDefinitionAnalysis({
+      scope: completion!, current, facts: () => completionServerFacts.get(completion!.connectionId, completion!.connectionVersion),
+      state: sessionId => invoke('query.completionState', { sessionId }), create: () => new CompletionWorkerClient(() => new CompletionWorker()),
+    });
+    const navigation = createSqlDefinitionProvider({ worker, model: () => editorRef.current?.getModel() ?? null,
+      current, sourceLimit: dialect === 'sqlite' ? sqliteCompletionLimits.sourceUnits : completionLimits.sourceUnits,
     });
     const registration = monaco.languages.registerDefinitionProvider('sql', navigation.provider);
     return () => { registration.dispose(); void navigation.dispose().catch(() => {}); };
-  }, [dialect, readOnly, contentReady]);
+  }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   useEffect(() => {
     if(readOnly||!completion){statusRef.current?.('idle');return;}
     // SQLite使用自己的词法和目录，不能将其正文、临时对象或标识符预算交给MySQL分析器。

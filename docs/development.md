@@ -1,6 +1,6 @@
 # 开发与测试
 
-SQLite 高频编辑新增[本文声明跳转](development/sqlite-definition-20261102.md)：别名、CTE／派生、遮蔽及复合分支导航，原模型 URI／范围和取消保护。268 项相关、47 项最终定向分轮通过，严格类型／构建与 Windows 原整例三次 F12、一次 Ctrl 点击通过；原进程及目录核清，Mac／安装另验，暂不发布。
+MySQL／MariaDB 高频编辑新增[本文声明跳转](development/mysql-definition-20261103.md)：复用原 AST、会话模式缓存及有界 Worker，通用渲染 provider 同时保持 SQLite 导航。187 项相关、84 项最终定向分轮通过，严格类型／构建与 Windows 三次 F12、一次 Ctrl 点击通过，原资源核清；Mac／安装另验，暂不发布。
 
 JOIN 三平台组件验收已定位并修复[运行入口的 NODE_PATH 注入](development/foreign-key-join-ci-env-20261102.md)：保留原守卫及十二例，改用固定清洗运行器。260 项相关、严格类型／YAML 和本机注入环境后的十二窗口单轮通过；三份原失败分别保留，新头远端结果继续回读，暂不发布。
 

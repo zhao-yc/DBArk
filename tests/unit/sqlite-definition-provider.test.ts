@@ -1,7 +1,7 @@
 import type { editor, CancellationToken } from 'monaco-editor';
 import { expect, it, vi } from 'vitest';
 import { analyzeSqliteCompletion, type SqliteCompletionAnalysis } from '../../src/shared/sqliteCompletionAnalysis';
-import { createSqliteDefinitionProvider } from '../../src/renderer/sqliteDefinitionProvider';
+import { createSqlDefinitionProvider } from '../../src/renderer/sqlDefinitionProvider';
 
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => resolve = yes); return { promise, resolve }; }
 /** 真解析与provider；Monaco模型和Worker消息端口为RAM，未提供数据库或文件能力。 */
@@ -10,7 +10,7 @@ function fixture() {
   const changes = new Set<() => void>(), cancellations = new Set<() => void>(), uri = { scheme: 'inmemory', path: '/only-this-model' };
   const model = { uri, isDisposed: () => !modelAlive, getVersionId: () => version, getValueLength: () => source.length, getValue: vi.fn(() => source), getOffsetAt: () => 8, getPositionAt: (offset: number) => ({ lineNumber: 1, column: offset + 1 }), onDidChangeContent: (listener: () => void) => { changes.add(listener); return { dispose: () => changes.delete(listener) }; } } as unknown as editor.ITextModel;
   const worker = { analyze: vi.fn(async (sql: string, offset: number, _signal: AbortSignal, intent: 'definition'): Promise<SqliteCompletionAnalysis> => analyzeSqliteCompletion(sql, offset, intent)), dispose: vi.fn(async () => {}) };
-  const provider = createSqliteDefinitionProvider({ model: () => model, current: () => live, worker });
+  const provider = createSqlDefinitionProvider({ model: () => model, current: () => live, worker, sourceLimit: 262144 });
   const token: CancellationToken = { isCancellationRequested: false, onCancellationRequested: listener => { const invoke = () => listener(undefined); cancellations.add(invoke); return { dispose() { cancellations.delete(invoke); } }; } };
   const invoke = () => provider.provider.provideDefinition(model, { lineNumber: 1, column: 9 } as import('monaco-editor').Position, token);
   return { provider, model, worker, token, invoke, changes, cancellations, uri, source, edit() { version++; changes.forEach(listener => listener()); }, invalidate() { live = false; }, closeModel() { modelAlive = false; } };
