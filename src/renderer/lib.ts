@@ -18,8 +18,17 @@ export const identifier = (value: string) => '`' + value.replaceAll('`', '``') +
 export const qualifiedName = (database: string, table: string) => `${identifier(database)}.${identifier(table)}`;
 /** 未填写的字段是 DEFAULT；只读取自有属性，不能把原型成员误当作数据库单元格。 */
 export function ownCell(row: DataRow, key: string): CellValue | undefined { return Object.hasOwn(row, key) ? row[key] : undefined; }
+/** 分块转换完整字节，避免为大 BLOB 一次创建与原字节等长的临时数组。 */
+function binaryCellText(base64: string): string {
+  const bytes = atob(base64), parts = ['0x'];
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    parts.push(Array.from(bytes.slice(offset, offset + 8192), char => char.charCodeAt(0).toString(16).padStart(2, '0')).join(''));
+  }
+  return parts.join('');
+}
+
 /** 完整文本用于显式查看或复制，二进制转为十六进制且不改变原始数据。 */
-export const cellText = (value: CellValue | undefined) => value === null ? 'NULL' : value === undefined ? '' : typeof value === 'object' ? `0x${atob(value.base64).split('').map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')}` : String(value);
+export const cellText = (value: CellValue | undefined) => value === null ? 'NULL' : value === undefined ? '' : typeof value === 'object' ? binaryCellText(value.base64) : String(value);
 /** 比较由同一行快照派生的普通数据，包含 NULL、字符串及二进制包装值。 */
 export const rowEqual = (a: DataRow, b: DataRow) => JSON.stringify(a) === JSON.stringify(b);
 export const kindLabels: Record<string, string> = { table: zh.commonMessages.text002, view: zh.commonMessages.text003, procedure: zh.commonMessages.text004, function: zh.commonMessages.text005, trigger: zh.commonMessages.text006, event: zh.commonMessages.text007 };

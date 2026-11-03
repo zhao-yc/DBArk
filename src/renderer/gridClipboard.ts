@@ -2,6 +2,7 @@ import { zh } from './locales/zh-CN';
 import type { CellValue } from '../shared/contracts';
 import type { DraftRow } from './dataChanges';
 import { cellText } from './lib';
+import { binaryByteLength } from './binaryCell';
 import { tableHeaderCopyZh } from './locales/tableHeaderCopy.zh-CN';
 
 export const cellClipboardType = 'application/x-dbark-cells';
@@ -56,12 +57,66 @@ export function parseTabularText(text: string): string[][] {
   return rows;
 }
 
+/** 计量转义后的字符数，配对代理项原样保留，孤立代理项按 JSON 的六字符转义计算。 */
+function measureClipboardString(value: string, plainAvailable: number, typedAvailable = Infinity) {
+  let plain = value.length, typed = value.length + 2, quoted = false;
+  if (plain > plainAvailable || typed > typedAvailable) throw new Error(zh.clipboard.copySizeLimit);
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code === 34) { plain++; quoted = true; }
+    else if (code === 9 || code === 10 || code === 13) quoted = true;
+    if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) typed++;
+    else if (code < 32) typed += 5;
+    else if (code >= 0xd800 && code <= 0xdfff) {
+      const next = value.charCodeAt(index + 1);
+      if (code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) index++;
+      else typed += 5;
+    }
+    if (plain + (quoted ? 2 : 0) > plainAvailable || typed > typedAvailable) throw new Error(zh.clipboard.copySizeLimit);
+  }
+  return { plain: plain + (quoted ? 2 : 0), typed };
+}
+
+const clipboardEmptyPacket = '{"version":1,"rows":[]}';
+const clipboardDefault = { type: 'default' } as const;
+const clipboardBinaryOverhead = '{"type":"binary","base64":""}'.length;
+
+/** 编码前累计两种格式的预算，超限时不生成矩阵文本或解码二进制。 */
+function assertClipboardSize(values: ClipboardCell[][], headers?: readonly string[]): void {
+  let plain = Math.max(0, values.length - 1), typed = clipboardEmptyPacket.length + values.length * 2 + plain;
+  if (headers) {
+    plain += 1 + Math.max(0, headers.length - 1);
+    for (const name of headers) plain += measureClipboardString(name, maxClipboardCharacters - plain).plain;
+  }
+  for (const row of values) {
+    const separators = Math.max(0, row.length - 1);
+    plain += separators;
+    typed += separators;
+    for (const value of row) {
+      if (typeof value === 'string') {
+        const size = measureClipboardString(value, maxClipboardCharacters - plain, maxClipboardCharacters - typed);
+        plain += size.plain;
+        typed += size.typed;
+      } else if (value && typeof value === 'object') {
+        plain += 2 + binaryByteLength(value)! * 2;
+        typed += clipboardBinaryOverhead + value.base64.length;
+      } else {
+        plain += cellText(value).length;
+        typed += JSON.stringify(value === undefined ? clipboardDefault : value).length;
+      }
+      if (plain > maxClipboardCharacters || typed > maxClipboardCharacters) throw new Error(zh.clipboard.copySizeLimit);
+    }
+  }
+  if (plain > maxClipboardCharacters || typed > maxClipboardCharacters) throw new Error(zh.clipboard.copySizeLimit);
+}
+
 /** 外部程序读取通用 TSV；DBArk 内部复制额外保存 NULL 和二进制类型。 */
 export function encodeClipboard(values: ClipboardCell[][], headers?: readonly string[]) {
   if (values.reduce((count, row) => count + row.length, headers?.length ?? 0) > maxClipboardCells) throw new Error(zh.clipboard.copyLimit);
+  assertClipboardSize(values, headers);
   /** 仅对含分隔符或引号的值加引号，确保电子表格可完整还原单元格边界。 */
   const quote = (value: ClipboardCell) => { const text = cellText(value); return /[\t\r\n"]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text; };
-  const typed = JSON.stringify({ version: 1, rows: values.map(row => row.map(value => value === undefined ? { type: 'default' } : value)) });
+  const typed = JSON.stringify({ version: 1, rows: values.map(row => row.map(value => value === undefined ? clipboardDefault : value)) });
   if (typed.length > maxClipboardCharacters) throw new Error(zh.clipboard.copySizeLimit);
   const body = values.map(row => row.map(quote).join('\t')).join('\n');
   const text = headers ? headers.map(quote).join('\t') + '\n' + body : body;

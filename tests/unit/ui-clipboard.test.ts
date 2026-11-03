@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { decodeClipboard, encodeClipboard, parseTabularText, pasteCells } from '../../src/renderer/gridClipboard';
+import { describe, expect, it, vi } from 'vitest';
+import { decodeClipboard, encodeClipboard, maxClipboardCharacters, parseTabularText, pasteCells } from '../../src/renderer/gridClipboard';
+import { zh } from '../../src/renderer/locales/zh-CN';
 import type { DraftRow } from '../../src/renderer/dataChanges';
 
 describe('网格剪贴板', () => {
@@ -19,6 +20,40 @@ describe('网格剪贴板', () => {
     const encoded = encodeClipboard(values);
     expect(decodeClipboard(encoded.typed, encoded.text)).toEqual(values);
     expect(decodeClipboard('', 'NULL\t18446744073709551615')).toEqual([['NULL', '18446744073709551615']]);
+  });
+  it('转义后的类型化数据恰好到上限时保留原编码，多一字符即拒绝', () => {
+    const suffix = '\0\t\r\n\\\"\b\f\u001f\uD800😀\uDC00';
+    const overhead = JSON.stringify({ version: 1, rows: [[suffix], ['']] }).length;
+    const value = 'x'.repeat(maxClipboardCharacters - overhead);
+    const content = encodeClipboard([[suffix], [value]]);
+    expect(content.typed.length).toBe(maxClipboardCharacters);
+    expect(content.typed.slice(0, 95)).toBe(JSON.stringify({ version: 1, rows: [[suffix], [value]] }).slice(0, 95));
+    expect(() => encodeClipboard([[suffix], [value + 'x']])).toThrow(zh.clipboard.copySizeLimit);
+  });
+  it('大量控制字符、带引号的表头及超限 BLOB 在序列化与字节展开前拒绝', () => {
+    const stringify = vi.spyOn(JSON, 'stringify');
+    const decode = vi.spyOn(globalThis, 'atob');
+    const failures: unknown[] = [];
+    const capture = (action: () => unknown) => {
+      try { action(); } catch (error) { failures.push(error); }
+    };
+    let stringifyCalls: number, decodeCalls: number;
+    try {
+      capture(() => encodeClipboard([['\0'.repeat(2_000_000)]]));
+      capture(() => encodeClipboard([], ['"'.repeat(maxClipboardCharacters / 2)]));
+      capture(() => encodeClipboard([[{ type: 'binary', base64: 'AAAA'.repeat(1_666_667) }]]));
+      stringifyCalls = stringify.mock.calls.length;
+      decodeCalls = decode.mock.calls.length;
+    } finally { stringify.mockRestore(); decode.mockRestore(); }
+    expect(failures.map(error => (error as Error).message)).toEqual(Array(3).fill(zh.clipboard.copySizeLimit));
+    expect(stringifyCalls).toBe(0);
+    expect(decodeCalls).toBe(0);
+  });
+  it('可复制跨多个转换块的二进制，十六进制与内部原值保持一致', () => {
+    const bytes = '\x00\xff'.repeat(8193), value = { type: 'binary' as const, base64: btoa(bytes) };
+    const content = encodeClipboard([[value]]);
+    expect(content.text).toBe('0x' + '00ff'.repeat(8193));
+    expect(decodeClipboard(content.typed, content.text)).toEqual([[value]]);
   });
   it('拒绝损坏或伪造的类型化剪贴板', () => {
     expect(() => decodeClipboard('{', '')).toThrow();

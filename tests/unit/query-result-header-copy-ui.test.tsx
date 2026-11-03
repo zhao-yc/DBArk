@@ -33,8 +33,9 @@ beforeAll(async()=>{
 afterEach(async()=>{if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();grids.all=[];});
 afterAll(()=>{ restoreNavigationMenuPort();for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只给真实查询端口合成响应；所有文件选择、写入和settings保存都是RAM事件。 */
-async function mount(multiple = false){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
+async function mount(multiple = false, large = false){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
  if(multiple){ original.rows[0].n='同组';original.rows[1].n='同组';original.rows.push(JSON.parse('{"__proto__":"3","d":"0.50000000000000000000","n":"同组","b":{"type":"binary","base64":"AA=="},"secret":"秘密"}')); }
+ if (large) original.rows[0].n = '\0'.repeat(2_000_000);
  (window as any).dbark={onTask:()=>()=>{},onMenu:()=>()=>{},invoke:async(command:string,input:any)=>{commands.push(command);if(command==='settings.save'||command==='connections.open'||command==='sessions.close')return;if(command==='sessions.open')return {sessionId:'s'};if(command==='query.completionState')return {databaseKnown:true,database:null,temporaryObjects:[]};if(command==='query.execute')return {results:[original,second],elapsedMs:1,transactionOpen:false};if(command==='files.choose')return {token:'ram-file',name:'内存文件'};if(command==='files.exportResult'){validateResultExportData(input.result);exports.push(structuredClone(input));return {rows:input.result.rows.length};}throw Error('禁止外界命令：'+command);}};
  store.setState({settings:{theme:'light',sidebarWidth:260,resultLimit:1000,pageSize:100,activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',title:'查询',sql:'SELECT RAM',databaseContext:{state:'known',database:null}}]},connections:[{id:'c',name:'RAM',group:'',color:'',dialect:'mysql',host:'offline.invalid',port:1,user:'ram'}],connectionVersions:{c:1},activeJobs:{},dirtyTabs:{}});
  function Harness(){const tabs=store(state=>state.settings.tabs);return tabs.map(tab=><QueryTab key={tab.id} tab={tab} onHistory={()=>{}}/>);}const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(<Harness/>));await click(zh.query.text010);
@@ -140,6 +141,22 @@ it('复制当前结果列使用筛选和排序后的原值，勾选或换结果�
   expect(button(copyText.column).disabled).toBe(true);
   await act(async () => stale());
   expect(port.writes).toHaveLength(2);
+});
+
+it('当前列转义后超限时提示导出且不打开剪贴板，换到正常列仍可复制', async () => {
+  await mount(false, true);
+  const port = clipboardPort();
+  const grid = mainGrid();
+  const selectColumn = (key: string) => act(async () => grid.onActivePositionChange({ row: original.rows[0], rowIdx: 0, column: { key } }));
+  await selectColumn('n');
+  const before = [...commands];
+  await click(copyText.column);
+  expect(store.getState().notice).toEqual({ text: zh.clipboard.copySizeLimit, error: true });
+  expect(port.execute).not.toHaveBeenCalled();
+  await selectColumn('d');
+  await click(copyText.column);
+  expect(port.writes[0].get('text/plain')).toBe('0.12345678901234567890\n1.00000000000000000001');
+  expect(commands).toEqual(before);
 });
 
 it('筛选为空时含列名复制禁用，旧按钮不能复制被排除的原行', async () => {
