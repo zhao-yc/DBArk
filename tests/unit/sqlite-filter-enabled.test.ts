@@ -2,7 +2,8 @@ import { afterAll, expect, it } from 'vitest';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { sqliteTablePageSchema, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../../src/shared/sqliteTableBrowse';
 import { buildSqliteReadPlan, buildSqliteFilteredSelect } from '../../src/shared/sqliteReadSql';
-import { sqliteTableDraft } from '../../src/renderer/sqliteTableBrowser';
+import { sqliteTableDraft, sqliteTableDraftChanged, type SqliteFilterDraft, type SqliteSortDraft } from '../../src/renderer/sqliteTableBrowser';
+import { sqlitePresetDraft } from '../../src/renderer/sqliteTablePresetDraft';
 import { SqliteTableExportIntent } from '../../src/renderer/sqliteTableExportUi';
 import { SqliteFilteredSelectIntent } from '../../src/renderer/sqliteFilteredSelectUi';
 
@@ -12,6 +13,25 @@ db.exec('CREATE TABLE subject(id INTEGER PRIMARY KEY,v)');
 const insert = db.prepare('INSERT INTO subject VALUES(?,?)');
 [null, '2', 2n, 9223372036854775807n, Buffer.from('00ff', 'hex'), '中文\0🚢'].forEach((value, index) => insert.run(index + 1, value));
 afterAll(() => db.close());
+
+it('筛选排序草稿按实际设置比较，还原保留不同类型、停用、顺序及页大小', () => {
+  const scope = { connectionId: 'owned', database: 'main', table: 'subject' };
+  const filters: SqliteFilterDraft[] = [
+    { id: 'set', column: 'v', operator: 'oneOf', kind: 'text', value: '', selectedValues: [{ kind: 'text', value: '2' }, { kind: 'integer', value: '2' }, { kind: 'null' }] },
+    { id: 'disabled', column: 'id', operator: 'between', kind: 'integer', value: '2', secondValue: '9', enabled: false },
+  ];
+  const sort: SqliteSortDraft[] = [{ id: 'a', column: 'v', direction: 'desc' }, { id: 'b', column: 'id', direction: 'asc' }];
+  const applied = sqliteTableDraft(scope, 7, 'or', filters, sort);
+  const restored = sqlitePresetDraft(applied, ['id', 'v'], () => '还原编号');
+  expect(sqliteTableDraftChanged(applied, scope, 7, 'or', restored.filters, restored.sort)).toBe(false);
+  expect(sqliteTableDraftChanged(applied, scope, 7, 'or', [{ ...filters[0], enabled: true }, filters[1]], sort)).toBe(false);
+  expect(sqliteTableDraftChanged(applied, scope, 7, 'or', [], sort)).toBe(true);
+  expect(sqliteTableDraftChanged(applied, scope, 7, 'or', filters, [])).toBe(true);
+  expect(sqliteTableDraftChanged(applied, scope, 7, 'or', filters, [...sort].reverse())).toBe(true);
+  expect(sqliteTableDraftChanged(applied, scope, 7, 'and', filters, sort)).toBe(true);
+  expect(sqliteTableDraftChanged(applied, scope, 8, 'or', filters, sort)).toBe(true);
+  expect(sqliteTableDraftChanged(applied, scope, 7, 'or', [filters[0], { ...filters[1], secondValue: '无效' }], sort)).toBe(true);
+});
 /** 真实SQLite使用明确绑定类型，完整读取用于独立核对停用后的结果，不伪造行值。 */
 function read(input: SqliteTablePageInput, complete = false) {
   const plan = buildSqliteReadPlan(input, columns, ['id'], complete), statement = db.prepare(plan.sql);

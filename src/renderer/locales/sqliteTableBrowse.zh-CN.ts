@@ -5,6 +5,8 @@ export const sqliteTableBrowseZh = {
   refresh: '刷新 SQLite 表数据', stop: '停止 SQLite 表读取', stopping: '正在停止原读取，等待真实结束', loading: '正在读取 SQLite 表数据',
   export: '导出 SQLite 当前页', conditions: '筛选与排序', filters: 'SQLite 服务端筛选', mode: 'SQLite 筛选关系', addFilter: '添加 SQLite 筛选条件',
   sorts: 'SQLite 服务端排序', addSort: '添加 SQLite 排序', apply: '应用 SQLite 筛选排序', limit: 'SQLite 每页条数',
+  draftActions: '筛选与排序草稿操作', clearFilterDraft: '清空筛选草稿', clearSortDraft: '清空排序草稿', restoreAppliedDraft: '还原到当前页设置',
+  draftPending: '筛选、排序或每页条数尚未应用。', draftActionsHint: '清空和还原只修改表单，点击“应用”后才读取。',
   first: 'SQLite 首页', previous: 'SQLite 上一页', next: 'SQLite 下一页', empty: '当前页没有记录', noPage: '尚无可用的当前页',
   noCount: '不读取总行数；下一页是否可用由本次多读一行确认。未指定排序或存在同值排序时，行顺序可能变化。',
   typesHint: '条件值按明确类型绑定：文本保留原文，整数使用有符号 64 位范围，实数必须有限，二进制填写十六进制字节。NULL 条件不填写值。',

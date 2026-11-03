@@ -319,6 +319,12 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await confirm(() => headerBeforeCancel.click(), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1); await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending')); const afterHeaderCancel = await step(audit); for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterHeaderCancel, command)).toHaveLength(operations(beforeHeaderCancel, command).length); expect(disk()).toEqual(baseline);
     stage = '脏页不同值只读已提交原文，加入和删除筛选草稿均保整批增改删';
     await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); const beforeValues = await step(audit), valuesDraftIds = await columnValues('id');
+    await step(() => table().getByRole('button', { name: '清空排序草稿', exact: true }).click());
+    await step(() => expect(table().getByText('筛选、排序或每页条数尚未应用。', { exact: true })).toBeVisible());
+    await step(() => table().getByRole('button', { name: '还原到当前页设置', exact: true }).click());
+    await step(() => expect(table().getByRole('button', { name: '还原到当前页设置', exact: true })).toBeDisabled());
+    await counts(1, 1, 1); expect(await columnValues('id')).toEqual(valuesDraftIds);
+    for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(await step(audit), command)).toHaveLength(operations(beforeValues, command).length);
     const conditionSnapshot = () => table().locator('[aria-label^="SQLite 筛选 "]').evaluateAll(nodes => nodes.map(node => ({ label: node.getAttribute('aria-label'), value: (node as HTMLInputElement).value, checked: (node as HTMLInputElement).checked })));
     const originalConditions = await step(conditionSnapshot), filterCount = await step(() => table().getByRole('combobox', { name: /^SQLite 筛选 \d+ 运算符$/ }).count());
     await step(() => table().getByRole('button', { name: valuesText.entry, exact: true }).click()); const valuesModal = () => page.getByRole('dialog', { name: valuesText.title, exact: true }); await step(() => expect(valuesModal()).toBeVisible());

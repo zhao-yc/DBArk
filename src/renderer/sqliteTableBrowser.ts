@@ -17,6 +17,17 @@ export function sqliteTableDraft(scope: Pick<SqliteTableScope, 'connectionId' | 
     filters: filters.map(filter => ({ column: filter.column, operator: filter.operator, ...(filter.enabled === undefined ? {} : { enabled: filter.enabled }), ...(['oneOf', 'notOneOf'].includes(filter.operator) ? { selectedValues: filter.selectedValues } : ['in', 'notIn'].includes(filter.operator) ? { values: (filter.values ?? [filter.value]).map(value => ({ kind: filter.kind, value })) } : ['isNull', 'notNull'].includes(filter.operator) ? {} : { value: { kind: filter.kind, value: filter.value } }), ...(['between', 'notBetween'].includes(filter.operator) ? { secondValue: { kind: filter.kind, value: filter.secondValue ?? '' } } : {}) })), sort: sort.map(({ column, direction }) => ({ column, direction })) });
   return { limit: input.limit, mode: input.mode, filters: input.filters, sort: input.sort };
 }
+
+/** 比较实际查询设置，忽略表单行编号和默认启用标记；暂时无效的输入仍是未应用草稿。 */
+export function sqliteTableDraftChanged(applied: SqliteTableQuery, scope: Parameters<typeof sqliteTableDraft>[0], limit: number, mode: SqliteTableQuery['mode'], filters: readonly SqliteFilterDraft[], sort: readonly SqliteSortDraft[]): boolean {
+  if (limit !== applied.limit || mode !== applied.mode || filters.length !== applied.filters.length || sort.length !== applied.sort.length) return true;
+  try {
+    const draft = sqliteTableDraft(scope, limit, mode, filters, sort);
+    const filterKey = (filter: SqliteTableFilter) => JSON.stringify({ ...filter, enabled: filter.enabled !== false });
+    return draft.filters.some((filter, index) => filterKey(filter) !== filterKey(applied.filters[index]))
+      || draft.sort.some((rule, index) => rule.column !== applied.sort[index].column || rule.direction !== applied.sort[index].direction);
+  } catch { return true; }
+}
 /** 回包必须对应准确目标与窗口，原值按导出合同检查，不能把错页或超限行交给网格。 */
 export function assertSqliteTablePage(page: SqliteTablePage, input: SqliteTablePageInput): void {
   if (typeof page?.schemaKey !== 'string' || !/^[a-f0-9]{64}$/.test(page.schemaKey) || page.columns?.some(column => column.generated !== undefined && typeof column.generated !== 'boolean')) throw Error(text.invalidPage);
