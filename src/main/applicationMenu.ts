@@ -74,7 +74,7 @@ export class ApplicationMenu {
         { label: text.snapshots, submenu: [item('explain-snapshot'), item('result-snapshot')] }, separator, item('task-center')
       ] },
       { label: text.window, submenu: [
-        item('tab-search', 'CmdOrCtrl+Shift+A'), item('close-tab', 'CmdOrCtrl+W'), item('close-other-queries'), item('close-left-queries'), item('close-right-queries'), separator,
+        item('tab-search', 'CmdOrCtrl+Shift+A'), item('close-tab', 'CmdOrCtrl+W'), item('reopen-query', 'CmdOrCtrl+Shift+T'), item('close-other-queries'), item('close-left-queries'), item('close-right-queries'), separator,
         item('previous-tab'), item('next-tab')
       ] },
       { label: text.help, submenu: [item('help'), item('shortcuts'), ...(!mac ? [separator, item('about')] : [])] }

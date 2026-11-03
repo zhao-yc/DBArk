@@ -134,6 +134,7 @@ import { columnPatchZh } from './locales/columnPatches.zh-CN';
 import { QueryTab } from './components/QueryTab';
 import { QueryCloseRequests, type QueryCloseRequest } from './queryCloseIntent';
 import { QueryCloseQueue } from './queryCloseQueue';
+import { captureRetainedQuery, RecentClosedQueries } from './recentClosedQueries';
 import { queryCloseZh } from './locales/queryClose.zh-CN';
 import { TableTab } from './components/TableTab';
 import { DdlDialog, SchemaDialog } from './components/SchemaDialog';
@@ -163,6 +164,10 @@ function WorkspaceApp() {
   const treeSelection = useSidebarSelection();
   const state = useWorkspace(); const { settings, ready, connections, notice } = state;
   const closeRequests = useMemo(() => new QueryCloseRequests(), []);
+  const retainedQueries = useMemo(() => new RecentClosedQueries(), []);
+  useEffect(() => useWorkspace.subscribe((next, previous) => {
+    if (next.connections !== previous.connections || next.connectionVersions !== previous.connectionVersions) retainedQueries.prune(next);
+  }), [retainedQueries]);
   const [queryCloseRequest, setQueryCloseRequest] = useState<QueryCloseRequest>();
   const otherQueryClose = useRef<QueryCloseQueue | null>(null), [closingOtherQueries, setClosingOtherQueries] = useState(false);
   const [queryCloseCommit, setQueryCloseCommit] = useState<{ queue: QueryCloseQueue; request: QueryCloseRequest }>();
@@ -291,7 +296,12 @@ function WorkspaceApp() {
       if (event.shiftKey && event.key.toLowerCase() === 'l') { event.preventDefault(); const current = useWorkbench.getState(); void current.save({ ...current.snapshot.document, focusMode: !current.snapshot.document.focusMode }); }
       if (event.shiftKey && event.key.toLowerCase() === 'b') { event.preventDefault(); openWorkbenchManager(); }
       if (event.shiftKey && event.key.toLowerCase() === 'o') { event.preventDefault(); openObjectLink(); }
-      if (event.key.toLowerCase() === 't') { event.preventDefault(); openNewQueryDialog(); }
+      if (event.key.toLowerCase() === 't') {
+        if (event.shiftKey && (event.altKey || event.defaultPrevented || event.repeat)) return;
+        event.preventDefault();
+        if (!event.shiftKey) openNewQueryDialog();
+        else { const snapshot = uiCommands.getSnapshot(); void uiCommands.execute({ id: 'reopen-query', revision: snapshot.revision }).catch(reason => useWorkspace.getState().notify(errorMessage(reason), true)); }
+      }
       if(event.shiftKey&&event.key.toLowerCase()==='f'){event.preventDefault();if(document.querySelector('[role="dialog"], [role="alertdialog"]'))return;const snapshot=uiCommands.getSnapshot();void uiCommands.execute({id:'structure-search',revision:snapshot.revision}).catch(reason=>useWorkspace.getState().notify(errorMessage(reason),true));}
       if (event.key.toLowerCase() === 'w' && useWorkspace.getState().settings.activeTabId) { event.preventDefault(); closeTab(useWorkspace.getState().settings.activeTabId!); }
     };
@@ -413,18 +423,34 @@ function WorkspaceApp() {
     otherQueryClose.current?.dispose(); otherQueryClose.current = queue; queue.start(keep, side ?? 'others');
   }
   /** 只有当前请求能完成关闭；保存解除自身busy之后仍重新核对作业与事务。 */
-  function finishQueryClose(request: QueryCloseRequest, close: boolean) {
+  function finishQueryClose(request: QueryCloseRequest, close: boolean, keep?: WorkspaceTab) {
     if (!closeRequests.finish(request)) return;
     setQueryCloseRequest(undefined);
     const current = useWorkspace.getState();
     const queue = otherQueryClose.current?.owns(request) ? otherQueryClose.current : undefined, tab = current.settings.tabs.find(tab => tab.id === request.tabId);
     if (!close || !tab) { queue?.finish(request, false); return; }
     if (current.activeJobs[request.tabId] || current.dirtyTabs[request.tabId]) { current.notify(queryCloseZh.changed, true); queue?.finish(request, false); return; }
+    const retained = keep === tab ? captureRetainedQuery(tab, current) : undefined;
+    if (keep && !retained) { current.notify(queryCloseZh.keepUnavailable, true); queue?.finish(request, false); return; }
+    const remove = () => current.closeTab(request.tabId);
     if (queue) {
-      queue.finish(request, queue.remove(tab, () => current.closeTab(request.tabId)));
+      const removed = queue.remove(tab, remove);
+      if (removed && retained) retainedQueries.remember(retained);
+      queue.finish(request, removed);
       if (queue.awaitingCommit === request) setQueryCloseCommit({ queue, request });
     }
-    else current.closeTab(request.tabId);
+    else {
+      remove();
+      if (retained && !useWorkspace.getState().settings.tabs.some(item => item.id === tab.id)) retainedQueries.remember(retained);
+    }
+  }
+  /** 用新标签身份打开独立草稿，只在确认打开后消费内存记录。 */
+  function reopenRetainedQuery(): void {
+    const current = useWorkspace.getState(), entry = retainedQueries.peek(current);
+    if (!entry || current.settings.tabs.length >= 100 || closeRequests.pending || otherQueryClose.current?.running || otherQueryClose.current?.pending || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const id = uid();
+    workbenchNavigation.invalidate(); current.openTab({ ...entry.draft, id });
+    if (useWorkspace.getState().settings.tabs.some(tab => tab.id === id)) retainedQueries.consume(entry);
   }
   /** 原请求已从本次渲染清空且portal已移除后交付提交回执；新的外部模态仍由全局门拒绝。 */
   function commitQueryClose(commit: { queue: QueryCloseQueue; request: QueryCloseRequest }, pending?: QueryCloseRequest) {
@@ -857,6 +883,7 @@ function WorkspaceApp() {
     'explain-snapshot': handler(openExplainSnapshot), 'result-snapshot': handler(openResultSnapshot),
     'task-center': handler(() => setTasks(true)), 'tab-search': handler(openTabSearch),
     'close-tab': handler(() => { if (activeTab) closeTab(activeTab.id); }, !!activeTab && !state.activeJobs[activeTab.id]),
+    'reopen-query': handler(reopenRetainedQuery, settings.tabs.length < 100 && !!retainedQueries.peek(state)),
     'close-other-queries': handler(() => closeOtherQueries(), activeTab?.kind === 'query' && settings.tabs.some(tab => tab.kind === 'query' && tab.id !== activeTab.id)),
     'close-left-queries': handler(() => closeSide('left'), activeTab?.kind === 'query' && settings.tabs.some((tab, index) => tab.kind === 'query' && index < activeIndex)),
     'close-right-queries': handler(() => closeSide('right'), activeTab?.kind === 'query' && settings.tabs.some((tab, index) => tab.kind === 'query' && index > activeIndex)),

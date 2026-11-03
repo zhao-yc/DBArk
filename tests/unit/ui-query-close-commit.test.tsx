@@ -7,7 +7,10 @@ import { QueryCloseRequests } from '../../src/renderer/queryCloseIntent';
 import { queryCloseZh as closeWords } from '../../src/renderer/locales/queryClose.zh-CN';
 import { queryBindingZh as bindingWords } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { appFunctions } from './query-close-app-commit-fixture';
+import { captureRetainedQuery, RecentClosedQueries } from '../../src/renderer/recentClosedQueries';
 
+/** 真实 QueryTab 引入 Monaco 的标记端口，内存用例不运行浏览器编辑器。 */
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers() { throw Error('关闭用例不应写入 SQL 标记'); } }, MarkerSeverity: { Warning: 4 } }));
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const React = await import('react'), { ContentEditorPort, ContentModelPort } = await import('../../tests/unit/editor-content-test-ports');
   return { SqlEditor(props: any) { const latest = React.useRef(props); latest.current = props; React.useEffect(() => { const model = new ContentModelPort(props.value), editor = new ContentEditorPort(model); props.onReady?.(editor); return () => editor.dispose(); }, []); return React.createElement('div', { 'aria-label': '只读独审RAM编辑端口' }); } };
@@ -20,7 +23,7 @@ afterEach(async () => { if (root) await act(async () => root.unmount()); root = 
 afterAll(() => { restoreNavigationMenuPort(); for (const [key, value] of globals) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key); });
 const saved = { name: '保存后的A', source: { id: 'saved-a', digest: 'b'.repeat(64), connectionId: 'c', context: { state: 'known', database: null } } };
 async function mount() {
-  calls = []; hook = undefined; world = { requests: [] as any[], modalChecks: [] as boolean[] };
+  calls = []; hook = undefined; world = { requests: [] as any[], modalChecks: [] as boolean[], retainedQueries: new RecentClosedQueries() };
   (window as any).confirm = vi.fn(() => false);
   (window as any).dbark = { onTask: () => () => {}, onMenu: () => () => {}, invoke: async (command: string, input: any) => { calls.push({ command, input }); const wait = hook?.(command, input); if (wait) return wait; if (command === 'settings.save' || command === 'sessions.close') return; if (command === 'queries.create') return saved; throw Error('独审拒绝实际外界调用：' + command); } };
   const make = (id: string) => ({ id, kind: 'query', title: id, connectionId: 'c', sql: 'SELECT ' + id + ';', databaseContext: { state: 'known', database: null } });
@@ -30,7 +33,7 @@ async function mount() {
     const settings = store((state: any) => state.settings), requests = useMemo(() => new QueryCloseRequests(), []), otherQueryClose = useRef<any>(null);
     const [request, setRequest] = useState<any>(), [closing, setClosing] = useState(false), [commit, setCommit] = useState<any>(), [foreign,setForeign]=useState(false);
     world.showForeign=setForeign;
-    const vm = useMemo(() => appFunctions({ otherQueryClose, closeRequests: requests, useWorkspace: store, window,
+    const vm = useMemo(() => appFunctions({ otherQueryClose, closeRequests: requests, useWorkspace: store, window, captureRetainedQuery, retainedQueries: world.retainedQueries,
       document: { querySelector(selector: string) { const modal = document.querySelector(selector); world.modalChecks.push(!!modal); return modal; } },
       setQueryCloseRequest(next: any) { if (next) world.requests.push(next); setRequest(next); }, setClosingOtherQueries: setClosing, setQueryCloseCommit(next:any){if(next)world.onCommitQueued?.();setCommit(next)} }), []);
     world.vm = vm; world.queue = otherQueryClose; vm.layout(commit,request,settings);
@@ -43,6 +46,13 @@ async function click(text: string) { const button = (navigationMenuRamButton(doc
 function gate() { let resolve!: (value: any) => void; const promise = new Promise<any>(yes => { resolve = yes; }); return { promise, resolve }; }
 
 describe('原独审反例的真实App布局提交与Modal对照', () => {
+  it('批量关闭时仅保留明确选择的草稿，取消不消费后续标签', async () => {
+    await mount(); await click(closeWords.others); await click(closeWords.keepDraft);
+    expect(world.retainedQueries.peek(store.getState())?.draft.sql).toBe('SELECT a;');
+    expect(world.requests.map((request: any) => request.tabId)).toEqual(['a', 'b']);
+    await click(closeWords.cancel);
+    expect(store.getState().settings.tabs.some((tab: any) => tab.id === 'b')).toBe(true);
+  });
   it.each(['新的外部模态','未来目标变化'])('关闭成功但提交间隙发生%s时停链，后续查询原样保留',async fault=>{
     await mount();await click(closeWords.others);world.onCommitQueued=()=>{if(fault==='新的外部模态')world.showForeign(true);else store.getState().updateTab('b',{sql:'SELECT 外部新正文;'})};
     await click(closeWords.discard);expect(world.requests.map((request:any)=>request.tabId)).toEqual(['a']);expect(world.queue.current.running).toBe(false);

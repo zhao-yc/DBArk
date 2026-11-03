@@ -16,7 +16,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'statement-navigation': '语句导航',
   'import': '导入数据', 'export': '导出数据', 'schema-compare': '结构比较', 'structure-search': '全库搜索',
   'server-monitor': '服务器监控', 'explain-snapshot': '打开计划快照', 'result-snapshot': '打开结果快照',
-  'task-center': '任务中心', 'tab-search': '查找已打开标签', 'close-tab': '关闭当前标签',
+  'task-center': '任务中心', 'tab-search': '查找已打开标签', 'close-tab': '关闭当前标签', 'reopen-query': '重新打开上个保留查询',
   'close-other-queries': '关闭其他查询', 'close-left-queries': '关闭左侧查询', 'close-right-queries': '关闭右侧查询',
   'next-tab': '下一个标签', 'previous-tab': '上一个标签', 'help': '使用说明', 'shortcuts': '快捷键', 'about': '关于 DBArk'
 };
