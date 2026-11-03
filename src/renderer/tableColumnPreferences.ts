@@ -27,7 +27,7 @@ export function reconcileTablePreferences(names: readonly string[], preferences:
   const candidates = saved.map((column, index) => ({ column, index })).filter(item => item.column.name === boundary);
   const mapped = candidates.length === 1 && !candidates[0].column.hidden ? matched.get(candidates[0].index) : undefined;
   const frozenThrough = mapped && names.filter(name => name === mapped).length === 1 && columns.some(column => column.name === mapped && !column.hidden) ? mapped : undefined;
-  return { version: 1, columns, ...(frozenThrough === undefined ? {} : { frozenThrough }) };
+  return { version: 1, columns, ...(frozenThrough === undefined ? {} : { frozenThrough }), ...(preferences?.rowHeight === undefined ? {} : { rowHeight: preferences.rowHeight }) };
 }
 
 /** 可见列顺序是网格、查找及复制粘贴的唯一共同输入。 */
@@ -50,7 +50,8 @@ export function frozenTableKeys(preferences: TablePreferences): string[] {
 
 /** 清除时真正省略可选字段；新边界必须是当前可见的精确唯一列名。 */
 export function setTableFrozenThrough(preferences: TablePreferences, name?: string, maximumNameLength = 256): TablePreferences {
-  const output: TablePreferences = { version: 1, columns: preferences.columns.map(column => ({ ...column })) };
+  const { frozenThrough: _previous, ...base } = preferences;
+  const output: TablePreferences = { ...base, columns: preferences.columns.map(column => ({ ...column })) };
   if (name === undefined) return output;
   if (typeof name !== 'string' || !name.length || name.length > maximumNameLength || tableFrozenBoundary({ ...output, frozenThrough: name }) !== name) throw Error('冻结边界必须是当前可见的精确唯一列名');
   return { ...output, frozenThrough: name };
@@ -58,7 +59,8 @@ export function setTableFrozenThrough(preferences: TablePreferences, name?: stri
 
 /** 布局重建后只保留仍可见的合法边界，隐藏边界列会立即解除冻结。 */
 function preserveTableFrozenThrough(preferences: TablePreferences, columns: TablePreferences['columns']): TablePreferences {
-  const output: TablePreferences = { version: 1, columns }, frozenThrough = tableFrozenBoundary({ ...output, ...(preferences.frozenThrough === undefined ? {} : { frozenThrough: preferences.frozenThrough }) });
+  const { frozenThrough: _previous, ...base } = preferences;
+  const output: TablePreferences = { ...base, columns }, frozenThrough = tableFrozenBoundary({ ...preferences, columns });
   return frozenThrough === undefined ? output : { ...output, frozenThrough };
 }
 

@@ -33,7 +33,7 @@ export function reconcileSqliteLayout(names: readonly string[], preferences: Tab
   for (const name of names) if (!used.has(name)) { used.add(name); columns.push({ name, hidden: false }); }
   if (columns.length && columns.every(column => column.hidden)) columns[0].hidden = false;
   const boundary = preferences?.frozenThrough;
-  return { version: 1, columns, ...(boundary !== undefined && columns.some(column => column.name === boundary && !column.hidden) ? { frozenThrough: boundary } : {}) };
+  return { version: 1, columns, ...(boundary !== undefined && columns.some(column => column.name === boundary && !column.hidden) ? { frozenThrough: boundary } : {}), ...(preferences?.rowHeight === undefined ? {} : { rowHeight: preferences.rowHeight }) };
 }
 /** 只产生显示映射，保留原物理列编号；行数据与编辑快照始终不投影或重排。 */
 export function sqliteLayoutProjection(names: readonly string[], preferences: TablePreferences): { index: number; width?: number; frozen: boolean }[] {

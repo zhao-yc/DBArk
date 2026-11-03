@@ -1,14 +1,15 @@
 import { z } from 'zod';
 import type { ConnectionProfile } from './contracts';
+import { isGridRowHeight, type GridRowHeight } from './gridRowHeight';
 
 export interface TablePreferenceTarget { connectionId: string; database: string; table: string; }
 export interface TableColumnPreference { name: string; hidden: boolean; width?: number; }
 /** 数组顺序即展示顺序；只记录列布局，不包含行数据、筛选值或 SQL。 */
-export interface TablePreferences { version: 1; columns: TableColumnPreference[]; frozenThrough?: string; }
+export interface TablePreferences { version: 1; columns: TableColumnPreference[]; frozenThrough?: string; rowHeight?: GridRowHeight; }
 export const tablePreferencesLimits = { tables: 500, columns: 4096, entryBytes: 512 * 1024, totalBytes: 8 * 1024 * 1024, minWidth: 64, maxWidth: 2000 } as const;
 export const tablePreferenceTargetSchema = z.object({ connectionId: z.string().min(1).max(200), database: z.string().min(1).max(256), table: z.string().min(1).max(256) }).strict();
 /** 各驱动使用自己的准确名称合同，列布局语义与宽度预算共同维护。 */
-export function tablePreferencesShapeFor(name: z.ZodType<string>, maximum: number = tablePreferencesLimits.columns) { return z.object({ version: z.literal(1), columns: z.array(z.object({ name, hidden: z.boolean(), width: z.number().int().min(tablePreferencesLimits.minWidth).max(tablePreferencesLimits.maxWidth).optional() }).strict()).max(maximum), frozenThrough: name.optional() }).strict().superRefine((preferences, context) => {
+export function tablePreferencesShapeFor(name: z.ZodType<string>, maximum: number = tablePreferencesLimits.columns) { return z.object({ version: z.literal(1), columns: z.array(z.object({ name, hidden: z.boolean(), width: z.number().int().min(tablePreferencesLimits.minWidth).max(tablePreferencesLimits.maxWidth).optional() }).strict()).max(maximum), frozenThrough: name.optional(), rowHeight: z.custom<GridRowHeight>(isGridRowHeight, '数据行高预设无效').optional() }).strict().superRefine((preferences, context) => {
   const names = new Set<string>();
   for (const column of preferences.columns) {
     if (names.has(column.name)) context.addIssue({ code: 'custom', message: '表偏好不能重复列名' });
@@ -35,7 +36,7 @@ function preferenceRecord(input: unknown, allowed: readonly string[], required: 
 
 /** 有界复制稠密列数组，缺省冻结字段保持省略；显式undefined不能冒充有效边界。 */
 export function preferenceInput(input: unknown): unknown {
-  const source = preferenceRecord(input, ['version', 'columns', 'frozenThrough'], ['version', 'columns']);
+  const source = preferenceRecord(input, ['version', 'columns', 'frozenThrough', 'rowHeight'], ['version', 'columns']);
   if (Object.hasOwn(source, 'frozenThrough') && source.frozenThrough === undefined) throw Error('冻结边界必须是当前可见的精确列名');
   const original = source.columns;
   if (!Array.isArray(original) || Object.getPrototypeOf(original) !== Array.prototype) throw Error('表偏好列数组无效');

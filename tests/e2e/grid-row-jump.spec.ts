@@ -6,6 +6,7 @@ import type { Locator } from '@playwright/test';
 import { LocalStore } from '../../src/main/storage';
 import { gridRowJumpZh as text } from '../../src/renderer/locales/gridRowJump.zh-CN';
 import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
+import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
 import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
@@ -109,6 +110,7 @@ test('SQLite 统一可见列宽保留隐藏列与冻结，并通过原保存流�
   await nameWidth.fill('210');
   await modal.getByRole('checkbox', { name: tableGridZh.visible + ' name', exact: true }).uncheck();
   await modal.getByRole('button', { name: tableGridZh.freezeThrough('id'), exact: true }).click();
+  await modal.getByRole('combobox', { name: heightText.label, exact: true }).selectOption('24');
   await modal.getByRole('textbox', { name: batchText.width, exact: true }).fill('240');
   await modal.getByRole('button', { name: batchText.apply, exact: true }).click();
   await expect(idWidth).toHaveValue('240');
@@ -120,10 +122,11 @@ test('SQLite 统一可见列宽保留隐藏列与冻结，并通过原保存流�
   await expect(nameWidth).toHaveValue('210');
   await modal.getByRole('button', { name: tableGridZh.save, exact: true }).click();
   await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('sqlite.tableLayout.get', { connectionId: 'row-jump-offline', database: 'main', table: 'subject_view' }))).preferences).toEqual({
-    version: 1, frozenThrough: 'id', columns: [
+    version: 1, frozenThrough: 'id', rowHeight: 24, columns: [
       { name: 'id', hidden: false, width: fitted },
       { name: 'name', hidden: true, width: 210 },
     ],
   });
+  await expect.poll(() => table.locator('.results-grid .rdg-row').first().evaluate(element => Math.round(element.getBoundingClientRect().height))).toBe(24);
   expect(pageErrors).toEqual([]);
 });

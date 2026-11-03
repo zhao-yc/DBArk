@@ -5,6 +5,7 @@ import { queryResultColumnsZh as text } from '../locales/queryResultColumns.zh-C
 import { zh } from '../locales/zh-CN';
 import { UsageHelp, Modal, ErrorBox  } from './ui';
 import { GridColumnWidthBatch } from './GridColumnWidthBatch';
+import { GridRowHeightField } from './GridRowHeightField';
 import { fitGridColumnWidths } from '../gridColumnFit';
 import { cellPreview, ownCell } from '../lib';
 import { gridColumnWidthBatchZh as widthText } from '../locales/gridColumnWidthBatch.zh-CN';
@@ -12,7 +13,7 @@ import '../queryResultColumns.css';
 
 /** 模态只编辑列草稿；自动列宽抽取少量现有预览，不投递 SQL 或文件请求。 */
 export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, onApply, onClose }: { binding:ResultSelectionBinding;initial:QueryResultColumnLayout;owner:string;isCurrent():boolean;onApply(layout:QueryResultColumnLayout):void;onClose():void }) {
-  const [layout,setLayout]=useState<QueryResultColumnLayout>(()=>({order:[...initial.order],visible:[...initial.visible],...(initial.frozenThrough===undefined?{}:{frozenThrough:initial.frozenThrough})})),[search,setSearch]=useState('');
+  const [layout,setLayout]=useState<QueryResultColumnLayout>(()=>({order:[...initial.order],visible:[...initial.visible],...(initial.frozenThrough===undefined?{}:{frozenThrough:initial.frozenThrough}),...(initial.rowHeight===undefined?{}:{rowHeight:initial.rowHeight})})),[search,setSearch]=useState('');
   const [widthDraft, setWidthDraft] = useState(() => new Map(Array.from(initial.widths ?? [], ([key, width]) => [key, String(width)])));
   const [fitError, setFitError] = useState('');
   const invalid=useRef(false), live=useRef(layout);live.current=layout;
@@ -58,6 +59,7 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
     <div className="modal-content query-result-columns"><UsageHelp><p>{text.hint}</p><p>{text.freezeHint}</p><p>{text.widthHint}</p></UsageHelp>
       <p role="status" aria-label={text.freezeStatus}>{frozenPosition===undefined?text.notFrozen:text.frozenThrough(frozenPosition)}</p>
       <GridColumnWidthBatch disabled={!valid} onApply={applyVisibleWidths} onFit={() => applyVisibleWidths()}/>
+      <GridRowHeightField value={layout.rowHeight} disabled={!valid} onChange={rowHeight => replace(layout, { ...layout, rowHeight })}/>
       <label>{text.search}<input aria-label={text.search} value={search} placeholder={text.searchHint} disabled={!valid} onChange={event=>{if(current())setSearch(event.target.value);}}/></label>
       <div className="query-result-columns-list">{matches.map(key=>{const item=original.get(key)!,index=layout.order.indexOf(key);return <div className="query-result-column" key={key}>
         <label><input type="checkbox" aria-label={text.visible(item.position)} checked={visible.has(key)} disabled={!valid||visible.has(key)&&visible.size===1} onChange={event=>changeVisible(layout,key,event.target.checked)}/><strong>{item.column.name||zh.resultExport.emptyName}</strong><small>{text.ordinal(item.position)} · {item.column.type}</small>{layout.frozenThrough===key&&<span className="tag">{text.boundary}</span>}</label>

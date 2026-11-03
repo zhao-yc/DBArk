@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { LocalStore } from '../../src/main/storage';
 import { queryResultColumnsZh as text } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
+import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { dataDir, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -34,9 +35,12 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   const width = (index: number) => headers.nth(index).evaluate(header => Math.round(header.getBoundingClientRect().width));
   const open = async () => (await navigationMenuItem(query, { name: text.open, exact: true })).click();
   const execute = async () => query.locator('.query-execute-split > button.primary').click();
+  const dataRow = query.locator('.results-grid .rdg-row').first();
+  const rowHeight = () => dataRow.evaluate(element => Math.round(element.getBoundingClientRect().height));
   await execute();
   await expect(headers).toHaveCount(2);
   await expect.poll(() => width(0)).toBe(170);
+  await expect.poll(rowHeight).toBe(32);
   await open();
   await first.fill('280');
   await second.fill('63');
@@ -61,9 +65,12 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   expect(fitted[0]).toBeGreaterThanOrEqual(64);
   expect(fitted[1]).toBeGreaterThan(fitted[0]);
   expect(fitted[1]).toBeLessThanOrEqual(640);
+  await modal.getByRole('combobox', { name: heightText.label, exact: true }).selectOption('56');
   await apply.click();
   await expect.poll(() => width(0)).toBe(fitted[0]);
   await expect.poll(() => width(1)).toBe(fitted[1]);
+  await expect.poll(rowHeight).toBe(56);
+  await expect(dataRow.locator('.grid-row-preview').first()).toHaveCSS('white-space', 'pre-wrap');
   await open();
   const batch = modal.getByRole('textbox', { name: batchText.width, exact: true });
   const batchApply = modal.getByRole('button', { name: batchText.apply, exact: true });
@@ -97,6 +104,7 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   await expect.poll(() => width(0)).toBe(290);
   await execute();
   await expect.poll(() => width(0)).toBe(170);
+  await expect.poll(rowHeight).toBe(32);
   const history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
   expect(history.map(entry => entry.sql)).toEqual([sql, sql]);
   expect(pageErrors).toEqual([]);

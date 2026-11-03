@@ -2,8 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { changeTablePreference, moveTableColumn, reconcileTablePreferences, setVisibleTableColumnWidths, visibleTableKeys } from '../../src/renderer/tableColumnPreferences';
 import { pasteCells } from '../../src/renderer/gridClipboard';
 import type { DraftRow } from '../../src/renderer/dataChanges';
+import { tablePreferencesSchema } from '../../src/shared/tablePreferences';
+import { reconcileSqliteLayout, sqliteLayoutPreferencesSchema } from '../../src/shared/sqliteTableLayout';
+import { readGridRowHeight } from '../../src/shared/gridRowHeight';
 
 describe('表列偏好与可见坐标', () => {
+  it('行高预设与旧布局兼容，调和和列宽调整保留独立行高', () => {
+    const legacy = { version: 1 as const, columns: [{ name: 'id', hidden: false }] };
+    expect(readGridRowHeight(tablePreferencesSchema.parse(legacy).rowHeight)).toBe(32);
+    const layout = { ...legacy, rowHeight: 56 as const };
+    expect(tablePreferencesSchema.parse(layout).rowHeight).toBe(56);
+    expect(sqliteLayoutPreferencesSchema.parse(layout).rowHeight).toBe(56);
+    expect(reconcileTablePreferences(['id', 'other'], layout).rowHeight).toBe(56);
+    expect(reconcileSqliteLayout(['id', 'other'], layout).rowHeight).toBe(56);
+    expect(setVisibleTableColumnWidths(layout, 240).rowHeight).toBe(56);
+    for (const rowHeight of ['24', 23, 57]) {
+      expect(tablePreferencesSchema.safeParse({ ...legacy, rowHeight }).success).toBe(false);
+      expect(sqliteLayoutPreferencesSchema.safeParse({ ...legacy, rowHeight }).success).toBe(false);
+    }
+  });
   it('批量宽度只替换可见列并保留冻结和隐藏宽度', () => {
     const before = { version: 1 as const, frozenThrough: '__proto__', columns: [
       { name: '__proto__', hidden: false, width: 165 },
