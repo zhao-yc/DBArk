@@ -4,6 +4,8 @@ import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 const io = vi.hoisted(() => ({ source: '', eol: '\n', start: 0, end: 0, multi: false, readOnly: false, events: [] as string[], editor: null as any, closeRequest: undefined as undefined | { tabId: string }, rerender: () => {}, format: undefined as undefined | (() => void) }));
+/** QueryTab 直接引入 Monaco 的标记端口，内存 DOM 只允许格式化用例需要的 API。 */
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers() { throw Error('格式化用例不应设置 SQL 语法标记'); } }, MarkerSeverity: { Warning: 4 } }));
 /** 只替换Monaco外界端口；真实QueryTab、store和DOM负责按钮、正文回传及副作用边界。 */
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { useEffect, createElement } = await import('react');
@@ -17,7 +19,7 @@ vi.mock('../../src/renderer/components/SqlEditor', async () => {
       const range = (start: number, end: number) => ({ startLineNumber: position(start).lineNumber, startColumn: position(start).column, endLineNumber: position(end).lineNumber, endColumn: position(end).column, selectionStartLineNumber: position(start).lineNumber, selectionStartColumn: position(start).column, positionLineNumber: position(end).lineNumber, positionColumn: position(end).column, getStartPosition: () => position(start), getEndPosition: () => position(end), isEmpty: () => start === end });
       const model = { isDisposed: () => false, getValue: () => io.source, getValueLength: () => io.source.length, getVersionId: () => version, getOffsetAt: offset, getFullModelRange: () => range(0, io.source.length), getEOL: () => io.eol };
       const subscribe = () => ({ dispose() {} });
-      io.editor = { onDidChangeModel: subscribe, onDidChangeModelContent: subscribe, onDidChangeCursorSelection: subscribe, onDidChangeConfiguration: subscribe, onDidDispose: subscribe, getModel: () => model, getSelections: () => io.multi ? [range(0, 0), range(0, 0)] : [range(io.start, io.end)], getRawOptions: () => ({ readOnly: io.readOnly }), pushUndoStop: () => { io.events.push('undo-stop'); return true; }, executeEdits: (name: string, edits: any[]) => { io.events.push(name); for (const edit of edits) io.source = io.source.slice(0, offset(edit.range.getStartPosition())) + edit.text + io.source.slice(offset(edit.range.getEndPosition())); version++; props.onChange(io.source); return true; }, focus: () => io.events.push('focus') };
+      io.editor = { addAction: subscribe, onDidChangeModel: subscribe, onDidChangeModelContent: subscribe, onDidChangeCursorSelection: subscribe, onDidChangeConfiguration: subscribe, onDidDispose: subscribe, getModel: () => model, getSelections: () => io.multi ? [range(0, 0), range(0, 0)] : [range(io.start, io.end)], getRawOptions: () => ({ readOnly: io.readOnly }), pushUndoStop: () => { io.events.push('undo-stop'); return true; }, executeEdits: (name: string, edits: any[]) => { io.events.push(name); for (const edit of edits) io.source = io.source.slice(0, offset(edit.range.getStartPosition())) + edit.text + io.source.slice(offset(edit.range.getEndPosition())); version++; props.onChange(io.source); return true; }, focus: () => io.events.push('focus') };
       props.onReady?.(io.editor);
     }, []);
     return createElement('div');
@@ -46,7 +48,7 @@ describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', 
     await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: keywordCase }));
     const before = useWorkspace.getState(), binding = before.settings.tabs[0].sourceBinding, model = io.editor.getModel();
     expect(before.settings.tabs[0].sql).toBe(source); expect(io.source).toBe(source.replace(/\r\n|\r|\n/g, modelEol)); expect(io.events).toEqual([]);
-    await click(entry); await vi.waitFor(() => expect(io.events).toHaveLength(4), { timeout: 10000 });
+    await click(entry); await act(async () => vi.waitFor(() => expect(io.events).toHaveLength(4), { timeout: 10000 }));
     expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(io.editor.getModel()).toBe(model); expect(model.getEOL()).toBe(modelEol);
     expect(io.source).toContain("'原文😀'"); expect(io.source).not.toBe(source.replace(/\r\n|\r|\n/g, modelEol)); expect(io.source.replaceAll(modelEol, '')).not.toMatch(/[\r\n]/);
     const after = useWorkspace.getState(); expect(after.settings.tabs[0].sql).toBe(io.source); expect(after.settings.tabs[0].sourceBinding).toBe(binding); expect(after.activeJobs).toEqual(before.activeJobs); expect(after.dirtyTabs).toEqual(before.dirtyTabs); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
@@ -70,7 +72,7 @@ describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', 
     const model = io.editor.getModel(), binding = useWorkspace.getState().settings.tabs[0].sourceBinding;
     await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: keywordCase }));
     expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(io.editor.getModel()).toBe(model);
-    await click(entry); await vi.waitFor(() => expect(io.events).toHaveLength(4), { timeout: 10000 }); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(io.editor.getModel()).toBe(model);
+    await click(entry); await act(async () => vi.waitFor(() => expect(io.events).toHaveLength(4), { timeout: 10000 })); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(io.editor.getModel()).toBe(model);
     expect(io.source).toContain(keywordCase === 'upper' ? 'SELECT' : 'select'); expect(io.source).toContain('MiXeD'); expect(io.source).toContain('t.order'); expect(io.source).toContain('count('); expect(io.source).toContain('@from');
     if (selected) { expect(io.source.startsWith(prefix)).toBe(true); expect(io.source.endsWith(suffix)).toBe(true); }
     expect(useWorkspace.getState().settings.tabs[0].sourceBinding).toBe(binding); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
@@ -97,8 +99,10 @@ describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', 
     if (reason === '过期草稿') await act(async () => useWorkspace.getState().updateTab('t', { sql: 'select 外部新草稿;' }));
     if (reason === '非活动标签') await act(async () => useWorkspace.getState().updateSettings({ activeTabId: '其他' }));
     if (reason === '后台作业') await act(async () => useWorkspace.getState().setBusy('t', true));
-    let dialog: any; if (reason === '弹窗') { dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); document.body.appendChild(dialog); }
-    await click(entry); expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(commands.filter(command => command !== 'settings.save')).toEqual([]); dialog?.parentNode?.removeChild(dialog);
+    const dialog = reason === '弹窗' ? document.createElement('div') : undefined;
+    if (dialog) await act(async () => { dialog.setAttribute('role', 'dialog'); document.body.appendChild(dialog); });
+    await click(entry); expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
+    if (dialog) await act(async () => { dialog.parentNode?.removeChild(dialog); });
   });
 });
 
