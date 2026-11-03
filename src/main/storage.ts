@@ -14,7 +14,7 @@ import { assertObjectBrowserTabs, readObjectBrowserTabs } from '../shared/object
 import { assertQueryFileSourceSettings, queryFileSourceRefSchema, sameQueryFileSource, type QueryFileSourceRef } from '../shared/queryFileSources';
 import { privateQueryFileSourceSchema, type PrivateQueryFileSource } from './queryFileSourceRecords';
 import { privateQueryRecentFilesSchema, rememberQueryFile, type PrivateQueryRecentFile } from './queryFileRecents';
-import { assertQueryLayoutWrite, readQueryEditorHeight, readQueryResultPlacement } from '../shared/queryLayout';
+import { assertQueryLayoutWrite, readQueryEditorHeight, readQueryEditorWidth, readQueryResultPlacement } from '../shared/queryLayout';
 import { assertEditorIndentationWrite, editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { assertEditorWordWrap, defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
 import { assertEditorFontSize, editorFontLimits, readEditorFontSize } from '../shared/editorFont';
@@ -1010,10 +1010,10 @@ export class LocalStore {
     // 布局偏好只属于查询标签，读取时兼容旧记录并局部回退，不写回。
     const tabs = Array.isArray(stored?.tabs) ? stored.tabs.map(tab => {
       if (!tab || typeof tab !== 'object') return tab;
-      const hasHeight = Object.hasOwn(tab, 'queryEditorHeight'), hasPlacement = Object.hasOwn(tab, 'queryResultPlacement');
-      if (!hasHeight && !hasPlacement) return tab;
-      if (tab.kind === 'query') return { ...tab, ...(hasHeight ? { queryEditorHeight: readQueryEditorHeight(tab.queryEditorHeight) } : {}), ...(hasPlacement ? { queryResultPlacement: readQueryResultPlacement(tab.queryResultPlacement) } : {}) };
-      const { queryEditorHeight: _height, queryResultPlacement: _placement, ...unchanged } = tab; return unchanged;
+      const hasHeight = Object.hasOwn(tab, 'queryEditorHeight'), hasWidth = Object.hasOwn(tab, 'queryEditorWidth'), hasPlacement = Object.hasOwn(tab, 'queryResultPlacement');
+      if (!hasHeight && !hasWidth && !hasPlacement) return tab;
+      if (tab.kind === 'query') return { ...tab, ...(hasHeight ? { queryEditorHeight: readQueryEditorHeight(tab.queryEditorHeight) } : {}), ...(hasWidth ? { queryEditorWidth: readQueryEditorWidth(tab.queryEditorWidth) } : {}), ...(hasPlacement ? { queryResultPlacement: readQueryResultPlacement(tab.queryResultPlacement) } : {}) };
+      const { queryEditorHeight: _height, queryEditorWidth: _width, queryResultPlacement: _placement, ...unchanged } = tab; return unchanged;
     }) : stored?.tabs ?? defaultSettings.tabs;
     const restoredTabs = this.queryFileCanonicalTabs(readObjectBrowserTabs(tabs));
     // 过滤坏对象页后同步修复返回的活动ID，避免显示首标签但命令仍绑定已丢弃页；原配置不写盘。

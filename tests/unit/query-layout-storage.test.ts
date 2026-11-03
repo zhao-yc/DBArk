@@ -36,7 +36,7 @@ function main(store:LocalStore){const text=readFileSync(new URL('../../src/main/
 }
 
 it('真实Main严格读写后SQLite重启逐标签保持高度和结果位置，缺项不补写，SQL/来源/偏好不变',async()=>{
- const {file,store}=await fixture(),settings=original();settings.tabs[0].queryEditorHeight=130;settings.tabs[0].queryResultPlacement='beside';settings.tabs[1].queryEditorHeight=8192;settings.tabs.push({id:'legacy',kind:'query',title:'旧缺项',connectionId:'ram',sql:'原文'});
+ const {file,store}=await fixture(),settings=original();settings.tabs[0].queryEditorHeight=130;settings.tabs[0].queryEditorWidth=510;settings.tabs[0].queryResultPlacement='beside';settings.tabs[1].queryEditorHeight=8192;settings.tabs.push({id:'legacy',kind:'query',title:'旧缺项',connectionId:'ram',sql:'原文'});
  const port=main(store);await port.route('settings.save',settings);expect(await port.route('settings.get',{})).toEqual(settings);close(store);
  const restored=await reopen(file);expect(restored.settings()).toEqual(settings);expect(Object.hasOwn(restored.settings().tabs[3],'queryEditorHeight')).toBe(false);expect(readQueryEditorHeight(restored.settings().tabs[3].queryEditorHeight)).toBe(300);
  expect(restored.queries()).toEqual([]);expect(restored.history()).toEqual([]);expect(restored.tasks()).toEqual([]);

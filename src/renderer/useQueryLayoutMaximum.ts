@@ -1,5 +1,4 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { queryResultBesideMinimum } from '../shared/queryLayout';
 
 /** 外层及结果内部工具条分别计费，网格内容另留96像素；不足时仅视觉压缩编辑区。 */
 export function queryLayoutMaximum(height: number, chrome: number, maximum: number, resultChrome=0): number {
@@ -19,14 +18,14 @@ function queryLayoutChildren(root: Element): Element[] {
 }
 
 /** 测量当前标签的实际可用区，隐藏标签不沿用全局窗口高度；只调整显示边界，不保存偏好。 */
-export function useQueryLayoutMaximum(root: RefObject<HTMLDivElement | null>, maximum: number, setBesideAvailable?: (available: boolean) => void): number {
+export function useQueryLayoutMaximum(root: RefObject<HTMLDivElement | null>, maximum: number, setAvailableWidth?: (width: number) => void): number {
   const [value, setValue] = useState(maximum), observer = useRef<ResizeObserver | null>(null), watched = useRef(new Set<Element>());
   const minimum=useRef<{element:HTMLDivElement;height:number}|undefined>(undefined);
   /** 只扣固定chrome，编辑区与弹性结果内容不反向参与保存高度。 */
   function measure() {
     const element = root.current; if (!element) return;
     const bounds = element.getBoundingClientRect(), children = queryLayoutChildren(element);
-    setBesideAvailable?.(bounds.width >= queryResultBesideMinimum);
+    setAvailableWidth?.(element.clientWidth);
     let chrome = 0;
     for (const child of children) {
       if (child.classList.contains('sql-editor-wrap') || child.classList.contains('result-body')) continue;
@@ -46,7 +45,7 @@ export function useQueryLayoutMaximum(root: RefObject<HTMLDivElement | null>, ma
     if (element) { observer.current?.observe(element); watched.current.add(element); }
     window.addEventListener('resize', measure);
     return () => { observer.current?.disconnect(); observer.current = null; watched.current.clear(); window.removeEventListener('resize', measure); };
-  }, [maximum, setBesideAvailable]);
+  }, [maximum, setAvailableWidth]);
   // 新结果/错误/固定结果工具条可改变占用，React提交后补观察；相同测量不会重渲染。
   useLayoutEffect(() => {
     const children = root.current ? queryLayoutChildren(root.current) : [];

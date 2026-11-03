@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import { queryLayoutZh as text } from '../locales/queryLayout.zh-CN';
+import { queryLayoutWidthLimits } from '../../shared/queryLayout';
 
 /** 手势只持有当次布局租约；实际保存由父页从最新工作台合并，不持有旧tabs。 */
 export interface QueryLayoutLease {
@@ -10,11 +11,12 @@ export interface QueryLayoutLease {
 }
 interface Props {
   value: number; min: number; max: number; defaultValue: number; controls: string; scope: string; disabled?: boolean;
+  dimension?: 'height' | 'width';
   begin(cancel: () => void): QueryLayoutLease | null;
   onPreview(value: number | null): void;
 }
-interface Drag { pointerId: number; target: HTMLElement; startY: number; startHeight: number; height: number; lease: QueryLayoutLease; cleanup(): void; }
-/** 窗口不足时只压缩显示；不得把视觉高度当成持久偏好写回。 */
+interface Drag { pointerId: number; size: number; lease: QueryLayoutLease; cleanup(): void; }
+/** 窗口不足时只压缩显示，不把显示尺寸写回偏好。 */
 export function queryEditorVisualHeight(value: number, maximum: number): number {
   return Math.max(0, Math.min(Math.max(0, Math.floor(maximum)), Math.round(value)));
 }
@@ -30,36 +32,39 @@ export function QueryLayoutSplitter(props: Props) {
     if (alive.current) latest.current.onPreview(null);
   }
   useLayoutEffect(() => { alive.current = true; return () => { alive.current = false; cancel(); }; }, []);
-  useLayoutEffect(() => { cancel(); }, [props.scope, props.value, props.min, props.max, props.disabled]);
+  useLayoutEffect(() => { cancel(); }, [props.scope, props.value, props.min, props.max, props.disabled, props.dimension]);
 
   /** 仅主指针领取一次布局租约，拖动事件不持有或保存工作台快照。 */
   function start(event: PointerEvent<HTMLDivElement>) {
     const current = latest.current;
-    if (drag.current || current.disabled || current.max < current.min || event.button !== 0 || event.isPrimary === false || !Number.isFinite(event.clientY)) return;
+    const position = (point: { clientX: number; clientY: number }) => current.dimension === 'width' ? point.clientX : point.clientY;
+    const origin = position(event);
+    if (drag.current || current.disabled || current.max < current.min || event.button !== 0 || event.isPrimary === false || !Number.isFinite(origin)) return;
     const lease = current.begin(cancel); if (!lease) return;
-    const target = event.currentTarget, pointerId = event.pointerId, startY = event.clientY;
-    const startHeight = queryEditorVisualHeight(lease.value, current.max);
+    const target = event.currentTarget, pointerId = event.pointerId;
+    const startSize = queryEditorVisualHeight(lease.value, current.max);
     /** 所有原生事件都核当次租约；另一个pointer及旧闭包不能修改当前拖动。 */
     const valid = (next: globalThis.PointerEvent) => drag.current === session && next.pointerId === pointerId;
     const move = (next: globalThis.PointerEvent) => {
       if (!valid(next)) return;
       if (!lease.current()) { cancel(); return; }
-      if (!Number.isFinite(next.clientY)) return;
-      session.height = Math.round(Math.max(current.min, Math.min(current.max, startHeight + next.clientY - startY)));
-      latest.current.onPreview(session.height);
+      const point = position(next);
+      if (!Number.isFinite(point)) return;
+      session.size = Math.round(Math.max(current.min, Math.min(current.max, startSize + point - origin)));
+      latest.current.onPreview(session.size);
     };
     const up = (next: globalThis.PointerEvent) => {
       if (!valid(next)) return;
       if (!lease.current()) { cancel(); return; }
       move(next); if (drag.current !== session) return;
       drag.current = null; session.cleanup();
-      try { if (session.height !== session.startHeight) lease.commit(session.height); }
+      try { if (session.size !== startSize) lease.commit(session.size); }
       finally { lease.dispose(); if (alive.current) latest.current.onPreview(null); }
     };
     const stopped = (next: globalThis.PointerEvent) => { if (valid(next)) cancel(); };
     const key = (next: globalThis.KeyboardEvent) => { if (next.key === 'Escape' && drag.current === session) { next.preventDefault(); next.stopPropagation(); cancel(); } };
     const blur = () => { if (drag.current === session) cancel(); };
-    const session: Drag = { pointerId, target, startY, startHeight, height: startHeight, lease, cleanup() {
+    const session: Drag = { pointerId, size: startSize, lease, cleanup() {
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', stopped);
       window.removeEventListener('keydown', key, true); window.removeEventListener('blur', blur);
       try { if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId); } catch { /* 销毁中的节点仍须完成其余监听与租约回收。 */ }
@@ -75,7 +80,8 @@ export function QueryLayoutSplitter(props: Props) {
     const current = latest.current;
     if (event.key === 'Escape') { cancel(); return; }
     if (drag.current || current.disabled || event.altKey || event.ctrlKey || event.metaKey) return;
-    const restore = event.key === 'Home', direction = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+    const width = current.dimension === 'width';
+    const restore = event.key === 'Home', direction = event.key === (width ? 'ArrowLeft' : 'ArrowUp') ? -1 : event.key === (width ? 'ArrowRight' : 'ArrowDown') ? 1 : 0;
     if (!restore && (!direction || current.max < current.min)) return;
     event.preventDefault();
     const lease = current.begin(cancel); if (!lease) return;
@@ -93,6 +99,9 @@ export function QueryLayoutSplitter(props: Props) {
     try { if (lease.current() && lease.value !== latest.current.defaultValue) lease.commit(latest.current.defaultValue); }
     finally { lease.dispose(); }
   }
-  const visual = queryEditorVisualHeight(drag.current?.height ?? props.value, props.max);
-  return <div className="query-layout-bar"><div className="query-layout-handle" role="separator" tabIndex={props.disabled ? -1 : 0} aria-orientation="horizontal" aria-label={text.separator} aria-controls={props.controls} aria-valuemin={Math.min(props.min, Math.max(0, props.max))} aria-valuemax={Math.max(0, props.max)} aria-valuenow={visual} aria-valuetext={visual === props.value ? text.height(visual) : text.limited(visual, props.value)} aria-disabled={props.disabled || props.max < props.min} aria-keyshortcuts="ArrowUp ArrowDown Home Escape" title={text.hint} onPointerDown={start} onKeyDown={keyboard} onLostPointerCapture={event => { if (drag.current?.pointerId === event.pointerId) cancel(); }}/><button type="button" disabled={props.disabled} onClick={restore}>{text.restore}</button></div>;
+  const width = props.dimension === 'width';
+  const visual = queryEditorVisualHeight(drag.current?.size ?? props.value, props.max);
+  const valueText = width ? (visual === props.value ? text.width(visual) : text.widthLimited(visual, props.value)) : (visual === props.value ? text.height(visual) : text.limited(visual, props.value));
+  const restoreLabel = width ? text.widthRestore : text.restore;
+  return <div className={`query-layout-bar${width ? ' query-layout-bar-vertical' : ''}`} style={width ? { width: queryLayoutWidthLimits.separatorWidth } : undefined}><div className="query-layout-handle" role="separator" tabIndex={props.disabled ? -1 : 0} aria-orientation={width ? 'vertical' : 'horizontal'} aria-label={width ? text.widthSeparator : text.separator} aria-controls={props.controls} aria-valuemin={Math.min(props.min, Math.max(0, props.max))} aria-valuemax={Math.max(0, props.max)} aria-valuenow={visual} aria-valuetext={valueText} aria-disabled={props.disabled || props.max < props.min} aria-keyshortcuts={width ? 'ArrowLeft ArrowRight Home Escape' : 'ArrowUp ArrowDown Home Escape'} title={width ? text.widthHint : text.hint} onPointerDown={start} onKeyDown={keyboard} onLostPointerCapture={event => { if (drag.current?.pointerId === event.pointerId) cancel(); }}/><button type="button" aria-label={restoreLabel} title={width ? restoreLabel : undefined} disabled={props.disabled} onClick={restore}>{width ? '↺' : restoreLabel}</button></div>;
 }

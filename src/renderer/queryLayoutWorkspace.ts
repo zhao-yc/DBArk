@@ -1,4 +1,4 @@
-import { queryLayoutLimits, readQueryEditorHeight } from '../shared/queryLayout';
+import { queryLayoutLimits, queryLayoutWidthLimits, readQueryEditorHeight, readQueryEditorWidth, readQueryResultPlacement } from '../shared/queryLayout';
 import { useWorkspace, type WorkspaceTab } from './store';
 import { beginQueryLayoutLease } from './queryLayoutLease';
 
@@ -11,20 +11,24 @@ export function queryLayoutTarget(tab: WorkspaceTab, connectionVersion: number):
   return JSON.stringify([tab.id, tab.kind, tab.connectionId, tab.database ?? null, tab.databaseContext ?? null, tab.table ?? null, connectionVersion]);
 }
 /** 每次实际提交从最新store合并本查询字段；监听同步关闭/切页/目标或偏好ABA。 */
-export function beginWorkspaceQueryLayout(tab: WorkspaceTab, connectionVersion: number, alive: () => boolean, cancel: () => void) {
+export function beginWorkspaceQueryLayout(tab: WorkspaceTab, connectionVersion: number, alive: () => boolean, cancel: () => void, dimension: 'height' | 'width' = 'height') {
   const expected = queryLayoutTarget(tab, connectionVersion);
+  const placement = readQueryResultPlacement(tab.queryResultPlacement);
+  const horizontal = dimension === 'width';
   return beginQueryLayoutLease({
     /** 每次重新核实际活动标签、目标、连接代次及存续；读取坏偏好只回退默认。 */
     read() {
       const state = useWorkspace.getState(), current = state.settings.tabs.find(item => item.id === tab.id);
       const key = current ? queryLayoutTarget(current, state.connectionVersions[current.connectionId] ?? 0) : '';
-      return { state, key, value: readQueryEditorHeight(current?.queryEditorHeight), available: alive() && !!current && current.kind === 'query' && key === expected && queryLayoutActiveTab(state.settings) === current.id && state.connections.some(profile => profile.id === current.connectionId) && !document.querySelector('[role="dialog"]') };
+      const value = horizontal ? readQueryEditorWidth(current?.queryEditorWidth) : readQueryEditorHeight(current?.queryEditorHeight);
+      return { state, key, value, available: alive() && !!current && current.kind === 'query' && key === expected && readQueryResultPlacement(current.queryResultPlacement) === placement && queryLayoutActiveTab(state.settings) === current.id && state.connections.some(profile => profile.id === current.connectionId) && !document.querySelector('[role="dialog"], [role="alertdialog"]') };
     },
     subscribe: changed => useWorkspace.subscribe(changed),
     write(current, value) {
-      // read/current与写入之间无await；只变高度，绝不拿pointerdown时的tabs还原新SQL或来源。
-      current.updateSettings({ tabs: current.settings.tabs.map(item => item.id === tab.id ? { ...item, queryEditorHeight: value } : item) });
+      // 只更新本次拖动的尺寸，从最新标签保留并行编辑的 SQL 和来源。
+      const patch = horizontal ? { queryEditorWidth: value } : { queryEditorHeight: value };
+      current.updateSettings({ tabs: current.settings.tabs.map(item => item.id === tab.id ? { ...item, ...patch } : item) });
       return true;
     },
-  }, { min: queryLayoutLimits.minEditorHeight, max: queryLayoutLimits.maxEditorHeight }, cancel);
+  }, horizontal ? { min: queryLayoutWidthLimits.minEditorWidth, max: queryLayoutWidthLimits.maxEditorWidth } : { min: queryLayoutLimits.minEditorHeight, max: queryLayoutLimits.maxEditorHeight }, cancel);
 }

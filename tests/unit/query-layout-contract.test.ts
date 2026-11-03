@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { assertQueryLayoutWrite, queryLayoutLimits, readQueryEditorHeight, readQueryResultPlacement } from '../../src/shared/queryLayout';
+import { assertQueryLayoutWrite, queryEditorWidthMaximum, queryLayoutLimits, readQueryEditorHeight, readQueryEditorWidth, readQueryResultPlacement } from '../../src/shared/queryLayout';
 
 it('查询高度合同固定像素范围与缺省值，缺项保持旧调用兼容', () => {
   expect(queryLayoutLimits).toEqual({ minEditorHeight: 130, maxEditorHeight: 8192, defaultEditorHeight: 300 });
@@ -34,4 +34,16 @@ it('仅查询标签可保存下方或右侧，缺项与坏值读取时使用下�
   expect(() => assertQueryLayoutWrite({ tabs: [{ kind: 'table', queryResultPlacement: 'beside' }] })).toThrow('只有查询');
   const inherited = Object.assign(Object.create({ queryResultPlacement: 'beside' }), { kind: 'query' });
   expect(() => assertQueryLayoutWrite({ tabs: [inherited] })).toThrow('有效的结果位置');
+});
+
+it('宽度只接受查询标签的整数偏好，实际可用区为结果和分隔条留位', () => {
+  expect(readQueryEditorWidth(undefined)).toBe(420);
+  expect(readQueryEditorWidth(510)).toBe(510);
+  expect(queryEditorWidthMaximum(800)).toBe(378);
+  expect(queryEditorWidthMaximum(100)).toBe(0);
+  for (const value of [undefined, '420', 259, 420.5, Infinity, 8193]) {
+    expect(readQueryEditorWidth(value)).toBe(420);
+    expect(() => assertQueryLayoutWrite({ tabs: [{ kind: 'query', queryEditorWidth: value }] })).toThrow('编辑区宽度');
+  }
+  expect(() => assertQueryLayoutWrite({ tabs: [{ kind: 'table', queryEditorWidth: 420 }] })).toThrow('只有查询');
 });

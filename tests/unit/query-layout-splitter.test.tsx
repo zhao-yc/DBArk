@@ -81,3 +81,18 @@ it('旧回调遇到新手势也无权提交或清除新监听，只有新pointer
   await act(async () => old(Object.assign(new MemoryEvent('pointerup'), { pointerId: 7, clientY: 240 }) as unknown as Event)); expect(commits).toEqual([]); expect(windowListeners.get('pointerup')!.size).toBe(1);
   await native('pointerup', 140); expect(commits).toEqual([340]);
 });
+
+it('宽度模式只处理横向输入，Escape 取消预览，键盘和 Home 仍各自提交', async () => {
+  preferred = 420;
+  props = { ...props, dimension: 'width', value: preferred, min: 260, defaultValue: 420 };
+  await mount();
+  expect(handle().getAttribute('aria-orientation')).toBe('vertical');
+  await act(async () => handle().dispatchEvent(Object.assign(new MemoryEvent('pointerdown'), { pointerId: 7, clientX: 500, clientY: 100, isPrimary: true })));
+  await act(async () => { for (const callback of [...windowListeners.get('pointermove')!]) callback(Object.assign(new MemoryEvent('pointermove'), { pointerId: 7, clientX: 555, clientY: 10 }) as unknown as Event); });
+  expect(preview).toHaveBeenLastCalledWith(475);
+  await act(async () => { for (const callback of [...windowListeners.get('keydown')!]) callback(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' }) as unknown as Event); });
+  expect(preview).toHaveBeenLastCalledWith(null);
+  expect(commits).toEqual([]);
+  for (const key of ['ArrowDown', 'ArrowRight', 'Home']) await act(async () => handle().dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key })));
+  expect(commits).toEqual([430, 420]);
+});

@@ -240,9 +240,30 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
       const editorBox = await query().locator('.query-editor-region').boundingBox(), resultBox = await query().locator('.result-body').boundingBox();
       return !!editorBox && !!resultBox && editorBox.x + editorBox.width <= resultBox.x + 1 && Math.min(editorBox.y + editorBox.height, resultBox.y + resultBox.height) - Math.max(editorBox.y, resultBox.y) >= 96;
     }).toBe(true));
+    const widthHandle = () => query().getByRole('separator', { name: '调整 SQL 编辑区和结果区宽度', exact: true });
+    await step(() => expect(widthHandle()).toHaveAttribute('aria-valuenow', '420'));
+    await step(() => widthHandle().press('ArrowRight'));
+    await step(() => expect(widthHandle()).toHaveAttribute('aria-valuenow', '430'));
+    await step(() => widthHandle().press('Home'));
+    const grip = await step(() => widthHandle().boundingBox());
+    if (!grip) throw Error('右侧布局分隔条不可见');
+    const gripX = grip.x + grip.width / 2, gripY = grip.y + grip.height / 2;
+    await step(async () => {
+      await page.mouse.move(gripX, gripY); await page.mouse.down();
+      try { await page.mouse.move(gripX + 90, gripY, { steps: 5 }); }
+      finally { await page.mouse.up(); }
+    });
+    await step(() => expect(widthHandle()).toHaveAttribute('aria-valuenow', '510'));
+    const savedWidth = async () => { const state = await settings(); return state.tabs.find(tab => tab.id === state.activeTabId)?.queryEditorWidth; };
+    await step(() => expect.poll(savedWidth).toBe(510));
+    await resize(1120, 760);
+    await step(() => expect(query()).toHaveAttribute('data-result-layout', 'beside'));
+    await step(() => expect.poll(async () => Number(await widthHandle().getAttribute('aria-valuenow'))).toBeLessThan(510));
+    expect(await savedWidth()).toBe(510);
     await resize(1024, 760);
     await step(() => expect(query()).toHaveAttribute('data-result-layout', 'below'));
     await resize(1320, 860); await step(() => expect(query()).toHaveAttribute('data-result-layout', 'beside'));
+    await step(() => expect(widthHandle()).toHaveAttribute('aria-valuenow', '510'));
     await changePlacement('仅显示结果');
     await step(() => expect(query().locator('.monaco-editor')).toBeHidden()); await step(() => expect(grid).toBeVisible());
     await changePlacement('结果在下方'); await step(() => expect(query().locator('.monaco-editor')).toBeVisible());
@@ -514,6 +535,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     stage = '同profile严格owned重启'; await runtime.restartOwnedDesktop(info); owner = runtime.ownedDesktopResources(info); application = owner.application; page = owner.page; originalProcess = application.process(); closed = false; check(); expect(originalProcess.pid).not.toBe(firstPid);
     await arm(profile.id); armed = true;
     await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible()); expect(await settings()).toEqual(persisted);
+    await resize(1320, 860); await step(() => expect(widthHandle()).toHaveAttribute('aria-valuenow', '510'));
     await step(() => expect.poll(async () => { const state = await settings(); return state.tabs.find(tab => tab.id === state.activeTabId)?.queryResultPlacement; }).toBe('beside'));
     expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(profiles); expect(await tasks()).toEqual(firstTasks); expect(await history()).toEqual(firstHistory); expect(disk()).toEqual(committedDisk);
     expect((await step(audit)).executions).toBe(0); await step(() => expect(query().getByRole('grid')).toHaveCount(0));
