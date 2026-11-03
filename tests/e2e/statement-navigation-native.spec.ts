@@ -49,6 +49,15 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     return { uri: model.uri.toString(), version: model.getVersionId(), source: model.getValue(), undo: model.canUndo(), redo: model.canRedo(), selection: { start: model.getOffsetAt(selection.getStartPosition()), end: model.getOffsetAt(selection.getEndPosition()) } };
   }));
   const unchanged = (a: Awaited<ReturnType<typeof model>>, b: Awaited<ReturnType<typeof model>>) => expect({ uri: a.uri, version: a.version, source: a.source, undo: a.undo, redo: a.redo }).toEqual({ uri: b.uri, version: b.version, source: b.source, undo: b.undo, redo: b.redo });
+  /** 通过真实菜单的原命令入口，单独核对已注册的加速键。 */
+  const nativeAdjacent = async (id: 'previous-statement' | 'next-statement') => {
+    await expect.poll(() => step(() => application.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled === true, id))).toBe(true);
+    await step(() => application.evaluate(({ Menu, BrowserWindow }, id) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById(id), windows = BrowserWindow.getAllWindows(), key = id === 'previous-statement' ? 'PageUp' : 'PageDown';
+      if (!item?.enabled || !item.accelerator?.endsWith(key) || windows.length !== 1) throw Error('相邻语句的原生命令或快捷键不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    }, id));
+  };
   try {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']);
     if (dialect === 'sqlite') { const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite'), db = new DatabaseSync(sqlitePath); try { db.exec("CREATE TABLE sample(id INTEGER PRIMARY KEY,note TEXT); INSERT INTO sample VALUES(1,'导航控制行😀')"); } finally { db.close(); } canonical = realpathSync(sqlitePath); }
@@ -233,6 +242,14 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     await step(() => expect(panel().getByRole('listitem').nth(2).locator('code')).not.toContainText('hidden_needle')); await step(() => panel().getByRole('textbox', { name: text.search, exact: true }).fill('hidden_needle')); await step(() => expect(panel().getByRole('status')).toHaveText(text.total(1)));
     await step(() => panel().getByRole('button', { name: `${text.select} 3`, exact: true }).click()); const selected = await model(); unchanged(before, selected); expect(selected.selection).toEqual({ start: ranges[2].start, end: ranges[2].end });
     await step(() => panel().getByRole('textbox', { name: text.search, exact: true }).fill('')); await step(() => panel().getByRole('button', { name: text.next, exact: true }).click()); await step(() => expect(panel().getByRole('listitem')).toHaveCount(3)); await step(() => panel().getByRole('button', { name: /^第 13 条/ }).click()); const jumped = await model(); unchanged(before, jumped); expect(jumped.selection).toEqual({ start: ranges[12].start, end: ranges[12].start }); await step(() => expect(panel().locator('li.active')).toHaveCount(1));
+    stage = '相邻导航复用原目录，保留搜索和分页';
+    const search = panel().getByRole('textbox', { name: text.search, exact: true });
+    await step(() => search.fill('duplicate')); await step(() => panel().getByRole('button', { name: text.next, exact: true }).click());
+    await click(query(), uiCommandLabels['previous-statement']);
+    await expect.poll(async () => (await model()).selection).toEqual({ start: ranges[11].start, end: ranges[11].start });
+    await nativeAdjacent('next-statement'); await expect.poll(async () => (await model()).selection).toEqual(jumped.selection);
+    await step(() => expect(search).toHaveValue('duplicate')); await step(() => expect(panel().getByRole('listitem')).toHaveCount(1));
+    expect((await workers()).filter(value => value.navigation)).toHaveLength(1); unchanged(before, await model());
     await step(() => application.evaluate(({ BrowserWindow }) => { const windows = BrowserWindow.getAllWindows(); if (windows.length !== 1) throw Error('非唯一导航窗口'); windows[0].setSize(1150, 760); }));
     await step(() => expect.poll(async () => page.evaluate(() => { const node = document.querySelector('.statement-navigation'); const editor = document.querySelector('.sql-editor-wrap > [aria-busy] .monaco-editor'), e = editor?.getBoundingClientRect(), n = node?.getBoundingClientRect(); return !!node && !!e && !!n && node.scrollWidth <= node.clientWidth + 1 && e.height >= 130 && e.right <= n.left + 1 && n.bottom <= e.bottom + 1; })).toBe(true));
     await step(async () => info.attach('实际导航-' + dialect, { body: await page.screenshot(), contentType: 'image/png' }));
@@ -287,6 +304,13 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     const selectionWorkers = (await workers()).filter(value => value.navigation);
     expect(selectionWorkers).toHaveLength(5);
     expect(selectionWorkers.every(value => value.ready === 1 && value.sent === 1 && value.replied === 1 && value.terminated === 1)).toBe(true);
+    stage = '未打开目录时直接跳过复合语句并释放原线程';
+    await goTo(compoundLine); await nativeAdjacent('next-statement');
+    await expect.poll(async () => (await model()).selection).toEqual({ start: ranges[2].start, end: ranges[2].start });
+    await expect(panel()).toHaveCount(0); unchanged(finalModel, await model());
+    const directWorkers = (await workers()).filter(value => value.navigation);
+    expect(directWorkers).toHaveLength(6); expect(directWorkers.at(-1)).toMatchObject({ ready: 1, sent: 1, replied: 1, terminated: 1 });
+    expect((await audit()).denied).toEqual([]);
     stage = '原生选项启用 SQL 语句折叠并保留原模型';
     type EditorToggle = 'editor-sql-folding' | 'editor-line-numbers' | 'editor-match-brackets';
     const editorMenuState = (id: EditorToggle) => step(() => application.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.checked, id));

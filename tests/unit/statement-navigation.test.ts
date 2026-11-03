@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { analyzeStatementNavigation, currentNavigableStatement, statementNavigationPreview, validStatementNavigationResult } from '../../src/shared/statementNavigation';
+import { adjacentNavigableStatement, analyzeStatementNavigation, currentNavigableStatement, statementNavigationPreview, validStatementNavigationResult } from '../../src/shared/statementNavigation';
 import { sqlStatementRanges } from '../../src/engine/currentStatement';
 import { sqliteStatementRanges } from '../../src/engine/sqlite/currentStatement';
 import { SqlScriptScanner as EngineScanner } from '../../src/engine/sql';
@@ -21,6 +21,18 @@ it('选中当前语句区分紧邻语句、空白、行末和代理对边界', (
   expect(index(third.start - 3)).toBe(-1);
   expect(index(source.indexOf('😀') + 1)).toBe(-1);
   expect(index(source.length)).toBe(2);
+});
+
+it.each(['mysql', 'mariadb', 'sqlite'] as const)('%s 相邻导航跨语句间隔，首尾不循环，拒绝断开的原文位置', dialect => {
+  const source = "SELECT '😀';SELECT 2;\r\n  \r\nSELECT 3;", result = analyzeStatementNavigation(source, dialect, mode);
+  if (result.status !== 'ready') throw Error('本例分段未完成');
+  const [first, second, third] = result.statements;
+  const adjacent = (offset: number, direction: -1 | 1) => adjacentNavigableStatement(source, result.statements, offset, direction);
+  expect(adjacent(first.start, -1)).toBeUndefined(); expect(adjacent(first.start, 1)).toBe(second);
+  expect(adjacent(second.start, -1)).toBe(first); expect(adjacent(second.start, 1)).toBe(third);
+  expect(adjacent(second.delimiterEnd + 2, -1)).toBe(second); expect(adjacent(second.delimiterEnd + 2, 1)).toBe(third);
+  expect(adjacent(source.length, 1)).toBeUndefined(); expect(adjacent(source.length, -1)).toBe(second);
+  expect(adjacent(second.delimiterEnd + 1, 1)).toBeUndefined(); expect(adjacent(source.indexOf('😀') + 1, -1)).toBeUndefined();
 });
 /** 逐项与原真正执行入口核对，不用新导航器自身的预设分段充当正确性依据。 */
 it.each(['mysql', 'mariadb', 'sqlite'] as const)('%s原执行范围与导航完全一致，重复正文/UTF16/注释不猜位置', dialect => {

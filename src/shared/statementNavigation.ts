@@ -63,6 +63,16 @@ export function currentNavigableStatement(source: string, ranges: readonly Navig
   return ranges.findIndex(range => offset >= range.start && offset === range.delimiterEnd);
 }
 
+/** 从语句内跳相邻语句，从间隔跳指定方向最近的一条；首尾不循环。 */
+export function adjacentNavigableStatement(source: string, ranges: readonly NavigableStatement[], offset: number, direction: -1 | 1): NavigableStatement | undefined {
+  if (!boundary(source, offset)) return undefined;
+  const current = currentNavigableStatement(source, ranges, offset);
+  if (current >= 0) return ranges[current + direction];
+  if (direction === 1) return ranges.find(range => range.start > offset);
+  for (let index = ranges.length - 1; index >= 0; index--) if (ranges[index].delimiterEnd <= offset) return ranges[index];
+  return undefined;
+}
+
 /** 预览仅在本地从原文生成，不改分段；跳过普通前导注释，执行注释保留给用户辨认。 */
 export function statementNavigationPreview(source: string, range: NavigableStatement, dialect: 'mysql' | 'mariadb' | 'sqlite'): string {
   let text = source.slice(range.start, range.end), index = 0;

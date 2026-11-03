@@ -4,6 +4,7 @@ export const statementNavigationZh = {
   entry: uiCommandLabels['statement-navigation'], title: '语句导航', group: '脚本导航', loading: '正在读取原脚本语句…',
   hint: '跳转或选中正文不会执行 SQL。分段按当前会话模式；执行当前语句仍使用原脚本。',
   noCurrent: '光标所在位置没有可选中的语句。',
+  noPrevious: '光标前没有可跳转的语句。', noNext: '光标后没有可跳转的语句。',
   search: '搜索语句正文', empty: '没有匹配的语句。', total: (count: number) => `共 ${count} 条语句`,
   position: (index: number, line: number) => `第 ${index + 1} 条 · 第 ${line} 行`,
   select: '选中正文', refresh: '刷新语句导航', cancel: '取消读取', close: '关闭语句导航', previous: '上一页', next: '下一页', page: (page: number, pages: number) => `${page} / ${pages}`,

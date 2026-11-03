@@ -2,7 +2,7 @@ import { StatementNavigationController, type StatementNavigationView } from '../
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { StatementNavigationWorkerClient } from '../statementNavigationWorkerClient';
 import StatementNavigationWorker from '../statementNavigation.worker?worker';
-import { currentNavigableStatement, type NavigableStatement, type StatementNavigationResult } from '../../shared/statementNavigation';
+import { adjacentNavigableStatement, currentNavigableStatement, type NavigableStatement, type StatementNavigationResult } from '../../shared/statementNavigation';
 import { statementNavigationZh as navigationText } from '../locales/statementNavigation.zh-CN';
 import { editor as monacoEditor, MarkerSeverity } from 'monaco-editor';
 import { SqlSyntaxCheckController, type SqlSyntaxCheckView } from '../sqlSyntaxCheckController';
@@ -1639,14 +1639,23 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && (workspace.connectionVersions[tab.connectionId] ?? 0) === connectionVersion
       && !closeRequestRef.current && !document.querySelector('[role="dialog"], [role="alertdialog"]');
   }
-  /** 目录和单次选中共用原分段线程，均不创建连接、会话或查询任务。 */
-  function openStatementNavigation(instance = editor.current, selectCurrent = false): void {
+  /** 目录、选中和相邻跳转共用原分段规则，均不创建连接、会话或查询任务。 */
+  function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' = 'panel'): void {
     if (!queryMenuCurrent() || !connection || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || navigationIntent.current?.controller.busy) return;
     const model = instance.getModel(); if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
-    const selections = selectCurrent ? instance.getSelections() : undefined;
-    if (selectCurrent && (resultsOnly || selections?.length !== 1)) return;
+    const oneShot = action !== 'panel', direction = action === 'previous' ? -1 : action === 'next' ? 1 : undefined;
+    const selections = oneShot ? instance.getSelections() : undefined;
+    if (oneShot && (resultsOnly || selections?.length !== 1)) return;
     const originalSelection = selections?.[0];
     const offset = originalSelection ? model.getOffsetAt(originalSelection.getPosition()) : 0;
+    const noTarget = action === 'previous' ? navigationText.noPrevious : action === 'next' ? navigationText.noNext : navigationText.noCurrent;
+    // 面板已经持有准确原模型的目录时，直接导航并保留搜索、分页和当前面板。
+    const existing = navigationIntent.current;
+    if (direction && existing?.model === model && existing.instance === instance && existing.result && existing.controller.current()) {
+      const range = adjacentNavigableStatement(existing.source, existing.result.statements, offset, direction);
+      if (range) applyStatementRange(existing, range, false); else useWorkspace.getState().notify(noTarget);
+      return;
+    }
     closeSyntaxCheck(); closeStatementNavigation();
     const version = model.getVersionId(), profile = connection, originalSession = sessionRef.current;
     const context = JSON.stringify([tab.connectionId, tab.database, tab.databaseContext, tab.sourceBinding, tab.fileSourceBinding]); let valid = true;
@@ -1674,18 +1683,19 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       decorate: result => { if (current()) binding.result = result; }, clear: () => { binding.result = undefined; },
       changed: view => {
         if (!alive.current || navigationIntent.current !== binding) return;
-        if (!selectCurrent) { setNavigationView(view); return; }
+        if (!oneShot) { setNavigationView(view); return; }
         if (view.busy || !view.result) return;
         const result = view.result;
-        const range = result.status === 'ready' && current() ? result.statements[currentNavigableStatement(binding.source, result.statements, offset)] : undefined;
+        const range = result.status === 'ready' && current()
+          ? direction ? adjacentNavigableStatement(binding.source, result.statements, offset, direction) : result.statements[currentNavigableStatement(binding.source, result.statements, offset)] : undefined;
         closeStatementNavigation();
-        if (range) applyStatementRange(binding, range, true);
-        else if (result.status === 'ready') useWorkspace.getState().notify(navigationText.noCurrent);
+        if (range) applyStatementRange(binding, range, action === 'select');
+        else if (result.status === 'ready') useWorkspace.getState().notify(noTarget);
         else if (result.reason !== 'stale') useWorkspace.getState().notify(navigationText.reasons[result.reason] ?? navigationText.unavailable, true);
       },
     });
     navigationIntent.current = binding;
-    if (!selectCurrent) { const point = instance.getPosition(); setNavigationCursor(point ? model.getOffsetAt(point) : 0); setNavigationView({ busy: true }); }
+    if (!oneShot) { const point = instance.getPosition(); setNavigationCursor(point ? model.getOffsetAt(point) : 0); setNavigationView({ busy: true }); }
     void binding.controller.start();
   }
   /** 跳转只更改原编辑器的光标／选区，不执行、不复制，也不修改正文和撤销栈。 */
@@ -1697,9 +1707,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 单次选中先解绑原监听，再应用选区，避免把自己的选区变更误认作用户取消。 */
   function applyStatementRange(binding: NonNullable<typeof navigationIntent.current>, range: NavigableStatement, select: boolean): void {
     const start = binding.model.getPositionAt(range.start), end = binding.model.getPositionAt(range.end);
-    if (select) binding.instance.setSelection({ startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column });
-    else binding.instance.setPosition(start);
-    binding.instance.revealRangeInCenter({ startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column }); binding.instance.focus();
+    if (select) {
+      const selection = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+      binding.instance.setSelection(selection); binding.instance.revealRangeInCenter(selection);
+    } else { binding.instance.setPosition(start); binding.instance.revealPositionInCenter(start); }
+    binding.instance.focus();
   }
   /** 只释放本轮目录和监听，旧清理不能关闭继任面板。 */
   function closeStatementNavigation(): void { const binding = navigationIntent.current; navigationIntent.current = null; binding?.controller.dispose(); setNavigationView(null); }
@@ -1874,9 +1886,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       run: () => { if (active) return openEditorPosition(searchEditor); },
     });
     const select = searchEditor.addAction({ id: 'dbark-select-current-statement:' + uid(), label: uiCommandLabels['select-current-statement'], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.65,
-      run: () => { if (active) openStatementNavigation(searchEditor, true); },
+      run: () => { if (active) openStatementNavigation(searchEditor, 'select'); },
     });
-    return () => { active = false; action.dispose(); position.dispose(); select.dispose(); };
+    const adjacent = (['previous', 'next'] as const).map((direction, index) => searchEditor.addAction({
+      id: `dbark-${direction}-statement:${uid()}`, label: uiCommandLabels[`${direction}-statement`], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.66 + index / 100,
+      run: () => { if (active) openStatementNavigation(searchEditor, direction); },
+    }));
+    return () => { active = false; action.dispose(); position.dispose(); select.dispose(); adjacent.forEach(item => item.dispose()); };
   }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql, resultsOnly]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
@@ -1894,6 +1910,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   const resultMenuKey = JSON.stringify([queryMenuKey, menuResult.current.revision, resultIndex, selectedPin, resultSelectionRevision, !!activeColumnLease, !!activeFilterLease, !!activeSortLease]);
   const canExecuteSelection = hasSingleSelection && !resultsOnly && !busy && !!connection && !closeRequest && !fileSource.busy;
+  const canNavigateFromCursor = !!searchEditor && !!connection && !resultsOnly && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy;
   useUiCommandScope(`tab:${tab.id}`, {
     execute: { enabled: !busy && !!connection && !closeRequest && !fileSource.busy, run: () => { void execute(); } },
     'execute-selection': { enabled: canExecuteSelection, run: () => { void execute('selection-only'); } },
@@ -1908,7 +1925,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'save-query': { enabled: !busy && !closeRequest && !fileSource.busy, run: saveCurrentSource },
     find: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind() },
     'statement-navigation': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy, run: () => openStatementNavigation() },
-    'select-current-statement': { enabled: !!searchEditor && !!connection && !resultsOnly && !busy && !closeRequest && !fileSource.busy && !navigationView?.busy, run: () => openStatementNavigation(editor.current, true) },
+    'select-current-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'select') },
+    'previous-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'previous') },
+    'next-statement': { enabled: canNavigateFromCursor, run: () => openStatementNavigation(editor.current, 'next') },
     'syntax-check': { enabled: !sqlite && !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind(true) },
@@ -1942,7 +1961,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       ]}
       moreLabel={menuText.queryMore}
       more={<>
-        <ActionMenuSection label={navigationText.group}><button disabled={busy || !connection || !searchEditor || navigationView?.busy} onClick={() => openStatementNavigation()}>{navigationText.entry}</button></ActionMenuSection>{!sqlite && <ActionMenuSection label={syntaxText.title}><button disabled={busy || !connection || !searchEditor || syntaxView?.busy} onClick={() => openSyntaxCheck()}>{syntaxText.entry}</button></ActionMenuSection>}<ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
+        <ActionMenuSection label={navigationText.group}><button disabled={busy || !connection || !searchEditor || navigationView?.busy} onClick={() => openStatementNavigation()}>{navigationText.entry}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'previous')}>{uiCommandLabels['previous-statement']}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'next')}>{uiCommandLabels['next-statement']}</button></ActionMenuSection>{!sqlite && <ActionMenuSection label={syntaxText.title}><button disabled={busy || !connection || !searchEditor || syntaxView?.busy} onClick={() => openSyntaxCheck()}>{syntaxText.entry}</button></ActionMenuSection>}<ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
         <ActionMenuSection label={menuText.execution}>{!sqlite && <button disabled={busy || !connection} title={queryStreamZh.title} aria-label={queryStreamZh.open} onClick={openStreamExport}><Download size={14}/>{queryStreamZh.open}</button>}
 <button aria-label={parameterZh.open} disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={openParameters}><Braces size={14}/>{parameterZh.open}</button>
 {!sqlite && <button disabled={busy || !connection || !!closeRequest} onClick={openTransactionSettings}>{queryTransactionSettingsZh.open}</button>}
@@ -1954,7 +1973,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 <button title={zh.snippets.title} aria-label={zh.snippets.title} onClick={openSnippets}><BookOpen size={15}/></button>
 <button onClick={() => { if (queryMenuCurrent()) onHistory(); }} aria-label={historyPagesZh.queryHistory} title={historyPagesZh.queryHistory}><History size={15}/></button></ActionMenuSection>
       </>}
-    />}/>{!sqlite && collectWarnings && <aside className="info-strip" role="note" aria-label={queryWarningsZh.notice} style={{ margin: '0 12px 8px', padding: '8px 12px', fontSize: 11, lineHeight: 1.6, maxHeight: 72, overflow: 'auto', flexShrink: 0 }}>{queryWarningsZh.hint}</aside>}<div className="query-layout-panes"><div className="query-layout-editor" style={resultLayout === 'beside' ? { width: editorWidth } : undefined}><SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={searchEditor}/><div id={layoutEditorId} className="sql-editor-wrap query-editor-region" style={resultLayout === 'below' ? { height: editorHeight } : undefined}>{fileOpening ? <Spinner text={queryFilesZh.opening}/> : <SqlEditor value={tab.sql ?? ''} onChange={sql => useWorkspace.getState().updateTab(tab.id, { sql })} onReady={instance => { attachQueryEditor(instance); parameterReuse.current?.observe(); }} onExecute={() => void execute()} onExecuteCurrent={() => void executeCurrentStatement()} onSelectCurrent={() => openStatementNavigation(editor.current, true)} onFormat={formatQuery} onToggleComment={() => editSqlText('sql-toggle-comment')} snippetCompletion={!busy && !fileSource.busy && !closeRequest && !resultsOnly && settings.activeTabId === tab.id} dialect={connection?.dialect} completion={!busy&&connection?{connectionId:tab.connectionId,connectionVersion,database:draftContext.state==='known'?draftContext.database??undefined:undefined,databaseUnknown:draftContext.state==='unknown',sessionId:sessionId||undefined}:undefined} onCompletionStatus={setCompletionStatus} onSelectionState={updateSelectionState}/>}{navigationView && navigationIntent.current && <StatementNavigationPanel key={navigationIntent.current.id} source={navigationIntent.current.source} dialect={navigationIntent.current.dialect} view={navigationView} cursor={navigationCursor} position={offset => { const model = navigationIntent.current?.model; return model && !model.isDisposed() ? model.getPositionAt(offset) : { lineNumber: 1, column: 1 }; }} onNavigate={navigateStatement} onRefresh={() => openStatementNavigation()} onCancel={() => navigationIntent.current?.controller.stop()} onClose={closeStatementNavigation}/>}</div>{syntaxView && <SqlSyntaxCheckPanel view={syntaxView} position={offset => { const model = syntaxIntent.current?.model; return model && !model.isDisposed() ? model.getPositionAt(offset) : { lineNumber: 1, column: 1 }; }} onSelect={selectSyntaxIssue} onCancel={() => syntaxIntent.current?.controller.stop()} onClose={closeSyntaxCheck} onRecheck={() => openSyntaxCheck()}/>}</div>{resultLayout === 'below' && <QueryLayoutSplitter key="height" value={preferredEditorHeight} min={queryLayoutLimits.minEditorHeight} max={layoutMaximum} defaultValue={queryLayoutLimits.defaultEditorHeight} controls={layoutEditorId} scope={layoutScope} disabled={layoutActiveTab!==tab.id||!connection||!!closeRequest} begin={beginEditorLayout} onPreview={setEditorPreview}/>}{resultLayout === 'beside' && <QueryLayoutSplitter key="width" dimension="width" value={preferredEditorWidth} min={queryLayoutWidthLimits.minEditorWidth} max={widthMaximum} defaultValue={queryLayoutWidthLimits.defaultEditorWidth} controls={layoutEditorId} scope={layoutScope} disabled={layoutActiveTab!==tab.id||!connection||!!closeRequest} begin={cancel => beginEditorLayout(cancel, 'width')} onPreview={setEditorWidthPreview}/>}<div className="query-layout-results"><QueryResultSnapshotActions result={queryRunning ? undefined : sourceResult} disabled={busy || resultModal || settings.activeTabId !== tab.id} begin={beginResultSnapshot} renderActions={snapshotActions => <div className="result-toolbar query-result-toolbar">
+    />}/>{!sqlite && collectWarnings && <aside className="info-strip" role="note" aria-label={queryWarningsZh.notice} style={{ margin: '0 12px 8px', padding: '8px 12px', fontSize: 11, lineHeight: 1.6, maxHeight: 72, overflow: 'auto', flexShrink: 0 }}>{queryWarningsZh.hint}</aside>}<div className="query-layout-panes"><div className="query-layout-editor" style={resultLayout === 'beside' ? { width: editorWidth } : undefined}><SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={searchEditor}/><div id={layoutEditorId} className="sql-editor-wrap query-editor-region" style={resultLayout === 'below' ? { height: editorHeight } : undefined}>{fileOpening ? <Spinner text={queryFilesZh.opening}/> : <SqlEditor value={tab.sql ?? ''} onChange={sql => useWorkspace.getState().updateTab(tab.id, { sql })} onReady={instance => { attachQueryEditor(instance); parameterReuse.current?.observe(); }} onExecute={() => void execute()} onExecuteCurrent={() => void executeCurrentStatement()} onSelectCurrent={() => openStatementNavigation(editor.current, 'select')} onFormat={formatQuery} onToggleComment={() => editSqlText('sql-toggle-comment')} snippetCompletion={!busy && !fileSource.busy && !closeRequest && !resultsOnly && settings.activeTabId === tab.id} dialect={connection?.dialect} completion={!busy&&connection?{connectionId:tab.connectionId,connectionVersion,database:draftContext.state==='known'?draftContext.database??undefined:undefined,databaseUnknown:draftContext.state==='unknown',sessionId:sessionId||undefined}:undefined} onCompletionStatus={setCompletionStatus} onSelectionState={updateSelectionState}/>}{navigationView && navigationIntent.current && <StatementNavigationPanel key={navigationIntent.current.id} source={navigationIntent.current.source} dialect={navigationIntent.current.dialect} view={navigationView} cursor={navigationCursor} position={offset => { const model = navigationIntent.current?.model; return model && !model.isDisposed() ? model.getPositionAt(offset) : { lineNumber: 1, column: 1 }; }} onNavigate={navigateStatement} onRefresh={() => openStatementNavigation()} onCancel={() => navigationIntent.current?.controller.stop()} onClose={closeStatementNavigation}/>}</div>{syntaxView && <SqlSyntaxCheckPanel view={syntaxView} position={offset => { const model = syntaxIntent.current?.model; return model && !model.isDisposed() ? model.getPositionAt(offset) : { lineNumber: 1, column: 1 }; }} onSelect={selectSyntaxIssue} onCancel={() => syntaxIntent.current?.controller.stop()} onClose={closeSyntaxCheck} onRecheck={() => openSyntaxCheck()}/>}</div>{resultLayout === 'below' && <QueryLayoutSplitter key="height" value={preferredEditorHeight} min={queryLayoutLimits.minEditorHeight} max={layoutMaximum} defaultValue={queryLayoutLimits.defaultEditorHeight} controls={layoutEditorId} scope={layoutScope} disabled={layoutActiveTab!==tab.id||!connection||!!closeRequest} begin={beginEditorLayout} onPreview={setEditorPreview}/>}{resultLayout === 'beside' && <QueryLayoutSplitter key="width" dimension="width" value={preferredEditorWidth} min={queryLayoutWidthLimits.minEditorWidth} max={widthMaximum} defaultValue={queryLayoutWidthLimits.defaultEditorWidth} controls={layoutEditorId} scope={layoutScope} disabled={layoutActiveTab!==tab.id||!connection||!!closeRequest} begin={cancel => beginEditorLayout(cancel, 'width')} onPreview={setEditorWidthPreview}/>}<div className="query-layout-results"><QueryResultSnapshotActions result={queryRunning ? undefined : sourceResult} disabled={busy || resultModal || settings.activeTabId !== tab.id} begin={beginResultSnapshot} renderActions={snapshotActions => <div className="result-toolbar query-result-toolbar">
       <span className="result-label">{zh.query.text016}</span><div className="query-result-tabs">{results.map((resultSet, index) => {
         const ordinal = `${zh.query.text017}${index + 1}`;
         const name = resultSet.columns.length ? (sqlite ? outcome?.resultTitles?.[index] : queryResultTitle(resultSet.statement)) : undefined;
