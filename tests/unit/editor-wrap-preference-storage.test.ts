@@ -16,6 +16,25 @@ class Rows {
 function open(settings?: any, data?: Uint8Array): LocalStore { const restore = (bytes: Uint8Array) => new Rows(JSON.parse(Buffer.from(bytes).toString('utf8')).row); return Reflect.construct(LocalStore, [data ? restore(data) : new Rows(settings === undefined ? undefined : JSON.stringify(settings)), 'ram-wrap-settings', { available: () => false }, restore]); }
 afterEach(() => { fs.files.clear(); fs.writes = 0; });
 
+it('行号和匹配括号可独立保存，坏值仅回退受影响的显示选项', () => {
+  const store = open(), original = store.settings();
+  expect(original.editorLineNumbers).toBeUndefined();
+  expect(original.editorMatchBrackets).toBeUndefined();
+  const choices = { ...original, editorLineNumbers: false, editorMatchBrackets: true };
+  const corrupt = { ...choices, editorMatchBrackets: 'false' };
+  expect(open(corrupt).settings()).toEqual(choices);
+  for (const key of ['editorLineNumbers', 'editorMatchBrackets'] as const) {
+    const invalid = { ...choices, [key]: 0 };
+    expect(() => validateCommand('settings.save', invalid)).toThrow();
+    expect(() => store.saveSettings(invalid)).toThrow('布尔');
+  }
+  expect(fs.writes).toBe(0);
+  for (const next of [choices, { ...choices, editorLineNumbers: true, editorMatchBrackets: false }]) {
+    store.saveSettings(validateCommand('settings.save', next) as AppSettings);
+    expect(open(undefined, fs.files.get('ram-wrap-settings')).settings()).toEqual(next);
+  }
+});
+
 it('SQL 语句折叠的旧工作区保持默认，显式开关原子保存且拒绝非布尔值', () => {
   const store = open(), original = store.settings();
   expect(original.editorSqlFolding).toBeUndefined();

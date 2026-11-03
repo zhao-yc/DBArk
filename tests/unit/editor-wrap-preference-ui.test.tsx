@@ -82,6 +82,22 @@ it('renderer初始化旧缺项只补true，原字号/SQL/标签/活动项与其�
   ports();await act(async()=>store.getState().initialize());expect(store.getState().settings).toEqual({...legacy(),editorWordWrap:true,editorTabSize:2,editorInsertSpaces:true});expect(saved).toHaveLength(0);
 });
 
+it('行号和匹配括号热更新原可写及只读编辑器，保留模型和选区', async () => {
+  await mount();
+  const editors = [...io.editors] as EditorPort[], before = editors.map(snapshot);
+  const displays = () => editors.map(editor => [editor.options.lineNumbers, editor.options.matchBrackets]);
+  expect(displays()).toEqual([['on', 'always'], ['on', 'always']]);
+  await act(async () => store.getState().updateSettings({ editorLineNumbers: false }));
+  expect(displays()).toEqual([['off', 'always'], ['off', 'always']]);
+  await act(async () => store.getState().updateSettings({ editorMatchBrackets: false }));
+  expect(displays()).toEqual([['off', 'never'], ['off', 'never']]);
+  await act(async () => store.getState().updateSettings({ editorLineNumbers: true }));
+  expect(displays()).toEqual([['on', 'never'], ['on', 'never']]);
+  expect(io.editors).toEqual(editors);
+  expect(editors.map(snapshot)).toEqual(before);
+  expect(editors.map(editor => editor.readOnly)).toEqual([false, true]);
+});
+
 it('迟到loader从稳定optionsRef取最新off，仍由原桥接解除可写实例readonly',async()=>{
   let resolve!:(value:any)=>void;io.loader=new Promise(yes=>{resolve=yes;});await mount();expect(io.editors).toHaveLength(0);await toggle();expect(store.getState().settings.editorWordWrap).toBe(false);await act(async()=>resolve(io.monaco));
   expect(io.initial.map(options=>options.wordWrap)).toEqual(['off','off']);expect(io.initial.every(options=>options.readOnly===true&&options.fontSize===20&&options.lineHeight===35)).toBe(true);expect(io.editors.map(editor=>editor.readOnly)).toEqual([false,true]);expect(ready).toHaveBeenCalledTimes(2);

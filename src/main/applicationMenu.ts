@@ -39,7 +39,7 @@ export class ApplicationMenu {
     const mac = this.platform === 'darwin';
     const separator: MenuItemConstructorOptions = { type: 'separator' };
     const item = (id: UiCommandId, accelerator?: string): MenuItemConstructorOptions => {
-      const status = statuses.get(id), checkbox = id === 'focus-mode' || id === 'editor-word-wrap' || id === 'editor-sql-folding';
+      const status = statuses.get(id), checkbox = id === 'focus-mode' || id === 'editor-word-wrap' || id === 'editor-sql-folding' || id === 'editor-line-numbers' || id === 'editor-match-brackets';
       return {
         id, label: id === 'favorite-toggle' ? status?.checked ? text.removeFavorite : text.addFavorite : labels[id], enabled: status?.enabled === true,
         ...(accelerator ? { accelerator } : {}), ...(checkbox ? { type: 'checkbox' as const, checked: status?.checked === true } : {}),
@@ -67,7 +67,7 @@ export class ApplicationMenu {
       { label: text.view, submenu: [
         item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), separator,
         { label: text.zoomIn, role: 'zoomIn' }, { label: text.zoomOut, role: 'zoomOut' }, { label: text.resetZoom, role: 'resetZoom' }, { label: text.fullscreen, role: 'togglefullscreen' }, separator,
-        { label: text.editor, submenu: [item('editor-font'), item('editor-word-wrap'), item('editor-sql-folding'), item('editor-indent')] }
+        { label: text.editor, submenu: [item('editor-font'), item('editor-word-wrap'), item('editor-line-numbers'), item('editor-match-brackets'), item('editor-sql-folding'), item('editor-indent')] }
       ] },
       { label: text.favorites, submenu: [item('favorite-toggle'), item('favorites-manage', 'CmdOrCtrl+Shift+B'), separator, item('object-link', 'CmdOrCtrl+Shift+O')] },
       { label: text.tools, submenu: [

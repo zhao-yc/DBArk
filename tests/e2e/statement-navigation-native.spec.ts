@@ -91,7 +91,7 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     await step(() => page.evaluate(async ({ name, dialect }) => { const profiles = await window.dbark.invoke('connections.list', {}), settings = await window.dbark.invoke('settings.get', {}); if (profiles.length !== 1 || profiles[0].name !== name || profiles[0].dialect !== dialect || settings.tabs.length) throw Error('导航空草稿目标不唯一'); const id = crypto.randomUUID(); await window.dbark.invoke('settings.save', { ...settings, theme: dialect === 'sqlite' ? 'light' : 'dark', tabs: [{ id, kind: 'query', title: '语句导航草稿', connectionId: profiles[0].id, ...(dialect === 'sqlite' ? { database: 'main', databaseContext: { state: 'known', database: 'main' } } : {}), sql: '' }], activeTabId: id }); }, { name, dialect }));
     await step(() => page.reload()); await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible());
     await step(() => expect(page.locator('html')).toHaveAttribute('data-theme', dialect === 'sqlite' ? 'light' : 'dark'));
-    const compound = dialect === 'sqlite' ? "CREATE TEMP TRIGGER nav_trigger AFTER INSERT ON sample BEGIN\nUPDATE sample SET note=';'; SELECT CASE WHEN 1 THEN ';' END;\nEND;" : "DELIMITER $$\nCREATE PROCEDURE nav_proc() BEGIN\nSELECT ';'; SELECT 2;\nEND$$\nDELIMITER ;";
+    const compound = dialect === 'sqlite' ? "CREATE TEMP TRIGGER nav_trigger AFTER INSERT ON sample BEGIN\nUPDATE sample SET note=';'; SELECT CASE WHEN (1) THEN ';' END;\nEND;" : "DELIMITER $$\nCREATE PROCEDURE nav_proc() BEGIN\nSELECT ';'; SELECT 2;\nEND$$\nDELIMITER ;";
     const script = (dialect === 'sqlite' ? '--前导注释;😀\n' : '#前导注释;😀\n') + "SELECT 'duplicate;😀';\n" + compound + "\nSELECT '" + 'x'.repeat(200) + "hidden_needle';\n" + "SELECT 'duplicate;😀';\n".repeat(10);
     await step(() => query().locator('.monaco-editor').getByRole('textbox').focus()); await step(() => page.keyboard.insertText(script)); await step(() => expect.poll(async () => (await model()).source.replaceAll('\r\n', '\n')).toBe(script));
     stage = '原生菜单跳到行列，恢复仅结果布局并保持草稿';
@@ -246,9 +246,9 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     const finalModel = await model(); expect(finalModel.source).toBe(before.source);
     await step(() => panel().getByRole('button', { name: text.close, exact: true }).click()); await step(() => expect(panel()).toHaveCount(0));
     stage = '快捷键、原生菜单和右键只选中当前语句正文';
-    const goTo = async (line: number) => {
+    const goTo = async (line: number, column = 4) => {
       await gotoLine();
-      await step(() => quickInput.fill(`:${line}:4`));
+      await step(() => quickInput.fill(`:${line}:${column}`));
       await step(() => quickInput.press('Enter'));
     };
     const expectRange = async (index: number) => {
@@ -288,12 +288,15 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     expect(selectionWorkers).toHaveLength(5);
     expect(selectionWorkers.every(value => value.ready === 1 && value.sent === 1 && value.replied === 1 && value.terminated === 1)).toBe(true);
     stage = '原生选项启用 SQL 语句折叠并保留原模型';
-    const foldingMenuState = () => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('editor-sql-folding')?.checked));
-    const toggleFolding = () => step(() => application.evaluate(({ Menu, BrowserWindow }) => {
-      const item = Menu.getApplicationMenu()?.getMenuItemById('editor-sql-folding'), windows = BrowserWindow.getAllWindows();
-      if (!item?.enabled || windows.length !== 1) throw Error('SQL 语句折叠原生菜单不可用');
+    type EditorToggle = 'editor-sql-folding' | 'editor-line-numbers' | 'editor-match-brackets';
+    const editorMenuState = (id: EditorToggle) => step(() => application.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.checked, id));
+    const toggleEditorOption = (id: EditorToggle) => step(() => application.evaluate(({ Menu, BrowserWindow }, id) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById(id), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('编辑器选项原生菜单不可用');
       item.click(item, windows[0], {} as Electron.KeyboardEvent);
-    }));
+    }, id));
+    const foldingMenuState = () => editorMenuState('editor-sql-folding');
+    const toggleFolding = () => toggleEditorOption('editor-sql-folding');
     await expect.poll(foldingMenuState).toBe(false);
     await goTo(dialect === 'mysql' ? 4 : 3);
     const editor = query().locator('.monaco-editor'), editorLines = editor.locator('.view-lines');
@@ -331,6 +334,54 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     const foldingAudit = await audit();
     expect(foldingAudit.denied).toEqual([]);
     expect(foldingAudit.commands.filter(command => /^(?:metadata|sessions|query|table|schema|sqlite|serverMonitor)\./.test(command))).toEqual([]);
+    stage = '独立切换行号和匹配括号，保留原正文和选区';
+    const bracketLine = dialect === 'mysql' ? compoundLine : compoundLine + 1;
+    const line = finalModel.source.split(/\r?\n/)[bracketLine - 1];
+    const bracketColumn = line.indexOf('(') + 1;
+    expect(bracketColumn).toBeGreaterThan(0);
+    await goTo(bracketLine, bracketColumn);
+    const beforeOptions = await model();
+    const lineNumbers = editor.locator('.line-numbers'), brackets = editor.locator('.bracket-match');
+    // 紧邻的括号可能合并成一个 DOM 装饰，按真实模型中的两个范围确认配对。
+    const bracketRanges = () => step(() => page.evaluate(() => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().closest('.query-tab'));
+      return instance?.getModel()?.getAllDecorations().filter(item => item.options.className === 'bracket-match')
+        .map(item => [item.range.startLineNumber, item.range.startColumn, item.range.endColumn])
+        .sort((a, b) => a[1] - b[1]);
+    }));
+    const closeColumn = line.indexOf(')', bracketColumn) + 1;
+    expect(closeColumn).toBeGreaterThan(bracketColumn);
+    const matchingPair = [[bracketLine, bracketColumn, bracketColumn + 1], [bracketLine, closeColumn, closeColumn + 1]];
+    await expect.poll(() => editorMenuState('editor-line-numbers')).toBe(true);
+    await expect.poll(() => editorMenuState('editor-match-brackets')).toBe(true);
+    await expect.poll(() => lineNumbers.count()).toBeGreaterThan(0);
+    await expect.poll(bracketRanges).toEqual(matchingPair);
+    await expect.poll(() => brackets.count()).toBeGreaterThan(0);
+    await toggleEditorOption('editor-line-numbers');
+    await expect.poll(() => editorMenuState('editor-line-numbers')).toBe(false);
+    await expect(lineNumbers).toHaveCount(0);
+    await expect.poll(bracketRanges).toEqual(matchingPair);
+    await toggleEditorOption('editor-match-brackets');
+    await expect.poll(() => editorMenuState('editor-match-brackets')).toBe(false);
+    await expect(brackets).toHaveCount(0);
+    await expect.poll(bracketRanges).toEqual([]);
+    await expect.poll(() => step(() => page.evaluate(async () => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      return [settings.editorLineNumbers, settings.editorMatchBrackets];
+    }))).toEqual([false, false]);
+    await toggleEditorOption('editor-line-numbers');
+    await expect.poll(() => lineNumbers.count()).toBeGreaterThan(0);
+    await expect(brackets).toHaveCount(0);
+    await toggleEditorOption('editor-match-brackets');
+    await expect.poll(bracketRanges).toEqual(matchingPair);
+    await expect.poll(() => brackets.count()).toBeGreaterThan(0);
+    const afterOptions = await model();
+    unchanged(beforeOptions, afterOptions);
+    expect(afterOptions.selection).toEqual(beforeOptions.selection);
+    const displayAudit = await audit();
+    expect(displayAudit.denied).toEqual([]);
+    expect(displayAudit.commands.filter(command => /^(?:metadata|sessions|query|table|schema|sqlite|serverMonitor)\./.test(command))).toEqual([]);
     stage = '保留草稿后通过原生窗口菜单重开，明确放弃后不可重开';
     const tabButton = page.locator('[data-workspace-tab-id]');
     const oldTabId = await step(() => tabButton.getAttribute('data-workspace-tab-id'));

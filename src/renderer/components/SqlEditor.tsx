@@ -59,6 +59,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
+  const lineNumbers = useWorkspace<'off' | 'on'>(state => state.settings.editorLineNumbers === false ? 'off' : 'on');
+  const matchBrackets = useWorkspace<'never' | 'always'>(state => state.settings.editorMatchBrackets === false ? 'never' : 'always');
   const sqlFolding = useWorkspace(state => state.settings.editorSqlFolding === true);
   const tabSize = useWorkspace(state => readEditorTabSize(state.settings.editorTabSize));
   const insertSpaces = useWorkspace(state => readEditorInsertSpaces(state.settings.editorInsertSpaces));
@@ -97,7 +99,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const [renameMessage, setRenameMessage] = useState<string | null>(null);
   useEffect(() => { setRenameMessage(null); }, [value, readOnly, dialect, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.sessionId]);
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
-  const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, ...editorIndentationOptions(tabSize, insertSpaces), ...editorWordWrapOptions(wordWrap), renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
+  const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, ...editorIndentationOptions(tabSize, insertSpaces), ...editorWordWrapOptions(wordWrap), lineNumbers, matchBrackets, renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
   // 只发布已提交的props；并发渲染被取消时不能把未提交回调交给旧模型。
   useLayoutEffect(() => { propsRef.current = { value, onChange, onReady, readOnly, onFormat }; syncFormatAction(); });
   /** 外部value只能走桥接的受控编辑范围；库不再另行更新value或订阅onChange。 */
@@ -122,6 +124,13 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const widget = widgetRef.current;
     if (aliveRef.current && widget?.alive) widget.editor.updateOptions(options);
   }, [wordWrap]);
+  /** 只更新原编辑器显示选项，行号和括号状态不进入 SQL 模型。 */
+  useLayoutEffect(() => {
+    const options = { lineNumbers, matchBrackets };
+    Object.assign(optionsRef.current, options);
+    const widget = widgetRef.current;
+    if (aliveRef.current && widget?.alive) widget.editor.updateOptions(options);
+  }, [lineNumbers, matchBrackets]);
   /** 全局偏好更新原widget和当前model；不替换正文，也不因正文已有Tab而重新猜缩进。 */
   useLayoutEffect(() => {
     Object.assign(optionsRef.current, editorIndentationOptions(tabSize, insertSpaces));

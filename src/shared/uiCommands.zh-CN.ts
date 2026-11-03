@@ -11,7 +11,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'sql-toggle-comment': '切换行注释',
   'sql-duplicate-lines': '向下复制行', 'sql-move-lines-up': '上移行', 'sql-move-lines-down': '下移行', 'sql-delete-lines': '删除行',
   'toggle-theme': '切换明暗主题', 'focus-mode': '专注模式', 'editor-font': '编辑器字体',
-  'editor-word-wrap': '自动换行', 'editor-sql-folding': '按 SQL 语句折叠', 'editor-indent': '编辑器缩进', 'favorite-toggle': '添加／取消当前对象收藏',
+  'editor-word-wrap': '自动换行', 'editor-line-numbers': '显示行号', 'editor-match-brackets': '高亮匹配括号', 'editor-sql-folding': '按 SQL 语句折叠', 'editor-indent': '编辑器缩进', 'favorite-toggle': '添加／取消当前对象收藏',
   'favorites-manage': '管理收藏与分组', 'object-link': '粘贴对象链接', 'execute': '执行查询',
   'execute-selection': '仅执行选区', 'execute-current': '执行当前语句', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
   'parameters': '参数执行', 'explain': '执行计划', 'analyze': '实际执行分析', 'transaction-settings': '事务设置',
