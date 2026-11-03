@@ -5,13 +5,27 @@ import { sqliteValueOptionSchema } from './sqliteValueOptions';
 export const sqliteStatisticsLimits = { groups: 5, bytes: 1024 * 1024, cellBytes: 65536, active: 2 } as const;
 export const sqliteStorageKinds = ['blob', 'integer', 'null', 'real', 'text'] as const;
 const page = sqliteTablePageSchema.shape;
-/** 概况只接收准确字段、结构指纹和已应用条件；不接受路径、SQL、会话或写能力。 */
-export const sqliteStatisticsInputSchema = z.object({ connectionId: page.connectionId, database: z.literal('main'), table: page.table, column: page.table, schemaKey: z.string().regex(/^[a-f0-9]{64}$/), taskId: page.taskId, mode: page.mode, filters: page.filters }).strict().superRefine((input, context) => {
+const aggregateSource = { connectionId: page.connectionId, database: z.literal('main'), table: page.table, schemaKey: z.string().regex(/^[a-f0-9]{64}$/), taskId: page.taskId, mode: page.mode, filters: page.filters };
+/** 聚合沿分页筛选预算，拒绝额外 SQL、路径、分页及会话权限。 */
+function validateConditions(input: z.infer<typeof sqliteRowCountInputBase>, context: z.RefinementCtx): void {
   // 只把分页合同声明的字段交给原条件验证，不能用额外统计字段绕过预算。
   const conditions = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, sort: [], offset: 0, limit: 1 });
   if (!conditions.success) for (const issue of conditions.error.issues) context.addIssue({ code: 'custom', path: issue.path, message: issue.message });
-});
+}
+const sqliteRowCountInputBase = z.object(aggregateSource).strict();
+export const sqliteRowCountInputSchema = sqliteRowCountInputBase.superRefine(validateConditions);
+export const sqliteStatisticsInputSchema = sqliteRowCountInputBase.extend({ column: page.table }).superRefine(validateConditions);
 const count = z.string().regex(/^(?:0|[1-9][0-9]{0,18})$/).refine(value => /^(?:0|[1-9][0-9]{0,18})$/.test(value) && BigInt(value) <= 9223372036854775807n);
+const sqliteRowCountOutputSchema = z.object({ request: sqliteRowCountInputSchema, rows: count }).strict();
+export type SqliteRowCountInput = z.infer<typeof sqliteRowCountInputSchema>;
+export type SqliteRowCountOutput = z.infer<typeof sqliteRowCountOutputSchema>;
+
+/** 精确十进制计数绑定原任务与筛选，不通过 JavaScript 数字转换。 */
+export function assertSqliteRowCount(raw: unknown, request: SqliteRowCountInput): SqliteRowCountOutput {
+  const result = sqliteRowCountOutputSchema.parse(raw);
+  if (JSON.stringify(result.request) !== JSON.stringify(sqliteRowCountInputSchema.parse(request))) throw Error('SQLite匹配行数回包与原请求不符');
+  return result;
+}
 // 概况仅展示，不受筛选候选的32KiB BLOB选取范围限制；完整原字节仍固定64KiB。
 export const sqliteStatisticsValueSchema = z.union([sqliteValueOptionSchema.shape.value, z.object({ kind: z.literal('blob'), value: z.string().max(sqliteStatisticsLimits.cellBytes * 2).regex(/^(?:[0-9a-fA-F]{2})*$/) }).strict()]);
 export const sqliteStatisticsGroupSchema = z.object({ kind: z.enum(sqliteStorageKinds), count, distinct: count, min: sqliteStatisticsValueSchema, max: sqliteStatisticsValueSchema }).strict();

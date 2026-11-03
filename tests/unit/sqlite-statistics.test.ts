@@ -1,9 +1,16 @@
 import { expect, it, vi } from 'vitest';
-import { assertSqliteStatistics, sqliteStatisticsInputSchema, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../../src/shared/sqliteStatistics';
+import { assertSqliteRowCount, assertSqliteStatistics, sqliteRowCountInputSchema, sqliteStatisticsInputSchema, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../../src/shared/sqliteStatistics';
 import { SqliteStatisticsController } from '../../src/renderer/sqliteStatistics';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
 
 const request: SqliteStatisticsInput = { connectionId: 'c', database: 'main', table: 'subject', column: 'v', schemaKey: 'a'.repeat(64), taskId: 'stats', mode: 'and', filters: [] };
+it('行数请求拒绝列、SQL和分页，精确回包绑定原任务和条件', () => {
+  const { column: _column, ...input } = request;
+  for (const extra of [{ column: 'v' }, { sql: 'SELECT 1' }, { limit: 5 }, { filePath: '外部文件' }]) expect(sqliteRowCountInputSchema.safeParse({ ...input, ...extra }).success).toBe(false);
+  expect(assertSqliteRowCount({ request: input, rows: '9223372036854775807' }, input).rows).toBe('9223372036854775807');
+  expect(() => assertSqliteRowCount({ request: input, rows: '9223372036854775808' }, input)).toThrow();
+  expect(() => assertSqliteRowCount({ request: { ...input, mode: 'or' }, rows: '0' }, input)).toThrow('原请求');
+});
 const output = (): SqliteStatisticsOutput => ({ request: structuredClone(request), declaredType: '', rows: '4', nulls: '1', nonNull: '3', groups: [
   { kind: 'integer', count: '3', distinct: '2', min: { kind: 'integer', value: '-9223372036854775808' }, max: { kind: 'integer', value: '9223372036854775807' } },
   { kind: 'null', count: '1', distinct: '0', min: { kind: 'null' }, max: { kind: 'null' } },
@@ -48,9 +55,17 @@ function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unk
 function fixture() {
   const reading = deferred<SqliteStatisticsOutput>(), cancel = deferred<void>(), state = { current: true, owns: true }, release = vi.fn(), read = vi.fn(async (_request: SqliteStatisticsInput) => reading.promise), cancelPort = vi.fn(async () => cancel.promise), changed = vi.fn(), cleanup = vi.fn();
   const base = { connectionId: request.connectionId, database: request.database, table: request.table, schemaKey: request.schemaKey, mode: request.mode, filters: request.filters };
-  const controller = new SqliteStatisticsController({ base, current: () => state.current, acquire: () => ({ owns: () => state.owns, release }), read, cancel: cancelPort, id: () => 'stats', changed, cleanup });
-  return { controller, base, state, reading, cancel, release, read, cancelPort, changed, cleanup };
+  const counting = deferred<SqliteRowCountOutput>(), countRows = vi.fn(async (_input: SqliteRowCountInput) => counting.promise);
+  const controller = new SqliteStatisticsController({ base, current: () => state.current, acquire: () => ({ owns: () => state.owns, release }), read, countRows, cancel: cancelPort, id: () => 'stats', changed, cleanup });
+  return { controller, base, state, reading, cancel, release, read, counting, countRows, cancelPort, changed, cleanup };
 }
+it('行数与字段统计互斥，完成后保留精确总数原文', async () => {
+  const f = fixture(), work = f.controller.countRows(); await f.controller.read('v');
+  const input = { ...f.base, taskId: 'stats' };
+  expect(f.countRows).toHaveBeenCalledExactlyOnceWith(input); expect(f.read).not.toHaveBeenCalled();
+  f.counting.resolve({ request: input, rows: '9007199254740993' }); await work;
+  expect(f.controller.view.rowCount).toBe('9007199254740993'); expect(f.release).toHaveBeenCalledOnce();
+});
 it('打开及选择字段零读取，连点不重复投递，完成归还准确租约', async () => {
   const f = fixture(); f.controller.clear(); expect(f.read).not.toHaveBeenCalled(); const work = f.controller.read('v'); await f.controller.read('v'); await Promise.resolve(); expect(f.read).toHaveBeenCalledExactlyOnceWith(request);
   f.reading.resolve(output()); await work; expect(f.controller.view.output).toEqual(output()); expect(f.release).toHaveBeenCalledOnce();

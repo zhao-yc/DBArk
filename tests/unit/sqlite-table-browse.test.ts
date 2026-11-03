@@ -126,18 +126,45 @@ describe('SQLite全筛选字段概况真实只读worker', () => {
     await expect(app.request('sqlite.statistics', { ...request, taskId: randomUUID() })).rejects.toThrow(/编码|无损|TEXT/);
     expect(disk(profile, db => db.prepare('SELECT typeof(v),hex(v) FROM extreme').all())).toEqual([{ 'typeof(v)': 'text', 'hex(v)': '61' }, { 'typeof(v)': 'text', 'hex(v)': '80' }]);
   });
-  it('真实长聚合准确取消，原用户事务不受影响，未退出资源继续占槽', async () => {
+  it('匹配行数涵盖整表和视图，按原存储类型绑定且不读取大 BLOB', async () => {
+    const profile = fixture();
+    disk(profile, db => db.exec("CREATE TABLE counted(id INTEGER PRIMARY KEY,v,payload); INSERT INTO counted(v) VALUES(2),('2'),(2),(NULL); CREATE VIEW counted_view AS SELECT * FROM counted WHERE id<=3"));
+    const { app, events } = runtime(profile);
+    const sources = [];
+    for (const [table, total] of [['counted', '4'], ['counted_view', '3']] as const) {
+      const { column: _column, ...source } = await statisticsInput(app, profile, table, 'v'); sources.push({ source, total });
+    }
+    disk(profile, db => db.exec('UPDATE counted SET payload=zeroblob(1048577) WHERE id<=2'));
+    for (const { source, total } of sources) {
+      await expect(app.request('sqlite.countRows', source)).resolves.toEqual({ request: source, rows: total });
+      const read = (value: string) => app.request('sqlite.countRows', { ...source, taskId: randomUUID(), filters: [{ column: 'v', operator: 'eq', value: { kind: 'integer', value } }, { column: 'v', operator: 'isNull', enabled: false }] });
+      await expect(read('2')).resolves.toMatchObject({ rows: '2' });
+      await expect(read('99')).resolves.toMatchObject({ rows: '0' });
+      expect(events.at(-1)).toMatchObject({ status: 'completed' }); expect(events.at(-1)?.rows).toBeUndefined();
+      const record = processes.at(-1)!;
+      expect(await record.exited).toEqual({ code: 0, signal: null }); expect(record.kills).toBe(0);
+      expect(record.sent.find(message => message.kind === 'open')).toMatchObject({ options: { readOnly: true } });
+      const statements = record.sent.flatMap(message => message.kind === 'execute' ? [message.sql] : []);
+      expect(statements[0]).toBe('BEGIN'); expect(statements.at(-1)).toBe('ROLLBACK');
+      expect(statements.find(sql => sql.includes('__dbark_count'))).toMatch(/^SELECT count\(\*\) FROM \(SELECT 1 AS /);
+      expect(statements.find(sql => sql.includes('__dbark_count'))).not.toMatch(/\b(?:ORDER BY|LIMIT|OFFSET)\b/i);
+      await expect(app.request('sqlite.countRows', { ...source, schemaKey: 'f'.repeat(64), taskId: randomUUID() })).rejects.toThrow('结构已变化');
+    }
+  });
+  it.each(['sqlite.statistics', 'sqlite.countRows'] as const)('%s 长聚合准确取消，原用户事务不受影响，未退出资源继续占槽', async command => {
     const profile = fixture(); disk(profile, db => db.exec('CREATE VIEW stats_expensive AS WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x AS value FROM n'));
-    const reached = deferred<void>(), { app, events } = runtime(profile, () => transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.includes('__dbark_statistics')) reached.resolve(); })), request = await statisticsInput(app, profile, 'stats_expensive');
+    const reached = deferred<void>(), { app, events } = runtime(profile, () => transport((message, forward) => { forward(); if (message.kind === 'statement' && /__dbark_(statistics|count)/.test(message.sql)) reached.resolve(); })), request = await statisticsInput(app, profile, 'stats_expensive');
+    const { column: _column, ...countRequest } = request;
     const user = await app.request('sessions.open', { connectionId: profile.id }); await app.request('query.transaction', { ...user, action: 'begin' });
-    const work = app.request('sqlite.statistics', request).catch(reason => reason); await reached.promise; await delay(50); await app.request('query.cancel', { taskId: request.taskId }); expect(await work).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(processes[2].kills).toBe(1); expect(processes[1].kills).toBe(0);
+    const work = app.request(command, command === 'sqlite.countRows' ? countRequest : request).catch(reason => reason); await reached.promise; await delay(50); await app.request('query.cancel', { taskId: request.taskId }); expect(await work).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(processes[2].kills).toBe(1); expect(processes[1].kills).toBe(0);
     expect(await app.request('query.sessionState', user)).toEqual({ transactionOpen: true, transactionKnown: true, broken: false }); expect(taskState(app, request.taskId)).toEqual({ kind: 'browse-finished' }); await app.request('query.transaction', { ...user, action: 'rollback' }); await app.close();
   });
   it('两份概况准确任务仍在途时不创建第三个进程，退出后归还槽位', async () => {
     const profile = fixture(); let armed = false; const releases: (() => void)[] = [], reached = deferred<void>();
     const { app } = runtime(profile, () => transport((message, forward) => { if (armed && message.kind === 'opened') { releases.push(forward); if (releases.length === 2) reached.resolve(); } else forward(); }));
     const source = await statisticsInput(app, profile); armed = true; const first = app.request('sqlite.statistics', source), second = app.request('sqlite.statistics', { ...source, taskId: randomUUID() });
-    await reached.promise; const count = processes.length; await expect(app.request('sqlite.statistics', { ...source, taskId: randomUUID() })).rejects.toThrow('并发上限'); expect(processes).toHaveLength(count);
+    const { column: _column, ...countRequest } = source;
+    await reached.promise; const count = processes.length; await expect(app.request('sqlite.countRows', { ...countRequest, taskId: randomUUID() })).rejects.toThrow('并发上限'); expect(processes).toHaveLength(count);
     armed = false; releases.forEach(release => release()); await Promise.all([first, second]); await expect(app.request('sqlite.statistics', { ...source, taskId: randomUUID() })).resolves.toMatchObject({ rows: '10' });
   });
 });

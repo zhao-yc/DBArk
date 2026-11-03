@@ -14,6 +14,7 @@ import { sqliteTableEditMessages } from '../shared/sqliteTableEdit';
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
   if (command === 'query.objectDefinition') return event.status === 'completed' ? '对象结构读取完成；定义正文和错误原文未保存。' : event.status === 'running' ? '正在读取对象结构；定义只留在当前窗口。' : '对象结构读取未完成；定义正文和错误原文未保存。';
   if (command === 'sqlite.statistics') return event.status === 'completed' ? 'SQLite字段概况完成；筛选、极值和统计结果未保存。' : event.status === 'running' ? '正在统计SQLite字段；原值仅留在当前窗口。' : 'SQLite字段概况未完成；筛选、极值及错误原文未保存。';
+  if (command === 'sqlite.countRows') return event.status === 'completed' ? 'SQLite匹配行数统计完成。' : event.status === 'running' ? '正在统计SQLite匹配行数。' : 'SQLite匹配行数统计未完成。';
   if (command === 'sqlite.valueOptions') return event.status === 'completed' ? 'SQLite不同值读取完成；条件、搜索和候选值未保存。' : event.status === 'running' ? '正在读取SQLite不同值；原值仅留在当前窗口。' : 'SQLite不同值读取未完成；条件、搜索、候选值及错误原文未保存。';
   if (command.startsWith('sqlite.objects.')) return sqliteObjectsTaskMessage(command, event.status);
   if (command.startsWith('sqlite.tableMaintenance.')) return sqliteTableMaintenanceTaskMessage(command, event.status);

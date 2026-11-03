@@ -5,12 +5,14 @@ import type { SqliteStatisticsInput } from '../../src/shared/sqliteStatistics';
 const profile = { id: 'sqlite-file', name: '概况本例', group: '', color: '#123456', dialect: 'sqlite', sqlite: { filePath: '仅作已存概要', readOnly: true, busyTimeoutMs: 1000 } };
 const input: SqliteStatisticsInput = { connectionId: profile.id, database: 'main', taskId: 'statistics', table: 'subject', column: 'v', schemaKey: 'a'.repeat(64), mode: 'and', filters: [] };
 /** 正式Main校验、分派与晚发布门；只替换数据库边界，不打开文件或接入网络。 */
-it.each(['current', 'revision', 'destroyed', 'blocked'] as const)('概况%s核原窗口、配置与晚发布代次，零SQL历史', async mode => {
+it.each((['current', 'revision', 'destroyed', 'blocked'] as const).flatMap(mode => ['sqlite.statistics', 'sqlite.countRows'].map(command => ({ mode, command }))))('$command $mode核原窗口、配置与晚发布代次，零SQL历史', async ({ mode, command }) => {
   const f = mainColumnsHarness(), pending = deferred(); Object.assign(f.context.store, { connections: () => [profile], addHistory: () => { throw Error('概况不能进入SQL历史'); } });
-  f.request.mockImplementation(async (command, request) => { expect(command).toBe('sqlite.statistics'); expect(request).toEqual(input); return pending.promise; });
-  const reading = f.invoke('sqlite.statistics', input); expect(f.request).toHaveBeenCalledOnce();
+  const { column: _column, ...countInput } = input;
+  const source = command === 'sqlite.countRows' ? countInput : input;
+  f.request.mockImplementation(async (actual, request) => { expect(actual).toBe(command); expect(request).toEqual(source); return pending.promise; });
+  const reading = f.invoke(command, source); expect(f.request).toHaveBeenCalledOnce();
   if (mode === 'revision') f.setRevision(99); if (mode === 'destroyed') f.context.window.destroyContents(); if (mode === 'blocked') f.context.connectionConfig.assertAvailable = () => { throw Error('连接正在修订'); };
-  const value = { request: input, declaredType: '', rows: '0', nonNull: '0', nulls: '0', groups: [] }; pending.resolve(value); const reply = await reading;
+  const value = command === 'sqlite.countRows' ? { request: source, rows: '0' } : { request: source, declaredType: '', rows: '0', nonNull: '0', nulls: '0', groups: [] }; pending.resolve(value); const reply = await reading;
   if (mode === 'current') expect(reply).toEqual({ ok: true, result: value }); else { expect(reply.ok).toBe(false); expect(reply).not.toHaveProperty('result'); }
   expect(f.request).toHaveBeenCalledOnce(); expect(f.context.preparingTasks.size).toBe(0);
 });
