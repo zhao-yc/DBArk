@@ -1,5 +1,7 @@
 # 开发与测试
 
+SQL 编辑新增[语句导航](development/statement-navigation-20261103.md)：复用原执行扫描器的纯模块及独占Worker，保持原引擎导出、20MiB和当前语句限制；固定线程预算及永久来源失效，不新增数据库或IPC写协议。原执行扫描、Worker、命令和Windows真实窗口分别验收，Mac／安装继续独立记录。
+
 新增[查询脚本本地语法检查](development/sql-syntax-check-20261103.md)，固定范围问题、UTF16映射、独占Worker及过期标记清除。139项相关、严格类型、同2GiB构建及Windows真实菜单／模型整例通过；完整MariaDB／SQLite方言、Mac和安装另验，暂不发布。
 
 新增[查询中查看对象结构](development/object-definition-20261103.md)：类型化 IPC、独立语义分析、原会话读取与取消收尾；保持 SQLite 原业务单值预算。源码、实际窗口及 MySQL 只读实库证据分别记录，Mac／安装及完整版本矩阵另验，暂不发布。

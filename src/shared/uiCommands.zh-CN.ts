@@ -12,6 +12,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'parameters': '参数执行', 'explain': '执行计划', 'analyze': '实际执行分析', 'transaction-settings': '事务设置',
   'object-definition': '查看对象结构',
   'syntax-check': '检查 SQL 语法',
+  'statement-navigation': '语句导航',
   'import': '导入数据', 'export': '导出数据', 'schema-compare': '结构比较', 'structure-search': '全库搜索',
   'server-monitor': '服务器监控', 'explain-snapshot': '打开计划快照', 'result-snapshot': '打开结果快照',
   'task-center': '任务中心', 'tab-search': '查找已打开标签', 'close-tab': '关闭当前标签',

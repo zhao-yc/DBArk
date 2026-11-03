@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+SQL 高频编辑新增[语句导航](development/statement-navigation-20261103.md)：完整正文搜索、分页与原模型跳转，MySQL／MariaDB DELIMITER和SQLite触发器沿原执行扫描规则；不执行SQL。O05仍部分，Mac两架构和安装另验，不增加完整工作包或发行计数，暂不发布。
+
 2026-11-03 源码增量：[查询脚本本地语法检查](development/sql-syntax-check-20261103.md)提供本地提示、原文跳转和过期清除，不执行SQL。139项相关、类型／构建和Windows实际窗口通过；不以本地grammar代替服务器或完整方言验收，O05仍部分，暂不发布。
 
 2026-11-03 源码增量：[查询中查看对象结构](development/object-definition-20261103.md)提供 MySQL／MariaDB 与 SQLite 表／视图完整只读 DDL，目标绑定活动查询原会话，不被左树选择覆盖。SQLite 保留 TEMP 遮蔽及原事务；不确定语法拒绝猜测。O05 仍部分，不增加完整工作包或发行计数，暂不发布。

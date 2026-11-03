@@ -1,0 +1,14 @@
+/* 目录与原编辑器共享已分配高度，避免最小窗口纵向挤掉SQL；不回写布局偏好。 */
+.query-editor-region { display: flex; align-items: stretch; }
+.query-editor-region > [aria-busy] { flex: 1; min-width: 0; height: 100%; overflow: hidden; }
+.statement-navigation { flex: 0 0 38%; width: 38%; min-width: 240px; max-width: 340px; max-height: 100%; overflow: auto; border-left: 1px solid var(--line); background: var(--surface-2); padding: 8px 12px; }
+.statement-navigation header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.statement-navigation p { margin: 6px 0; }
+.statement-navigation input { width: 100%; min-height: 28px; }
+.statement-navigation ol { list-style: none; padding: 0; margin: 6px 0; }
+.statement-navigation li { min-width: 0; display: flex; align-items: center; gap: 8px; border-radius: 4px; }
+.statement-navigation li.active { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.statement-navigation .statement-navigation-target { display: flex; flex: 1; min-width: 0; gap: 2px; flex-direction: column; align-items: stretch; background: transparent; border: 0; text-align: left; }
+.statement-navigation-target span { flex-shrink: 0; color: var(--muted); }
+.statement-navigation-target code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.statement-navigation footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }

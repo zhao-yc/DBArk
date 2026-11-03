@@ -1,0 +1,57 @@
+name: 语句导航源码验收
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/statement-navigation.yml', 'scripts/statement-navigation-ci.*', 'src/shared/**', 'src/main/**', 'src/engine/**', 'src/renderer/**', 'tests/unit/**', 'tests/e2e/statement-navigation-native.spec.ts', 'tests/e2e/desktop-fixture.ts', 'tests/e2e/navigation-menu.ts', 'package.json', 'pnpm-lock.yaml']
+  pull_request:
+    paths: ['.github/workflows/statement-navigation.yml', 'scripts/statement-navigation-ci.*', 'src/shared/**', 'src/main/**', 'src/engine/**', 'src/renderer/**', 'tests/unit/**', 'tests/e2e/statement-navigation-native.spec.ts', 'tests/e2e/desktop-fixture.ts', 'tests/e2e/navigation-menu.ts', 'package.json', 'pnpm-lock.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 各原轮独立保留失败报告，不因后续提交取消验收。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  navigation:
+    name: 语句导航 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖和Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 原执行扫描器、目录、线程取消及命令回归
+        run: pnpm exec vitest run tests/unit/statement-navigation.test.ts tests/unit/statement-navigation-controller.test.ts tests/unit/statement-navigation-worker.test.ts tests/unit/statement-navigation-ci.test.ts tests/unit/engine-sql.test.ts tests/unit/current-statement.test.ts tests/unit/current-statement-protocol.test.ts tests/unit/current-statement-model.test.ts tests/unit/current-statement-intent.test.ts tests/unit/sqlite-current-statement.test.ts tests/unit/query-failure-source-scanner.test.ts tests/unit/application-menu.test.ts tests/unit/ui-command-preload.test.ts tests/unit/ui-command-registry.test.ts --maxWorkers=1
+      - name: 严格类型检查和构建
+        run: pnpm build
+      - name: 双方言真实菜单、原文跳转及零SQL执行
+        run: node scripts/statement-navigation-ci.mjs
+      - name: 记录准确源码和实际平台
+        if: always()
+        run: |
+          node -e "const fs=require('node:fs');fs.mkdirSync('test-results/statement-navigation',{recursive:true});fs.writeFileSync('test-results/statement-navigation/platform.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version}))"
+          git rev-parse HEAD > test-results/statement-navigation/head.txt
+      - name: 保存原报告、截图及退出清理回执
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: statement-navigation-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/statement-navigation/
+          if-no-files-found: warn

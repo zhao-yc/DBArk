@@ -1,5 +1,7 @@
 # 使用指南
 
+查询页新增[语句导航](development/statement-navigation-20261103.md)：从“更多 → 脚本导航 → 语句导航”、编辑器右键或原生工具菜单打开；按完整正文搜索、分页、跳转与选中。支持MySQL／MariaDB的DELIMITER及SQLite触发器，不执行SQL；编辑后须明确刷新，选中复杂例程正文不会自动执行。
+
 MySQL／MariaDB 查询新增[本地语法检查](development/sql-syntax-check-20261103.md)：通过查询“更多”、编辑器右键或原生工具菜单检查当前脚本，点击问题跳转。支持 DELIMITER 例程及准确原文位置；编辑后旧标记立即失效。不执行 SQL，本地解析器提示与服务器实际执行结果分开，SQLite 方言后续接入。
 
 SQL 查询新增[查看对象结构](development/object-definition-20261103.md)：在物理表或视图名称上右键选择该项，也可使用查询“更多”或原生工具菜单。显示当前查询原会话中的完整只读 DDL，SQLite 未限定名称优先识别 TEMP；不修改正文、执行查询或切换标签。不确定目标会显示原因，F12 仍定位本文声明。
