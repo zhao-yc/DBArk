@@ -278,7 +278,10 @@ describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾',
   it('500+1不同值有界，搜索仍扫描完整集合，原排序规则分组且无穷REAL保持原值', async () => {
     const profile = fixture(); disk(profile, db => {
       db.exec('CREATE TABLE choices(id INTEGER PRIMARY KEY,v COLLATE NOCASE)'); const insert = db.prepare('INSERT INTO choices(v) VALUES(?)');
+      // 合成数据一起提交，避免数百次磁盘同步耗尽原5秒期限；读取、原行值和资源断言保持。
+      db.exec('BEGIN');
       for (let index = 0; index < 601; index++) insert.run('g' + String(index).padStart(4, '0')); insert.run('g0600'); insert.run('A'); insert.run('a'); insert.run(null); db.exec('INSERT INTO choices(v) VALUES(1e999)');
+      db.exec('COMMIT');
     });
     const { app } = runtime(profile), original = await page(app, input(profile, '候选上限结构', { table: 'choices' })), request = { connectionId: profile.id, database: 'main', table: 'choices', column: 'v', schemaKey: original.schemaKey, mode: 'and', filters: [], search: '', taskId: '候选上限' };
     const first = await app.request('sqlite.valueOptions', request); expect(first.values).toHaveLength(500); expect(first.truncated).toBe(true); expect(first.values).toContainEqual({ value: { kind: 'null' }, count: '1' }); expect(first.values).toContainEqual({ value: { kind: 'real', value: 'Infinity' }, count: '1' }); expect(first.values.filter((option: { value: { value?: string } }) => option.value.value === 'A' || option.value.value === 'a')).toHaveLength(1); expect(first.values.find((option: { count: string }) => option.count === '2')).toMatchObject({ count: '2' });

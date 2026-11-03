@@ -1,5 +1,7 @@
 # 开发与测试
 
+声明定位已[去除冗余补全候选计算](development/definition-work-cost-20261103.md)，保留完整 AST、语法和作用域校验。后续核对准确 d066 的 Mac Intel／arm64 字段概况原整例通过；Windows 种子超时、Intel Worker 超时及 arm64 引用退出未确认分别保留，不泛化为三平台通过，暂不发布。
+
 数据浏览新增[SQLite 全筛选字段概况](development/sqlite-statistics-20261103.md)：实际存储类型、NULL／非空、类型内不同值和准确极值，独立只读聚合，不拉取全表或改草稿。277 项相关与后续 37 项定向分轮、类型、同 2 GiB 构建及 Windows 原完整窗口通过；原 ER 真实 Main／MySQL 8.4 另已[验收并精确清理](development/relationship-diagram-live-20261103.md)。Mac／安装及完整剖析／模型仍待验，暂不发布。
 
 SQL 高频编辑新增[本文别名／CTE F2 重命名](development/local-rename-20261103.md)：完整绑定组、原模型版本、线程及中文拒绝提示，不执行 SQL。482 项相关、严格类型、同 2 GiB 构建及 Windows 双方言原完整窗口通过；四次真实修改及整组撤销／重做、冲突零改、资源核清。新 Mac／安装另验，O05 保持部分，暂不发布。

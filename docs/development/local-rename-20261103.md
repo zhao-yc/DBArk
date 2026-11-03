@@ -1,5 +1,7 @@
 # SQL 本文别名与 CTE 重命名
 
+后续声明路径[去除冗余候选计算并补原 CI 核对](definition-work-cost-20261103.md)，保留原语义和完整组操作。准确 d066 的 Windows SQLite 原完整两次正常退出整例通过；arm64 的 F2 附件不替代尚未证明的两次正常退出，Intel 原 Worker 超时保留，不据此宣称新三平台整例通过。
+
 ## d591 的后续平台原件
 
 [原轮次 41552068878](https://github.com/zhao-yc/DBArk/actions/runs/41552068878)的 Mac Intel／arm64 作业成功，准确 `d591cb2b` 的原整例分别 17.144／26.238 秒，1 通过、0 跳过或重试，原 120 秒／worker1、正常 App exit0／signal null。两个产物已核 API SHA256、ZIP 路径／类型／长度／CRC、head 与平台；原四次引用导航保持。原报告另含两次 F2／整组撤销重做和冲突拒绝，继续按原件核验，不外推安装。

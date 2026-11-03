@@ -113,7 +113,8 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     // 复用既有procedure语义与目录契约，不添加参数占位、全库扫描或执行动作。
     if(procedure)return{status:'ready',target:lexical.target,syntax:['procedure'],keywords:[],relations:[],localRelations:[],columnMode:'expression',incomplete:false};
     const before=normalized.text.slice(0,normalized.caret).split('\n'),position={lineNumber:before.length,column:before.at(-1)!.length+1},parser=new QuietMySQL();
-    const suggestions=parser.getSuggestionAtCaretPosition(normalized.text,position),entities=parser.getAllEntities(normalized.text,position)??[];
+    // 声明定位只消费完整语法树与作用域，不计算随后会丢弃的补全候选；语法校验仍在交付定义前执行。
+    const suggestions=intent==='definition'?null:parser.getSuggestionAtCaretPosition(normalized.text,position),entities=parser.getAllEntities(normalized.text,position)??[];
     if(entities.length>completionLimits.tokens)return{status:'blocked',reason:'budget'};
     const tables=entities.filter(entity=>entity.entityContextType==='table') as CommonEntityContext[],queries=entities.filter(entity=>entity.entityContextType==='queryResult') as CommonEntityContext[],ctes=collectCtes(normalizedTokens,normalized.text.length);
     // 新行别名仅供同条 INSERT 更新右侧使用；不支持的局部名称在例程目录回退之前停止。

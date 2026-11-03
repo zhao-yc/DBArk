@@ -27,13 +27,20 @@ const transactionalSql = 'CREATE TABLE main.uncommitted_completion_only(uncommit
 const secondSessionSql = 'SELECT main_marker,id FROM main.subject ORDER BY id;';
 const explicitSql = [bootstrapSql, transactionalSql, secondSessionSql];
 let completed: { directory: string; database: string; firstPid?: number; secondPid?: number; platform: string } | undefined;
+let observeFailure: (() => Record<string, unknown>) | undefined;
 /** 任何失败保留准确窗口、profile及合成库，不自动重启/重试/强停/清理。 */
-test.afterEach(({}, info) => { if (active && info.status !== 'skipped' && !completed) { (require('./desktop-fixture') as Desktop).retainOwnedDesktopResources(info); throw Error('SQLite补全未完成两次正常退出，原现场已保留'); } });
+test.afterEach(async ({}, info) => { if (active && info.status !== 'skipped' && !completed) {
+  (require('./desktop-fixture') as Desktop).retainOwnedDesktopResources(info);
+  // 总期限耗尽时原CDP承诺可能未结算；仅读取已捕获的原进程对象，不再请求失效页面或重复退出。
+  try { await info.attach('SQLite补全停链阶段与原进程观察', { body: JSON.stringify(observeFailure?.() ?? { phase: '原owner尚未捕获' }), contentType: 'application/json' }); } catch { /* 附件失败不覆盖原错误或解除资源保护。 */ }
+  throw Error('SQLite补全未完成两次正常退出，原现场已保留');
+} });
 
 test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔离与旧model撤销，正常重启不执行SQL', async ({ trace, screenshot, video }, info) => {
   const runtime = require('./desktop-fixture') as Desktop, { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite'), { join, basename, dirname, resolve } = require('node:path') as typeof import('node:path'), { realpathSync } = require('node:fs') as typeof import('node:fs');
   let owner = runtime.ownedDesktopResources(info), application = owner.application, page = owner.page, applicationProcess = application.process(), closed = false, armed = false, stage = '独占合成SQLite准备';
   const directory = runtime.dataDir, database = join(directory, 'sqlite-completion-native.sqlite');
+  observeFailure = () => ({ stage, directory, pid: applicationProcess.pid, closed, armed, originalExitCode: applicationProcess.exitCode, originalSignal: applicationProcess.signalCode, automaticRetry: false, automaticRestart: false, automaticForceStop: false });
   const check = () => { const current = runtime.ownedDesktopResources(info); if (current.application !== application || current.page !== page || current.closed !== closed || runtime.dataDir !== directory || info.timeout !== 120000 || info.retry !== 0 || info.repeatEachIndex !== 0 || info.config.workers !== 1) throw Error('SQLite补全owner/profile/120秒期限变化'); };
   const audit = () => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteCompletionNative?: Audit & { check(): void } }).__sqliteCompletionNative; if (!state) throw Error('原补全Main观察器不存在'); state.check(); return { pending: state.pending, denied: state.denied, pickerIds: state.pickerIds, profiles: state.profiles, sessions: state.sessions, commands: state.commands, operations: state.operations, workers: state.workers }; });
   const step = async <T,>(action: () => Promise<T>, skipAfter = false): Promise<T> => { check(); if (armed && !closed) await audit(); const value = await action(); check(); if (armed && !closed && !skipAfter) await audit(); return value; };

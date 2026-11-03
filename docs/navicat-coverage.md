@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQL 声明定位后续[去除冗余候选计算并核对原 CI](development/definition-work-cost-20261103.md)，794 项相关、严格类型／同 2 GiB 构建及 Windows 双方言原完整窗口通过。准确 d066 的 Mac 两架构字段概况原件已核；原 Worker 超时和 arm64 引用退出未确认独立保留，不以专项代替全量或安装验收，暂不发布。
+
 数据浏览新增[SQLite 全筛选字段概况](development/sqlite-statistics-20261103.md)，有界只读聚合、实际存储类型、NULL／不同值及准确极值，原页／草稿保持；277 项相关与 37 项定向分轮、类型／构建和 Windows 原完整窗口通过。另补[MySQL 8.4 关系图真实 Main／实库原例](development/relationship-diagram-live-20261103.md)，复合／自引用／跨库目标、完整定义保持及两准确库清理已核。D09／R02／E01 仍部分，不增加完整工作包或发行计数，暂不发布。
 
 SQL 高频编辑新增[本文别名／CTE 重命名](development/local-rename-20261103.md)：F2、准确绑定组、名称冲突提示及整组撤销／重做，不执行 SQL。482 项相关、严格类型、同 2 GiB 构建及 Windows 双方言原完整窗口通过，准确资源核清；新 Mac／安装及字段／跨作用域／全局重构继续，O05 保持部分，不增加完整工作包或发行计数。
