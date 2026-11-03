@@ -117,6 +117,26 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     await gotoLine(); await step(() => quickInput.fill(':3:2')); await step(() => quickInput.press('Escape'));
     await expect.poll(async () => (await model()).selection).toEqual(afterPosition.selection);
     unchanged(beforePosition, await model());
+    stage = '原生菜单切换行注释并保护 MySQL 双负号';
+    const toggleComment = () => step(() => application.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('sql-toggle-comment'), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('切换行注释原生命令不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    }));
+    await toggleComment();
+    const startOfLine = beforePosition.source.indexOf('\n') + 1;
+    await expect.poll(async () => (await model()).source).toBe(beforePosition.source.slice(0, startOfLine) + '-- ' + beforePosition.source.slice(startOfLine));
+    await step(() => page.keyboard.press(modifier + '+Z'));
+    await expect.poll(async () => (await model()).source).toBe(beforePosition.source);
+    await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End'));
+    await step(() => page.keyboard.insertText('--8'));
+    await expect.poll(async () => (await model()).source).toBe(beforePosition.source + '--8');
+    await step(() => page.keyboard.press(modifier + '+/'));
+    await expect.poll(async () => (await model()).source).toBe(beforePosition.source + (dialect === 'mysql' ? '-- --8' : '8'));
+    await step(() => page.keyboard.press(modifier + '+Z'));
+    await expect.poll(async () => (await model()).source).toBe(beforePosition.source + '--8');
+    await step(() => page.keyboard.press(modifier + '+Z'));
+    await expect.poll(async () => (await model()).source).toBe(beforePosition.source);
     stage = '真实原生菜单与右键仅转换选区并可一次撤销';
     const nativeEnabled = () => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-lowercase')?.enabled === true));
     await expect.poll(nativeEnabled).toBe(false);

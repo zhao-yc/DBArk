@@ -4,6 +4,7 @@ import { editorFontOptions, readEditorFontSize } from '../../shared/editorFont';
 import { editorIndentationOptions, readEditorInsertSpaces, readEditorTabSize } from '../../shared/editorIndentation';
 import { bindEditorIndentation } from '../editorIndentation';
 import { zh } from '../locales/zh-CN';
+import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
@@ -50,7 +51,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, onCompletionStatus, onCaseSelection, onExecute, onExecuteCurrent, onFormat }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onCaseSelection?:(available:boolean)=>void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, onCompletionStatus, onCaseSelection, onExecute, onExecuteCurrent, onFormat, onToggleComment }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onCaseSelection?:(available:boolean)=>void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void> }) {
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
@@ -110,6 +111,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   }, [tabSize, insertSpaces]);
   // 真实卸载释放widget存活监听；单纯布局隐藏保留句柄，不能用已销毁实例恢复桥接。
   useEffect(() => () => { const widget = widgetRef.current; widgetRef.current = null; if (widget) { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.indentation?.dispose(); widget.disposal?.dispose(); } }, []);
+  const toggleCommentRef = useRef(onToggleComment); toggleCommentRef.current = onToggleComment;
   const runRef = useRef(onExecute); runRef.current = onExecute;
   const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
@@ -288,6 +290,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     editor.addAction({ id: 'dbark-run', label: zh.editor.text001, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], run: () => runRef.current?.() });
     // 与原动作分开注册；按钮和快捷键最终进入同一个忙碌/模态守卫。
     if (currentRunRef.current) editor.addAction({ id: 'dbark-run-current', label: currentStatementZh.action, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter], run: () => currentRunRef.current?.() });
+    // 编辑器快捷键和原生菜单走同一个方言检查，避免绕过 MySQL 双负号保护。
+    if (toggleCommentRef.current) editor.addAction({ id: 'dbark-toggle-sql-comment', label: uiCommandLabels['sql-toggle-comment'], precondition: '!editorReadonly', keybindingContext: 'editorTextFocus', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash], run: () => toggleCommentRef.current?.() });
     if (propsRef.current.onFormat) syncFormatAction();
     // 正文订阅、受控同步与readonly解除均已完成，父层才可取得可交互实例。
     if (bridge.ready) propsRef.current.onReady?.(editor);
