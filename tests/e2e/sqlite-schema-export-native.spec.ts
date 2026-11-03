@@ -2,6 +2,8 @@ import { navigationMenuItem } from './navigation-menu';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
+import { tableToolbarZh } from '../../src/renderer/locales/tableToolbar.zh-CN';
+import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
 
 // 默认和--list仅注册一个跳过项；原生桌面及磁盘reader只在显式离线专项内加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -72,13 +74,15 @@ test('SQLite真实结构及筛选数据SQL导出、依赖回放、索引触发�
       if (command === 'sqlite.tableLayout.get' && (Object.keys(value).length !== 3 || Object.keys(value).some(key => !['connectionId', 'database', 'table'].includes(key)))) return deny('其它SQLite本机列布局');
 
       if (/clipboard/i.test(command) || command === 'files.path' || command.startsWith('table.') || command.startsWith('schema.') || command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('serverMonitor.') || ['files.export', 'files.exportResult', 'excel.export'].includes(command)) return deny(command);
-      if (command.startsWith('sqlite.') && !['sqlite.tableLayout.get', 'sqlite.tablePage', 'sqlite.tableExport'].includes(command)) return deny('非本例SQLite只读页/结构导出');
+      const sqliteAllowed = ['sqlite.tableLayout.get', 'sqlite.tablePage', 'sqlite.tableExport', 'sqlite.schemaScript'];
+      if (command.startsWith('sqlite.') && !sqliteAllowed.includes(command)) return deny('非本例SQLite只读页/结构导出');
       if (command === 'sqlite.tableExport' && (value.format !== 'sql' || !['structure', 'structure-data'].includes(String(value.sqlContent)))) return deny('非本例显式SQL内容');
       if (command.startsWith('metadata.') && !['metadata.databases', 'metadata.objects'].includes(command)) return deny(command);
       if (command === 'files.choose') { if (pickerRequest) return deny('并发chooser'); if (value.purpose === 'sqlite-database') { if (input.profileId || typeof value.sqliteConnectionId !== 'string' || !value.sqliteConnectionId || state.connectionId && state.connectionId !== value.sqliteConnectionId) return deny('源文件归属'); state.connectionId = value.sqliteConnectionId; } else if (value.purpose !== 'export' || !state.choice || value.format !== state.choice.format) return deny('文件用途'); pickerRequest = value; }
       if (command === 'connections.save' || command === 'connections.test') { const config = value.sqlite; if (value.dialect !== 'sqlite' || value.id !== state.connectionId || !config || typeof config !== 'object' || !('readOnly' in config) || config.readOnly !== true || ['host', 'port', 'user', 'password', 'ssh', 'tls'].some(key => Object.hasOwn(value, key))) return deny('非本例只读配置'); }
       if (command === 'connections.open' && value.id !== state.connectionId || command.startsWith('metadata.') && value.connectionId !== state.connectionId) return deny('其它数据库');
-      if (['sqlite.tableLayout.get', 'sqlite.tablePage', 'sqlite.tableExport'].includes(command) && (value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite目标');
+      if (sqliteAllowed.includes(command) && (value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite目标');
+      if (command === 'sqlite.schemaScript' && (Object.keys(value).length !== 4 || value.kind !== (value.table === input.objects[0] ? 'table' : 'view'))) return deny('其它结构脚本对象类型');
       const fact: Fact | undefined = ['files.choose', 'sqlite.tablePage', 'sqlite.tableExport'].includes(command) ? { request: structuredClone(value) } : undefined;
       if (fact) (command === 'sqlite.tablePage' ? state.pages : command === 'sqlite.tableExport' ? state.exports : state.choices).push(fact); state.commands.push(command); state.pending++;
       try { const reply = await original(event, payload); check(); if (fact) fact.reply = structuredClone(reply); return reply; } catch (reason) { if (fact) fact.failure = reason instanceof Error ? reason.message : String(reason); throw reason; } finally { state.pending--; if (command === 'files.choose') pickerRequest = undefined; }
@@ -181,7 +185,34 @@ test('SQLite真实结构及筛选数据SQL导出、依赖回放、索引触发�
     await arm(); armed = true; stage = '真实只读表单保存'; await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     await step(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName)); const dialect = form.locator('select'); await step(() => expect(dialect).toHaveCount(1)); await step(() => dialect.selectOption('sqlite')); await step(() => expect(form.getByRole('checkbox', { name: sqliteZh.readOnly, exact: true })).toBeChecked()); await step(() => form.getByRole('button', { name: sqliteZh.choose, exact: true }).click()); await step(() => expect(form.locator('input[readonly]')).toHaveValue(basename(database))); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; if (profile.dialect !== 'sqlite') throw Error('结构导出表单错误保存网络连接'); expect(profile.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: true }); expect(profile.sqlite.fileToken).toBeUndefined(); for (const field of ['host', 'port', 'user', 'password', 'rememberPassword', 'hasPassword', 'ssh', 'tls']) expect(profile).not.toHaveProperty(field);
-    stage = '原树只读表页typed筛选与明确排序'; await step(() => page.locator('.connection-row .tree-label').filter({ hasText: connectionName }).click()); await step(() => page.locator('.database-row .tree-label').filter({ hasText: /^main$/ }).click()); await step(() => page.locator('.object-row .tree-label').filter({ hasText: tableName }).dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible());
+    // 每个入口必须只生成一个草稿，关闭后还原原活动页，保留后续原布局恢复断言。
+    const draft = async (name: string, click: () => Promise<void>) => {
+      const title = name + ' · ' + sqliteZh.structureScript;
+      const close = page.getByRole('button', { name: '关闭 ' + title, exact: true });
+      const before = await step(audit);
+      await step(click);
+      await step(() => expect(close).toBeVisible());
+      await step(() => expect.poll(async () => (await settings()).tabs.find(tab => tab.title === title)?.sql).toContain('COMMIT;'));
+      const workspace = await settings(), tab = workspace.tabs.find(tab => tab.id === workspace.activeTabId);
+      expect(tab).toMatchObject({ title, kind: 'query', connectionId: profile.id, database: 'main' });
+      const after = await step(audit);
+      expect(after.pages).toEqual(before.pages); expect(after.exports).toEqual(before.exports); expect(after.saveCalls).toEqual(before.saveCalls);
+      expect(after.commands.slice(before.commands.length).filter(command => command === 'sqlite.schemaScript')).toHaveLength(1);
+      await step(() => close.click());
+      await step(() => page.getByRole('dialog', { name: queryCloseZh.title, exact: true }).getByRole('button', { name: queryCloseZh.discard, exact: true }).click());
+      await step(() => expect(close).toHaveCount(0));
+      return tab?.sql;
+    };
+    stage = '从原对象树生成表结构草稿';
+    await step(() => page.locator('.connection-row .tree-label').filter({ hasText: connectionName }).click()); await step(() => page.locator('.database-row .tree-label').filter({ hasText: /^main$/ }).click());
+    const tableNode = page.locator('.object-row .tree-label').filter({ hasText: tableName });
+    const tableDraft = await draft(tableName, async () => {
+      await tableNode.click({ button: 'right' });
+      const menu = page.locator('.sidebar-context-menu');
+      await menu.getByRole('menuitem', { name: tableToolbarZh.structure, exact: true }).click();
+      await menu.getByRole('menuitem', { name: sqliteZh.structureScript + ' ' + tableName, exact: true }).click();
+    });
+    stage = '原树只读表页typed筛选与明确排序'; await step(() => tableNode.dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible());
     await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5'));
     for (const [index, column, operator, kind, value] of [[1, 'id', 'gte', 'integer', '3'], [2, 'bucket', 'eq', 'text', '保留']] as const) { await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await step(() => table().getByLabel(`SQLite 筛选 ${index} 字段`, { exact: true }).selectOption(column)); await step(() => table().getByLabel(`SQLite 筛选 ${index} 运算符`, { exact: true }).selectOption(operator)); await step(() => table().getByLabel(`SQLite 筛选 ${index} 值类型`, { exact: true }).selectOption(kind)); await step(() => table().getByLabel(`SQLite 筛选 ${index} 条件值`, { exact: true }).fill(value)); }
     await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('desc')); await step(() => table().getByRole('button', { name: '应用 SQLite 筛选排序', exact: true }).click()); await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); await expectIds(filtered.slice(0, 5).map(row => row.id)); await step(() => table().getByRole('button', { name: 'SQLite 下一页', exact: true }).click()); await expectIds(filtered.slice(5, 10).map(row => row.id)); const pageRequest = (await step(audit)).pages.at(-1)?.request; expect(pageRequest).toMatchObject({ offset: 5, limit: 5, filters: [{ column: 'id', operator: 'gte', value: { kind: 'integer', value: '3' } }, { column: 'bucket', operator: 'eq', value: { kind: 'text', value: '保留' } }], sort: [{ column: 'id', direction: 'desc' }] });
@@ -190,11 +221,20 @@ test('SQLite真实结构及筛选数据SQL导出、依赖回放、索引触发�
     await openExport(); await setContent('structure'); const staleContentChoice = await choose('撤销目标.sql', 'sql'); await step(() => expect(dialog().getByRole('button', { name: '开始 SQLite 全量导出', exact: true })).toBeEnabled()); await setContent('structure-data'); await step(() => expect(dialog().getByRole('button', { name: '开始 SQLite 全量导出', exact: true })).toBeDisabled()); await step(() => expect(dialog().getByLabel('SQLite 导出字段顺序', { exact: true }).locator('li > span')).toHaveText(sourceColumns)); await step(() => expect(dialog().getByRole('checkbox', { name: '导出 SQLite 字段 ' + generated, exact: true })).not.toBeChecked());
     await step(() => dialog().getByLabel('SQLite 全量导出格式', { exact: true }).selectOption('csv')); const staleFormatChoice = await choose('撤销目标.csv', 'csv'); await step(() => expect(dialog().getByRole('button', { name: '开始 SQLite 全量导出', exact: true })).toBeEnabled()); await step(() => dialog().getByLabel('SQLite 全量导出格式', { exact: true }).selectOption('sql')); await step(() => expect(dialog().getByRole('button', { name: '开始 SQLite 全量导出', exact: true })).toBeDisabled()); await setContent('structure'); expect((await step(audit)).exports).toEqual([]); expect(readFileSync(staleCsv)).toEqual(sentinel); expect(readFileSync(staleSql)).toEqual(sentinel);
     stage = '仅结构真实导出及独立DDL回放'; const structure = await execute('仅结构.sql', 'structure', 'structure', baseline); expect(structure?.request.fileToken).not.toBe(result(staleContentChoice?.reply).token); expect(structure?.request.fileToken).not.toBe(result(staleFormatChoice?.reply).token);
+    expect(tableDraft).toBe(readFileSync(canceledTarget, 'utf8'));
     stage = '结构及筛选数据真实导出与触发器延后生效'; await openExport(); await setContent('structure-data'); for (const column of sourceColumns) { await step(() => expect(dialog().getByRole('checkbox', { name: '导出 SQLite 字段 ' + column, exact: true })).toBeChecked()); await step(() => expect(dialog().getByRole('checkbox', { name: '导出 SQLite 字段 ' + column, exact: true })).toBeDisabled()); } const structureData = await execute('结构及筛选数据.sql', 'structure-data', 'structure-data', baseline); expect(structureData?.request).toMatchObject({ mode: 'and', filters: pageRequest?.filters, sort: pageRequest?.sort }); await expectIds(filtered.slice(5, 10).map(row => row.id));
-    stage = '视图仅结构及真实INSTEAD OF触发器回放'; await step(() => page.locator('.object-row .tree-label').filter({ hasText: viewName }).dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible()); const viewPage = (await step(audit)).pages.at(-1); expect(result(viewPage?.reply)).toMatchObject({ target: { kind: 'view', table: viewName } }); await openExport(); await step(() => expect(dialog().getByLabel('SQLite SQL 导出内容', { exact: true })).toHaveValue('structure'));
+    stage = '视图页生成结构草稿并回放真实INSTEAD OF触发器'; const viewNode = page.locator('.object-row .tree-label').filter({ hasText: viewName }); await step(() => viewNode.dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible()); const viewPage = (await step(audit)).pages.at(-1); expect(result(viewPage?.reply)).toMatchObject({ target: { kind: 'view', table: viewName } });
+    const viewDraft = await draft(viewName, async () => {
+      await table().getByRole('button', { name: '更多', exact: true }).click();
+      await page.locator('.action-menu-panel:not(.action-menu-submenu)').getByRole('menuitem', { name: tableToolbarZh.generate, exact: true }).click();
+      await page.locator('.action-menu-submenu').getByRole('menuitem', { name: sqliteZh.structureScript, exact: true }).click();
+    });
+    await step(() => viewNode.dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible());
+    await openExport(); await step(() => expect(dialog().getByLabel('SQLite SQL 导出内容', { exact: true })).toHaveValue('structure'));
     // option以原生HTML属性和DOM布尔属性共同判定，保留视图两种数据模式均不可选的准确事实。
     for (const content of ['data', 'structure-data']) { const option = dialog().getByLabel('SQLite SQL 导出内容', { exact: true }).locator(`option[value="${content}"]`); await step(() => expect(option).toHaveAttribute('disabled', '')); await step(() => expect(option).toHaveJSProperty('disabled', true)); }
     await execute('视图结构.sql', 'structure', 'view', baseline);
+    expect(viewDraft).toBe(readFileSync(join(exportDirectory, '视图结构.sql'), 'utf8'));
     stage = '持久任务隐私与源库完全保持'; expect(disk()).toEqual(baseline); expect(readFileSync(staleCsv)).toEqual(sentinel); expect(readFileSync(staleSql)).toEqual(sentinel); noPartial(); await step(() => expect.poll(async () => (await tasks()).every(task => ['sqlite.tablePage', 'sqlite.tableExport'].includes(task.kind) && task.status === 'completed')).toBe(true)); const firstTasks = await tasks(), taskJson = JSON.stringify(firstTasks); for (const privateValue of [database, canonicalDatabase, tableSql, tableTriggerSql, viewTriggerSql, rows[2].note]) expect(taskJson).not.toContain(privateValue); expect(await history()).toEqual([]); expect(runtime.pageErrors).toEqual([]);
     const firstFacts = await step(audit); expect(firstFacts.exports).toHaveLength(3); expect(firstFacts.pickerCalls).toBe(1); expect(firstFacts.saveCalls).toHaveLength(6); expect(firstFacts.denied).toEqual([]); expect(firstFacts.commands.some(command => command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('table.') || command.startsWith('schema.') || command.startsWith('sqlite.tableEdit.') || /clipboard/i.test(command))).toBe(false); const persisted = await settings(); expect(persisted.tabs.every(tab => tab.kind === 'table')).toBe(true);
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteSchemaExportNative?: { restore(): void } }).__sqliteSchemaExportNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;

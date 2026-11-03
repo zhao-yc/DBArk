@@ -1,10 +1,21 @@
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteExportTextFunction, type SqliteValue } from '../engine/sqlite/protocol';
-import { type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
+import { readSqliteTableCatalogue, withSqliteReadSnapshot, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
+import { assertSqliteSchemaScript, type SqliteSchemaScriptInput, type SqliteSchemaScriptOutput } from '../shared/sqliteSchemaScript';
 
 export const sqliteSchemaExportLimits = { objects: 1000, definitionBytes: 2 * 1024 * 1024, tokens: 300000 } as const;
 interface Token { kind: 'word' | 'quoted' | 'string' | 'symbol'; value: string; }
 export interface SqliteSchemaExport { beforeData: string; afterData: string; }
+
+/** 只生成结构草稿，复用结构文件导出的归属、依赖与原字节校验。 */
+export async function readSqliteSchemaScript(driver: SqliteDriverSession, source: SqliteSchemaScriptInput, control: SqliteTableBrowseControl): Promise<SqliteSchemaScriptOutput> {
+  return withSqliteReadSnapshot(driver, control, async () => {
+    const catalogue = await readSqliteTableCatalogue(driver, source.table, control);
+    if (catalogue.kind !== source.kind) throw Error('SQLite对象类型已变化，请刷新对象列表');
+    const result = await readSqliteSchemaExport(driver, source.table, catalogue, control);
+    return assertSqliteSchemaScript({ source, sql: result.beforeData + result.afterData }, source);
+  });
+}
 
 /** 原目录文字必须经过原生TEXT字节校验；定义中的NUL不能作为可回放SQL发布。 */
 function text(column: string): string { return 'CASE WHEN typeof(' + column + ")='text' THEN " + sqliteExportTextFunction + '(' + column + ',CAST(' + column + ' AS BLOB)) ELSE ' + column + ' END'; }

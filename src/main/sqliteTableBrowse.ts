@@ -140,3 +140,16 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
   if (editPlan) page!.edit = editPlan.capture(originalRows);
   return page!;
 }
+
+/** 目录及派生读取使用同一快照，回滚完成前不交付结果。 */
+export async function withSqliteReadSnapshot<T>(driver: SqliteDriverSession, control: SqliteTableBrowseControl, read: () => Promise<T>): Promise<T> {
+  let output: T | undefined, failed = false, failure: unknown;
+  try {
+    control.check(); await driver.execute('BEGIN'); control.check();
+    output = await read();
+  } catch (reason) { failed = true; failure = reason; }
+  control.beginCleanup();
+  if (driver.isUsable && driver.transaction === true) try { await driver.execute('ROLLBACK'); } catch (reason) { control.cleanupFailed(reason); failure = failed ? new AggregateError([failure, reason], 'SQLite只读操作失败且回滚未确认', { cause: failure }) : reason; failed = true; }
+  else if (!driver.isClosed && driver.transaction !== false) { const reason = Error('SQLite只读操作原只读快照状态未知'); control.cleanupFailed(reason); failure = failed ? new AggregateError([failure, reason], 'SQLite只读操作与收尾失败', { cause: failure }) : reason; failed = true; }
+  if (failed) throw failure; control.check(); return output!;
+}

@@ -11,6 +11,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.relationships': true,
   'sqlite.valueOptions': true,
   'sqlite.statistics': true,
+  'sqlite.schemaScript': true,
   'sqlite.countRows': true,
   'sqlite.tableExport': true,
   'sqlite.tableEdit.preview': true,

@@ -5,6 +5,7 @@ export const sqliteZh = {
   readOnly: '以只读方式打开', busyTimeout: '锁等待超时（毫秒）',
   hint: '文件选择仅授权当前连接。导入或复制的连接需要重新选择本机文件。',
   selectQuery: '生成 SELECT 查询', definition: '查看定义',
+  structureScript: '生成结构 SQL 草稿',
   wrongFileKind: '网络连接不能授权 SQLite 数据库文件',
   unsupported: 'SQLite 当前入口尚未实现，请在查询标签中执行明确的 SQL。',
   formatCaseUnavailable: 'SQLite 格式化暂仅支持保留关键字大小写，请在偏好中选择保留。',

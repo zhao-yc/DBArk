@@ -8,6 +8,7 @@ import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsAp
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteValueOptionsInputSchema } from './sqliteValueOptions';
 import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema } from './sqliteStatistics';
+import { sqliteSchemaScriptSchema } from './sqliteSchemaScript';
 import { sqliteRelationshipsInputSchema } from './sqliteRelationships';
 import { tableHistogramSchema } from './tableHistogram';
 import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from './sqliteImportSource';
@@ -221,6 +222,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tablePage': sqliteTablePageSchema,
   'sqlite.valueOptions': sqliteValueOptionsInputSchema,
   'sqlite.statistics': sqliteStatisticsInputSchema,
+  'sqlite.schemaScript': sqliteSchemaScriptSchema,
   'sqlite.countRows': sqliteRowCountInputSchema,
   'sqlite.relationships': sqliteRelationshipsInputSchema,
   'sqlite.tableExport': sqliteTableExportSchema,

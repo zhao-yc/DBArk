@@ -1,7 +1,7 @@
 import { sqliteStatisticsInputSchema, assertSqliteStatistics, sqliteStatisticsLimits as limits, sqliteRowCountInputSchema, assertSqliteRowCount, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput, type SqliteStatisticsValue } from '../shared/sqliteStatistics';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
-import { readSqliteTableCatalogue, countSqliteMatchingRows, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
+import { withSqliteReadSnapshot, readSqliteTableCatalogue, countSqliteMatchingRows, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 
 /** 原生聚合结果按真实存储类型传输；64位整数、REAL无穷和BLOB不经显示文本猜测。 */
 function typed(value: SqliteValue): SqliteStatisticsValue {
@@ -10,7 +10,7 @@ function typed(value: SqliteValue): SqliteStatisticsValue {
 /** 同一独立只读快照内对全部匹配行按存储类型聚合，最多五行，不拉取全表或借用用户事务。 */
 export async function readSqliteStatistics(driver: SqliteDriverSession, raw: SqliteStatisticsInput, control: SqliteTableBrowseControl): Promise<SqliteStatisticsOutput> {
   const input = sqliteStatisticsInputSchema.parse(raw);
-  return readAggregateSnapshot(driver, control, async () => {
+  return withSqliteReadSnapshot(driver, control, async () => {
     const catalogue = await readSqliteTableCatalogue(driver, input.table, control), field = catalogue.columns.find(column => column.name === input.column);
     if (catalogue.schemaKey !== input.schemaKey || !field) throw Error('SQLite表结构或字段已变化，请刷新后重新统计');
     const source = buildSqliteTableSelect({ connectionId: input.connectionId, database: 'main', table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, sort: [], offset: 0, limit: 1 }, catalogue.columns, [input.column], true);
@@ -34,22 +34,9 @@ export async function readSqliteStatistics(driver: SqliteDriverSession, raw: Sql
 /** 只聚合行数，投影为常量，避免解码无关列的大文本或 BLOB。 */
 export async function readSqliteRowCount(driver: SqliteDriverSession, raw: SqliteRowCountInput, control: SqliteTableBrowseControl): Promise<SqliteRowCountOutput> {
   const input = sqliteRowCountInputSchema.parse(raw);
-  return readAggregateSnapshot(driver, control, async () => {
+  return withSqliteReadSnapshot(driver, control, async () => {
     const catalogue = await readSqliteTableCatalogue(driver, input.table, control);
     if (catalogue.schemaKey !== input.schemaKey) throw Error('SQLite表结构已变化，请刷新后重新统计');
     return assertSqliteRowCount({ request: input, rows: await countSqliteMatchingRows(driver, input, catalogue.columns, control) }, input);
   });
-}
-
-/** 目录与聚合使用同一快照，回滚完成前不交付结果。 */
-async function readAggregateSnapshot<T>(driver: SqliteDriverSession, control: SqliteTableBrowseControl, read: () => Promise<T>): Promise<T> {
-  let output: T | undefined, failed = false, failure: unknown;
-  try {
-    control.check(); await driver.execute('BEGIN'); control.check();
-    output = await read();
-  } catch (reason) { failed = true; failure = reason; }
-  control.beginCleanup();
-  if (driver.isUsable && driver.transaction === true) try { await driver.execute('ROLLBACK'); } catch (reason) { control.cleanupFailed(reason); failure = failed ? new AggregateError([failure, reason], 'SQLite统计失败且回滚未确认', { cause: failure }) : reason; failed = true; }
-  else if (!driver.isClosed && driver.transaction !== false) { const reason = Error('SQLite统计原只读快照状态未知'); control.cleanupFailed(reason); failure = failed ? new AggregateError([failure, reason], 'SQLite统计与收尾失败', { cause: failure }) : reason; failed = true; }
-  if (failed) throw failure; control.check(); return output!;
 }

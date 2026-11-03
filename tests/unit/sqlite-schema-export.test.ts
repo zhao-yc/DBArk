@@ -60,6 +60,22 @@ function definitions(db: InstanceType<typeof DatabaseSync>, table: string): unkn
 const inspect = 'SELECT id,parent_id,typeof(value) AS storage,CASE WHEN typeof(value)=\'blob\' THEN hex(value) ELSE quote(value) END AS value,hex(CAST(note AS BLOB)) AS note,hex(payload) AS payload,generated FROM subject ORDER BY id';
 
 describe('SQLite结构及数据导出真实快照与独立SQL回放', () => {
+  it.each([['subject', 'table'], ['subject_view', 'view']] as const)('未浏览 %s 时生成的结构草稿与导出一致', async (table, kind) => {
+    const profile = fixture(), { app, events } = runtime(profile), before = hash(profile.sqlite.filePath!);
+    const source = { connectionId: profile.id, database: 'main', table, kind } as const;
+    const draft = await app.request('sqlite.schemaScript', source);
+    expect(draft.source).toEqual(source);
+    const original = processes.at(-1)!;
+    expect(original.sent.some(message => message.kind === 'streamRead')).toBe(false);
+    expect(await original.exited).toEqual({ code: 0, signal: null });
+    expect(events).toEqual([]);
+    const input = request(profile, await page(app, profile, table));
+    await expect(app.request('sqlite.tableExport', input)).resolves.toEqual({ rows: 0, fileCommitted: true });
+    expect(draft.sql).toBe(readFileSync(input.filePath, 'utf8'));
+    await expect(app.request('sqlite.schemaScript', { ...source, kind: kind === 'table' ? 'view' : 'table' })).rejects.toThrow();
+    expect(hash(profile.sqlite.filePath!)).toBe(before);
+  });
+
   it('仅结构零数据SELECT/rows0，精确CREATE/index/trigger/FK及seq9000回放，目标其它序列不变', async () => {
     const profile = fixture(), { app } = runtime(profile), source = await page(app, profile);
     // 附属目录取导出开始时自己的快照；浏览页之后新增的真实索引应包含在脚本中。

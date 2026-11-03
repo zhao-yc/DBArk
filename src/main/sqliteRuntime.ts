@@ -14,6 +14,8 @@ import { readSqliteValueOptions } from './sqliteValueOptions';
 import { readSqliteRowCount, readSqliteStatistics } from './sqliteStatistics';
 import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema, sqliteStatisticsLimits, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../shared/sqliteStatistics';
 import { readSqliteRelationships } from './sqliteRelationships';
+import { readSqliteSchemaScript } from './sqliteSchemaExport';
+import { sqliteSchemaScriptSchema } from '../shared/sqliteSchemaScript';
 import { sqliteRelationshipsInputSchema, type SqliteRelationshipsInput, type SqliteRelationshipsOutput } from '../shared/sqliteRelationships';
 import { sqliteValueOptionsInputSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import { sqliteTableExportSchema, type SqliteTableExportOutput } from '../shared/sqliteTableExport';
@@ -220,11 +222,15 @@ export class SqliteRuntime {
     if (database !== undefined && database !== null && database !== 'main') throw Error('SQLite原工作区目前只支持main数据库');
   }
   /** 每次元数据读取重新解析Main可信路径，禁止复用用户事务或渲染传入的profile。 */
-  private metadata(input: any, action: (driver: SqliteDriverSession) => Promise<unknown>): Promise<unknown> {
+  private metadata(input: any, action: (driver: SqliteDriverSession, check: () => void) => Promise<unknown>): Promise<unknown> {
     this.database(input.database);
     const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
     this.assertTarget(connection, profile);
-    return this.track(connection, () => this.short(connection, profile, action, true));
+    const check = () => {
+      if (this.stopping || connection.closing || connection.blocked) throw Error('SQLite连接正在关闭或不可用');
+      this.assertTarget(connection, this.profile(this.options.resolveProfile(input.connectionId), input.connectionId));
+    };
+    return this.track(connection, () => this.short(connection, profile, driver => action(driver, check), true));
   }
   /** 补全只保留有界活动请求；会话分支串行借用原driver，独立分支只读打开并确认原exit。 */
   private completion(source: unknown): Promise<SqliteCompletionOutput> {
@@ -1144,6 +1150,11 @@ export class SqliteRuntime {
       case 'sqlite.valueOptions': return this.valueOptions(input);
       case 'sqlite.statistics': return this.statistics(input);
       case 'sqlite.countRows': return this.statistics(input, true);
+      case 'sqlite.schemaScript': {
+        const source = sqliteSchemaScriptSchema.parse(input);
+        // 短读自行确认 driver 关闭；边界检查只中止读取，不干预回滚或用户事务。
+        return this.metadata(source, (driver, check) => readSqliteSchemaScript(driver, source, { check, beginCleanup: () => {}, cleanupFailed: () => {} }));
+      }
       case 'sqlite.relationships': return this.relationships(input);
       case 'sqlite.completion': return this.completion(input);
       case 'query.objectDefinition': return this.objectDefinition(input);
