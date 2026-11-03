@@ -16,6 +16,7 @@ import { collectChanges, newDraftRow, type DraftRow } from '../dataChanges';
 import { cellClipboardType, decodeClipboard, encodeClipboard, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import { maxTablePage, parsePageJump, setAllFilterRulesEnabled, type FilterMode, type FilterDraft } from '../tableFilters';
+import { tableLastPageBounds } from '../../shared/tableLastPage';
 import { tableCellFilterDraft } from '../tableCellFilter';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { buildTableSelectedFilter, type TableSelectedFilterProposal } from '../tableSelectedFilter';
@@ -147,6 +148,7 @@ function TextCellEditor({ row, column, onRowChange, onClose, binary, onEditingCh
 /** 分页、排序和筛选全部交给数据库，界面仅持有当前页及该页的待提交修改。 */
 type TableQueryTemplateLease = { info: TableInfo; metadata: string; tab: WorkspaceTab; version: number; refresh: number; generation: number; limit: number; invalid: boolean };
 type TableFilteredSelectPage = { info: TableInfo; page: TablePage; scope: string; generation: number; index: number };
+type TableLastPageRead = { taskId: string; sent: boolean; finished: boolean; stopped: boolean; stop?: Promise<unknown> };
 type TableSortLease = { scope: object; columns: string[]; sort: SortRule[]; invalid: boolean };
 type TableDraftLease = { mode: 'save' | 'restore'; payload?: TableDraftPayload; info: TableInfo; page: TablePage; rows: DraftRow[]; generation: number; invalid: boolean; values: unknown[] };
 type TableFilterGroupLease = { scope: object; filters: FilterRule[]; mode: FilterMode; initial?: FilterGroup; invalid: boolean; dialogs: ReturnType<typeof createPresetDialogGuard> };
@@ -156,7 +158,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const settings = useWorkspace(state => state.settings); const connection = useWorkspace(state => state.connections.find(profile => profile.id === tab.connectionId));
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const presetUiEpoch=useRef(0);
-  const [info, setInfo] = useState<TableInfo | null>(null); const [page, setPage] = useState<TablePage | null>(null); const [pageIndex, setPageIndexState] = useState(1);
+  const [info, setInfo] = useState<TableInfo | null>(null); const [page, setPage] = useState<TablePage | null>(null);
+  const [pageRequest, setPageRequest] = useState<number | { from: number }>(1);
+  const pageIndex = typeof pageRequest === 'number' ? pageRequest : page?.page ?? pageRequest.from;
+  const lastPageRead = useRef<TableLastPageRead | undefined>(undefined), [lastPageStopping, setLastPageStopping] = useState(false);
   const [draftDialog, setDraftDialog] = useState<TableDraftLease | null>(null), draftLease = useRef<TableDraftLease | null>(null);
   const [restoredDraftView, setRestoredDraftView] = useState(false);
   const [pageJump, setPageJump] = useState('1');
@@ -183,7 +188,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const foreignKeyJoinBusy = useRef<{ lease?: WorkspaceBusyLease; acquiring: boolean; releasing: boolean } | null>(null);
   const [filteredSelectDialog, setFilteredSelectDialog] = useState<TableFilteredSelectIntent | null>(null), filteredSelectIntent = useRef<TableFilteredSelectIntent | null>(null), filteredSelectPage = useRef<TableFilteredSelectPage | null>(null);
   /** 所有已应用条件/排序均同时回到第一页；在排队渲染前撤销旧loaded来源，堵住同事件旧按钮。 */
-  function setPageIndex(next: number | ((current: number) => number)): void { rowTransferIntent.current?.invalidate(); filteredSelectIntent.current?.invalidate(); filteredSelectPage.current = null; setPageIndexState(next); }
+  function setPageIndex(next: number | ((current: number) => number)): void {
+    rowTransferIntent.current?.invalidate(); filteredSelectIntent.current?.invalidate(); filteredSelectPage.current = null;
+    setPageRequest(previous => typeof next === 'number' ? next : next(typeof previous === 'number' ? previous : pageIndex));
+  }
   const [sortPanel, setSortPanel] = useState<TableSortLease | null>(null), sortPanelRef = useRef(sortPanel);
   const tableReadAction = useRef<object | null>(null), tableReadRender = {};
   /** 只发布已提交渲染的快捷动作；卸载、隐藏恢复或后继渲染不能复活旧按钮回调。 */
@@ -351,7 +359,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (source?.source.status === 'ready') await invoke('table.copySourceRelease', { connectionId: source.connectionId, pageRef: source.source.pageRef }).catch(() => undefined);
   }
   useEffect(() => { invalidateCopyRead(); }, [base, connectionVersion, refreshVersion]);
-  useEffect(() => () => { invalidateCopyRead(); if (copyPageTask.current) void invoke('query.cancel', { taskId: copyPageTask.current }).catch(() => undefined); void releaseCopySources(); }, []);
+  useEffect(() => () => { invalidateCopyRead(); if (copyPageTask.current && !lastPageRead.current?.stopped) void invoke('query.cancel', { taskId: copyPageTask.current }).catch(() => undefined); void releaseCopySources(); }, []);
   const record = useRecordViews({ rows, getRows: () => rowsRef.current, getContext: getRecordContext, onRows: setRows, onDirty: dirty => { childReferenceIntent.current?.invalidate(); tableStatisticsIntent.current?.invalidate(); tableValueOptionsIntent.current?.invalidate(); if (dirty && selectedFilterRef.current) selectedFilterRef.current.invalid = true; if (dirty) { filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate(); invalidateCopyRead(); batchFillIntent.current?.invalidate(); } inputDirtyRef.current = dirty; useWorkspace.getState().setDirty(tab.id, dirty || collectChanges(rowsRef.current).length > 0); }, onFocusGrid: () => restoreGridFocus(true) });
   recordControllerRef.current = record;
   const childReferenceValues = [base, connectionVersion, refreshVersion, info, page, rows, loadGeneration.current, pageIndex, pageSize, sort, filters, filterMode, filterGroup, externalStale, selection?.rowId, settings.activeTabId, record.dirty, record.pending, record.formOpen, gridEditing];
@@ -506,47 +514,73 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const load = useCallback(async () => {
     rowTransferIntent.current?.invalidate();
     history.clear();
+    const last = typeof pageRequest !== 'number', requestedIndex = last ? 1 : pageRequest;
+    const previousPage = last ? filteredSelectPage.current : null;
     const generation = ++loadGeneration.current; blockedRef.current = true;
     filteredSelectIntent.current?.invalidate(); filteredSelectPage.current = null;
     // 实际读取实参在第一个await前固定，不能让旧页领取后来筛选/排序的SQL草稿。
     const selectScope = recordPageScope({ target: base, connectionVersion, refreshVersion: recordPageScopeRef.current.value.refreshVersion, pageSize, filters, filterMode, filterGroup, sort });
     // 读取实参绑定当次条件；结构版本取最新值，其它旧闭包实参不能领取新条件的意图。
-    const navigation = recordPages.claim({ ...getRecordPageContext(), scope: recordPageScope({ target: base, connectionVersion, refreshVersion: recordPageScopeRef.current.value.refreshVersion, pageSize, filters, filterMode, filterGroup, sort }), page: pageIndex, generation });
-    invalidateCopyRead(); if (copyPageTask.current) void invoke('query.cancel', { taskId: copyPageTask.current }).catch(() => undefined);
+    const navigation = last ? undefined : recordPages.claim({ ...getRecordPageContext(), scope: selectScope, page: requestedIndex, generation });
+    invalidateCopyRead(); if (copyPageTask.current && !lastPageRead.current?.stopped) void invoke('query.cancel', { taskId: copyPageTask.current }).catch(() => undefined);
     const sourceTaskId = uid(); copyPageTask.current = sourceTaskId;
+    const lastRead: TableLastPageRead | undefined = last ? { taskId: sourceTaskId, sent: false, finished: false, stopped: false } : undefined;
+    lastPageRead.current = lastRead; setLastPageStopping(false);
     let pendingSource: { connectionId: string; source: TableCopyPageSources } | null = null;
+    let retiringSource: Promise<void> | undefined;
     loadingCount.current++; useWorkspace.getState().setBusy(tab.id, true);
     setBusy(true); setError('');
     try {
-      await releaseCopySources();
+      if (!last) await releaseCopySources();
       await invoke('connections.open', { id: tab.connectionId });
       if (generation !== loadGeneration.current || !mounted.current) return;
-      const settled = await Promise.allSettled([invoke('metadata.table', base), invoke('table.page', { ...base, page: pageIndex, pageSize, filters, filterMode, filterGroup, sort, copySource: true, taskId: sourceTaskId })]);
+      if (lastRead?.stopped) throw Error(zh.table.lastPageCancelled);
+      if (lastRead) lastRead.sent = true;
+      const settled = await Promise.allSettled([invoke('metadata.table', base), invoke('table.page', { ...base, page: requestedIndex, pageSize, filters, filterMode, filterGroup, sort, copySource: true, taskId: sourceTaskId, ...(last ? { lastPage: true } : {}) })]);
+      if (lastRead) lastRead.finished = true;
       if (settled[1].status === 'fulfilled' && settled[1].value.copySource) pendingSource = { connectionId: base.connectionId, source: settled[1].value.copySource };
+      if (lastRead?.stopped) {
+        if (settled[1].status === 'rejected') throw settled[1].reason;
+        throw Error(zh.table.lastPageCancelled);
+      }
       if (settled[0].status === 'rejected') throw settled[0].reason;
       const metadata = settled[0].value;
       if (settled[1].status === 'rejected') throw settled[1].reason; const data = settled[1].value;
       if (generation !== loadGeneration.current || !mounted.current) return;
-      if (navigation && (data.page !== pageIndex || data.pageSize !== pageSize)) throw new Error(recordViewZh.pageChanged);
+      if (last) {
+        const expected = tableLastPageBounds(data.matchingRows, pageSize);
+        if (data.page !== expected.page || data.pageSize !== pageSize || data.hasMore || data.rows.length !== expected.rows || data.copyMetadataKey !== tableCopyMetadataKey(metadata)) throw Error(zh.table.lastPageMismatch);
+      } else if (navigation && (data.page !== requestedIndex || data.pageSize !== pageSize)) throw new Error(recordViewZh.pageChanged);
       const nextRows = data.rows.map(data => ({ id: uid(), data: structuredClone(data), original: structuredClone(data), inserted: false, deleted: false }));
+      if (last) retiringSource = releaseCopySources();
       copySources.current = pendingSource; copyPage.current = { page: data, target: recordTargetKey(base), connectionVersion, generation }; pendingSource = null; copyRowRefs.current.clear();
       if (data.copySource?.status === 'ready') { const refs = data.copySource.rowRefs; nextRows.forEach((row, index) => { if (refs[index]) copyRowRefs.current.set(row.id, refs[index]!); }); }
-      filteredSelectPage.current = { info: metadata, page: data, scope: selectScope, generation, index: pageIndex };
+      filteredSelectPage.current = { info: metadata, page: data, scope: selectScope, generation, index: last ? data.page : requestedIndex };
       setInfo(metadata); setPage(data); setRows(nextRows, 'replace'); setRestoredDraftView(false); setSelectedRows(new Set()); setSelection(undefined); selectionRef.current = undefined; copiedDraftIds.current.clear(); setDuplicateNotice(''); recordControllerRef.current?.reset(); setExternalStale(false);
-      if (navigation && recordPages.complete(navigation, getRecordPageContext(), nextRows)) setRecordPageMessage({ revision: navigation.action, text: formatText(nextRows.length ? recordViewZh.pageArrived : recordViewZh.pageEmpty, pageIndex) });
+      if (navigation && recordPages.complete(navigation, getRecordPageContext(), nextRows)) setRecordPageMessage({ revision: navigation.action, text: formatText(nextRows.length ? recordViewZh.pageArrived : recordViewZh.pageEmpty, requestedIndex) });
     } catch (reason) {
       if (generation === loadGeneration.current && mounted.current) {
-        // 翻页/筛选已获草稿放弃确认；失败不能把旧页继续显示成新条件下的可编辑结果。
-        setError(errorMessage(reason)); setPage(null); setRows([], 'replace'); setRestoredDraftView(false); setSelectedRows(new Set()); setSelection(undefined); selectionRef.current = undefined; recordControllerRef.current?.reset();
-        if (navigation && recordPages.fail(navigation, getRecordPageContext())) setRecordPageMessage({ revision: navigation.action, text: formatText(recordViewZh.pageFailed, pageIndex) });
+        setError(errorMessage(reason));
+        if (previousPage?.scope === selectScope && recordPageSource.current === previousPage.page && getRecordPageContext().scope === selectScope) {
+          // 显式末页读取失败或取消时，原页、原行和复制来源均保持。
+          filteredSelectPage.current = { ...previousPage, generation };
+          if (copyPage.current?.page === previousPage.page) copyPage.current = { ...copyPage.current, generation };
+        } else {
+          if (last) retiringSource = releaseCopySources();
+          setPage(null); setRows([], 'replace'); setRestoredDraftView(false); setSelectedRows(new Set()); setSelection(undefined); selectionRef.current = undefined; recordControllerRef.current?.reset();
+        }
+        if (navigation && recordPages.fail(navigation, getRecordPageContext())) setRecordPageMessage({ revision: navigation.action, text: formatText(recordViewZh.pageFailed, requestedIndex) });
       }
     }
     finally {
       if (pendingSource) await releaseCopySources(pendingSource);
+      if (retiringSource) await retiringSource;
+      if (lastRead?.stop) await lastRead.stop;
+      if (lastPageRead.current === lastRead) { lastPageRead.current = undefined; if (mounted.current) setLastPageStopping(false); }
       if (copyPageTask.current === sourceTaskId) copyPageTask.current = undefined;
       loadingCount.current = Math.max(0, loadingCount.current - 1); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || applyingRef.current || preferencesLock.current || copyPendingRef.current); if (generation === loadGeneration.current && mounted.current) setBusy(false);
     }
-  }, [base, pageIndex, pageSize, filters, filterMode, filterGroup, sort, tab.connectionId, connectionVersion]);
+  }, [base, pageRequest, pageSize, filters, filterMode, filterGroup, sort, tab.connectionId, connectionVersion]);
   const observedConnection = useRef({ target: recordTargetKey(base), version: connectionVersion });
   useEffect(() => {
     const changed = observedConnection.current.target !== recordTargetKey(base) || observedConnection.current.version !== connectionVersion;
@@ -1131,8 +1165,30 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   function jumpToPage() {
     // 恢复视图不领取服务器分页；旧渲染闭包也不能沿用恢复前残留的页码。
     if (tableReadAction.current !== tableReadRender || restoredDraftView || busy || applying) return;
-    try { const target = parsePageJump(pageJump); if (target !== pageIndex && canReload()) { setError(''); setPageIndex(target); } }
+    try { const target = parsePageJump(pageJump); if ((target !== pageIndex || !page && typeof pageRequest !== 'number') && canReload()) { setError(''); setPageIndex(target); } }
     catch (reason) { setError(errorMessage(reason)); }
+  }
+  const lastPageSupported = info?.objectKind === 'table' && info.engine.toUpperCase() === 'INNODB';
+  const lastPageAvailable = lastPageSupported && countPageAvailable && !blocked && !externalStale && !gridEditing;
+  const renderedLastPageRead = lastPageRead.current;
+  /** 末页读取使用原筛选和排序，丢稿确认前后都核对同一已加载页。 */
+  function openLastPage(): void {
+    const current = () => {
+      const workspace = useWorkspace.getState();
+      return lastPageAvailable && mounted.current && tableReadAction.current === tableReadRender && filteredSelectPage.current === loadedCountPage
+        && loadedCountPage?.scope === getRecordPageContext().scope && workspace.settings.activeTabId === tab.id
+        && workspace.settings.tabs.find(item => item.id === tab.id) === tab && workspace.connections.find(item => item.id === tab.connectionId) === connection
+        && !activeGridEditor.current && !reloadBlocked() && !document.querySelector('[role="alertdialog"]');
+    };
+    if (!canReload(undefined, current)) return;
+    tableReadAction.current = null;
+    setPageRequest({ from: pageIndex });
+  }
+  /** 停止只消费本次末页任务；收到取消回执之前，仍等原读取完成清理。 */
+  function stopLastPage(read: TableLastPageRead): void {
+    if (!mounted.current || lastPageRead.current !== read || read.stopped || read.finished || useWorkspace.getState().settings.activeTabId !== tab.id) return;
+    read.stopped = true; setLastPageStopping(true);
+    if (read.sent) read.stop = invoke('query.cancel', { taskId: read.taskId }).catch(() => undefined);
   }
   const columns = useMemo<Column<DraftRow>[]>(() => [SelectColumn, ...visibleColumns.map<Column<DraftRow>>(column => ({
     key: column.key, name: column.name, minWidth: 64, maxWidth: 2000, width: preferences.columns.find(item => item.name === column.key)?.width ?? 165, frozen: frozenKeys.includes(column.key), resizable: true, sortable: true, draggable: true,
@@ -1476,6 +1532,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     <ActionMenuSection label={tableToolbarZh.danger}>{onTableDrop && <button title={tableDropZh.title} aria-label={tableDropZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableDrop(); }}>{tableDropZh.title}</button>}
 {onTableTruncate && <button title={tableTruncateZh.title} aria-label={tableTruncateZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableTruncate(); }}>{tableTruncateZh.title}</button>}</ActionMenuSection>
   </>}/>{preferencesDirty && <span className="muted small">{tableGridZh.unsaved}</span>}{showFilter && <TableFilterPanel seed={cellFilterSeed} columns={info?.columns.map(column => column.name) ?? []} filters={filters} mode={filterMode} disabled={blocked || !!filterGroups} onFiltersChange={changeFilters} onModeChange={changeFilterMode} pause={{ active: !!resumableFilters, available: filterPauseAvailable, onToggle: toggleFilterPause }}><TablePresetPanel target={base} connectionVersion={connectionVersion} refreshVersion={refreshVersion} columns={info?.columns.map(column=>column.name)??[]} configuration={{filters,filterMode,...(filterGroup?{filterGroup}:{}),sort}} disabled={blocked||externalStale||!info||!!activeGridEditor.current||!!filterGroups} beforeApply={preparePresetApply} onApply={applyNamedPreset}/></TableFilterPanel>}{filterGroup && <p className="filter-value-hint" aria-label={groupText.structure}>{tableFilterGroupSummary(filterGroup)}</p>}{selectedFilter && <TableSelectedFilterPanel proposal={selectedFilter.proposal} isCurrent={() => selectedFilterCurrent(selectedFilter)} onApply={() => applySelectedFilter(selectedFilter)} onClose={() => closeSelectedFilter(selectedFilter)}/>}{filterGroups && <TableFilterGroupsDialog filters={filterGroups.filters} mode={filterGroups.mode} initial={filterGroups.initial} isCurrent={() => filterGroupsCurrent(filterGroups)} onApply={next => applyFilterGroups(filterGroups, next)} onClose={() => closeFilterGroups(filterGroups)}/ >}{sortPanel && <TableSortPanel columns={sortPanel.columns} initial={sortPanel.sort} isCurrent={() => sortPanelCurrent(sortPanel)} onApply={next => applySortPanel(sortPanel, next)} onClose={() => closeSortPanel(sortPanel)}/>}{showFind && <PageFindPanel focusRequest={findFocus} rows={rows} keys={visibleKeys} info={info} generation={pageFindGeneration()} disabled={blocked || record.dirty || externalStale} replaceDisabled={!editable} onJump={jumpToMatch} getSelectionToken={() => selectionRef.current} onApply={applyPagePlan} onFilter={() => setShowFilter(true)}/>}{externalStale && <div className="info-strip">{columnPatchZh.staleTable}</div>}<ErrorBox message={error || references.error || preferencesError}/>{history.notice && <div className="info-strip" role="status">{history.notice}</div>}{duplicateNotice && <div className="info-strip" role="status">{duplicateNotice}{copyPending && <button onClick={() => { invalidateCopyRead(); setDuplicateNotice(recordCopySourceZh.cancelling); }}>{recordCopySourceZh.cancel}</button>}</div>}{info && !editable && <div className="info-strip">{recordReadonlyReason({ ...getRecordContext(), busy: false })}</div>}<div className="table-record-layout"><div className="table-grid-wrap">{busy && <div className="loading-overlay"><Spinner/></div>}<DataGrid<DraftRow, unknown, string> ref={grid} aria-label={tableGridZh.grid} onColumnResize={(column, width) => { if (!blocked && visibleKeys.includes(column.key)) { try { updatePreferences(changeTablePreference(preferencesRef.current, column.key, { width })); } catch (reason) { setPreferencesError(errorMessage(reason)); } } }} onColumnsReorder={(source, target) => { if (!blocked) updatePreferences(moveTableColumn(preferencesRef.current, source, target)); }} className={`results-grid rdg-${settings.theme} grid-row-height-${readGridRowHeight(preferences.rowHeight)}`} columns={columns} rows={rows} rowHeight={readGridRowHeight(preferences.rowHeight)} headerRowHeight={42} rowKeyGetter={row => row.id} rowClass={row => row.deleted ? 'row-deleted' : row.inserted ? 'row-inserted' : !rowEqual(row.original!, row.data) ? 'row-modified' : undefined} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onRowsChange={changeRows} onActivePositionChange={({ row, column }) => selectCurrentCell(row, column?.key)} onCellClick={({ row, column }) => { recordPages.cancel(); selectCurrentCell(row, column.key); }} onCellDoubleClick={({ row, column }, event) => { if (!blocked && isBinaryCell(ownCell(row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)) { event.preventGridDefault(); record.openCell(row.id, column.key); } }} sortColumns={sort.map(item => ({ columnKey: item.column, direction: item.direction }))} onSortColumnsChange={next => { if (tableReadAction.current !== tableReadRender) return; try { const checked = tableSortFromGrid(next, sort, info?.columns.map(column => column.name) ?? []); if (canReload()) { setSort(checked); setPageIndex(1); } } catch (reason) { setError(errorMessage(reason)); } }} onCellCopy={copyCells} onCellPaste={pasteClipboard} onCellKeyDown={(args, event) => { recordPages.cancel(); handleGridKeyDown(args, event); }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} pageNavigation={{ previous: !restoredDraftView && pageIndex > 1 && (rows.length === 0 || !!record.draft), next: !restoredDraftView && !!page?.hasMore && pageIndex < maxTablePage && !!record.draft, message: recordPageMessage.revision === recordPages.revision ? recordPageMessage.text : '', onNavigate: navigateRecordPage }} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div><div className="table-action-bar mysql-table-page-status"><span className={changes.length ? 'warning-text' : 'muted'}>{changes.length ? formatText(zh.table.text015, changes.length) : formatText(zh.table.text016, page?.rows.length ?? 0)}</span>{record.dirty && <span className="warning-text">{recordViewZh.inputDirty}</span>}{(changes.length > 0 || record.dirty) && <><button disabled={blocked} onClick={() => { if (canReload()) void load(); }}><Undo2 size={13}/>{zh.table.text018}</button><button className="primary" disabled={blocked} onClick={() => void makePreview()}><Save size={13}/>{zh.table.text019}</button></>}<span className="grow"/><label className="inline-field">{zh.table.text020}<select aria-label={zh.table.text021} value={pageSize} disabled={blocked || restoredDraftView} onChange={event => { if (canReload()) { setPageIndex(1); setPageSize(Number(event.target.value)); useWorkspace.getState().updateSettings({ pageSize: Number(event.target.value) }); } }}>{[50, 100, 200, 500, 1000].map(size => <option key={size}>{size}</option>)}</select>{zh.table.text022}</label><GridRowJump grid={grid} scope={rowJumpScope} count={rows.length} disabled={rowJumpDisabled} onJump={jumpToGridRow}/><form className="page-jump" title={zh.table.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}><input aria-label={zh.table.pageJumpLabel} inputMode="numeric" value={pageJump} disabled={blocked || restoredDraftView} onChange={event => setPageJump(event.target.value)}/><button type="submit" disabled={blocked || restoredDraftView}>{zh.table.pageJump}</button></form><button className="icon-button" aria-label={zh.common.pagePrevious} disabled={restoredDraftView || pageIndex === 1 || blocked} onClick={() => { if (canReload()) setPageIndex(current => current - 1); }}><ChevronLeft size={16}/></button><span>{restoredDraftView ? savedDraftText.restoredScope : <>{zh.table.text023}{pageIndex}{zh.table.text024}</>}</span><button className="icon-button" aria-label={zh.common.pageNext} disabled={restoredDraftView || !page?.hasMore || blocked || pageIndex >= maxTablePage} onClick={() => { if (canReload()) setPageIndex(current => current + 1); }}><ChevronRight size={16}/></button>
+      <button type="button" disabled={!lastPageAvailable} title={lastPageSupported ? zh.table.lastPageHint : zh.table.lastPageUnsupported} onClick={openLastPage}>{zh.table.lastPage}</button>
+      {busy && renderedLastPageRead && <button type="button" disabled={lastPageStopping || renderedLastPageRead.finished} onClick={() => stopLastPage(renderedLastPageRead)}>{lastPageStopping ? zh.table.lastPageStopping : zh.table.lastPageStop}</button>}
+      {countPageAvailable && !externalStale && page?.matchingRows !== undefined && <span title={zh.table.lastPageHint}>{formatText(zh.table.lastPageCount, page.matchingRows)}</span>}
       <button type="button" disabled={!statisticsAvailable || !countPageAvailable} title={tableStatisticsZh.countHint} onClick={() => openTableStatistics(true)}>{tableStatisticsZh.countTitle}</button>
       <span aria-live="polite" title={visiblePageCount === undefined ? undefined : tableStatisticsZh.recentCountHint}>{visiblePageCount === undefined ? '' : tableStatisticsZh.recentCount(visiblePageCount)}</span>
     </div>

@@ -23,6 +23,7 @@ function fixture() {
     if (sql.startsWith('SELECT 1 FROM')) state.locked = true;
     if (sql === 'ROLLBACK') { state.locked = false; state.onRollback?.(); }
     if (sql.startsWith('SELECT @@SESSION.time_zone')) return { rows: [{ timeZone: '+08:00' }] };
+    if (sql.startsWith('SELECT CAST(COUNT(*) AS CHAR)')) { expect(state.locked).toBe(true); return { rows: [{ matchingRows: String(state.count) }] }; }
     if (sql.startsWith('SELECT OCTET_LENGTH')) { expect(state.locked).toBe(true); await state.block?.(); return { rows: Array.from({ length: state.count }, () => Object.fromEntries(state.info.columns.map((column, index) => ['n' + index, state.size ?? (state.raw[column.name] === null ? null : Buffer.isBuffer(state.raw[column.name]) ? (state.raw[column.name] as Buffer).length : Buffer.byteLength(String(state.raw[column.name])))]))) }; }
     if (sql.startsWith('SELECT `')) { expect(state.locked).toBe(true); return { rows: Array.from({ length: state.count }, () => Object.fromEntries(state.info.columns.map((column, index) => ['c' + index, state.raw[column.name]]))) }; }
     return { rows: [] };
@@ -42,6 +43,11 @@ function fixture() {
 }
 
 describe('完整复制源严格IPC', () => {
+  it('末页只能使用独立只读任务，拒绝与页码或裸读取混用', () => {
+    const { input } = fixture();
+    expect(validateCommand('table.page', { ...input, lastPage: true })).toEqual({ ...input, lastPage: true });
+    for (const patch of [{ page: 2 }, { copySource: false }, { taskId: undefined }, { lastPage: false }]) expect(() => validateCommand('table.page', { ...input, lastPage: true, ...patch })).toThrow();
+  });
   it('页opt-in与任务号耦合；旧普通页及referencePage不扩大', () => {
     const f = fixture(), { taskId, copySource, ...ordinary } = f.input;
     expect(validateCommand('table.page', ordinary)).toEqual(ordinary); expect(validateCommand('table.page', f.input)).toEqual(f.input);
@@ -51,6 +57,35 @@ describe('完整复制源严格IPC', () => {
     const input = { connectionId: 'conn', pageRef: randomUUID(), ...(command === 'table.copySourceRead' ? { taskId: randomUUID(), rowRef: randomUUID() } : {}) };
     expect(publicCommands[command]).toBe(true); expect(validateCommand(command, input)).toEqual(input);
     for (const patch of [{ sql: 'SELECT secret' }, { key: '1' }, { complete: true }, { identity: {} }, { pageRef: 'not-uuid' }, { connectionId: '' }]) expect(() => validateCommand(command, { ...input, ...patch })).toThrow();
+  });
+});
+
+describe('末页在独立只读事务中计数并读取', () => {
+  it.each([[0, 1, 0], [1, 1, 1], [50, 1, 50], [101, 3, 1]] as const)('匹配 %s 行时回到准确末页', async (total, pageIndex, rows) => {
+    const f = fixture(); f.state.count = total; f.state.rows = rows; f.state.info.columns[2].extra = '';
+    const filters = [{ column: 'id', operator: '>=', value: '9007199254740993' }, { column: 'note', operator: 'IS NULL', enabled: false }] as const;
+    const result = await f.cache.page(f.context, { ...f.input, lastPage: true, filters: structuredClone([...filters]), filterGroup: { mode: 'all', children: [0, { mode: 'any', children: [1] }] }, sort: [{ column: 'note', direction: 'DESC', nulls: 'LAST' }] }, f.readPage);
+    expect(result).toMatchObject({ page: pageIndex, matchingRows: String(total), hasMore: false }); expect(result.rows).toHaveLength(rows);
+    const [start, transaction, mdl, count, page, rollback] = f.log;
+    expect([start, transaction, mdl, rollback]).toEqual(['SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', 'START TRANSACTION READ ONLY', 'SELECT 1 FROM `db`.`records` LIMIT 0', 'ROLLBACK']);
+    const where = count.slice(count.indexOf(' WHERE '), count.length);
+    expect(where).toContain('`id`'); expect(where).not.toContain('`note`');
+    expect(page).toContain(where + ' ORDER BY '); expect(page).toContain('`note` DESC'); expect(page).toMatch(new RegExp('OFFSET ' + (pageIndex - 1) * 50 + '$'));
+    expect(f.state.locked).toBe(false);
+  });
+  it('超限、计数矛盾及非事务表均失败，释放原快照且不降级读取其它页', async () => {
+    const large = fixture(); large.state.count = 500_000_001;
+    await expect(large.cache.page(large.context, { ...large.input, lastPage: true }, large.readPage)).rejects.toThrow('最大可浏览页码');
+    expect(large.readPage).not.toHaveBeenCalled(); expect(large.log.at(-1)).toBe('ROLLBACK');
+    const mismatch = fixture(); mismatch.state.count = 2;
+    await expect(mismatch.cache.page(mismatch.context, { ...mismatch.input, lastPage: true }, mismatch.readPage)).rejects.toThrow('不一致');
+    expect(mismatch.readPage).toHaveBeenCalledOnce(); expect(mismatch.log.at(-1)).toBe('ROLLBACK');
+    const unsupported = fixture(); unsupported.state.info.engine = 'MyISAM';
+    await expect(unsupported.cache.page(unsupported.context, { ...unsupported.input, lastPage: true }, unsupported.readPage)).rejects.toThrow('InnoDB');
+    expect(unsupported.readPage).not.toHaveBeenCalled(); expect(unsupported.log.at(-1)).toBe('ROLLBACK');
+    const permission = fixture(); permission.state.fail = 'SELECT CAST(COUNT(*)';
+    await expect(permission.cache.page(permission.context, { ...permission.input, lastPage: true }, permission.readPage)).rejects.toMatchObject({ errno: 1142 });
+    expect(permission.readPage).not.toHaveBeenCalled(); expect(permission.log.at(-1)).toBe('ROLLBACK');
   });
 });
 

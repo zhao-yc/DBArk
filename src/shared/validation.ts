@@ -6,6 +6,7 @@ import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteT
 import { sqliteTableRebuildInspectSchema, sqliteTableRebuildPreviewSchema, sqliteTableRebuildApplySchema, sqliteTableRebuildReleaseSchema } from './sqliteTableRebuild';
 import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsApplySchema, sqliteColumnsReleaseSchema } from './sqliteColumns';
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
+import { maxTablePage } from './tableLastPage';
 import { sqliteValueOptionsInputSchema } from './sqliteValueOptions';
 import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema } from './sqliteStatistics';
 import { sqliteSchemaScriptSchema } from './sqliteSchemaScript';
@@ -200,7 +201,7 @@ const resultExportData = z.custom<ResultExportData>().superRefine((value, contex
   catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '结果导出数据无效' }); }
 });
 /** IPC 同时约束单项形状及整个集合体积，错误由共享校验返回中文说明。 */
-const tablePage = z.object({ ...target, page: z.number().int().min(1).max(10000000), pageSize: z.number().int().min(1).max(1000), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all','any']).optional(), filterGroup:filterGroupSchema.optional(), sort: sortRulesSchema }).strict().superRefine((input, context) => {
+const tablePage = z.object({ ...target, page: z.number().int().min(1).max(maxTablePage), pageSize: z.number().int().min(1).max(1000), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all','any']).optional(), filterGroup:filterGroupSchema.optional(), sort: sortRulesSchema }).strict().superRefine((input, context) => {
   try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); }
   catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
 });
@@ -343,8 +344,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.transactionSettings.apply': queryTransactionSettingsApplySchema,
   'query.autocommit.apply': queryAutocommitApplySchema,
   'query.databaseSwitch': queryDatabaseSwitchSchema,
-  'table.page': guardedTablePage(tablePage.safeExtend({ copySource: z.boolean().optional(), taskId: z.string().uuid().optional() }).superRefine((input, context) => {
+  'table.page': guardedTablePage(tablePage.safeExtend({ copySource: z.boolean().optional(), taskId: z.string().uuid().optional(), lastPage: z.literal(true).optional() }).superRefine((input, context) => {
     if (input.copySource && !input.taskId || input.taskId && !input.copySource) context.addIssue({ code: 'custom', message: '来源表页必须同时显式启用copySource并提供独立任务UUID' });
+    if (input.lastPage && (!input.copySource || input.page !== 1)) context.addIssue({ code: 'custom', path: ['lastPage'], message: '末页必须使用独立只读任务，且不能同时指定其它页码' });
   })),
   'table.copySourceRead': tableCopySourceReadSchema,
   'table.copySourceRelease': tableCopySourceReleaseSchema,

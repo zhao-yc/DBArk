@@ -2,10 +2,11 @@ import type { FilterMode, FilterRule } from '../shared/contracts';
 import { FILTER_LIMITS, validateFilterRules } from '../shared/filtering';
 import { zh, formatText } from './locales/zh-CN';
 import { tableFilterEnabledZh as enabledText } from './locales/tableFilterEnabled.zh-CN';
+import { maxTablePage } from '../shared/tableLastPage';
 
 export type { FilterMode };
 /** 与 table.page 的 IPC 页码上限保持一致；不据此虚构表的实际总页数。 */
-export const maxTablePage = 10_000_000;
+export { maxTablePage };
 export interface FilterDraft {
   column: string; operator: FilterRule['operator']; value: string; upperValue: string; valuesText: string; includeEmptyString: boolean;
 }

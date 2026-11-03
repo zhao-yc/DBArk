@@ -94,7 +94,7 @@ export type FilterMode = 'all' | 'any';
 export interface FilterGroup { readonly mode: FilterMode; readonly children: readonly (number | FilterGroup)[]; }
 export interface FilterRule { column: string; operator: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'NOT LIKE' | 'IN' | 'NOT IN' | 'BETWEEN' | 'IS NULL' | 'IS NOT NULL'; value?: string; values?: string[]; /** 缺省启用；停用保留原条件但不参与本次筛选，仍计入全部预算。 */ enabled?: boolean; }
 export interface SortRule { column: string; direction: 'ASC' | 'DESC'; /** 缺省沿用数据库顺序；显式位置与升降序独立。 */ nulls?: 'FIRST' | 'LAST'; }
-export interface TablePage { rows: DataRow[]; columns: ResultColumn[]; hasMore: boolean; page: number; pageSize: number; /** 显式复制页在同一MDL内读取的目录身份；缺失时只能查看。 */ copyMetadataKey?: string; copySource?: TableCopyPageSources; }
+export interface TablePage { rows: DataRow[]; columns: ResultColumn[]; hasMore: boolean; page: number; pageSize: number; /** 仅显式末页请求返回同快照的匹配总数。 */ matchingRows?: string; /** 显式复制页在同一MDL内读取的目录身份；缺失时只能查看。 */ copyMetadataKey?: string; copySource?: TableCopyPageSources; }
 export type RowChange = { kind: 'insert'; values: DataRow } | { kind: 'update'; before: DataRow; values: DataRow } | { kind: 'delete'; before: DataRow };
 export interface SqlPreview { sql: string; statements: { sql: string; params: CellValue[] }[]; warnings: string[]; }
 export interface TableDesign { database: string; name: string; originalName?: string; engine: string; charset: string; comment: string; columns: { name: string; originalName?: string; type: string; nullable: boolean; defaultValue?: string | null; autoIncrement: boolean; comment: string }[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; }
@@ -302,7 +302,7 @@ export interface CommandMap {
   'sqlite.indexes.preview': { input: import('./sqliteIndexes').SqliteIndexesPreviewInput; output: import('./sqliteIndexes').SqliteIndexesPreviewOutput };
   'sqlite.indexes.apply': { input: import('./sqliteIndexes').SqliteIndexesApplyInput; output: import('./sqliteIndexes').SqliteIndexesOutcome };
   'sqlite.indexes.release': { input: import('./sqliteIndexes').SqliteIndexesReleaseInput; output: void };
-  'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; copySource?: boolean; taskId?: string }; output: TablePage };
+  'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; copySource?: boolean; taskId?: string; lastPage?: true }; output: TablePage };
   'table.copySourceRead': { input: TableCopySourceReadInput; output: TableCopySourceReadResult };
   'table.copySourceRelease': { input: TableCopySourceReleaseInput; output: void };
   /** 只生成并复制受限的已加载表行 INSERT，不访问数据库。 */

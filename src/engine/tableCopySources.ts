@@ -6,7 +6,8 @@ import type { StructureTaskContext } from './structureDefinition';
 import { completionQuery } from './completionQuery';
 import { tableInfo } from './metadata';
 import { prepareDataSearchRecord, type RecordPreparation } from './dataSearchRecords';
-import { buildPageSql, deserializeCell, identifier, inlineParameters, qualified, serializeCell, typedCellPlaceholder } from './sql';
+import { buildPageSql, buildTableFilterSql, deserializeCell, identifier, inlineParameters, qualified, serializeCell, typedCellPlaceholder } from './sql';
+import { tableLastPageBounds } from '../shared/tableLastPage';
 
 type Context = Pick<StructureTaskContext, 'managed' | 'checkCancelled' | 'commandStarted'>;
 type PageInput = CommandMap['table.page']['input'];
@@ -77,8 +78,18 @@ export class TableCopySources {
   /** 明确opt-in的表页才进入本路径；没有缺列时仍调用原分页读取，不签发来源。 */
   async page(context: Context, input: PageInput, readPage: ReadPage): Promise<TablePage> {
     const epoch = this.epochs.get(input.connectionId) ?? 0, info = await this.ports.info(context, input.database, input.table);
-    const statement = (metadata: TableInfo) => { const built = buildPageSql(metadata, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup); return inlineParameters(built.sql, built.params); };
-    const read = async (metadata: TableInfo, sql = statement(metadata)) => { context.checkCancelled(); const terminal = context.commandStarted(); try { const page = await readPage(context.managed, sql, input.page, input.pageSize, metadata.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type))); context.checkCancelled(); return page; } finally { terminal(); } };
+    let last: ReturnType<typeof tableLastPageBounds> | undefined;
+    const statement = (metadata: TableInfo) => { const built = buildPageSql(metadata, last?.page ?? input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup); return inlineParameters(built.sql, built.params); };
+    const read = async (metadata: TableInfo, sql = statement(metadata)) => {
+      context.checkCancelled(); const terminal = context.commandStarted();
+      try {
+        const page = await readPage(context.managed, sql, last?.page ?? input.page, input.pageSize, metadata.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
+        context.checkCancelled();
+        if (!last) return page;
+        if (page.page !== last.page || page.pageSize !== input.pageSize || page.hasMore || page.rows.length !== last.rows) throw Error('末页与同一快照的计数不一致，请重新读取');
+        return { ...page, matchingRows: last.matchingRows };
+      } finally { terminal(); }
+    };
     let issued: PageLease | undefined; let transaction = false, fallback: TableCopyUnavailable | undefined;
     try {
       await this.ports.query(context, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
@@ -86,6 +97,14 @@ export class TableCopySources {
       // 先建立真实表MDL，之后目录、物理身份、页面SELECT和签发全在同一只读事务持锁期间。
       await this.ports.query(context, 'SELECT 1 FROM ' + qualified(info.database, info.name) + ' LIMIT 0');
       const fresh = await this.ports.info(context, info.database, info.name), metadataKey = tableCopyMetadataKey(fresh);
+      if (input.lastPage) {
+        // 只在已锁定的事务型物理表上建立读取快照，后续分页沿用同一连接和筛选表达式。
+        if (fresh.objectKind !== 'table' || fresh.engine.toUpperCase() !== 'INNODB') throw Error('末页导航需要 InnoDB 物理表');
+        const { where, params } = buildTableFilterSql(fresh, input.filters, input.filterMode, input.filterGroup);
+        const sql = `SELECT CAST(COUNT(*) AS CHAR) AS matchingRows FROM ${qualified(fresh.database, fresh.name)}${where ? ' WHERE ' + where : ''}`;
+        const { rows } = await this.ports.query<{ matchingRows: string }[]>(context, inlineParameters(sql, params));
+        last = tableLastPageBounds(rows.length === 1 ? rows[0].matchingRows : undefined, input.pageSize);
+      }
       // 即使初始目录没有INVISIBLE，也须在同一MDL内复核并读页，不能给本地快捷路径旧结构背书。
       if (!fresh.columns.some(column => ordinary(column) && /\bINVISIBLE\b/i.test(column.extra))) return { ...await read(fresh), copyMetadataKey: metadataKey };
       const prepared = await this.ports.identity(context, fresh);
@@ -124,6 +143,7 @@ export class TableCopySources {
       return { ...page, copySource: { status: 'ready', pageRef, rowRefs, expiresAt: expires, metadataKey, missingColumns: missing } };
     } catch (error) {
       if (issued) this.remove(issued); context.checkCancelled();
+      if (input.lastPage) throw error;
       if (permission(error)) fallback = 'identity-permission';
       else if ([1064, 1235].includes((error as { errno?: number })?.errno ?? 0)) fallback = 'unsupported';
       else if (error instanceof TableCopySourceError) fallback = error.reason;

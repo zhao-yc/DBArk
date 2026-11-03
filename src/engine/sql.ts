@@ -10,6 +10,7 @@ import type { CellValue, ColumnInfo, DataRow, FilterGroup, FilterMode, FilterRul
 import { tableCreateOnUpdateSql, type TableCreateTimeColumn } from '../shared/tableCreateOnUpdate';
 import { buildTableFilterSql as compileTableReadFilterSql, buildTableReadOrder } from '../shared/tableReadSql';
 import { validateReferenceValues } from '../shared/references';
+import { maxTablePage } from '../shared/tableLastPage';
 
 /** 标识符始终作为标识符引用，不允许空值、NUL 或超过 MySQL 限制的名称。 */
 export function identifier(value: string): string {
@@ -63,7 +64,7 @@ export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filt
 }
 /** 排序与筛选严格使用元数据白名单，值独立绑定；原表页SQL字节模板保持。 */
 export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode: FilterMode = 'all', filterGroup?:FilterGroup): { sql: string; params: CellValue[] } {
-  if (!Number.isSafeInteger(page) || page < 1 || page > 10000000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页号范围为 1～10000000，页大小范围为 1～1000');
+  if (!Number.isSafeInteger(page) || page < 1 || page > maxTablePage || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页号范围为 1～10000000，页大小范围为 1～1000');
   const { where, params } = buildTableFilterSql(info, filters, filterMode, filterGroup);
   // 同一排序器保留显式顺序并补可靠键；合法旧SQL字节不变，重复非法规则不再放行。
   const orderSql = buildTableReadOrder(info, sort);

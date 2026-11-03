@@ -9,7 +9,7 @@ import * as zod from 'zod';
 import { describe, expect, it, vi } from 'vitest';
 import * as lib from '../../src/renderer/lib';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
-import type { TableInfo } from '../../src/shared/contracts';
+import type { TableInfo, TablePage } from '../../src/shared/contracts';
 import { draftHistoryZh as text } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { pasteInsertZh } from '../../src/renderer/locales/pasteInsert.zh-CN';
 import { recordDuplicateZh } from '../../src/renderer/locales/recordDuplicate.zh-CN';
@@ -52,17 +52,20 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     },
     set(_target, key, value) { stateApi.setState({ [key]: value } as Partial<typeof workspaceSeed>); return true; }
   });
-  const source = { id: '18446744073709551615', note: '原值', bytes: { type: 'binary', base64: 'AAH/' }, doc: '{"x":1,"x":-0,"n":9007199254740993}' };
+  const source = { id: '18446744073709551615', note: '原值', bytes: { type: 'binary' as const, base64: 'AAH/' }, doc: '{"x":1,"x":-0,"n":9007199254740993}' };
   if (options.plainKey) info.columns[0].extra = '';
   const sourceRows = options.batch ? [source, { ...source, id: '18446744073709551614', note: '' }] : [source];
-  const pageSource = { status: 'ready', pageRef: 'RAM页引用', rowRefs: ['RAM行1', 'RAM行2'], expiresAt: Date.now() + 60_000, metadataKey: tableCopyMetadataKey(info), missingColumns: [] as string[] };
+  const pageSource = { status: 'ready' as const, pageRef: 'RAM页引用', rowRefs: ['RAM行1', 'RAM行2'], expiresAt: Date.now() + 60_000, metadataKey: tableCopyMetadataKey(info), missingColumns: [] as string[] };
   let failApply = false, failPage = false;
+  let lastReply: ((page: TablePage) => TablePage | Promise<TablePage>) | undefined;
   const invoke = vi.fn(async (command: string, input: any) => {
     if (command === 'metadata.table') return info;
     if (command === 'table.page') {
       if (failPage) { failPage = false; throw Error('合成分页失败'); }
-      return { page: input.page, pageSize: input.pageSize, hasMore: true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: structuredClone(sourceRows), copyMetadataKey: tableCopyMetadataKey(info), ...(options.batch && options.lease ? { copySource: pageSource } : {}) };
+      const page: TablePage = { page: input.page, pageSize: input.pageSize, hasMore: true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: structuredClone(sourceRows), copyMetadataKey: tableCopyMetadataKey(info), ...(options.batch && options.lease ? { copySource: pageSource } : {}) };
+      return input.lastPage && lastReply ? lastReply(page) : page;
     }
+    if (command === 'query.cancel' && lastReply) return null;
     if (command === 'table.preview') return { sql: '仅RAM模拟预览', warnings: [] };
     if (command === 'table.apply') { if (failApply) throw Error('合成执行结果未知'); return { affectedRows: 1 }; }
     if (command === 'table.preferences.get' || command === 'connections.open') return null;
@@ -115,7 +118,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     grid().onCellKeyDown({ mode, row: grid().rows[0], column: { key: 'note' } }, event); await render(); return event;
   }
   await render(); expect(grid().rows).toHaveLength(options.batch ? 2 : 1);
-  return { render, click, change, press, grid, record, button, all, props, workspace, store, invoke, confirm, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; }, failNextPage() { failPage = true; } };
+  return { render, click, change, press, grid, record, button, all, props, workspace, store, invoke, confirm, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; }, failNextPage() { failPage = true; }, replyToLastPage(value: typeof lastReply) { lastReply = value; } };
 }
 
 
@@ -237,6 +240,49 @@ it('暂停和恢复混合启停的筛选只各读一次，保留分组、多列�
   await click(filterEnabledText.resume);
   expect(reads().at(-1)).toMatchObject({ filters: edited, filterGroup, sort, page: 1 });
   expect(f.grid().rows).toHaveLength(1);
+});
+
+it('末页从原筛选读取一次，显示同快照计数并按实际页码向前翻页', async () => {
+  const f = await fixture(); await f.click(zh.table.text006);
+  const filters = [{ column: 'id', operator: '>=', value: '9007199254740993' }];
+  f.all('TableFilterPanel')[0].props.onFiltersChange(filters); await f.render();
+  const reads = () => f.invoke.mock.calls.filter(([command]) => command === 'table.page').map(([, input]) => input);
+  const before = reads().length;
+  f.replyToLastPage(page => ({ ...page, page: 3, hasMore: false, matchingRows: '101' }));
+  await f.click(zh.table.lastPage);
+  expect(reads()).toHaveLength(before + 1);
+  expect(reads().at(-1)).toMatchObject({ page: 1, pageSize: 50, copySource: true, lastPage: true, filters });
+  expect(f.all('span').find(element => element.props.title === zh.table.lastPageHint)?.props.children).toBe('末页快照共 101 行');
+  expect(f.button(zh.common.pageNext).props.disabled).toBe(true);
+  await f.click(zh.common.pagePrevious);
+  expect(reads()).toHaveLength(before + 2); expect(reads().at(-1).page).toBe(2); expect(reads().at(-1)).not.toHaveProperty('lastPage');
+  expect(f.all('span').find(element => element.props.title === zh.table.lastPageHint)).toBeUndefined();
+});
+
+it('停止只取消原末页任务，迟到结果不会覆盖原页或未提交记录', async () => {
+  const f = await fixture(); await f.click(zh.common.pageNext); await f.change('保留原页的修改');
+  const row = f.grid().rows[0];
+  let complete!: () => void;
+  f.replyToLastPage(page => new Promise(resolve => { complete = () => resolve({ ...page, page: 3, hasMore: false, matchingRows: '101' }); }));
+  await f.click(zh.table.lastPage);
+  const input = f.invoke.mock.calls.filter(([command, input]) => command === 'table.page' && input.lastPage).at(-1)?.[1];
+  expect(input).toBeTruthy();
+  const stop = f.button(zh.table.lastPageStop).props.onClick;
+  stop(); stop(); await f.render();
+  expect(f.invoke.mock.calls.filter(([command]) => command === 'query.cancel')).toEqual([['query.cancel', { taskId: input.taskId }]]);
+  expect(f.button(zh.table.lastPageStopping).props.disabled).toBe(true);
+  complete(); await f.render();
+  expect(f.grid().rows[0]).toBe(row); expect(f.grid().rows[0].data.note).toBe('保留原页的修改');
+  expect(f.button(zh.table.lastPage).props.disabled).toBe(false);
+  expect(f.all('span').find(element => element.props.title === zh.table.lastPageHint)).toBeUndefined();
+  await f.click(zh.common.pagePrevious);
+  expect(f.invoke.mock.calls.filter(([command]) => command === 'table.page').at(-1)?.[1].page).toBe(1);
+
+  let fail!: () => void;
+  f.replyToLastPage(() => new Promise((_, reject) => { fail = () => reject(Error('无法确认服务器任务已结束')); }));
+  await f.click(zh.table.lastPage); await f.click(zh.table.lastPageStop);
+  fail(); await f.render();
+  expect(f.all('ErrorBox').some(element => element.props.message === '无法确认服务器任务已结束')).toBe(true);
 });
 
 it('关系图正式表页入口不读库，自己的忙碌计数不撤销来源且父草稿保持', async () => {

@@ -431,6 +431,14 @@ export const zh = {
     pageJump: "跳转",
     pageJumpInvalid: "页码必须是 1 到 {0} 之间的正整数。",
     pageJumpHint: "按服务器分页读取，不统计总页数；超出数据范围会显示空页。",
+    lastPage: "末页",
+    lastPageHint: "按当前筛选和排序，在同一只读快照中统计匹配数并读取末页。",
+    lastPageUnsupported: "末页导航支持 InnoDB 物理表。",
+    lastPageStop: "停止读取末页",
+    lastPageStopping: "正在停止末页读取…",
+    lastPageCancelled: "末页读取已取消。",
+    lastPageMismatch: "末页与同一快照的计数不一致，请重新读取。",
+    lastPageCount: "末页快照共 {0} 行",
   },
   // 文件导入导出。
   transfer: {
