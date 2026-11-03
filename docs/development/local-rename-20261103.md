@@ -1,5 +1,11 @@
 # SQL 本文别名与 CTE 重命名
 
+## d591 的后续平台原件
+
+[原轮次 41552068878](https://github.com/zhao-yc/DBArk/actions/runs/41552068878)的 Mac Intel／arm64 作业成功，准确 `d591cb2b` 的原整例分别 17.144／26.238 秒，1 通过、0 跳过或重试，原 120 秒／worker1、正常 App exit0／signal null。两个产物已核 API SHA256、ZIP 路径／类型／长度／CRC、head 与平台；原四次引用导航保持。原报告另含两次 F2／整组撤销重做和冲突拒绝，继续按原件核验，不外推安装。
+
+Windows 同轮在原 `completion-window-worker.test.ts` 第一例触及 5 秒期限，实际记录 14.423 秒；未进入原生步骤，产物只有 head／平台。原失败及日志保留，没有提高时限或重跑旧轮；本机原四例单次通过，不能追认旧 CI。新头平台和安装继续独立验收。
+
 ## 使用与边界
 
 MySQL／MariaDB、SQLite 可编辑查询中，在表别名、派生别名、CTE 声明或已确认的引用上按 `F2`，输入新名称后按 Enter。原编辑器一次修改声明及全部确认引用；Ctrl／Cmd+Z 一次撤销整组，支持重做。只修改当前查询草稿，不保存或执行 SQL。

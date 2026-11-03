@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-03 源码增量：[SQLite 全筛选字段概况](development/sqlite-statistics-20261103.md)支持存储类型、非空／不同值、精度极值，Windows 原完整窗口覆盖 640／100 行且原页保持，277 项相关与 37 项定向分轮、类型／构建通过；D09／R02 部分。另闭合[MySQL 8.4 关系图实库原例](development/relationship-diagram-live-20261103.md)，复合／自引用／跨库目标及精确资源清理已核；E01 部分，Mac／安装继续，暂不发布。
+
 2026-11-03 源码增量：[本文别名／CTE 重命名](development/local-rename-20261103.md)支持双方言 F2、整组修改和单次撤销／重做，冲突或绑定不全明确拒绝，不执行 SQL。482 项相关、严格类型、同 2 GiB 构建及 Windows 双方言原完整窗口通过，资源核清；新 Mac／安装和完整重构继续，O05 仍部分，暂不发布。
 
 2026-11-03 源码增量：[SQLite 本文关系引用](development/sqlite-local-references-20261103.md)支持 Shift+F12、ASCII 大小写、非 BMP、嵌套 CTE 和作用域隔离；原函数误跳及共享补全竞态已修复。395 项相关、类型、同 2 GiB 堆构建及 Windows 双驱动原完整用例通过；旧 ARM 构建失败保留，新 Mac／安装另证，O05 仍部分，暂不发布。

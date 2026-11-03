@@ -1,0 +1,57 @@
+name: SQLite字段概况源码验收
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/sqlite-statistics.yml', 'src/main/taskPrivacy.ts', 'src/renderer/components/ActivityDialog.tsx', 'src/main/sqliteStatistics.ts', 'src/main/sqliteRuntime.ts', 'src/main/sqliteTableBrowse.ts', 'src/main/index.ts', 'src/shared/sqliteStatistics.ts', 'src/shared/sqliteTableBrowse.ts', 'src/shared/sqliteValueOptions.ts', 'src/shared/commands.ts', 'src/shared/contracts.ts', 'src/shared/validation.ts', 'src/renderer/sqliteStatistics.ts', 'src/renderer/sqliteStatistics.css', 'src/renderer/locales/sqliteStatistics.zh-CN.ts', 'src/renderer/components/SqliteStatisticsDialog.tsx', 'src/renderer/components/SqliteTableTab.tsx', 'tests/unit/*sqlite-statistics*', 'tests/unit/sqlite-table-browse.test.ts', 'tests/e2e/sqlite-value-frequency-native.spec.ts', 'scripts/sqlite-workspace-ci.mjs', 'package.json', 'pnpm-lock.yaml']
+  pull_request:
+    paths: ['.github/workflows/sqlite-statistics.yml', 'src/main/taskPrivacy.ts', 'src/renderer/components/ActivityDialog.tsx', 'src/main/sqliteStatistics.ts', 'src/main/sqliteRuntime.ts', 'src/main/sqliteTableBrowse.ts', 'src/main/index.ts', 'src/shared/sqliteStatistics.ts', 'src/shared/sqliteTableBrowse.ts', 'src/shared/sqliteValueOptions.ts', 'src/shared/commands.ts', 'src/shared/contracts.ts', 'src/shared/validation.ts', 'src/renderer/sqliteStatistics.ts', 'src/renderer/sqliteStatistics.css', 'src/renderer/locales/sqliteStatistics.zh-CN.ts', 'src/renderer/components/SqliteStatisticsDialog.tsx', 'src/renderer/components/SqliteTableTab.tsx', 'tests/unit/*sqlite-statistics*', 'tests/unit/sqlite-table-browse.test.ts', 'tests/e2e/sqlite-value-frequency-native.spec.ts', 'scripts/sqlite-workspace-ci.mjs', 'package.json', 'pnpm-lock.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 保留旧轮资源和原始失败，不取消仍在退出或上传的任务。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  statistics:
+    name: SQLite字段概况 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖和Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 单次概况及原分页与生命周期回归
+        run: pnpm exec vitest run tests/unit/task-privacy.test.ts tests/unit/sqlite-statistics.test.ts tests/unit/main-sqlite-statistics.test.ts tests/unit/sqlite-statistics-parent.test.ts tests/unit/sqlite-table-browse.test.ts tests/unit/sqlite-value-options.test.ts tests/unit/sqlite-value-options-parent.test.ts tests/unit/ui-sqlite-value-options.test.tsx tests/unit/main-sqlite-table-browse.test.ts tests/unit/main-sqlite-relationships.test.ts tests/unit/sqlite-relationships.test.ts tests/unit/sqlite-runtime.test.ts tests/unit/sqlite-table-browse-contract.test.ts tests/unit/sqlite-table-browser-renderer.test.ts tests/unit/sqlite-offline-ci.test.ts --maxWorkers=1
+      - name: 严格类型检查和构建
+        run: pnpm build
+      - name: 单次原完整次数排序窗口及真实字段概况
+        run: node scripts/sqlite-workspace-ci.mjs statistics
+      - name: 记录准确源码和平台
+        if: always()
+        run: |
+          node -e "const fs=require('node:fs');fs.mkdirSync('test-results/sqlite-statistics',{recursive:true});fs.writeFileSync('test-results/sqlite-statistics/platform.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version}))"
+          git rev-parse HEAD > test-results/sqlite-statistics/head.txt
+      - name: 保存原报告、截图及退出清理原件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite-statistics-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/sqlite-statistics/
+          if-no-files-found: warn

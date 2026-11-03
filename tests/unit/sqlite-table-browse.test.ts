@@ -14,6 +14,7 @@ import type { SqliteValueOptionsInput, SqliteValueOptionsOutput } from '../../sr
 import { randomUUID } from 'node:crypto';
 import type { SqliteRelationshipsInput, SqliteRelationshipsOutput } from '../../src/shared/sqliteRelationships';
 import { captureSqliteRelationshipDiagram } from '../../src/renderer/sqliteRelationshipDiagram';
+import type { SqliteStatisticsInput, SqliteStatisticsOutput } from '../../src/shared/sqliteStatistics';
 
 // 真实Node子进程代替Electron宿主，任何意外默认工厂调用立即失败，不伪造数据库结果。
 vi.mock('electron', () => ({ utilityProcess: { fork: () => { throw Error('分页测试必须注入真实Node子进程'); } } }));
@@ -90,6 +91,56 @@ function input(profile: SqliteConnectionProfile, taskId: string, patch: Partial<
 function page(app: SqliteRuntime, value: SqliteTablePageInput): Promise<SqliteTablePage> { return app.request('sqlite.tablePage', value); }
 /** 从真实结果合同取id原文，避免测试把64位数值转成Number。 */
 function ids(value: SqliteTablePage): unknown[] { return value.result.rows.map(row => row.c0); }
+
+describe('SQLite全筛选字段概况真实只读worker', () => {
+  /** 来源指纹必须来自原分页目录，不自行伪造结构摘要。 */
+  async function statisticsInput(app: SqliteRuntime, profile: SqliteConnectionProfile, table = 'mix', column = 'value'): Promise<SqliteStatisticsInput> {
+    const original = await page(app, input(profile, randomUUID(), { table, sort: [], limit: 1 }));
+    return { connectionId: profile.id, database: 'main', table, column, taskId: randomUUID(), schemaKey: original.schemaKey, mode: 'and', filters: [] };
+  }
+  it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s存储类型、64位极值、完整筛选及真实只读终态', async encoding => {
+    const profile = fixture(encoding), { app } = runtime(profile), request = await statisticsInput(app, profile), before = disk(profile, db => db.prepare('SELECT id,typeof(value),hex(value) FROM mix ORDER BY id').all());
+    const value: SqliteStatisticsOutput = await app.request('sqlite.statistics', request);
+    expect(value).toMatchObject({ rows: '10', nonNull: '9', nulls: '1', declaredType: '' });
+    expect(value.groups.map(group => [group.kind, group.count, group.distinct])).toEqual([['blob', '1', '1'], ['integer', '2', '2'], ['null', '1', '0'], ['real', '2', '2'], ['text', '4', '4']]);
+    expect(value.groups[1]).toMatchObject({ min: { kind: 'integer', value: '-9223372036854775808' }, max: { kind: 'integer', value: '9223372036854775807' } });
+    expect(value.groups[3]).toMatchObject({ min: { kind: 'real', value: '0' }, max: { kind: 'real', value: '1.25' } }); expect(value.groups[4].max).toEqual({ kind: 'text', value: '空\0字符' });
+    const filtered = await app.request('sqlite.statistics', { ...request, taskId: randomUUID(), filters: [{ column: 'rank', operator: 'eq', value: { kind: 'integer', value: '10' } }] }); expect(filtered).toMatchObject({ rows: '6', nonNull: '5', nulls: '1' });
+    expect(await app.request('sqlite.statistics', { ...request, taskId: randomUUID(), filters: [{ column: 'id', operator: 'gt', value: { kind: 'integer', value: '999' } }] })).toMatchObject({ rows: '0', nonNull: '0', nulls: '0', groups: [] });
+    expect(await app.request('sqlite.statistics', { ...request, taskId: randomUUID(), column: 'doubled' })).toMatchObject({ groups: [{ kind: 'integer', count: '10', distinct: '10', min: { kind: 'integer', value: '2' }, max: { kind: 'integer', value: '20' } }] });
+    await expect(app.request('sqlite.statistics', { ...request, taskId: randomUUID(), schemaKey: '0'.repeat(64) })).rejects.toThrow('结构');
+    expect(disk(profile, db => db.prepare('SELECT id,typeof(value),hex(value) FROM mix ORDER BY id').all())).toEqual(before);
+    for (const record of processes) { expect(await record.exited).toEqual({ code: 0, signal: null }); expect(record.kills).toBe(0); const queries = record.sent.filter(message => message.kind === 'execute'); expect(queries[0]?.sql).toBe('BEGIN'); expect(queries.at(-1)?.sql).toBe('ROLLBACK'); expect(record.sent.find(message => message.kind === 'open')).toMatchObject({ options: { readOnly: true } }); }
+  });
+  it('视图、原排序规则、REAL无穷和不同类型不合并，源磁盘保持', async () => {
+    const profile = fixture(); disk(profile, db => db.exec("CREATE TABLE storage(v COLLATE NOCASE);INSERT INTO storage VALUES('a'),('A'),('b'),(1),(CAST(1 AS REAL)),(1e999),(-1e999),(X'00ff'),(X'01');CREATE VIEW storage_view AS SELECT v FROM storage"));
+    const { app } = runtime(profile), request = await statisticsInput(app, profile, 'storage_view', 'v'), result: SqliteStatisticsOutput = await app.request('sqlite.statistics', request);
+    expect(result.rows).toBe('9'); expect(result.groups.map(group => [group.kind, group.count, group.distinct])).toEqual([['blob', '2', '2'], ['integer', '1', '1'], ['real', '3', '3'], ['text', '3', '2']]);
+    expect(result.groups[2]).toMatchObject({ min: { kind: 'real', value: '-Infinity' }, max: { kind: 'real', value: 'Infinity' } }); expect(result.groups[3].max).toEqual({ kind: 'text', value: 'b' });
+  });
+  it('极值超预算或坏TEXT整份失败，不发布截断统计，保留原数据', async () => {
+    const profile = fixture(); disk(profile, db => db.exec("CREATE TABLE extreme(v);INSERT INTO extreme VALUES('a')")); const { app } = runtime(profile), request = await statisticsInput(app, profile, 'extreme', 'v');
+    disk(profile, db => db.exec('INSERT INTO extreme VALUES(zeroblob(65537))'));
+    await expect(app.request('sqlite.statistics', request)).rejects.toThrow(/预算/);
+    disk(profile, db => db.exec("DELETE FROM extreme WHERE typeof(v)='blob';INSERT INTO extreme VALUES(CAST(X'80' AS TEXT))"));
+    await expect(app.request('sqlite.statistics', { ...request, taskId: randomUUID() })).rejects.toThrow(/编码|无损|TEXT/);
+    expect(disk(profile, db => db.prepare('SELECT typeof(v),hex(v) FROM extreme').all())).toEqual([{ 'typeof(v)': 'text', 'hex(v)': '61' }, { 'typeof(v)': 'text', 'hex(v)': '80' }]);
+  });
+  it('真实长聚合准确取消，原用户事务不受影响，未退出资源继续占槽', async () => {
+    const profile = fixture(); disk(profile, db => db.exec('CREATE VIEW stats_expensive AS WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x AS value FROM n'));
+    const reached = deferred<void>(), { app, events } = runtime(profile, () => transport((message, forward) => { forward(); if (message.kind === 'statement' && message.sql.includes('__dbark_statistics')) reached.resolve(); })), request = await statisticsInput(app, profile, 'stats_expensive');
+    const user = await app.request('sessions.open', { connectionId: profile.id }); await app.request('query.transaction', { ...user, action: 'begin' });
+    const work = app.request('sqlite.statistics', request).catch(reason => reason); await reached.promise; await delay(50); await app.request('query.cancel', { taskId: request.taskId }); expect(await work).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(processes[2].kills).toBe(1); expect(processes[1].kills).toBe(0);
+    expect(await app.request('query.sessionState', user)).toEqual({ transactionOpen: true, transactionKnown: true, broken: false }); expect(taskState(app, request.taskId)).toEqual({ kind: 'browse-finished' }); await app.request('query.transaction', { ...user, action: 'rollback' }); await app.close();
+  });
+  it('两份概况准确任务仍在途时不创建第三个进程，退出后归还槽位', async () => {
+    const profile = fixture(); let armed = false; const releases: (() => void)[] = [], reached = deferred<void>();
+    const { app } = runtime(profile, () => transport((message, forward) => { if (armed && message.kind === 'opened') { releases.push(forward); if (releases.length === 2) reached.resolve(); } else forward(); }));
+    const source = await statisticsInput(app, profile); armed = true; const first = app.request('sqlite.statistics', source), second = app.request('sqlite.statistics', { ...source, taskId: randomUUID() });
+    await reached.promise; const count = processes.length; await expect(app.request('sqlite.statistics', { ...source, taskId: randomUUID() })).rejects.toThrow('并发上限'); expect(processes).toHaveLength(count);
+    armed = false; releases.forEach(release => release()); await Promise.all([first, second]); await expect(app.request('sqlite.statistics', { ...source, taskId: randomUUID() })).resolves.toMatchObject({ rows: '10' });
+  });
+});
 
 describe('SQLite关系图真实只读worker', () => {
   /** 锚点来自正式物理表分页，不自行拼出目录摘要。 */

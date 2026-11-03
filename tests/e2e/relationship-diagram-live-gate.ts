@@ -7,6 +7,7 @@ export interface RelationshipLiveEnvironment {
 export const relationshipLiveCommands: readonly string[] = Object.freeze([
   'app.menuState', 'app.runtimeInfo', 'app.info', 'app.setDirty', 'settings.get', 'settings.save',
   'connections.list', 'connections.organizationGet', 'connections.save', 'connections.open', 'connections.close',
+  'workbench.get', 'workbench.protocolReady', 'workbench.protocolTake',
   'metadata.table', 'metadata.objects', 'table.page', 'table.preferences.get', 'query.cancel', 'tasks.list', 'history.list',
 ]);
 

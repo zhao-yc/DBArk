@@ -1,0 +1,13 @@
+.sqlite-statistics-content{display:flex;flex-direction:column;gap:14px}
+.sqlite-statistics-content p{margin:0;line-height:1.65}
+.sqlite-statistics-controls{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.sqlite-statistics-controls label{display:grid;gap:6px;flex:1;min-width:180px}
+.sqlite-statistics-controls button{flex:none}
+.sqlite-statistics-result{display:grid;gap:12px}
+.sqlite-statistics-summary{padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);font-variant-numeric:tabular-nums}
+.sqlite-statistics-scroll{overflow:auto;max-height:38vh;border:1px solid var(--line);border-radius:6px}
+.sqlite-statistics-scroll table{width:100%;border-collapse:collapse;font-size:12px;text-align:left}
+.sqlite-statistics-scroll th,.sqlite-statistics-scroll td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.sqlite-statistics-scroll thead th{position:sticky;top:0;background:var(--surface-2);font-weight:600;white-space:nowrap}
+.sqlite-statistics-scroll tbody tr:last-child>*{border-bottom:0}
+.sqlite-statistics-bound{min-width:100px;max-width:280px;overflow-wrap:anywhere;white-space:pre-wrap;font-family:Consolas,monospace}

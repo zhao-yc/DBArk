@@ -1,5 +1,7 @@
 # 开发与测试
 
+数据浏览新增[SQLite 全筛选字段概况](development/sqlite-statistics-20261103.md)：实际存储类型、NULL／非空、类型内不同值和准确极值，独立只读聚合，不拉取全表或改草稿。277 项相关与后续 37 项定向分轮、类型、同 2 GiB 构建及 Windows 原完整窗口通过；原 ER 真实 Main／MySQL 8.4 另已[验收并精确清理](development/relationship-diagram-live-20261103.md)。Mac／安装及完整剖析／模型仍待验，暂不发布。
+
 SQL 高频编辑新增[本文别名／CTE F2 重命名](development/local-rename-20261103.md)：完整绑定组、原模型版本、线程及中文拒绝提示，不执行 SQL。482 项相关、严格类型、同 2 GiB 构建及 Windows 双方言原完整窗口通过；四次真实修改及整组撤销／重做、冲突零改、资源核清。新 Mac／安装另验，O05 保持部分，暂不发布。
 
 SQL 编辑新增[SQLite 本文关系引用](development/sqlite-local-references-20261103.md)：复用本地方言作用域、ASCII 折叠与准确 UTF16 范围，独立线程无数据库端口；原函数误跳及共享补全竞态已修复。395 项相关、严格类型、同 2 GiB 堆构建及 Windows 双驱动原完整用例通过，资源核清；旧 ARM 构建失败保留，新三平台／安装另验，O05 仍部分，暂不发布。

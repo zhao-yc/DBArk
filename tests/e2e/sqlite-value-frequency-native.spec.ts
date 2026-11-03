@@ -3,6 +3,8 @@ import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { sqliteValueOptionsZh as valuesText } from '../../src/renderer/locales/sqliteValueOptions.zh-CN';
+import { sqliteStatisticsZh as statisticsText } from '../../src/renderer/locales/sqliteStatistics.zh-CN';
+import { assertSqliteStatistics, type SqliteStatisticsInput } from '../../src/shared/sqliteStatistics';
 import { createHash } from 'node:crypto';
 import { installTableValueOptionsConfirmation, readTableValueOptionsConfirmations } from './table-value-options-native-gate';
 
@@ -20,7 +22,7 @@ if (active) {
 
 type Desktop = typeof import('./desktop-fixture');
 type PageFact = { request: Record<string, unknown>; reply: unknown; failure?: string };
-interface Audit { frames?: { event: string; at: number; pid?: number; kind?: string; id?: string; code?: number }[]; pending: number; denied: string[]; forks: string[]; pickerCalls: number; connectionId?: string; commands: string[]; lookups: PageFact[]; pages: PageFact[]; }
+interface Audit { frames?: { event: string; at: number; pid?: number; kind?: string; id?: string; code?: number }[]; pending: number; denied: string[]; forks: string[]; pickerCalls: number; connectionId?: string; commands: string[]; lookups: PageFact[]; pages: PageFact[]; statistics: PageFact[]; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：须DBARK_SQLITE_VALUE_FREQUENCY_NATIVE_TEST=1且integration=0，仅使用独占临时SQLite');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -61,7 +63,7 @@ test('SQLite完整客户端全组次数排序、丢弃确认、类型筛选与�
     try { return await application.evaluate(() => {
       const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: Audit & { check(): void } }).__sqliteTableBrowseNative;
       if (!state) throw Error('原SQLite表浏览观察器不存在'); state.check();
-      return { pending: state.pending, denied: state.denied, forks: state.forks, pickerCalls: state.pickerCalls, connectionId: state.connectionId, commands: state.commands, lookups: state.lookups, pages: state.pages };
+      return { pending: state.pending, denied: state.denied, forks: state.forks, pickerCalls: state.pickerCalls, connectionId: state.connectionId, commands: state.commands, lookups: state.lookups, pages: state.pages, statistics: state.statistics };
     }); } finally { observation.snapshotMs += performance.now() - started; }
   };
   const step = async <T,>(action: () => Promise<T>, skipAuditAfter = false): Promise<T> => { if (stage !== reportedStage) { reportedStage = stage; console.log('SQLite表页阶段：' + stage); console.log('SQLite观察端口累计：' + JSON.stringify(observation)); } check(); if (armed && !closed) await guard(); const result = await action(); check(); if (armed && !closed && !skipAuditAfter) await guard(); return result; };
@@ -76,7 +78,7 @@ test('SQLite完整客户端全组次数排序、丢弃确认、类型筛选与�
     const root = globalThis as typeof globalThis & { __sqliteTableBrowseNative?: State }, handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, Handler> })._invokeHandlers;
     const original = handlers?.get('dbark:request'), windows = BrowserWindow.getAllWindows(), window = windows[0], frame = window?.webContents.mainFrame, originalPicker = dialog.showOpenDialog, originalFork = utilityProcess.fork;
     if (typeof original !== 'function' || windows.length !== 1 || !frame || root.__sqliteTableBrowseNative) throw Error('SQLite表浏览原Main入口未知');
-    const state: State = { pending: 0, denied: [], forks: [], frames: [], pickerCalls: 0, connectionId: input.profileId, commands: [], lookups: [], pages: [], check() {}, restore() {} }; let pickerRequest = false;
+    const state: State = { pending: 0, denied: [], forks: [], frames: [], pickerCalls: 0, connectionId: input.profileId, commands: [], lookups: [], pages: [], statistics: [], check() {}, restore() {} }; let pickerRequest = false;
     const deny = (command: string): never => { state.denied.push(command); throw Error('SQLite只读表浏览专项拒绝越界：' + command); };
     const check = () => { if (root.__sqliteTableBrowseNative !== state || handlers.get('dbark:request') !== wrapped || dialog.showOpenDialog !== picker || utilityProcess.fork !== fork || window.isDestroyed() || BrowserWindow.getAllWindows().length !== 1 || window.webContents.mainFrame !== frame || state.denied.length) throw Error('SQLite表浏览原Main/文档观察器失效'); };
     const picker = (async (...args: unknown[]) => {
@@ -106,10 +108,10 @@ test('SQLite完整客户端全组次数排序、丢弃确认、类型筛选与�
         if (value.dialect !== 'sqlite' || value.id !== state.connectionId || !config || typeof config !== 'object' || !('readOnly' in config) || config.readOnly !== true || ['host', 'port', 'user', 'password', 'ssh', 'tls'].some(key => Object.hasOwn(value, key))) return deny('非本例只读文件配置');
       }
       if (command === 'connections.open' && value.id !== state.connectionId || command.startsWith('metadata.') && value.connectionId !== state.connectionId) return deny('其它数据库连接');
-      if ((command === 'sqlite.tablePage' || command === 'sqlite.valueOptions' || command.startsWith('sqlite.tableLayout.')) && (value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite表目标');
+      if ((command === 'sqlite.tablePage' || command === 'sqlite.valueOptions' || command === 'sqlite.statistics' || command.startsWith('sqlite.tableLayout.')) && (value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite表目标');
       if (command.startsWith('sqlite.tablePresets.') && (!['list', 'save', 'delete', 'read'].some(kind => command === 'sqlite.tablePresets.' + kind) || value.connectionId !== state.connectionId || value.database !== 'main' || !input.objects.includes(String(value.table)))) return deny('其它SQLite本机方案目标');
-      const page: PageFact | undefined = (command === 'sqlite.tablePage' || command === 'sqlite.valueOptions') ? { request: structuredClone(value), reply: undefined } : undefined;
-      if (page) (command === 'sqlite.valueOptions' ? state.lookups : state.pages).push(page);
+      const page: PageFact | undefined = (command === 'sqlite.tablePage' || command === 'sqlite.valueOptions' || command === 'sqlite.statistics') ? { request: structuredClone(value), reply: undefined } : undefined;
+      if (page) (command === 'sqlite.statistics' ? state.statistics : command === 'sqlite.valueOptions' ? state.lookups : state.pages).push(page);
       state.commands.push(command); state.pending++;
       try { const reply = await original(event, payload); check(); if (page) page.reply = structuredClone(reply); return reply; }
       catch (reason) { if (page) page.failure = reason instanceof Error ? reason.message : String(reason); throw reason; }
@@ -147,6 +149,24 @@ test('SQLite完整客户端全组次数排序、丢弃确认、类型筛选与�
     await step(() => form.getByRole('button', { name: sqliteZh.choose, exact: true }).click()); await step(() => expect(form.locator('input[readonly]')).toHaveValue(basename(database))); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; if (profile.dialect !== 'sqlite') throw Error('本例不允许网络连接'); expect(profile.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: true });
     await step(() => page.locator('.connection-row .tree-label').filter({ hasText: connectionName }).click()); await step(() => page.locator('.database-row .tree-label').filter({ hasText: /^main$/ }).click()); await step(() => page.locator('.object-row .tree-label').filter({ hasText: new RegExp('^' + tableName + '$') }).dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible());
+    /** 真实菜单/字段选择零读取；开始后核原Main回包、完整640行及关闭不改变表页或标签。 */
+    const statisticsProof: unknown[] = [];
+    const statistics = async (rows: string) => {
+      const before = await step(audit), beforeSettings = await settings();
+      await step(async () => (await navigationMenuItem(table(), { name: statisticsText.entry, exact: true }, check)).click());
+      const dialog = page.getByRole('dialog', { name: statisticsText.title, exact: true }); await step(() => expect(dialog).toBeVisible()); await step(() => dialog.getByLabel(statisticsText.column, { exact: true }).selectOption('n'));
+      expect((await step(audit)).statistics).toHaveLength(before.statistics.length); await step(() => dialog.getByRole('button', { name: statisticsText.read, exact: true }).click());
+      await step(() => expect.poll(async () => { const facts = (await audit()).statistics; return facts.length === before.statistics.length + 1 && facts.at(-1)?.reply !== undefined; }).toBe(true));
+      const fact = (await step(audit)).statistics.at(-1)!; expect(fact.failure).toBeUndefined(); const reply = fact.reply as { ok: boolean; result: unknown }; expect(reply.ok).toBe(true);
+      const output = assertSqliteStatistics(reply.result, fact.request as SqliteStatisticsInput); expect(output.rows).toBe(rows); expect(output.request.column).toBe('n');
+      await step(() => expect(dialog.getByRole('status')).toContainText(statisticsText.rows + '：' + rows));
+      await info.attach('SQLite全筛选字段概况' + statisticsProof.length, { body: await step(() => dialog.screenshot()), contentType: 'image/png' });
+      await step(() => dialog.getByRole('button', { name: statisticsText.close, exact: true }).click()); await step(() => expect(dialog).toBeHidden());
+      const after = await step(audit), afterSettings = await settings(); expect(after.pages).toHaveLength(before.pages.length); expect(after.lookups).toHaveLength(before.lookups.length); expect(afterSettings.tabs).toEqual(beforeSettings.tabs); expect(afterSettings.activeTabId).toBe(beforeSettings.activeTabId);
+      statisticsProof.push({ output, tablePageReadsAdded: 0, valueLookupsAdded: 0, tabChanged: false }); return output;
+    };
+    stage = '真实全筛选字段概况覆盖当前页外640行及五种存储类型';
+    const fullStatistics = await statistics('640'); expect(fullStatistics).toMatchObject({ nonNull: '638', nulls: '2' }); expect(fullStatistics.groups.map(group => [group.kind, group.count, group.distinct])).toEqual([['blob', '1', '1'], ['integer', '2', '1'], ['null', '2', '0'], ['real', '1', '1'], ['text', '634', '525']]);
     await controls(true); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5')); await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
     stage = '完整529组默认与最多次数'; await open(); const first = await read(); expect(first.values).toHaveLength(500); expect(first.truncated).toBe(true); expect(first.values.some(option => option.value.kind === 'text' && option.value.value === 'zz_hot')).toBe(false);
     await step(() => modal().getByLabel(valuesText.order, { exact: true }).selectOption('count-desc')); expect((await step(audit)).lookups).toHaveLength(1); const most = await read(); expect(most.values.slice(0, 3)).toEqual([{ value: { kind: 'text', value: 'zz_hot' }, count: '100' }, { value: { kind: 'text', value: 'yy_warm' }, count: '9' }, { value: { kind: 'text', value: '2' }, count: '3' }]);
@@ -160,9 +180,11 @@ test('SQLite完整客户端全组次数排序、丢弃确认、类型筛选与�
     const beforeAdd = (await step(audit)).pages.length; await step(() => modal().getByLabel(valuesText.choice(2), { exact: true }).check()); await step(() => modal().getByRole('button', { name: valuesText.add, exact: true }).click()); await step(() => expect(modal()).toBeHidden()); expect((await step(audit)).pages).toHaveLength(beforeAdd); await controls(false); await expectIds([1, 2, 3, 4, 5]); await controls(true); await apply([636]);
     expect((await step(audit)).pages.at(-1)?.request.filters).toEqual([{ column: 'n', operator: 'oneOf', selectedValues: [{ kind: 'real', value: '2' }] }]);
     stage = '清原条件再读热门值并明确应用'; await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]); await open(); await step(() => modal().getByLabel(valuesText.order, { exact: true }).selectOption('count-desc')); await read(); await step(() => modal().getByLabel(valuesText.choice(1), { exact: true }).check()); const finalBefore = (await step(audit)).pages.length; await step(() => modal().getByRole('button', { name: valuesText.add, exact: true }).click()); await step(() => expect(modal()).toBeHidden()); expect((await step(audit)).pages).toHaveLength(finalBefore); await apply([521, 522, 523, 524, 525]);
+    stage = '概况沿已应用热门值筛选覆盖100行，不替换原五行页'; const filteredStatistics = await statistics('100'); expect(filteredStatistics.groups).toEqual([{ kind: 'text', count: '100', distinct: '1', min: { kind: 'text', value: 'zz_hot' }, max: { kind: 'text', value: 'zz_hot' } }]); await expectIds([521, 522, 523, 524, 525]);
+    await info.attach('SQLite字段概况真实Main原件', { body: JSON.stringify({ statisticsProof, realMain: true, realDriver: true, explicitReads: 2, userQueries: 0 }), contentType: 'application/json' });
     const confirmationRecords = await step(() => application.evaluate(readTableValueOptionsConfirmations, confirmationOwner)), confirmations = confirmationRecords.map(record => ({ message: record.options.message, accepted: record.choice === 'accept' }));
     expect(confirmations).toEqual([{ message: valuesText.discard, accepted: false }, { message: valuesText.discard, accepted: true }]); expect(confirmationRecords[0].response).toBe(confirmationRecords[0].cancelIndex); expect(confirmationRecords[1].response).toBe(confirmationRecords[1].acceptIndex); const facts = await step(audit); expect(facts.lookups.map(item => item.request.order)).toEqual([undefined, 'count-desc', 'count-asc', 'count-desc']); expect(facts.lookups.every(item => !item.failure && (item.reply as { ok?: boolean }).ok === true)).toBe(true); expect(facts.denied).toEqual([]); expect(facts.pending).toBe(0); expect(facts.pickerCalls).toBe(1); expect(await history()).toEqual([]); expect(runtime.pageErrors).toEqual([]); expect(disk()).toEqual(baseline);
-    const allTasks = await tasks(); expect(allTasks.filter(task => task.kind === 'sqlite.valueOptions')).toHaveLength(4); expect(allTasks.every(task => ['sqlite.tablePage', 'sqlite.valueOptions'].includes(task.kind) && task.status === 'completed')).toBe(true);
+    const allTasks = await tasks(); expect(allTasks.filter(task => task.kind === 'sqlite.valueOptions')).toHaveLength(4); expect(allTasks.filter(task => task.kind === 'sqlite.statistics')).toHaveLength(2); expect(allTasks.every(task => ['sqlite.tablePage', 'sqlite.valueOptions', 'sqlite.statistics'].includes(task.kind) && task.status === 'completed')).toBe(true);
     await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: { restore(): void } }).__sqliteTableBrowseNative; if (!state) throw Error('原Main观察器已失效'); state.restore(); }), true); armed = false; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); expect(disk()).toEqual(baseline);
     await info.attach('SQLite次数排序完整窗口终态', { body: JSON.stringify({ database, directory, pid: originalProcess.pid, platform: process.platform, sourceRows: 640, groups: 529, returnedGroups: 500, explicitReads: 4, confirmations, confirmationRecords, systemConfirmationInputVerified: false, sourceUnchanged: true, rawMainFacts: facts, userQueries: 0, systemClipboard: 0, originalExitCode: originalProcess.exitCode, normalExit: true, systemPickerInputVerified: false, installerVerified: false, macOSVerified: false }), contentType: 'application/json' });
     completed = { directory, database, platform: process.platform, firstPid: originalProcess.pid };

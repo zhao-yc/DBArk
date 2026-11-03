@@ -9,6 +9,8 @@ import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTa
 import { sqliteTablePageSchema, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import { readSqliteTablePage, SqliteTableBrowseCancelled } from './sqliteTableBrowse';
 import { readSqliteValueOptions } from './sqliteValueOptions';
+import { readSqliteStatistics } from './sqliteStatistics';
+import { sqliteStatisticsInputSchema, sqliteStatisticsLimits, type SqliteStatisticsInput, type SqliteStatisticsOutput } from '../shared/sqliteStatistics';
 import { readSqliteRelationships } from './sqliteRelationships';
 import { sqliteRelationshipsInputSchema, type SqliteRelationshipsInput, type SqliteRelationshipsOutput } from '../shared/sqliteRelationships';
 import { sqliteValueOptionsInputSchema, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
@@ -68,7 +70,7 @@ interface Session {
 }
 interface QueryTask { kind: 'query'; session: Session; active?: Promise<unknown>; preparing?: boolean; cancelled?: boolean; }
 interface BrowseTask {
-  purpose?: 'relationships';
+  purpose?: 'relationships' | 'statistics';
   kind: 'browse'; connection: Connection; cancelled: boolean; boundaryCancelled: boolean; cleaning: boolean;
   resource?: Resource; driver?: SqliteDriverSession; active?: Promise<unknown>; cancelWork?: Promise<void>;
   cleanupFailure?: unknown; cancelFailure?: unknown;
@@ -326,6 +328,16 @@ export class SqliteRuntime {
     const work = this.track(connection, () => this.browse(task, input, profile)); task.active = work;
     const retire = () => { task.active = undefined; this.retireBrowse(input.taskId, task); }; void work.then(retire, retire); return work;
   }
+  /** 字段概况沿原只读资源账本；准确任务结束且资源退出后才归还并发槽。 */
+  private statistics(source: unknown): Promise<SqliteStatisticsOutput> {
+    const input = sqliteStatisticsInputSchema.parse(source), profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
+    this.assertTarget(connection, profile);
+    if (this.tasks.has(input.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
+    if ([...this.tasks.values()].filter(task => task.kind === 'browse' && task.purpose === 'statistics').length >= sqliteStatisticsLimits.active) return Promise.reject(Error('SQLite字段概况任务已达并发上限'));
+    const task: BrowseTask = { kind: 'browse', purpose: 'statistics', connection, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
+    const work = this.track(connection, () => this.browse(task, input, profile)); task.active = work;
+    const retire = () => { task.active = undefined; this.retireBrowse(input.taskId, task); }; void work.then(retire, retire); return work;
+  }
   /** 关系图复用原只读资源账本；排队及退出未确认的任务仍占槽，不借用用户会话。 */
   private relationships(source: unknown): Promise<SqliteRelationshipsOutput> {
     const input = sqliteRelationshipsInputSchema.parse(source), profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
@@ -349,10 +361,11 @@ export class SqliteRuntime {
   private browse(task: BrowseTask, input: SqliteTablePageInput, profile: SqliteConnectionProfile): Promise<SqliteTablePage>;
   private browse(task: BrowseTask, input: SqliteValueOptionsInput, profile: SqliteConnectionProfile): Promise<SqliteValueOptionsOutput>;
   private browse(task: BrowseTask, input: SqliteRelationshipsInput, profile: SqliteConnectionProfile): Promise<SqliteRelationshipsOutput>;
-  private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput, profile: SqliteConnectionProfile): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput> {
-    let value: SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | undefined, failed = false, failure: unknown;
+  private browse(task: BrowseTask, input: SqliteStatisticsInput, profile: SqliteConnectionProfile): Promise<SqliteStatisticsOutput>;
+  private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput | SqliteStatisticsInput, profile: SqliteConnectionProfile): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput> {
+    let value: SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | undefined, failed = false, failure: unknown;
     try {
-      this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: 'tables' in input ? '正在读取SQLite表关系快照' : 'column' in input ? '正在读取SQLite不同值快照' : '正在读取SQLite只读分页快照' });
+      this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: task.purpose === 'statistics' ? '正在读取SQLite字段概况' : 'tables' in input ? '正在读取SQLite表关系快照' : 'column' in input ? '正在读取SQLite不同值快照' : '正在读取SQLite只读分页快照' });
       this.browseCheck(task);
       task.driver = await this.driver(task.connection, profile, true, resource => {
         task.resource = resource;
@@ -361,7 +374,7 @@ export class SqliteRuntime {
       });
       this.browseCheck(task);
       const control = { check: () => this.browseCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: (reason: unknown) => { task.cleanupFailure = reason; } };
-      value = 'tables' in input ? await readSqliteRelationships(task.driver, input, control) : 'column' in input ? await readSqliteValueOptions(task.driver, input, control) : await readSqliteTablePage(task.driver, input, { ...control, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }) });
+      value = 'column' in input && !('search' in input) ? await readSqliteStatistics(task.driver, input, control) : 'tables' in input ? await readSqliteRelationships(task.driver, input, control) : 'column' in input ? await readSqliteValueOptions(task.driver, input, control) : await readSqliteTablePage(task.driver, input, { ...control, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }) });
     } catch (reason) {
       failed = true; failure = reason;
       if (task.driver && !task.driver.isUsable && !task.driver.isClosed) this.block(task.connection, reason);
@@ -1079,6 +1092,7 @@ export class SqliteRuntime {
       }
       case 'sqlite.tablePage': return this.tablePage(input);
       case 'sqlite.valueOptions': return this.valueOptions(input);
+      case 'sqlite.statistics': return this.statistics(input);
       case 'sqlite.relationships': return this.relationships(input);
       case 'sqlite.completion': return this.completion(input);
       case 'sqlite.tableExport': return this.tableExport(input);

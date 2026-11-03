@@ -7,7 +7,7 @@ const listing = process.argv.some(value => value === '--list' || value.startsWit
 const active = !listing && process.env.DBARK_ER_LIVE_NATIVE === '1';
 const environment = active ? (require('./relationship-diagram-live-gate') as typeof import('./relationship-diagram-live-gate')).relationshipLiveEnvironment(process.env, process.argv, process.platform) : undefined;
 type Desktop = typeof import('./desktop-fixture');
-interface Audit { commands: string[]; denied: string[]; tables: { database: string; table: string; taskId?: string }[]; catalogs: number; pages: number; }
+interface Audit { commands: string[]; denied: string[]; failures: { command: string; message: string }[]; tables: { database: string; table: string; taskId?: string }[]; catalogs: number; pages: number; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：显式启用ER实库门、准确随机两库及服务器UUID');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -62,7 +62,7 @@ test('真实Main和数据库元数据的复合／自引用／跨库关系图，�
       type Handler = (event: Electron.IpcMainInvokeEvent, payload: unknown) => Promise<unknown>;
       const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, Handler> })._invokeHandlers, original = handlers.get('dbark:request'), window = BrowserWindow.getAllWindows()[0], fork = utilityProcess.fork;
       if (!original || !window || BrowserWindow.getAllWindows().length !== 1) throw Error('ER原Main入口未知');
-      const state: Audit & { profileId?: string } = { commands: [], denied: [], tables: [], catalogs: 0, pages: 0 };
+      const state: Audit & { profileId?: string } = { commands: [], denied: [], failures: [], tables: [], catalogs: 0, pages: 0 };
       (globalThis as typeof globalThis & { __erLiveAudit?: typeof state }).__erLiveAudit = state;
       const deny = (value: string): never => { state.denied.push(value); throw Error('ER实库拒绝越界：' + value); };
       utilityProcess.fork = ((path: string, ...args: unknown[]) => { if (!/(?:^|[\\/])worker\.cjs$/.test(path)) return deny('其它utility'); return Reflect.apply(fork, utilityProcess, [path, ...args]); }) as typeof utilityProcess.fork;
@@ -71,6 +71,7 @@ test('真实Main和数据库元数据的复合／自引用／跨库关系图，�
         const raw = payload as { command?: unknown; input?: Record<string, unknown> }, command = raw.command, input = raw.input;
         if (typeof command !== 'string' || !input || typeof input !== 'object') return deny('非标准请求'); state.commands.push(command);
         if (!target.allowed.includes(command)) return deny(command);
+        if (['workbench.get', 'workbench.protocolReady', 'workbench.protocolTake'].includes(command) && Object.keys(input).length) return deny('其它工作区或协议参数');
         if (command === 'connections.save') {
           if (state.profileId || typeof input.id !== 'string' || input.name !== target.name || input.host !== target.host || input.port !== 13384 || input.database !== target.database || input.dialect !== 'mysql' || input.rememberPassword !== false) return deny('其它连接配置'); state.profileId = input.id;
         }
@@ -84,7 +85,11 @@ test('真实Main和数据库元数据的复合／自引用／跨库关系图，�
         else if (command === 'table.preferences.get') { if (input.database !== target.database || input.table !== 'child') return deny('其它表偏好'); }
         else if (command === 'query.cancel') { if (!state.tables.some(value => value.taskId === input.taskId)) return deny('其它任务取消'); }
         else if (/^(?:metadata|table|schema|query|sessions|sqlite|files|result|serverMonitor|routine|tableDraftFiles|binaryCellFiles)\./.test(command) || /clipboard/i.test(command) || ['connections.test', 'connections.delete', 'connections.connect'].includes(command)) return deny(command);
-        return original(event, payload);
+        const reply = await original(event, payload);
+        if (command === 'workbench.protocolReady') { const value = reply as { ok?: boolean; result?: { pending?: boolean; active?: boolean } }; if (value.ok !== true || value.result?.pending !== false || value.result.active !== false) return deny('本例不允许系统对象意图'); }
+        if (command === 'workbench.protocolTake') { const value = reply as { ok?: boolean; result?: unknown }; if (value.ok !== true || value.result !== null) return deny('本例不领取系统对象意图'); }
+        if (reply && typeof reply === 'object' && 'ok' in reply && reply.ok === false) { const error = 'error' in reply ? reply.error : undefined; const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); state.failures.push({ command, message: message.slice(0, 1000) }); }
+        return reply;
       });
     }, { name, host: env.host, database: env.source, allowed: [...relationshipLiveCommands] }));
     const click = async (scope: import('@playwright/test').Locator, name: string) => step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(scope, { name, exact: true }, check)).click());
@@ -97,6 +102,9 @@ test('真实Main和数据库元数据的复合／自引用／跨库关系图，�
       const id = crypto.randomUUID(); await window.dbark.invoke('settings.save', { ...settings, tabs: [{ id, kind: 'table', title: 'child', connectionId: profiles[0].id, database: profiles[0].database, table: 'child' }], activeTabId: id });
     }));
     await step(() => page.reload()); await step(() => expect(page.locator('.table-tab [role="grid"]')).toBeVisible());
+    // 网格骨架先于元数据及行页出现；等待实际原页准备完成，不能拿旧禁用菜单等待后来渲染。
+    await step(() => expect(page.locator('.table-tab .context-bar .tag')).toHaveText('InnoDB'));
+    await step(() => expect(page.locator('.table-tab').getByRole('button', { name: zh.common.refresh, exact: true })).toBeEnabled());
     const before = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
     await click(page.locator('.table-tab'), text.entry); const modal = page.getByRole('dialog', { name: text.title, exact: true });
     await step(() => expect(modal.locator('.relationship-diagram-node')).toHaveCount(3)); await step(() => modal.getByRole('button', { name: text.catalog, exact: true }).click());
@@ -115,7 +123,16 @@ test('真实Main和数据库元数据的复合／自引用／跨库关系图，�
     await step(() => expect.poll(async () => (await read(threadsSql, [env.source, env.target, observer!.threadId!])).length, { timeout: 5000 }).toBe(0));
     await closeMysqlConnection(observer, true); observerClosed = true; expect(stream?.closed).toBe(true);
     await info.attach('ER真实窗口闭合原件', { body: JSON.stringify({ directory, pid, platform: process.platform, source: env.source, target: env.target, serverUuid: env.serverUuid, audit, originalExitCode: applicationProcess.exitCode, observerClosed, sourceUnchanged: true, normalExit: true, clipboard: 0, databaseWrites: 0 }), contentType: 'application/json' }); complete = true;
-  } catch (reason) { originalFailure = reason; throw reason; }
+  } catch (reason) {
+    originalFailure = reason;
+    // 保留原失败和窗口，只附准确Main只读审计及当前可见错误；不重开、不调用隐藏业务入口。
+    try {
+      const audit = await application.evaluate(() => (globalThis as typeof globalThis & { __erLiveAudit?: Audit }).__erLiveAudit);
+      await info.attach('ER失败Main审计', { body: scrub(JSON.stringify(audit)), contentType: 'application/json' });
+      await info.attach('ER失败窗口', { body: await page.screenshot(), contentType: 'image/png' });
+    } catch { /* 诊断句柄已失效时保留原错误，不用新窗口替代失败现场。 */ }
+    throw reason;
+  }
   finally {
     if (!complete) runtime.retainOwnedDesktopResources(info);
     // 失败保留库和窗口；独立只读观察连接仍精确释放，收尾失败由原框架保留现场。

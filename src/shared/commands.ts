@@ -9,6 +9,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.tablePage': true,
   'sqlite.relationships': true,
   'sqlite.valueOptions': true,
+  'sqlite.statistics': true,
   'sqlite.tableExport': true,
   'sqlite.tableEdit.preview': true,
   'sqlite.tableEdit.apply': true,

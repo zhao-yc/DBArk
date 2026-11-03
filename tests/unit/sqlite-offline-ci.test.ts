@@ -12,6 +12,7 @@ describe('SQLite独立源码CI的原生门与环境隔离', () => {
     expect(result.dropped).toContain('PGPASSWORD'); expect(JSON.stringify(result)).not.toContain('合成PG秘密');
   });
   it.each([
+    ['statistics', 'sqlite-value-frequency-native.spec.ts', 'sqlite-statistics', 'DBARK_SQLITE_VALUE_FREQUENCY_NATIVE_TEST'],
     ['workspace', 'sqlite-workspace-native.spec.ts', 'sqlite-workspace', 'DBARK_SQLITE_WORKSPACE_NATIVE_TEST'],
     ['relationships', 'sqlite-relationships-native.spec.ts', 'sqlite-relationships', 'DBARK_SQLITE_RELATIONSHIPS_NATIVE_TEST'],
     ['table', 'sqlite-table-browse-native.spec.ts', 'sqlite-table-browse', 'DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST'],

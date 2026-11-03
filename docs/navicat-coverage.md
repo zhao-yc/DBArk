@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+数据浏览新增[SQLite 全筛选字段概况](development/sqlite-statistics-20261103.md)，有界只读聚合、实际存储类型、NULL／不同值及准确极值，原页／草稿保持；277 项相关与 37 项定向分轮、类型／构建和 Windows 原完整窗口通过。另补[MySQL 8.4 关系图真实 Main／实库原例](development/relationship-diagram-live-20261103.md)，复合／自引用／跨库目标、完整定义保持及两准确库清理已核。D09／R02／E01 仍部分，不增加完整工作包或发行计数，暂不发布。
+
 SQL 高频编辑新增[本文别名／CTE 重命名](development/local-rename-20261103.md)：F2、准确绑定组、名称冲突提示及整组撤销／重做，不执行 SQL。482 项相关、严格类型、同 2 GiB 构建及 Windows 双方言原完整窗口通过，准确资源核清；新 Mac／安装及字段／跨作用域／全局重构继续，O05 保持部分，不增加完整工作包或发行计数。
 
 SQL 编辑新增[SQLite 本文关系引用](development/sqlite-local-references-20261103.md)：本地方言、嵌套 CTE、ASCII 折叠和原词导航，不执行 SQL；原函数误跳及共享补全竞态已修复。395 项相关、类型、同 2 GiB 堆构建及 Windows 双驱动原完整用例通过；旧 ARM 构建失败保留，新 Mac／安装继续独立验收，O05 仍部分，不增加完整工作包或发行计数。
@@ -675,7 +677,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | S01 | 用户/角色/授权撤销 | 待做 | 真实权限、预览、权限不足与当前账号保护 |
 | S02 | 服务器/会话/命令监控 | 在做 | 已接正式连接选择、概要/固定状态/有限会话、串行刷新及只读独立任务；源码与RAM证据见[接线边界](development/server-monitor-integration-20261017.md)、[资源隔离与退出](development/independent-task-resource-recovery-20261017.md)，实库/原生/安装待验；取消读取与结束他人会话区分 |
 | F02 | Excel | 部分 | 0.17开发中已有XLSX有界读取、工作表/字段映射及流式导出；MySQL8.4实际1201行往返及六实例文件精度/真实警告批次回滚已验，后者174项包含XLSX/CSV/JSON，见[第二批验收](../tests/integration/acceptance-parallel-second-20261016.md)。完整工作表/类型/公式与取消矩阵、原生macOS及公开发行仍待完成 |
-| D09 | 数据概况/剖析 | 部分 | 已有全筛选计数／NULL／极值／聚合及不同值计数；另有[次数排序](development/table-value-frequency-20261103.md)和[物理表数值分布](development/table-histogram-20261103.md)。后者322项相关、六端点2880次只读语义及Windows源码组件通过；物理表完整实库UI、权限／取消故障、抽样、时间／类别分布、Mac与安装继续，未发行 |
+| D09 | 数据概况/剖析 | 部分 | 已有全筛选计数／NULL／极值／聚合及不同值计数；SQLite 另有[全筛选字段概况](development/sqlite-statistics-20261103.md)，实际存储类型与原精度极值，Windows 全部 640／筛选 100 行原窗口通过；另有[次数排序](development/table-value-frequency-20261103.md)和[物理表数值分布](development/table-histogram-20261103.md)。后者322项相关、六端点2880次只读语义及Windows源码组件通过；物理表完整实库UI、权限／取消故障、抽样、时间／类别分布、Mac与安装继续，未发行 |
 
 ## P2：专业数据库与工作流
 
@@ -687,7 +689,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | R06 | Redis/Cluster/Sentinel | 待做 | 键、TTL、扫描、命令、重定向与取消 |
 | O04 | 可视化查询/视图/查找/聚合构建 | 部分 | 已有单外键LEFT／INNER、复合映射、选列、多列排序／上限、嵌套WHERE、GROUP BY及七种聚合；前期实库边界见[专项验收](../tests/integration/acceptance-table-foreign-key-join-20261028.md)。后续[嵌套HAVING](development/table-foreign-key-join-having-20261102.md)与六端点2130次严格查询另证；准确0d的[三平台十二组件例与arm64显示恢复](development/foreign-key-join-display-lease-20261103.md)已核。高级聚合、任意多表、完整查询转视图、完整Mac实库及安装继续，未公开发行 |
 | O05 | 重构/语义代码辅助 | 部分 | MySQL 已有[字段悬停](../tests/integration/acceptance-sql-field-hover-7f926c4-20261021.md)、[本文声明导航](development/mysql-definition-20261103.md)及[本文关系引用](development/local-references-20261103.md)，SQLite 已有[字段悬停](development/sqlite-field-hover-20261102.md)、[本文声明导航](development/sqlite-definition-20261102.md)及[本文关系引用](development/sqlite-local-references-20261103.md)；双方言另有[本文别名／CTE重命名](development/local-rename-20261103.md)。物理对象定义导航、完整字段／变量引用、诊断、跨作用域／全局重命名和完整平台组合继续，不以单项能力代替完整代码辅助 |
-| E01 | ER 关系查看 | 部分 | 已有[MySQL／MariaDB图](development/relationship-diagram-20261103.md)和[SQLite独立快照图](development/sqlite-relationships-20261103.md)，主外键、复合／自引用及未确认声明分明。准确c1的MySQL合成目录组件各两例、准确3215的SQLite真实Main／worker三平台各一例及原件已核。MySQL服务器实库尚未运行；其它驱动、完整模型和安装继续，不以单项图代替完整ER |
+| E01 | ER 关系查看 | 部分 | 已有[MySQL／MariaDB图](development/relationship-diagram-20261103.md)和[SQLite独立快照图](development/sqlite-relationships-20261103.md)，主外键、复合／自引用及未确认声明分明。准确c1的MySQL合成目录组件各两例、准确3215的SQLite真实Main／worker三平台各一例及原件已核。Windows／MySQL 8.4 已有[真实 Main 与实库原例](development/relationship-diagram-live-20261103.md)，含复合、自引用和跨库未读目标，准确资源核零；其它版本／限权、Mac 实库、完整模型和安装继续，不以单项图代替完整ER |
 | A01 | 编排/本地计划任务 | 待做 | 跨连接依赖、失败策略、进度、重复运行控制 |
 | A02 | 通知/导出附件 | 待做 | 用户配置后发送，秘密隔离及实际结果 |
 | G01 | 数据生成 | 待做 | 约束、分布、参照完整性、预览及取消 |
