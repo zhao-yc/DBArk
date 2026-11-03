@@ -32,10 +32,10 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserv
 test.describe.configure({ timeout: 120000, retries: 0 });
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const connectionName = 'SQLite原工作区离线验收', quotedTable = '中文"航船🚢';
-const precisionSql = "SELECT exact_int,note,nullable,payload,CASE id WHEN 1 THEN 2 ELSE '2' END AS mixed FROM main.subject ORDER BY id;";
+const precisionSql = "/*NAME: 精度与字节 */ SELECT exact_int,note,nullable,payload,CASE id WHEN 1 THEN 2 ELSE '2' END AS mixed FROM main.subject ORDER BY id;";
 const rolledBackSql = "INSERT INTO main.subject VALUES(10,10,'必须回滚',NULL,x'1000');";
 const committedSql = "INSERT INTO main.subject VALUES(20,20,'明确提交🚢',NULL,x'00ff');";
-const restoredSql = 'SELECT id,note FROM main.subject ORDER BY id;';
+const restoredSql = '-- NAME: 重启后读取\nSELECT id,note FROM main.subject ORDER BY id;';
 let completed: { directory: string; database: string; platform: string; firstPid: number | undefined; secondPid: number | undefined } | undefined;
 
 /** 只在已经进入显式启用的原生用例后加载真实桌面菜单。 */
@@ -213,6 +213,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
 
     stage = '原Monaco键盘执行精度及二进制'; await execute(precisionSql, 1);
     const grid = query().getByRole('grid'); await step(() => expect(grid).toBeVisible());
+    await step(() => expect(query().getByRole('button', { name: '结果 1 · 精度与字节', exact: true })).toHaveText('精度与字节'));
     for (const text of ['9223372036854775807', '-9223372036854775808', '9007199254740993', '中文🚢', '0x00ff', '0xff00']) await step(() => expect(grid.getByText(text, { exact: true })).toBeVisible());
     await step(() => expect(grid.locator('.null-value')).toHaveCount(2)); expect(disk()).toEqual(baselineDisk);
     expect((await step(audit)).resultTypes).toEqual([[{ codes: ['itnbi', 'itnbt'], columns: ['c0', 'c1', 'c2', 'c3', 'c4'], rowCount: 2 }]]);
@@ -475,6 +476,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     stage = '明确自动提交写入及重启前未执行草稿'; await execute(committedSql, 3);
     const committedDisk = [...baselineDisk, { id: 20, note: '明确提交🚢' }]; expect(disk()).toEqual(committedDisk);
     await write(restoredSql); const persisted = await settings(), firstHistory = await history(), firstTasks = await tasks(), firstFacts = await step(audit);
+    await step(() => expect(query().locator('.query-result-tabs').getByRole('button', { name: '结果 1', exact: true })).toBeVisible());
     expect(firstFacts.executions).toBe(3); expect(firstFacts.denied).toEqual([]); expect(firstFacts.forks.length).toBeGreaterThan(0); expect(firstFacts.forks.every(path => /(?:^|[\\/])sqliteWorker\.cjs$/.test(path))).toBe(true); expect(runtime.pageErrors).toEqual([]);
     // 检查pending与撤观察器放在同一Main同步回合，不能让400ms防抖保存插进两次evaluate之间。
     await step(() => expect.poll(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteWorkspaceNative?: { pending: number; check(): void; restore(): void } }).__sqliteWorkspaceNative; if (!state) throw Error('原SQLite观察器已失效'); state.check(); if (state.pending !== 0) return false; state.restore(); return true; })).toBe(true), true); armed = false;
@@ -485,6 +487,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(profiles); expect(await tasks()).toEqual(firstTasks); expect(await history()).toEqual(firstHistory); expect(disk()).toEqual(committedDisk);
     expect((await step(audit)).executions).toBe(0); await step(() => expect(query().getByRole('grid')).toHaveCount(0));
     stage = '恢复后明确执行SELECT'; await execute(restoredSql, 4);
+    await step(() => expect(query().getByRole('button', { name: '结果 1 · 重启后读取', exact: true })).toHaveText('重启后读取'));
     await step(() => expect(query().getByRole('grid').getByText('明确提交🚢', { exact: true })).toBeVisible()); expect(disk()).toEqual(committedDisk);
     stage = '新owner原结果菜单离线重开版本2快照';
     await step(async () => (await navigationMenuItem(query(), { name: snapshotText.open, exact: true }, check)).click());

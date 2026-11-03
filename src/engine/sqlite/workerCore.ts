@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { constants, DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteWorkerOpenOptions, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteWorkerOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { queryResultTitle, queryResultTitlePrefixLimit } from '../../shared/queryResultTitle';
 import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, compareSqliteRebuildTables, SqliteRebuildComparisonError } from './rebuildComparison';
 import { queryParameterLimits } from '../../shared/queryParameters';
 import { sqliteNamedParameterNames } from './parameters';
@@ -33,9 +34,10 @@ function readablePragma(first: string | null, second: string | null): boolean {
 }
 
 /** 仅跳过SQLite明确的空白、分号和注释；语句边界始终由原生prepare/sourceSQL决定。 */
-function skipTrivia(sql: string, offset = 0): number {
+function skipTrivia(sql: string, offset = 0, afterDelimiter?: (offset: number) => void): number {
   while (offset < sql.length) {
-    if (/[ \t\r\n\f;]/.test(sql[offset])) { offset++; continue; }
+    if (sql[offset] === ';') { offset++; afterDelimiter?.(offset); continue; }
+    if (/[ \t\r\n\f]/.test(sql[offset])) { offset++; continue; }
     if (sql.startsWith('--', offset)) { const end = sql.indexOf('\n', offset + 2); offset = end < 0 ? sql.length : end + 1; continue; }
     if (sql.startsWith('/*', offset)) { const end = sql.indexOf('*/', offset + 2); offset = end < 0 ? sql.length : end + 2; continue; }
     break;
@@ -255,7 +257,7 @@ export class SqliteWorkerCore {
   }
 
   /** 每个帧先登记原序号再发送，ACK或取消只唤醒本帧；唤醒后重新核验取消状态。 */
-  private async sendFrame(active: Execution, body: { kind: 'statement'; index: number; sql: string; columns: SqliteColumn[] } | { kind: 'batch'; index: number; rows: SqliteValue[][] } | { kind: 'rebuildProgress'; comparedRows: string; columnGroups: number }): Promise<void> {
+  private async sendFrame(active: Execution, body: { kind: 'statement'; index: number; sql: string; columns: SqliteColumn[]; title?: string } | { kind: 'batch'; index: number; rows: SqliteValue[][] } | { kind: 'rebuildProgress'; comparedRows: string; columnGroups: number }): Promise<void> {
     this.check(active); const frame = ++this.frame;
     await new Promise<void>((resolve, reject) => {
       active.waiting = { frame, resolve };
@@ -313,7 +315,10 @@ export class SqliteWorkerCore {
         let guard: SqliteCreateGuard; try { guard = copySqliteCreateGuard(descriptor.value); } catch { throw new DriverFailure('SQLITE_CREATE_GUARD_INVALID', 'SQLite对象创建内部能力格式或预算无效'); }
         this.guardedCreate = { owner: active, guard, matched: false };
       }
-      let offset = skipTrivia(sql);
+      // 原生准备仍跳过注释。另记最近分隔符，避免空语句前的注释串到下一条结果。
+      let heading = 0;
+      const afterDelimiter = (next: number) => { heading = next; };
+      let offset = skipTrivia(sql, 0, afterDelimiter);
       if (stream && (!Array.isArray(request.parameters) || !/^SELECT\b/i.test(sql.slice(offset)))) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite完整流读取只接受单条SELECT');
       if (parameters && offset === sql.length) throw invalid();
       while (offset < sql.length) {
@@ -321,12 +326,14 @@ export class SqliteWorkerCore {
         const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining), prefix = statement.sourceSQL;
         try {
           if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
-          offset = skipTrivia(sql, offset + prefix.length);
+          const title = stream ? undefined : queryResultTitle(sql.slice(heading, Math.min(offset + prefix.length, heading + queryResultTitlePrefixLimit + 1)), true);
+          heading = offset + prefix.length;
+          offset = skipTrivia(sql, heading, afterDelimiter);
           if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');
           if (this.guardedCreate && !this.guardedCreate.matched) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite没有观察到本次准确CREATE原生授权，尚未执行任何语句');
           if (this.guardedCreate && statement.columns().length !== 0) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite对象创建不能使用EXPLAIN或带结果列的其它语句');
           if (!statement.hasStatement) continue;
-          const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream);
+          const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream, title);
           active.results.push(result); this.port.send({ kind: 'statementEnd', id: active.id, result });
         } finally { statement.finish(); }
         // 包括零行DDL和控制语句；脚本不能靠连续同步语句饿死父端取消消息。
@@ -345,11 +352,11 @@ export class SqliteWorkerCore {
   }
 
   /** 结果达到预算后仍drain原语句，避免RETURNING写入因提前return而只执行一部分。 */
-  private async statement(active: Execution, statement: SqliteRawStatement, sql: string, parameters: SQLInputValue[] | Record<string, SQLInputValue>, options: SqliteExecutionOptions, stream = false): Promise<SqliteStatementResult> {
+  private async statement(active: Execution, statement: SqliteRawStatement, sql: string, parameters: SQLInputValue[] | Record<string, SQLInputValue>, options: SqliteExecutionOptions, stream = false, title?: string): Promise<SqliteStatementResult> {
     statement.bind(parameters);
     const columns = statement.columns(); if (columns.length > limits.columns) throw invalid();
     const before = this.changes(), index = active.results.length;
-    await this.sendFrame(active, { kind: 'statement', index, sql, columns });
+    await this.sendFrame(active, { kind: 'statement', index, sql, columns, ...(columns.length && title ? { title } : {}) });
     this.check(active);
     let rows = 0, truncated = false, retaining = true, batch: SqliteValue[][] = [], batchBytes = 0, row: SqliteValue[] | undefined, rowBytes = 2;
     const flush = async () => {

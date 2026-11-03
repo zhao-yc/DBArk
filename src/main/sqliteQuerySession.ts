@@ -8,6 +8,7 @@ import { sqliteExplainSource } from '../engine/sqlite/explainSource';
 import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
 import { sqliteNamedParameterNames } from '../engine/sqlite/parameters';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
+import { validQueryResultTitle } from '../shared/queryResultTitle';
 
 type ExecuteInput = CommandMap['query.execute']['input'];
 type ExplainInput = CommandMap['query.explain']['input'];
@@ -100,6 +101,12 @@ export class SqliteQuerySession {
     if (this.objectsRevision >= Number.MAX_SAFE_INTEGER) throw Error('SQLite会话目录修订已达上限，请明确重开会话');
     this.objectsRevision++;
     const operation: Execution = { taskId: input.taskId, results: [], started: performance.now(), rows: 0 };
+    const titles: (string | null)[] = [];
+    /** 只回传已完成的结果名称，失败语句的流式表头不能泄漏到下一条结果。 */
+    function displayTitles(completed: number): Pick<QueryOutcome, 'resultTitles'> {
+      const resultTitles = titles.slice(0, completed);
+      return resultTitles.some(Boolean) ? { resultTitles } : {};
+    }
     let resultLimitReached = false;
     this.active = operation;
     const event = (patch: Omit<Partial<TaskEvent>, 'taskId'>) => {
@@ -134,6 +141,7 @@ export class SqliteQuerySession {
           const columns = statement.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' }));
           const result: QueryResult = { columns, rows: [], sqliteStorage: { version: 1, rows: [] }, truncated: false, elapsedMs: 0, statement: statement.sql.slice(0, 32768) };
           operation.results.push(result);
+          titles.push(columns.length && validQueryResultTitle(statement.title) ? statement.title : null);
           event({ resultIndex: statement.index, columns, executionSql: statement.sql });
         },
         onBatch: batch => {
@@ -156,7 +164,7 @@ export class SqliteQuerySession {
       // 即使原表受行预算截断，也交共享builder显式降级为不完整表格；只有原生成功才附计划。
       const sqliteExplain = options.explainView && results.length === 1 ? buildSqliteExplainPlan(results[0], this.driver.version, options.explainView) : undefined;
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
-      return { results, elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
+      return { results, ...displayTitles(results.length), elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
     } catch (reason) {
       const cancelled = reason instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(reason.code);
       const message = options.explainView && this.driver.readOnly && reason instanceof SqliteDriverError && reason.code === 'SQLITE_NATIVE_23'
@@ -167,7 +175,7 @@ export class SqliteQuerySession {
       if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || options.namedParameters && reason.code === 'SQLITE_NAMED_PARAMETERS_INVALID' || options.single && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
         if (reason.completedResults.length !== reason.completedStatements) throw Error('SQLite失败回执缺少前序完整结果，不能发布成功摘要');
         const sourceRange = options.sourceRange ?? options.parameterRanges?.[reason.completedStatements];
-        return { results: complete(reason.completedResults), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) } };
+        return { results: complete(reason.completedResults), ...displayTitles(reason.completedStatements), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) } };
       }
       throw reason;
     } finally { if (this.active === operation) this.active = undefined; }

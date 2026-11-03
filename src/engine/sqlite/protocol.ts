@@ -98,7 +98,7 @@ export type SqliteWorkerRequest =
 export type SqliteWorkerResponse =
   | { kind: 'ready' }
   | { kind: 'opened'; id: string; version: string; transaction: boolean; readOnly: boolean; identity?: SqliteFileIdentity; mode?: 'table-rebuild' }
-  | { kind: 'statement'; id: string; frame: number; index: number; sql: string; columns: SqliteColumn[] }
+  | { kind: 'statement'; id: string; frame: number; index: number; sql: string; columns: SqliteColumn[]; title?: string }
   | { kind: 'batch'; id: string; frame: number; index: number; rows: SqliteValue[][] }
   | { kind: 'rebuildProgress'; id: string; frame: number; comparedRows: string; columnGroups: number }
   | { kind: 'statementEnd'; id: string; result: SqliteStatementResult }

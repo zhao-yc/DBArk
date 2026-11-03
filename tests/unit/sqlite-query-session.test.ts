@@ -98,12 +98,25 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     expect(harness.session.completionState()).toMatchObject({ database: 'main', databaseKnown: true, dialect: 'sqlite', broken: false, busy: false, serverVersion: harness.driver.version });
   });
 
+  it('按原生结果序号回传名称，空语句丢弃旧注释且执行正文保持原样', async () => {
+    const harness = await open(fixture());
+    const outcome = await execute(harness, '-- NAME: 明细;一\nSELECT 1; /*NAME: 空语句 */ ; SELECT 2; /*NAME: 明细二 */ SELECT 3;');
+    expect(outcome.failure).toBeUndefined();
+    expect(outcome.resultTitles).toEqual(['明细;一', null, '明细二']);
+    expect(outcome.results.map(result => result.rows)).toEqual([[{ c0: '1' }], [{ c0: '2' }], [{ c0: '3' }]]);
+    const native = ['SELECT 1;', 'SELECT 2;', 'SELECT 3;'];
+    expect(outcome.results.map(result => result.statement)).toEqual(native);
+    expect(harness.process.statements).toEqual(native);
+    expect(harness.events.filter(event => event.executionSql).map(event => event.executionSql)).toEqual(native);
+  });
+
   it('脚本首错仅返回原生确认的完整前序，失败语句已流式发布的部分行不冒充完整结果', async () => {
     const path = fixture(), harness = await open(path);
     await execute(harness, `WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<250) INSERT INTO subject SELECT x,CASE WHEN x=220 THEN '无效JSON' ELSE '{"n":1}' END FROM n`);
     harness.events.length = 0;
-    const outcome = await execute(harness, "BEGIN; INSERT INTO subject VALUES(1000,'{}'); SELECT 7 AS prior; SELECT json_extract(note,'$.n') AS item FROM subject ORDER BY id; INSERT INTO subject VALUES(1001,'不得执行')");
+    const outcome = await execute(harness, "BEGIN; INSERT INTO subject VALUES(1000,'{}'); /*NAME: 已完成 */ SELECT 7 AS prior; /*NAME: 失败后不保留 */ SELECT json_extract(note,'$.n') AS item FROM subject ORDER BY id; INSERT INTO subject VALUES(1001,'不得执行')");
     expect(outcome.failure).toMatchObject({ statementOrdinal: 4, statementsCompleted: 3 });
+    expect(outcome.resultTitles).toEqual([null, null, '已完成']);
     expect(outcome.results).toHaveLength(3); expect(outcome.results[1].affectedRows).toBe(1); expect(outcome.results[2].rows).toEqual([{ c0: '7' }]);
     expect(harness.events.some(event => event.resultIndex === 3 && event.batch?.length === 200)).toBe(true);
     expect(harness.events.at(-1)?.status).toBe('failed'); expect(harness.events.some(event => event.status === 'completed')).toBe(false);

@@ -1,5 +1,9 @@
 # Navicat 全功能覆盖目标
 
+SQL 查询支持在语句头使用 `NAME` 注释命名结果标签，复用本次执行语句与结果序号；无有效名称时沿用序号。该语法参照 Navicat 17。[官方查询结果手册](https://www.navicat.com/manual/pdf_manual/en/navicat_17/linux_manual/navicat_en.pdf)
+
+相关 15 份单元共 509 项、严格类型和构建通过。Windows SQLite 原工作区整例通过，覆盖两种命名写法、未执行草稿隔离、重启后明确执行及原四次 SQL 边界。首轮 SQLite 原用例超时已保留，按原时限复验通过。MySQL／MariaDB 已核真实脚本分段模板，本轮未验其数据库窗口；macOS 与安装包另验。
+
 查询结果新增常见值分布，按已返回范围内的完整原值排名，精确区分数值低位、SQLite 文本／字节和 NULL。可从分布项打开本地筛选草稿，应用或撤销均沿用原结果整理流程。D09 保持部分覆盖。[常见值分布](development/query-result-frequency-20261103.md)
 
 SQL 高频编辑新增[语句导航](development/statement-navigation-20261103.md)：长脚本按完整正文搜索、分页、跳转与选中，复用原MySQL／MariaDB／SQLite分段规则，不执行SQL。O05保持部分，Mac两架构及安装另验，不增加完整工作包或发行计数，暂不发布。

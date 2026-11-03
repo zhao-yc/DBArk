@@ -16,7 +16,7 @@ export interface SqliteExecuteOptions extends Partial<SqliteExecutionOptions> {
   namedParameters?: Record<string, SqliteValue>;
   /** 对象管理私有原生CREATE约束；公共query接口不能传入此能力。 */
   createGuard?: SqliteCreateGuard;
-  onStatement?(statement: { index: number; sql: string; columns: SqliteColumn[] }): void | Promise<void>;
+  onStatement?(statement: { index: number; sql: string; columns: SqliteColumn[]; title?: string }): void | Promise<void>;
   onBatch?(batch: { index: number; rows: SqliteValue[][] }): void | Promise<void>;
 }
 export interface SqliteStreamReadOptions extends Pick<SqliteExecuteOptions, 'parameters' | 'onStatement' | 'onBatch'> { batchRows?: number; }
@@ -215,7 +215,7 @@ export class SqliteDriverSession {
         operation.frame = message.frame; if (message.kind === 'statement') operation.index = message.index;
         operation.delivery = operation.delivery.then(async () => {
           if (this.invalid || this.active !== operation || operation.cancelRequested || operation.terminal) return;
-          if (message.kind === 'statement') await operation.options.onStatement?.({ index: message.index, sql: message.sql, columns: message.columns });
+          if (message.kind === 'statement') await operation.options.onStatement?.({ index: message.index, sql: message.sql, columns: message.columns, ...(message.title === undefined ? {} : { title: message.title }) });
           else await operation.options.onBatch?.({ index: message.index, rows: message.rows });
         }).catch(reason => { operation.consumerError = reason instanceof Error ? reason : Error('SQLite结果消费者失败'); this.requestCancel(operation); }).finally(() => {
           if (!this.invalid && this.active === operation && !operation.terminal && !this.exited) try { this.transport.send({ kind: 'ack', id: operation.id, frame: message.frame }); } catch { void this.breakSession('SQLite批次确认无法投递', 'SQLITE_SEND_FAILED'); }

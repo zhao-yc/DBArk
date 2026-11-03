@@ -215,6 +215,7 @@ export const zh = {
     text015: "保存查询",
     text016: "查询结果",
     text017: "结果 ",
+    namedResultLabel: "{0} · {1}",
     text018: "正在执行…",
     text019: " 毫秒",
     text020: "最多 ",
