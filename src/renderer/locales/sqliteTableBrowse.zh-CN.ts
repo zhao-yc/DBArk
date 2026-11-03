@@ -9,6 +9,7 @@ export const sqliteTableBrowseZh = {
   draftPending: '筛选、排序或每页条数尚未应用。', draftActionsHint: '清空和还原只修改表单，点击“应用”后才读取。',
   first: 'SQLite 首页', previous: 'SQLite 上一页', next: 'SQLite 下一页', empty: '当前页没有记录', noPage: '尚无可用的当前页',
   pageJumpLabel: 'SQLite 跳转页码', pageJump: '跳转', pageJumpHint: '按已应用的筛选、排序和页长读取；超过数据范围时显示空页，可返回首页。',
+  last: 'SQLite 末页', lastHint: '在同一个只读快照中统计匹配行数并读取末页；可取消。', lastCount: (count: string) => '本次末页快照匹配 ' + count + ' 行',
   noCount: '分页不会自动统计总行数；下一页是否可用由本次多读一行确认。未指定排序或存在同值排序时，行顺序可能变化。',
   typesHint: '条件值按明确类型绑定：文本保留原文，整数使用有符号 64 位范围，实数必须有限，二进制填写十六进制字节。NULL 条件不填写值。',
   filterEnabled: (n: number) => '启用 SQLite 筛选 ' + n, filterEnabledState: '已启用', filterDisabledState: '已停用',

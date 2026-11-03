@@ -247,6 +247,26 @@ async function closedRead(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite真正只读服务器分页、typed筛选与准确任务收尾', () => {
+  it('末页计数后外部插入不会混入原快照，后继末页读取才看到新增记录', async () => {
+    const profile = fixture(); let counting = false, inserted = false;
+    const { app } = runtime(profile, () => transport((message, forward) => {
+      if (message.kind === 'statement' && message.sql.includes('__dbark_count')) counting = true;
+      if (message.kind === 'batch' && counting && !inserted) {
+        disk(profile, db => db.exec("INSERT INTO mix(id,value,group_name,rank) VALUES(11,'新行','A',30)")); inserted = true;
+      }
+      forward();
+    }));
+    const first = await page(app, input(profile, randomUUID(), { lastPage: true, limit: 5, editing: true }));
+    expect(inserted).toBe(true); expect(first).toMatchObject({ offset: 5, limit: 5, matchingRows: '10', hasMore: false, edit: { kind: 'editable' } });
+    expect(ids(first)).toEqual(['6', '7', '8', '9', '10']);
+    expect(await processes[0].exited).toEqual({ code: 0, signal: null });
+    const statements = processes[0].sent.flatMap(packet => packet.kind === 'execute' ? [packet.sql] : []);
+    expect(statements.filter(sql => sql === 'BEGIN' || sql === 'ROLLBACK' || sql.includes('__dbark_count') || sql.includes('__dbark_edit_locator')).map(sql => sql.includes('__dbark_count') ? '计数' : sql.includes('__dbark_edit_locator') ? '末页' : sql)).toEqual(['BEGIN', '计数', '末页', 'ROLLBACK']);
+    const next = await page(app, input(profile, randomUUID(), { lastPage: true, limit: 5 }));
+    expect(next).toMatchObject({ offset: 10, matchingRows: '11', hasMore: false }); expect(ids(next)).toEqual(['11']);
+    const empty = await page(app, input(profile, randomUUID(), { table: 'mix_view', lastPage: true, filters: [{ column: 'id', operator: 'gt', value: { kind: 'integer', value: '99' } }] }));
+    expect(empty).toMatchObject({ offset: 0, matchingRows: '0', hasMore: false }); expect(ids(empty)).toEqual([]);
+  });
   it('准确1024个列表/类型/分页绑定经过原utility保护真实执行，不提高原worker门槛', async () => {
     const profile = fixture(), { app } = runtime(profile), values = Array.from({ length: 128 }, () => ({ kind: 'text' as const, value: '' }));
     const filters = [...Array.from({ length: 7 }, () => ({ column: 'value', operator: 'in' as const, values })), { column: 'value', operator: 'in' as const, values: values.slice(0, 118) }];

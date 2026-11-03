@@ -1,6 +1,6 @@
 import type { DataRow, QueryResult } from '../shared/contracts';
 import { createHash } from 'node:crypto';
-import { sqliteTableBrowseLimits as limits, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
+import { sqliteTableBrowseLimits as limits, sqliteLastPagePosition, sqliteRowCountSchema, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteExportTextFunction, type SqliteColumn, type SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
@@ -55,16 +55,28 @@ export function sqliteTableSchemaKey(schemaSql: string, xinfo: readonly (readonl
 }
 
 /** 单条查询只收完整结果；截断不能伪造目录完整、页尾或没有下一页。 */
-async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maxRows: number, control: SqliteTableBrowseControl, header?: (columns: SqliteColumn[]) => void): Promise<SqliteValue[][]> {
+async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maxRows: number, control: SqliteTableBrowseControl, header?: (columns: SqliteColumn[]) => void, maxBytes: number = limits.resultBytes): Promise<SqliteValue[][]> {
   control.check(); const values: SqliteValue[][] = [];
   const result = await driver.execute(sql, {
-    parameters, maxRows, batchRows: Math.min(200, maxRows), maxBytes: limits.resultBytes,
+    parameters, maxRows, batchRows: Math.min(200, maxRows), maxBytes,
     onStatement: statement => { control.check(); if (statement.index !== 0) throw Error('SQLite表浏览出现了额外语句'); header?.(statement.columns); },
     onBatch: batch => { control.check(); if (batch.index !== 0 || values.length + batch.rows.length > maxRows) throw Error('SQLite表浏览结果行超出本页预算'); values.push(...batch.rows); },
   });
   control.check();
   if (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== values.length) throw Error('SQLite表浏览结果或元数据超过预算，无法确认完整分页；请减少每页行数或缩小范围');
   return values;
+}
+
+/** 在调用方已打开的快照中计数，只投影常量，不解码无关列的原值。 */
+export async function countSqliteMatchingRows(driver: SqliteDriverSession, input: Pick<SqliteTablePageInput, 'connectionId' | 'database' | 'table' | 'taskId' | 'mode' | 'filters'>, columns: readonly SqliteTableColumn[], control: SqliteTableBrowseControl): Promise<string> {
+  const { connectionId, database, table, taskId, mode, filters } = input;
+  const source = buildSqliteTableSelect({ connectionId, database, table, taskId, mode, filters, sort: [], offset: 0, limit: 1 }, columns, [columns[0].name], true, () => '1');
+  const result = await rows(driver, 'SELECT count(*) FROM (' + source.sql + ') AS "__dbark_count"', source.parameters, 1, control, columns => {
+    if (columns.length !== 1) throw Error('SQLite匹配行数返回非预期列');
+  }, 1024);
+  const value = result[0]?.[0];
+  if (result.length !== 1 || result[0].length !== 1 || !value || typeof value !== 'object' || value.type !== 'integer') throw Error('SQLite匹配行数返回不完整');
+  return sqliteRowCountSchema.parse(value.value);
 }
 
 /** 调用方已BEGIN；精确目录和完整xinfo属于同一物理读快照，导出和分页共享来源指纹。 */
@@ -85,11 +97,14 @@ export async function readSqliteTableCatalogue(driver: SqliteDriverSession, tabl
 
 /** BEGIN后的首个目录读取固定本页快照；元数据、筛选排序和行读取全部使用同一个只读物理连接。 */
 export async function readSqliteTablePage(driver: SqliteDriverSession, source: SqliteTablePageInput, control: SqliteTableBrowseControl): Promise<SqliteTablePage> {
-  const input = sqliteTablePageSchema.parse(source), started = performance.now();
+  const requested = sqliteTablePageSchema.parse(source), started = performance.now();
   let page: SqliteTablePage | undefined, failed = false, failure: unknown, editPlan: SqliteEditReadPlan | undefined, originalRows: SqliteValue[][] = [];
   try {
     control.check(); await driver.execute('BEGIN'); control.check();
-    const catalogue = await readSqliteTableCatalogue(driver, input.table, control), { kind, columns, schemaKey } = catalogue;
+    const catalogue = await readSqliteTableCatalogue(driver, requested.table, control), { kind, columns, schemaKey } = catalogue;
+    const matchingRows = requested.lastPage ? await countSqliteMatchingRows(driver, requested, columns, control) : undefined;
+    const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
+    const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
     editPlan = input.editing && control.prepareEdit ? await control.prepareEdit(catalogue, driver) : undefined;
     // 无编辑快照的只读页也必须核对原TEXT字节，不能将驱动替代字符作为真实数据交给网格。
     const request = buildSqliteTableSelect(input, columns, undefined, false, editPlan?.project ?? sqliteExactTextProjection), extra = editPlan?.extraColumn ? 1 : 0;
@@ -97,6 +112,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     const values = await rows(driver, request.sql, request.parameters, input.limit + 1, control, actual => {
       if (actual.length !== columns.length + extra || actual.slice(extra).some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');
     });
+    if (last && values.length !== last.rows) throw Error('SQLite末页行数与同一快照内的计数不一致，请重试');
     originalRows = values.slice(0, input.limit);
     const result: QueryResult = {
       columns: columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' })),
@@ -107,7 +123,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     };
     // 每格一个协议类型码，不新增SQL；与去掉编辑定位列后的本页原值一一对应。
     const storageTypes = originalRows.map(row => row.slice(extra).map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join(''));
-    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit };
+    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }) };
   } catch (reason) { failed = true; failure = reason; }
   // 即使边界取消也只回滚本次独立只读快照，绝不借用户查询标签的事务。
   control.beginCleanup();

@@ -1,7 +1,7 @@
 import { sqliteStatisticsInputSchema, assertSqliteStatistics, sqliteStatisticsLimits as limits, sqliteRowCountInputSchema, assertSqliteRowCount, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput, type SqliteStatisticsValue } from '../shared/sqliteStatistics';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
-import { readSqliteTableCatalogue, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
+import { readSqliteTableCatalogue, countSqliteMatchingRows, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 
 /** 原生聚合结果按真实存储类型传输；64位整数、REAL无穷和BLOB不经显示文本猜测。 */
 function typed(value: SqliteValue): SqliteStatisticsValue {
@@ -37,17 +37,7 @@ export async function readSqliteRowCount(driver: SqliteDriverSession, raw: Sqlit
   return readAggregateSnapshot(driver, control, async () => {
     const catalogue = await readSqliteTableCatalogue(driver, input.table, control);
     if (catalogue.schemaKey !== input.schemaKey) throw Error('SQLite表结构已变化，请刷新后重新统计');
-    const source = buildSqliteTableSelect({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, sort: [], offset: 0, limit: 1 }, catalogue.columns, [catalogue.columns[0].name], true, () => '1');
-    const rows: SqliteValue[][] = [];
-    control.check();
-    const result = await driver.execute('SELECT count(*) FROM (' + source.sql + ') AS "__dbark_count"', { parameters: source.parameters, maxRows: 1, batchRows: 1, maxBytes: 1024,
-      onStatement: statement => { control.check(); if (statement.index !== 0 || statement.columns.length !== 1) throw Error('SQLite匹配行数返回非预期列'); },
-      onBatch: batch => { control.check(); if (batch.index !== 0 || rows.length + batch.rows.length > 1) throw Error('SQLite匹配行数返回非预期行'); rows.push(...batch.rows); },
-    });
-    control.check();
-    const value = rows[0]?.[0];
-    if (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== 1 || rows.length !== 1 || rows[0].length !== 1 || !value || typeof value !== 'object' || value.type !== 'integer') throw Error('SQLite匹配行数返回不完整');
-    return assertSqliteRowCount({ request: input, rows: value.value }, input);
+    return assertSqliteRowCount({ request: input, rows: await countSqliteMatchingRows(driver, input, catalogue.columns, control) }, input);
   });
 }
 

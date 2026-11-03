@@ -270,6 +270,13 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 6, limit: 3 });
     await step(() => table().getByRole('button', { name: browseText.first, exact: true }).click()); await expectIds([34, 33, 32]);
     await step(() => expect(jumpInput()).toHaveValue('1'));
+    const beforeLast = (await step(audit)).pages.length;
+    await step(() => table().getByRole('button', { name: browseText.last, exact: true }).click()); await expectIds([31, 30]);
+    await step(() => expect(jumpInput()).toHaveValue('2'));
+    await step(() => expect(table().getByText(browseText.lastCount('5'), { exact: true })).toBeVisible());
+    const lastAudit = await step(audit); expect(lastAudit.pages).toHaveLength(beforeLast + 1);
+    expect(lastAudit.pages.at(-1)?.request).toMatchObject({ offset: 0, limit: 3, lastPage: true, mode: 'or', sort: [{ column: 'id', direction: 'desc' }] });
+    expect(lastAudit.pages.at(-1)?.reply).toMatchObject({ ok: true, result: { offset: 3, limit: 3, matchingRows: '5', hasMore: false } });
     // 回原明确已应用状态，原分页、typed筛选和排序表单回归全部继续执行。
     await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByLabel('SQLite 筛选关系', { exact: true }).selectOption('and')); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
     // 右侧原列通过真实水平滚动显露，不能以虚拟网格尚未挂载的单元格冒称可见。

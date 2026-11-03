@@ -1,4 +1,4 @@
-import { assertSqliteStorageTypes, sqliteTableBrowseLimits, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
+import { assertSqliteStorageTypes, sqliteLastPagePosition, sqliteTableBrowseLimits, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import { validateResultExportData } from '../shared/resultExport';
 import { resultExportData } from './resultExport';
 import { sqliteTableBrowseZh as text } from './locales/sqliteTableBrowse.zh-CN';
@@ -31,7 +31,12 @@ export function sqliteTableDraftChanged(applied: SqliteTableQuery, scope: Parame
 /** 回包必须对应准确目标与窗口，原值按导出合同检查，不能把错页或超限行交给网格。 */
 export function assertSqliteTablePage(page: SqliteTablePage, input: SqliteTablePageInput): void {
   if (typeof page?.schemaKey !== 'string' || !/^[a-f0-9]{64}$/.test(page.schemaKey) || page.columns?.some(column => column.generated !== undefined && typeof column.generated !== 'boolean')) throw Error(text.invalidPage);
-  if (!page || page.target?.connectionId !== input.connectionId || page.target.database !== input.database || page.target.table !== input.table || !['table', 'view'].includes(page.target.kind) || page.offset !== input.offset || page.limit !== input.limit || typeof page.hasMore !== 'boolean' || !Array.isArray(page.columns) || page.columns.length > sqliteTableBrowseLimits.columns || !page.result || !Array.isArray(page.result.columns) || page.columns.length !== page.result.columns.length || page.result.rows.length > input.limit || page.columns.some((column, index) => typeof column.name !== 'string' || typeof column.declaredType !== 'string' || page.result.columns[index]?.name !== column.name)) throw Error(text.invalidPage);
+  if (!page || page.target?.connectionId !== input.connectionId || page.target.database !== input.database || page.target.table !== input.table || !['table', 'view'].includes(page.target.kind) || page.limit !== input.limit || typeof page.hasMore !== 'boolean' || !Array.isArray(page.columns) || page.columns.length > sqliteTableBrowseLimits.columns || !page.result || !Array.isArray(page.result.columns) || page.columns.length !== page.result.columns.length || page.result.rows.length > input.limit || page.columns.some((column, index) => typeof column.name !== 'string' || typeof column.declaredType !== 'string' || page.result.columns[index]?.name !== column.name)) throw Error(text.invalidPage);
+  if (input.lastPage) {
+    if (typeof page.matchingRows !== 'string' || page.hasMore) throw Error(text.invalidPage);
+    const last = sqliteLastPagePosition(page.matchingRows, input.limit);
+    if (page.offset !== last.offset || page.result.rows.length !== last.rows) throw Error(text.invalidPage);
+  } else if (page.offset !== input.offset || page.matchingRows !== undefined) throw Error(text.invalidPage);
   validateResultExportData(resultExportData(page.result));
   assertSqliteStorageTypes(page);
 }
@@ -76,12 +81,12 @@ export class SqliteTableBrowser {
   /** 停止不清理其他查询会话或事务，只撤销本表原读取的交付权。 */
   async stop(): Promise<void> { this.generation++; this.wanted = undefined; const operation = this.operation; if (operation) { await this.cancelOperation(operation); await operation.done; } this.emit({ stopping: false }); }
   /** 配置先验证，准确旧任务真正结束后才取得下一次占用；读取成功后才发布当前页。 */
-  async load(query: SqliteTableQuery, offset: number): Promise<void> {
+  async load(query: SqliteTableQuery, offset: number | 'last'): Promise<void> {
     // 捕获各字段的本次值和引用；port 即使复用可变概要对象，也不能同时改写捕获侧。
     const scope = { ...this.ports.scope() };
     if (this.disposed || !scope.present || !scope.active || !scope.sqlite) return;
     let input: SqliteTablePageInput;
-    try { input = sqliteTablePageSchema.parse({ connectionId: scope.connectionId, database: scope.database, table: scope.table, taskId: this.ports.id(), offset, ...query, ...(scope.editing ? { editing: true } : {}) }); }
+    try { input = sqliteTablePageSchema.parse({ connectionId: scope.connectionId, database: scope.database, table: scope.table, taskId: this.ports.id(), ...(offset === 'last' ? { offset: 0, lastPage: true } : { offset }), ...query, ...(scope.editing ? { editing: true } : {}) }); }
     catch (reason) { this.emit({ error: scope.database !== 'main' ? text.unsupported : String(reason instanceof Error ? reason.message : reason) }); return; }
     const generation = ++this.generation; this.wanted = generation; this.releaseUnadopted(); this.pageScope = undefined; this.emit({ page: undefined, error: '' });
     const previous = this.operation;

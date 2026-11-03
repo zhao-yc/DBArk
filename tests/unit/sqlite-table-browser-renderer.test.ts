@@ -36,6 +36,16 @@ describe('SQLite 只读表浏览的明确条件与服务端分页', () => {
     const f = fixture(), pending = f.controller.load(query(), 0); expect(f.reads).toHaveLength(1); expect(f.reads[0].input).toMatchObject({ offset: 0, limit: 10, filters: [], sort: [], database: 'main' });
     const page = result(f.reads[0].input); page.result.rows = [{ c0: '9223372036854775807' }]; f.reads[0].pending.resolve(page); await pending; expect(f.view().page).toBe(page); expect(f.controller.pageCurrent(page)).toBe(true); expect(page.result.columns[0].type).toBe('SQLITE'); expect(page.result.rows[0].c0).toBe('9223372036854775807'); expect(f.releases).toBe(1); f.controller.dispose();
   });
+  it('末页请求只接受同一计数对应的偏移与实际行数', async () => {
+    const f = fixture(), first = f.controller.load(query(), 'last');
+    expect(f.reads[0].input).toMatchObject({ offset: 0, lastPage: true, limit: 10 });
+    f.reads[0].pending.resolve({ ...result(f.reads[0].input), offset: 10, matchingRows: '11', hasMore: false });
+    await first; expect(f.view().page?.offset).toBe(10);
+    const second = f.controller.load(query(), 'last');
+    f.reads[1].pending.resolve({ ...result(f.reads[1].input), offset: 0, matchingRows: '11', hasMore: false });
+    await second; expect(f.view().page).toBeUndefined(); expect(f.view().error).toContain('不匹配');
+    f.controller.dispose();
+  });
 });
 
 describe('SQLite 原表请求串行与准确生命周期', () => {

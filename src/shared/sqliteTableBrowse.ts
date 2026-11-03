@@ -3,6 +3,16 @@ import type { QueryResult } from './contracts';
 
 /** 表浏览始终有界；不通过完整COUNT或一次性读取全表来计算页数。 */
 export const sqliteTableBrowseLimits = { pageSize: 1000, offset: 1000000000, filters: 32, listValues: 128, parameters: 1024, sorts: 8, columns: 1024, resultBytes: 16 * 1024 * 1024, valueUnits: 65536 } as const;
+export const sqliteRowCountSchema = z.string().regex(/^(?:0|[1-9][0-9]{0,18})$/).refine(value => /^(?:0|[1-9][0-9]{0,18})$/.test(value) && BigInt(value) <= 9223372036854775807n);
+
+/** 精确计算末页偏移与行数，整页边界不能跳到额外空页。 */
+export function sqliteLastPagePosition(count: string, limit: number): { offset: number; rows: number } {
+  const total = BigInt(sqliteRowCountSchema.parse(count));
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > sqliteTableBrowseLimits.pageSize) throw Error('SQLite末页页长无效');
+  const size = BigInt(limit), offset = total > 0n ? (total - 1n) / size * size : 0n;
+  if (offset > BigInt(sqliteTableBrowseLimits.offset)) throw Error('SQLite末页超出可浏览的偏移范围，请缩小筛选范围');
+  return { offset: Number(offset), rows: Number(total - offset) };
+}
 export const sqliteTextFilterOperators = ['contains', 'notContains', 'startsWith', 'notStartsWith', 'endsWith', 'notEndsWith'] as const;
 /** 表单和合同共用文本运算符集合，不能将数值或二进制隐式转成文本。 */
 export function isSqliteTextFilter(operator: string): operator is typeof sqliteTextFilterOperators[number] { return sqliteTextFilterOperators.some(value => value === operator); }
@@ -67,9 +77,11 @@ export const sqliteTableFilterSchema = z.object({
 export const sqliteTablePageSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.literal('main'), table: name, taskId: z.string().min(1).max(200),
   offset: z.number().int().min(0).max(sqliteTableBrowseLimits.offset), limit: z.number().int().min(1).max(sqliteTableBrowseLimits.pageSize),
+  lastPage: z.literal(true).optional(),
   mode: z.enum(['and', 'or']), filters: z.array(sqliteTableFilterSchema).max(sqliteTableBrowseLimits.filters), editing: z.boolean().optional(),
   sort: z.array(z.object({ column: name, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
 }).strict().superRefine((input, context) => {
+  if (input.lastPage && input.offset !== 0) context.addIssue({ code: 'custom', path: ['offset'], message: 'SQLite末页请求不能指定偏移' });
   if (new Set(input.sort.map(sort => sort.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: '排序列不能重复' });
   if (input.filters.reduce((size, filter) => size + (filter.value?.value.length ?? 0) + (filter.secondValue?.value.length ?? 0) + (filter.values?.reduce((total, value) => total + value.value.length, 0) ?? 0) + (filter.selectedValues?.reduce((total, value) => total + (value.kind === 'null' ? 0 : value.value.length), 0) ?? 0), 0) > 131072) context.addIssue({ code: 'custom', message: 'SQLite筛选值总量超过预算' });
   // 保留utility原1024个位置绑定保护，预留分页两个；完整导出与生成查询沿同一准入。
@@ -90,6 +102,8 @@ export interface SqliteTablePage {
   columns: SqliteTableColumn[];
   result: QueryResult;
   offset: number;
+  /** 仅显式末页读取返回同一快照中的匹配总数。 */
+  matchingRows?: string;
   limit: number;
   hasMore: boolean;
 }

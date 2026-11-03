@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { sqliteTablePageSchema } from './sqliteTableBrowse';
+import { sqliteRowCountSchema as count, sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteValueOptionSchema } from './sqliteValueOptions';
 
 export const sqliteStatisticsLimits = { groups: 5, bytes: 1024 * 1024, cellBytes: 65536, active: 2 } as const;
@@ -15,7 +15,6 @@ function validateConditions(input: z.infer<typeof sqliteRowCountInputBase>, cont
 const sqliteRowCountInputBase = z.object(aggregateSource).strict();
 export const sqliteRowCountInputSchema = sqliteRowCountInputBase.superRefine(validateConditions);
 export const sqliteStatisticsInputSchema = sqliteRowCountInputBase.extend({ column: page.table }).superRefine(validateConditions);
-const count = z.string().regex(/^(?:0|[1-9][0-9]{0,18})$/).refine(value => /^(?:0|[1-9][0-9]{0,18})$/.test(value) && BigInt(value) <= 9223372036854775807n);
 const sqliteRowCountOutputSchema = z.object({ request: sqliteRowCountInputSchema, rows: count }).strict();
 export type SqliteRowCountInput = z.infer<typeof sqliteRowCountInputSchema>;
 export type SqliteRowCountOutput = z.infer<typeof sqliteRowCountOutputSchema>;

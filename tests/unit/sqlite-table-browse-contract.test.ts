@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sqliteTablePageSchema } from '../../src/shared/sqliteTableBrowse';
+import { sqliteLastPagePosition, sqliteTablePageSchema } from '../../src/shared/sqliteTableBrowse';
 import { validateCommand } from '../../src/shared/validation';
 import { publicCommands } from '../../src/shared/commands';
 
@@ -9,6 +9,15 @@ describe('SQLite表浏览严格合同及动态类型条件', () => {
   it('只公开明确main页请求，拒绝原始SQL/路径/凭据和其它数据库', () => {
     expect(publicCommands['sqlite.tablePage']).toBe(true); expect(validateCommand('sqlite.tablePage', base)).toEqual(base);
     for (const value of [{ ...base, database: 'other' }, { ...base, sql: 'DELETE FROM subject' }, { ...base, filePath: '外部文件' }, { ...base, profile: { dialect: 'sqlite' } }, { ...base, offset: -1 }, { ...base, offset: 1000000001 }, { ...base, limit: 1001 }]) expect(sqliteTablePageSchema.safeParse(value).success).toBe(false);
+  });
+  it('末页仅接受明确模式，行数换算保留空集、整页和偏移边界', () => {
+    expect(validateCommand('sqlite.tablePage', { ...base, lastPage: true })).toEqual({ ...base, lastPage: true });
+    for (const patch of [{ offset: 1, lastPage: true }, { lastPage: false }, { matchingRows: '100', lastPage: true }]) expect(sqliteTablePageSchema.safeParse({ ...base, ...patch }).success).toBe(false);
+    expect(sqliteLastPagePosition('0', 5)).toEqual({ offset: 0, rows: 0 });
+    expect(sqliteLastPagePosition('10', 5)).toEqual({ offset: 5, rows: 5 });
+    expect(sqliteLastPagePosition('11', 5)).toEqual({ offset: 10, rows: 1 });
+    expect(sqliteLastPagePosition('1000000001', 1)).toEqual({ offset: 1000000000, rows: 1 });
+    expect(() => sqliteLastPagePosition('9223372036854775807', 5)).toThrow('偏移范围');
   });
   it('类型和值必须显式匹配，NULL无值、二进制完整字节，排序列唯一且有界', () => {
     for (const value of [{ column: 'x', operator: 'eq' }, { column: 'x', operator: 'isNull', value: { kind: 'text', value: '' } }, { column: 'x', operator: 'contains', value: { kind: 'integer', value: '1' } }, { column: 'x', operator: 'gt', value: { kind: 'blob', value: '00ff' } }, { column: 'x', operator: 'eq', value: { kind: 'blob', value: '0' } }]) expect(sqliteTablePageSchema.safeParse({ ...base, filters: [value] }).success).toBe(false);
