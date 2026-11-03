@@ -1,4 +1,6 @@
 import { test, expect, ownedDesktopResources, retainOwnedDesktopResources, confirmOwnedDesktopExit, dataDir, pageErrors } from './desktop-fixture';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { savedQueryPagesZh as pagesText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
 import { savedQuerySearchZh as searchText } from '../../src/renderer/locales/savedQuerySearch.zh-CN';
@@ -16,6 +18,7 @@ test.afterEach(({}, info) => { if (!completed) { retainOwnedDesktopResources(inf
 /** 两个入口都只将真实本地原文插入原选区，旧读取关闭后不能覆盖模型或污染Undo分组。 */
 test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escape拒绝真实迟到回包', async ({ trace, screenshot, video }, info) => {
   const captured = ownedDesktopResources(info), application = captured.application, page = captured.page, originalProcess = application.process(), directory = dataDir;
+  const exportedPath = join(directory, 'saved-query-export.sql');
   const redoKey = process.platform === 'darwin' ? 'Meta+Shift+Z' : 'Control+Y';
   let closed = false, armed = false;
   const check = () => { const current = ownedDesktopResources(info); if (current.application !== application || current.page !== page || current.closed !== closed || dataDir !== directory || info.retry !== 0 || info.repeatEachIndex !== 0 || info.config.workers !== 1 || info.timeout !== 120000) throw Error('保存查询插入的原App/profile/单例期限变化'); };
@@ -74,23 +77,33 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
     const before = await effects(), baseline = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
     expect(before.tabs).toHaveLength(1); expect(before.tabs[0].sourceBinding).toEqual(prepared.original.source); expect(before.tabs[0].fileSourceBinding).toBeUndefined(); expect(before.context).toBe('原查询库'); expect(before.connection).toBe('插入原连接'); expect(before.grids).toBe(0); expect(before.session).toBe(zh.query.text009); expect(before.commitDisabled && before.rollbackDisabled).toBe(true); expect(before.tasks).toEqual([]); expect(before.history).toEqual([]);
     // 沿原历史例只透传Main并延后一次原读回包；不替换正文、摘要、结果或模型。
-    await step(() => application.evaluate(({ ipcMain, BrowserWindow, utilityProcess }, input) => {
+    await step(() => application.evaluate(({ ipcMain, BrowserWindow, utilityProcess, dialog }, input) => {
       const root = globalThis as any, handlers = (ipcMain as any)._invokeHandlers, previous = handlers?.get('dbark:request'), windows = BrowserWindow.getAllWindows(), window = windows[0], frame = window?.webContents.mainFrame, originalFork = utilityProcess.fork;
       if (!previous || windows.length !== 1 || !frame || root.__savedQueryInsertionOffline) throw Error('保存查询插入Main旁观入口未知');
       const stable = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
       const withoutSql = (value: typeof input.baseline) => ({ ...value, tabs: value.tabs.map(({ sql: _sql, ...tab }) => tab) });
       const allowedSql = new Set(input.sql), sources = new Map(input.sources.map(source => [source.id, source.sql]));
       const state = { pending: 0, calls: [] as { command: string; ok: boolean }[], reads: [] as { id: string; digest: string; sql: string; ok: boolean }[], savedSql: [] as string[], searchTaskIds: [] as string[], denied: [] as string[], engineStarts: 0, gateNext: false, held: false, release: undefined as (() => void) | undefined, check() {}, restore() {} };
-      const check = () => { if (root.__savedQueryInsertionOffline !== state || handlers.get('dbark:request') !== wrapped || utilityProcess.fork !== blocked || window.isDestroyed() || window.webContents.mainFrame !== frame || BrowserWindow.getAllWindows().length !== 1 || state.denied.length) throw Error('保存查询插入Main原窗口或旁观归属变化'); };
+      const originalSave = dialog.showSaveDialog;
+      let exporting = false, choices = 0;
+      const check = () => { if (root.__savedQueryInsertionOffline !== state || handlers.get('dbark:request') !== wrapped || utilityProcess.fork !== blocked || dialog.showSaveDialog !== picker || window.isDestroyed() || window.webContents.mainFrame !== frame || BrowserWindow.getAllWindows().length !== 1 || state.denied.length) throw Error('保存查询插入Main原窗口或旁观归属变化'); };
       const deny = (command: string): never => { state.denied.push(command); throw Error('离线保存查询插入拒绝数据库/剪贴板或未知操作：' + command); };
       const blocked = ((..._args: unknown[]) => { state.engineStarts++; return deny('utilityProcess.fork'); }) as typeof utilityProcess.fork;
-      const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'history.page', 'history.pageContinue', 'history.pageRelease', 'queries.list', 'queries.page', 'queries.pageContinue', 'queries.pageRelease', 'queries.organizationGet', 'queries.readText', 'search.savedQueries', 'search.savedQueriesContinue', 'search.savedQueriesRelease', 'query.cancel', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish']);
+      const picker = (async (...args: unknown[]) => {
+        check();
+        const options = args[1] as Electron.SaveDialogOptions | undefined;
+        if (!exporting || args[0] !== window || options?.defaultPath !== '保存查询.sql' || options.filters?.[0]?.extensions[0] !== 'sql' || choices >= 2) return deny('非本例 SQL 另存选择');
+        return ++choices === 1 ? { canceled: true, filePath: undefined } : { canceled: false, filePath: input.exportedPath };
+      }) as typeof dialog.showSaveDialog;
+      const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'history.page', 'history.pageContinue', 'history.pageRelease', 'queries.list', 'queries.page', 'queries.pageContinue', 'queries.pageRelease', 'queries.organizationGet', 'queries.readText', 'queries.exportSql', 'search.savedQueries', 'search.savedQueriesContinue', 'search.savedQueriesRelease', 'query.cancel', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish']);
       const wrapped = async (event: any, payload: any) => {
         check(); if (event.sender !== window.webContents || event.senderFrame !== frame) return deny('外来IPC'); const command = String(payload?.command), value = payload?.input; if (!allowed.has(command)) return deny(command);
         if (command === 'settings.save' && (stable(withoutSql(value)) !== stable(withoutSql(input.baseline)) || value.tabs.length !== 1 || !allowedSql.has(value.tabs[0].sql))) return deny(command);
         if (command === 'queries.readText' && (!value || Object.keys(value).sort().join() !== 'digest,id' || !sources.has(value.id) || !/^[a-f0-9]{64}$/.test(value.digest))) return deny(command);
+        if (command === 'queries.exportSql' && (exporting || !value || Object.keys(value).sort().join() !== 'digest,id' || value.id !== input.exportedId || !/^[a-f0-9]{64}$/.test(value.digest))) return deny(command);
         if (command === 'search.savedQueries') { if (state.searchTaskIds.length || typeof value?.taskId !== 'string') return deny(command); state.searchTaskIds.push(value.taskId); }
         const fact = { command, ok: false }; state.calls.push(fact); state.pending++;
+        if (command === 'queries.exportSql') exporting = true;
         try {
           const response = await previous(event, payload); check(); fact.ok = response?.ok === true;
           if (command === 'settings.save' && fact.ok) state.savedSql.push(value.tabs[0].sql);
@@ -100,11 +113,11 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
             if (state.gateNext) { state.gateNext = false; state.held = true; await new Promise<void>(resolve => { state.release = () => { if (!state.held) throw Error('原保存查询读取门已释放'); state.held = false; state.release = undefined; resolve(); }; }); check(); }
           }
           return response;
-        } finally { state.pending--; }
+        } finally { state.pending--; if (command === 'queries.exportSql') exporting = false; }
       };
-      state.check = check; state.restore = () => { check(); if (state.pending || state.held || state.gateNext || state.calls.some(call => !call.ok)) throw Error('原保存查询读取或本地任务未收尾'); handlers.set('dbark:request', previous); utilityProcess.fork = originalFork; delete root.__savedQueryInsertionOffline; };
-      root.__savedQueryInsertionOffline = state; handlers.set('dbark:request', wrapped); utilityProcess.fork = blocked; check();
-    }, { baseline, sql: [original, listInserted, searchInserted], sources: [{ id: prepared.list.source.id, sql: listSql }, { id: prepared.search.source.id, sql: searchSql }, { id: prepared.preview.source.id, sql: previewSql }] })); armed = true;
+      state.check = check; state.restore = () => { check(); if (state.pending || state.held || state.gateNext || state.calls.some(call => !call.ok) || choices !== 2) throw Error('原保存查询读取或本地任务未收尾'); handlers.set('dbark:request', previous); utilityProcess.fork = originalFork; dialog.showSaveDialog = originalSave; delete root.__savedQueryInsertionOffline; };
+      root.__savedQueryInsertionOffline = state; handlers.set('dbark:request', wrapped); utilityProcess.fork = blocked; dialog.showSaveDialog = picker; check();
+    }, { baseline, sql: [original, listInserted, searchInserted], exportedPath, exportedId: prepared.preview.source.id, sources: [{ id: prepared.list.source.id, sql: listSql }, { id: prepared.search.source.id, sql: searchSql }, { id: prepared.preview.source.id, sql: previewSql }] })); armed = true;
     const history = () => page.getByRole('dialog', { name: zh.activity.text003, exact: true });
     /** 真实工作台入口先打开历史，再切保存页，沿同一捕获选区而不重新领当前编辑器。 */
     const openList = async () => { await step(async () => { const action = await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '执行历史', exact: true }, check); check(); await action.click(); check(); }); await step(() => history().getByRole('button', { name: zh.activity.text005, exact: true }).click()); await step(() => expect(history().getByRole('button', { name: pagesText.refresh, exact: true })).toBeEnabled()); };
@@ -125,6 +138,15 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
     await step(() => page.keyboard.press('Escape'));
     await step(() => expect(preview).toHaveCount(0));
     await step(() => expect(history()).toBeVisible());
+    const exportSql = previewCard.getByRole('button', { name: pagesText.sqlExport, exact: true });
+    await step(() => exportSql.click());
+    await step(() => expect(exportSql).toBeEnabled());
+    expect((await audit()).calls.filter(call => call.command === 'queries.exportSql')).toHaveLength(1);
+    await expect(readFile(exportedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await step(() => exportSql.click());
+    await step(() => expect(history().getByText('已另存 SQL 文件：saved-query-export.sql', { exact: true })).toBeVisible());
+    expect(await readFile(exportedPath)).toEqual(Buffer.from(previewSql, 'utf8'));
+    expect((await audit()).calls.filter(call => call.command === 'queries.exportSql')).toEqual([{ command: 'queries.exportSql', ok: true }, { command: 'queries.exportSql', ok: true }]);
     expect(await observe()).toEqual(beforePreview);
     expect(await effects()).toEqual(before);
     await step(() => page.keyboard.press('Escape'));

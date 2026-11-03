@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
@@ -67,18 +68,20 @@ describe('保存查询完整正文的严格本地读取', () => {
 function mainFixture() {
   const f = local(), source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true);
   const dispatch = tree.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'dispatch');
-  const branches = dispatch?.body?.statements.filter((node): node is ts.IfStatement => ts.isIfStatement(node) && node.expression.getText(tree) === "command === 'queries.readText'") ?? [];
+  const branches = dispatch?.body?.statements.filter((node): node is ts.IfStatement => ts.isIfStatement(node) && ["command === 'queries.readText'", "command === 'queries.exportSql'"].includes(node.expression.getText(tree))) ?? [];
   let wrapper: ts.Expression | undefined;
   function visit(node: ts.Node): void { if (ts.isCallExpression(node) && node.expression.getText(tree) === 'ipcMain.handle' && node.arguments[0]?.getText(tree) === "'dbark:request'") wrapper = node.arguments[1]; ts.forEachChild(node, visit); } visit(tree);
-  if (branches.length !== 1 || !wrapper) throw Error('未取得唯一正式正文读取分支和IPC入口');
+  if (branches.length !== 2 || !wrapper) throw Error('未取得正文读取、导出和IPC入口');
   const frame = { url: 'ram://read-text', processId: 1, frameToken: '原文档', detached: false }, contents = Object.assign(new EventEmitter(), { mainFrame: frame, isDestroyed: () => false }), window = { webContents: contents, isDestroyed: () => false }, structureTokens = new Map();
   const unexpected = vi.fn((): never => { throw Error('本地正文不得访问连接/Engine/来源绑定'); });
   const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window as never, rendererURL: frame.url, connectionRevision: () => 0, assertAvailable: unexpected, shuttingDown: () => false, release: unexpected }); columnsMain.trackWindow(window as never);
-  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens, columnsMain, savedQuerySearches: f.service, shuttingDown: false, window, rendererURL: frame.url, tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set(), connectionConfig: { assertAvailable: unexpected }, store: { bindQuerySource: unexpected, resolveConnection: unexpected, connectionRevision: () => 0 }, broker: { request: unexpected } });
-  const code = extractMainProductionBinding(source, 'tableChecksMain') + '\nasync function dispatch(command:any,input:any,columns?:any){' + branches[0].getText(tree) + "throw Error('未授权其它分发');}\nglobalThis.request=" + wrapper.getText(tree) + ';';
+  const choose = vi.fn(async (): Promise<{ canceled: boolean; filePath?: string }> => ({ canceled: true }));
+  const release = vi.fn(), reserve = vi.fn(async (_path: string) => release), write = vi.fn(async () => {});
+  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens, columnsMain, savedQuerySearches: f.service, shuttingDown: false, window, rendererURL: frame.url, tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set(), connectionConfig: { assertAvailable: unexpected }, store: { bindQuerySource: unexpected, resolveConnection: unexpected, connectionRevision: () => 0 }, broker: { request: unexpected }, basename, dialog: { showSaveDialog: choose }, queryFileOperation: (action: () => Promise<unknown>) => action(), exportReservations: { acquire: reserve }, writeQueryFile: write });
+  const code = extractMainProductionBinding(source, 'tableChecksMain') + '\nasync function dispatch(command:any,input:any,columns?:any){' + branches.map(branch => branch.getText(tree)).join('\n') + "throw Error('未授权其它分发');}\nglobalThis.request=" + wrapper.getText(tree) + ';';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   const event = { sender: contents, senderFrame: frame };
-  return { ...f, context, unexpected, event, contents, request: (input: unknown, sender = event): Promise<any> => context.request(sender, { command: 'queries.readText', input }) };
+  return { ...f, context, unexpected, event, contents, choose, reserve, release, write, request: (input: unknown, sender = event): Promise<any> => context.request(sender, { command: 'queries.readText', input }), exportSql: (input: unknown): Promise<any> => context.request(event, { command: 'queries.exportSql', input }) };
 }
 
 describe('queries.readText正式Main本地分支与最终文档归属', () => {
@@ -93,5 +96,44 @@ describe('queries.readText正式Main本地分支与最终文档归属', () => {
   it('真实Main文档在读取后、IPC await发布前换代，完整SQL不能迟到发布', async () => {
     const f = mainFixture(); f.reading(() => queueMicrotask(() => f.contents.emit('did-navigate')));
     const result = await f.request(f.input()); expect(result).toMatchObject({ ok: false }); expect(result).not.toHaveProperty('result'); expect(f.unexpected).not.toHaveBeenCalled();
+  });
+});
+
+describe('queries.exportSql 原生选址及原摘要写入', () => {
+  it('取消不读正文，确认后以 UTF-8 写入原文且只返回文件名', async () => {
+    const f = mainFixture(), target = 'C:/isolated/saved.sql';
+    expect(publicCommands['queries.exportSql']).toBe(true);
+    expect(await f.exportSql({ ...f.input(), path: target })).toMatchObject({ ok: false });
+    expect(f.choose).not.toHaveBeenCalled();
+    expect(await f.exportSql(f.input())).toEqual({ ok: true, result: { status: 'cancelled' } });
+    expect(f.store.querySearchRaw).not.toHaveBeenCalled();
+    expect(f.write).not.toHaveBeenCalled();
+    f.choose.mockResolvedValueOnce({ canceled: false, filePath: target });
+    expect(await f.exportSql(f.input())).toEqual({ ok: true, result: { status: 'saved', name: 'saved.sql' } });
+    expect(f.reserve).toHaveBeenCalledExactlyOnceWith(target);
+    expect(f.write).toHaveBeenCalledExactlyOnceWith(target, record().sql, 'utf8');
+    expect(f.release).toHaveBeenCalledOnce();
+    expect(f.connection).not.toHaveBeenCalled();
+    expect(f.unexpected).not.toHaveBeenCalled();
+  });
+
+  it('选址期间原记录变化或文档失效均拒绝写入', async () => {
+    const target = 'C:/isolated/saved.sql';
+    const stale = mainFixture(), original = stale.input();
+    stale.choose.mockImplementationOnce(async () => {
+      stale.replace(JSON.stringify(record({ sql: 'SELECT 2' })));
+      return { canceled: false, filePath: target };
+    });
+    expect(await stale.exportSql(original)).toMatchObject({ ok: false });
+    expect(stale.write).not.toHaveBeenCalled();
+    expect(stale.release).toHaveBeenCalledOnce();
+    const obsolete = mainFixture();
+    obsolete.choose.mockImplementationOnce(async () => {
+      obsolete.contents.emit('did-navigate');
+      return { canceled: false, filePath: target };
+    });
+    expect(await obsolete.exportSql(obsolete.input())).toMatchObject({ ok: false });
+    expect(obsolete.reserve).not.toHaveBeenCalled();
+    expect(obsolete.write).not.toHaveBeenCalled();
   });
 });

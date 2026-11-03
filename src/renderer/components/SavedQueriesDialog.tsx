@@ -215,17 +215,27 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     let opened: SavedQueryOpenResult | undefined; const work = run(async ticket => { const result = await io.request('queries.read', { id: item.query.id, digest: item.digest, connectionId }); if (owns(ticket)) opened = result; });
     if (work) void work.then(() => { if (opened && !closed.current) { const result = opened; void close(() => { useWorkspace.getState().openTab({ id: io.id(), kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database, databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding }); onClose(); }); } });
   }
+  /** 只有已应用范围内的原卡片可以读取或导出，旧页事件不能复用。 */
+  function currentCard(item: SavedQueryPageEntry): boolean {
+    return pageView.current.reply === reply && pageView.current.applied === applied
+      && !pageView.current.needsRefresh && criteriaKey(criteriaRef.current) === applied && reply?.items.includes(item) === true;
+  }
   /** 按原卡片编号和摘要读取本地正文，连接是否可用不参与预览。 */
   function showSql(item: SavedQueryPageEntry): void {
-    const original = pageView.current;
-    const current = () => pageView.current.reply === original.reply && pageView.current.applied === original.applied
-      && !pageView.current.needsRefresh && criteriaKey(criteriaRef.current) === original.applied && original.reply?.items.includes(item) === true;
-    if (!editable() || !current()) return;
+    if (!editable() || !currentCard(item)) return;
     void run(async ticket => {
       const result = await io.request('queries.readText', { id: item.query.id, digest: item.digest });
       if (!owns(ticket)) return;
-      if (!current()) throw Error(t.sqlStale);
+      if (!currentCard(item)) throw Error(t.sqlStale);
       setSqlPreview({ item, sql: result.query.sql, epoch: ticket });
+    });
+  }
+  /** 文件保存交给主进程，卡片只提供原编号和摘要。 */
+  function exportSql(item: SavedQueryPageEntry): void {
+    if (!editable() || !currentCard(item)) return;
+    void run(async ticket => {
+      const result = await io.request('queries.exportSql', { id: item.query.id, digest: item.digest });
+      if (owns(ticket) && result.status === 'saved') setNotice(formatText(t.sqlExported, result.name));
     });
   }
   /** 全文按摘要重读；先退出run原Promise再关闭释放，避免cleanup等待自己的pending。 */
@@ -280,7 +290,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p>{notice}</p>}{busy && <Spinner/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
-          <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
+          <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<button disabled={blocked || changed || needsRefresh} title={t.sqlExportHint} onClick={() => exportSql(item)}>{t.sqlExport}</button><label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
           <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh || !organization} onClick={() => beginRename(item, true)}>{duplicateText.rename}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
         </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}

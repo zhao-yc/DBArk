@@ -18,6 +18,8 @@ export const savedQueryReadSchema=z.object({id,digest:z.string().regex(/^[a-f0-9
 export const savedQueryReadTextSchema=savedQueryReadSchema.omit({connectionId:true}).strict();
 export type SavedQueryReadTextInput=z.infer<typeof savedQueryReadTextSchema>;
 export interface SavedQueryReadTextResult{query:SavedQuery}
+/** 保存结果只返回显示名称，原路径和正文不离开主进程。 */
+export type SavedQueryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };
 export type SavedQuerySearchInput=z.infer<typeof savedQuerySearchInputSchema>;
 export type SavedQuerySearchNext=z.infer<typeof savedQuerySearchNextSchema>;
 export interface SavedQueryMatch{field:'name'|'sql';line:number;column:number;offset:number;length:number;preview:string;previewTruncated:boolean}
