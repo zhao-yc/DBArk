@@ -273,6 +273,13 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     await step(() => table().getByRole('button', { name: '新增 SQLite 记录', exact: true }).click()); const added = page.getByRole('dialog', { name: '新增 SQLite 记录', exact: true }); await step(() => expect(added).toBeVisible()); await step(() => expect(added.getByRole('checkbox', { name: '写入 SQLite 字段 defaulted', exact: true })).not.toBeChecked());
     for (const [column, kind, value] of [['id', 'integer', '6'], ['note', 'text', insertNote], ['mixed', 'real', '2.5'], ['nullable', 'text', ''], ['payload', 'blob', ''], ['exact_int', 'integer', '9223372036854775807'], ['real_num', 'real', '1.25']] as const) await input(added, column, kind, value, true); await save(added);
     await select(3); await confirm(() => table().getByRole('button', { name: '删除 SQLite 当前行', exact: true }).click(), '将当前记录标记为本地待删除？只有预览并明确提交后才会修改数据库。'); await counts(1, 1, 1); expect(disk()).toEqual(baseline); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toEqual([]);
+    const adjacent = await openRow(2);
+    await step(() => adjacent.getByRole('button', { name: '下一条记录', exact: true }).click());
+    await step(() => expect(adjacent.getByLabel('SQLite 字段 id 值', { exact: true })).toHaveValue('4'));
+    await step(() => adjacent.getByRole('button', { name: '上一条记录', exact: true }).click());
+    await step(() => expect(adjacent.getByLabel('SQLite 字段 id 值', { exact: true })).toHaveValue('2'));
+    await step(() => adjacent.getByRole('button', { name: '取消 SQLite 字段编辑', exact: true }).click());
+    await counts(1, 1, 1);
     stage = '脏页列头排序取消原确认，准确增改删草稿/行序/排序均保留且零请求';
     const beforePresets = await step(audit), presetDraftIds = await columnValues('id');
     // 原流程可能已展开条件；只在关闭时展开，不能用盲目toggle把真实入口藏掉。
@@ -323,7 +330,27 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     // 成功提交会真实刷新并关闭原预览；等待新网格，不用已返回IPC冒称React已完成。
     await step(() => expect(preview()).toBeHidden()); await step(() => expect(grid()).toBeVisible()); await counts(0, 0, 0);
     stage = 'WITHOUT ROWID复合主键冲突整批回滚'; await openObject(rwName, compoundTable); await step(() => expect(grid()).toBeVisible()); await sortPage(['tenant', 'id']); await step(() => expect.poll(async () => await columnValues('tenant')).toEqual(['TEXT · A', 'TEXT · A', 'TEXT · A', 'TEXT · B'])); await step(() => expect.poll(async () => await columnValues('id')).toEqual(['INTEGER · 1', 'INTEGER · 2', 'INTEGER · 3', 'INTEGER · 3']));
-    const compoundPage = operations(await step(audit), 'sqlite.tablePage').at(-1); expect(result(compoundPage?.reply)).toMatchObject({ edit: { kind: 'editable', locator: { kind: 'primary-key', columns: ['tenant', 'id'] } } }); const first = await openRow(1); await input(first, 'note', 'text', conflictFirst); await save(first); const last = await openRow(3); await input(last, 'note', 'text', conflictLast); await save(last); await counts(0, 2, 0); expect(disk()).toEqual(afterCommit); const conflictPreview = await openPreview({ insert: 0, update: 2, delete: 0 });
+    const beforeRecordNavigation = await step(audit), compoundPage = operations(beforeRecordNavigation, 'sqlite.tablePage').at(-1);
+    expect(result(compoundPage?.reply)).toMatchObject({ edit: { kind: 'editable', locator: { kind: 'primary-key', columns: ['tenant', 'id'] } } });
+    const form = await openRow(1), recordId = form.getByLabel('SQLite 字段 id 值', { exact: true });
+    const recordButton = (name: string) => form.getByRole('button', { name, exact: true });
+    await step(() => expect(recordButton('上一条记录')).toBeDisabled());
+    await step(() => recordButton('下一条记录').click()); await step(() => expect(recordId).toHaveValue('2'));
+    await step(() => recordButton('上一条记录').click()); await step(() => expect(recordId).toHaveValue('1'));
+    await input(form, 'note', 'integer', '无效整数');
+    await step(() => recordButton('暂存并查看下一条').click());
+    await step(() => expect(form.locator('.error-box')).toBeVisible()); await step(() => expect(recordId).toHaveValue('1'));
+    await step(() => expect(form.getByLabel('SQLite 字段 note 值', { exact: true })).toHaveValue('无效整数'));
+    await input(form, 'note', 'text', conflictFirst);
+    await step(() => recordButton('暂存并查看下一条').click()); await step(() => expect(recordId).toHaveValue('2'));
+    await step(() => recordButton('上一条记录').click()); await step(() => expect(recordId).toHaveValue('1'));
+    await step(() => expect(form.getByLabel('SQLite 字段 note 值', { exact: true })).toHaveValue(conflictFirst));
+    await step(() => recordButton('下一条记录').click()); await step(() => expect(recordId).toHaveValue('2'));
+    await step(() => recordButton('下一条记录').click()); await step(() => expect(recordId).toHaveValue('3'));
+    await input(form, 'note', 'text', conflictLast); await save(form); await counts(0, 2, 0); expect(disk()).toEqual(afterCommit);
+    const afterRecordNavigation = await step(audit);
+    for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply']) expect(operations(afterRecordNavigation, command)).toEqual(operations(beforeRecordNavigation, command));
+    const conflictPreview = await openPreview({ insert: 0, update: 2, delete: 0 });
     // 独立外部写入是本例合成库明确授权的并发观察，不通过产品IPC或同一连接模拟冲突。
     check(); const observer = new DatabaseSync(database); try { expect(observer.prepare('UPDATE "编辑复合键" SET note=? WHERE tenant=? AND id=?').run(observerNote, 'A', 3n).changes).toBe(1); } finally { observer.close(); check(); }
     const afterObserver = { ...afterCommit, compound: compoundRows.map(row => row.tenant === 'A' && row.id === '3' ? { ...row, note: observerNote } : row) }; expect(disk()).toEqual(afterObserver);

@@ -7,9 +7,15 @@ import { errorMessage } from '../lib';
 import { ErrorBox, Modal, Spinner } from './ui';
 
 interface FieldDraft { include: boolean; kind: SqliteOriginalValue['kind']; value: string; changed: boolean; }
+interface RecordNavigation {
+  ownerId: string;
+  previous: boolean;
+  next: boolean;
+  move(direction: -1 | 1, values?: (SqliteOriginalValue | undefined)[]): boolean;
+}
 /** 编辑输入保持原动态类型；未触碰的非有限原 REAL 只保留，不重新解析或偷偷转换。 */
-export function SqliteTableValueDialog({ ticket, page, row, column, duplicate = false, duplicateOwner, current, onSave, onClose }: { ticket: object; page: SqliteTablePage; row: SqliteDraftRow; column?: number; duplicate?: boolean; duplicateOwner?: string; current(): boolean; onSave(values: (SqliteOriginalValue | undefined)[]): boolean; onClose(): void }) {
-  const owner = useRef({ ticket, page, row, column, duplicate, duplicateOwner, current, onSave, onClose }).current;
+export function SqliteTableValueDialog({ ticket, page, row, column, duplicate = false, duplicateOwner, navigation, current, onSave, onClose }: { ticket: object; page: SqliteTablePage; row: SqliteDraftRow; column?: number; duplicate?: boolean; duplicateOwner?: string; navigation?: RecordNavigation; current(): boolean; onSave(values: (SqliteOriginalValue | undefined)[]): boolean; onClose(): void }) {
+  const owner = useRef({ ticket, page, row, column, duplicate, duplicateOwner, navigation, current, onSave, onClose }).current;
   const renderTicket = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; }; });
   const [fields, setFields] = useState<FieldDraft[]>(() => row.values.map((value, index) => { const original = duplicate && page.edit?.kind === 'editable' && page.edit.columns[index]?.generated ? undefined : value; return { include: original !== undefined, kind: original?.kind ?? 'text', value: original && original.kind !== 'null' ? original.value : '', changed: false }; }));
@@ -23,21 +29,29 @@ export function SqliteTableValueDialog({ ticket, page, row, column, duplicate = 
   duplicateCurrent();
   function localCurrent(): boolean { return !invalid.current && !closed.current && committed.current === renderTicket && live.current === fields; }
   function close(): void { if (!localCurrent() || saving.current) return; closed.current = true; owner.onClose(); }
-  /** 全部字段作为一次本地 undo 步骤；只有显式改动字段才解析新输入。 */
-  function save(): void {
+  const changed = fields.some(field => field.changed);
+  /** 校验失败保留原表单；干净的导航不消耗草稿撤销步骤。 */
+  function save(direction?: -1 | 1): void {
     if (!localCurrent() || saving.current || !duplicateCurrent() || !owner.current()) { if (committed.current === renderTicket) setError(text.stale); return; }
+    const move = owner.navigation;
+    if (direction !== undefined && (!move || !(direction === -1 ? move.previous : move.next))) return;
     saving.current = true;
     try {
-      const values = owner.row.values.map((original, i) => {
+      const values = direction !== undefined && !changed ? undefined : owner.row.values.map((original, i) => {
         const field = fields[i]; if (owner.duplicate && columns[i].generated) return undefined; if (columns[i].generated || !field.changed) return original;
         if (!field.include && owner.row.index === undefined) return undefined;
         return sqliteEditValueSchema.parse(field.kind === 'null' ? { kind: 'null' } : { kind: field.kind, value: field.value });
       });
-      if (!duplicateCurrent() || !owner.current() || !owner.onSave(values)) { setError(text.stale); return; } closed.current = true; owner.onClose();
+      if (!duplicateCurrent() || !owner.current() || !(direction !== undefined ? move?.move(direction, values) : values && owner.onSave(values))) { setError(text.stale); return; }
+      closed.current = true;
+      if (direction === undefined) owner.onClose();
     } catch (reason) { setError(errorMessage(reason)); } finally { saving.current = false; }
   }
   function change(index: number, patch: Partial<FieldDraft>): void { if (!localCurrent() || saving.current || !duplicateCurrent()) return; const next = fields.map((field, i) => i === index ? { ...field, ...patch, changed: true } : field); live.current = next; setFields(next); }
-  return <Modal title={owner.duplicate ? text.duplicateTitle : row.index === undefined ? text.add : column === undefined ? text.editRow : text.editCell} onClose={close} wide><div className="dialog-body" data-sqlite-duplicate-input={owner.duplicate ? owner.duplicateOwner : undefined}><p>{text.inputHint}</p>{owner.duplicate && <p>{text.duplicateHint}</p>}{columns.map((item, index) => column !== undefined && index !== column ? null : <fieldset key={item.name}><legend>{item.name}{item.generated ? ' · ' + text.generated : ''}</legend>{row.index === undefined && <label><input type="checkbox" aria-label={text.include(item.name)} checked={fields[index].include} disabled={item.generated} onChange={event => change(index, { include: event.target.checked })}/>{text.include(item.name)}</label>}<select aria-label={text.type(item.name)} value={fields[index].kind} disabled={item.generated || !fields[index].include} onChange={event => change(index, { kind: event.target.value as FieldDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select><textarea aria-label={text.value(item.name)} value={fields[index].value} maxLength={65536} disabled={item.generated || !fields[index].include || fields[index].kind === 'null'} onChange={event => change(index, { value: event.target.value })}/></fieldset>)}<ErrorBox message={owner.duplicate && !duplicateSource.current ? text.stale : error}/></div><footer><button aria-label={owner.duplicate ? text.duplicateCancel : text.cancelInput} onClick={close}>{owner.duplicate ? text.duplicateCancel : text.cancelInput}</button><button className="primary" aria-label={owner.duplicate ? text.duplicateSave : text.saveInput} disabled={owner.duplicate && !duplicateSource.current} onClick={save}>{owner.duplicate ? text.duplicateSave : text.saveInput}</button></footer></Modal>;
+  return <Modal title={owner.duplicate ? text.duplicateTitle : row.index === undefined ? text.add : column === undefined ? text.editRow : text.editCell} onClose={close} wide><div className="dialog-body" data-sqlite-duplicate-input={owner.duplicate ? owner.duplicateOwner : undefined} data-sqlite-record-input={owner.navigation?.ownerId}><p>{text.inputHint}</p>{owner.duplicate && <p>{text.duplicateHint}</p>}{owner.navigation && <p>{text.recordNavigation}</p>}{columns.map((item, index) => column !== undefined && index !== column ? null : <fieldset key={item.name}><legend>{item.name}{item.generated ? ' · ' + text.generated : ''}</legend>{row.index === undefined && <label><input type="checkbox" aria-label={text.include(item.name)} checked={fields[index].include} disabled={item.generated} onChange={event => change(index, { include: event.target.checked })}/>{text.include(item.name)}</label>}<select aria-label={text.type(item.name)} value={fields[index].kind} disabled={item.generated || !fields[index].include} onChange={event => change(index, { kind: event.target.value as FieldDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select><textarea aria-label={text.value(item.name)} value={fields[index].value} maxLength={65536} disabled={item.generated || !fields[index].include || fields[index].kind === 'null'} onChange={event => change(index, { value: event.target.value })}/></fieldset>)}<ErrorBox message={owner.duplicate && !duplicateSource.current ? text.stale : error}/></div><footer className="modal-footer">{owner.navigation && <>
+    <button type="button" aria-label={changed ? text.savePreviousRecord : text.previousRecord} disabled={!owner.navigation.previous} onClick={() => save(-1)}>{changed ? text.savePreviousRecord : text.previousRecord}</button>
+    <button type="button" aria-label={changed ? text.saveNextRecord : text.nextRecord} disabled={!owner.navigation.next} onClick={() => save(1)}>{changed ? text.saveNextRecord : text.nextRecord}</button>
+  <span className="grow"/></>}<button aria-label={owner.duplicate ? text.duplicateCancel : text.cancelInput} onClick={close}>{owner.duplicate ? text.duplicateCancel : text.cancelInput}</button><button className="primary" aria-label={owner.duplicate ? text.duplicateSave : text.saveInput} disabled={owner.duplicate && !duplicateSource.current} onClick={() => save()}>{owner.duplicate ? text.duplicateSave : text.saveInput}</button></footer></Modal>;
 }
 
 /** 真实 modal 明确确认集中写入；预览关闭不丢本地草稿，也不伪取消已发送提交。 */

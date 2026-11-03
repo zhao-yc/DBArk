@@ -31,6 +31,19 @@ async function mount(render: () => ReactNode) { const host = document.createElem
 function editView(id: string): SqliteEditView { const source = page('相同目标'); return { page: source, rows: [row(id)], dirty: true, busy: false, valid: true, unknown: false, undo: true, redo: false, message: '', preview: { previewId: id, snapshotId: 'snapshot', target: source.target, schemaKey: source.schemaKey, expiresAt: new Date(300000).toISOString(), confirmation: 'main.相同目标', counts: { insert: 0, update: 1, delete: 0 }, sql: ['UPDATE "相同目标" SET "mixed" = ?;'] } }; }
 
 describe('SQLite typed Modal 与集中预览真实 React 旧回调隔离', () => {
+  it('上一条及下一条只交接当前票据，干净切换不传暂存值', async () => {
+    const move = vi.fn(() => true), nextMove = vi.fn(() => true), save = vi.fn(() => true), close = vi.fn();
+    let key = 'first', props = { ticket: {}, page: page('页'), row: row('第一条'), current: () => true, onSave: save, onClose: close, navigation: { ownerId: key, previous: false, next: true, move } };
+    const rerender = await mount(() => <ValueDialog key={key} {...props}/>);
+    expect(node(text.previousRecord).disabled).toBe(true);
+    const oldNext = callback(node(text.nextRecord));
+    await act(async () => oldNext()); expect(move).toHaveBeenCalledExactlyOnceWith(1, undefined);
+    key = 'second'; props = { ...props, ticket: {}, row: row('第二条'), navigation: { ownerId: key, previous: true, next: false, move: nextMove } }; await rerender();
+    await act(async () => oldNext()); expect(move).toHaveBeenCalledOnce(); expect(nextMove).not.toHaveBeenCalled();
+    await act(async () => callback(node(text.value('mixed'), 'textarea'), 'onChange')({ target: { value: '准确暂存文本' } }));
+    await act(async () => callback(node(text.savePreviousRecord))()); expect(nextMove).toHaveBeenCalledExactlyOnceWith(-1, [{ kind: 'text', value: '准确暂存文本' }]);
+    expect(save).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled();
+  });
   it('换页后同original-0的旧save/close/change不修改新窗口；新key使用新字段正文', async () => {
     const oldSave = vi.fn(() => true), oldClose = vi.fn(), nextSave = vi.fn(() => true), nextClose = vi.fn();
     let props = { ticket: {}, page: page('旧页'), row: row('旧内容'), current: () => true, onSave: oldSave, onClose: oldClose }, key = 'old';

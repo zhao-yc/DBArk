@@ -518,6 +518,27 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
     if (editorRef.current !== ticket.editor || ticket.editor.page !== ticket.page || ticket.editor.view.rows !== ticket.rows) return;
     inputRef.current = null; ticket.editor.inputOpen(false); setCellInput(null);
   }
+  /** 只在原快照的已有行中导航，本地新增或待删除行不会成为目标。 */
+  function adjacentRecord(ticket: EditInputTicket, direction: -1 | 1): SqliteDraftRow | undefined {
+    if (ticket.column !== undefined || ticket.duplicate || ticket.row.index === undefined || ticket.row.deleted) return;
+    const index = ticket.rows.indexOf(ticket.row);
+    if (index < 0) return;
+    for (let i = index + direction; i >= 0 && i < ticket.rows.length; i += direction) {
+      const row = ticket.rows[i];
+      if (row.index !== undefined && !row.deleted) return row;
+    }
+  }
+  /** 切换前核对唯一表单及原票据，暂存后用新票据交接给下一条。 */
+  function moveRecordInput(ticket: EditInputTicket, direction: -1 | 1, values?: (SqliteOriginalValue | undefined)[]): boolean {
+    const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+    const next = adjacentRecord(ticket, direction);
+    if (!next || !inputCurrent(ticket) || dialogs.length !== 1 || !dialogs[0].querySelector('[data-sqlite-record-input="' + ticket.id + '"]')) return false;
+    if (values) ticket.editor.save(ticket.row.id, values);
+    if (inputRef.current !== ticket || editorRef.current !== ticket.editor || !ticket.editor.canEdit() || !ticket.editor.view.rows.includes(next)) return false;
+    setSelectedRow(next.id);
+    openInput(ticket.editor, next);
+    return true;
+  }
   /** 准确选中行的已保存typed值独立复制到虚拟输入；打开及取消不调用add或接触剪贴板。 */
   function duplicateRow(): void {
     if (!editActionCurrent() || !available() || inputRef.current || previewRef.current || pasteRef.current || rangeRef.current) return;
@@ -807,7 +828,11 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
     {pasteOpen && <SqlitePasteInsertDialog key={pasteOpen.id} page={pasteOpen.page} initial={pasteOpen.source} current={() => pasteCurrent(pasteOpen)} onStage={plan => stagePaste(pasteOpen, plan)} onClose={() => closePaste(pasteOpen)}/>}
     {filteredSelectOpen && <SqliteFilteredSelectDialog intent={filteredSelectOpen.intent} ownerId={filteredSelectOpen.id} onOpen={plan => openFilteredSelectQuery(filteredSelectOpen, plan)} onClose={() => closeFilteredSelect(filteredSelectOpen)}/>}
     {fillOpen && <SqliteTableFillDialog key={fillOpen.id} ticket={fillOpen} ownerId={fillOpen.id} page={fillOpen.source.page} count={fillOpen.source.selected.length} allNew={fillOpen.source.allNew} current={() => fillCurrent(fillOpen)} onSave={fields => stageFill(fillOpen, fields)} onClose={() => closeFill(fillOpen)}/>}
-    {cellInput && <SqliteTableValueDialog key={cellInput.id} ticket={cellInput} page={cellInput.page} row={cellInput.row} column={cellInput.column} duplicate={!!cellInput.duplicate} duplicateOwner={cellInput.duplicate ? cellInput.id : undefined} current={() => inputCurrent(cellInput)} onSave={values => saveInput(cellInput, values)} onClose={() => closeInput(cellInput)}/>}
+    {cellInput && <SqliteTableValueDialog key={cellInput.id} ticket={cellInput} page={cellInput.page} row={cellInput.row} column={cellInput.column} duplicate={!!cellInput.duplicate} duplicateOwner={cellInput.duplicate ? cellInput.id : undefined}
+      navigation={cellInput.column === undefined && !cellInput.duplicate && cellInput.row.index !== undefined ? {
+        ownerId: cellInput.id, previous: !!adjacentRecord(cellInput, -1), next: !!adjacentRecord(cellInput, 1),
+        move: (direction, values) => moveRecordInput(cellInput, direction, values),
+      } : undefined} current={() => inputCurrent(cellInput)} onSave={values => saveInput(cellInput, values)} onClose={() => closeInput(cellInput)}/>}
     {previewOpen && editView && previewOpen.editor === renderedEditor && <SqliteTablePreviewDialog key={previewOpen.id + ':' + (editView.preview?.previewId ?? 'pending')} ticket={previewOpen} view={editView} current={() => previewCurrent(previewOpen, editView.preview, editView.taskId)} onApply={() => applyPreview(previewOpen, editView.preview)} onClose={() => closePreview(previewOpen, editView.preview)} onStop={() => stopPreview(previewOpen, editView.preview, editView.taskId)}/>}
   </div>;
 }

@@ -2,6 +2,9 @@
 export const sqliteTableEditZh = {
   grid: 'SQLite 表格编辑', editable: '可编辑快照：修改先保存在本地草稿，预览后明确集中提交；不使用查询标签事务。',
   add: '新增 SQLite 记录', remove: '删除 SQLite 当前行', editRow: '编辑 SQLite 当前行', editCell: '编辑 SQLite 单元格',
+  previousRecord: '上一条记录', nextRecord: '下一条记录',
+  savePreviousRecord: '暂存并查看上一条', saveNextRecord: '暂存并查看下一条',
+  recordNavigation: '在当前页的已有记录间切换，跳过待删除记录。暂存的修改仍须集中预览并提交。',
   duplicateEntry: '复制 SQLite 当前行为新增记录', duplicateTitle: '复制 SQLite 记录为新增草稿',
   duplicateHint: '复制当前行已保存到本地草稿的字段值，不复制生成列。可更改主键或唯一字段，或取消勾选字段以使用数据库默认值；确认仅暂存新增草稿，仍须预览 SQL 并明确提交。',
   duplicateSave: '暂存 SQLite 复制记录', duplicateCancel: '取消 SQLite 复制记录',
