@@ -7,7 +7,7 @@ import { invoke, uid, errorMessage } from '../lib';
 import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import '../sqliteStatistics.css';
 
-interface Props { tabId: string; base: Omit<SqliteStatisticsInput, 'column' | 'taskId'>; columns: readonly string[]; current(): boolean; onClose(): void; onCleanup(reason: unknown): void; }
+interface Props { tabId: string; base: Omit<SqliteStatisticsInput, 'column' | 'taskId'>; columns: readonly string[]; current(): boolean; onClose(): void; onCleanup(reason: unknown): void; onCount?(rows: string): void; }
 /** 极值只展示准确typed值，文本保留JSON转义，二进制显示完整hex，不按声明类型隐式转换。 */
 function preview(value: SqliteStatisticsValue): string { return value.kind === 'null' ? 'NULL' : value.kind === 'text' ? JSON.stringify(value.value) : value.kind === 'blob' ? 'X\'' + value.value + '\'' : value.value; }
 /** 打开和选择字段不读取，明确开始才统计；关闭在途操作等原任务与ACK，原占用不提前释放。 */
@@ -20,16 +20,24 @@ export function SqliteStatisticsDialog(props: Props) {
   useEffect(() => { controller.observe(); });
   useEffect(() => { mounted.current = true; controller.activate(); return () => { mounted.current = false; controller.dispose(); }; }, [controller]);
   function current(): boolean { return committed.current === render && !closed.current && !closingRef.current && !controller.view.busy && controller.current(); }
+  /** 只把当前对话框已验且未取消的计数交还给原表页。 */
+  async function countRows(): Promise<void> {
+    if (!current()) return;
+    await controller.countRows();
+    const count = controller.view.rowCount;
+    if (count !== undefined && !closed.current && !closingRef.current && controller.current()) origin.onCount?.(count);
+  }
   /** 关闭占门后不接纳继任读取；取消失败仍等待原Promise的真实终态。 */
   async function close(): Promise<void> {
     if (committed.current !== render || closed.current || closingRef.current) return; closingRef.current = true; setClosing(true);
     try { await controller.stop(); if (mounted.current && !closed.current) { closed.current = true; origin.onClose(); } } catch (reason) { if (mounted.current) { closingRef.current = false; setProblem(errorMessage(reason)); setClosing(false); } }
   }
   const output = view.output;
-  return <Modal title={text.title} onClose={() => { void close(); }} wide><div className="modal-content sqlite-statistics-content">
-    <p>{text.hint}</p><UsageHelp><p className="muted small">{text.types}</p></UsageHelp><p className="muted small">{origin.base.database} / {origin.base.table}</p>
-    <div className="sqlite-statistics-controls"><label>{text.column}<select aria-label={text.column} value={column} disabled={view.busy || closing} onChange={event => { if (!current() || !origin.columns.includes(event.target.value)) return; controller.clear(); setColumn(event.target.value); setProblem(''); }}>{origin.columns.map(name => <option key={name}>{name}</option>)}</select></label>
-    <button disabled={view.busy || closing || !controller.current()} onClick={() => { if (current()) void controller.read(column); }}>{text.read}</button><button disabled={view.busy || closing || !controller.current()} onClick={() => { if (current()) void controller.countRows(); }}>{text.readRowCount}</button>{view.busy && <><button disabled={view.stopping || closing} onClick={() => { if (committed.current === render) void controller.stop(); }}>{text.stop}</button><Spinner text={view.stopping ? text.stopping : text.loading}/></>}</div>
+  const countOnly = !!origin.onCount, disabled = view.busy || closing || !controller.current();
+  return <Modal title={countOnly ? text.countTitle : text.title} onClose={() => { void close(); }} wide><div className="modal-content sqlite-statistics-content">
+    <p>{text.hint}</p>{!countOnly && <UsageHelp><p className="muted small">{text.types}</p></UsageHelp>}<p className="muted small">{origin.base.database} / {origin.base.table}</p>
+    <div className="sqlite-statistics-controls">{!countOnly && <><label>{text.column}<select aria-label={text.column} value={column} disabled={view.busy || closing} onChange={event => { if (!current() || !origin.columns.includes(event.target.value)) return; controller.clear(); setColumn(event.target.value); setProblem(''); }}>{origin.columns.map(name => <option key={name}>{name}</option>)}</select></label>
+    <button disabled={disabled} onClick={() => { if (current()) void controller.read(column); }}>{text.read}</button></>}<button disabled={disabled} onClick={() => void countRows()}>{countOnly ? text.read : text.readRowCount}</button>{view.busy && <><button disabled={view.stopping || closing} onClick={() => { if (committed.current === render) void controller.stop(); }}>{text.stop}</button><Spinner text={view.stopping ? text.stopping : text.loading}/></>}</div>
     <ErrorBox message={problem || view.error || (!controller.current() ? text.stale : '')}/>
     {view.rowCount !== undefined && controller.current() && <p className="sqlite-statistics-summary" role="status">{text.rowCountResult(view.rowCount)}</p>}
     {output && <div className="sqlite-statistics-result" aria-label={text.entry}><p className="muted small">{text.declared}：{output.declaredType || text.dynamic}</p><p className="sqlite-statistics-summary" role="status">{text.rows}：{output.rows} · {text.nonNull}：{output.nonNull} · {text.nulls}：{output.nulls}</p>{!output.groups.length ? <p>{text.empty}</p> : <div className="sqlite-statistics-scroll"><table><thead><tr>{[text.kind, text.count, text.distinct, text.min, text.max].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{output.groups.map(group => <tr key={group.kind}><th scope="row">{group.kind.toUpperCase()}</th><td>{group.count}</td><td>{group.distinct}</td><td className="sqlite-statistics-bound">{preview(group.min)}</td><td className="sqlite-statistics-bound">{preview(group.max)}</td></tr>)}</tbody></table></div>}</div>}
