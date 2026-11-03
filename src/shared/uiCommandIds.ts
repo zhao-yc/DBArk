@@ -5,7 +5,7 @@ export const sqlLineCommandIds = ['sql-duplicate-lines', 'sql-move-lines-up', 's
 export const uiCommandIds = [
   'new-connection', 'new-query', 'open-sql-file', 'recent-sql-file', 'save-query', 'save-sql-file',
   'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-goto-line', 'sql-toggle-comment', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
-  ...sqlLineCommandIds,
+  ...sqlLineCommandIds, 'sql-selection-to-snippet',
   'editor-font', 'editor-word-wrap', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
   'execute', 'execute-selection', 'execute-current', 'execute-all', 'stop', 'format', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation',
   'transaction-settings', 'import', 'export', 'schema-compare', 'structure-search', 'server-monitor',

@@ -1,4 +1,5 @@
-import { test, expect, page, pageErrors, quitDesktop, launchDesktop, startSnippetsNativeDiagnostics, snippetsDiagnostics } from './desktop-fixture';
+import { test, expect, page, desktop, pageErrors, quitDesktop, launchDesktop, startSnippetsNativeDiagnostics, snippetsDiagnostics } from './desktop-fixture';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const source = "-- 原样保留 $1 ${name} 和注释\nSELECT JSON_OBJECT('a', '$&'), '${1:值}', '🚢';\n";
@@ -41,6 +42,51 @@ async function noExecution() {
 }
 async function openLibrary() { await (await (await import('./navigation-menu')).navigationMenuItem(query(), { name: 'SQL 片段库', exact: true })).click(); await expect(dialog()).toBeVisible(); }
 async function selectSnippet(name: string) { await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: `选择片段：${name}`, exact: true })).click(); }
+
+test('编辑器选区可从右键与原生菜单直接打开片段草稿，取消不保存且只写入选中原文', async () => {
+  const id = 'sql-selection-to-snippet', original = 'SELECT 0;\n' + source + 'SELECT 9;';
+  const editorOriginal = process.platform === 'win32' ? original.replaceAll('\n', '\r\n') : original;
+  const nativeEnabled = () => desktop.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.enabled === true, id);
+  const input = query().locator('.monaco-editor').getByRole('textbox');
+  const name = dialog().getByLabel('片段名称', { exact: true });
+  const body = dialog().getByRole('textbox', { name: '片段 SQL 正文', exact: true });
+  await offlineQuery();
+  await writeSql(editorOriginal);
+  await expect.poll(nativeEnabled).toBe(false);
+  // 从第二行起只选择中间两行，保留末尾换行及原始美元占位符。
+  const selectMiddle = async () => {
+    await input.focus();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect.poll(nativeEnabled).toBe(true);
+  };
+  await selectMiddle();
+  await page.keyboard.press('Shift+F10');
+  await page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: uiCommandLabels[id], exact: true }).click({ delay: 120 });
+  await expect(body).toHaveValue(source);
+  await expect(name).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog()).toHaveCount(0);
+  expect(await page.evaluate(() => window.dbark.invoke('snippets.list', {}))).toEqual([]);
+
+  await selectMiddle();
+  await desktop.evaluate(({ Menu, BrowserWindow }, id) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById(id), window = BrowserWindow.getAllWindows()[0];
+    if (!item?.enabled || !window) throw Error('原生片段菜单或查询窗口不可用');
+    item.click(item, window, {} as Electron.KeyboardEvent);
+  }, id);
+  await expect(body).toHaveValue(source);
+  await name.fill('仅选区片段');
+  await dialog().getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog().getByRole('button', { name: '编辑片段', exact: true })).toBeVisible();
+  const saved = await page.evaluate(() => window.dbark.invoke('snippets.list', {}));
+  expect(saved).toMatchObject([{ name: '仅选区片段', sql: editorSource }]);
+  await dialog().getByRole('button', { name: '关闭', exact: true }).click();
+  await expectSql(editorOriginal);
+  await noExecution();
+});
 
 test('离线片段分组搜索编辑复制删除、重启持久化、纯文本插入撤销与模态快捷键', async ({}, testInfo) => {
   await offlineQuery(); if (snippetsDiagnostics) await startSnippetsNativeDiagnostics(); const original = 'SELECT 0;'; await writeSql(original); await openLibrary();
