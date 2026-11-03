@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DataRow, ResultColumn } from '../../src/shared/contracts';
-import { encodeQueryResultWithHeaders, writeQueryResultWithHeaders } from '../../src/renderer/queryResultHeaderCopy';
+import { encodeQueryResultColumn, encodeQueryResultWithHeaders, writeQueryResultClipboard } from '../../src/renderer/queryResultHeaderCopy';
 import { decodeClipboard, encodeClipboard, maxClipboardCells, parseTabularText } from '../../src/renderer/gridClipboard';
 
 const columns: ResultColumn[] = [
@@ -49,6 +49,21 @@ describe('可见结果含表头复制沿原编码与源身份', () => {
   });
 });
 
+describe('当前结果列的准确投影', () => {
+  it('活动列按真实键取值，重复别名、NULL 和字节保真，隐藏列或过期行拒绝', () => {
+    const rows = [row(), row(), row()];
+    rows[1].bytes = null;
+    rows[2].bytes = { type: 'binary', base64: '' };
+    const active = { index: 0, row: rows[0], column: columns[5] };
+    const content = encodeQueryResultColumn(columns, rows, new Set([2, 1]), active);
+    expect(decodeClipboard(content.typed, content.text)).toEqual([[null], [{ type: 'binary', base64: '' }]]);
+    const decimal = encodeQueryResultColumn(columns, rows, new Set([0]), { ...active, column: columns[1] });
+    expect(decimal.text).toBe('0.12345678901234567890');
+    expect(() => encodeQueryResultColumn(columns.slice(0, 5), rows, new Set([1]), active)).toThrow();
+    expect(() => encodeQueryResultColumn(columns, rows, new Set([1]), { ...active, index: 1 })).toThrow();
+  });
+});
+
 describe('显式含列名按钮的同步剪贴板端口', () => {
   it.each(['ok', 'late', 'refused', 'no-event', 'throws'] as const)('%s始终解绑临时copy观察，不触碰其它复制入口', mode => {
     const values = new Map<string, string>(), listeners = new Set<EventListener>(); let allowed = true;
@@ -58,7 +73,7 @@ describe('显式含列名按钮的同步剪贴板端口', () => {
       if (mode !== 'no-event' && mode !== 'refused') for (const listener of listeners) listener(event as unknown as Event);
       return mode !== 'refused';
     }) } as unknown as Document;
-    const content = encodeClipboard([['列名'], [null]]), action = () => writeQueryResultWithHeaders(content, () => allowed, target);
+    const content = encodeClipboard([['列名'], [null]]), action = () => writeQueryResultClipboard(content, () => allowed, target);
     if (mode === 'ok') { expect(action).not.toThrow(); expect(values.get('text/plain')).toBe('列名\nNULL'); expect(values.get('application/x-dbark-cells')).toBe(content.typed); }
     else { expect(action).toThrow(); expect(values.size).toBe(0); }
     expect(listeners.size).toBe(0);

@@ -2,6 +2,8 @@
 export const queryResultCopyZh = {
   action: '复制（含列名）',
   hint: '勾选行时复制这些行的可见列；否则复制当前单元格。保留显示顺序，不含隐藏列。',
+  column: '复制当前列',
+  columnHint: '选中这一列的数据格。仅复制当前显示结果，有勾选时只复制勾选行。',
   invalid: '结果、列布局或选择已变化，请重新选择后复制。',
-  unavailable: '未能复制含列名的结果，请重新选择后再试。',
+  unavailable: '未能复制查询结果，请重新选择后再试。',
 };

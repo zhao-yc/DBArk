@@ -110,6 +110,38 @@ it.each(['clear', 'excluded'] as const)('筛选后多列排序的含列名复制
   expect(commands.filter(command => command === 'query.execute')).toHaveLength(1); expect(exports).toEqual([]);
 });
 
+it('复制当前结果列使用筛选和排序后的原值，勾选或换结果时撤销旧动作', async () => {
+  await mount(true);
+  const port = clipboardPort();
+  await layout();
+  await click(filterText.open);
+  await click(filterText.add);
+  await conditionField(filterText.column + ' 1', 'd');
+  await conditionField(filterText.operator + ' 1', 'gte');
+  await conditionField(filterText.input + ' 1', '0.5');
+  await click(filterText.apply);
+  await act(async () => grids.all.at(-1)!.onSortColumnsChange([{ columnKey: 'd', direction: 'ASC' }]));
+  const sorted = grids.all.at(-1)!;
+  expect(sorted.rows).toEqual([original.rows[2], original.rows[1]]);
+  expect(button(copyText.column).disabled).toBe(true);
+  await act(async () => sorted.onActivePositionChange({ row: sorted.rows[1], rowIdx: 1, column: { key: 'd' } }));
+  const before = [...commands];
+  await click(copyText.column);
+  expect(port.writes[0].get('text/plain')).toBe('0.50000000000000000000\n1.00000000000000000001');
+  const old = callback(button(copyText.column));
+  await act(async () => sorted.onSelectedRowsChange(new Set([1])));
+  await act(async () => old());
+  expect(port.writes).toHaveLength(1);
+  await click(copyText.column);
+  expect(JSON.parse(port.writes[1].get('application/x-dbark-cells')!).rows).toEqual([['1.00000000000000000001']]);
+  expect(commands).toEqual(before);
+  const stale = callback(button(copyText.column));
+  await click(filterText.clear);
+  expect(button(copyText.column).disabled).toBe(true);
+  await act(async () => stale());
+  expect(port.writes).toHaveLength(2);
+});
+
 it('筛选为空时含列名复制禁用，旧按钮不能复制被排除的原行', async () => {
   await mount(true); const port = clipboardPort();
   await act(async () => mainGrid().onSelectedRowsChange(new Set([0]))); const stale = callback(button(copyText.action));

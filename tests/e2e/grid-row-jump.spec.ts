@@ -10,6 +10,7 @@ import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRo
 import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
 import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
+import { queryResultCopyZh } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
@@ -132,16 +133,8 @@ test('SQLite 统一可见列宽保留隐藏列与冻结，并通过原保存流�
   expect(pageErrors).toEqual([]);
 });
 
-test('SQLite 可编辑网格支持含列名及当前列复制，内部 MIME 保持原数据行', async () => {
-  await seed();
-  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
-  const pane = page.locator('.sqlite-table-tab:visible');
-  const copy = pane.getByRole('button', { name: tableHeaderCopyZh.action, exact: true });
-  const copyColumn = pane.getByRole('button', { name: tableHeaderCopyZh.column, exact: true });
-  const idCell = (id: number) => pane.getByRole('gridcell', { name: `INTEGER · ${id}`, exact: true });
-  await expect(pane).toHaveAttribute('data-readonly', 'false');
-  await expect(idCell(1)).toBeVisible();
-  // 原按钮和复制事件都运行真实实现，只将系统复制端口换成本例内存 DataTransfer。
+/** 保留真实按钮与复制事件，仅在独立窗口将系统写入换成内存 DataTransfer。 */
+async function installClipboardPort() {
   await page.evaluate(() => {
     const previous = Object.getOwnPropertyDescriptor(document, 'execCommand');
     const transfers: DataTransfer[] = [];
@@ -158,6 +151,47 @@ test('SQLite 可编辑网格支持含列名及当前列复制，内部 MIME 保�
       Reflect.deleteProperty(globalThis, '__headerCopyTest');
     } } });
   });
+  return () => page.evaluate(() => (globalThis as typeof globalThis & { __headerCopyTest: { restore(): void } }).__headerCopyTest.restore());
+}
+
+test('查询结果可复制尚未渲染的列值，倒序勾选仍沿显示顺序且没有额外数据任务', async () => {
+  await seed();
+  const query = page.locator('.query-tab:visible');
+  const copyColumn = query.getByRole('button', { name: queryResultCopyZh.column, exact: true });
+  const cell = (value: number) => query.getByRole('gridcell', { name: String(value), exact: true });
+  const tasks = () => page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  await query.locator('.query-execute-split > button.primary').click();
+  await expect(cell(180)).toBeVisible();
+  await expect(cell(1)).toHaveCount(0);
+  const before = await tasks();
+  const restore = await installClipboardPort();
+  try {
+    await expect(copyColumn).toBeDisabled();
+    await cell(180).click();
+    await copyColumn.click();
+    for (const id of [178, 180]) await cell(id).locator('..').getByRole('checkbox').check();
+    await cell(180).click();
+    await copyColumn.click();
+    const result = await page.evaluate(() => (globalThis as typeof globalThis & { __headerCopyTest: { transfers: DataTransfer[] } }).__headerCopyTest.transfers.map(data => ({
+      text: data.getData('text/plain'), rows: JSON.parse(data.getData('application/x-dbark-cells')).rows,
+    })));
+    const values = Array.from({ length: 180 }, (_, index) => String(180 - index));
+    expect(result).toEqual([{ text: values.join('\n'), rows: values.map(value => [value]) }, { text: '180\n178', rows: [['180'], ['178']] }]);
+    expect(await tasks()).toEqual(before);
+    expect(pageErrors).toEqual([]);
+  } finally { await restore(); }
+});
+
+test('SQLite 可编辑网格支持含列名及当前列复制，内部 MIME 保持原数据行', async () => {
+  await seed();
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const pane = page.locator('.sqlite-table-tab:visible');
+  const copy = pane.getByRole('button', { name: tableHeaderCopyZh.action, exact: true });
+  const copyColumn = pane.getByRole('button', { name: tableHeaderCopyZh.column, exact: true });
+  const idCell = (id: number) => pane.getByRole('gridcell', { name: `INTEGER · ${id}`, exact: true });
+  await expect(pane).toHaveAttribute('data-readonly', 'false');
+  await expect(idCell(1)).toBeVisible();
+  const restore = await installClipboardPort();
   try {
     await expect(copyColumn).toBeDisabled();
     await idCell(1).click();
@@ -181,6 +215,6 @@ test('SQLite 可编辑网格支持含列名及当前列复制，内部 MIME 保�
     expect(result[3]).toMatchObject({ text: '1\n2', typed: { rows: [['1'], ['2']] }, sqlite: { columns: ['id'], rows: [[{ kind: 'integer', value: '1' }], [{ kind: 'integer', value: '2' }]] } });
     expect(pageErrors).toEqual([]);
   } finally {
-    await page.evaluate(() => (globalThis as typeof globalThis & { __headerCopyTest: { restore(): void } }).__headerCopyTest.restore());
+    await restore();
   }
 });
