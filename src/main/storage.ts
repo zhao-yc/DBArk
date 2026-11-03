@@ -1020,7 +1020,7 @@ export class LocalStore {
     const repairedActive = restoredTabs.length !== tabs.length && !restoredTabs.some(tab => tab.id === stored?.activeTabId)
       ? { activeTabId: restoredTabs[0]?.id } : {};
     // 旧颜色标志只认true；缺项或损坏字号回退13，不迁移数据库或隐式强转。
-    return { ...defaultSettings, ...stored, tabs: restoredTabs, ...repairedActive, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces), ...(stored && Object.hasOwn(stored, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(stored.sqlKeywordCase) } : {}) };
+    return { ...defaultSettings, ...stored, tabs: restoredTabs, ...repairedActive, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), ...(stored && Object.hasOwn(stored, 'editorSqlFolding') ? { editorSqlFolding: stored.editorSqlFolding === true } : {}), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces), ...(stored && Object.hasOwn(stored, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(stored.sqlKeywordCase) } : {}) };
   }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
@@ -1053,6 +1053,7 @@ export class LocalStore {
     if (settings.editorFontSize !== undefined) assertEditorFontSize(settings.editorFontSize);
     // 只兼容缺项，显式非法换行值必须在任何持久化变更前拒绝。
     if (settings.editorWordWrap !== undefined) assertEditorWordWrap(settings.editorWordWrap);
+    if (settings.editorSqlFolding !== undefined && typeof settings.editorSqlFolding !== 'boolean') throw Error('SQL 语句折叠必须是布尔值');
     const previous = this.settings().tabs;
     this.mutate(() => {
       // 只删除可证明属于已移除文档的精确授权，损坏记录不猜测归属。

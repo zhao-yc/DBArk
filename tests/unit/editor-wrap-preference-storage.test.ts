@@ -16,6 +16,20 @@ class Rows {
 function open(settings?: any, data?: Uint8Array): LocalStore { const restore = (bytes: Uint8Array) => new Rows(JSON.parse(Buffer.from(bytes).toString('utf8')).row); return Reflect.construct(LocalStore, [data ? restore(data) : new Rows(settings === undefined ? undefined : JSON.stringify(settings)), 'ram-wrap-settings', { available: () => false }, restore]); }
 afterEach(() => { fs.files.clear(); fs.writes = 0; });
 
+it('SQL 语句折叠的旧工作区保持默认，显式开关原子保存且拒绝非布尔值', () => {
+  const store = open(), original = store.settings();
+  expect(original.editorSqlFolding).toBeUndefined();
+  expect(open({ ...original, editorSqlFolding: 'true' }).settings()).toEqual({ ...original, editorSqlFolding: false });
+  expect(() => validateCommand('settings.save', { ...original, editorSqlFolding: 'true' })).toThrow();
+  expect(() => store.saveSettings({ ...original, editorSqlFolding: 'true' } as unknown as AppSettings)).toThrow('布尔');
+  expect(fs.writes).toBe(0);
+  for (const editorSqlFolding of [true, false]) {
+    const next = { ...original, editorSqlFolding };
+    store.saveSettings(validateCommand('settings.save', next) as AppSettings);
+    expect(open(undefined, fs.files.get('ram-wrap-settings')).settings()).toEqual(next);
+  }
+});
+
 it('旧缺项读取默认true而不写盘，false/true经原IPC与原子字节保存可重读且其它字段不变', () => {
   const old = { ...defaultSettings, editorFontSize: 20, tabs: [{ id: 'q', kind: 'query' as const, connectionId: 'c', title: '保留', sql: 'select 原SQL' }] }; delete old.editorWordWrap;
   const store = open(old); expect(defaultSettings.editorWordWrap).toBe(true); expect(open().settings().editorWordWrap).toBe(true); expect(store.settings()).toEqual({ ...old, editorWordWrap: true }); expect(fs.writes).toBe(0);

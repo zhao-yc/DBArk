@@ -877,6 +877,7 @@ function WorkspaceApp() {
     'focus-mode': handler(() => { void workbench.save({ ...useWorkbench.getState().snapshot.document, focusMode: !useWorkbench.getState().snapshot.document.focusMode }); }, workbench.ready && !workbench.busy, workbench.snapshot.document.focusMode),
     'editor-font': handler(openEditorFontPreferences), 'editor-indent': handler(() => { workbenchNavigation.invalidate(); setEditorIndentPreferences(true); }),
     'editor-word-wrap': handler(() => { const now = useWorkspace.getState(); now.updateSettings({ editorWordWrap: !readEditorWordWrap(now.settings.editorWordWrap) }); void flushSettings().catch(reason => now.notify(errorMessage(reason), true)); }, true, readEditorWordWrap(settings.editorWordWrap)),
+    'editor-sql-folding': handler(() => { const now = useWorkspace.getState(); now.updateSettings({ editorSqlFolding: now.settings.editorSqlFolding !== true }); void flushSettings().catch(reason => now.notify(errorMessage(reason), true)); }, true, settings.editorSqlFolding === true),
     'favorite-toggle': handler(async () => { if (selectedObject && treeSelection.current() === selectedObject) await useWorkbench.getState().toggleFavorite(selectedObject); }, !!selectedObject && workbench.ready && !workbench.busy, !!selectedFavorite),
     'favorites-manage': handler(openWorkbenchManager), 'object-link': handler(openObjectLink),
     // 全库搜索仍提供离线保存查询入口；数据库搜索由弹窗内的真实连接能力限制。

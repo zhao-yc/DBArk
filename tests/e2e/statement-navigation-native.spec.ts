@@ -13,7 +13,7 @@ if (active) {
   for (const [index, value] of process.argv.entries()) if (value === '--trace' && process.argv[index + 1] !== 'off' || value.startsWith('--trace=') && value !== '--trace=off') throw Error('语句导航专项禁止trace');
 }
 type Desktop = typeof import('./desktop-fixture');
-interface WorkerFact { navigation: boolean; ready: number; sent: number; replied: number; terminated: number; source?: string; dialect?: string; result?: StatementNavigationResult; }
+interface WorkerFact { navigation: boolean; folding: boolean; ready: number; sent: number; replied: number; terminated: number; source?: string; dialect?: string; result?: StatementNavigationResult; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：显式语句导航离线专项');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -58,8 +58,8 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
       const original = window.Worker, facts: WorkerFact[] = []; (window as Window & { __navigationWorkers?: WorkerFact[] }).__navigationWorkers = facts;
       window.Worker = class extends original {
         private readonly fact: WorkerFact;
-        constructor(url: string | URL, options?: WorkerOptions) { super(url, options); this.fact = { navigation: false, ready: 0, sent: 0, replied: 0, terminated: 0 }; facts.push(this.fact); this.addEventListener('message', event => { if (event.data?.type === 'dbark-statement-navigation-ready') { this.fact.navigation = true; this.fact.ready++; } else if (event.data?.id === 1 && this.fact.navigation) { this.fact.replied++; this.fact.result = structuredClone(event.data.result); } }); }
-        override postMessage(message: unknown, transfer?: Transferable[] | StructuredSerializeOptions) { const data = message as { source?: unknown; dialect?: unknown }; if (data && typeof data.dialect === 'string' && typeof data.source === 'string') { this.fact.navigation = true; this.fact.sent++; this.fact.source = data.source; this.fact.dialect = data.dialect; } if (Array.isArray(transfer)) super.postMessage(message, transfer); else super.postMessage(message, transfer); }
+        constructor(url: string | URL, options?: WorkerOptions) { super(url, options); this.fact = { navigation: false, folding: options?.name === 'dbark-sql-folding', ready: 0, sent: 0, replied: 0, terminated: 0 }; facts.push(this.fact); this.addEventListener('message', event => { if (event.data?.type === 'dbark-statement-navigation-ready') { this.fact.navigation = !this.fact.folding; this.fact.ready++; } else if (event.data?.id === 1 && (this.fact.navigation || this.fact.folding)) { this.fact.replied++; this.fact.result = structuredClone(event.data.result); } }); }
+        override postMessage(message: unknown, transfer?: Transferable[] | StructuredSerializeOptions) { const data = message as { source?: unknown; dialect?: unknown }; if (data && typeof data.dialect === 'string' && typeof data.source === 'string') { this.fact.navigation = !this.fact.folding; this.fact.sent++; this.fact.source = data.source; this.fact.dialect = data.dialect; } if (Array.isArray(transfer)) super.postMessage(message, transfer); else super.postMessage(message, transfer); }
         override terminate() { this.fact.terminated++; super.terminate(); }
       };
     }));
@@ -91,7 +91,7 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     await step(() => page.evaluate(async ({ name, dialect }) => { const profiles = await window.dbark.invoke('connections.list', {}), settings = await window.dbark.invoke('settings.get', {}); if (profiles.length !== 1 || profiles[0].name !== name || profiles[0].dialect !== dialect || settings.tabs.length) throw Error('导航空草稿目标不唯一'); const id = crypto.randomUUID(); await window.dbark.invoke('settings.save', { ...settings, theme: dialect === 'sqlite' ? 'light' : 'dark', tabs: [{ id, kind: 'query', title: '语句导航草稿', connectionId: profiles[0].id, ...(dialect === 'sqlite' ? { database: 'main', databaseContext: { state: 'known', database: 'main' } } : {}), sql: '' }], activeTabId: id }); }, { name, dialect }));
     await step(() => page.reload()); await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible());
     await step(() => expect(page.locator('html')).toHaveAttribute('data-theme', dialect === 'sqlite' ? 'light' : 'dark'));
-    const compound = dialect === 'sqlite' ? "CREATE TEMP TRIGGER nav_trigger AFTER INSERT ON sample BEGIN UPDATE sample SET note=';'; SELECT CASE WHEN 1 THEN ';' END; END;" : "DELIMITER $$\nCREATE PROCEDURE nav_proc() BEGIN SELECT ';'; SELECT 2; END$$\nDELIMITER ;";
+    const compound = dialect === 'sqlite' ? "CREATE TEMP TRIGGER nav_trigger AFTER INSERT ON sample BEGIN\nUPDATE sample SET note=';'; SELECT CASE WHEN 1 THEN ';' END;\nEND;" : "DELIMITER $$\nCREATE PROCEDURE nav_proc() BEGIN\nSELECT ';'; SELECT 2;\nEND$$\nDELIMITER ;";
     const script = (dialect === 'sqlite' ? '--前导注释;😀\n' : '#前导注释;😀\n') + "SELECT 'duplicate;😀';\n" + compound + "\nSELECT '" + 'x'.repeat(200) + "hidden_needle';\n" + "SELECT 'duplicate;😀';\n".repeat(10);
     await step(() => query().locator('.monaco-editor').getByRole('textbox').focus()); await step(() => page.keyboard.insertText(script)); await step(() => expect.poll(async () => (await model()).source.replaceAll('\r\n', '\n')).toBe(script));
     stage = '原生菜单跳到行列，恢复仅结果布局并保持草稿';
@@ -257,7 +257,8 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
       unchanged(finalModel, await model());
       await expect(panel()).toHaveCount(0);
     };
-    await goTo(dialect === 'mysql' ? 4 : 3);
+    const compoundLine = dialect === 'mysql' ? 4 : 3;
+    await goTo(compoundLine);
     await step(() => page.keyboard.press(modifier + '+E'));
     await expectRange(1);
     await goTo(2);
@@ -286,6 +287,50 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     const selectionWorkers = (await workers()).filter(value => value.navigation);
     expect(selectionWorkers).toHaveLength(5);
     expect(selectionWorkers.every(value => value.ready === 1 && value.sent === 1 && value.replied === 1 && value.terminated === 1)).toBe(true);
+    stage = '原生选项启用 SQL 语句折叠并保留原模型';
+    const foldingMenuState = () => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('editor-sql-folding')?.checked));
+    const toggleFolding = () => step(() => application.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('editor-sql-folding'), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('SQL 语句折叠原生菜单不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    }));
+    await expect.poll(foldingMenuState).toBe(false);
+    await goTo(dialect === 'mysql' ? 4 : 3);
+    const editor = query().locator('.monaco-editor'), editorLines = editor.locator('.view-lines');
+    const bodyText = dialect === 'sqlite' ? 'UPDATE sample SET' : "SELECT ';'; SELECT 2;";
+    const expanded = editor.locator('.codicon-folding-expanded');
+    await expect(editorLines).toContainText(bodyText);
+    await expect(expanded).toHaveCount(0);
+    await toggleFolding();
+    await expect.poll(foldingMenuState).toBe(true);
+    // 首条 SELECT 的前导注释也跨行。用模型行位置定位对应按钮，Monaco 的虚拟 DOM 顺序可能不同。
+    await expect(expanded).toHaveCount(2);
+    const foldingPoint = await step(() => page.evaluate(line => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().closest('.query-tab'));
+      const position = instance?.getScrolledVisiblePosition({ lineNumber: line, column: 1 }), node = instance?.getDomNode();
+      if (!position || !node) throw Error('缺少复合语句的可见行');
+      const y = node.getBoundingClientRect().top + position.top + position.height / 2;
+      const icons = Array.from(node.querySelectorAll('.margin-view-overlays .codicon-folding-expanded'), icon => icon.getBoundingClientRect())
+        .filter(rect => rect.top <= y && y < rect.bottom);
+      if (icons.length !== 1) throw Error('复合语句折叠按钮与可见行未对齐');
+      return { x: icons[0].left + icons[0].width / 2, y };
+    }, compoundLine));
+    await step(() => page.mouse.click(foldingPoint.x, foldingPoint.y));
+    await expect(editorLines).not.toContainText(bodyText);
+    await expect(editorLines).toContainText(dialect === 'sqlite' ? 'CREATE TEMP TRIGGER' : 'CREATE PROCEDURE');
+    await step(() => editor.locator('.codicon-folding-collapsed').click());
+    await expect(editorLines).toContainText(bodyText);
+    const foldingWorkers = (await workers()).filter(value => value.folding);
+    expect(foldingWorkers).toHaveLength(1);
+    expect(foldingWorkers[0]).toMatchObject({ ready: 1, sent: 1, replied: 1, terminated: 1, dialect, source: finalModel.source });
+    unchanged(finalModel, await model());
+    await toggleFolding();
+    await expect.poll(foldingMenuState).toBe(false);
+    await expect(expanded).toHaveCount(0);
+    const foldingAudit = await audit();
+    expect(foldingAudit.denied).toEqual([]);
+    expect(foldingAudit.commands.filter(command => /^(?:metadata|sessions|query|table|schema|sqlite|serverMonitor)\./.test(command))).toEqual([]);
     stage = '保留草稿后通过原生窗口菜单重开，明确放弃后不可重开';
     const tabButton = page.locator('[data-workspace-tab-id]');
     const oldTabId = await step(() => tabButton.getAttribute('data-workspace-tab-id'));

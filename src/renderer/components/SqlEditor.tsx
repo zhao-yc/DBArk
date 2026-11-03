@@ -21,6 +21,9 @@ import {resolveCompletionContext,completionContextCapabilities,sameCompletionSco
 import {SessionCompletionDirectory} from '../sessionCompletionDirectory';
 import {completionServerFacts} from '../completionServerFacts';
 import { currentStatementZh } from '../locales/currentStatement.zh-CN';
+import { sqlStatementFoldingProvider } from '../sqlStatementFolding';
+import { StatementNavigationWorkerClient } from '../statementNavigationWorkerClient';
+import StatementNavigationWorker from '../statementNavigation.worker?worker';
 import { editorContentBridge } from '../editorContentBridge';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import { createSqlFieldHoverProvider } from '../sqlFieldHoverProvider';
@@ -56,6 +59,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
+  const sqlFolding = useWorkspace(state => state.settings.editorSqlFolding === true);
   const tabSize = useWorkspace(state => readEditorTabSize(state.settings.editorTabSize));
   const insertSpaces = useWorkspace(state => readEditorInsertSpaces(state.settings.editorInsertSpaces));
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -66,6 +70,16 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const dialectRef = useRef(dialect);
   useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
+  const queryEditor = !!onExecute;
+  useEffect(() => {
+    const instance = editorRef.current;
+    if (!contentReady || !instance || !queryEditor || !sqlFolding || !dialect) return;
+    let active = true;
+    const client = new StatementNavigationWorkerClient(() => new StatementNavigationWorker({ name: 'dbark-sql-folding' }));
+    const registration = monaco.languages.registerFoldingRangeProvider('sql', sqlStatementFoldingProvider(instance, dialect, client,
+      () => active && aliveRef.current && editorRef.current === instance && dialectRef.current === dialect && useWorkspace.getState().settings.editorSqlFolding === true));
+    return () => { active = false; registration.dispose(); client.dispose(); };
+  }, [contentReady, queryEditor, sqlFolding, dialect]);
   /** 原生菜单只收到可用状态，选区内容留在当前模型内。 */
   useEffect(() => {
     if (!onSelectionState) return;

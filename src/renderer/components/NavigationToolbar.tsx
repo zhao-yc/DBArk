@@ -14,13 +14,13 @@ export function NavigationToolbar({ onBrowse, onQueries, onHistory, objectTarget
 }) {
   const commands = useUiCommands(), revision = commands.snapshot.revision;
   const current = () => uiCommands.getSnapshot().revision === revision;
-  const command = (id: UiCommandId) => <button key={id} disabled={!commands.enabled(id)} aria-pressed={id === 'focus-mode' || id === 'editor-word-wrap' ? commands.checked(id) : undefined} onClick={() => commands.run(id)}>{uiCommandLabels[id]}</button>;
+  const command = (id: UiCommandId) => <button key={id} disabled={!commands.enabled(id)} aria-pressed={id === 'focus-mode' || id === 'editor-word-wrap' || id === 'editor-sql-folding' ? commands.checked(id) : undefined} onClick={() => commands.run(id)}>{uiCommandLabels[id]}</button>;
   const connectionActions = <>{command('new-connection')}{command('connections-organize')}{command('connections-transfer')}</>;
   const otherActions = <>{(['trigger', 'event'] as const).filter(kind => !sqliteObjects || kind === 'trigger').map(kind => <button key={kind} disabled={!connectionsAvailable} onClick={() => onBrowse(kind)}>{text.categories[kind]}</button>)}</>;
   const queryActions = <><button onClick={onQueries}>{text.savedQueries}</button><button onClick={onHistory}>{text.queryHistory}</button>{command('new-query')}</>;
   const toolActions = <><ActionMenuSection label="数据库工具">{command('schema-compare')}{command('server-monitor')}{command('structure-search')}</ActionMenuSection>
     <ActionMenuSection label="离线快照">{command('explain-snapshot')}{command('result-snapshot')}</ActionMenuSection>
-    <ActionMenuSection label="编辑器">{command('editor-font')}{command('editor-word-wrap')}{command('editor-indent')}</ActionMenuSection>
+    <ActionMenuSection label="编辑器">{command('editor-font')}{command('editor-word-wrap')}{command('editor-sql-folding')}{command('editor-indent')}</ActionMenuSection>
     <ActionMenuSection label="工作区">{command('task-center')}{command('favorites-manage')}{command('tab-search')}{command('focus-mode')}</ActionMenuSection></>;
   const browse = (category: ObjectCategory, label: string, icon: ReactNode) => <button className="module-button" disabled={!connectionsAvailable} onClick={() => onBrowse(category)}>{icon}<span>{label}</span></button>;
   return <div className="navigation-toolbar" aria-label={text.toolbar}>
