@@ -8,6 +8,7 @@ export const savedQueryPagesZh={
  openHint:'更换来源连接后，请在执行前确认默认库。',preview:'正文共{0}个UTF16单元；此处仅为预览。',failures:'本批失败记录',failedStop:'已按错误策略停止，仍有未确认范围。',
  sqlFull:'查看完整 SQL',sqlTitle:'完整保存查询 SQL',sqlStale:'原列表范围已变化，请重新选择要查看的查询。',
  sqlExport:'另存为 SQL 文件',sqlExportHint:'以 UTF-8 保存原查询正文，保留现有换行。',sqlExported:'已另存 SQL 文件：{0}',
+ sqlArchive:'导出所选查询为 ZIP',sqlArchiveHint:'包括跨页勾选的查询。每条为独立的 UTF-8 SQL 文件，合计最多 32 MiB。',sqlArchiveSaved:'已将 {0} 条查询导出到 {1}。',
  sqlImport:'导入 SQL 文件',sqlImportChoose:'选择并导入 SQL 文件',sqlImportHint:'可多选，最多 25 个文件、合计 32 MiB。每个文件以文件名创建未绑定、未分组查询。',sqlImported:'已导入未分组查询：{0}。当前筛选可能隐藏此记录。',sqlBatchImported:'已导入 {0} 条未分组查询。当前筛选可能隐藏这些记录。',
  onError:'列表读取遇到错误',stop:'停止读取',continue:'略过失败记录并继续',cancelled:'列表读取已取消，可以刷新重新开始。',cleanupFailed:'保存查询列表收尾失败，请核对：'
 }as const;

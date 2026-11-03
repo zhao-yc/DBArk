@@ -241,6 +241,15 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       if (owns(ticket) && result.status === 'saved') setNotice(formatText(t.sqlExported, result.name));
     });
   }
+  /** 导出包括筛选或翻页后隐藏的勾选项；仅提交本地查询编号和摘要。 */
+  function exportSqlArchive(): void {
+    if (!editable() || !selectedRef.current.size || pageView.current.needsRefresh) return;
+    const items = [...selectedRef.current.values()].map(({ id, digest }) => ({ id, digest }));
+    void run(async ticket => {
+      const result = await io.request('queries.exportSqlArchive', { items });
+      if (owns(ticket) && result.status === 'saved') setNotice(formatText(t.sqlArchiveSaved, result.count, result.name));
+    });
+  }
   /** 写入完成后刷新原筛选。若刷新失败，保留导入成功提示并由用户重新读取列表。 */
   function importSql(): void {
     if (!editable()) return;
@@ -310,7 +319,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
           {connections.map(profile => <option key={profile.id} value={'connection:' + profile.id}>{profile.name}</option>)}
         </select></label>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label>{changed && reply && <p>{t.pending}</p>}
-        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
+        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size || needsRefresh} title={t.sqlArchiveHint} onClick={exportSqlArchive}>{t.sqlArchive}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
         <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p>{notice}</p>}{busy && <Spinner/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>

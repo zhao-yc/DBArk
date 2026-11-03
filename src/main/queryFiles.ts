@@ -67,22 +67,30 @@ export function encodeQueryFile(sql: string, encoding: QueryFileEncoding): Buffe
   return content;
 }
 
-/** 同目录临时文件写完并同步后原子替换；失败不先删除原目标，始终清理临时文件。 */
-export async function writeQueryFile(filePath: string, sql: string, encoding: QueryFileEncoding): Promise<void> {
-  const bytes = encodeQueryFile(sql, encoding);
+/** 同目录临时文件同步后原子替换；失效时保留原目标并清理未提交的临时文件。 */
+export async function writeQueryFileBytes(filePath: string, bytes: Buffer, check: () => void): Promise<void> {
   const temporary = `${filePath}.dbark-${randomUUID()}.tmp`;
+  check();
   const file = await open(temporary, 'wx', 0o600);
+  let committed = false;
   try {
     let offset = 0;
     while (offset < bytes.length) {
+      check();
       const { bytesWritten } = await file.write(bytes, offset, Math.min(64 * 1024, bytes.length - offset));
       if (!bytesWritten) throw new Error('SQL 文件写入未取得进展，原目标未替换');
       offset += bytesWritten;
     }
-    await file.sync(); await file.close();
+    check(); await file.sync(); await file.close(); check();
     await rename(temporary, filePath);
+    committed = true;
   } finally {
     await file.close().catch(() => undefined);
-    await rm(temporary, { force: true });
+    if (!committed) await rm(temporary, { force: true });
   }
+}
+
+/** 单文件另存沿用原编码和大小检查。 */
+export async function writeQueryFile(filePath: string, sql: string, encoding: QueryFileEncoding): Promise<void> {
+  await writeQueryFileBytes(filePath, encodeQueryFile(sql, encoding), () => {});
 }

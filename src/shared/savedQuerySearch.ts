@@ -20,6 +20,12 @@ export type SavedQueryReadTextInput=z.infer<typeof savedQueryReadTextSchema>;
 export interface SavedQueryReadTextResult{query:SavedQuery}
 /** 保存结果只返回显示名称，原路径和正文不离开主进程。 */
 export type SavedQueryExportSqlResult = { status: 'cancelled' } | { status: 'saved'; name: string };
+export const savedQueryArchiveLimits = { files: 100, bytes: 32 * 1024 * 1024 } as const;
+/** 批量导出只接收跨页选中的本地查询身份，不接收路径或 SQL。 */
+export const savedQueryExportSqlArchiveSchema = z.object({ items: z.array(savedQueryReadTextSchema).min(1).max(savedQueryArchiveLimits.files)
+  .refine(items => new Set(items.map(item => item.id)).size === items.length, '选中的查询不能重复') }).strict();
+export type SavedQueryExportSqlArchiveInput = z.infer<typeof savedQueryExportSqlArchiveSchema>;
+export type SavedQueryExportSqlArchiveResult = { status: 'cancelled' } | { status: 'saved'; name: string; count: number };
 /** 导入只回传新记录的名称，文件路径及原文留在主进程。 */
 export type SavedQueryImportSqlResult = { status: 'cancelled' } | { status: 'imported'; names: string[] };
 export const savedQueryImportLimits = { files: 25, bytes: 32 * 1024 * 1024 } as const;

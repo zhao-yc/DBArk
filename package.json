@@ -27,6 +27,7 @@
     "csv-stringify": "^6.6.0",
     "exceljs": "4.4.0",
     "iconv-lite": "^0.7.0",
+    "jszip": "3.10.2",
     "lucide-react": "^0.577.0",
     "monaco-editor": "0.55.1",
     "mysql2": "3.24.5",
