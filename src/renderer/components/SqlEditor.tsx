@@ -52,7 +52,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void> }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
@@ -118,6 +118,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const toggleCommentRef = useRef(onToggleComment); toggleCommentRef.current = onToggleComment;
   const runRef = useRef(onExecute); runRef.current = onExecute;
   const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
+  const selectCurrentRef = useRef(onSelectCurrent); selectCurrentRef.current = onSelectCurrent;
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
   const referenceCompletionGuard = useRef(new SqlReferenceCompletionGuard());
   const suggestionsBlocked = () => referenceCompletionGuard.current.blocked(editorRef.current?.getDomNode() ?? null);
@@ -331,6 +332,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     editor.addAction({ id: 'dbark-run', label: zh.editor.text001, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], run: () => runRef.current?.() });
     // 与原动作分开注册；按钮和快捷键最终进入同一个忙碌/模态守卫。
     if (currentRunRef.current) editor.addAction({ id: 'dbark-run-current', label: currentStatementZh.action, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter], run: () => currentRunRef.current?.() });
+    // 仅编辑区接收快捷键，结果网格、筛选输入和其它页面保留原按键语义。
+    if (selectCurrentRef.current) editor.addAction({ id: 'dbark-select-current-statement', label: uiCommandLabels['select-current-statement'], precondition: '!editorReadonly && !editorHasMultipleSelections', keybindingContext: 'editorTextFocus', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE], run: () => selectCurrentRef.current?.() });
     // 编辑器快捷键和原生菜单走同一个方言检查，避免绕过 MySQL 双负号保护。
     if (toggleCommentRef.current) editor.addAction({ id: 'dbark-toggle-sql-comment', label: uiCommandLabels['sql-toggle-comment'], precondition: '!editorReadonly', keybindingContext: 'editorTextFocus', keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash], run: () => toggleCommentRef.current?.() });
     if (propsRef.current.onFormat) syncFormatAction();

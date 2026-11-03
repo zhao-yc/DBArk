@@ -245,6 +245,47 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     expect(await step(() => page.evaluate(async () => ({ history: (await window.dbark.invoke('history.list', {})).length, tasks: (await window.dbark.invoke('tasks.list', {})).length })))).toEqual({ history: 0, tasks: 0 });
     const finalModel = await model(); expect(finalModel.source).toBe(before.source);
     await step(() => panel().getByRole('button', { name: text.close, exact: true }).click()); await step(() => expect(panel()).toHaveCount(0));
+    stage = '快捷键、原生菜单和右键只选中当前语句正文';
+    const goTo = async (line: number) => {
+      await gotoLine();
+      await step(() => quickInput.fill(`:${line}:4`));
+      await step(() => quickInput.press('Enter'));
+    };
+    const expectRange = async (index: number) => {
+      const { start, end } = ranges[index];
+      await expect.poll(async () => (await model()).selection).toEqual({ start, end });
+      unchanged(finalModel, await model());
+      await expect(panel()).toHaveCount(0);
+    };
+    await goTo(dialect === 'mysql' ? 4 : 3);
+    await step(() => page.keyboard.press(modifier + '+E'));
+    await expectRange(1);
+    await goTo(2);
+    await expect.poll(() => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('select-current-statement')?.enabled === true))).toBe(true);
+    await step(() => application.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('select-current-statement'), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('选中当前语句原生命令不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    }));
+    await expectRange(0);
+    await goTo(2);
+    const selectionPoint = await step(() => page.evaluate(() => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const editor = api?.editor.getEditors().find(item => item.getContainerDomNode().closest('.query-tab'));
+      const position = editor?.getScrolledVisiblePosition({ lineNumber: 2, column: 5 });
+      const bounds = editor?.getDomNode()?.getBoundingClientRect();
+      if (!position || !bounds) throw Error('选中当前语句右键坐标不可用');
+      return { x: bounds.x + position.left, y: bounds.y + position.top + position.height / 2 };
+    }));
+    await step(() => page.mouse.click(selectionPoint.x, selectionPoint.y, { button: 'right' }));
+    await step(() => page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: uiCommandLabels['select-current-statement'], exact: true }).click({ delay: 120 }));
+    await expectRange(0);
+    const selectionAudit = await audit();
+    expect(selectionAudit.denied).toEqual([]);
+    expect(selectionAudit.commands.filter(command => /^(?:metadata|sessions|query|table|schema|sqlite|serverMonitor)\./.test(command))).toEqual([]);
+    const selectionWorkers = (await workers()).filter(value => value.navigation);
+    expect(selectionWorkers).toHaveLength(5);
+    expect(selectionWorkers.every(value => value.ready === 1 && value.sent === 1 && value.replied === 1 && value.terminated === 1)).toBe(true);
     stage = '保留草稿后通过原生窗口菜单重开，明确放弃后不可重开';
     const tabButton = page.locator('[data-workspace-tab-id]');
     const oldTabId = await step(() => tabButton.getAttribute('data-workspace-tab-id'));

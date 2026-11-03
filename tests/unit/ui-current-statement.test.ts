@@ -147,7 +147,7 @@ describe('真实按钮和Monaco动作接线', () => {
     const content = readFileSync(new URL('../../src/renderer/components/SqlEditor.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('SqlEditor.tsx', content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX); let mounted = '';
     function inspect(node: ts.Node) { if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'mounted') mounted = node.initializer!.getText(file); node.forEachChild(inspect); } inspect(file);
     expect(mounted).toContain("keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter]"); expect(mounted).toContain('monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter');
-    const original = vi.fn(), first = vi.fn(), latest = vi.fn(), actions: Array<{ id: string; keybindings: number[]; run(): void }> = [];
+    const original = vi.fn(), first = vi.fn(), latest = vi.fn(), select = vi.fn(), actions: Array<{ id: string; keybindings: number[]; keybindingContext?: string; run(): void }> = [];
     /** 提供真实绑定器需要的模型切换/选项端口；事件会实际更新editor及新model选项，不以noop绕过挂载。 */
     function actionEditor() {
       const modelListeners = new Set<() => void>(), disposeListeners = new Set<() => void>(), editorOptions: Record<string, unknown> = {};
@@ -164,10 +164,11 @@ describe('真实按钮和Monaco动作接线', () => {
       };
     }
     // 本例只核对原快捷键；正文桥接的真实生命周期由专用组件测试覆盖。
-    const port = createContext({ ...queryDialectVm(),  monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, bindEditorIndentation, editorIndentationOptions, optionsRef: { current: { tabSize: 4, insertSpaces: true } }, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first }, toggleCommentRef: { current: undefined } });
+    const port = createContext({ ...queryDialectVm(),  monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3, KeyE: 35 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, uiCommandLabels: { 'select-current-statement': '选中当前语句' }, bindEditorIndentation, editorIndentationOptions, optionsRef: { current: { tabSize: 4, insertSpaces: true } }, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first }, toggleCommentRef: { current: undefined }, selectCurrentRef: { current: select } });
     runInContext(ts.transpileModule('globalThis.mounted=' + mounted, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port); const firstEditor = actionEditor(); port.mounted(firstEditor.editor); firstEditor.changeModel();
-    expect(actions.map(action => [action.id, action.keybindings[0]])).toEqual([['dbark-run', 2051], ['dbark-run-current', 3075]]); port.currentRunRef.current = latest; actions[1].run(); actions[0].run(); expect(latest).toHaveBeenCalledOnce(); expect(first).not.toHaveBeenCalled(); expect(original).toHaveBeenCalledOnce();
-    actions.length = 0; port.currentRunRef.current = undefined; const nextEditor = actionEditor(); port.mounted(nextEditor.editor); nextEditor.changeModel(); expect(actions.map(action => action.id)).toEqual(['dbark-run']);
+    expect(actions.map(action => [action.id, action.keybindings[0]])).toEqual([['dbark-run', 2051], ['dbark-run-current', 3075], ['dbark-select-current-statement', 2083]]); port.currentRunRef.current = latest; actions[1].run(); actions[0].run(); expect(latest).toHaveBeenCalledOnce(); expect(first).not.toHaveBeenCalled(); expect(original).toHaveBeenCalledOnce();
+    expect(actions[2].keybindingContext).toBe('editorTextFocus'); actions[2].run(); expect(select).toHaveBeenCalledOnce();
+    actions.length = 0; port.currentRunRef.current = undefined; port.selectCurrentRef.current = undefined; const nextEditor = actionEditor(); port.mounted(nextEditor.editor); nextEditor.changeModel(); expect(actions.map(action => action.id)).toEqual(['dbark-run']);
   });
 });
 

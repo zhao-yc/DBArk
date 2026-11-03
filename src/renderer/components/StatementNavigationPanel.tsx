@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { StatementNavigationView } from '../statementNavigationController';
-import { statementNavigationPreview } from '../../shared/statementNavigation';
+import { currentNavigableStatement, statementNavigationPreview } from '../../shared/statementNavigation';
 import { statementNavigationZh as text } from '../locales/statementNavigation.zh-CN';
 import '../statementNavigation.css';
 
@@ -12,8 +12,7 @@ export function StatementNavigationPanel({ source, dialect, view, cursor, positi
 }) {
   const [search, setSearch] = useState(''), [page, setPage] = useState(0), result = view.result;
   const ranges = result?.status === 'ready' ? result.statements : undefined;
-  const containing = ranges?.findIndex(range => cursor >= range.start && cursor < range.delimiterEnd) ?? -1;
-  const activeIndex = containing >= 0 ? containing : ranges?.findIndex(range => cursor >= range.start && cursor === range.delimiterEnd && (cursor === source.length || source[cursor] === '\r' || source[cursor] === '\n')) ?? -1;
+  const activeIndex = ranges ? currentNavigableStatement(source, ranges, cursor) : -1;
   const rows = useMemo(() => ranges?.map((range, index) => ({ range, index, preview: statementNavigationPreview(source, range, dialect) })).filter(row => !search || source.slice(row.range.start, row.range.end).toLowerCase().includes(search.toLowerCase())) ?? [], [ranges, source, search, dialect]);
   const pages = Math.max(1, Math.ceil(rows.length / pageSize)), actual = Math.min(page, pages - 1);
   return <section className="statement-navigation" aria-label={text.title}><header><strong>{text.title}</strong><span role="status">{view.busy ? text.loading : result?.status === 'ready' ? text.total(rows.length) : result ? text.reasons[result.reason] ?? text.unavailable : ''}</span><span className="grow"/>

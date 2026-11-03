@@ -55,6 +55,14 @@ export function analyzeStatementNavigation(source: string, dialect: 'mysql' | 'm
   } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && reason.message === 'budget' ? 'budget' : 'script' }; }
 }
 
+/** 光标归属使用执行当前语句的边界规则，语句间空白不回退到相邻语句。 */
+export function currentNavigableStatement(source: string, ranges: readonly NavigableStatement[], offset: number): number {
+  if (!boundary(source, offset)) return -1;
+  const containing = ranges.findIndex(range => offset >= range.start && offset < range.delimiterEnd);
+  if (containing >= 0 || offset !== source.length && source[offset] !== '\r' && source[offset] !== '\n') return containing;
+  return ranges.findIndex(range => offset >= range.start && offset === range.delimiterEnd);
+}
+
 /** 预览仅在本地从原文生成，不改分段；跳过普通前导注释，执行注释保留给用户辨认。 */
 export function statementNavigationPreview(source: string, range: NavigableStatement, dialect: 'mysql' | 'mariadb' | 'sqlite'): string {
   let text = source.slice(range.start, range.end), index = 0;

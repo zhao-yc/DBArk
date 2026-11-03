@@ -71,7 +71,7 @@ export class ApplicationMenu {
       ] },
       { label: text.favorites, submenu: [item('favorite-toggle'), item('favorites-manage', 'CmdOrCtrl+Shift+B'), separator, item('object-link', 'CmdOrCtrl+Shift+O')] },
       { label: text.tools, submenu: [
-        { label: text.query, submenu: [item('execute', 'CmdOrCtrl+Enter'), item('execute-selection'), item('execute-current'), item('execute-all'), item('stop'), separator, item('format'), item('statement-navigation'), item('syntax-check'), item('object-definition'), item('parameters'), item('explain'), item('analyze'), item('transaction-settings')] },
+        { label: text.query, submenu: [item('execute', 'CmdOrCtrl+Enter'), item('execute-selection'), item('execute-current'), item('execute-all'), item('stop'), separator, item('format'), item('select-current-statement'), item('statement-navigation'), item('syntax-check'), item('object-definition'), item('parameters'), item('explain'), item('analyze'), item('transaction-settings')] },
         { label: text.transfer, submenu: [item('import'), item('export')] }, separator,
         item('schema-compare'), item('structure-search', 'CmdOrCtrl+Shift+F'), item('server-monitor'),
         { label: text.snapshots, submenu: [item('explain-snapshot'), item('result-snapshot')] }, separator, item('task-center')

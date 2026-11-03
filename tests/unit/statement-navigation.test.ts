@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { analyzeStatementNavigation, statementNavigationPreview, validStatementNavigationResult } from '../../src/shared/statementNavigation';
+import { analyzeStatementNavigation, currentNavigableStatement, statementNavigationPreview, validStatementNavigationResult } from '../../src/shared/statementNavigation';
 import { sqlStatementRanges } from '../../src/engine/currentStatement';
 import { sqliteStatementRanges } from '../../src/engine/sqlite/currentStatement';
 import { SqlScriptScanner as EngineScanner } from '../../src/engine/sql';
@@ -8,6 +8,20 @@ import type { CompletionLexicalMode } from '../../src/shared/completionLexical';
 
 const mode = { ansiQuotes: false, noBackslashEscapes: false };
 const fields = ({ start, end, delimiterStart, delimiterEnd }: { start: number; end: number; delimiterStart: number; delimiterEnd: number }) => ({ start, end, delimiterStart, delimiterEnd });
+it('选中当前语句区分紧邻语句、空白、行末和代理对边界', () => {
+  const source = "SELECT '😀';SELECT 2;\r\n  \r\nSELECT 3;";
+  const result = analyzeStatementNavigation(source, 'mysql', mode);
+  if (result.status !== 'ready') throw Error('本例分段未完成');
+  const index = (offset: number) => currentNavigableStatement(source, result.statements, offset);
+  const [first, second, third] = result.statements;
+  expect(index(first.delimiterStart)).toBe(0);
+  expect(index(first.delimiterEnd)).toBe(1);
+  expect(index(second.delimiterEnd)).toBe(1);
+  expect(index(second.delimiterEnd + 1)).toBe(-1);
+  expect(index(third.start - 3)).toBe(-1);
+  expect(index(source.indexOf('😀') + 1)).toBe(-1);
+  expect(index(source.length)).toBe(2);
+});
 /** 逐项与原真正执行入口核对，不用新导航器自身的预设分段充当正确性依据。 */
 it.each(['mysql', 'mariadb', 'sqlite'] as const)('%s原执行范围与导航完全一致，重复正文/UTF16/注释不猜位置', dialect => {
   const source = dialect === 'sqlite' ? "--无空白注释;😀\r\nSELECT ';中文😀'; SELECT ';中文😀';\r\nCREATE TEMP TRIGGER \"t;\" AFTER INSERT ON sample BEGIN SELECT CASE WHEN 1 THEN ';' END; SELECT 2; END;\nSELECT 3" : "# 注释;😀\r\nSELECT ';中文😀'; SELECT ';中文😀';\nDELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT ';'; SELECT 2; END$$\nDELIMITER ;\nSELECT 3";
