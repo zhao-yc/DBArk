@@ -1,7 +1,15 @@
 import type { DataRow, QueryResult, ResultColumn, ResultExportData } from '../shared/contracts';
 import { resultExportLimits, validateResultExportData } from '../shared/resultExport';
 
-export interface QueryResultColumnLayout { order: string[]; visible: string[]; frozenThrough?: string; }
+export const queryResultColumnWidth = { min: 64, max: 2000, default: 170 } as const;
+export interface QueryResultColumnLayout { order: string[]; visible: string[]; frozenThrough?: string; widths?: ReadonlyMap<string, number>; }
+
+/** 空白用默认值，手动输入只接受范围内的整数像素。 */
+export function parseQueryResultColumnWidth(value: string): number | undefined {
+  if (!value) return undefined;
+  const width = Number(value);
+  return /^\d+$/.test(value) && width >= queryResultColumnWidth.min && width <= queryResultColumnWidth.max ? width : NaN;
+}
 /** 内部唯一key才是身份；显示别名允许重复，元数据预算保持原上限。 */
 export function queryResultColumnKeys(columns: ResultColumn[]): string[] {
   if (!columns.length || columns.length > resultExportLimits.columns) throw Error('结果列数量超出可管理范围');
@@ -20,7 +28,7 @@ export function queryResultVisibleColumns(columns: ResultColumn[], layout: Query
 }
 /** 冻结标记只接受布局中的可见唯一key，重名显示别名不会参与身份判断。 */
 export function setQueryResultFrozenThrough(layout: QueryResultColumnLayout, key?: string): QueryResultColumnLayout {
-  const output: QueryResultColumnLayout = { order: [...layout.order], visible: [...layout.visible] };
+  const output: QueryResultColumnLayout = { order: [...layout.order], visible: [...layout.visible], ...(layout.widths ? { widths: layout.widths } : {}) };
   if (key === undefined) return output;
   const available = new Set(output.order);
   if (typeof key !== 'string' || !key.length || key.length > 4096 || output.order.length > resultExportLimits.columns || output.order.some(value => typeof value !== 'string' || !value.length) || available.size !== output.order.length || new Set(output.visible).size !== output.visible.length || output.visible.some(value => !available.has(value)) || !available.has(key) || !output.visible.includes(key)) throw Error('结果冻结边界必须是当前可见的精确唯一内部列键');
@@ -42,7 +50,7 @@ export function moveQueryResultColumn(layout: QueryResultColumnLayout, key: stri
   const order=[...layout.order];[order[index],order[target]]=[order[target],order[index]];
   const frozen = Object.getOwnPropertyDescriptor(layout, 'frozenThrough');
   const frozenThrough = frozen && 'value' in frozen && frozen.enumerable && typeof frozen.value === 'string' && order.filter(value => value === frozen.value).length === 1 && layout.visible.includes(frozen.value) ? frozen.value : undefined;
-  return {order,visible:layout.visible,...(frozenThrough === undefined ? {} : {frozenThrough})};
+  return {order,visible:layout.visible,...(frozenThrough === undefined ? {} : {frozenThrough}),...(layout.widths ? {widths:layout.widths} : {})};
 }
 /** 在打开导出或接纳行选择时才投影；逐行计量，超预算即停，绝不复制隐藏单元格。 */
 export function projectQueryResultRows(result: QueryResult, columns: ResultColumn[], indices?: readonly number[]): ResultExportData {

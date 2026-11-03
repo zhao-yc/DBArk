@@ -4,3 +4,4 @@
 .query-result-column strong { overflow-wrap: anywhere; }
 .query-result-column small { color: var(--muted); }
 .query-result-column button { flex-shrink: 0; }
+.query-result-column .query-result-column-width { flex: 0 0 68px; width: 68px; }

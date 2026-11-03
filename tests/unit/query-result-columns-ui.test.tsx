@@ -11,6 +11,8 @@ const grids=vi.hoisted(()=>({all:[] as any[]}));
 // 只替换Monaco和虚拟网格的外界渲染端口，真实QueryTab／管理器／导出窗口／store均运行。
 vi.mock('react-data-grid',()=>({DataGrid:(props:any)=>{grids.all.push(props);return null;},SelectColumn:{key:'select-row'}}));
 vi.mock('../../src/renderer/components/SqlEditor',()=>({SqlEditor:()=>null}));
+// 查询页直接导入语法标记接口，内存网格测试没有浏览器编辑器。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 let QueryTab:typeof import('../../src/renderer/components/QueryTab')['QueryTab'],store:typeof import('../../src/renderer/store')['useWorkspace'],flush:typeof import('../../src/renderer/store')['flushSettings'];
 let document:ReturnType<typeof memoryDocument>,createRoot:typeof import('react-dom/client')['createRoot'],root:ReturnType<typeof createRoot>|undefined;
 let original:QueryResult,second:QueryResult,commands:string[],exports:any[],observers:Set<Function>;
@@ -39,6 +41,40 @@ function mainGrid(){const props=[...grids.all].reverse().find(props=>props.rows=
 /** 仅内存ClipboardEvent数据，不调用navigator.clipboard或系统剪贴板。 */
 function copy(props=mainGrid()){const values=new Map<string,string>();props.onCellCopy({row:props.rows[0],column:{key:props.columns.find((c:any)=>c.key!=='select-row').key}},{preventDefault:vi.fn(),clipboardData:{setData:(key:string,value:string)=>values.set(key,value)}});return values;}
 async function layout(){await click(text.open);await toggle(5,false);for(let i=0;i<3;i++)await click(text.up(4));await click(text.apply);}
+
+it('结果宽度按内部键保存，保留隐藏列尺寸并忽略失效网格和无效输入', async () => {
+ await mount();
+ const originalGrid = mainGrid();
+ await act(async () => originalGrid.onColumnWidthsChange(new Map([['__proto__', { type: 'resized', width: 260 }], ['d', { type: 'resized', width: 2500 }]])));
+ const width = (key: string) => mainGrid().columnWidths.get(key)?.width;
+ expect(width('__proto__')).toBe(260);
+ expect(width('d')).toBe(2000);
+ await click(text.open);
+ const input = document.querySelector(`input[aria-label="${text.width(2)}"]`)!;
+ const enter = async (value: string) => act(async () => { input.value = value; input.dispatchEvent(new MemoryEvent('input')); });
+ await enter('12.5');
+ expect(button(text.apply).disabled).toBe(true);
+ await enter('320');
+ await toggle(2, false);
+ await click(text.up(2));
+ await click(text.freezeThrough(1));
+ await click(text.apply);
+ expect(mainGrid().columns.some((column: {key: string}) => column.key === 'd')).toBe(false);
+ expect(width('d')).toBe(320);
+ await click(text.open);
+ await toggle(2, true);
+ await click(text.apply);
+ expect(mainGrid().columns.find((column: {key: string}) => column.key === 'd').width).toBe(320);
+ await act(async () => originalGrid.onColumnWidthsChange(new Map([['d', { type: 'resized', width: 64 }]])));
+ expect(width('d')).toBe(320);
+ await click(text.open);
+ await click(text.resetWidths);
+ await click(text.apply);
+ expect(mainGrid().columnWidths.size).toBe(0);
+ expect(mainGrid().columns.find((column: {key: string}) => column.key === 'd').width).toBe(170);
+ expect(mainGrid().rows).toBe(original.rows);
+ expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
 
 it('正式列管理器搜索、原序号显隐排序／恢复至少一列，搜索不重绘网格或深拷贝结果行',async()=>{
  await mount();const saved=structuredClone(original);await click(text.open);expect(document.body.textContent).toContain('同名');expect(document.body.textContent).toContain(text.ordinal(1));expect(document.body.textContent).toContain(text.ordinal(2));const rendered=grids.all.length,clone=vi.spyOn(globalThis,'structuredClone');const search=document.querySelector(`input[aria-label="${text.search}"]`)!;await act(async()=>{search.value='DECIMAL';search.dispatchEvent(new MemoryEvent('input'));});expect(document.querySelector(`input[aria-label="${text.visible(1)}"]`)).toBeNull();expect(document.querySelector(`input[aria-label="${text.visible(2)}"]`)).not.toBeNull();expect(grids.all.length).toBe(rendered);expect(clone).not.toHaveBeenCalled();clone.mockRestore();await act(async()=>{search.value='';search.dispatchEvent(new MemoryEvent('input'));});for(let i=1;i<=4;i++)await toggle(i,false);expect(document.querySelector(`input[aria-label="${text.visible(5)}"]`)!.disabled).toBe(true);const oldUncheck=callback(document.querySelector(`input[aria-label="${text.visible(5)}"]`),'onChange');await act(async()=>oldUncheck({target:{checked:false}}));await click(text.apply);expect(mainGrid().columns.filter((c:any)=>c.key!=='select-row').map((c:any)=>c.key)).toEqual(['secret']);expect(original).toEqual(saved);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);

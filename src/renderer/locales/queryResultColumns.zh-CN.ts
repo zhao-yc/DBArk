@@ -8,5 +8,8 @@ export const queryResultColumnsZh = {
   freezeHint:'冻结当前可见列从左侧到所选边界，选择框不计入。隐藏边界会取消冻结；移动或恢复顺序后按同一边界列重算。仅属于当前准确结果，切换结果或固定快照后重置。',
   empty:'没有匹配的结果列',stale:'结果或操作上下文已变化，请关闭后重新打开列管理。',
   ordinal:(position:number)=>`原第${position}列`, visible:(position:number)=>`显示原第${position}列`,
+  width:(position:number)=>`原第${position}列宽度（像素）`, resetWidths:'恢复默认列宽',
+  widthHint:'列宽可填写 64 到 2000 的整数像素，留空恢复默认。只调整当前结果的显示。',
+  widthInvalid:'列宽须留空，或填写 64 到 2000 的整数像素。',
   up:(position:number)=>`上移原第${position}列`,down:(position:number)=>`下移原第${position}列`,
 };
