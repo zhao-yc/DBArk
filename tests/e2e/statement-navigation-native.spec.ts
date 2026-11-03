@@ -94,6 +94,29 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     const compound = dialect === 'sqlite' ? "CREATE TEMP TRIGGER nav_trigger AFTER INSERT ON sample BEGIN UPDATE sample SET note=';'; SELECT CASE WHEN 1 THEN ';' END; END;" : "DELIMITER $$\nCREATE PROCEDURE nav_proc() BEGIN SELECT ';'; SELECT 2; END$$\nDELIMITER ;";
     const script = (dialect === 'sqlite' ? '--前导注释;😀\n' : '#前导注释;😀\n') + "SELECT 'duplicate;😀';\n" + compound + "\nSELECT '" + 'x'.repeat(200) + "hidden_needle';\n" + "SELECT 'duplicate;😀';\n".repeat(10);
     await step(() => query().locator('.monaco-editor').getByRole('textbox').focus()); await step(() => page.keyboard.insertText(script)); await step(() => expect.poll(async () => (await model()).source.replaceAll('\r\n', '\n')).toBe(script));
+    stage = '原生菜单跳到行列，恢复仅结果布局并保持草稿';
+    const beforePosition = await model();
+    await step(() => query().getByRole('button', { name: '查询结果布局', exact: true }).click());
+    await step(() => page.getByRole('menuitem', { name: '仅显示结果', exact: true }).click());
+    await step(() => expect(query().locator('.monaco-editor')).toBeHidden());
+    const gotoLine = async () => {
+      await expect.poll(() => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-goto-line')?.enabled === true))).toBe(true);
+      await step(() => application.evaluate(({ Menu, BrowserWindow }) => {
+        const item = Menu.getApplicationMenu()?.getMenuItemById('sql-goto-line'), windows = BrowserWindow.getAllWindows();
+        if (!item?.enabled || windows.length !== 1) throw Error('跳到行列原生命令不可用');
+        item.click(item, windows[0], {} as Electron.KeyboardEvent);
+      }));
+    };
+    await gotoLine();
+    await step(() => expect(query().locator('.monaco-editor')).toBeVisible());
+    const quickInput = page.locator('.quick-input-widget:visible input');
+    await step(() => quickInput.fill(':2:4')); await step(() => quickInput.press('Enter'));
+    const targetOffset = beforePosition.source.indexOf('\n') + 4;
+    await expect.poll(async () => (await model()).selection).toEqual({ start: targetOffset, end: targetOffset });
+    const afterPosition = await model(); unchanged(beforePosition, afterPosition);
+    await gotoLine(); await step(() => quickInput.fill(':3:2')); await step(() => quickInput.press('Escape'));
+    await expect.poll(async () => (await model()).selection).toEqual(afterPosition.selection);
+    unchanged(beforePosition, await model());
     stage = '真实原生菜单与右键仅转换选区并可一次撤销';
     const nativeEnabled = () => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-lowercase')?.enabled === true));
     await expect.poll(nativeEnabled).toBe(false);

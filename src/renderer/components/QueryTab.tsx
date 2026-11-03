@@ -1704,6 +1704,16 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const instance = editor.current, action = instance.getAction(replace ? 'editor.action.startFindReplaceAction' : 'actions.find');
     if (action) { instance.focus(); void action.run().catch(reason => setError(errorMessage(reason))); }
   }
+  /** 聚焦原查询编辑器后调用 Monaco 行列导航，结果专注模式先恢复编辑区。 */
+  async function openEditorPosition(instance = editor.current): Promise<void> {
+    if (!instance || instance !== editor.current || !queryMenuCurrent() || fileSource.isBusy()) return;
+    const model = instance.getModel(), action = instance.getAction('editor.action.gotoLine');
+    if (!model || model.isDisposed() || !action?.isSupported()) return;
+    if (resultsOnly) flushSync(() => setResultsOnly(false));
+    if (instance !== editor.current || instance.getModel() !== model || model.isDisposed() || !queryMenuCurrent()) return;
+    instance.focus();
+    await action.run();
+  }
   const queryMenuKey = JSON.stringify([tab.id, tab.connectionId, connectionVersion, sessionId, tab.database, tab.databaseContext, tab.fileSourceBinding, tab.sourceBinding, settings.activeTabId, busy, queryRunning, !!closeRequest, fileSource.busy]);
   /** 只对当前查询已同步的模型调用原生编辑动作，保留原撤销组。 */
   async function changeSqlSelectionCase(upper: boolean, instance = editor.current): Promise<void> {
@@ -1747,8 +1757,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const action = searchEditor.addAction({ id: 'dbark-statement-navigation:' + uid(), label: navigationText.entry, precondition: '!editorReadonly', contextMenuGroupId: 'navigation', contextMenuOrder: 1.7,
       run: () => { if (active && editor.current === searchEditor) openStatementNavigation(searchEditor); },
     });
-    return () => { active = false; action.dispose(); };
-  }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql]);
+    const position = searchEditor.addAction({ id: 'dbark-sql-goto-line:' + uid(), label: uiCommandLabels['sql-goto-line'], contextMenuGroupId: 'navigation', contextMenuOrder: 1.6,
+      run: () => { if (active) return openEditorPosition(searchEditor); },
+    });
+    return () => { active = false; action.dispose(); position.dispose(); };
+  }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql, resultsOnly]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
   const resultMenuKey = JSON.stringify([queryMenuKey, menuResult.current.revision, resultIndex, selectedPin, resultSelectionRevision, !!activeColumnLease, !!activeFilterLease, !!activeSortLease]);
@@ -1768,6 +1781,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'syntax-check': { enabled: !sqlite && !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind(true) },
+    'sql-goto-line': { enabled: !!searchEditor?.getAction?.('editor.action.gotoLine') && !closeRequest && !fileSource.busy, run: () => openEditorPosition() },
     'sql-uppercase': { enabled: hasCaseSelection && !busy && !closeRequest && !fileSource.busy, run: () => changeSqlSelectionCase(true) },
     'sql-lowercase': { enabled: hasCaseSelection && !busy && !closeRequest && !fileSource.busy, run: () => changeSqlSelectionCase(false) },
     export: { enabled: !!selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease, run: exportVisibleResult },

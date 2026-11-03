@@ -6,6 +6,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'recent-sql-file': '最近 SQL 文件', 'save-query': '保存查询', 'save-sql-file': '另存 SQL 文件',
   'connections-transfer': '连接导入导出', 'connections-organize': '整理连接', 'find': '查找', 'replace': '替换',
   'sql-uppercase': '选区转为大写', 'sql-lowercase': '选区转为小写',
+  'sql-goto-line': '跳到行列',
   'toggle-theme': '切换明暗主题', 'focus-mode': '专注模式', 'editor-font': '编辑器字体',
   'editor-word-wrap': '自动换行', 'editor-indent': '编辑器缩进', 'favorite-toggle': '添加／取消当前对象收藏',
   'favorites-manage': '管理收藏与分组', 'object-link': '粘贴对象链接', 'execute': '执行查询',
