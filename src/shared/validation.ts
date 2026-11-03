@@ -290,6 +290,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'metadata.databases': z.object({ connectionId: id }).strict(),
   'search.structure':structureSearchInputSchema,
   'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,'queries.readText':savedQueryReadTextSchema,'queries.exportSql':savedQueryReadTextSchema,
+  'queries.importSql': z.object({ encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'queries.page':savedQueryPageInputSchema,'queries.pageContinue':savedQueryPageNextSchema,'queries.pageRelease':savedQueryPageReleaseSchema,'queries.deleteChecked':savedQueryDeleteCheckedSchema,
   'queries.renameChecked': savedQueryRenameSchema,
   'queries.duplicateChecked': savedQueryDuplicateSchema,

@@ -7,6 +7,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { SavedQuerySearches, type SavedQuerySearchStore } from '../../src/main/savedQuerySearch';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
+import { decodeQueryFile } from '../../src/main/queryFiles';
 import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
 import { savedQueryReadTextSchema, savedQuerySearchLimits } from '../../src/shared/savedQuerySearch';
 import { publicCommands } from '../../src/shared/commands';
@@ -68,20 +69,23 @@ describe('保存查询完整正文的严格本地读取', () => {
 function mainFixture() {
   const f = local(), source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true);
   const dispatch = tree.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'dispatch');
-  const branches = dispatch?.body?.statements.filter((node): node is ts.IfStatement => ts.isIfStatement(node) && ["command === 'queries.readText'", "command === 'queries.exportSql'"].includes(node.expression.getText(tree))) ?? [];
+  const branches = dispatch?.body?.statements.filter((node): node is ts.IfStatement => ts.isIfStatement(node) && ["command === 'queries.readText'", "command === 'queries.exportSql'", "command === 'queries.importSql'"].includes(node.expression.getText(tree))) ?? [];
   let wrapper: ts.Expression | undefined;
   function visit(node: ts.Node): void { if (ts.isCallExpression(node) && node.expression.getText(tree) === 'ipcMain.handle' && node.arguments[0]?.getText(tree) === "'dbark:request'") wrapper = node.arguments[1]; ts.forEachChild(node, visit); } visit(tree);
-  if (branches.length !== 2 || !wrapper) throw Error('未取得正文读取、导出和IPC入口');
+  if (branches.length !== 3 || !wrapper) throw Error('未取得正文读取、导入导出和IPC入口');
   const frame = { url: 'ram://read-text', processId: 1, frameToken: '原文档', detached: false }, contents = Object.assign(new EventEmitter(), { mainFrame: frame, isDestroyed: () => false }), window = { webContents: contents, isDestroyed: () => false }, structureTokens = new Map();
   const unexpected = vi.fn((): never => { throw Error('本地正文不得访问连接/Engine/来源绑定'); });
   const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window as never, rendererURL: frame.url, connectionRevision: () => 0, assertAvailable: unexpected, shuttingDown: () => false, release: unexpected }); columnsMain.trackWindow(window as never);
   const choose = vi.fn(async (): Promise<{ canceled: boolean; filePath?: string }> => ({ canceled: true }));
+  const chooseImport = vi.fn(async () => ({ canceled: true, filePaths: [] as string[] }));
+  const snapshot = vi.fn(async (_path: string, assertCurrent: () => void) => { assertCurrent(); return { bytes: Buffer.from('SELECT 1;') }; });
+  const create = vi.fn((content: { name: string }) => ({ name: content.name }));
   const release = vi.fn(), reserve = vi.fn(async (_path: string) => release), write = vi.fn(async () => {});
-  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens, columnsMain, savedQuerySearches: f.service, shuttingDown: false, window, rendererURL: frame.url, tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set(), connectionConfig: { assertAvailable: unexpected }, store: { bindQuerySource: unexpected, resolveConnection: unexpected, connectionRevision: () => 0 }, broker: { request: unexpected }, basename, dialog: { showSaveDialog: choose }, queryFileOperation: (action: () => Promise<unknown>) => action(), exportReservations: { acquire: reserve }, writeQueryFile: write });
+  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens, columnsMain, savedQuerySearches: f.service, shuttingDown: false, window, rendererURL: frame.url, tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set(), connectionConfig: { assertAvailable: unexpected }, store: { bindQuerySource: unexpected, resolveConnection: unexpected, connectionRevision: () => 0, createBoundQuery: create }, broker: { request: unexpected }, basename, dialog: { showSaveDialog: choose, showOpenDialog: chooseImport }, queryFileOperation: (action: () => Promise<unknown>) => action(), exportReservations: { acquire: reserve }, writeQueryFile: write, readQueryFileSnapshot: snapshot, decodeQueryFile });
   const code = extractMainProductionBinding(source, 'tableChecksMain') + '\nasync function dispatch(command:any,input:any,columns?:any){' + branches.map(branch => branch.getText(tree)).join('\n') + "throw Error('未授权其它分发');}\nglobalThis.request=" + wrapper.getText(tree) + ';';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   const event = { sender: contents, senderFrame: frame };
-  return { ...f, context, unexpected, event, contents, choose, reserve, release, write, request: (input: unknown, sender = event): Promise<any> => context.request(sender, { command: 'queries.readText', input }), exportSql: (input: unknown): Promise<any> => context.request(event, { command: 'queries.exportSql', input }) };
+  return { ...f, context, unexpected, event, contents, choose, chooseImport, snapshot, create, reserve, release, write, request: (input: unknown, sender = event): Promise<any> => context.request(sender, { command: 'queries.readText', input }), exportSql: (input: unknown): Promise<any> => context.request(event, { command: 'queries.exportSql', input }), importSql: (input: unknown): Promise<any> => context.request(event, { command: 'queries.importSql', input }) };
 }
 
 describe('queries.readText正式Main本地分支与最终文档归属', () => {
@@ -135,5 +139,34 @@ describe('queries.exportSql 原生选址及原摘要写入', () => {
     expect(await obsolete.exportSql(obsolete.input())).toMatchObject({ ok: false });
     expect(obsolete.reserve).not.toHaveBeenCalled();
     expect(obsolete.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('queries.importSql 真实 Main 分支', () => {
+  it('只接受编码，取消不读取，带 BOM 的原文写成独立未绑定查询', async () => {
+    const f = mainFixture(), input = { encoding: 'utf8' }, path = 'C:/isolated/中文😀.SQL';
+    const sql = "-- 原文\r\nSELECT '😀';\n";
+    expect(await f.importSql({ ...input, path })).toMatchObject({ ok: false });
+    expect(f.chooseImport).not.toHaveBeenCalled();
+    expect(await f.importSql(input)).toEqual({ ok: true, result: { status: 'cancelled' } });
+    expect(f.snapshot).not.toHaveBeenCalled();
+    f.chooseImport.mockResolvedValueOnce({ canceled: false, filePaths: [path] });
+    f.snapshot.mockResolvedValueOnce({ bytes: Buffer.from('\uFEFF' + sql, 'utf16le') });
+    expect(await f.importSql(input)).toEqual({ ok: true, result: { status: 'imported', name: '中文😀' } });
+    expect(f.create).toHaveBeenCalledExactlyOnceWith({ name: '中文😀', context: { state: 'known', database: null }, sql });
+    expect(f.unexpected).not.toHaveBeenCalled();
+  });
+
+  it('坏编码和文件读取时失效的文档都不能写入查询库', async () => {
+    const f = mainFixture(), input = { encoding: 'utf8' };
+    f.chooseImport.mockResolvedValue({ canceled: false, filePaths: ['C:/isolated/file.sql'] });
+    f.snapshot.mockResolvedValueOnce({ bytes: Buffer.from([0xff]) });
+    expect(await f.importSql(input)).toMatchObject({ ok: false });
+    f.snapshot.mockImplementationOnce(async () => {
+      f.contents.emit('did-navigate');
+      return { bytes: Buffer.from('SELECT 2;') };
+    });
+    expect(await f.importSql(input)).toMatchObject({ ok: false });
+    expect(f.create).not.toHaveBeenCalled();
   });
 });

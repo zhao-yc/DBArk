@@ -74,7 +74,8 @@ import { confirmConnectionFiles, resolveFileToken, revokeConnectionFiles } from 
 import { connectionReplacementText } from '../shared/connectionTransferMessages';
 import { ExportReservations } from './exportReservations';
 import { persistedQueryError, persistedTaskMessage } from './taskPrivacy';
-import { readQueryFile, writeQueryFile } from './queryFiles';
+import { decodeQueryFile, readQueryFile, writeQueryFile } from './queryFiles';
+import { readQueryFileSnapshot } from './queryFileSourceFiles';
 import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
 import { taskCancelSnapshot } from './taskCancelState';
@@ -864,6 +865,28 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         await writeQueryFile(selected.filePath, query.sql, 'utf8');
         return { status: 'saved', name: basename(selected.filePath) };
       } finally { release(); }
+    });
+  }
+  // 导入始终创建未绑定记录。先完整读取并校验，再以单次事务写入查询库。
+  if (command === 'queries.importSql') {
+    const assertCurrent = () => {
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown) throw Error('客户端正在退出，不能导入保存查询');
+    };
+    assertCurrent();
+    return queryFileOperation(async () => {
+      const selected = await dialog.showOpenDialog(columns!.owner.window, {
+        title: '导入 SQL 到保存查询', properties: ['openFile'], filters: [{ name: 'SQL 文件', extensions: ['sql'] }],
+      });
+      assertCurrent();
+      const path = selected.canceled ? undefined : selected.filePaths[0];
+      if (!path) return { status: 'cancelled' };
+      const snapshot = await readQueryFileSnapshot(path, assertCurrent);
+      const { sql } = decodeQueryFile(snapshot.bytes, input.encoding);
+      const name = basename(path).replace(/\.sql$/i, '').trim().slice(0, 256).replace(/[\uD800-\uDBFF]$/, '') || '导入的查询';
+      assertCurrent();
+      const created = store.createBoundQuery({ name, context: { state: 'known', database: null }, sql });
+      return { status: 'imported', name: created.name };
     });
   }
   // 专属片段传输只认真实IPC文档与Main快照，永不转发给SQL引擎或接受任意文件路径。
@@ -1838,7 +1861,7 @@ else {
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('table.filteredDelete.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredDeletes.has(payload.input.taskId)) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'queries.exportSql') columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText' || payload.command === 'queries.exportSql' || payload.command === 'queries.importSql') columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || payload.command === 'sqlite.tableExport' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
@@ -1862,7 +1885,7 @@ else {
           if (payload.command === 'sqlite.valueOptions') { if (!columns?.sqliteValueOptionsPublication) throw Error('SQLite不同值缺少原窗口发布门'); columns.sqliteValueOptionsPublication(); }
           if (payload.command === 'sqlite.statistics') { if (!columns?.sqliteStatisticsPublication) throw Error('SQLite字段概况缺少原窗口发布门'); columns.sqliteStatisticsPublication(); }
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
-          if (payload.command === 'queries.exportSql') columnsMain.assertCapturedOwner(columns);
+          if (payload.command === 'queries.exportSql' || payload.command === 'queries.importSql') columnsMain.assertCapturedOwner(columns);
           if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'table.filteredUpdate.preview') {
             try { filteredUpdates.assertPublication(result, columns!); }

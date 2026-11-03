@@ -3,9 +3,11 @@ import { ArrowUpRight, Clock3, FileCode2, Search, Trash2 } from 'lucide-react';
 import type { SavedQueryPage, SavedQueryPageEntry } from '../../shared/savedQueryPages';
 import type { SavedQueryGroupScope, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
 import type { SavedQueryOpenResult, SavedQueryScope } from '../../shared/savedQuerySearch';
+import type { QueryFileEncoding } from '../../shared/contracts';
 import { zh, formatText } from '../locales/zh-CN';
 import { queryContextZh } from '../locales/queryContext.zh-CN';
 import { savedQueryPagesZh as t } from '../locales/savedQueryPages.zh-CN';
+import { queryFilesZh as fileText } from '../locales/queryFiles.zh-CN';
 import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
@@ -34,6 +36,7 @@ interface Edit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganiza
 export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConnectionId, services: io = services }: { onClose(): void; onHistory(): void; insertion?: HistoryInsertionTarget | null; initialConnectionId?: string; services?: Services }) {
   const connections = useWorkspace(state => state.connections);
   const [scope, setScope] = useState<SavedQueryScope>(() => initialConnectionId ? { kind: 'connection', connectionId: initialConnectionId } : { kind: 'all' });
+  const [importEncoding, setImportEncoding] = useState<QueryFileEncoding>('utf8');
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
   const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
@@ -238,6 +241,23 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
       if (owns(ticket) && result.status === 'saved') setNotice(formatText(t.sqlExported, result.name));
     });
   }
+  /** 写入完成后刷新原筛选。若刷新失败，保留导入成功提示并由用户重新读取列表。 */
+  function importSql(): void {
+    if (!editable()) return;
+    const canRefresh = !reply || criteriaKey(criteriaRef.current) === applied;
+    void run(async ticket => {
+      const result = await io.request('queries.importSql', { encoding: importEncoding });
+      if (!owns(ticket) || result.status !== 'imported') return;
+      setNotice(formatText(t.sqlImported, result.name));
+      setNeedsRefresh(true);
+      if (!canRefresh) return;
+      const raw = await io.request('queries.organizationGet', {});
+      if (!owns(ticket)) return;
+      const nextGroup = publish(raw, criteriaRef.current.group);
+      await readPage(ticket, { ...criteriaRef.current, group: nextGroup });
+      if (owns(ticket)) setNeedsRefresh(false);
+    });
+  }
   /** 全文按摘要重读；先退出run原Promise再关闭释放，避免cleanup等待自己的pending。 */
   function insert(item: SavedQueryPageEntry) {
     if (!editable()) return;
@@ -279,6 +299,10 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         <div className="saved-query-group-actions"><button disabled={blocked || !organization || needsRefresh} onClick={() => edit({ kind: 'create', id: selectedGroup })}>{text.create}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'rename', id: selectedGroup })}>{text.rename}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'moveGroup', id: selectedGroup })}>{text.moveGroup}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'dissolve', id: selectedGroup })}>{text.dissolve}</button></div>
       </details>
       <div className="saved-query-organization-list"><div className="search-box"><Search size={15}/><input aria-label={t.search} value={search} maxLength={512} disabled={blocked} onChange={event => draft(() => setSearch(event.target.value))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void load(); } }}/><button disabled={blocked} onClick={() => void load()}>{t.searchButton}</button></div>
+        <details><summary>{t.sqlImport}</summary><p className="muted small">{t.sqlImportHint}</p><div className="inline-field">
+          <label>{fileText.encoding} <select disabled={blocked} value={importEncoding} onChange={event => draft(() => setImportEncoding(event.target.value as QueryFileEncoding))}><option value="utf8">{fileText.utf8}</option><option value="utf16le">{fileText.utf16le}</option><option value="gb18030">{fileText.gb18030}</option></select></label>
+          <button disabled={blocked} onClick={importSql}>{t.sqlImportChoose}</button>
+        </div></details>
         <label className="inline-field">{t.scope}<select aria-label={t.scope} disabled={blocked} value={scope.kind === 'connection' ? 'connection:' + scope.connectionId : scope.kind} onChange={event => selectConnectionScope(event.target.value)}>
           <option value="all">{t.allSources}</option>
           <option value="unbound">{t.unbound}</option>
