@@ -6,6 +6,7 @@ import { sqliteTablePresetsZh as presetText } from '../../src/renderer/locales/s
 import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
 import { sqliteValueOptionsZh as valuesText } from '../../src/renderer/locales/sqliteValueOptions.zh-CN';
 import { tableGridZh as layoutFields } from '../../src/renderer/locales/tableGrid.zh-CN';
+import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
 
 // 默认及--list仅注册跳过项；真实桌面、文件和NodeSQLite只在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -200,8 +201,36 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await controls(true); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5'));
     // 分页断言由明确唯一id排序保证，不把未指定排序的扫描顺序当作跨版本合同。
     await step(() => table().getByRole('button', { name: '添加 SQLite 排序', exact: true }).click()); await step(() => table().getByLabel('SQLite 排序 1 字段', { exact: true }).selectOption('id')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
+    stage = '只读当前页行详情复用原值并区分动态类型';
+    const details = () => table().getByRole('region', { name: detailText.sqlitePage, exact: true });
+    const detailField = (name: string) => details().locator('article').filter({ has: page.locator('h4', { hasText: name }) });
+    /** 经虚拟网格选格和真实更多菜单打开，行详情只读取已加载页。 */
+    const openDetail = async () => {
+      await step(() => table().getByRole('grid').locator('[role="row"][aria-rowindex="2"] [role="gridcell"]').first().click());
+      await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: detailText.open, exact: true }, check)).click());
+      await step(() => expect(details()).toBeVisible());
+    };
+    const beforeDetails = await step(audit);
+    await openDetail();
+    await step(() => expect(details().getByRole('button', { name: detailText.previous, exact: true })).toBeDisabled());
+    await step(() => expect(detailField('mixed').locator('small')).toHaveText('INTEGER'));
+    await step(() => expect(detailField('mixed').locator('pre')).toHaveText('2'));
+    await step(() => expect(detailField('exact_int').locator('pre')).toHaveText('9223372036854775807'));
+    await step(() => expect(detailField('nullable').locator('pre')).toHaveText(detailText.null));
+    await step(() => expect(detailField('payload').locator('small')).toHaveText('BLOB'));
+    await step(() => expect(detailField('payload').locator('pre')).toHaveText('AP8='));
+    await step(() => details().getByRole('button', { name: detailText.next, exact: true }).click());
+    await step(() => expect(detailField('mixed').locator('small')).toHaveText('TEXT'));
+    await step(() => expect(detailField('mixed').locator('pre')).toHaveText('2'));
+    await step(() => details().getByLabel(detailText.sqliteRow, { exact: true }).fill('5'));
+    await step(() => details().getByRole('button', { name: detailText.go, exact: true }).click());
+    await step(() => expect(detailField('note').locator('pre')).toHaveText(rows[4].note));
+    await step(() => expect(details().getByRole('button', { name: detailText.next, exact: true })).toBeDisabled());
+    const afterDetails = await step(audit);
+    expect(afterDetails.pages).toEqual(beforeDetails.pages); expect(afterDetails.forks).toEqual(beforeDetails.forks); expect(disk()).toEqual(baseline);
     stage = '只读真实列头即时排序、分页沿服务端全表且ASC/DESC/移除循环';
     await headerSort('id', [{ column: 'id', direction: 'desc' }], [34, 33, 32, 31, 30]);
+    await step(() => expect(details()).toHaveCount(0));
     const headerNext = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: 'SQLite 下一页', exact: true }).click()); await step(() => expect.poll(async () => { const pages = (await audit()).pages; return pages.length === headerNext + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true)); await expectIds([29, 28, 27, 26, 25]); expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 5, limit: 5, sort: [{ column: 'id', direction: 'desc' }] });
     await headerSort('id', []); await headerSort('id', [{ column: 'id', direction: 'asc' }], [1, 2, 3, 4, 5]);
     stage = 'Ctrl或Meta追加优先级，精确BIGINT与NULL排序交真实SQLite并同步排序表单';
@@ -316,6 +345,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     stage = '原树视图与明确生成SELECT仍待执行'; await step(() => page.locator('.object-row .tree-label').filter({ hasText: viewName }).dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible()); await expectIds([30, 31, 32, 33, 34]);
     expect((await step(audit)).pages.at(-1)?.reply).toMatchObject({ ok: true, result: { target: { kind: 'view', table: viewName }, hasMore: false } });
     const beforeDraft = (await step(audit)).pages.length;
+    await openDetail(); await step(() => expect(detailField('note').locator('pre')).toHaveText(rows[29].note));
     await step(async () => { const row = page.locator('.object-row').filter({ has: page.getByRole('button', { name: tableName, exact: true }) }); const item = await (require('./sidebar-menu') as typeof import('./sidebar-menu')).sidebarMenuItem(row, { name: sqliteZh.selectQuery + ' ' + tableName, exact: true }, check); check(); await item.click(); check(); });
     await step(() => expect(page.locator('.query-tab:visible .monaco-editor').getByRole('textbox')).toBeVisible());
     const drafted = await settings(), queryTab = drafted.tabs.find(tab => tab.id === drafted.activeTabId); expect(queryTab).toMatchObject({ kind: 'query', connectionId: profile.id, database: 'main', sql: 'SELECT * FROM "main"."浏览""航船🚢" LIMIT 100;' });
@@ -352,7 +382,10 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
       const left = await step(() => id.evaluate(element => { const rect = element.getBoundingClientRect(); if (Math.abs(rect.width - 220) > 1) throw Error('SQLite保存列宽未应用'); return rect.left; }));
       await step(() => grid.evaluate(element => { element.scrollLeft = 400; })); await step(() => expect.poll(() => id.evaluate(element => element.getBoundingClientRect().left)).toBeCloseTo(left, 0)); await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
     };
-    await assertLayout(); const afterLayout = await step(audit); expect(afterLayout.pages.length).toBe(beforeLayout.pages.length); expect(afterLayout.forks).toEqual(beforeLayout.forks); expect(disk()).toEqual(baseline);
+    await assertLayout(); await openDetail();
+    await step(() => expect(detailField('nullable')).toBeVisible());
+    await step(() => details().getByRole('button', { name: detailText.close, exact: true }).click()); await step(() => expect(details()).toHaveCount(0));
+    const afterLayout = await step(audit); expect(afterLayout.pages.length).toBe(beforeLayout.pages.length); expect(afterLayout.forks).toEqual(beforeLayout.forks); expect(disk()).toEqual(baseline);
     const persisted = await settings(), firstFacts = await step(audit), firstTasks = await tasks(); expect(persisted.tabs.find(tab => tab.id === persisted.activeTabId)).toMatchObject({ kind: 'table', table: tableName });
     expect(firstFacts.pickerCalls).toBe(1); expect(firstFacts.denied).toEqual([]); expect(firstFacts.forks.length).toBeGreaterThan(0); expect(firstFacts.forks.every(path => /(?:^|[\\/])sqliteWorker\.cjs$/.test(path))).toBe(true); expect(firstFacts.commands.some(command => command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('table.') || command.startsWith('schema.'))).toBe(false); expect(runtime.pageErrors).toEqual([]);
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableBrowseNative?: { restore(): void } }).__sqliteTableBrowseNative; if (!state) throw Error('原观察器已失效'); state.restore(); }), true); armed = false;

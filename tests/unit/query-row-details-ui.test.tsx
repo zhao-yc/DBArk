@@ -9,6 +9,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { validateResultExportData } from '../../src/shared/resultExport';
 const grids=vi.hoisted(()=>({all:[] as any[]}));
 // 只替换Monaco和虚拟网格的外界渲染端口，真实QueryTab／管理器／导出窗口／store均运行。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers() { throw Error('行详情用例不应设置 SQL 语法标记'); } }, MarkerSeverity: { Warning: 4 } }));
 vi.mock('react-data-grid',()=>({DataGrid:(props:any)=>{grids.all.push(props);return null;},SelectColumn:{key:'select-row'}}));
 vi.mock('../../src/renderer/components/SqlEditor',()=>({SqlEditor:()=>null}));
 let QueryTab:typeof import('../../src/renderer/components/QueryTab')['QueryTab'],store:typeof import('../../src/renderer/store')['useWorkspace'],flush:typeof import('../../src/renderer/store')['flushSettings'];

@@ -4,4 +4,6 @@ export const queryRowDetailsZh = {
   fieldsPrevious: '上一页字段', fieldsNext: '下一页字段', expand: '展开单值', collapse: '收起单值', null: 'NULL（空值）', empty: '空字符串', binary: '二进制（原Base64）',
   truncated: '结果已截断；行号仅覆盖已返回数据。', preview: '预览已截断，可展开单值查看。', budget: '单次最多展开65,536个UTF-16单位，超限部分未展示；原值未修改。',
   invalid: '结果行详情已失效，请从当前结果重新选择一行',
+  sqlitePage: 'SQLite 当前页行详情', sqliteRow: '当前页行号', sqliteChoose: '先在当前页网格选择一行',
+  sqliteStorage: { i: 'INTEGER', r: 'REAL', t: 'TEXT', b: 'BLOB', n: 'NULL' },
 };
