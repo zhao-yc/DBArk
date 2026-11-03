@@ -71,6 +71,7 @@ import type {CompletionSessionState} from '../../shared/sqlCompletion';
 import {queryConnectionDatabase,queryDatabaseFromSession,queryDatabasePatch,resolveQueryDatabase,type QueryDatabaseContext} from '../../shared/queryContext';
 import {queryContextZh} from '../locales/queryContext.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
+import { openFocusedGridRowJump } from './GridRowJump';
 import { ExplainPlanView } from './ExplainPlanView';
 import { SqliteExplainPlanView } from './SqliteExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
@@ -1883,7 +1884,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'syntax-check': { enabled: !sqlite && !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind(true) },
-    'sql-goto-line': { enabled: !!searchEditor?.getAction?.('editor.action.gotoLine') && !closeRequest && !fileSource.busy, run: () => openEditorPosition() },
+    'sql-goto-line': {
+      enabled: (!!selectionBinding || !!searchEditor?.getAction?.('editor.action.gotoLine')) && !closeRequest && !fileSource.busy,
+      run: () => { if (queryMenuCurrent() && !openFocusedGridRowJump()) return openEditorPosition(); },
+    },
     'sql-toggle-comment': { enabled: !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-toggle-comment') },
     ...Object.fromEntries(sqlLineCommandIds.map(id => [id, {
       enabled: !!searchEditor?.getAction?.(sqlTextActions[id])?.isSupported() && !resultsOnly && !busy && !closeRequest && !fileSource.busy,

@@ -3,6 +3,7 @@ import type { UiCommandId } from '../shared/uiCommands';
 import { UiCommandRegistry, updateCommandPageContext, type UiCommandPageContext, type UiCommandHandler } from './uiCommandRegistry';
 import { errorMessage, invoke } from './lib';
 import { useWorkspace } from './store';
+import { openFocusedGridRowJump } from './components/GridRowJump';
 
 export type { UiCommandHandler } from './uiCommandRegistry';
 export const uiCommands = new UiCommandRegistry();
@@ -67,12 +68,18 @@ export function useUiCommandRuntime(): void {
       void uiCommands.execute(event).catch(reason => useWorkspace.getState().notify(errorMessage(reason), true));
     });
     const offInternal = window.dbark?.onMenu(action => { if (action === 'refresh-command-state') uiCommands.invalidate(); });
+    /** Electron 加速键与渲染层键盘事件复用同一焦点判断，组合输入时不接管。 */
+    const gridShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229 || !event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'g') return;
+      if (openFocusedGridRowJump()) { event.preventDefault(); event.stopPropagation(); }
+    };
+    document.addEventListener('keydown', gridShortcut, true);
     let previous = useWorkspace.getState();
     const offStore = useWorkspace.subscribe(next => {
       const changed = next.settings.activeTabId !== previous.settings.activeTabId || next.connections !== previous.connections
         || next.connectionVersions !== previous.connectionVersions || next.selection !== previous.selection;
       previous = next; if (changed) uiCommands.invalidate();
     });
-    return () => { alive = false; observer.disconnect(); off(); offNative?.(); offInternal?.(); offStore(); uiCommands.setBlocked(true); };
+    return () => { alive = false; document.removeEventListener('keydown', gridShortcut, true); observer.disconnect(); off(); offNative?.(); offInternal?.(); offStore(); uiCommands.setBlocked(true); };
   }, []);
 }

@@ -27,7 +27,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
 export const uiMenuLabels = {
   file: '文件', edit: '编辑', view: '查看', favorites: '收藏夹', tools: '工具', window: '窗口', help: '帮助',
   query: '查询执行与分析', transfer: '数据导入导出', snapshots: '快照', editor: '编辑器',
-  sqlLines: '行操作',
+  sqlLines: '行操作', gotoPosition: '跳到行／行列',
   undo: '撤销', redo: '重做', cut: '剪切', copy: '复制', paste: '粘贴', selectAll: '全选',
   zoomIn: '放大', zoomOut: '缩小', resetZoom: '重置缩放', fullscreen: '全屏', quit: '退出',
   addFavorite: '添加当前对象收藏', removeFavorite: '取消当前对象收藏',

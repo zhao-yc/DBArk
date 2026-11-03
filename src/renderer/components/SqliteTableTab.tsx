@@ -56,6 +56,7 @@ import { sqliteZh } from '../locales/sqlite.zh-CN';
 import { openSqliteSelect } from '../sqliteNavigation';
 import { useUiCommandScope } from '../uiCommands';
 import { ResultsGrid } from './ResultsGrid';
+import { openFocusedGridRowJump } from './GridRowJump';
 import { SqliteTableExportDialog } from './SqliteTableExportDialog';
 import { SqliteTableExportIntent } from '../sqliteTableExportUi';
 import { sqliteTableExportZh as exportText } from '../locales/sqliteTableExport.zh-CN';
@@ -512,7 +513,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   }
   /** 顺序即服务端 ORDER BY 优先级；只移动草稿，应用时才发送。 */
   function moveSort(index: number, offset: -1 | 1) { setSort(values => { const next = [...values], to = index + offset; if (to < 0 || to >= next.length) return values; [next[index], next[to]] = [next[to], next[index]]; return next; }); }
-  useUiCommandScope('tab:' + tab.id, { find: { enabled: active && !!editView && !view.busy && !externalBusy && !findPreview, run: () => openFind('find') }, replace: { enabled: active && !!editView && !view.busy && !externalBusy && !findPreview, run: () => openFind('replace') }, stop: { enabled: active && view.busy, run: () => { void controller.stop(); } }, export: { enabled: active && !!page && !view.busy && !externalBusy, run: exportPage }, import: { enabled: active && page?.target.kind === 'table' && !invalidTarget && !view.busy && !externalBusy && !fullExport && !exportData && !tableImport && !editView?.dirty && !editView?.busy && !editView?.unknown && !cellInput && !previewOpen, run: openImport } }, { active, contextKey: JSON.stringify([tab.id, version, page?.offset, page?.limit, page?.schemaKey, view.busy, externalBusy, !!tableImport, !!fullExport, !!exportData, !!editView?.dirty, !!editView?.unknown, !!cellInput, !!previewOpen, findOpen?.id, findPreview]) });
+  useUiCommandScope('tab:' + tab.id, { 'sql-goto-line': { enabled: active && !!page?.result.rows.length && !view.busy && !externalBusy && !cellInput, run: () => { if (latest.current.active && useWorkspace.getState().settings.activeTabId === tab.id) openFocusedGridRowJump(); } }, find: { enabled: active && !!editView && !view.busy && !externalBusy && !findPreview, run: () => openFind('find') }, replace: { enabled: active && !!editView && !view.busy && !externalBusy && !findPreview, run: () => openFind('replace') }, stop: { enabled: active && view.busy, run: () => { void controller.stop(); } }, export: { enabled: active && !!page && !view.busy && !externalBusy, run: exportPage }, import: { enabled: active && page?.target.kind === 'table' && !invalidTarget && !view.busy && !externalBusy && !fullExport && !exportData && !tableImport && !editView?.dirty && !editView?.busy && !editView?.unknown && !cellInput && !previewOpen, run: openImport } }, { active, contextKey: JSON.stringify([tab.id, version, page?.offset, page?.limit, page?.schemaKey, view.busy, externalBusy, !!tableImport, !!fullExport, !!exportData, !!editView?.dirty, !!editView?.unknown, !!cellInput, !!previewOpen, findOpen?.id, findPreview]) });
   const renderedEditor = editorRef.current?.page === editView?.page ? editorRef.current : null, editRows = editView?.rows ?? [];
   /** 每个编辑入口绑定准确渲染、编辑器、页和草稿数组；同名 row id 不提供跨页授权。 */
   function editActionCurrent(writable = true): boolean {
