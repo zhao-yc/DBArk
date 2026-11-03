@@ -7,7 +7,7 @@ export const uiCommandIds = [
   'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-goto-line', 'sql-toggle-comment', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
   ...sqlLineCommandIds,
   'editor-font', 'editor-word-wrap', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
-  'execute', 'execute-current', 'execute-all', 'stop', 'format', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation',
+  'execute', 'execute-selection', 'execute-current', 'execute-all', 'stop', 'format', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation',
   'transaction-settings', 'import', 'export', 'schema-compare', 'structure-search', 'server-monitor',
   'explain-snapshot', 'result-snapshot', 'task-center', 'tab-search', 'close-tab', 'reopen-query', 'close-other-queries',
   'close-left-queries', 'close-right-queries', 'next-tab', 'previous-tab', 'help', 'shortcuts', 'about'

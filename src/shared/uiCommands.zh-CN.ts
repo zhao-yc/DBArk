@@ -12,7 +12,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'toggle-theme': '切换明暗主题', 'focus-mode': '专注模式', 'editor-font': '编辑器字体',
   'editor-word-wrap': '自动换行', 'editor-indent': '编辑器缩进', 'favorite-toggle': '添加／取消当前对象收藏',
   'favorites-manage': '管理收藏与分组', 'object-link': '粘贴对象链接', 'execute': '执行查询',
-  'execute-current': '执行当前语句', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
+  'execute-selection': '仅执行选区', 'execute-current': '执行当前语句', 'execute-all': '执行整个脚本', 'stop': '停止', 'format': '格式化 SQL',
   'parameters': '参数执行', 'explain': '执行计划', 'analyze': '实际执行分析', 'transaction-settings': '事务设置',
   'object-definition': '查看对象结构',
   'syntax-check': '检查 SQL 语法',

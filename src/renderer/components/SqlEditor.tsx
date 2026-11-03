@@ -51,7 +51,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, onCompletionStatus, onCaseSelection, onExecute, onExecuteCurrent, onFormat, onToggleComment }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onCaseSelection?:(available:boolean)=>void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void> }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void> }) {
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
@@ -67,15 +67,18 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
   /** 原生菜单只收到可用状态，选区内容留在当前模型内。 */
   useEffect(() => {
-    if (!onCaseSelection) return;
+    if (!onSelectionState) return;
     const instance = editorRef.current;
-    if (!instance || !contentReady || readOnly) { onCaseSelection(false); return; }
-    const sync = () => onCaseSelection(hasExplicitCaseSelection(instance));
+    if (!instance || !contentReady || readOnly) { onSelectionState(false, false); return; }
+    const sync = () => {
+      const nonEmpty = hasExplicitCaseSelection(instance);
+      onSelectionState(nonEmpty, nonEmpty && instance.getSelections()?.length === 1);
+    };
     const selection = instance.onDidChangeCursorSelection(sync), model = instance.onDidChangeModel(sync);
-    const disposal = instance.onDidDispose(() => onCaseSelection(false));
+    const disposal = instance.onDidDispose(() => onSelectionState(false, false));
     sync();
-    return () => { selection.dispose(); model.dispose(); disposal.dispose(); onCaseSelection(false); };
-  }, [contentReady, onCaseSelection, readOnly]);
+    return () => { selection.dispose(); model.dispose(); disposal.dispose(); onSelectionState(false, false); };
+  }, [contentReady, onSelectionState, readOnly]);
   const [renameMessage, setRenameMessage] = useState<string | null>(null);
   useEffect(() => { setRenameMessage(null); }, [value, readOnly, dialect, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.sessionId]);
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。

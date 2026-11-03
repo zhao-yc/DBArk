@@ -26,16 +26,18 @@ function gate() { let release!: () => void; const pending = new Promise<void>(re
 /** workspace、模型事件和IPC各有独立观察端口，保持生产执行函数本身不变。 */
 function fixture(dialect: 'mysql' | 'sqlite' = 'mysql') {
   const selection = queryResultSelectionFixture();
-  let sql = "SET @before=1; SELECT '🧭当前'; DELETE FROM after;", version = 1, offset = sql.indexOf('当前'), modal = false, activeModel: unknown, fileBusy = false;
+  let sql = "SET @before=1; SELECT '🧭当前'; DELETE FROM after;", version = 1, offset = sql.indexOf('当前'), modal = false, activeModel: unknown, fileBusy = false, ranges: [number, number][] = [];
   const database = dialect === 'sqlite' ? 'main' : 'db', connection = dialect === 'sqlite' ? { id: 'c', dialect, sqlite: { filePath: 'C:\\合成当前语句.sqlite', readOnly: false, busyTimeoutMs: 1000 } } : { id: 'c', dialect, database: 'db' };
   const listeners = new Map<string, Set<() => void>>(), workspace = { settings: { activeTabId: 'tab', tabs: [{ id: 'tab', kind: 'query', connectionId: 'c', sql, database, databaseContext: { state: 'known', database } }] }, connections: [connection], connectionVersions: { c: 2 }, activeJobs: {} as Record<string, boolean>, setBusy: vi.fn(), setDirty: vi.fn() };
   const listen = (kind: string, action: () => void) => { const list = listeners.get(kind) ?? new Set(); list.add(action); listeners.set(kind, list); return { dispose: () => { list.delete(action); } }; };
   const emit = (kind: string) => { for (const action of [...listeners.get(kind) ?? []]) action(); };
   // 原 store 的同步 busy 通知也进入真实 scope 订阅，确保本任务占用不会使自己失效。
   workspace.setBusy.mockImplementation((id: string, busy: boolean) => { workspace.activeJobs[id] = busy; emit('context'); });
-  const model = { getValue: () => sql, getVersionId: () => version, isDisposed: () => false, getOffsetAt: (p: { column: number }) => p.column - 1, getValueInRange: () => 'SELECT selected', onDidChangeContent: (action: () => void) => listen('content', action), onWillDispose: (action: () => void) => listen('modelDispose', action) };
+  const model = { getValue: () => sql, getEOL: () => '\n', getVersionId: () => version, isDisposed: () => false, getOffsetAt: (p: { column: number }) => p.column - 1, getValueInRange: () => 'SELECT selected', onDidChangeContent: (action: () => void) => listen('content', action), onWillDispose: (action: () => void) => listen('modelDispose', action) };
   activeModel = model;
-  const editor = { getModel: () => activeModel, getPosition: () => ({ lineNumber: 1, column: offset + 1 }), getSelection: () => ({}), onDidChangeModel: (action: () => void) => listen('model', action), onDidDispose: (action: () => void) => listen('editorDispose', action), onDidChangeCursorPosition: (action: () => void) => listen('caret', action) };
+  const editor = { getModel: () => activeModel, getPosition: () => ({ lineNumber: 1, column: offset + 1 }), getSelection: () => ({}),
+    getSelections: () => ranges.map(([start, end]) => ({ isEmpty: () => start === end, getStartPosition: () => ({ column: start + 1 }), getEndPosition: () => ({ column: end + 1 }) })),
+    onDidChangeCursorSelection: (action: () => void) => listen('selection', action), onDidChangeModel: (action: () => void) => listen('model', action), onDidDispose: (action: () => void) => listen('editorDispose', action), onDidChangeCursorPosition: (action: () => void) => listen('caret', action) };
   const invoke = vi.fn(async (command: string, _input?: any): Promise<any> => command === 'sessions.open' ? { sessionId: 'session' } : { results: [] }), flushSettings = vi.fn(async () => {}), handleQueryError = vi.fn(async (_reason: unknown) => {});
   let serial = 0;
   // 对应真实组件的useRef：复制/格式化尚未发起，模型挂载标记初始false，仍执行真实接管函数。
@@ -47,7 +49,7 @@ function fixture(dialect: 'mysql' | 'sqlite' = 'mysql') {
     analyzeIntent: { current: null },
     // 尚未打开筛选草稿；真实撤销函数仍使用组件的引用及状态端口。
     comparisonLeaseRef: { current: null }, setComparisonLease: vi.fn(), statisticsLeaseRef: { current: null }, setStatisticsLease: vi.fn(), sortLeaseRef: { current: null }, setSortLease: vi.fn(), filterLeaseRef: { current: null }, setFilterLease: vi.fn(),
-    CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, document: { querySelector: () => modal ? {} : null },
+    CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, resultsOnly: false, document: { querySelector: () => modal ? {} : null },
     useWorkspace: { getState: () => workspace, subscribe: (action: () => void) => listen('context', action).dispose }, tab: workspace.settings.tabs[0], settings: { resultLimit: 10 }, editor: { current: editor }, activeCurrentIntent: { current: null }, setSearchEditor: vi.fn(), sessionRef: { current: '' }, pendingSession: { current: null }, busyRef: { current: false }, cancelledQuery: { current: '' }, task: { current: '' }, parameterSession: { current: '' }, explainSource: { current: '' },
     invoke, flushSettings, handleQueryError, rememberDatabase: vi.fn(), uid: () => `task-${++serial}`, errorMessage: (reason: any) => reason.message, zh: { query: { text001: '请输入SQL' } },
     setSessionId: vi.fn(), setRecoveryDatabase: vi.fn(), setRecovery: vi.fn(), setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),
@@ -55,11 +57,32 @@ function fixture(dialect: 'mysql' | 'sqlite' = 'mysql') {
   runInContext(code, port);
   return { selection, port, workspace, model, editor, invoke, flushSettings, handleQueryError, emit, listeners,
     edit: (value: string) => { sql = value; version++; emit('content'); }, swap: (value: unknown) => { activeModel = value; emit('model'); }, move: (value: number) => { offset = value; emit('caret'); }, modal: (value: boolean) => { modal = value; }, fileBusy: (value: boolean) => { fileBusy = value; emit('context'); },
+    select: (next: [number, number][]) => { ranges = next; emit('selection'); },
     execute: () => port.handlers.executeCurrentStatement() as Promise<void>, original: (mode?: string) => port.handlers.execute(mode) as Promise<void>,
   };
 }
 
 describe('真实QueryTab当前语句异步意图', () => {
+  it.each(['mysql', 'sqlite'] as const)('%s 显式仅执行选区提交原字节范围且不带当前语句标记', async dialect => {
+    const f = fixture(dialect), full = f.model.getValue(), start = full.indexOf('SELECT'), end = full.indexOf(';', start);
+    f.select([[start, end]]); await f.original('selection-only');
+    const calls = f.invoke.mock.calls.filter(([command]) => command === 'query.execute');
+    expect(calls).toHaveLength(1); expect(calls[0][1]).toMatchObject({ sql: full.slice(start, end) });
+    expect(calls[0][1]).not.toHaveProperty('currentStatement');
+  });
+  it.each([{ ranges: [] }, { ranges: [[14, 15]] }, { ranges: [[0, 3], [4, 6]] }])('无有效单选区时完全不建连或投递 $ranges', async ({ ranges }) => {
+    const f = fixture();
+    f.select(ranges as [number, number][]); await f.original('selection-only');
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+  it('等待设置落盘期间选区锚点变化再恢复，也不会投递原 SQL', async () => {
+    const f = fixture(), held = gate(), full = f.model.getValue(), start = full.indexOf('SELECT'), end = full.indexOf(';', start);
+    f.select([[start, end]]); f.flushSettings.mockImplementationOnce(() => held.pending);
+    const pending = f.original('selection-only'); await vi.waitFor(() => expect(f.flushSettings).toHaveBeenCalledOnce());
+    f.select([[start + 1, end]]); f.select([[start, end]]); held.release(); await pending;
+    expect(f.invoke.mock.calls.some(([command]) => command === 'query.execute')).toBe(false);
+    expect(f.handleQueryError.mock.calls[0][0]).toHaveProperty('message', currentStatementZh.selectionChanged);
+  });
   it('真实入口在异步建连和落盘后只发一次完整模型正文与真实UTF16光标', async () => {
     expect(functions).toHaveLength(12); const f = fixture(), expected = f.model.getValue(); await f.execute();
     const calls = f.invoke.mock.calls.filter(([command]) => command === 'query.execute'); expect(calls).toHaveLength(1); expect(calls[0][1]).toMatchObject({ sessionId: 'session', sql: expected, currentStatement: { offset: expected.indexOf('当前') } }); expect(calls[0][1].sql).not.toBe('SELECT selected');
