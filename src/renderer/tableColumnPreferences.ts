@@ -70,6 +70,12 @@ export function changeTablePreference(preferences: TablePreferences, name: strin
   return preserveTableFrozenThrough(preferences, columns);
 }
 
+/** 一次更新全部可见列，保留隐藏列、顺序和冻结边界。 */
+export function setVisibleTableColumnWidths(preferences: TablePreferences, width: number): TablePreferences {
+  if (!Number.isInteger(width) || width < tablePreferencesLimits.minWidth || width > tablePreferencesLimits.maxWidth) throw Error(text.widthInvalid);
+  return preserveTableFrozenThrough(preferences, preferences.columns.map(column => column.hidden ? column : { ...column, width }));
+}
+
 /** 重排按列名移动，选择列不进入偏好数组或拖动目标。 */
 export function moveTableColumn(preferences: TablePreferences, source: string, target: string): TablePreferences {
   const columns = preferences.columns.slice(), from = columns.findIndex(column => column.name === source), to = columns.findIndex(column => column.name === target);

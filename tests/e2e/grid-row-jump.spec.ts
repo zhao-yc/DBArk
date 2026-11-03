@@ -5,6 +5,10 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Locator } from '@playwright/test';
 import { LocalStore } from '../../src/main/storage';
 import { gridRowJumpZh as text } from '../../src/renderer/locales/gridRowJump.zh-CN';
+import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
+import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
+import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
+import { navigationMenuItem } from './navigation-menu';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -90,5 +94,31 @@ test('查询结果和 SQLite 可编辑表、只读视图可定位未渲染行且
     await jump(table, '80', value('80'), readOnly === 'false' ? nativeGoto : () => page.keyboard.press('Control+g'));
     expect(await tasks()).toEqual(originalTasks);
   }
+  expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 统一可见列宽保留隐藏列与冻结，并通过原保存流程写入布局', async () => {
+  await seed();
+  await page.locator('[data-workspace-tab-id="v-jump"]').getByRole('button', { name: '视图定位', exact: true }).click();
+  const table = page.locator('.sqlite-table-tab:visible');
+  await expect(table.getByRole('gridcell', { name: '1', exact: true })).toBeVisible();
+  await (await navigationMenuItem(table.locator('.toolbar'), { name: layoutText.entry, exact: true })).click();
+  const modal = page.getByRole('dialog', { name: layoutText.title, exact: true });
+  const idWidth = modal.getByRole('spinbutton', { name: tableGridZh.width + ' id', exact: true });
+  const nameWidth = modal.getByRole('spinbutton', { name: tableGridZh.width + ' name', exact: true });
+  await nameWidth.fill('210');
+  await modal.getByRole('checkbox', { name: tableGridZh.visible + ' name', exact: true }).uncheck();
+  await modal.getByRole('button', { name: tableGridZh.freezeThrough('id'), exact: true }).click();
+  await modal.getByRole('textbox', { name: batchText.width, exact: true }).fill('240');
+  await modal.getByRole('button', { name: batchText.apply, exact: true }).click();
+  await expect(idWidth).toHaveValue('240');
+  await expect(nameWidth).toHaveValue('210');
+  await modal.getByRole('button', { name: tableGridZh.save, exact: true }).click();
+  await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('sqlite.tableLayout.get', { connectionId: 'row-jump-offline', database: 'main', table: 'subject_view' }))).preferences).toEqual({
+    version: 1, frozenThrough: 'id', columns: [
+      { name: 'id', hidden: false, width: 240 },
+      { name: 'name', hidden: true, width: 210 },
+    ],
+  });
   expect(pageErrors).toEqual([]);
 });

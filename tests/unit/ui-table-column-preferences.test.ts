@@ -1,9 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys } from '../../src/renderer/tableColumnPreferences';
+import { changeTablePreference, moveTableColumn, reconcileTablePreferences, setVisibleTableColumnWidths, visibleTableKeys } from '../../src/renderer/tableColumnPreferences';
 import { pasteCells } from '../../src/renderer/gridClipboard';
 import type { DraftRow } from '../../src/renderer/dataChanges';
 
 describe('表列偏好与可见坐标', () => {
+  it('批量宽度只替换可见列并保留冻结和隐藏宽度', () => {
+    const before = { version: 1 as const, frozenThrough: '__proto__', columns: [
+      { name: '__proto__', hidden: false, width: 165 },
+      { name: 'constructor', hidden: true, width: 210 },
+      { name: 'id', hidden: false },
+    ] };
+    const next = setVisibleTableColumnWidths(before, 250);
+    expect(next.frozenThrough).toBe('__proto__');
+    expect(next.columns).toEqual([
+      { name: '__proto__', hidden: false, width: 250 },
+      before.columns[1],
+      { name: 'id', hidden: false, width: 250 },
+    ]);
+    expect(before.columns[0].width).toBe(165);
+    expect(() => setVisibleTableColumnWidths(before, 2001)).toThrow();
+  });
   it('真实列调和删除旧列、追加新列、规范大小写且保留同名原型字段', () => {
     const preferences = reconcileTablePreferences(['ID', '__proto__', 'constructor', 'new'], { version: 1, columns: [{ name: 'constructor', hidden: false, width: 250 }, { name: 'id', hidden: true }, { name: 'removed', hidden: false }, { name: '__proto__', hidden: false }] });
     expect(preferences.columns.map(column => column.name)).toEqual(['constructor', 'ID', '__proto__', 'new']);

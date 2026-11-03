@@ -4,6 +4,7 @@ import { moveQueryResultColumn, parseQueryResultColumnWidth, queryResultColumnWi
 import { queryResultColumnsZh as text } from '../locales/queryResultColumns.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { UsageHelp, Modal, ErrorBox  } from './ui';
+import { GridColumnWidthBatch } from './GridColumnWidthBatch';
 import '../queryResultColumns.css';
 
 /** 模态只编辑有界列草稿；不扫描、复制行数据，也不投递SQL或文件请求。 */
@@ -28,6 +29,11 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
   }
   const frozenPosition=layout.frozenThrough===undefined?undefined:original.get(layout.frozenThrough)?.position;
   const invalidWidth = Array.from(widthDraft.values()).some(value => Number.isNaN(parseQueryResultColumnWidth(value)));
+  /** 查询结果使用唯一内部列键，重名列及隐藏列各自保留身份。 */
+  function applyVisibleWidths(width: number) {
+    if (!current(layout)) return;
+    setWidthDraft(previous => new Map([...previous, ...layout.visible.map(key => [key, String(width)] as const)]));
+  }
   /** 按内部列键提交有效宽度，过滤管理列表时也会校验未显示的草稿。 */
   function apply() {
     if (!current(layout) || invalidWidth) return;
@@ -41,6 +47,7 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
   return <div data-query-columns-owner={owner}><Modal title={text.title} onClose={onClose} wide>
     <div className="modal-content query-result-columns"><UsageHelp><p>{text.hint}</p><p>{text.freezeHint}</p><p>{text.widthHint}</p></UsageHelp>
       <p role="status" aria-label={text.freezeStatus}>{frozenPosition===undefined?text.notFrozen:text.frozenThrough(frozenPosition)}</p>
+      <GridColumnWidthBatch disabled={!valid} onApply={applyVisibleWidths}/>
       <label>{text.search}<input aria-label={text.search} value={search} placeholder={text.searchHint} disabled={!valid} onChange={event=>{if(current())setSearch(event.target.value);}}/></label>
       <div className="query-result-columns-list">{matches.map(key=>{const item=original.get(key)!,index=layout.order.indexOf(key);return <div className="query-result-column" key={key}>
         <label><input type="checkbox" aria-label={text.visible(item.position)} checked={visible.has(key)} disabled={!valid||visible.has(key)&&visible.size===1} onChange={event=>changeVisible(layout,key,event.target.checked)}/><strong>{item.column.name||zh.resultExport.emptyName}</strong><small>{text.ordinal(item.position)} · {item.column.type}</small>{layout.frozenThrough===key&&<span className="tag">{text.boundary}</span>}</label>

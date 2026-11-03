@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { LocalStore } from '../../src/main/storage';
 import { queryResultColumnsZh as text } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
 import { dataDir, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -55,6 +56,27 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   await open();
   await expect(first).toHaveValue('340');
   await expect(second).toHaveValue('210');
+  const batch = modal.getByRole('textbox', { name: batchText.width, exact: true });
+  const batchApply = modal.getByRole('button', { name: batchText.apply, exact: true });
+  await batch.fill('2001');
+  await expect(batchApply).toBeDisabled();
+  await batch.fill('240');
+  await batchApply.click();
+  await expect(first).toHaveValue('240');
+  await expect(second).toHaveValue('240');
+  await second.fill('210');
+  const visibleSecond = modal.getByRole('checkbox', { name: text.visible(2), exact: true });
+  await visibleSecond.uncheck();
+  await batch.fill('290');
+  await batchApply.click();
+  await expect(first).toHaveValue('290');
+  await expect(second).toHaveValue('210');
+  await visibleSecond.check();
+  await apply.click();
+  await expect.poll(() => width(0)).toBe(290);
+  await expect.poll(() => width(1)).toBe(210);
+
+  await open();
   await modal.getByRole('button', { name: text.resetWidths, exact: true }).click();
   await apply.click();
   await expect.poll(() => width(0)).toBe(170);
