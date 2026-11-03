@@ -1,3 +1,10 @@
+import { editor as monacoEditor, MarkerSeverity } from 'monaco-editor';
+import { SqlSyntaxCheckController, type SqlSyntaxCheckView } from '../sqlSyntaxCheckController';
+import { SqlSyntaxCheckPanel } from './SqlSyntaxCheckPanel';
+import { sqlSyntaxCheckZh as syntaxText } from '../locales/sqlSyntaxCheck.zh-CN';
+import { LocalReferencesWorkerClient } from '../localReferencesWorkerClient';
+import CompletionWorker from '../completion.worker?worker';
+import type { SqlSyntaxCheckResult } from '../../shared/sqlSyntaxCheck';
 import { ObjectDefinitionDialog, type ObjectDefinitionSource } from './ObjectDefinitionDialog';
 import { objectDefinitionZh } from '../locales/objectDefinition.zh-CN';
 import { connectionDatabase, connectionOverview } from '../sqliteWorkspace';
@@ -190,6 +197,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   useEffect(() => { transactionSettingsIntent.current?.current(); }, [closeRequest, tab.id, tab.connectionId, connectionVersion, sessionId]);
   useEffect(() => () => { analyzeIntent.current?.dispose(); }, []);
   const [searchEditor,setSearchEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
+  const [syntaxView, setSyntaxView] = useState<SqlSyntaxCheckView | null>(null);
+  const syntaxIntent = useRef<{ controller: SqlSyntaxCheckController; model: monaco.editor.ITextModel; instance: monaco.editor.IStandaloneCodeEditor; result?: Extract<SqlSyntaxCheckResult, { status: 'ready' }> } | null>(null);
+  useEffect(() => () => { syntaxIntent.current?.controller.dispose(); syntaxIntent.current = null; }, []);
+  useLayoutEffect(() => { syntaxIntent.current?.controller.observe(); });
   const [objectDefinition, setObjectDefinition] = useState<ObjectDefinitionSource | null>(null), objectDefinitionRef = useRef<ObjectDefinitionSource | null>(null);
   const [pins, setPins] = useState<PinnedQueryResult[]>([]); const [selectedPin, setSelectedPin] = useState(''); const pinSequence = useRef(0);
   type SnapshotOperation = { intent: QueryResultSnapshotIntent; job?: WorkspaceBusyLease; acquiring: boolean };
@@ -1491,6 +1502,52 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && !closeRequestRef.current && !document.querySelector('[role="dialog"], [role="alertdialog"]');
   }
   /** 使用当前Monaco实例的正式查找动作，不发送模拟按键或点击旧按钮。 */
+  /** 检查只读取原会话缓存；不创建会话、不执行正文，也不让树选择更换当前查询目标。 */
+  function openSyntaxCheck(instance = editor.current): void {
+    if (sqlite || !queryMenuCurrent() || !connection || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || syntaxIntent.current?.controller.busy) return;
+    const model = instance.getModel();
+    if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
+    closeSyntaxCheck();
+    const version = model.getVersionId(), profile = connection, originalSession = sessionRef.current;
+    const context = JSON.stringify([tab.connectionId, tab.database, tab.databaseContext, tab.sourceBinding, tab.fileSourceBinding]);
+    const owner = 'dbark-syntax:' + uid(); let valid = true;
+    const binding: NonNullable<typeof syntaxIntent.current> = { model, instance, controller: undefined as unknown as SqlSyntaxCheckController };
+    const current = () => {
+      if (!valid) return false;
+      const state = useWorkspace.getState(), now = state.settings.tabs.find(value => value.id === tab.id);
+      const okay = alive.current && syntaxIntent.current === binding && state.settings.activeTabId === tab.id && now?.kind === 'query'
+        && JSON.stringify([now.connectionId, now.database, now.databaseContext, now.sourceBinding, now.fileSourceBinding]) === context
+        && state.connections.find(value => value.id === profile.id) === profile && (state.connectionVersions[profile.id] ?? 0) === connectionVersion
+        && sessionRef.current === originalSession && !closeRequestRef.current && !busyRef.current && !state.activeJobs[tab.id] && !fileSource.isBusy()
+        && !document.querySelector('[role="dialog"], [role="alertdialog"]') && editor.current === instance && instance.getModel() === model && !model.isDisposed() && model.getVersionId() === version;
+      if (!okay) valid = false; return okay;
+    };
+    binding.controller = new SqlSyntaxCheckController({ source: model.getValue(), sessionId: originalSession || undefined, current,
+      subscribe: changed => {
+        const subscriptions = [model.onDidChangeContent(changed), model.onWillDispose(changed), instance.onDidChangeModel(changed), instance.onDidDispose(changed)], release = useWorkspace.subscribe(changed);
+        return () => { release(); subscriptions.forEach(value => value.dispose()); };
+      },
+      state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => new CompletionWorker()),
+      decorate: result => {
+        if (!current()) return;
+        binding.result = result;
+        monacoEditor.setModelMarkers(model, owner, result.issues.map(issue => { const start = model.getPositionAt(issue.start), end = model.getPositionAt(issue.end); return { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column, severity: MarkerSeverity.Warning, source: syntaxText.title, message: syntaxText.issueMessages[issue.code] ?? syntaxText.issue }; }));
+      },
+      clear: () => { binding.result = undefined; if (!model.isDisposed()) monacoEditor.setModelMarkers(model, owner, []); },
+      changed: view => { if (alive.current && syntaxIntent.current === binding) setSyntaxView(view); },
+    });
+    syntaxIntent.current = binding; setSyntaxView({ busy: true }); void binding.controller.start();
+  }
+  /** 点击问题只在原模型版本仍有效时定位；不修改SQL或撤销栈。 */
+  function selectSyntaxIssue(index: number): void {
+    const binding = syntaxIntent.current, issue = binding?.result?.issues[index];
+    if (!binding || !issue || !binding.controller.current()) return;
+    const start = binding.model.getPositionAt(issue.start), end = binding.model.getPositionAt(issue.end);
+    const range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+    binding.instance.setSelection(range); binding.instance.revealRangeInCenter(range); binding.instance.focus();
+  }
+  /** 只清本轮marker owner；旧异步清理不能撤销继任检查。 */
+  function closeSyntaxCheck(): void { const binding = syntaxIntent.current; syntaxIntent.current = null; binding?.controller.dispose(); setSyntaxView(null); }
   /** 捕获活动查询的原模型与连接；树选择不会成为这个对象导航的目标。 */
   function openObjectStructure(instance = editor.current): void {
     if (!queryMenuCurrent() || !connection || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || objectDefinitionRef.current) return;
@@ -1546,11 +1603,20 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   useEffect(() => {
     if (!searchEditor) return;
     let active = true;
-    const action = searchEditor.addAction({ id: 'dbark-object-definition', label: objectDefinitionZh.entry, contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
+    // 每代动作使用独立命令ID，旧Monaco菜单不能按复用ID调用新目标的处理器。
+    const action = searchEditor.addAction({ id: 'dbark-object-definition:' + uid(), label: objectDefinitionZh.entry, contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
       run: () => { if (active && editor.current === searchEditor) openObjectStructure(searchEditor); },
     });
     return () => { active = false; action.dispose(); };
-  }, [searchEditor, queryMenuKey, connection]);
+  }, [searchEditor, queryMenuKey, connection, tab.sql]);
+  useEffect(() => {
+    if (!searchEditor || sqlite) return;
+    let active = true;
+    const action = searchEditor.addAction({ id: 'dbark-syntax-check:' + uid(), label: syntaxText.entry, precondition: '!editorReadonly', contextMenuGroupId: 'navigation', contextMenuOrder: 1.9,
+      run: () => { if (active && editor.current === searchEditor) openSyntaxCheck(searchEditor); },
+    });
+    return () => { active = false; action.dispose(); };
+  }, [searchEditor, queryMenuKey, connection, sqlite, syntaxView?.busy, tab.sql]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
   const resultMenuKey = JSON.stringify([queryMenuKey, menuResult.current.revision, resultIndex, selectedPin, resultSelectionRevision, !!activeColumnLease, !!activeFilterLease, !!activeSortLease]);
@@ -1566,6 +1632,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'transaction-settings': { enabled: !sqlite && !busy && !!connection && !closeRequest, run: openTransactionSettings },
     'save-query': { enabled: !busy && !closeRequest && !fileSource.busy, run: saveCurrentSource },
     find: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind() },
+    'syntax-check': { enabled: !sqlite && !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !syntaxView?.busy, run: () => openSyntaxCheck() },
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind(true) },
     export: { enabled: !!selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease, run: exportVisibleResult },
@@ -1586,7 +1653,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       ]}
       moreLabel={menuText.queryMore}
       more={<>
-        <ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
+        {!sqlite && <ActionMenuSection label={syntaxText.title}><button disabled={busy || !connection || !searchEditor || syntaxView?.busy} onClick={() => openSyntaxCheck()}>{syntaxText.entry}</button></ActionMenuSection>}<ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
         <ActionMenuSection label={menuText.execution}>{!sqlite && <button disabled={busy || !connection} title={queryStreamZh.title} aria-label={queryStreamZh.open} onClick={openStreamExport}><Download size={14}/>{queryStreamZh.open}</button>}
 <button aria-label={parameterZh.open} disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={openParameters}><Braces size={14}/>{parameterZh.open}</button>
 {!sqlite && <button disabled={busy || !connection || !!closeRequest} onClick={openTransactionSettings}>{queryTransactionSettingsZh.open}</button>}
@@ -1598,7 +1665,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 <button title={zh.snippets.title} aria-label={zh.snippets.title} onClick={openSnippets}><BookOpen size={15}/></button>
 <button onClick={onHistory} title={zh.common.historyQueries}><History size={15}/></button></ActionMenuSection>
       </>}
-    />}/>{!sqlite && collectWarnings && <aside className="info-strip" role="note" aria-label={queryWarningsZh.notice} style={{ margin: '0 12px 8px', padding: '8px 12px', fontSize: 11, lineHeight: 1.6, maxHeight: 72, overflow: 'auto', flexShrink: 0 }}>{queryWarningsZh.hint}</aside>}<SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={searchEditor}/><div id={layoutEditorId} className="sql-editor-wrap" style={{ height: editorHeight }}>{fileOpening ? <Spinner text={queryFilesZh.opening}/> : <SqlEditor value={tab.sql ?? ''} onChange={sql => useWorkspace.getState().updateTab(tab.id, { sql })} onReady={instance => { attachQueryEditor(instance); parameterReuse.current?.observe(); }} onExecute={() => void execute()} onExecuteCurrent={() => void executeCurrentStatement()} onFormat={formatQuery} dialect={connection?.dialect} completion={!busy&&connection?{connectionId:tab.connectionId,connectionVersion,database:draftContext.state==='known'?draftContext.database??undefined:undefined,databaseUnknown:draftContext.state==='unknown',sessionId:sessionId||undefined}:undefined} onCompletionStatus={setCompletionStatus}/>}</div><QueryLayoutSplitter value={preferredEditorHeight} min={queryLayoutLimits.minEditorHeight} max={layoutMaximum} defaultValue={queryLayoutLimits.defaultEditorHeight} controls={layoutEditorId} scope={layoutScope} disabled={layoutActiveTab!==tab.id||!connection||!!closeRequest} begin={beginEditorLayout} onPreview={setEditorPreview}/><QueryResultSnapshotActions result={queryRunning ? undefined : sourceResult} disabled={busy || resultModal || settings.activeTabId !== tab.id} begin={beginResultSnapshot} renderActions={snapshotActions => <div className="result-toolbar query-result-toolbar">
+    />}/>{!sqlite && collectWarnings && <aside className="info-strip" role="note" aria-label={queryWarningsZh.notice} style={{ margin: '0 12px 8px', padding: '8px 12px', fontSize: 11, lineHeight: 1.6, maxHeight: 72, overflow: 'auto', flexShrink: 0 }}>{queryWarningsZh.hint}</aside>}<SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={searchEditor}/><div id={layoutEditorId} className="sql-editor-wrap" style={{ height: editorHeight }}>{fileOpening ? <Spinner text={queryFilesZh.opening}/> : <SqlEditor value={tab.sql ?? ''} onChange={sql => useWorkspace.getState().updateTab(tab.id, { sql })} onReady={instance => { attachQueryEditor(instance); parameterReuse.current?.observe(); }} onExecute={() => void execute()} onExecuteCurrent={() => void executeCurrentStatement()} onFormat={formatQuery} dialect={connection?.dialect} completion={!busy&&connection?{connectionId:tab.connectionId,connectionVersion,database:draftContext.state==='known'?draftContext.database??undefined:undefined,databaseUnknown:draftContext.state==='unknown',sessionId:sessionId||undefined}:undefined} onCompletionStatus={setCompletionStatus}/>}</div>{syntaxView && <SqlSyntaxCheckPanel view={syntaxView} position={offset => { const model = syntaxIntent.current?.model; return model && !model.isDisposed() ? model.getPositionAt(offset) : { lineNumber: 1, column: 1 }; }} onSelect={selectSyntaxIssue} onCancel={() => syntaxIntent.current?.controller.stop()} onClose={closeSyntaxCheck} onRecheck={() => openSyntaxCheck()}/>}<QueryLayoutSplitter value={preferredEditorHeight} min={queryLayoutLimits.minEditorHeight} max={layoutMaximum} defaultValue={queryLayoutLimits.defaultEditorHeight} controls={layoutEditorId} scope={layoutScope} disabled={layoutActiveTab!==tab.id||!connection||!!closeRequest} begin={beginEditorLayout} onPreview={setEditorPreview}/><QueryResultSnapshotActions result={queryRunning ? undefined : sourceResult} disabled={busy || resultModal || settings.activeTabId !== tab.id} begin={beginResultSnapshot} renderActions={snapshotActions => <div className="result-toolbar query-result-toolbar">
       <span className="result-label">{zh.query.text016}</span><div className="query-result-tabs">{results.map((_, index) => <button className={!pin && resultIndex === index ? 'selected' : ''} onClick={() => { invalidateResultSelection(); setResultIndex(index); setSelectedPin(''); setShowPinSql(false); }} key={index}>{zh.query.text017}{index + 1}</button>)}</div>
       <AdaptiveToolbar className="query-result-actions" ariaLabel={menuText.resultToolbar} contextKey={resultMenuKey} isCurrent={queryMenuCurrent}
         items={[

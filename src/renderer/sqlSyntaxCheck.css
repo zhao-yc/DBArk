@@ -1,0 +1,6 @@
+.sql-syntax-check { flex: 0 0 auto; max-height: 210px; overflow: auto; border-top: 1px solid var(--line); background: var(--surface-2); padding: 8px 12px; }
+.sql-syntax-check header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.sql-syntax-check header span[role="status"] { font-size: 12px; }
+.sql-syntax-check p { margin: 6px 0; }
+.sql-syntax-check ol { margin: 0; padding-left: 24px; }
+.sql-syntax-check li button { min-height: 28px; padding: 3px 6px; text-align: left; white-space: normal; }

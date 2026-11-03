@@ -1,0 +1,57 @@
+name: SQL语法检查源码验收
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/sql-syntax-check.yml', 'scripts/sql-syntax-check-ci.mjs', 'scripts/sql-syntax-check-ci.d.mts', 'src/shared/**', 'src/main/**', 'src/engine/**', 'src/renderer/**', 'tests/unit/**', 'tests/e2e/sql-syntax-check-native.spec.ts', 'tests/e2e/desktop-fixture.ts', 'package.json', 'pnpm-lock.yaml']
+  pull_request:
+    paths: ['.github/workflows/sql-syntax-check.yml', 'scripts/sqlite-workspace-ci.mjs', 'src/shared/**', 'src/main/**', 'src/engine/**', 'src/renderer/**', 'tests/unit/**', 'tests/e2e/sql-syntax-check-native.spec.ts', 'tests/e2e/desktop-fixture.ts', 'package.json', 'pnpm-lock.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 原窗口及失败上传保留，每个run独立，不因新提交取消旧轮。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  references:
+    name: SQL语法检查 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖和Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 单次运行语法检查、原导航、严格封套及取消回归
+        run: pnpm exec vitest run tests/unit/mysql-syntax-check.test.ts tests/unit/sql-syntax-check-controller.test.ts tests/unit/sql-syntax-check-worker.test.ts tests/unit/local-references-worker.test.ts tests/unit/local-rename-worker.test.ts tests/unit/physical-object-worker.test.ts tests/unit/completion-worker-client.test.ts tests/unit/application-menu.test.ts tests/unit/ui-command-preload.test.ts tests/unit/ui-command-registry.test.ts tests/unit/sql-syntax-check-ci.test.ts --maxWorkers=1
+      - name: 严格类型检查和构建
+        run: pnpm build
+      - name: 单次真实菜单检查、问题跳转及零数据库请求窗口验收
+        run: node scripts/sql-syntax-check-ci.mjs
+      - name: 记录准确源码和平台
+        if: always()
+        run: |
+          node -e "const fs=require('node:fs');fs.mkdirSync('test-results/sql-syntax-check',{recursive:true});fs.writeFileSync('test-results/sql-syntax-check/platform.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version}))"
+          git rev-parse HEAD > test-results/sql-syntax-check/head.txt
+      - name: 保存原报告、截图及退出清理原件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-syntax-check-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/sql-syntax-check/
+          if-no-files-found: warn

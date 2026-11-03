@@ -8,16 +8,21 @@ import { analyzeCompletionDefinition } from '../shared/completionDefinitionAnaly
 import { analyzeLocalReferences } from '../shared/localReferencesAnalysis';
 import { analyzeMysqlLocalRename } from '../shared/mysqlLocalRename';
 import { analyzeMysqlPhysicalObject } from '../shared/mysqlPhysicalObject';
+import { checkMysqlSyntax } from '../shared/mysqlSyntaxCheck';
 
 /** 仅同安装包的本地编辑器发送有界快照；不访问网络、IPC、凭据或用户查询会话。 */
-self.onmessage=(event:MessageEvent<{id:number;source:string;offset:number;mode:CompletionLexicalMode;capabilities?:CompletionScopeCapabilities;intent?:'hover'|'definition'|'references'|'rename'|'object';newName?:string}>)=>{
+self.onmessage=(event:MessageEvent<{id:number;source:string;offset:number;mode:CompletionLexicalMode;capabilities?:CompletionScopeCapabilities;intent?:'hover'|'definition'|'references'|'rename'|'object'|'syntax';newName?:string}>)=>{
   const input=event.data;
   if(!input||!Number.isSafeInteger(input.id)||input.id<1||typeof input.source!=='string'||input.source.length>completionLimits.sourceUnits||!Number.isInteger(input.offset)||input.offset<0||input.offset>input.source.length){self.postMessage({id:input?.id,result:{status:'blocked',reason:'budget'}});return;}
   const mode=input.mode??{};
   if([mode.ansiQuotes,mode.noBackslashEscapes].some(value=>value!==undefined&&typeof value!=='boolean')){self.postMessage({id:input.id,result:{status:'blocked',reason:'mode'}});return;}
   // 本地能力缺省关闭；未知字段和非布尔值不能开启任何未核验服务器语法。
   const capabilities=input.capabilities;if(capabilities!==undefined&&(!capabilities||typeof capabilities!=='object'||Array.isArray(capabilities)||Object.keys(capabilities).some(key=>!['lateralDerivedTables','windowFunctions','insertRowAliases'].includes(key))||[capabilities.lateralDerivedTables,capabilities.windowFunctions,capabilities.insertRowAliases].some(value=>value!==undefined&&typeof value!=='boolean'))){self.postMessage({id:input.id,result:{status:'blocked',reason:'capability'}});return;}
-  if (input.intent !== undefined && !['hover','definition','references','rename','object'].includes(input.intent)) { self.postMessage({ id: input.id, result: { status: 'blocked', reason: 'intent' } }); return; }
+  if (input.intent !== undefined && !['hover','definition','references','rename','object','syntax'].includes(input.intent)) { self.postMessage({ id: input.id, result: { status: 'blocked', reason: 'intent' } }); return; }
+  if (input.intent === 'syntax') {
+    if (input.offset !== 0 || Object.keys(input).some(key => !['id','source','offset','mode','capabilities','intent'].includes(key))) { self.postMessage({ id: input.id, result: { status: 'blocked', reason: 'input' } }); return; }
+    self.postMessage({ id: input.id, result: checkMysqlSyntax(input.source, mode) }); return;
+  }
   if (input.intent === 'object') {
     if (Object.keys(input).some(key => !['id','source','offset','mode','capabilities','intent'].includes(key))) { self.postMessage({ id: input.id, result: { status: 'blocked', reason: 'input' } }); return; }
     self.postMessage({ id: input.id, result: analyzeMysqlPhysicalObject(input.source, input.offset, mode, capabilities) }); return;

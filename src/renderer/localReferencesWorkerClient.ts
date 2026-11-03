@@ -8,6 +8,7 @@ import { completionLexicalContext } from '../shared/completionLexical';
 import { sqliteReferenceContext } from '../shared/sqliteCompletionAnalysis';
 import { quoteLocalRename, validLocalRename, type LocalRename, type LocalRenameContext } from '../shared/localRename';
 import { validPhysicalObjectAnalysis, type PhysicalObjectAnalysis } from '../shared/physicalObjectAnalysis';
+import { validSqlSyntaxCheckResult, type SqlSyntaxCheckResult } from '../shared/sqlSyntaxCheck';
 
 type WorkerPort = Pick<Worker, 'postMessage' | 'terminate' | 'onmessage' | 'onerror' | 'onmessageerror'>;
 
@@ -37,8 +38,14 @@ export class LocalReferencesWorkerClient {
   object(source: string, offset: number, mode: CompletionLexicalMode, signal: AbortSignal, capabilities: CompletionScopeCapabilities): Promise<PhysicalObjectAnalysis> {
     return this.request<PhysicalObjectAnalysis>(source, offset, mode, signal, capabilities, { intent: 'object' }, (value, snapshot): value is PhysicalObjectAnalysis => validPhysicalObjectAnalysis(value, source, offset, this.dialect, snapshot));
   }
+  /** 整份脚本的纯语法提示复用同一产物，仍独占实际线程；SQLite不借用MySQL方言。 */
+  syntax(source: string, mode: CompletionLexicalMode, signal: AbortSignal): Promise<SqlSyntaxCheckResult> {
+    if (this.dialect !== 'mysql') return Promise.resolve({ status: 'blocked', reason: 'unsupported' });
+    return this.request<SqlSyntaxCheckResult>(source, 0, mode, signal, {}, { intent: 'syntax' }, (value): value is SqlSyntaxCheckResult => validSqlSyntaxCheckResult(value, source))
+      .then((value): SqlSyntaxCheckResult => validSqlSyntaxCheckResult(value, source) ? value : { status: 'blocked', reason: 'worker' });
+  }
   /** 分析类型不改变8秒握手／2秒正文期限，替换或取消都终止准确owner。 */
-  private request<T extends LocalReferences | LocalRename | PhysicalObjectAnalysis>(source: string, offset: number, mode: CompletionLexicalMode, signal: AbortSignal, capabilities: CompletionScopeCapabilities, intent: { intent?: 'references' | 'rename' | 'object'; newName?: string }, valid: (value: unknown, snapshot: CompletionLexicalMode) => value is T): Promise<T | { status: 'blocked'; reason: string }> {
+  private request<T extends LocalReferences | LocalRename | PhysicalObjectAnalysis | SqlSyntaxCheckResult>(source: string, offset: number, mode: CompletionLexicalMode, signal: AbortSignal, capabilities: CompletionScopeCapabilities, intent: { intent?: 'references' | 'rename' | 'object' | 'syntax'; newName?: string }, valid: (value: unknown, snapshot: CompletionLexicalMode) => value is T): Promise<T | { status: 'blocked'; reason: string }> {
     if (this.disposed || signal.aborted) return Promise.resolve({ status: 'blocked', reason: 'cancelled' });
     if (source.length > (this.dialect === 'sqlite' ? sqliteCompletionLimits : completionLimits).sourceUnits) return Promise.resolve({ status: 'blocked', reason: 'budget' });
     this.active?.stop('replaced');
@@ -64,7 +71,7 @@ export class LocalReferencesWorkerClient {
           if (finished) return;
           const message = event.data;
           const prefix = this.dialect === 'sqlite' ? 'dbark-sqlite-local-references' : 'dbark-completion';
-          if (intent.intent === 'object' && (message?.type === prefix + '-ready' || message?.type === prefix + '-unavailable') && (typeof message !== 'object' || Array.isArray(message) || Object.keys(message).sort().join(',') !== 'type,version')) { owner.stop('worker'); return; }
+          if (['object', 'syntax'].includes(intent.intent ?? '') && (message?.type === prefix + '-ready' || message?.type === prefix + '-unavailable') && (typeof message !== 'object' || Array.isArray(message) || Object.keys(message).sort().join(',') !== 'type,version')) { owner.stop('worker'); return; }
           if (message?.type === prefix + '-unavailable') { owner.stop('worker'); return; }
           if (message?.type === prefix + '-ready') {
             if (message.version !== 1) { owner.stop('worker'); return; }
@@ -73,7 +80,7 @@ export class LocalReferencesWorkerClient {
             try { worker!.postMessage(this.dialect === 'sqlite' ? { id: 1, source, offset, ...intent } : { id: 1, source, offset, mode: snapshot, capabilities: facts, ...intent }); } catch { owner.stop('worker'); }
             return;
           }
-          if (!sent || message?.id !== 1 || intent.intent === 'object' && (!message || typeof message !== 'object' || Array.isArray(message) || Object.keys(message).sort().join(',') !== 'id,result') || !valid(message.result, snapshot)) { owner.stop('worker'); return; }
+          if (!sent || message?.id !== 1 || ['object', 'syntax'].includes(intent.intent ?? '') && (!message || typeof message !== 'object' || Array.isArray(message) || Object.keys(message).sort().join(',') !== 'id,result') || !valid(message.result, snapshot)) { owner.stop('worker'); return; }
           finish(message.result);
         };
         worker.onerror = event => { event.preventDefault(); owner.stop('worker'); };

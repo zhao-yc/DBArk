@@ -1,5 +1,7 @@
 # 开发与测试
 
+新增[查询脚本本地语法检查](development/sql-syntax-check-20261103.md)，固定范围问题、UTF16映射、独占Worker及过期标记清除。139项相关、严格类型、同2GiB构建及Windows真实菜单／模型整例通过；完整MariaDB／SQLite方言、Mac和安装另验，暂不发布。
+
 新增[查询中查看对象结构](development/object-definition-20261103.md)：类型化 IPC、独立语义分析、原会话读取与取消收尾；保持 SQLite 原业务单值预算。源码、实际窗口及 MySQL 只读实库证据分别记录，Mac／安装及完整版本矩阵另验，暂不发布。
 
 声明定位已[去除冗余补全候选计算](development/definition-work-cost-20261103.md)，保留完整 AST、语法和作用域校验。后续核对准确 d066 的 Mac Intel／arm64 字段概况原整例通过；Windows 种子超时、Intel Worker 超时及 arm64 引用退出未确认分别保留，不泛化为三平台通过，暂不发布。
