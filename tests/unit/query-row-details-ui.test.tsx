@@ -11,7 +11,7 @@ const grids=vi.hoisted(()=>({all:[] as any[]}));
 // 只替换Monaco和虚拟网格的外界渲染端口，真实QueryTab／管理器／导出窗口／store均运行。
 vi.mock('monaco-editor', () => ({ editor: { setModelMarkers() { throw Error('行详情用例不应设置 SQL 语法标记'); } }, MarkerSeverity: { Warning: 4 } }));
 vi.mock('react-data-grid',()=>({DataGrid:(props:any)=>{grids.all.push(props);return null;},SelectColumn:{key:'select-row'}}));
-vi.mock('../../src/renderer/components/SqlEditor',()=>({SqlEditor:()=>null}));
+vi.mock('../../src/renderer/components/SqlEditor',()=>({SqlEditor:({value,readOnly}:{value:string;readOnly?:boolean})=>readOnly ? <textarea aria-label="只读 SQL" readOnly value={value}/> : null}));
 let QueryTab:typeof import('../../src/renderer/components/QueryTab')['QueryTab'],store:typeof import('../../src/renderer/store')['useWorkspace'],flush:typeof import('../../src/renderer/store')['flushSettings'];
 let document:ReturnType<typeof memoryDocument>,createRoot:typeof import('react-dom/client')['createRoot'],root:ReturnType<typeof createRoot>|undefined;
 let original:QueryResult,second:QueryResult,commands:string[],exports:any[],observers:Set<Function>;
@@ -25,7 +25,7 @@ beforeAll(async()=>{
 afterEach(async()=>{if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();grids.all=[];});
 afterAll(()=>{ restoreNavigationMenuPort();for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只给真实查询端口合成响应；所有文件选择、写入和settings保存都是RAM事件。 */
-async function mount(){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
+async function mount(){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,statement:'SELECT RAM 第二条',columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
  (window as any).dbark={onTask:()=>()=>{},onMenu:()=>()=>{},invoke:async(command:string,input:any)=>{commands.push(command);if(command==='settings.save'||command==='connections.open'||command==='sessions.close')return;if(command==='sessions.open')return {sessionId:'s'};if(command==='query.completionState')return {databaseKnown:true,database:null,temporaryObjects:[]};if(command==='query.execute')return {results:[original,second],elapsedMs:1,transactionOpen:false};if(command==='files.choose')return {token:'ram-file',name:'内存文件'};if(command==='files.exportResult'){validateResultExportData(input.result);exports.push(structuredClone(input));return {rows:input.result.rows.length};}throw Error('禁止外界命令：'+command);}};
  store.setState({settings:{theme:'light',sidebarWidth:260,resultLimit:1000,pageSize:100,activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',title:'查询',sql:'SELECT RAM',databaseContext:{state:'known',database:null}}]},connections:[{id:'c',name:'RAM',group:'',color:'',dialect:'mysql',host:'offline.invalid',port:1,user:'ram'}],connectionVersions:{c:1},activeJobs:{},dirtyTabs:{}});
  function Harness(){const tabs=store(state=>state.settings.tabs);return tabs.map(tab=><QueryTab key={tab.id} tab={tab} onHistory={()=>{}}/>);}const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(<Harness/>));await click(zh.query.text010);
@@ -53,6 +53,24 @@ async function activate(index = 0, grid = mainGrid()) {
 }
 const region = () => document.querySelector('[aria-label="查询结果行详情"]');
 async function openDetails(index = 0, grid = mainGrid()) { await activate(index, grid); await click(detailsText.open); expect(region()).not.toBeNull(); }
+
+it('结果来源 SQL 逐个绑定到已完成结果，草稿修改与旧对话框关闭不会替换预览', async () => {
+  await mount(); await flush();
+  await act(async () => store.getState().updateTab('q', { sql: 'SELECT 未执行草稿' }));
+  await flush(); const before = [...commands];
+  const preview = () => document.querySelector('textarea[aria-label="只读 SQL"]')!;
+  await click(zh.query.resultSql);
+  expect(preview().value).toBe('SELECT RAM');
+  const oldClose = callback(button(zh.common.close));
+  await click(zh.common.close);
+  await click('结果 2');
+  await click(zh.query.resultSql);
+  expect(preview().value).toBe('SELECT RAM 第二条');
+  await act(async () => oldClose()); expect(preview().value).toBe('SELECT RAM 第二条');
+  await click(zh.common.close);
+  expect(store.getState().settings.tabs[0].sql).toBe('SELECT 未执行草稿');
+  expect(commands).toEqual(before);
+});
 
 it('完整原列顺序包含隐藏列，精确值普通文本显示；打开、翻行和关闭不改勾选/布局/复制或发命令', async () => {
   await mount(); const before = structuredClone(original); await layout();

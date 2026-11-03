@@ -243,6 +243,9 @@ export const zh = {
     releasePin: "释放 {0}",
     pinnedStatement: "快照 SQL",
     pinSource: "固定结果的原 SQL",
+    resultSql: "查看结果 SQL",
+    resultSqlTitle: "结果来源 SQL",
+    resultSqlHint: "这里显示结果附带的 SQL 文本。长语句可能被截断，参数查询可能显示模板。查看不会重新执行。",
     pinSessionOnly: "固定结果只保留在当前查询标签中。达到结果上限的快照也只含已返回的数据。",
   },
   // 表设计和数据库对象定义。

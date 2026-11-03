@@ -90,7 +90,8 @@ function register(): void {
         const choose = (mode: 'open' | 'save', args: unknown[]) => { check(); const file = state.file, options = args[1] as { title?: string }; if (!state.frame || !file || file.mode !== mode || file.chosen || state.reading !== file || args[0] !== window || options?.title !== (mode === 'open' ? input.openTitle : input.saveTitle)) throw Error('结果快照原生选择不属于当前原操作'); file.chosen = true; state.chooserCalls++; return file.path; };
         const open = (async (...args: unknown[]) => ({ canceled: false, filePaths: [choose('open', args)] })) as typeof dialog.showOpenDialog;
         const save = (async (...args: unknown[]) => ({ canceled: false, filePath: choose('save', args) })) as typeof dialog.showSaveDialog;
-        const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'workbench.get', 'workbench.save', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish', 'resultSnapshotFiles.open', 'resultSnapshotFiles.save']);
+        // 原生菜单状态仍交给真实 Main 校验，允许同步菜单可用性，不放宽任何数据库请求。
+        const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.save', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish', 'resultSnapshotFiles.open', 'resultSnapshotFiles.save']);
         const wrapped = async (event: any, payload: any) => {
           check(); if (event.sender !== contents || event.senderFrame !== (state.frame ?? contents.mainFrame)) throw Error('结果快照IPC不是原窗口当前文档');
           const command = String(payload?.command), value = payload?.input, fact = { command, ok: false }; state.calls.push(fact);
