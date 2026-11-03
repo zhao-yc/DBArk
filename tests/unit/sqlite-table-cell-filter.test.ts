@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { assertSqliteStorageTypes, type SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
-import { captureSqliteCellFilter } from '../../src/renderer/sqliteTableCellFilter';
+import { captureSqliteCellFilter, sqliteCheckedFilterDraft } from '../../src/renderer/sqliteTableCellFilter';
 import { sqliteTableDraft } from '../../src/renderer/sqliteTableBrowser';
 import { buildSqliteFilteredSelect } from '../../src/shared/sqliteReadSql';
 import type { SqliteDraftRow } from '../../src/renderer/sqliteTableEditor';
@@ -77,4 +77,35 @@ it('真实SQLite混合类型全表筛选准确区分INTEGER/REAL/TEXT/BLOB/NULL�
       else expect(excluded).toEqual([{ t: expected }]);
     }
   } finally { db.close(); }
+});
+
+it('勾选行去重但保留同显示的不同存储类型，排除是包含集合的完整补集', () => {
+  const { page } = fixture();
+  page.storageTypes = ['t', 'i', 'n', 'b', 't'];
+  page.result.rows = [{ c0: '2' }, { c0: '2' }, { c0: null }, { c0: { type: 'binary', base64: 'AP8=' } }, { c0: '2' }];
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec("CREATE TABLE subject(v); INSERT INTO subject VALUES('2'),(2),(NULL),(X'00ff'),('2'),(2.0),('NULL'),(X'');");
+    for (const exclude of [false, true]) {
+      const draft = sqliteCheckedFilterDraft(page, 0, [0, 1, 2, 3, 4], exclude, 'rule');
+      expect(draft.selectedValues).toEqual([{ kind: 'text', value: '2' }, { kind: 'integer', value: '2' }, { kind: 'null' }, { kind: 'blob', value: '00ff' }]);
+      const { kind: _kind, ...target } = page.target;
+      const query = sqliteTableDraft(target, 10, 'and', [draft], []);
+      const sql = buildSqliteFilteredSelect({ ...query, ...target, taskId: 'read', offset: 0 }, page.columns, ['v']);
+      expect(db.prepare('SELECT typeof(v) AS t FROM (' + sql + ')').all().map(row => row.t)).toEqual(exclude ? ['real', 'text', 'blob'] : ['text', 'integer', 'null', 'blob', 'text']);
+    }
+  } finally { db.close(); }
+});
+
+it('勾选的新行、删除行和被修改字段拒绝整个条件；超过 128 个不同值也不截断', () => {
+  const { page } = fixture('i', '2');
+  const original = { kind: 'integer' as const, value: '2' };
+  page.edit = { kind: 'editable', snapshotId: 'snapshot', expiresAt: new Date().toISOString(), locator: { kind: 'rowid', columns: [] }, columns: [{ name: 'v', declaredType: '', generated: false, nullable: true, hasDefault: false }], rows: [[original]] };
+  const row: SqliteDraftRow = { id: 'row', index: 0, deleted: false, values: [original] };
+  const draft = (value: SqliteDraftRow) => sqliteCheckedFilterDraft(page, 0, [0], false, 'rule', [value]);
+  expect(draft(row).selectedValues).toEqual([original]);
+  for (const invalid of [{ ...row, index: undefined }, { ...row, deleted: true }, { ...row, values: [{ ...original, value: '3' }] }]) expect(() => draft(invalid)).toThrow();
+  page.storageTypes = Array.from({ length: 129 }, () => 'i');
+  page.result.rows = page.storageTypes.map((_, index) => ({ c0: String(index) }));
+  expect(() => sqliteCheckedFilterDraft(page, 0, page.storageTypes!.map((_, index) => index), false, 'rule')).toThrow('上限');
 });

@@ -1,4 +1,4 @@
-import { assertSqliteStorageTypes, sqliteTableFilterSchema, type SqliteTablePage } from '../shared/sqliteTableBrowse';
+import { assertSqliteStorageTypes, sqliteFilterSelectionSchema, sqliteTableBrowseLimits, sqliteTableFilterSchema, type SqliteTablePage } from '../shared/sqliteTableBrowse';
 import type { SqliteOriginalValue } from '../shared/sqliteTableEdit';
 import type { SqliteFilterDraft } from './sqliteTableBrowser';
 import type { SqliteDraftRow } from './sqliteTableEditor';
@@ -19,7 +19,6 @@ function own(value: object, key: PropertyKey): unknown {
 }
 /** 原只读页补充存储类型事实；不把数字样式TEXT误当INTEGER，也不解析格式化显示。 */
 function original(page: SqliteTablePage, index: number, column: number): SqliteOriginalValue {
-  assertSqliteStorageTypes(page);
   if (!Number.isSafeInteger(index) || index < 0 || !Number.isSafeInteger(column) || column < 0 || !page.columns[column] || !page.storageTypes?.[index]) throw Error(text.unavailable);
   const row = own(page.result.rows, index), info = page.result.columns[column];
   if (!row || typeof row !== 'object' || !info || info.name !== page.columns[column].name) throw Error(text.unavailable);
@@ -38,6 +37,7 @@ function original(page: SqliteTablePage, index: number, column: number): SqliteO
 
 /** 绑定准确页及原格；可编辑页还核原index及完整原值，新增、删除和已修改格不提供筛选来源。 */
 export function captureSqliteCellFilter(page: SqliteTablePage, index: number, column: number, current: () => boolean, edit?: { rows: readonly SqliteDraftRow[]; row: SqliteDraftRow }): SqliteCellFilterSource {
+  assertSqliteStorageTypes(page);
   const value = Object.freeze(original(page, index, column)), metadata = page.columns[column], resultColumn = page.result.columns[column], result = page.result, resultRows = result.rows, resultRow = resultRows[index], types = page.storageTypes, columns = page.columns, target = page.target;
   const signature = JSON.stringify([target, page.schemaKey, metadata, resultColumn, value]), name = metadata.name;
   const editPage = page.edit, editValues = edit?.row.values, editOriginal = editPage?.kind === 'editable' ? editPage.rows[index]?.[column] : undefined;
@@ -46,6 +46,7 @@ export function captureSqliteCellFilter(page: SqliteTablePage, index: number, co
   function check(): boolean {
     if (!valid) return false;
     try {
+      assertSqliteStorageTypes(page);
       valid = current() && page.target === target && page.columns === columns && page.columns[column] === metadata && page.result === result && page.result.rows === resultRows && resultRows[index] === resultRow && result.columns[column] === resultColumn && page.storageTypes === types && signature === JSON.stringify([page.target, page.schemaKey, page.columns[column], result.columns[column], original(page, index, column)])
         && (!edit || page.edit === editPage && edit.rows.includes(edit.row) && !edit.row.deleted && edit.row.index === index && edit.row.values === editValues && JSON.stringify(edit.row.values[column]) === JSON.stringify(value) && JSON.stringify(editOriginal) === JSON.stringify(value) && page.edit?.kind === 'editable' && page.edit.rows[index]?.[column] === editOriginal);
     } catch { valid = false; }
@@ -62,4 +63,22 @@ export function captureSqliteCellFilter(page: SqliteTablePage, index: number, co
   // 构造即验证所有原值；非有限REAL及超长值不可先显示成可用动作。
   draft(false, 'validate');
   return Object.freeze({ column: name, value, current: check, draft });
+}
+
+/** 从当前页的原值生成一条类型集合条件。草稿行只能提供仍等于原值的字段。 */
+export function sqliteCheckedFilterDraft(page: SqliteTablePage, column: number, indices: readonly number[], exclude: boolean, id: string, rows?: readonly SqliteDraftRow[]): SqliteFilterDraft {
+  assertSqliteStorageTypes(page);
+  if (!indices.length || indices.length > sqliteTableBrowseLimits.pageSize || rows && rows.length !== indices.length) throw Error(text.checkedUnavailable);
+  const values = new Map<string, SqliteOriginalValue>();
+  let units = 0;
+  for (const [position, index] of indices.entries()) {
+    const value = original(page, index, column), key = JSON.stringify(value), row = rows?.[position];
+    if (rows && (!row || row.deleted || row.index !== index || page.edit?.kind !== 'editable' || JSON.stringify(page.edit.rows[index]?.[column]) !== key || JSON.stringify(row.values[column]) !== key)) throw Error(text.checkedUnavailable);
+    if (values.has(key)) continue;
+    if (!sqliteFilterSelectionSchema.safeParse(value).success) throw Error(text.unsupported);
+    units += value.kind === 'null' ? 0 : value.value.length;
+    if (values.size >= sqliteTableBrowseLimits.listValues || units > 131072) throw Error(text.limit);
+    values.set(key, value);
+  }
+  return { id, column: page.columns[column].name, operator: exclude ? 'notOneOf' : 'oneOf', kind: 'text', value: '', selectedValues: [...values.values()] };
 }

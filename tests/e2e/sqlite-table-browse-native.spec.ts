@@ -277,6 +277,22 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
     await cellFilter(0, 'nullable', true); await step(() => expect(table().getByLabel('SQLite 筛选 1 运算符', { exact: true })).toHaveValue('notNull')); await apply([2, 4, 6, 8, 10]);
     await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
+    stage = '勾选两行后按当前列加入原类型集合，未应用时零读取';
+    for (const exclude of [false, true]) {
+      const grid = table().getByRole('grid'), beforeChecked = (await step(audit)).pages.length;
+      await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
+      for (const rowIndex of [2, 3]) await step(() => grid.locator('[role="row"][aria-rowindex="' + rowIndex + '"]').getByRole('checkbox').check());
+      await step(() => grid.evaluate(element => { element.scrollLeft = element.scrollWidth; }));
+      const position = await step(() => grid.getByRole('columnheader').filter({ hasText: /^mixed/ }).getAttribute('aria-colindex'));
+      if (!position) throw Error('勾选值筛选原列位置未知');
+      await step(() => grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="' + position + '"]').click());
+      await step(async () => (await navigationMenuItem(table(), { name: exclude ? '排除勾选行的当前列值' : '包含勾选行的当前列值', exact: true }, check)).click());
+      expect((await step(audit)).pages.length).toBe(beforeChecked);
+      await step(() => expect(table().getByLabel('SQLite 筛选 1 运算符', { exact: true })).toHaveValue(exclude ? 'notOneOf' : 'oneOf'));
+      await apply(exclude ? [3, 4, 5, 6, 7] : [1, 2]);
+      expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ filters: [{ column: 'mixed', operator: exclude ? 'notOneOf' : 'oneOf', selectedValues: [{ kind: 'integer', value: '2' }, { kind: 'text', value: '2' }] }] });
+      await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await apply([1, 2, 3, 4, 5]);
+    }
     stage = '只读范围包含两端、逆序不交换、NOT BETWEEN与停用，坏边界零读取';
     await controls(true); await step(() => table().getByRole('button', { name: '添加 SQLite 筛选条件', exact: true }).click()); await filter(1, 'id', 'between', 'integer', '30');
     const invalidRangePages = (await step(audit)).pages.length;

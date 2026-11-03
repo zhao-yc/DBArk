@@ -20,6 +20,8 @@
 .sqlite-browse-list-value { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 /* 至少保留列头、两行和横向滚动条；筛选面板先缩小，编辑与分页底栏仍在正常文档流中。 */
 .sqlite-browse-result { flex: 1; min-height: 128px; overflow: hidden; }
+/* 编辑网格上方还有跳行和复制按钮，展开筛选时一并给它们预留高度。 */
+.sqlite-browse-result:has(> .sqlite-edit-clipboard-region) { min-height: 144px; }
 .sqlite-browse-result > .results-grid { height: 100%; }
 /* 窄侧栏工作区把底部完整操作移至下一行，计数不能被压成竖排或溢出到分页／状态栏。 */
 .sqlite-table-tab .table-action-bar { height: auto; min-height: 39px; flex-wrap: wrap; padding-block: 6px; }
