@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { FilterRule } from '../../src/shared/contracts';
 import { FILTER_LIMITS, validateFilterRules } from '../../src/shared/filtering';
-import { emptyFilterDraft, filterDraftFromRule, filterRuleFromDraft, filterRuleSummary, maxTablePage, parseFilterSet, parsePageJump, replaceFilterRule } from '../../src/renderer/tableFilters';
+import { emptyFilterDraft, filterDraftFromRule, filterRuleFromDraft, filterRuleSummary, maxTablePage, parseFilterSet, parsePageJump, parseTablePageSize, replaceFilterRule } from '../../src/renderer/tableFilters';
+
+it('自定义页大小沿用服务器范围，只接受十进制整数', () => {
+  expect(['1', ' 37 ', '1000'].map(parseTablePageSize)).toEqual([1, 37, 1000]);
+  for (const value of ['0', '1001', '', '1e2', '1.0', '-1', '+1', 'Infinity', '９９']) expect(() => parseTablePageSize(value)).toThrow('1 到 1000');
+});
 
 describe('表格筛选输入保持原始数据', () => {
   it('逐行集合保留中文、逗号、空格和空行，不按逗号拆分或修剪', () => {

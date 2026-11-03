@@ -285,6 +285,52 @@ it('停止只取消原末页任务，迟到结果不会覆盖原页或未提交�
   expect(f.all('ErrorBox').some(element => element.props.message === '无法确认服务器任务已结束')).toBe(true);
 });
 
+it('自定义页大小先编辑后应用，保留筛选排序，拒绝丢稿时保持原页与默认设置', async () => {
+  const f = await fixture(); await f.click(zh.table.text006);
+  const preset = f.all('TablePresetPanel')[0].props;
+  const filters = [{ column: 'id', operator: '>=', value: '9007199254740993' }], sort = [{ column: 'note', direction: 'DESC' }];
+  expect(preset.beforeApply()).toBe(true); expect(preset.onApply({ filters, filterMode: 'all', sort })).toBe(true);
+  await f.render(); await f.click(zh.common.pageNext); await f.change('未提交修改');
+  const reads = () => f.invoke.mock.calls.filter(([command]) => command === 'table.page').map(([, input]) => input);
+  const before = reads().length;
+  const selector = () => f.all('select').find(element => element.props['aria-label'] === zh.table.text021)!.props;
+  const input = () => f.all('input').find(element => element.props['aria-label'] === zh.table.customPageSizeLabel)?.props;
+  const form = () => f.all('form').find(element => element.props.className === 'page-jump' && element.props.onKeyDown)!.props;
+  const select = async (value: string) => { selector().onChange({ target: { value } }); await f.render(); };
+  const fill = async (value: string) => { input()!.onChange({ target: { value } }); await f.render(); };
+  const submit = async () => { form().onSubmit({ preventDefault() {} }); await f.render(); };
+  await select('custom'); expect(input()?.value).toBe('50'); expect(reads()).toHaveLength(before);
+  await fill('1e2'); await submit();
+  expect(f.all('ErrorBox').some(element => element.props.message === zh.table.pageSizeInvalid)).toBe(true);
+  expect(reads()).toHaveLength(before); expect(f.confirm).not.toHaveBeenCalled();
+  form().onKeyDown({ key: 'Escape', nativeEvent: {}, preventDefault() {}, stopPropagation() {} }); await f.render();
+  expect(selector().value).toBe(50); expect(input()).toBeUndefined();
+
+  await select('custom'); await fill('37'); f.confirm.mockReturnValueOnce(false); await submit();
+  expect(reads()).toHaveLength(before); expect(input()?.value).toBe('37'); expect(f.grid().rows[0].data.note).toBe('未提交修改');
+  expect(f.workspace.updateSettings).not.toHaveBeenCalled();
+  await submit();
+  expect(reads()).toHaveLength(before + 1); expect(reads().at(-1)).toMatchObject({ page: 1, pageSize: 37, filters, sort });
+  expect(f.workspace.updateSettings).toHaveBeenCalledExactlyOnceWith({ pageSize: 37 });
+  expect(selector().value).toBe(37); expect(input()).toBeUndefined();
+  expect(f.all('option').some(element => element.props.value === 37)).toBe(true);
+});
+
+it('首页从末页读取一次并退出末页模式，确认期间切走标签时保留原草稿', async () => {
+  const f = await fixture();
+  f.replyToLastPage(page => ({ ...page, page: 3, hasMore: false, matchingRows: '101' }));
+  await f.click(zh.table.lastPage); await f.change('末页草稿');
+  const before = f.invoke.mock.calls.length;
+  f.confirm.mockImplementationOnce(() => { f.workspace.settings.activeTabId = '其它标签'; return true; });
+  await f.click(zh.table.firstPage);
+  expect(f.invoke.mock.calls).toHaveLength(before); expect(f.grid().rows[0].data.note).toBe('末页草稿');
+  f.workspace.settings.activeTabId = f.props.tab.id; await f.render();
+  await f.click(zh.table.firstPage);
+  const read = f.invoke.mock.calls.slice(before).filter(([command]) => command === 'table.page');
+  expect(read).toHaveLength(1); expect(read[0][1]).toMatchObject({ page: 1, pageSize: 50 }); expect(read[0][1]).not.toHaveProperty('lastPage');
+  expect(f.button(zh.table.firstPage).props.disabled).toBe(true);
+});
+
 it('关系图正式表页入口不读库，自己的忙碌计数不撤销来源且父草稿保持', async () => {
   const f = await fixture(); await f.change('保留关系图父草稿'); const before = f.invoke.mock.calls.length;
   await f.click(relationshipText.entry); const element = f.all('RelationshipDiagramDialog')[0]; expect(element.props.source).toBe(f.info); expect(element.props.current()).toBe(true); expect(f.invoke.mock.calls).toHaveLength(before);

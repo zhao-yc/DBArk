@@ -96,6 +96,13 @@ export function parsePageJump(text: string, maximum = maxTablePage): number {
   return page;
 }
 
+/** 页大小按表页接口范围校验，拒绝小数、指数和空输入。 */
+export function parseTablePageSize(text: string): number {
+  const value = text.trim(), size = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isInteger(size) || size < 1 || size > 1000) throw Error(zh.table.pageSizeInvalid);
+  return size;
+}
+
 /** 所有输入作为字符串校验，不把大整数、小数或日期转换为 JavaScript 数值。 */
 function checkValueLengths(values: readonly string[]): void {
   if (values.some(value => value.length > FILTER_LIMITS.valueLength)) throw new Error(formatText(zh.table.filterValueLengthLimit, FILTER_LIMITS.valueLength));
