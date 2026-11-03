@@ -53,7 +53,7 @@ jobs:
           DBARK_NATIVE_EDITOR_CI: '1'
           DBARK_NATIVE_EDITOR_SOURCE_APPROVAL: ${{ steps.native-source.outputs.source_approval }}
           DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256: ${{ steps.native-source.outputs.source_approval_sha256 }}
-          DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE: ${{ github.workspace }}/release/win-unpacked/DBArk.exe
+          DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE: ${{ github.workspace }}/release/win-unpacked/tabrelio.exe
           DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
           DBARK_EDITOR_FONT_NATIVE_TEST: '1'
           DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'

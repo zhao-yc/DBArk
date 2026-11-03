@@ -100,10 +100,17 @@
   IfErrors dbark_uri_install_skip
   StrCmpS $9 $1 dbark_uri_install_owned
   StrCpy $1 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"'
+  StrCmpS $9 $1 dbark_uri_install_owned
+  ; 仅接管同目录下原品牌 EXE 的完整自有注册。
+  StrCpy $0 "$INSTDIR\DBArk.exe"
+  StrCpy $1 '"$0" -- "%1"'
+  StrCmpS $9 $1 dbark_uri_install_owned
+  StrCpy $1 '"$0" "%1"'
   StrCmpS $9 $1 0 dbark_uri_install_skip
   dbark_uri_install_owned:
     ; 仅对选定命令完整核验一次；旧格式仍要求本路径、全部标记、类型及整棵树形。
     !insertmacro DBArkObjectUriOwned dbark_uri_install_skip
+    StrCpy $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
     StrCpy $1 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" -- "%1"'
   dbark_uri_register:
     ClearErrors
@@ -118,10 +125,10 @@
     IfErrors dbark_uri_install_skip
     !insertmacro DBArkObjectUriOwned dbark_uri_install_skip
     System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0) v'
-    DetailPrint "已注册DBArk对象链接。"
+    DetailPrint "已注册 tabrelio 对象链接。"
     Goto dbark_uri_install_done
   dbark_uri_install_skip:
-    DetailPrint "DBArk对象链接注册未更改：已有外来或变化的处理程序，或无法确认注册写入。"
+    DetailPrint "tabrelio 对象链接注册未更改：已有外来或变化的处理程序，或无法确认注册写入。"
   dbark_uri_install_done:
   Pop $9
   Pop $8

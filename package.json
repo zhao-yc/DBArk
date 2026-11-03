@@ -1,8 +1,8 @@
 {
-  "name": "dbark",
+  "name": "tabrelio",
   "version": "0.28.0",
   "private": true,
-  "description": "DBArk 开源数据库客户端",
+  "description": "tabrelio 开源数据库客户端",
   "license": "MIT",
   "author": "DBArk contributors",
   "main": "dist/main/index.cjs",
@@ -61,7 +61,7 @@
   },
   "build": {
     "appId": "com.dbark.desktop",
-    "productName": "DBArk",
+    "productName": "tabrelio",
     "copyright": "Copyright © 2026 DBArk contributors",
     "directories": { "output": "release", "buildResources": "build" },
     "artifactName": "${productName}-${version}-${os}-${arch}-unsigned.${ext}",
@@ -71,7 +71,7 @@
     "asarUnpack": ["node_modules/ssh2/**/*", "node_modules/cpu-features/**/*", "dist/main/sqlite-native/**/*"],
     "win": { "target": ["nsis"], "icon": "build/icon.ico", "signExecutable": false, "extraResources": [{ "from": "src/engine/databaseBackupWindowsFiles.helper.cs", "to": "database-backup-windows/databaseBackupWindowsFiles.helper.cs" }] },
     "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "installerLanguages": ["zh_CN"], "include": "build/installer.nsh" },
-    "mac": { "target": ["dmg", "zip"], "icon": "build/icon.icns", "category": "public.app-category.developer-tools", "identity": "-", "signIgnore": [".*sqlite-native/.*\\.dylib$"], "protocols": [{ "name": "DBArk 对象链接", "schemes": ["dbark"], "role": "Viewer" }] },
+    "mac": { "target": ["dmg", "zip"], "icon": "build/icon.icns", "category": "public.app-category.developer-tools", "identity": "-", "signIgnore": [".*sqlite-native/.*\\.dylib$"], "protocols": [{ "name": "tabrelio 对象链接", "schemes": ["dbark"], "role": "Viewer" }] },
     "publish": null
   }
 }

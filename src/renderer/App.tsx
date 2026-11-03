@@ -1,3 +1,4 @@
+import { productName } from '../shared/productName';
 import { SqliteObjectsDialog, type SqliteObjectsScope } from './components/SqliteObjectsDialog';
 import { assertSqliteObjectsScopeAvailable, assertSqliteObjectsTargetAvailable, sqliteObjectsTabMatches } from './sqliteObjectsAvailability';
 import { sqliteObjectsZh } from './locales/sqliteObjects.zh-CN';
@@ -984,7 +985,7 @@ function WorkspaceApp() {
 }
 
 /** 自主绘制的方舟图形标识，不依赖远程图片或第三方产品素材。 */
-function Brand() { return <span className="brand"><svg aria-hidden="true" width="25" height="25" viewBox="0 0 28 28" fill="none"><path d="M4 7L14 2L24 7V19L14 25L4 19V7Z" fill="currentColor" opacity=".16"/><path d="M5 8L14 3L23 8M5 8V18L14 24M5 8L14 13M23 8V18L14 24M23 8L14 13M14 13V24M9.5 5.5L18.5 10.5M5 13L14 18L23 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg><strong>DBArk</strong></span>; }
+function Brand() { return <span className="brand"><svg aria-hidden="true" width="25" height="25" viewBox="0 0 28 28" fill="none"><path d="M4 7L14 2L24 7V19L14 25L4 19V7Z" fill="currentColor" opacity=".16"/><path d="M5 8L14 3L23 8M5 8V18L14 24M5 8L14 13M23 8V18L14 24M23 8L14 13M14 13V24M9.5 5.5L18.5 10.5M5 13L14 18L23 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg><strong>{productName}</strong></span>; }
 
 /** 无标签时展示真实可用的入口，首次使用不创建演示连接或假数据。 */
 function Welcome({ onConnect, onQuery, onHistory }: { onConnect: () => void; onQuery: () => void; onHistory: () => void }) {

@@ -13,9 +13,9 @@ if (installers.length !== 2 || !execution) throw new Error('缺少实际安装�
 const probe = ts.transpileModule(installers.map(node => node.getText(tree)).join('\n') + '\n' + execution.tryBlock.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 const cases = [
-  { platform: 'win32', arch: 'x64', directory: 'C:\\隔离目录\\应用 安装\\Applications', executable: 'C:\\隔离目录\\应用 安装\\Applications\\DBArk.exe' },
-  { platform: 'darwin', arch: 'x64', directory: '/private/tmp/回归 空间/intel/Applications', executable: '/private/tmp/回归 空间/intel/Applications/DBArk.app/Contents/MacOS/DBArk' },
-  { platform: 'darwin', arch: 'arm64', directory: '/private/tmp/回归 空间/arm/Applications', executable: '/private/tmp/回归 空间/arm/Applications/DBArk.app/Contents/MacOS/DBArk' },
+  { platform: 'win32', arch: 'x64', directory: 'C:\\隔离目录\\应用 安装\\Applications', executable: 'C:\\隔离目录\\应用 安装\\Applications\\tabrelio.exe' },
+  { platform: 'darwin', arch: 'x64', directory: '/private/tmp/回归 空间/intel/Applications', executable: '/private/tmp/回归 空间/intel/Applications/tabrelio.app/Contents/MacOS/tabrelio' },
+  { platform: 'darwin', arch: 'arm64', directory: '/private/tmp/回归 空间/arm/Applications', executable: '/private/tmp/回归 空间/arm/Applications/tabrelio.app/Contents/MacOS/tabrelio' },
 ] as const;
 
 /** 运行实际安装函数和测试执行块；文件检查、安装命令与Playwright均为受控端口，不安装或启动程序。 */
@@ -48,7 +48,7 @@ function runProbe(input: typeof cases[number], executableExists = true, helperMo
   // 保留实际安装函数及完整执行块；异步包装仅支持原脚本新增的模式恢复等待。
   const execute = async () => await runInNewContext('(async () => {' + probe + '})()', {
     platform: input.platform, process: { arch: input.arch, env: inherited, execPath: node },
-    project, artifact: path.join(project, input.platform === 'win32' ? '安装程序.exe' : '安装映像.dmg'),
+    productName: 'tabrelio', project, artifact: path.join(project, input.platform === 'win32' ? '安装程序.exe' : '安装映像.dmg'),
     applicationDirectory: input.directory, mountDirectory: path.join(path.dirname(input.directory), '只读挂载'),
     installAttempted: false, join: path.join, basename: path.basename, dirname: path.dirname, command,
     lstatSync: stat, readFileSync: read, createHash,
@@ -98,7 +98,7 @@ describe('真实安装执行器统一普通及C02可执行路径', () => {
   });
   it('安装所得程序不存在时拒绝启动测试，不回退到继承的两种路径', async () => {
     const f = runProbe(cases[0], false);
-    await expect(f.execute()).rejects.toThrow('安装产物中缺少 DBArk 可执行文件');
+    await expect(f.execute()).rejects.toThrow('安装产物中缺少 tabrelio 可执行文件');
     expect(f.command.mock.calls.some(([executable]) => executable === f.node)).toBe(false);
   });
   it.each(['missing', 'symlink', 'directory', 'oversize', 'changed'] as const)('Windows helper资源%s时拒绝运行测试，不回退到继承路径', async mode => {

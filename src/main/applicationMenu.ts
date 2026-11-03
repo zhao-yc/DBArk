@@ -2,6 +2,7 @@ import type { MenuItemConstructorOptions } from 'electron';
 import { uiMenuStateSchema, type UiCommandId, type UiCommandInvocation, type UiMenuState } from '../shared/uiCommands';
 import { sqlLineCommandIds } from '../shared/uiCommandIds';
 import { uiCommandLabels as labels, uiMenuLabels as text } from '../shared/uiCommands.zh-CN';
+import { productName } from '../shared/productName';
 
 export interface ApplicationMenuPort {
   replace(template: MenuItemConstructorOptions[]): void;
@@ -50,7 +51,7 @@ export class ApplicationMenu {
       };
     };
     const menu: MenuItemConstructorOptions[] = [
-      ...(mac ? [{ label: 'DBArk', submenu: [item('about'), separator, { label: text.hide, role: 'hide' }, { label: text.hideOthers, role: 'hideOthers' }, { label: text.showAll, role: 'unhide' }, separator, { label: text.quit, role: 'quit' }] } as MenuItemConstructorOptions] : []),
+      ...(mac ? [{ label: productName, submenu: [item('about'), separator, { label: text.hide, role: 'hide' }, { label: text.hideOthers, role: 'hideOthers' }, { label: text.showAll, role: 'unhide' }, separator, { label: text.quit, role: 'quit' }] } as MenuItemConstructorOptions] : []),
       { label: text.file, submenu: [
         item('new-connection', 'CmdOrCtrl+Shift+N'), item('new-query', 'CmdOrCtrl+N'), separator,
         item('open-sql-file', 'CmdOrCtrl+O'), item('recent-sql-file'), item('save-query', 'CmdOrCtrl+S'), item('save-sql-file', 'CmdOrCtrl+Shift+S'), separator,

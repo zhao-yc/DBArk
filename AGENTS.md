@@ -2,7 +2,7 @@
 
 ## 项目结构
 
-DBArk：MIT 开源 Electron/React/TypeScript 数据库客户端，支持 Windows/macOS。
+tabrelio：MIT 开源 Electron/React/TypeScript 数据库客户端，支持 Windows/macOS。
 
 - `src/main/`：窗口、文件、配置和凭据；`preload.ts` 暴露受限 IPC。
 - `src/engine/`：utility process 中的数据库任务；`src/shared/`：跨进程契约和校验。

@@ -69,7 +69,7 @@ jobs:
           // 仅运行本job的打包应用与全新配置，不连接数据库或读系统剪贴板。
           const arch=process.env.EXPECTED_ARCH;
           const directory=arch==='arm64'?'mac-arm64':'mac';
-          const executable=resolve('release',directory,'DBArk.app/Contents/MacOS/DBArk');
+          const executable=resolve('release',directory,'tabrelio.app/Contents/MacOS/tabrelio');
           const profile=await mkdtemp(join(tmpdir(),'dbark-mac-development-'));
           const env={...process.env,DBARK_USER_DATA:profile};delete env.ELECTRON_RUN_AS_NODE;
           const report={passed:false,architecture:arch,executable,profile,checks:[]};
@@ -114,7 +114,7 @@ jobs:
           set -euo pipefail
           app_directory=mac
           if [ "$EXPECTED_ARCH" = arm64 ]; then app_directory=mac-arm64; fi
-          export DBARK_EXECUTABLE_PATH="$GITHUB_WORKSPACE/release/$app_directory/DBArk.app/Contents/MacOS/DBArk"
+          export DBARK_EXECUTABLE_PATH="$GITHUB_WORKSPACE/release/$app_directory/tabrelio.app/Contents/MacOS/tabrelio"
           pnpm exec playwright test tests/e2e/sidebar-context-menu.spec.ts --workers=1 --retries=0 --trace=off --reporter=line,json --output=package-evidence/sidebar-context-menu
       - name: 菜单与对象浏览打包应用专项
         shell: bash
@@ -127,11 +127,11 @@ jobs:
           set -euo pipefail
           app_directory=mac
           if [ "$EXPECTED_ARCH" = arm64 ]; then app_directory=mac-arm64; fi
-          export DBARK_EXECUTABLE_PATH="$GITHUB_WORKSPACE/release/$app_directory/DBArk.app/Contents/MacOS/DBArk"
+          export DBARK_EXECUTABLE_PATH="$GITHUB_WORKSPACE/release/$app_directory/tabrelio.app/Contents/MacOS/tabrelio"
           pnpm exec playwright test tests/e2e/navigation-workbench.spec.ts --workers=1 --retries=0 --trace=off --reporter=line,json --output=package-evidence/navigation-workbench
       - uses: actions/upload-artifact@v4
         with:
-          name: DBArk-macOS-${{ matrix.arch }}-开发包-${{ github.run_id }}
+          name: tabrelio-macOS-${{ matrix.arch }}-开发包-${{ github.run_id }}
           path: |
             release/*.dmg
             release/*.zip

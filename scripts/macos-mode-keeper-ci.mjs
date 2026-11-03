@@ -139,7 +139,7 @@ async function run() {
     const native=spawn(process.execPath,phase==='source' ? ['scripts/native-editor-ci.mjs','source'] : ['scripts/test-packaged.mjs','--mac-installed-keeper',nonce],{cwd:project,env:phase==='source' ? process.env : {
       ...process.env, DBARK_NATIVE_EDITOR_CI:'1', DBARK_NATIVE_EDITOR_SOURCE_APPROVAL:sourcePath,
       DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256:installedSourceHash,
-      DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE:join(project,'release/mac-arm64/DBArk.app/Contents/MacOS/DBArk'),
+      DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE:join(project,'release/mac-arm64/tabrelio.app/Contents/MacOS/tabrelio'),
       DBARK_W03_SAVED_QUERY_NAVIGATION_TEST:'1', DBARK_EDITOR_FONT_NATIVE_TEST:'1',
       DBARK_QUERY_DUPLICATE_NATIVE_TEST:'1', DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST:'1',
     },stdio:phase==='source' ? 'inherit' : ['inherit','inherit','inherit','ipc']});

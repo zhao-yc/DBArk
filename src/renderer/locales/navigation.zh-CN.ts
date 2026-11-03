@@ -7,7 +7,7 @@ export const navigationZh = {
   readDatabases: '读取数据库', open: '打开', cancel: '取消', selectConnection: '请选择连接',
   selectDatabase: '请选择数据库', noObjects: '此分类下没有匹配的对象',
   stale: '连接或浏览目标已变化，请重新打开。', context: '对象浏览目标', pageContext: '当前页面',
-  helpTitle: 'DBArk 使用说明', shortcutsTitle: '快捷键', queryHistory: '执行历史', savedQueries: '已保存查询',
+  helpTitle: 'tabrelio 使用说明', shortcutsTitle: '快捷键', queryHistory: '执行历史', savedQueries: '已保存查询',
   records: (count: number, total: number) => `${count} 个对象，共 ${total} 个`,
   help: [
     '文件、编辑、查看、收藏夹、工具、窗口和帮助菜单提供完整功能；下方模块栏保留常用入口。',

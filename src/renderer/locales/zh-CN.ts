@@ -79,10 +79,10 @@ export const zh = {
     text007: "切换深色主题",
     text008: "切换主题",
     text009: "偏好设置",
-    text010: "关于 DBArk",
+    text010: "关于 tabrelio",
     text011: "调整侧边栏宽度",
     text012: "关闭 {0}",
-    text013: "欢迎使用 DBArk",
+    text013: "欢迎使用 tabrelio",
     text014: "新建查询标签",
     text015: "工作空间已就绪",
     text016: "{0} 个任务运行中",
@@ -509,7 +509,7 @@ export const zh = {
   },
   // 通用错误与数据库对象名称。
   commonMessages: {
-    text001: "请通过 DBArk 桌面应用打开工作台。",
+    text001: "请通过 tabrelio 桌面应用打开工作台。",
     text002: "表",
     text003: "视图",
     text004: "存储过程",

@@ -95,9 +95,13 @@ import { externalObjectUrisZh } from '../shared/externalObjectUris.zh-CN';
 import { objectUri } from '../shared/workbench';
 import { applyTablePreset, TablePresetSources } from './tablePresets';
 import { QueryResultPresetSources } from './queryResultPresetSources';
+import { productName } from '../shared/productName';
 
-if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
+// Electron 在 ready 前用应用名初始化 macOS 钥匙串；保留原身份和数据路径。
 app.setName('DBArk');
+const userDataPath = process.env.DBARK_USER_DATA || join(app.getPath('appData'), 'DBArk');
+mkdirSync(userDataPath, { recursive: true });
+app.setPath('userData', userDataPath);
 let window: BrowserWindow | undefined;
 let applicationMenu: ApplicationMenu | undefined;
 let store: LocalStore;
@@ -1656,7 +1660,7 @@ function createMenu(): void {
 
 /** 创建启用沙箱与上下文隔离的窗口，限制导航并等待页面就绪后显示。 */
 async function createWindow(): Promise<void> {
-  window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
+  window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: productName, icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   columnsMain.trackWindow(window);
   // 重导航立即撤销旧菜单闭包，不能等待新页面初始化后再覆盖旧可用状态。
   window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) applicationMenu?.invalidate(); });
@@ -1821,6 +1825,7 @@ else {
     window?.focus();
   });
   void app.whenReady().then(async () => {
+    app.setName(productName);
     const wasm = app.isPackaged ? join(process.resourcesPath, 'sql-wasm.wasm') : require.resolve('sql.js/dist/sql-wasm.wasm');
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
     tableApplyReceipts = new TableApplyReceipts(store, () => persistAuxiliary(() => { throw Error('提交记录保存失败'); }));
@@ -1846,14 +1851,14 @@ else {
     tableDraftFiles = new TableDraftFiles({ reserve: path => exportReservations.acquire(path), choose: async mode => {
       const ownerWindow = window;
       if (!ownerWindow) throw Error('表格草稿所属窗口已关闭');
-      const filters = [{ name: 'DBArk 表格草稿（包含原始数据）', extensions: ['dbark-draft'] }];
+      const filters = [{ name: productName + ' 表格草稿（包含原始数据）', extensions: ['dbark-draft'] }];
       if (mode === 'open') { const selected = await dialog.showOpenDialog(ownerWindow, { title: '打开表格草稿', properties: ['openFile'], filters }); return selected.canceled ? undefined : selected.filePaths[0]; }
       const selected = await dialog.showSaveDialog(ownerWindow, { title: '保存表格草稿', defaultPath: '表格草稿.dbark-draft', filters }); return selected.canceled ? undefined : selected.filePath;
     } });
     explainSnapshotFiles = new ExplainSnapshotFiles({ reserve: path => exportReservations.acquire(path), choose: async mode => {
       const ownerWindow = window;
       if (!ownerWindow) throw Error(explainSnapshotZh.stale);
-      const filters = [{ name: 'DBArk 执行计划快照', extensions: ['json'] }];
+      const filters = [{ name: productName + ' 执行计划快照', extensions: ['json'] }];
       if (mode === 'open') {
         const selected = await dialog.showOpenDialog(ownerWindow, { title: explainSnapshotZh.choose, properties: ['openFile'], filters });
         return selected.canceled ? undefined : selected.filePaths[0];
@@ -2015,5 +2020,5 @@ else {
       }
     });
     createMenu(); await createWindow();
-  }).catch(error => { dialog.showErrorBox('DBArk 启动失败', error instanceof Error ? error.message : String(error)); shutdownComplete = true; app.quit(); });
+  }).catch(error => { dialog.showErrorBox(productName + ' 启动失败', error instanceof Error ? error.message : String(error)); shutdownComplete = true; app.quit(); });
 }

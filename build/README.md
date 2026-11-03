@@ -1,4 +1,4 @@
-# DBArk 应用图标
+# tabrelio 应用图标
 
 `icon.svg` 是唯一矢量源。图形沿用 `src/renderer/App.tsx` 的自主品牌路径，增加深色圆角底和透明外边距；未使用 Navicat 或第三方品牌素材。资产与项目一同采用 MIT 许可证。
 

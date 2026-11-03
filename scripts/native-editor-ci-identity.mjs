@@ -35,7 +35,7 @@ export function collectIdentity({ project, kind, root, executable, resources }) 
   project = canonical(project, true); root = canonical(root, true); executable = canonical(executable); resources = canonical(resources, true);
   if (!['source', 'installed'].includes(kind)) fail('未知阶段');
   const appPath = kind === 'source' ? root : join(resources, 'app.asar');
-  if (kind === 'source' ? root !== project : !inside(root, executable) || !inside(root, resources) || !['DBArk.exe', 'DBArk'].includes(basename(executable))) fail('应用根与入口不匹配');
+  if (kind === 'source' ? root !== project : !inside(root, executable) || !inside(root, resources) || !['tabrelio.exe', 'tabrelio', 'DBArk.exe', 'DBArk'].includes(basename(executable))) fail('应用根与入口不匹配');
   const files = [executable, canonical(join(project, 'scripts/check-offline-query-port.mjs'))];
   if (kind === 'source') {
     files.push(canonical(join(root, 'package.json')), canonical(join(resources, 'default_app.asar'))); walk(join(root, 'dist'), files);

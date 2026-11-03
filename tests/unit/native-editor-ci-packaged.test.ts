@@ -16,7 +16,7 @@ const program = ts.transpileModule(execution.getText(tree), { compilerOptions: {
 
 /** 执行原安装脚本整个收尾控制块；安装、运行与删除只用RAM端口记录，从不接触系统安装。 */
 async function probe(mode: 'native-failed' | 'later-failed' | 'accepted' | 'approval-failed' | 'first-model-failed' | 'first-model-unknown' | 'first-model-footer-bad', keeper: 'off' | 'accepted' | 'failed' = 'off') {
-  const cleanup = vi.fn(), install = vi.fn(() => '/owned/Applications/DBArk.app/Contents/MacOS/DBArk');
+  const cleanup = vi.fn(), install = vi.fn(() => '/owned/Applications/tabrelio.app/Contents/MacOS/tabrelio');
   const native = vi.fn(() => { if (mode === 'native-failed') throw Error('原专项失败'); return { cleanupAllowed: true, proofs: [{}, {}] }; });
   const firstModel = vi.fn(() => {
     if (mode === 'first-model-failed') throw Error('原四例失败');
@@ -81,7 +81,7 @@ describe('原安装脚本完整收尾与CI接线', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
     expect(workflow).toContain('cancel-in-progress: false'); expect(workflow).toContain('if: always()');
     expect(workflow).toContain('run: node scripts/native-editor-ci.mjs source'); expect(workflow).not.toContain('run: pnpm test:e2e');
-    expect(workflow).not.toContain('command: pnpm build'); expect(workflow).toContain('reference: release/win-unpacked/DBArk.exe'); expect(workflow).toContain('reference: release/mac-arm64/DBArk.app/Contents/MacOS/DBArk'); expect(workflow).toContain('reference: release/mac/DBArk.app/Contents/MacOS/DBArk');
+    expect(workflow).not.toContain('command: pnpm build'); expect(workflow).toContain('reference: release/win-unpacked/tabrelio.exe'); expect(workflow).toContain('reference: release/mac-arm64/tabrelio.app/Contents/MacOS/tabrelio'); expect(workflow).toContain('reference: release/mac/tabrelio.app/Contents/MacOS/tabrelio');
     expect(workflow).toContain('DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256: ${{ steps.native-source.outputs.source_approval_sha256 }}');
     expect(workflow.indexOf('run: node scripts/native-editor-ci.mjs source')).toBeLessThan(workflow.indexOf('run: ${{ matrix.command }}'));
     expect(workflow.indexOf('run: node scripts/native-editor-ci.mjs source')).toBeLessThan(workflow.indexOf('run: node scripts/native-file-first-model-ci.mjs source'));

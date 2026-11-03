@@ -25,7 +25,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'server-monitor': '服务器监控', 'explain-snapshot': '打开计划快照', 'result-snapshot': '打开结果快照',
   'task-center': '任务中心', 'tab-search': '查找已打开标签', 'close-tab': '关闭当前标签', 'reopen-query': '重新打开上个保留查询',
   'close-other-queries': '关闭其他查询', 'close-left-queries': '关闭左侧查询', 'close-right-queries': '关闭右侧查询',
-  'next-tab': '下一个标签', 'previous-tab': '上一个标签', 'help': '使用说明', 'shortcuts': '快捷键', 'about': '关于 DBArk'
+  'next-tab': '下一个标签', 'previous-tab': '上一个标签', 'help': '使用说明', 'shortcuts': '快捷键', 'about': '关于 tabrelio'
 };
 export const uiMenuLabels = {
   file: '文件', edit: '编辑', view: '查看', favorites: '收藏夹', tools: '工具', window: '窗口', help: '帮助',
@@ -34,5 +34,5 @@ export const uiMenuLabels = {
   undo: '撤销', redo: '重做', cut: '剪切', copy: '复制', paste: '粘贴', selectAll: '全选',
   zoomIn: '放大', zoomOut: '缩小', resetZoom: '重置缩放', fullscreen: '全屏', quit: '退出',
   addFavorite: '添加当前对象收藏', removeFavorite: '取消当前对象收藏',
-  hide: '隐藏 DBArk', hideOthers: '隐藏其他应用', showAll: '显示全部'
+  hide: '隐藏 tabrelio', hideOthers: '隐藏其他应用', showAll: '显示全部'
 } as const;

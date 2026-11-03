@@ -22,7 +22,7 @@ describe('原生菜单状态与原文档命令归属', () => {
   it('Windows固定七类，Mac保留应用菜单和编辑/窗口系统角色，没有未完成功能占位', () => {
     const windows = fixture();
     expect(windows.current().map(item => item.label)).toEqual(['文件', '编辑', '查看', '收藏夹', '工具', '窗口', '帮助']);
-    expect(fixture('darwin').current().map(item => item.label)).toEqual(['DBArk', '文件', '编辑', '查看', '收藏夹', '工具', '窗口', '帮助']);
+    expect(fixture('darwin').current().map(item => item.label)).toEqual(['tabrelio', '文件', '编辑', '查看', '收藏夹', '工具', '窗口', '帮助']);
     expect(windows.find('execute')?.enabled).toBe(false);
     expect(JSON.stringify(windows.current())).not.toMatch(/BI|自动运行|用户管理|模型|备份/);
     const edit = windows.current().find(item => item.label === '编辑')!.submenu as MenuItemConstructorOptions[];

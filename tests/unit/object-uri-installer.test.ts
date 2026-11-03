@@ -122,7 +122,7 @@ function legacyOwned(mode: 'CurrentUser' | 'all' = 'CurrentUser') {
 
 describe('对象URI安装配置与实际include有限解释（不代表原生安装验收）', () => {
   it('仅macOS声明dbark scheme，NSIS配置与SQLite签名隔离范围准确', () => {
-    expect(manifest.build.mac.protocols).toEqual([{ name: 'DBArk 对象链接', schemes: ['dbark'], role: 'Viewer' }]);
+    expect(manifest.build.mac.protocols).toEqual([{ name: 'tabrelio 对象链接', schemes: ['dbark'], role: 'Viewer' }]);
     expect(manifest.build.protocols).toBeUndefined(); expect(manifest.build.win.protocols).toBeUndefined();
     expect(manifest.build.nsis).toEqual({ oneClick: false, allowToChangeInstallationDirectory: true, installerLanguages: ['zh_CN'], include: 'build/installer.nsh' });
     const { protocols: _protocols, ...previousMac } = manifest.build.mac;
@@ -147,11 +147,22 @@ describe('对象URI安装配置与实际include有限解释（不代表原生安
     const registry: Registry = new Map(), directory = 'C:\\程序 Files\\DBArk %app% & test';
     const result = interpret('customInstall', registry, { mode, directory }), root = mode === 'all' ? 'machine:' : 'user:';
     expect(result.notifications).toBe(1); expect(result.writes).toBe(8);
-    expect(registry.get(root + protocol + '\\shell\\open\\command')!.get('')!.value).toBe('"' + directory + '\\DBArk.exe" -- "%1"');
-    expect(registry.get(root + protocol)!.get('dbarkownerpath')!.value).toBe(directory + '\\DBArk.exe');
+    expect(registry.get(root + protocol + '\\shell\\open\\command')!.get('')!.value).toBe('"' + directory + '\\tabrelio.exe" -- "%1"');
+    expect(registry.get(root + protocol)!.get('dbarkownerpath')!.value).toBe(directory + '\\tabrelio.exe');
     expect([...registry.keys()].every(key => key.startsWith(root))).toBe(true);
     expect(result.mutations.every(value => value.includes(root + protocol))).toBe(true);
     expect(result.nativeRoots.length).toBeGreaterThan(0); expect(result.nativeRoots.every(item => item.root + ':' === root && item.rights === 0x20119)).toBe(true);
+  });
+
+  it.each([false, true])('原品牌同目录完整对象链接可迁移，旧命令含终止符=%s', withTerminator => {
+    const registry = withTerminator ? owned() : legacyOwned(), root = 'user:' + protocol;
+    const owner = registry.get(root)!.get('dbarkownerpath')!;
+    const command = registry.get(root + '\\shell\\open\\command')!.get('')!;
+    const icon = registry.get(root + '\\defaulticon')!.get('')!;
+    for (const entry of [owner, command, icon]) entry.value = String(entry.value).replace('tabrelio.exe', 'DBArk.exe');
+    expect(interpret('customUnInstall', registry).mutations).toEqual([]);
+    expect(interpret('customInstall', registry).writes).toBe(8);
+    expect(snapshot(registry)).toEqual(snapshot(owned()));
   });
 
   it.each(['CurrentUser', 'all'] as const)('仅%s完整旧owner迁移为带固定终止符的新命令，迁移后仍可严格卸载', mode => {

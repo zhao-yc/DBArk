@@ -1,4 +1,4 @@
-# DBArk
+# tabrelio
 
 SQLite 高频查询新增[从已应用筛选生成 SELECT](docs/development/sqlite-filtered-select-20261101.md)：表／视图及只读连接、字段选择与顺序、原typed条件与多列排序，默认不带当前页分页，可明确LIMIT；只开原连接独立草稿，不自动执行且保留父数据修改。验证与未支持名称边界见专项记录，暂不发布。
 
@@ -8,7 +8,7 @@ SQLite 高频查询新增[元数据补全](docs/development/sqlite-completion-20
 
 面向 MySQL / MariaDB 的开源桌面数据库客户端。使用 Electron、React 和 TypeScript，采用 MIT 许可证。
 
-DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式，使用独立的界面与实现。当前开发范围为 Windows 和 macOS 客户端。
+tabrelio（原名 DBArk）保留连接树、多标签查询和表格编辑等熟悉的工作方式，使用独立的界面与实现。当前开发范围为 Windows 和 macOS 客户端。
 
 当前开发源码还提供 [SQLite 文件连接与原查询工作区](docs/development/sqlite-workspace-20261031.md)、[新建数据库文件](docs/development/sqlite-create-20261101.md)、[可视化新建表](docs/development/sqlite-table-create-20261101.md)、[执行光标所在语句](docs/development/sqlite-current-statement-20261101.md)、[类型参数脚本](docs/development/sqlite-parameters-20261101.md)、[查看执行计划](docs/development/sqlite-explain-20261101.md)、[分页表格、筛选和多列排序](docs/development/sqlite-table-browse-20261031.md)、[列头即时服务端排序](docs/development/sqlite-header-sort-20261101.md)、[按已应用条件完整流式导出](docs/development/sqlite-table-export-20261031.md)、[SQL 结构及数据导出](docs/development/sqlite-schema-export-20261101.md)、[CSV／JSON 整文件导入](docs/development/sqlite-table-import-20261101.md)、[CSV／JSON 导入为新表](docs/development/sqlite-import-new-table-20261101.md)，以及[读写表格草稿、修改预览和集中提交](docs/development/sqlite-table-edit-20261101.md)，另有[单元格／记录复制与粘贴新增草稿](docs/development/sqlite-table-clipboard-20261101.md)、[当前记录直接复制为新增草稿](docs/development/sqlite-table-duplicate-20261101.md)、[当前页勾选批量删除](docs/development/sqlite-table-remove-selected-20261101.md)、[从当前单元格覆盖矩形区域](docs/development/sqlite-table-range-paste-20261101.md)及[可写当前页查找与文本替换](docs/development/sqlite-table-find-20261101.md)。现有普通表另支持[索引查看、创建、替换和删除](docs/development/sqlite-indexes-20261101.md)，含表达式、排序规则和部分索引，先预览再以独立事务确认提交。现有普通表新增[字段管理](docs/development/sqlite-columns-20261101.md)：原生新增、重命名、删除字段及实际 SQLite 3.53.0 起支持的可空性修改，准确预览后以独立事务整批确认；ADD 时钟／含 NUL 表达式默认值明确拒绝并保留输入。现有普通表还新增[预览并确认重命名](docs/development/sqlite-table-rename-20261101.md)，支持原生依赖更新及安全往返导航。现有普通表新增[清空与删除](docs/development/sqlite-table-maintenance-20261101.md)：只读影响及 SQL 预览、完整风险确认、准确原名及独立事务；清空可明确重置 AUTOINCREMENT 序列，删除保留其他对象定义并说明级联／失效影响。视图及触发器新增[创建、定义替换与删除](docs/development/sqlite-objects-20261101.md)：完整原文编辑、只读预览、准确确认及独立事务，替换视图保留并重建原附属触发器，未知结果不重放。现有普通表还支持[字段类型与默认值修改](docs/development/sqlite-table-rebuild-20261101.md)：完整 SQL 预览、独立整批重建及全部值与精度核对，失败回滚、未知不重放。另支持[实际列顺序调整](docs/development/sqlite-table-reorder-20261101.md)：上移／下移、纯重排或组合修改，先预览和独立确认后整批重建。主外键约束设计、按键更新和更多导入格式继续开发；各增量的 Windows 源码、单元回归及真实窗口结果分别见专项记录，Mac／安装另验，这些开发源码能力不属于下列已发布安装包。
 
@@ -75,7 +75,7 @@ pnpm dist:mac
 
 ## 本地数据与文档
 
-配置、查询历史、保存的查询和任务记录保存在系统用户数据目录的 `DBArk/dbark.sqlite`。密码密文依赖当前系统用户的加密服务，复制配置库到另一台电脑后可能需要重新输入密码。
+更名后继续使用原系统用户数据目录的 `DBArk/dbark.sqlite` 保存连接、查询历史、草稿和任务记录。既有 `dbark:` 对象链接及导入导出格式仍可使用。密码密文依赖当前系统用户的加密服务，复制配置库到另一台电脑后可能需要重新输入密码。
 
 - [技术架构](docs/architecture.md)
 - [中文使用指南](docs/user-guide.md)
