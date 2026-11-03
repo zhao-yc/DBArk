@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import type { CellValue, QueryResult } from '../../src/shared/contracts';
-import { captureQueryResultStatistics, currentQueryResultStatistics, QueryResultStatisticsScan } from '../../src/renderer/queryResultStatistics';
+import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, QueryResultStatisticsScan } from '../../src/renderer/queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 
 type Value = bigint | number | string | Uint8Array | null;
@@ -29,6 +29,19 @@ function finish(scan: QueryResultStatisticsScan) {
 function literal(value: unknown): string { return value instanceof Uint8Array ? `X'${Buffer.from(value).toString('hex')}'` : String(value); }
 
 describe('SQLite已返回列统计', () => {
+  it('只勾选实数时，筛选仍覆盖同组的精确整数，不能并入相邻大整数或文本', () => {
+    const f = fixture([9007199254740992, 9007199254740992n, 9007199254740993n, '9007199254740992'], new Set([0]));
+    try {
+      const frequency = finish(new QueryResultStatisticsScan(f.capture, true)).frequency!;
+      expect(queryResultFrequencyFilter(frequency, frequency.entries[0])).toEqual({ mode: 'OR', children: [
+        { column: 'value', operator: 'eq', value: '9007199254740992', sqliteType: 'real' },
+        { column: 'value', operator: 'eq', value: '9007199254740992', sqliteType: 'integer' },
+      ] });
+      const odd = captureQueryResultStatistics(f.source.columns, f.source.rows, f.source.columns[0], new Set([2]), f.source);
+      const oddFrequency = finish(new QueryResultStatisticsScan(odd, true)).frequency!;
+      expect(queryResultFrequencyFilter(oddFrequency, oddFrequency.entries[0])).toEqual({ column: 'value', operator: 'eq', value: '9007199254740993', sqliteType: 'integer' });
+    } finally { f.db.close(); }
+  });
   it('频率按完整SQLite原值与独立GROUP BY一致；相邻大整数、文本、字节及NULL不被显示值混淆', () => {
     const f = fixture([2n, 2, '2', Uint8Array.of(0x32), 9007199254740993n, 9007199254740992n, 9007199254740992, null, '', Uint8Array.of(0x32), null]);
     try {

@@ -11,7 +11,13 @@ export interface QueryResultFrequency {
   readonly otherValues: number;
   readonly otherRows: number;
 }
-interface CountedValue { preview: string; kind: QueryResultFrequencyKind; count: number; truncated: boolean; }
+interface CountedValue { preview: string; kind: QueryResultFrequencyKind; count: number; truncated: boolean; rowIndex: number; }
+const representativeRows = new WeakMap<QueryResultFrequencyEntry, number>();
+
+/** 筛选定位到首个真实原格，展示文本仅用于阅读。 */
+export function queryResultFrequencyRow(entry: QueryResultFrequencyEntry): number | undefined {
+  return representativeRows.get(entry);
+}
 
 /** 只保留有界预览，去重键仍用统计扫描器已核过的完整、带类型原值。 */
 function preview(value: string): { preview: string; truncated: boolean } {
@@ -36,10 +42,10 @@ export class QueryResultFrequencyCounter {
   get distinct(): number { return this.values.size; }
 
   /** 同值保留首个代表值和出现次序，后续相同数值的不同写法只增加次数。 */
-  add(key: string, literal: string, kind: QueryResultFrequencyKind): void {
+  add(key: string, literal: string, kind: QueryResultFrequencyKind, rowIndex: number): void {
     const existing = this.values.get(key);
     if (existing) existing.count++;
-    else this.values.set(key, { ...preview(literal), kind, count: 1 });
+    else this.values.set(key, { ...preview(literal), kind, count: 1, rowIndex });
   }
 
   /** 只维护前10个位置，平次沿原结果首次出现顺序，完整计数再归入其它。 */
@@ -55,7 +61,11 @@ export class QueryResultFrequencyCounter {
       if (top.length > queryResultFrequencyLimits.entries) top.pop();
     }
     if (seen !== expected) throw Error('原值分布计数与非空行不一致');
-    const entries = top.map(value => Object.freeze({ label: label(value), kind: value.kind, count: value.count, truncated: value.truncated }));
+    const entries = top.map(value => {
+      const entry = Object.freeze({ label: label(value), kind: value.kind, count: value.count, truncated: value.truncated });
+      representativeRows.set(entry, value.rowIndex);
+      return entry;
+    });
     return Object.freeze({ entries: Object.freeze(entries), otherValues: this.values.size - top.length, otherRows: seen - top.reduce((sum, value) => sum + value.count, 0) });
   }
 

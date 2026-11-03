@@ -1,6 +1,6 @@
 # Navicat 全功能覆盖目标
 
-查询结果新增[常见值分布](development/query-result-frequency-20261103.md)：已返回筛选或勾选范围内，按完整原值排名，精确区分数值低位、SQLite 文本／字节和 NULL。不重查数据库；D09 保持部分，不增加完整工作包或发行计数。
+查询结果新增常见值分布，按已返回范围内的完整原值排名，精确区分数值低位、SQLite 文本／字节和 NULL。可从分布项打开本地筛选草稿，应用或撤销均沿用原结果整理流程。D09 保持部分覆盖。[常见值分布](development/query-result-frequency-20261103.md)
 
 SQL 高频编辑新增[语句导航](development/statement-navigation-20261103.md)：长脚本按完整正文搜索、分页、跳转与选中，复用原MySQL／MariaDB／SQLite分段规则，不执行SQL。O05保持部分，Mac两架构及安装另验，不增加完整工作包或发行计数，暂不发布。
 

@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
-import { captureQueryResultStatistics, currentQueryResultStatistics, QueryResultStatisticsScan, type QueryResultStatisticsCapture, type QueryResultStatisticsResult } from '../queryResultStatistics';
+import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, QueryResultStatisticsScan, type QueryResultStatisticsCapture, type QueryResultStatisticsResult } from '../queryResultStatistics';
+import type { QueryResultFrequencyEntry } from '../queryResultFrequency';
+import type { QueryResultFilterGroup, QueryResultFilterRule } from '../queryResultFilter';
 import { queryResultStatisticsZh as text } from '../locales/queryResultStatistics.zh-CN';
 import { errorMessage } from '../lib';
 import { UsageHelp, ErrorBox, Modal  } from './ui';
@@ -11,13 +13,14 @@ interface Props {
   selectedIndices: ReadonlySet<number>; truncated: boolean; owner: string;
   sqliteSource?: QueryResult;
   isCurrent(): boolean; onClose(): void;
+  onFrequencyFilter?(node: QueryResultFilterRule | QueryResultFilterGroup): void;
 }
 type Request = { column: string; scope: 'all' | 'selected'; mode: 'summary' | 'frequency' };
 type Operation = { request: Request; capture: QueryResultStatisticsCapture; scan: QueryResultStatisticsScan; timer?: ReturnType<typeof setTimeout> };
 type View = { request: Request; processed: number; total: number; result?: QueryResultStatisticsResult; error?: string };
 
 /** 仅统计当前已返回快照；分批让出界面线程，切列、取消和来源变化永久撤销旧计算。 */
-export function QueryResultStatisticsDialog({ columns, rows, initialColumn, selectedIndices, truncated, owner, sqliteSource, isCurrent, onClose }: Props) {
+export function QueryResultStatisticsDialog({ columns, rows, initialColumn, selectedIndices, truncated, owner, sqliteSource, isCurrent, onClose, onFrequencyFilter }: Props) {
   const origin = useRef({ columns, rows, initialColumn, owner, sqliteSource }).current;
   const latest = useRef({ columns, rows, initialColumn, owner, sqliteSource, isCurrent }); latest.current = { columns, rows, initialColumn, owner, sqliteSource, isCurrent };
   const [prepared] = useState(() => {
@@ -105,14 +108,23 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
   if (view.result && lastCapture.current && !currentQueryResultStatistics(lastCapture.current, columns, rows)) invalid.current = true;
   const valid = environment(), current = view.request === request && requestRef.current === request;
   const result = valid && current ? view.result : undefined;
+  /** 只允许当前已发布的图表交接原值条件，过期按钮无法开启筛选。 */
+  function filterFrequency(entry: QueryResultFrequencyEntry | null): void {
+    if (committed.current !== ticket || requestRef.current !== request || !environment() || !result?.frequency || !onFrequencyFilter) return;
+    try {
+      onFrequencyFilter(queryResultFrequencyFilter(result.frequency, entry));
+    } catch (reason) {
+      setView({ ...view, error: errorMessage(reason) });
+    }
+  }
   const labels = ['count', 'nonNull', 'nulls', 'distinct', 'min', 'max', 'sum', 'average'] as const;
   return <div data-query-result-statistics-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
-    <p>{text.notice}</p><UsageHelp><p>{request.mode === 'frequency' ? text.frequencyHint : sqliteSource ? text.sqliteHint : text.hint}</p></UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
+    <p>{text.notice}</p><UsageHelp><p>{request.mode === 'frequency' ? text.frequencyHint : sqliteSource ? text.sqliteHint : text.hint}</p>{request.mode === 'frequency' && onFrequencyFilter && <p>{text.frequencyFilterHint}</p>}</UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs"><label>{text.column}<select aria-label={text.column} value={request.column} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...request, column: event.target.value }); }}>{prepared.options.map(column => <option key={column.key} value={column.key}>{column.name || column.key} · {column.key}</option>)}</select></label>
       <label>{text.scope}<select aria-label={text.scope} value={request.scope} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (event.target.value === 'all' || event.target.value === 'selected')) change({ ...request, scope: event.target.value }); }}><option value="all">{text.all}</option><option value="selected" disabled={!prepared.indices.size}>{text.selected}</option></select></label></div>
     <div className="query-result-frequency-modes" role="group" aria-label={text.mode}>{(['summary', 'frequency'] as const).map(mode => <button key={mode} type="button" aria-pressed={mode === request.mode} className={mode === request.mode ? 'selected' : ''} disabled={!valid || !prepared.capture} onClick={() => change({ ...request, mode })}>{text[mode]}</button>)}</div>
     {!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={current ? view.error : undefined}/>
     {valid && current && !view.result && !view.error && <p role="status">{request.mode === 'frequency' ? text.scanningFrequency : text.scanning} {text.progress(view.processed, view.total)}</p>}
-    {result && (request.mode === 'frequency' ? <>{result.frequency ? <QueryResultFrequencyChart frequency={result.frequency} count={result.count} nulls={result.nulls}/> : <p>{text.frequencyUnavailable} {result.reason}</p>}{result.floatInput && <p>{text.floatInput}</p>}</> : <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.sqliteTypes && <dl aria-label={text.sqliteTypes}>{(['integer', 'real', 'text', 'blob', 'null'] as const).map(kind => <div key={kind}><dt>{kind.toUpperCase()}</dt><dd aria-label={text.sqliteTypeCount(kind)}>{result.sqliteTypes![kind]}</dd></div>)}</dl>}{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>)}
+    {result && (request.mode === 'frequency' ? <>{result.frequency ? <QueryResultFrequencyChart frequency={result.frequency} count={result.count} nulls={result.nulls} onFilter={onFrequencyFilter ? filterFrequency : undefined}/> : <p>{text.frequencyUnavailable} {result.reason}</p>}{result.floatInput && <p>{text.floatInput}</p>}</> : <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.sqliteTypes && <dl aria-label={text.sqliteTypes}>{(['integer', 'real', 'text', 'blob', 'null'] as const).map(kind => <div key={kind}><dt>{kind.toUpperCase()}</dt><dd aria-label={text.sqliteTypeCount(kind)}>{result.sqliteTypes![kind]}</dd></div>)}</dl>}{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>)}
   </div><footer className="modal-footer"><span className="grow"/><button onClick={close}>{result ? text.close : text.cancel}</button></footer></Modal></div>;
 }

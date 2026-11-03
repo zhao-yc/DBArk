@@ -274,6 +274,18 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     /** 原菜单与真实表单共同验证草稿；应用、撤销、清除均不补读数据库。 */
     const openFiltering = async () => { await step(async () => (await navigationMenuItem(query(), { name: filterText.open, exact: true }, check)).click()); await step(() => expect(filtering).toBeVisible()); };
     const applyFiltering = async (expected: string[]) => { await step(() => filtering.getByRole('button', { name: filterText.apply, exact: true }).click()); await step(() => expect(filtering).toHaveCount(0)); await step(() => expect.poll(shownIntegers).toEqual(expected)); await step(() => expect(blobHeader).toHaveAttribute('aria-sort', 'descending')); expect((await step(audit)).executions).toBe(1); };
+    await step(async () => (await navigationMenuItem(query(), { name: statisticsText.open, exact: true }, check)).click());
+    await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c4'));
+    await step(() => statistics().getByRole('button', { name: statisticsText.frequency, exact: true }).click());
+    const textFrequencyRow = frequency().getByRole('row').filter({ has: page.getByText('"2"', { exact: true }) });
+    await step(() => textFrequencyRow.getByRole('button', { name: statisticsText.frequencyFilter, exact: true }).click());
+    await step(() => expect(statistics()).toHaveCount(0));
+    await step(() => expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text'));
+    await step(() => expect(filtering.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('2'));
+    await step(() => expect.poll(shownIntegers).toEqual(ascending));
+    await applyFiltering([ascending[0]]);
+    await step(async () => (await navigationMenuItem(query(), { name: sortHistoryText.undo, exact: true }, check)).click());
+    await step(() => expect.poll(shownIntegers).toEqual(ascending));
     await openFiltering(); await step(() => filtering.getByRole('button', { name: filterText.add, exact: true }).click());
     await step(() => filtering.getByLabel(filterText.column + ' 1', { exact: true }).selectOption('c4'));
     await step(() => filtering.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('eq'));

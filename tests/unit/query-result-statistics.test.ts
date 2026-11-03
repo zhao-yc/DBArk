@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DataRow, ResultColumn } from '../../src/shared/contracts';
-import { captureQueryResultStatistics, currentQueryResultStatistics, QueryResultStatisticsScan, type QueryResultStatisticsCapture } from '../../src/renderer/queryResultStatistics';
+import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, QueryResultStatisticsScan, type QueryResultStatisticsCapture } from '../../src/renderer/queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 
 /** 所有统计均运行真实捕获器和分批扫描器，不模拟成功结果或数据库。 */
@@ -23,6 +23,19 @@ function finish(scan: QueryResultStatisticsScan, initialProcessed = 0) {
 }
 
 describe('当前已返回行的常见值分布', () => {
+  it('同预览的长值转为不同的完整原值条件，原格失效后拒绝再次交接', () => {
+    const prefix = '甲'.repeat(80);
+    const f = fixture('VARCHAR', [prefix + '乙', prefix + '丙', null]);
+    const frequency = finish(new QueryResultStatisticsScan(f.capture, true)).frequency!;
+    const [first, second] = frequency.entries;
+    expect(first.label).toBe(second.label);
+    expect(queryResultFrequencyFilter(frequency, first)).toMatchObject({ column: 'k', operator: 'eq', value: prefix + '乙' });
+    expect(queryResultFrequencyFilter(frequency, second)).toMatchObject({ column: 'k', operator: 'eq', value: prefix + '丙' });
+    expect(queryResultFrequencyFilter(frequency, null)).toEqual({ column: 'k', operator: 'null', value: '' });
+    expect(() => queryResultFrequencyFilter(frequency, { ...first })).toThrow(text.stale);
+    f.rows[0].k = prefix + '丁';
+    expect(() => queryResultFrequencyFilter(frequency, first)).toThrow(text.stale);
+  });
   it('按完整范围计数再取前十，后出现高频值与同次数原顺序、其余和NULL均对齐', () => {
     const values = [...Array.from({ length: 12 }, (_, index) => `值${index + 1}`), ...Array(520).fill('后来'), '值3', '值3', null];
     const f = fixture('VARCHAR', values), before = structuredClone(f.rows), result = finish(new QueryResultStatisticsScan(f.capture, true));
