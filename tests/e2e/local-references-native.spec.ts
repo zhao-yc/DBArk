@@ -1,4 +1,5 @@
 import { test as baseTest, expect } from '@playwright/test';
+import { localRenameZh } from '../../src/renderer/locales/localRename.zh-CN';
 
 // 默认和列举均不加载桌面fixture；离线本文引用不接收任何数据库认证或用户配置路径。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -9,7 +10,7 @@ if (active) {
   for (const [index, value] of process.argv.entries()) if (value === '--trace' && process.argv[index + 1] !== 'off' || value.startsWith('--trace=') && value !== '--trace=off') throw Error('本文关系引用专项禁止自动trace');
 }
 type Desktop = typeof import('./desktop-fixture');
-type WorkerFact = { posted: number; ready: number; replied: number; terminated: number; references: boolean; status?: string; count?: number };
+type WorkerFact = { posted: number; ready: number; replied: number; terminated: number; references: boolean; rename?: boolean; status?: string; count?: number };
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：显式启用MySQL本文引用离线专项');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -38,7 +39,7 @@ test('MySQL离线真实Shift+F12引用列表与跳转，保持原模型、撤销
         super(url, options); this.fact = { posted: 0, ready: 0, replied: 0, terminated: 0, references: false }; facts.push(this.fact);
         this.addEventListener('message', event => { if (event.data?.type === 'dbark-completion-ready') this.fact.ready++; else if (event.data?.result) { this.fact.replied++; this.fact.status = event.data.result.status; this.fact.count = event.data.result.references?.length; } });
       }
-      override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions): void { if (message && typeof message === 'object' && 'intent' in message && message.intent === 'references') { this.fact.references = true; this.fact.posted++; } if (Array.isArray(options)) super.postMessage(message, options); else super.postMessage(message, options); }
+      override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions): void { if (message && typeof message === 'object' && 'intent' in message) { if (message.intent === 'references') { this.fact.references = true; this.fact.posted++; } else if (message.intent === 'rename') { this.fact.rename = true; this.fact.posted++; } } if (Array.isArray(options)) super.postMessage(message, options); else super.postMessage(message, options); }
       override terminate(): void { this.fact.terminated++; super.terminate(); }
     };
   }));
@@ -118,6 +119,33 @@ test('MySQL离线真实Shift+F12引用列表与跳转，保持原模型、撤销
   const workers = await step(() => page.evaluate(() => (window as Window & { __localReferencesWorkers?: WorkerFact[] }).__localReferencesWorkers?.filter(fact => fact.references)));
   expect(workers).toHaveLength(4);
   for (const fact of workers!) expect(fact).toMatchObject({ posted: 1, ready: 1, replied: 1, terminated: 1, status: 'ready' });
+  const renameProofs: unknown[] = [];
+  for (const [source, offset, name, expected] of [
+    ['SELECT s.id,s.name FROM subject s WHERE s.id=1', 7, 'new_alias', 'SELECT `new_alias`.id,`new_alias`.name FROM subject `new_alias` WHERE `new_alias`.id=1'],
+    ['WITH q(n) AS (SELECT 1) SELECT q.n FROM q', 5, 'new_cte', 'WITH `new_cte`(n) AS (SELECT 1) SELECT `new_cte`.n FROM `new_cte`'],
+  ] as const) {
+    await step(() => page.keyboard.press('Escape')); await step(() => query().locator('.monaco-editor').getByRole('textbox').focus());
+    await step(() => page.keyboard.press(modifier + '+A')); await step(() => page.keyboard.insertText(source));
+    await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home')); for (const _point of source.slice(0, offset + 1)) await step(() => page.keyboard.press('ArrowRight'));
+    const before = await snapshot(); await step(() => page.keyboard.press('F2'));
+    const rename = query().locator('.rename-box input.rename-input'); await step(() => expect(rename).toBeVisible({ timeout: 13000 })); await step(() => expect(rename).toHaveValue(source[offset]));
+    await info.attach('MySQL局部重命名输入' + renameProofs.length, { body: await step(() => page.screenshot()), contentType: 'image/png' });
+    await step(() => rename.fill(name)); await step(() => page.keyboard.press('Enter')); await step(() => expect(rename).not.toBeVisible());
+    await step(() => expect.poll(async () => (await snapshot()).source, { timeout: 13000 }).toBe(expected)); const after = await snapshot(); expect(after.uri).toBe(before.uri);
+    await step(() => page.keyboard.press(modifier + '+Z')); expect((await snapshot()).source).toBe(source);
+    await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+Z' : 'Control+Y')); expect((await snapshot()).source).toBe(expected);
+    await step(() => page.keyboard.press(modifier + '+Z')); expect((await snapshot()).source).toBe(source); renameProofs.push({ before, after, undoRedoWholeGroup: true });
+  }
+  await step(() => page.keyboard.press(modifier + '+A')); await step(() => page.keyboard.insertText('SELECT s.id FROM subject s'));
+  await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home')); for (let index = 0; index < 8; index++) await step(() => page.keyboard.press('ArrowRight'));
+  const conflictBefore = await snapshot(); await step(() => page.keyboard.press('F2')); const conflictInput = query().locator('.rename-box input.rename-input');
+  await step(() => expect(conflictInput).toBeVisible({ timeout: 13000 })); await step(() => conflictInput.fill('subject')); await step(() => page.keyboard.press('Enter'));
+  await step(() => expect(query().getByRole('status').filter({ hasText: localRenameZh.collision })).toBeVisible({ timeout: 13000 })); const conflictAfter = await snapshot();
+  expect({ ...conflictAfter, offset: conflictBefore.offset, selection: conflictBefore.selection }).toEqual(conflictBefore);
+  await info.attach('MySQL重命名冲突可见提示', { body: await step(() => page.screenshot()), contentType: 'image/png' });
+  const renameWorkers = await step(() => page.evaluate(() => (window as Window & { __localReferencesWorkers?: WorkerFact[] }).__localReferencesWorkers?.filter(fact => fact.rename)));
+  expect(renameWorkers).toHaveLength(6); for (const [index, fact] of renameWorkers!.entries()) expect(fact).toMatchObject({ posted: 1, ready: 1, replied: 1, terminated: 1, status: index === 5 ? 'blocked' : 'ready' });
+  await info.attach('MySQL局部重命名原件', { body: JSON.stringify({ renameProofs, renameWorkers, databaseRequestsAdded: 0 }), contentType: 'application/json' });
   const audit = await step(() => application.evaluate(() => (globalThis as typeof globalThis & { __localReferencesAudit?: { commands: string[]; denied: string[] } }).__localReferencesAudit));
   expect(audit?.denied).toEqual([]); expect(audit?.commands.some(command => /^(?:query|metadata|sessions)\./.test(command))).toBe(false);
   expect(await step(() => page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) })))).toEqual({ tasks: [], history: [] });

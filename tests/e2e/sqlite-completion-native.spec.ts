@@ -16,7 +16,7 @@ type Desktop = typeof import('./desktop-fixture');
 interface Fact { command: string; request: Record<string, unknown>; reply?: unknown; failure?: string; }
 interface WorkerTrace { id: number; sent: { kind: string; id?: string; frame?: number; control?: string }[]; received: { kind: string; id?: string; frame?: number }[]; exit?: number; kills: number; }
 interface Audit { pending: number; denied: string[]; pickerIds: string[]; profiles: Record<string, boolean>; sessions: string[]; commands: string[]; operations: Fact[]; workers: WorkerTrace[]; }
-interface AnalysisTrace { id: number; url: string; posted: number; ready: number; replied: number; terminated: number; errors: number; status?: string; reason?: string; intent?: 'hover' | 'definition' | 'references'; }
+interface AnalysisTrace { id: number; url: string; posted: number; ready: number; replied: number; terminated: number; errors: number; status?: string; reason?: string; intent?: 'hover' | 'definition' | 'references' | 'rename'; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：须DBARK_SQLITE_COMPLETION_NATIVE_TEST=1、integration=0，仅使用独占合成SQLite文件');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -93,7 +93,7 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
   const observeAnalysis = () => step(() => page.evaluate(() => {
     const root = window as Window & { __sqliteCompletionAnalysis?: { records: AnalysisTrace[]; references: AnalysisTrace[]; check(): void; restore(): void } }; if (root.__sqliteCompletionAnalysis) throw Error('原分析观察器已存在'); const Native = window.Worker, records: AnalysisTrace[] = [], references: AnalysisTrace[] = [], releases: (() => void)[] = [];
     class Observed extends Native { constructor(url: string | URL, options?: WorkerOptions) { super(url, options); const reference = String(url).includes('sqliteLocalReferences.worker'); if (!reference && !String(url).includes('sqliteCompletion.worker')) return; const target = reference ? references : records; const worker = this, record: AnalysisTrace = { id: target.length + 1, url: String(url), posted: 0, ready: 0, replied: 0, terminated: 0, errors: 0, ...(reference ? { intent: 'references' as const } : {}) }; target.push(record); const post = worker.postMessage, terminate = worker.terminate;
-      const wrappedPost = ((...args: unknown[]) => { record.posted++; const raw = args[0]; if (raw && typeof raw === 'object' && 'intent' in raw && (raw.intent === 'hover' || raw.intent === 'definition')) record.intent = raw.intent; return Reflect.apply(post, worker, args); }) as typeof worker.postMessage, wrappedTerminate = () => { record.terminated++; return Reflect.apply(terminate, worker, []); };
+      const wrappedPost = ((...args: unknown[]) => { record.posted++; const raw = args[0]; if (raw && typeof raw === 'object' && 'intent' in raw && (raw.intent === 'hover' || raw.intent === 'definition' || raw.intent === 'rename')) record.intent = raw.intent; return Reflect.apply(post, worker, args); }) as typeof worker.postMessage, wrappedTerminate = () => { record.terminated++; return Reflect.apply(terminate, worker, []); };
       const message = (event: MessageEvent) => { const raw = event.data; if (raw?.type === (reference ? 'dbark-sqlite-local-references-ready' : 'dbark-sqlite-completion-ready') && raw.version === 1) record.ready++; else if (Number.isSafeInteger(raw?.id) && raw.result && typeof raw.result === 'object') { record.replied++; if (typeof raw.result.status === 'string') record.status = raw.result.status; if (typeof raw.result.reason === 'string') record.reason = raw.result.reason; } }, error = () => { record.errors++; }; worker.postMessage = wrappedPost; worker.terminate = wrappedTerminate; worker.addEventListener('message', message); worker.addEventListener('error', error); worker.addEventListener('messageerror', error); releases.push(() => { if (worker.postMessage !== wrappedPost || worker.terminate !== wrappedTerminate) throw Error('原分析Worker观察器已变化'); worker.postMessage = post; worker.terminate = terminate; worker.removeEventListener('message', message); worker.removeEventListener('error', error); worker.removeEventListener('messageerror', error); });
     } }
     window.Worker = Observed; const state = { records, references, check() { if (root.__sqliteCompletionAnalysis !== state || window.Worker !== Observed) throw Error('原分析观察器已变化'); }, restore() { state.check(); if ([...records, ...references].some(record => record.terminated !== 1 || record.errors)) throw Error('真实分析Worker未完成释放'); for (const release of releases) release(); window.Worker = Native; delete root.__sqliteCompletionAnalysis; } }; root.__sqliteCompletionAnalysis = state;
@@ -208,6 +208,26 @@ test('真实Monaco SQLite元数据建议、Unicode转义、原事务临时表隔
       referenceProof.push({ count, before, after, selection, directoryReadsAdded: 0 });
     }
     await info.attach('SQLite本文引用真实导航原件', { body: JSON.stringify({ referenceProof, workers: await referenceAnalysis(), realMain: true, realSQLiteWorker: true, queryExecutionsAdded: 0, directoryReadsAdded: 0 }), contentType: 'application/json' });
+    await metadataReadOnly(baseline, statelessBefore);
+    stage = '真实F2局部别名及CTE重命名，整组单次撤销／重做、零SQL与目录读取';
+    const renameProof: unknown[] = [];
+    for (const [marked, name, expected] of [
+      ['SELECT |s.id,S.main_marker FROM subject AS S WHERE s.id=1', '新名🚢', 'SELECT "新名🚢".id,"新名🚢".main_marker FROM subject AS "新名🚢" WHERE "新名🚢".id=1'],
+      ['WITH |q(n) AS (SELECT 1) SELECT q.n FROM q', '新CTE', 'WITH "新CTE"(n) AS (SELECT 1) SELECT "新CTE".n FROM "新CTE"'],
+    ] as const) {
+      const input = await at(marked); await settleMetadata(); const before = await navigationModel(), reads = completionFacts(await step(audit)).length, workers = (await referenceAnalysis()).length;
+      await step(() => page.keyboard.press('F2')); const rename = query().locator('.rename-box input.rename-input'); await step(() => expect(rename).toBeVisible({ timeout: 13000 }));
+      await info.attach('SQLite局部重命名输入' + renameProof.length, { body: await step(() => page.screenshot()), contentType: 'image/png' });
+      await step(() => rename.fill(name)); await step(() => page.keyboard.press('Enter')); await step(() => expect(rename).not.toBeVisible());
+      await step(() => expect.poll(async () => (await navigationModel()).source, { timeout: 13000 }).toBe(expected)); const after = await navigationModel(); expect(after.uri).toBe(before.uri);
+      await step(() => page.keyboard.press(modifier + '+Z')); expect((await navigationModel()).source).toBe(input.source);
+      await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+Z' : 'Control+Y')); expect((await navigationModel()).source).toBe(expected);
+      await step(() => page.keyboard.press(modifier + '+Z')); expect((await navigationModel()).source).toBe(input.source);
+      await settleMetadata(); expect(completionFacts(await step(audit))).toHaveLength(reads); const actual = await referenceAnalysis(); expect(actual).toHaveLength(workers + 2);
+      for (const record of actual.slice(-2)) expect(record).toMatchObject({ intent: 'rename', posted: 1, ready: 1, replied: 1, terminated: 1, errors: 0, status: 'ready' });
+      renameProof.push({ before, after, undoRedoWholeGroup: true, directoryReadsAdded: 0, userSqlAdded: 0 });
+    }
+    await info.attach('SQLite局部重命名原件', { body: JSON.stringify({ renameProof, workers: (await referenceAnalysis()).slice(-4), realMain: true, realSQLiteWorker: true }), contentType: 'application/json' });
     await metadataReadOnly(baseline, statelessBefore);
     const statelessFacts = await step(audit); expect(completionFacts(statelessFacts).length).toBeGreaterThan(0); expect(completionFacts(statelessFacts).every(fact => fact.request.sessionId === undefined)).toBe(true); for (const fact of completionFacts(statelessFacts)) { sqliteCompletionInputSchema.parse(fact.request); if (succeeded(fact)) sqliteCompletionOutputSchema.parse(result(fact.reply)); else expect(operations(statelessFacts, 'query.cancel').some(cancel => cancel.request.taskId === fact.request.taskId), '失败元数据必须有同编号真实取消请求，不能忽略无缘失败').toBe(true); expect(fact.request).not.toHaveProperty('sql'); expect(fact.request).not.toHaveProperty('source'); }
     stage = '用户明确执行TEMP脚本并在原查询事务创建未提交DDL；独立观察仍只见原主文件';

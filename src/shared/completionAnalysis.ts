@@ -98,7 +98,7 @@ function collectCtes(tokens:CompletionToken[],end:number):Cte[]{
 }
 
 /** SQL补全语义分析在可终止worker内调用；返回结构有界，异常不包含SQL正文。 */
-export function analyzeCompletion(source:string,offset:number,mode:CompletionLexicalMode={},capabilities:CompletionScopeCapabilities={},intent?:'definition'):CompletionAnalysis{
+export function analyzeCompletion(source:string,offset:number,mode:CompletionLexicalMode={},capabilities:CompletionScopeCapabilities={},intent?:'definition',definitionKind?:(kind:'alias'|'cte'|'physical')=>void):CompletionAnalysis{
   const lexical=completionLexicalContext(source,offset,mode,completionLimits.aliasUnits);if(lexical.status!=='ready')return lexical;
   const lateralCount=completionLateralTokens(lexical.tokens).length;
   if(lateralCount>completionLimits.entries)return{status:'blocked',reason:'budget'};
@@ -212,7 +212,7 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
       if(!targetToken||!targetToken.closed||!['word','identifier'].includes(targetToken.kind)||!completionAliasIdentifier(targetToken.value)||lexical.tokens.some(token=>!token.closed)||parser.validate(normalized.text).length)return{status:'blocked',reason:'syntax'};
       const index=lexical.tokens.indexOf(targetToken),qualifiers=lexical.target.qualifiers;
       if(['@',':'].includes(lexical.tokens[index-1]?.value??''))return{status:'blocked',reason:'syntax'};
-      let declaration:CompletionToken|undefined;
+      let declaration:CompletionToken|undefined,kind:'alias'|'cte'|'physical'='physical';
       if(lexical.tokens[index+1]?.value==='.'&&qualifiers.length<=1){
         // 完整AST确认查询作用域；收集器不保证保留WHERE/ON列，限定链还需排除表头、函数与schema段。
         const tableHeader=tables.some(entity=>entity.declareType===0&&contains(entity.position.startIndex,entity.position.endIndex+1,normalized.caret));
@@ -224,6 +224,7 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
         const entity=matches[0],parts=entityName(entity.text);
         if(!entity._alias&&parts?.length===1&&cteFor(entity,parts[0])===null)return{status:'blocked',reason:'syntax'};
         declaration=normalized.origins.get(entity._alias?.startIndex??entity.position.startIndex);
+        kind=entity._alias?'alias':'physical';
         // db.table的声明应选table词，而非schema词；范围始终回到原文token。
         if(!entity._alias&&parts?.length===2){const head=normalized.origins.get(entity.position.startIndex),at=lexical.tokens.indexOf(head!);declaration=at>=0?lexical.tokens[at+2]:undefined;}
       }else if(!qualifiers.length){
@@ -232,8 +233,11 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
         const cte=cteFor(references[0],targetToken.value);
         if(!cte||ctes.filter(item=>item.name===cte.name&&item.start===cte.start).length!==1)return{status:'blocked',reason:'syntax'};
         declaration=normalized.origins.get(cte.nameStart);
+        kind='cte';
       }
       if(!declaration||declaration.value!==targetToken.value||declaration.start===targetToken.start)return{status:'blocked',reason:'syntax'};
+      // 仅本地重命名证明使用此接收器；不改变原声明／补全回包或序列化协议。
+      definitionKind?.(kind);
       return{status:'ready',target:{...lexical.target,prefix:targetToken.value},syntax:[],keywords:[],relations:[],localRelations:[],columnMode:'expression',incomplete:false,definition:{start:declaration.start,end:declaration.end}};
     }
     /** 解析表达式的投影列；星号只产出实际目录来源，绝不执行SELECT探测列。 */

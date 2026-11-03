@@ -138,7 +138,7 @@ function projectionColumns(tokens: Token[], start: number, end: number): string[
 }
 
 /** 纯分析入口不读取文件、会话、IPC或数据库；预算与未知语法均以固定原因阻断。 */
-export function analyzeSqliteCompletion(source: string, offset: number, intent?: SqliteAnalysisIntent): SqliteCompletionAnalysis {
+export function analyzeSqliteCompletion(source: string, offset: number, intent?: SqliteAnalysisIntent, definitionKind?: (kind: 'alias' | 'cte' | 'physical') => void): SqliteCompletionAnalysis {
   try {
     if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
     if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
@@ -292,19 +292,21 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       return { bindings, ctes, syntax: relationContext ? ['relation', 'keyword'] : ['column', 'keyword'] };
     }
     const parsed = scope(statement.start, statement.end, new Map(), [], 0);
-    let definition: SqliteLocalDefinition | undefined;
+    let definition: SqliteLocalDefinition | undefined, kind: 'alias' | 'cte' | 'physical' = 'physical';
     if (intent === 'definition') {
       const index = tokens.findIndex(token => token.start === target.start && token.end === target.end);
       const range = (index: number | undefined) => index === undefined ? undefined : { start: tokens[index].start, end: tokens[index].end };
       if (tokens[index + 1]?.value === '.' && parsed.syntax.includes('column') && !['.', '('].includes(tokens[index + 3]?.value ?? '')) {
         // 只跳准确可见绑定；三段名称的schema段、被别名遮蔽的原表名不能伪装成声明。
         const matches = parsed.bindings.filter(({ relation }) => fold(relation.alias ?? relation.name) === fold(target.prefix) && (!qualifiers.length || qualifiers.length === 1 && relation.kind === 'physical' && !relation.alias && relation.schema === fold(qualifiers[0])));
-        if (matches.length === 1) { const binding = matches[0]; definition = range(binding.aliasIndex) ?? binding.declaration ?? range(binding.referenceIndex); }
+        if (matches.length === 1) { const binding = matches[0]; definition = range(binding.aliasIndex) ?? binding.declaration ?? range(binding.referenceIndex); kind = binding.aliasIndex !== undefined ? 'alias' : binding.declaration ? 'cte' : 'physical'; }
       } else {
         const matches = parsed.bindings.filter(binding => binding.referenceIndex === index && binding.relation.kind === 'local' && binding.relation.source === 'cte');
-        if (matches.length === 1) definition = matches[0].declaration;
+        if (matches.length === 1) { definition = matches[0].declaration; kind = 'cte'; }
       }
       if (!definition || definition.start === target.start && definition.end === target.end) fail('definition');
+      // 本地重命名只接收已确认的声明类型，不改变原声明回包形状。
+      definitionKind?.(kind);
     }
     const declarations: SqliteCompletionRelation[] = [...parsed.ctes.values()].map(cte => ({ kind: 'local', source: 'cte', name: cte.name, columns: cte.columns ?? [], declaration: true }));
     const relations = [...parsed.bindings.map(binding => intent === 'hover' ? { ...binding.relation, scopeDepth: binding.level! } : binding.relation), ...declarations];

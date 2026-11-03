@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-03 源码增量：[本文别名／CTE 重命名](development/local-rename-20261103.md)支持双方言 F2、整组修改和单次撤销／重做，冲突或绑定不全明确拒绝，不执行 SQL。482 项相关、严格类型、同 2 GiB 构建及 Windows 双方言原完整窗口通过，资源核清；新 Mac／安装和完整重构继续，O05 仍部分，暂不发布。
+
 2026-11-03 源码增量：[SQLite 本文关系引用](development/sqlite-local-references-20261103.md)支持 Shift+F12、ASCII 大小写、非 BMP、嵌套 CTE 和作用域隔离；原函数误跳及共享补全竞态已修复。395 项相关、类型、同 2 GiB 堆构建及 Windows 双驱动原完整用例通过；旧 ARM 构建失败保留，新 Mac／安装另证，O05 仍部分，暂不发布。
 
 2026-11-03 源码增量：[MySQL／MariaDB 本文关系引用](development/local-references-20261103.md)支持 Shift+F12、作用域隔离、CTE 链和原词跳转；关闭引用时的真实取消异常已局部修复。203 项相关、类型／构建与 Windows 原客户端四次导航通过，exit0 及资源核清；Mac／安装、SQLite 引用和完整语义继续，O05 部分，暂不发布。

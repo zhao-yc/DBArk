@@ -1,5 +1,7 @@
 # 使用指南
 
+SQL 编辑器新增[本文别名／CTE 重命名](development/local-rename-20261103.md)：在声明或已确认引用上按 `F2`，输入新名称后 Enter，整组更新当前语句，Ctrl／Cmd+Z 一次撤销。支持 MySQL／MariaDB 与 SQLite；不保存或执行 SQL，不改数据库对象。新名称冲突或存在未确认同名词时显示原因并保持正文，跨作用域同名、字段和全局重构另行开发。
+
 MySQL／MariaDB 查询编辑器支持[本文关系引用](development/local-references-20261103.md)，SQLite 已接入[对应入口](development/sqlite-local-references-20261103.md)：在别名、CTE 声明或关系限定段按 `Shift+F12` 查看声明及已确认使用位置，双击跳转并选中原词，不执行 SQL。按各方言处理作用域及名称，SQLite 另支持嵌套 CTE 和非 BMP 引用；不包含字段／变量或跨库依赖，Mac／安装另验。
 
 MySQL／MariaDB 物理表可从“表格操作 → 设计与结构 → 查看表关系图”查看主外键、复合映射和自引用。明确选择后读取其它表，支持缩放、刷新及关联键字段显示；未读目标用虚线标明。详见[关系图使用范围](development/relationship-diagram-20261103.md)，不修改数据库。

@@ -1,5 +1,9 @@
 # MySQL／MariaDB 本文关系引用
 
+## 9e44 的 ARM 后续实测
+
+[原轮次 41549490959](https://github.com/zhao-yc/DBArk/actions/runs/41549490959)的 macOS arm64 作业已成功，准确源码 `9e44a9e41a5a02f22e3d3caa23262b6908219e37`、Node 24.22.1、原整例 24.451 秒，1 通过／0 跳过或重试，原 120 秒／worker1。原件 13192060821 的 API SHA256、ZIP 路径／类型／长度／CRC、head／平台、四次真实导航、四个 Worker 完整释放、零数据库请求／页面错误与原 App exit0／signal null 已核；代表引用列表截图已审。实际新 ARM 构建及窗口通过，旧 `27320` 堆耗尽失败仍保留，不外推新重命名增量、SQLite 或安装包；本轮其它尚未闭合的作业继续跟进。
+
 本页记录 `27320b72` 的首批 MySQL／MariaDB 增量。后续 [SQLite 对应能力](sqlite-local-references-20261103.md)已接入，另包含共享补全与引用导航的竞态保护；旧轮结果不代替后续源码或更完整语义的验收。
 
 ## 27320 三平台 CI 原件

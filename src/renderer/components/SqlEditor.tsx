@@ -34,6 +34,10 @@ import { createLocalReferencesAnalysis } from '../localReferencesAnalysis';
 import { createSqliteLocalReferencesAnalysis } from '../sqliteLocalReferencesAnalysis';
 import { createSqlReferencesProvider } from '../sqlReferencesProvider';
 import { SqlReferenceCompletionGuard } from '../sqlReferenceCompletionGuard';
+import { createLocalRenameAnalysis } from '../localRenameAnalysis';
+import { createSqlRenameProvider } from '../sqlRenameProvider';
+import { localRenameZh } from '../locales/localRename.zh-CN';
+import '../localRename.css';
 import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared/sqliteCompletion';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
@@ -59,6 +63,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const dialectRef = useRef(dialect);
   useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
+  const [renameMessage, setRenameMessage] = useState<string | null>(null);
+  useEffect(() => { setRenameMessage(null); }, [value, readOnly, dialect, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.sessionId]);
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
   const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, ...editorIndentationOptions(tabSize, insertSpaces), ...editorWordWrapOptions(wordWrap), renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
   // 只发布已提交的props；并发渲染被取消时不能把未提交回调交给旧模型。
@@ -97,6 +103,21 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
   const referenceCompletionGuard = useRef(new SqlReferenceCompletionGuard());
   const suggestionsBlocked = () => referenceCompletionGuard.current.blocked(editorRef.current?.getDomNode() ?? null);
+  /** 局部F2重命名独占分析线程；输入框焦点属于本widget，不能借树选择改变目标。 */
+  useEffect(() => {
+    if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
+    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!(editorRef.current?.hasTextFocus() || editorRef.current?.hasWidgetFocus()) && !document.querySelector('[role="dialog"], [role="alertdialog"]') && (!completion || sameCompletionScope(completionRef.current, completion));
+    const worker = createLocalRenameAnalysis({ dialect: dialect === 'sqlite' ? 'sqlite' : 'mysql', scope: completion, current,
+      facts: () => completion ? completionServerFacts.get(completion.connectionId, completion.connectionVersion) : undefined,
+      state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => dialect === 'sqlite' ? new SqliteLocalReferencesWorker() : new CompletionWorker(), dialect === 'sqlite' ? 'sqlite' : 'mysql'),
+    });
+    const rename = createSqlRenameProvider({ worker, current, model: () => editorRef.current?.getModel() ?? null, sourceLimit: dialect === 'sqlite' ? sqliteCompletionLimits.sourceUnits : completionLimits.sourceUnits,
+      begin: signal => referenceCompletionGuard.current.acquire(signal), notify: setRenameMessage,
+      prepare: () => { setRenameMessage(null); editorRef.current?.trigger('dbark.localRename', 'hideSuggestWidget', {}); },
+    });
+    const registration = monaco.languages.registerRenameProvider('sql', rename.provider);
+    return () => { registration.dispose(); void rename.dispose().catch(() => {}); };
+  }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   /** 内置函数参数提示只分析当前模型；模式缓存之外没有数据库入口，与补全／声明线程独立。 */
   useEffect(() => {
     if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
@@ -259,5 +280,5 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     // 正文订阅、受控同步与readonly解除均已完成，父层才可取得可交互实例。
     if (bridge.ready) propsRef.current.onReady?.(editor);
   };
-  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language="sql" theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}</div>;
+  return <div style={{ height, position: 'relative' }} aria-busy={!contentReady} onKeyDown={event => { if (event.key === 'Escape') setRenameMessage(null); }}><div aria-hidden={!contentReady} inert={!contentReady} style={{ height: '100%', visibility: contentReady ? 'visible' : 'hidden' }}><Editor language="sql" theme={theme === 'dark' ? 'vs-dark' : 'light'} defaultValue={value} onMount={mounted} height="100%" loading={<div className="editor-loading">{zh.editor.text002}</div>} options={optionsRef.current}/></div>{!contentReady && <div className="editor-loading" style={{ position: 'absolute', inset: 0 }}>{zh.editor.text002}</div>}{contentReady && renameMessage && <div className="sql-rename-message" role="status"><span>{renameMessage}</span><button aria-label={localRenameZh.dismiss} onClick={() => { setRenameMessage(null); editorRef.current?.focus(); }}>×</button></div>}</div>;
 }
