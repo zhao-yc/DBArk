@@ -248,7 +248,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     void run(async ticket => {
       const result = await io.request('queries.importSql', { encoding: importEncoding });
       if (!owns(ticket) || result.status !== 'imported') return;
-      setNotice(formatText(t.sqlImported, result.name));
+      setNotice(result.names.length === 1 ? formatText(t.sqlImported, result.names[0]) : formatText(t.sqlBatchImported, result.names.length));
       setNeedsRefresh(true);
       if (!canRefresh) return;
       const raw = await io.request('queries.organizationGet', {});

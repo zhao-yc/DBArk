@@ -21,6 +21,8 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
   const exportedPath = join(directory, 'saved-query-export.sql');
   const importedPath = join(directory, '未绑定导入.sql');
   const importedSql = "-- 保留换行😀\r\nSELECT 9007199254740993;\n";
+  const secondImportPath = join(directory, '第二份导入.sql');
+  const secondImportSql = "-- UTF-8 保留原文\r\nSELECT '第二份';";
   const redoKey = process.platform === 'darwin' ? 'Meta+Shift+Z' : 'Control+Y';
   let closed = false, armed = false;
   const check = () => { const current = ownedDesktopResources(info); if (current.application !== application || current.page !== page || current.closed !== closed || dataDir !== directory || info.retry !== 0 || info.repeatEachIndex !== 0 || info.config.workers !== 1 || info.timeout !== 120000) throw Error('保存查询插入的原App/profile/单例期限变化'); };
@@ -35,6 +37,7 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
   try {
     check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']);
     await writeFile(importedPath, Buffer.from('\uFEFF' + importedSql, 'utf16le'), { flag: 'wx' });
+    await writeFile(secondImportPath, secondImportSql, { encoding: 'utf8', flag: 'wx' });
     expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))).toEqual([]);
     expect((await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})))).tabs).toEqual([]);
     // 正式Main本地配置准备；不冒称连接表单、新建查询UI或重启恢复验收。
@@ -101,8 +104,8 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
       const importPicker = (async (...args: unknown[]) => {
         check();
         const options = args[1] as Electron.OpenDialogOptions | undefined;
-        if (!importing || args[0] !== window || options?.properties?.join() !== 'openFile' || options.filters?.[0]?.extensions[0] !== 'sql' || imports >= 2) return deny('非本例 SQL 导入选择');
-        return ++imports === 1 ? { canceled: true, filePaths: [] } : { canceled: false, filePaths: [input.importedPath] };
+        if (!importing || args[0] !== window || options?.properties?.join() !== 'openFile,multiSelections' || options.filters?.[0]?.extensions[0] !== 'sql' || imports >= 2) return deny('非本例 SQL 导入选择');
+        return ++imports === 1 ? { canceled: true, filePaths: [] } : { canceled: false, filePaths: input.importedPaths };
       }) as typeof dialog.showOpenDialog;
       const allowed = new Set(['settings.get', 'settings.save', 'connections.list', 'tasks.list', 'history.list', 'history.page', 'history.pageContinue', 'history.pageRelease', 'queries.list', 'queries.page', 'queries.pageContinue', 'queries.pageRelease', 'queries.organizationGet', 'queries.readText', 'queries.exportSql', 'queries.importSql', 'search.savedQueries', 'search.savedQueriesContinue', 'search.savedQueriesRelease', 'query.cancel', 'app.info', 'app.runtimeInfo', 'app.setDirty', 'app.menuState', 'workbench.get', 'workbench.protocolReady', 'workbench.protocolTake', 'workbench.protocolFinish']);
       const wrapped = async (event: any, payload: any) => {
@@ -128,7 +131,7 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
       };
       state.check = check; state.restore = () => { check(); if (state.pending || state.held || state.gateNext || state.calls.some(call => !call.ok) || choices !== 2 || imports !== 2) throw Error('原保存查询读取或本地任务未收尾'); handlers.set('dbark:request', previous); utilityProcess.fork = originalFork; dialog.showSaveDialog = originalSave; dialog.showOpenDialog = originalOpen; delete root.__savedQueryInsertionOffline; };
       root.__savedQueryInsertionOffline = state; handlers.set('dbark:request', wrapped); utilityProcess.fork = blocked; dialog.showSaveDialog = picker; dialog.showOpenDialog = importPicker; check();
-    }, { baseline, sql: [original, listInserted, searchInserted], exportedPath, importedPath, exportedId: prepared.preview.source.id, sources: [{ id: prepared.list.source.id, sql: listSql }, { id: prepared.search.source.id, sql: searchSql }, { id: prepared.preview.source.id, sql: previewSql }] })); armed = true;
+    }, { baseline, sql: [original, listInserted, searchInserted], exportedPath, importedPaths: [importedPath, secondImportPath], exportedId: prepared.preview.source.id, sources: [{ id: prepared.list.source.id, sql: listSql }, { id: prepared.search.source.id, sql: searchSql }, { id: prepared.preview.source.id, sql: previewSql }] })); armed = true;
     const history = () => page.getByRole('dialog', { name: zh.activity.text003, exact: true });
     /** 真实工作台入口先打开历史，再切保存页，沿同一捕获选区而不重新领当前编辑器。 */
     const openList = async () => { await step(async () => { const action = await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '执行历史', exact: true }, check); check(); await action.click(); check(); }); await step(() => history().getByRole('button', { name: zh.activity.text005, exact: true }).click()); await step(() => expect(history().getByRole('button', { name: pagesText.refresh, exact: true })).toBeEnabled()); };
@@ -185,12 +188,19 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
     expect(await effects()).toEqual(before);
     await step(() => importSql.click());
     await step(() => expect(history().getByText('未绑定导入', { exact: true })).toBeVisible());
+    await step(() => expect(history().getByText('第二份导入', { exact: true })).toBeVisible());
+    await step(() => expect(history().getByText('已导入 2 条未分组查询。当前筛选可能隐藏这些记录。', { exact: true })).toBeVisible());
     const afterImport = await effects();
     const imported = afterImport.queries.find(record => record.name === '未绑定导入');
+    const secondImport = afterImport.queries.find(record => record.name === '第二份导入');
     expect(imported).toMatchObject({ name: '未绑定导入', databaseContext: { state: 'known', database: null }, sql: importedSql });
+    expect(secondImport).toMatchObject({ name: '第二份导入', databaseContext: { state: 'known', database: null }, sql: secondImportSql });
     expect(imported?.connectionId).toBeUndefined();
-    expect({ ...afterImport, queries: afterImport.queries.filter(record => record !== imported) }).toEqual(before);
+    expect(secondImport?.connectionId).toBeUndefined();
+    expect(imported?.id).not.toBe(secondImport?.id);
+    expect({ ...afterImport, queries: afterImport.queries.filter(record => record !== imported && record !== secondImport) }).toEqual(before);
     expect(await readFile(importedPath)).toEqual(Buffer.from('\uFEFF' + importedSql, 'utf16le'));
+    expect(await readFile(secondImportPath, 'utf8')).toBe(secondImportSql);
     expect(await observe()).toEqual(beforeImport);
     await step(() => page.keyboard.press('Escape'));
     await step(() => expect(history()).toBeHidden());

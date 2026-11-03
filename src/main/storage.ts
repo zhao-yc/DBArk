@@ -33,7 +33,7 @@ import type { AppSettings, ConnectionProfile, NetworkConnectionProfile, SqliteCo
 import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
-import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
+import{savedQueryImportLimits,savedQuerySearchLimits}from'../shared/savedQuerySearch';
 import type{SavedQueryPagePosition}from'../shared/savedQueryPages';
 import type{HistoryPagePosition,HistoryPageInput}from'../shared/historyPages';
 import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
@@ -861,6 +861,16 @@ export class LocalStore {
     });
     this.queryRevisionValue++;
     return { name: query.name, source: bindSavedQuery(query, JSON.stringify(query), profile) };
+  }
+  /** 导入文件都生成独立编号。全部记录通过校验后才进入同一事务，写盘失败时一起恢复。 */
+  createImportedQueries(files: readonly { name: string; sql: string }[], assertCurrent: () => void): void {
+    if (!files.length || files.length > savedQueryImportLimits.files) throw Error('导入文件数量超出限制');
+    const records = files.map(({ name, sql }) => this.boundQueryRecord(randomUUID(), { name, sql, context: { state: 'known', database: null } }));
+    assertCurrent();
+    this.mutate(() => {
+      for (const record of records) this.db.run('INSERT INTO queries VALUES (?,?,?)', [record.id, JSON.stringify(record), record.updatedAt]);
+    }, assertCurrent);
+    this.queryRevisionValue++;
   }
   /** 原文摘要、连接身份及四类上下文在同一 SQLite 事务内核对，失败恢复内存和磁盘。 */
   updateBoundQuery(raw: unknown): QuerySaveResult {

@@ -9,7 +9,7 @@ import { SavedQuerySearches, type SavedQuerySearchStore } from '../../src/main/s
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
 import { decodeQueryFile } from '../../src/main/queryFiles';
 import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
-import { savedQueryReadTextSchema, savedQuerySearchLimits } from '../../src/shared/savedQuerySearch';
+import { savedQueryImportLimits, savedQueryReadTextSchema, savedQuerySearchLimits } from '../../src/shared/savedQuerySearch';
 import { publicCommands } from '../../src/shared/commands';
 import { validateCommand } from '../../src/shared/validation';
 import type { SavedQuery } from '../../src/shared/contracts';
@@ -79,9 +79,9 @@ function mainFixture() {
   const choose = vi.fn(async (): Promise<{ canceled: boolean; filePath?: string }> => ({ canceled: true }));
   const chooseImport = vi.fn(async () => ({ canceled: true, filePaths: [] as string[] }));
   const snapshot = vi.fn(async (_path: string, assertCurrent: () => void) => { assertCurrent(); return { bytes: Buffer.from('SELECT 1;') }; });
-  const create = vi.fn((content: { name: string }) => ({ name: content.name }));
+  const create = vi.fn((_files: { name: string; sql: string }[], assertCurrent: () => void) => assertCurrent());
   const release = vi.fn(), reserve = vi.fn(async (_path: string) => release), write = vi.fn(async () => {});
-  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens, columnsMain, savedQuerySearches: f.service, shuttingDown: false, window, rendererURL: frame.url, tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set(), connectionConfig: { assertAvailable: unexpected }, store: { bindQuerySource: unexpected, resolveConnection: unexpected, connectionRevision: () => 0, createBoundQuery: create }, broker: { request: unexpected }, basename, dialog: { showSaveDialog: choose, showOpenDialog: chooseImport }, queryFileOperation: (action: () => Promise<unknown>) => action(), exportReservations: { acquire: reserve }, writeQueryFile: write, readQueryFileSnapshot: snapshot, decodeQueryFile });
+  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens, columnsMain, savedQuerySearches: f.service, shuttingDown: false, window, rendererURL: frame.url, tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set(), connectionConfig: { assertAvailable: unexpected }, store: { bindQuerySource: unexpected, resolveConnection: unexpected, connectionRevision: () => 0, createImportedQueries: create }, broker: { request: unexpected }, basename, dialog: { showSaveDialog: choose, showOpenDialog: chooseImport }, queryFileOperation: (action: () => Promise<unknown>) => action(), exportReservations: { acquire: reserve }, writeQueryFile: write, readQueryFileSnapshot: snapshot, decodeQueryFile, savedQueryImportLimits });
   const code = extractMainProductionBinding(source, 'tableChecksMain') + '\nasync function dispatch(command:any,input:any,columns?:any){' + branches.map(branch => branch.getText(tree)).join('\n') + "throw Error('未授权其它分发');}\nglobalThis.request=" + wrapper.getText(tree) + ';';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   const event = { sender: contents, senderFrame: frame };
@@ -152,8 +152,8 @@ describe('queries.importSql 真实 Main 分支', () => {
     expect(f.snapshot).not.toHaveBeenCalled();
     f.chooseImport.mockResolvedValueOnce({ canceled: false, filePaths: [path] });
     f.snapshot.mockResolvedValueOnce({ bytes: Buffer.from('\uFEFF' + sql, 'utf16le') });
-    expect(await f.importSql(input)).toEqual({ ok: true, result: { status: 'imported', name: '中文😀' } });
-    expect(f.create).toHaveBeenCalledExactlyOnceWith({ name: '中文😀', context: { state: 'known', database: null }, sql });
+    expect(await f.importSql(input)).toEqual({ ok: true, result: { status: 'imported', names: ['中文😀'] } });
+    expect(f.create).toHaveBeenCalledExactlyOnceWith([{ name: '中文😀', sql }], expect.any(Function));
     expect(f.unexpected).not.toHaveBeenCalled();
   });
 
@@ -167,6 +167,18 @@ describe('queries.importSql 真实 Main 分支', () => {
       return { bytes: Buffer.from('SELECT 2;') };
     });
     expect(await f.importSql(input)).toMatchObject({ ok: false });
+    expect(f.create).not.toHaveBeenCalled();
+  });
+
+  it('第二个文件无法解码时不提交第一条，超数量时不读取任何文件', async () => {
+    const f = mainFixture(), input = { encoding: 'utf8' };
+    f.chooseImport.mockResolvedValueOnce({ canceled: false, filePaths: Array.from({ length: savedQueryImportLimits.files + 1 }, (_, index) => `C:/isolated/${index}.sql`) });
+    expect(await f.importSql(input)).toMatchObject({ ok: false });
+    expect(f.snapshot).not.toHaveBeenCalled();
+    f.chooseImport.mockResolvedValueOnce({ canceled: false, filePaths: ['C:/isolated/good.sql', 'C:/isolated/bad.sql'] });
+    f.snapshot.mockResolvedValueOnce({ bytes: Buffer.from('SELECT 1;') }).mockResolvedValueOnce({ bytes: Buffer.from([0xff]) });
+    expect(await f.importSql(input)).toMatchObject({ ok: false, error: expect.stringContaining('bad.sql') });
+    expect(f.snapshot).toHaveBeenCalledTimes(2);
     expect(f.create).not.toHaveBeenCalled();
   });
 });

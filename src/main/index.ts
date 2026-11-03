@@ -83,6 +83,7 @@ import type { QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
 import{SavedQuerySearches,SavedQuerySearchCancelled}from'./savedQuerySearch';
+import { savedQueryImportLimits } from '../shared/savedQuerySearch';
 import{SavedQueryPages}from'./savedQueryPages';
 import{HistoryPages}from'./historyPages';
 import { HistoryDelete } from './historyDelete';
@@ -876,17 +877,32 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     assertCurrent();
     return queryFileOperation(async () => {
       const selected = await dialog.showOpenDialog(columns!.owner.window, {
-        title: '导入 SQL 到保存查询', properties: ['openFile'], filters: [{ name: 'SQL 文件', extensions: ['sql'] }],
+        title: '导入 SQL 到保存查询', properties: ['openFile', 'multiSelections'], filters: [{ name: 'SQL 文件', extensions: ['sql'] }],
       });
       assertCurrent();
-      const path = selected.canceled ? undefined : selected.filePaths[0];
-      if (!path) return { status: 'cancelled' };
-      const snapshot = await readQueryFileSnapshot(path, assertCurrent);
-      const { sql } = decodeQueryFile(snapshot.bytes, input.encoding);
-      const name = basename(path).replace(/\.sql$/i, '').trim().slice(0, 256).replace(/[\uD800-\uDBFF]$/, '') || '导入的查询';
+      if (selected.canceled || !selected.filePaths.length) return { status: 'cancelled' };
+      if (selected.filePaths.length > savedQueryImportLimits.files) throw Error(`每批最多导入 ${savedQueryImportLimits.files} 个 SQL 文件`);
+      const files: { name: string; sql: string }[] = [];
+      let bytes = 0;
+      const assertBudget = (size: number) => { if (bytes + size > savedQueryImportLimits.bytes) throw Error('本批文件总大小超过 32 MiB'); };
+      // 顺序读取避免同时分配多个文件缓冲，单文件仍由原读取器限制为 20 MiB。
+      for (const path of selected.filePaths) {
+        const fileName = basename(path);
+        try {
+          const snapshot = await readQueryFileSnapshot(path, assertCurrent, (_phase, _processed, size) => assertBudget(size));
+          assertBudget(snapshot.bytes.length);
+          bytes += snapshot.bytes.length;
+          const { sql } = decodeQueryFile(snapshot.bytes, input.encoding);
+          const name = fileName.replace(/\.sql$/i, '').trim().slice(0, 256).replace(/[\uD800-\uDBFF]$/, '') || '导入的查询';
+          files.push({ name, sql });
+        } catch (reason) {
+          const detail = reason instanceof Error && !('code' in reason) ? reason.message : '无法读取所选 SQL 文件';
+          throw Error(`${fileName}：${detail}，本批未导入`);
+        }
+      }
       assertCurrent();
-      const created = store.createBoundQuery({ name, context: { state: 'known', database: null }, sql });
-      return { status: 'imported', name: created.name };
+      store.createImportedQueries(files, assertCurrent);
+      return { status: 'imported', names: files.map(file => file.name) };
     });
   }
   // 专属片段传输只认真实IPC文档与Main快照，永不转发给SQL引擎或接受任意文件路径。
