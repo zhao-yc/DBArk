@@ -9,7 +9,7 @@
 .history-pages>div[role=group] label{display:flex;align-items:center;gap:6px}
 .history-pages .history-error{display:block}
 .history-pages .history-error pre{max-height:320px;overflow:auto}
-.history-pages .history-sql-preview pre{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
+.history-sql-preview pre{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
 .history-pages>details{margin:12px 0;flex-shrink:0}
 
 .history-pages .history-time-range{display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin-top:12px}

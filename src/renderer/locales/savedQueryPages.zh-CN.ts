@@ -6,5 +6,6 @@ export const savedQueryPagesZh={
  pending:'筛选尚未应用，请点击搜索。',summary:'当前第{0}批；已检查{1}条，命中{2}条，累计失败{3}条。',more:'仍有未检查记录，请读取下一批。',done:'已检查当前范围的全部记录，请同时核对累计失败数。',
  empty:'本批没有符合条件的保存查询',emptyHint:'如仍有未检查记录，可以继续读取下一批，或缩小搜索范围。',choose:'请明确选择连接',sourceMissing:'未指定或来源连接已失效',connection:'打开查询的连接：{0}',
  openHint:'更换来源连接后，请在执行前确认默认库。',preview:'正文共{0}个UTF16单元；此处仅为预览。',failures:'本批失败记录',failedStop:'已按错误策略停止，仍有未确认范围。',
+ sqlFull:'查看完整 SQL',sqlTitle:'完整保存查询 SQL',sqlStale:'原列表范围已变化，请重新选择要查看的查询。',
  onError:'列表读取遇到错误',stop:'停止读取',continue:'略过失败记录并继续',cancelled:'列表读取已取消，可以刷新重新开始。',cleanupFailed:'保存查询列表收尾失败，请核对：'
 }as const;

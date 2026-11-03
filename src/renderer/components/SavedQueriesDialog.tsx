@@ -17,6 +17,7 @@ import { savedQueryDuplicateSchema, savedQueryDuplicateZh as duplicateText } fro
 import { SavedQueryDeleteSelectedPreview } from './SavedQueryDeleteSelectedPreview';
 import { savedQueryDeleteSelectedSchema, readSavedQueryDeleteSelectedResult, savedQueryDeleteSelectedZh as deleteText } from '../../shared/savedQueryDeleteSelected';
 import { Empty, ErrorBox, Modal, Spinner, UsageHelp } from './ui';
+import { SqlTextPreview } from './SqlTextPreview';
 import type { HistoryInsertionTarget } from '../historyInsertion';
 import { savedQueryInsertionZh as insertionText } from '../locales/savedQueryInsertion.zh-CN';
 import '../savedQueryPages.css';
@@ -41,6 +42,10 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   const [deleting, setDeleting] = useState<DeleteEdit>(), deleteRef = useRef<DeleteEdit | undefined>(undefined);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
   const criteria: Criteria = { search, policy, group, scope }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
+  const [sqlPreview, setSqlPreview] = useState<{ item: SavedQueryPageEntry; sql: string; epoch: number }>();
+  const currentSqlPreview = sqlPreview?.epoch === renderEpoch ? sqlPreview : undefined;
+  // 分页、筛选或其它操作换代时释放大正文，渲染已立即隐藏旧预览。
+  useEffect(() => { if (sqlPreview && !currentSqlPreview) setSqlPreview(value => value === sqlPreview ? undefined : value); }, [sqlPreview, currentSqlPreview]);
   const insertionRef = useRef(insertion), previousInsertion = useRef(insertion), insertionClosing = useRef(false), cancelledInsertion = useRef(false);
   insertionRef.current = insertion;
   const [insertAvailable, setInsertAvailable] = useState(() => insertion?.current() ?? false);
@@ -210,6 +215,19 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
     let opened: SavedQueryOpenResult | undefined; const work = run(async ticket => { const result = await io.request('queries.read', { id: item.query.id, digest: item.digest, connectionId }); if (owns(ticket)) opened = result; });
     if (work) void work.then(() => { if (opened && !closed.current) { const result = opened; void close(() => { useWorkspace.getState().openTab({ id: io.id(), kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database, databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding }); onClose(); }); } });
   }
+  /** 按原卡片编号和摘要读取本地正文，连接是否可用不参与预览。 */
+  function showSql(item: SavedQueryPageEntry): void {
+    const original = pageView.current;
+    const current = () => pageView.current.reply === original.reply && pageView.current.applied === original.applied
+      && !pageView.current.needsRefresh && criteriaKey(criteriaRef.current) === original.applied && original.reply?.items.includes(item) === true;
+    if (!editable() || !current()) return;
+    void run(async ticket => {
+      const result = await io.request('queries.readText', { id: item.query.id, digest: item.digest });
+      if (!owns(ticket)) return;
+      if (!current()) throw Error(t.sqlStale);
+      setSqlPreview({ item, sql: result.query.sql, epoch: ticket });
+    });
+  }
   /** 全文按摘要重读；先退出run原Promise再关闭释放，避免cleanup等待自己的pending。 */
   function insert(item: SavedQueryPageEntry) {
     if (!editable()) return;
@@ -239,7 +257,8 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
   const blocked = busy || closing || !!editing || !!renaming || !!deleting, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
-  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else void close(); }}>
+  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else void close(); }}
+    onEscape={currentSqlPreview ? event => { event.stopPropagation(); setSqlPreview(value => value === currentSqlPreview ? undefined : value); } : undefined}>
     <div className="dialog-tabs"><button disabled={closing} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
     <div className="modal-content saved-query-pages"><UsageHelp><p>{text.metadataOnly}</p><p>{insertionText.hint}</p><p>{t.hint}</p><p>{t.openHint}</p></UsageHelp><p aria-live="polite">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
       <details className="saved-query-organization-tree" open><summary>{text.title}</summary><nav aria-label={text.tree}>
@@ -261,7 +280,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, initialConne
         <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p>{notice}</p>}{busy && <Spinner/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
-          <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
+          <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}{currentSqlPreview?.item === item ? <SqlTextPreview key={item.digest} title={t.sqlTitle} sql={currentSqlPreview.sql} onClose={() => setSqlPreview(value => value === currentSqlPreview ? undefined : value)}/> : <button disabled={blocked || changed || needsRefresh} onClick={() => showSql(item)}>{t.sqlFull}</button>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
           <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh || !organization} onClick={() => beginRename(item, true)}>{duplicateText.rename}</button><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
         </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}

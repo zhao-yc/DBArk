@@ -24,6 +24,9 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
   const prefix = '-- 原查询前缀🚢\n', selected = 'REPLACE_ME', suffix = "\nSELECT '原查询后缀😀' AS 尾;", originalSql = prefix + selected + suffix;
   const listSql = "-- 跨连接来源：纯文本，未执行\n-- " + 'x'.repeat(650) + "\nUPDATE synthetic SET id=:list_id, note='$1 ${name} 😀';\n-- LIST_FULL_TAIL";
   const searchSql = "-- 未绑定来源：不需要选择打开连接\n-- " + 'y'.repeat(650) + "\nSELECT :search_id, '中文🚢', '${1:原文}';\n-- SAVED_INSERT_SQL_ONLY_完整尾部";
+  const previewHead = '-- ' + 'x'.repeat(65532);
+  const previewTail = "😀\r\nSELECT '完整正文尾部';";
+  const previewSql = previewHead + previewTail;
   try {
     check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']);
     expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))))).toEqual([]);
@@ -35,10 +38,11 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
       const original = await window.dbark.invoke('queries.create', { name: '原来源绑定查询', connectionId: profiles[0].id, context: { state: 'known', database: '原查询库' }, sql: input.originalSql });
       const list = await window.dbark.invoke('queries.create', { name: '跨连接保存脚本', connectionId: profiles[1].id, context: { state: 'known', database: '保存来源库' }, sql: input.listSql });
       const search = await window.dbark.invoke('queries.create', { name: '未绑定保存脚本', context: { state: 'known', database: null }, sql: input.searchSql });
+      const preview = await window.dbark.invoke('queries.create', { name: '未绑定预览脚本', context: { state: 'known', database: null }, sql: input.previewSql });
       const settings = await window.dbark.invoke('settings.get', {});
       await window.dbark.invoke('settings.save', { ...settings, tabs: [{ id: 'saved-insert-original-tab', kind: 'query', title: '保持原查询', connectionId: profiles[0].id, database: '原查询库', databaseContext: { state: 'known', database: '原查询库' }, sql: input.originalSql, sourceBinding: original.source }], activeTabId: 'saved-insert-original-tab' });
-      return { original, list, search, profiles };
-    }, { originalSql, listSql, searchSql }));
+      return { original, list, search, preview, profiles };
+    }, { originalSql, listSql, searchSql, previewSql }));
     expect(prepared.profiles.every(profile => profile.password === undefined && profile.rememberPassword === false)).toBe(true);
     // 只启用Monaco官方全局只读观察API，模型/选区及正文均由真实UI或原Main创建。
     await step(() => page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; }));
@@ -100,11 +104,31 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
       };
       state.check = check; state.restore = () => { check(); if (state.pending || state.held || state.gateNext || state.calls.some(call => !call.ok)) throw Error('原保存查询读取或本地任务未收尾'); handlers.set('dbark:request', previous); utilityProcess.fork = originalFork; delete root.__savedQueryInsertionOffline; };
       root.__savedQueryInsertionOffline = state; handlers.set('dbark:request', wrapped); utilityProcess.fork = blocked; check();
-    }, { baseline, sql: [original, listInserted, searchInserted], sources: [{ id: prepared.list.source.id, sql: listSql }, { id: prepared.search.source.id, sql: searchSql }] })); armed = true;
+    }, { baseline, sql: [original, listInserted, searchInserted], sources: [{ id: prepared.list.source.id, sql: listSql }, { id: prepared.search.source.id, sql: searchSql }, { id: prepared.preview.source.id, sql: previewSql }] })); armed = true;
     const history = () => page.getByRole('dialog', { name: zh.activity.text003, exact: true });
     /** 真实工作台入口先打开历史，再切保存页，沿同一捕获选区而不重新领当前编辑器。 */
     const openList = async () => { await step(async () => { const action = await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '执行历史', exact: true }, check); check(); await action.click(); check(); }); await step(() => history().getByRole('button', { name: zh.activity.text005, exact: true }).click()); await step(() => expect(history().getByRole('button', { name: pagesText.refresh, exact: true })).toBeEnabled()); };
     const card = () => history().locator('.history-card').filter({ has: page.getByText('跨连接保存脚本', { exact: true }) });
+    await select();
+    const beforePreview = await observe();
+    await openList();
+    const previewCard = history().locator('.history-card').filter({ has: page.getByText('未绑定预览脚本', { exact: true }) });
+    await step(() => expect(previewCard.getByRole('button', { name: zh.activity.text010, exact: true })).toBeDisabled());
+    expect((await audit()).reads).toEqual([]);
+    await step(() => previewCard.getByRole('button', { name: pagesText.sqlFull, exact: true }).click());
+    const preview = previewCard.getByRole('region', { name: pagesText.sqlTitle, exact: true });
+    await step(() => expect(preview).toBeVisible());
+    expect(await step(() => preview.locator('pre').textContent())).toBe(previewHead);
+    await step(() => preview.getByRole('button', { name: '下一段 SQL', exact: true }).click());
+    expect(await step(() => preview.locator('pre').textContent())).toBe(previewTail);
+    expect((await audit()).reads.map(read => read.id)).toEqual([prepared.preview.source.id]);
+    await step(() => page.keyboard.press('Escape'));
+    await step(() => expect(preview).toHaveCount(0));
+    await step(() => expect(history()).toBeVisible());
+    expect(await observe()).toEqual(beforePreview);
+    expect(await effects()).toEqual(before);
+    await step(() => page.keyboard.press('Escape'));
+    await step(() => expect(history()).toBeHidden());
     /** Undo和Redo都必须一次真实按键恢复完整正文，来源绑定及原模型URI不变。 */
     const undoRedo = async (inserted: string) => {
       await step(() => box.focus()); await step(() => page.keyboard.press('ControlOrMeta+Z')); await exact(original); expect(await effects()).toEqual(before);
@@ -118,7 +142,7 @@ test('保存列表与全文搜索插入原查询选区、单次Undo/Redo、Escap
     await select(); const beforeLate = await observe(); await openList(); await step(() => application.evaluate(() => { const state = (globalThis as any).__savedQueryInsertionOffline; state.check(); if (state.held || state.gateNext) throw Error('原保存查询读取门不能重入'); state.gateNext = true; })); await step(() => card().getByRole('button', { name: insertionText.insert, exact: true }).click()); await step(() => expect.poll(async () => (await audit()).held).toBe(true)); await step(() => page.keyboard.press('Escape')); await step(() => expect(history().getByRole('button', { name: zh.common.close, exact: true })).toBeDisabled()); await step(() => application.evaluate(() => { const state = (globalThis as any).__savedQueryInsertionOffline; state.check(); if (!state.held || !state.release) throw Error('原保存查询读取未进入交付门'); state.release(); })); await step(() => expect(history()).toBeHidden()); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await exact(original); const afterLate = await observe(); expect({ value: afterLate.value, version: afterLate.version, uri: afterLate.uri }).toEqual({ value: beforeLate.value, version: beforeLate.version, uri: beforeLate.uri }); expect(await effects()).toEqual(before);
     // 迟到原包没有加入Undo栈，原搜索插入仍可一次Redo/Undo。
     await step(() => box.focus()); await step(() => page.keyboard.press(redoKey)); await exact(searchInserted); await step(() => page.keyboard.press('ControlOrMeta+Z')); await exact(original); expect(await effects()).toEqual(before);
-    const result = await step(audit); expect(result.reads.map(read => read.id)).toEqual([prepared.list.source.id, prepared.search.source.id, prepared.list.source.id]); expect(result.reads.every(read => read.ok && /^[a-f0-9]{64}$/.test(read.digest))).toBe(true); expect(result.reads[0].digest).toBe(result.reads[2].digest); expect(result.pending).toBe(0); expect(result.held).toBe(false); expect(result.denied).toEqual([]); expect(result.engineStarts).toBe(0); expect(result.calls.every(call => call.ok)).toBe(true); expect(result.calls.filter(call => call.command.startsWith('clipboard.') || call.command.startsWith('query.execute') || call.command.startsWith('query.transaction') || call.command === 'sessions.open' || call.command === 'connections.open')).toEqual([]);
+    const result = await step(audit); expect(result.reads.map(read => read.id)).toEqual([prepared.preview.source.id, prepared.list.source.id, prepared.search.source.id, prepared.list.source.id]); expect(result.reads.every(read => read.ok && /^[a-f0-9]{64}$/.test(read.digest))).toBe(true); expect(result.reads[1].digest).toBe(result.reads[3].digest); expect(result.pending).toBe(0); expect(result.held).toBe(false); expect(result.denied).toEqual([]); expect(result.engineStarts).toBe(0); expect(result.calls.every(call => call.ok)).toBe(true); expect(result.calls.filter(call => call.command.startsWith('clipboard.') || call.command.startsWith('query.execute') || call.command.startsWith('query.transaction') || call.command === 'sessions.open' || call.command === 'connections.open')).toEqual([]);
     // 全文搜索正式记录本地搜索任务；只允许此唯一已观测编号，不能把它误当SQL执行或掩去其它任务。
     expect(result.searchTaskIds).toHaveLength(1); const tasks = await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {}))); expect(tasks).toHaveLength(1); expect(tasks[0]).toMatchObject({ id: result.searchTaskIds[0], kind: 'search.savedQueries', status: 'completed' }); expect(page.mainFrame()).toBe(frame); expect(pageErrors).toEqual([]);
     // restore已经核原请求终态；撤销后仅本次不再读取被删除的观察器。

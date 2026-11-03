@@ -70,6 +70,40 @@ it.each([false, true])('App传入%s插入目标时，已应用列表仍只有一
 });
 async function escape() { await act(async () => doc.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' }))); }
 
+it('缺少来源连接也能原地查看完整 SQL，翻段不切断 CRLF，列表翻页撤销旧预览', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!;
+  const head = 'x'.repeat(65535), tail = '\r\nSELECT 2;';
+  f.request.mockImplementation((command, input) => command === 'queries.readText' ? Promise.resolve({ query: { sql: head + tail } }) : normal(command, input));
+  await render(f, null);
+  const preview = () => doc.querySelector(`[aria-label="${pages.sqlTitle}"]`);
+  expect(button(zh.activity.text010).disabled).toBe(true);
+  expect(calls(f, 'queries.readText')).toEqual([]);
+  await click(pages.sqlFull);
+  expect(preview()?.querySelector('pre')?.textContent).toBe(head);
+  await click('下一段 SQL');
+  expect(preview()?.querySelector('pre')?.textContent).toBe(tail);
+  expect(calls(f, 'queries.readText')).toEqual([['queries.readText', { id: 'q1', digest: entry().digest }]]);
+  await click(pages.next);
+  expect(preview()).toBeNull();
+  expect(calls(f, 'queries.readText')).toHaveLength(1);
+  expect(f.onClose).not.toHaveBeenCalled();
+  expect(openTab).not.toHaveBeenCalled();
+});
+
+it('关闭等待在途正文读取后只回收原游标，迟到全文不可显示', async () => {
+  const f = fixture(), read = deferred<{ query: { sql: string } }>(), normal = f.request.getMockImplementation()!;
+  f.request.mockImplementation((command, input) => command === 'queries.readText' ? read.promise : normal(command, input));
+  await render(f, null);
+  await click(pages.sqlFull);
+  await escape();
+  expect(f.onClose).not.toHaveBeenCalled();
+  await act(async () => read.resolve({ query: { sql } }));
+  expect(f.onClose).toHaveBeenCalledOnce();
+  expect(doc.querySelector(`[aria-label="${pages.sqlTitle}"]`)).toBeNull();
+  expect(calls(f, 'queries.pageRelease')).toHaveLength(1);
+  expect(openTab).not.toHaveBeenCalled();
+});
+
 it('来源连接缺失仍按摘要插入完整长SQL，先释放游标且不打开新标签或发送连接参数', async () => {
   const f = fixture(); await render(f); expect(button(zh.activity.text010).disabled).toBe(true);
   expect(doc.body.textContent).toContain(text.target(f.lease.title)); await click(text.insert);
