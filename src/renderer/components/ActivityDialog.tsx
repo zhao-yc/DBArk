@@ -38,11 +38,11 @@ import type { HistoryInsertionTarget } from '../historyInsertion';
 import { borrowInsertion } from '../insertionLease';
 
 /** 两个资料源分别管理有界页和收尾，切换时不保留另一面板的活动读取。 */
-export function HistoryDialog({ onClose, insertion, initialSection = 'history' }: { onClose: () => void; insertion?: HistoryInsertionTarget | null; initialSection?: 'history' | 'queries' }) {
+export function HistoryDialog({ onClose, insertion, initialSection = 'history', initialConnectionId }: { onClose: () => void; insertion?: HistoryInsertionTarget | null; initialSection?: 'history' | 'queries'; initialConnectionId?: string }) {
   const[section,setSection]=useState<'history'|'queries'>(initialSection);
   // App持有并释放父权限；子页关闭/切换撤销自身租约。不在effect清理中消费权限，避免StrictMode重订阅误撤销。
   const lease = useMemo(() => borrowInsertion(insertion), [insertion, section]);
-  return section==='queries'?<SavedQueriesDialog insertion={lease} onClose={onClose} onHistory={()=>setSection('history')}/>:<HistoryPagesDialog insertion={lease} onClose={onClose} onQueries={()=>setSection('queries')}/>;
+  return section==='queries'?<SavedQueriesDialog insertion={lease} onClose={onClose} onHistory={()=>setSection('history')}/>:<HistoryPagesDialog insertion={lease} initialConnectionId={initialConnectionId} onClose={onClose} onQueries={()=>setSection('queries')}/>;
 }
 
 /** 任务面板订阅统一状态存储，取消按钮只针对仍在运行的任务编号。 */

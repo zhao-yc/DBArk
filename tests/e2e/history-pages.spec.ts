@@ -21,6 +21,60 @@ async function search(text:string){await dialog().getByLabel('搜索完整历史
 /** 仅持久化不可连接的本地来源元数据，不打开数据库连接。 */
 function source(store:LocalStore,id='source'){store.saveConnection({id,name:'离线来源 '+id,group:'',color:'#123456',dialect:'mysql',host:'127.0.0.1',port:1,user:'offline',database:'配置默认库'});}
 
+test('查询内历史按活动标签连接打开，分页保持范围，全局入口显示全部来源', async () => {
+ await seed(store=>{
+  source(store);source(store,'other');
+  for(let i=0;i<28;i++)store.addHistory(entry({id:'src-'+String(i).padStart(2,'0')}));
+  store.addHistory(entry({id:'z-other',connectionId:'other',sql:'SELECT 2'}));
+  store.addHistory(entry({id:'z-deleted',connectionId:'deleted',sql:'SELECT 3'}));
+  store.saveSettings({...store.settings(),activeTabId:'query-source',tabs:[
+   {id:'query-source',kind:'query',title:'原连接查询',connectionId:'source',sql:'SELECT 10'},
+   {id:'query-other',kind:'query',title:'另一连接查询',connectionId:'other',sql:'SELECT 20'},
+  ]});
+ });
+ await desktop.evaluate(({ipcMain})=>{
+  const handlers=(ipcMain as unknown as {_invokeHandlers:Map<string, (...args:any[])=>unknown>})._invokeHandlers;
+  const previous=handlers.get('dbark:request');if(!previous)throw Error('缺少原历史 IPC 入口');
+  const observed={scopes:[] as unknown[],continued:0,denied:0};Object.assign(globalThis,{__historyScopeTest:observed});
+  handlers.set('dbark:request',(event,payload)=>{
+   const command=String(payload.command);
+   if(command==='history.page')observed.scopes.push(payload.input.scope);
+   if(command==='history.pageContinue')observed.continued++;
+   if(command==='connections.open'||/^(sessions|metadata|table|schema|sqlite)\./.test(command)||command.startsWith('query.')&&command!=='query.cancel'){observed.denied++;throw Error('离线历史查看禁止数据库请求');}
+   return previous(event,payload);
+  });
+ });
+ const navigation=await import('./navigation-menu'), query=page.locator('.query-tab:visible'), otherTreeRow=page.locator('.connection-row').filter({hasText:'离线来源 other'});
+ await expect(query.locator('.monaco-editor')).toBeVisible();
+ await otherTreeRow.click({button:'right'});await expect(otherTreeRow).toHaveClass(/\bactive\b/);
+ await page.keyboard.press('Escape');await expect(page.locator('.sidebar-context-menu')).toHaveCount(0);
+ const openForQuery=async()=>{
+  await (await navigation.navigationMenuItem(query,{name:'查看本连接的执行历史',exact:true})).click();
+  await expect(dialog().getByRole('button',{name:'刷新到第一页',exact:true})).toBeEnabled();
+ };
+ const scope=dialog().getByLabel('历史来源',{exact:true}), cards=dialog().locator('.history-card');
+ const ids=()=>cards.evaluateAll(nodes=>nodes.map(node=>node.getAttribute('data-history-id')));
+ const close=async()=>{await dialog().getByRole('button',{name:'关闭',exact:true}).click();await expect(dialog()).toHaveCount(0);};
+ await openForQuery();
+ await expect(scope).toHaveValue('connection:source');await expect(cards).toHaveCount(25);
+ expect(await ids()).toEqual(Array.from({length:25},(_,i)=>'src-'+String(27-i).padStart(2,'0')));
+ await dialog().getByRole('button',{name:'读取下一批',exact:true}).click();
+ await expect(cards).toHaveCount(3);expect(await ids()).toEqual(['src-02','src-01','src-00']);
+ await scope.selectOption('all');await search('');
+ expect((await ids()).slice(0,2)).toEqual(['z-other','z-deleted']);await close();
+ await page.locator('[data-workspace-tab-id="query-other"]').getByRole('button',{name:'另一连接查询',exact:true}).click();
+ await openForQuery();await expect(scope).toHaveValue('connection:other');expect(await ids()).toEqual(['z-other']);await close();
+ await open();await expect(scope).toHaveValue('all');expect((await ids()).slice(0,2)).toEqual(['z-other','z-deleted']);
+ await close();
+ expect(await desktop.evaluate(()=> (globalThis as typeof globalThis & {__historyScopeTest?:unknown}).__historyScopeTest)).toEqual({
+  scopes:[{kind:'connection',connectionId:'source'},{kind:'all'},{kind:'connection',connectionId:'other'},{kind:'all'}],continued:1,denied:0,
+ });
+ const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));
+ expect(settings.tabs.map(tab=>tab.sql)).toEqual(['SELECT 10','SELECT 20']);
+ expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
 test('来源已删除仍可原地分段查看完整历史 SQL', async () => {
  const head='UPDATE offline_fixture SET n=9007199254740993; -- ';
  const sql=head+'x'.repeat(65535-head.length)+'\r\n'+'y'.repeat(65534)+'😀历史尾部';

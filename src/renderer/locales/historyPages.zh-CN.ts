@@ -6,6 +6,7 @@ export const historyPagesZh={
  timeHint:'填写 YYYY-MM-DD HH:mm[:ss[.SSS]] 或带时区的 ISO 时间；开始包含，结束不包含，留空不限。夏令时重复时刻需指定偏移。',
  search:'搜索完整历史SQL或错误',searchButton:'搜索执行历史',fields:'搜索字段',sql:'SQL正文',error:'错误信息',
  scope:'历史来源',all:'全部来源',unbound:'无来源历史',status:'执行结果',allStatus:'全部结果',success:'执行成功',failed:'执行失败',
+ queryHistory:'查看本连接的执行历史',
  onError:'损坏记录处理',continue:'记录失败并继续',stop:'遇到失败停止',hint:'保留最近 1000 条历史，每批检查 25 条；搜索完整原文。',
  filterStatus:'历史筛选状态',pageStatus:'历史读取进度',
  pending:'筛选已改变，请重新搜索。',summary:'第{0}批 · 已检查{1}条 · 匹配{2}条 · 读取失败{3}条',failedStop:'遇到记录错误，已停止。',more:'还有下一批记录。',done:'已读取完毕。',
