@@ -1,5 +1,8 @@
 export const tableStatisticsZh = {
   title: '表数据统计', scope: '统计服务器上符合当前筛选的全部已提交记录。',
+  countTitle: '统计匹配行数', recentCount: (count: string) => `最近统计 ${count} 行`,
+  countHint: '统计符合当前筛选的全部服务器记录，包含字段为 NULL 的行，不受当前页条数限制。',
+  recentCountHint: '统计完成时的匹配数。刷新、翻页或更改筛选排序后需要重新统计。',
   drafts: '本页未提交修改不计入统计，草稿保持。',
   selection: '选择统计字段（最多12个）', countOnly: '不选择字段时只统计总记录数。勾选字段不会查询服务器。',
   selected: (count: number) => `已选择 ${count} / 12 个字段`, selectColumn: (name: string) => `统计字段 ${name}`,

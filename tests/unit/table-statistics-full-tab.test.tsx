@@ -154,6 +154,37 @@ it('统计模态实际阻止父表新操作，原取消回调只关闭原实例�
   const f=await fixture();await f.change('保留草稿');await f.click(statisticsText.title);const dialog=f.all('TableStatisticsDialog')[0];expect(f.button(zh.common.add).props.disabled).toBe(true);expect(f.button(statisticsText.title).props.disabled).toBe(true);dialog.props.onClose();await f.render();expect(f.grid().rows[0].data.note).toBe('保留草稿');expect(f.all('TableStatisticsDialog')).toHaveLength(0);expect(f.button(statisticsText.title).props.disabled).toBe(false);
 });
 
+it('分页栏计数仅发送原筛选，关闭后显示精确值，换页后不会复用旧计数', async () => {
+  const f = await fixture();
+  await f.click(zh.table.text006);
+  const filters = [{ column: 'id', operator: '>=', value: '9007199254740993' }];
+  f.all('TableFilterPanel')[0].props.onFiltersChange(filters);
+  await f.render(); await f.change('保留本地修改');
+  const before = f.invoke.mock.calls.length;
+  await f.click(statisticsText.countTitle);
+  const element = f.all('TableStatisticsDialog')[0], count = '9007199254740993';
+  const statistics = vi.fn<TableStatisticsServices['statistics']>(async () => ({ source: element.props.intent.source, sourceDigest: 'a'.repeat(64), rowCount: count, columns: [], warnings: [] }));
+  const host = memory.createElement('div'); memory.body.appendChild(host); dialogRoot = createRoot(host as any);
+  await act(async () => { dialogRoot!.render(<TableStatisticsDialog {...element.props as any} services={{ statistics, cancel: async () => {} }}/>); });
+  const dialog = memory.body.querySelector('[aria-label="' + statisticsText.countTitle + '"]')!;
+  expect(dialog).toBeTruthy(); expect(dialog.querySelectorAll('input')).toHaveLength(0); expect(dialog.querySelectorAll('select')).toHaveLength(0);
+  expect(statistics).not.toHaveBeenCalled();
+  const { MemoryEvent } = await import('../fixtures/memory-dom');
+  const click = async (label: string) => { const button = dialog.querySelectorAll('button').find(node => node.textContent === label)!; await act(async () => { button.dispatchEvent(new MemoryEvent('click')); }); };
+  await click(statisticsText.start);
+  expect(statistics).toHaveBeenCalledExactlyOnceWith({ connectionId: '连接', database: 'db', table: 'items', taskId: expect.any(String), columns: [], filters, filterMode: 'all' });
+  expect(dialog.querySelector('[aria-label="' + statisticsText.rowCount + '"]')?.textContent).toBe(count);
+  await click(statisticsText.close); await f.render();
+  const footerCount = () => f.all('span').find(element => element.props.title === statisticsText.recentCountHint)?.props.children;
+  expect(footerCount()).toBe(statisticsText.recentCount(count));
+  expect(f.invoke.mock.calls).toHaveLength(before);
+  expect(f.grid().rows[0].data.note).toBe('保留本地修改');
+  await f.click(zh.common.pageNext);
+  expect(footerCount()).toBeUndefined();
+  element.props.onCount('1'); await f.render();
+  expect(footerCount()).toBeUndefined();
+});
+
 it('关系图正式表页入口不读库，自己的忙碌计数不撤销来源且父草稿保持', async () => {
   const f = await fixture(); await f.change('保留关系图父草稿'); const before = f.invoke.mock.calls.length;
   await f.click(relationshipText.entry); const element = f.all('RelationshipDiagramDialog')[0]; expect(element.props.source).toBe(f.info); expect(element.props.current()).toBe(true); expect(f.invoke.mock.calls).toHaveLength(before);
