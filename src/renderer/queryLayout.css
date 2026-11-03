@@ -1,6 +1,13 @@
 .query-tab{overflow-y:auto;min-width:0}
-.query-tab>.sql-editor-wrap{min-height:0}
-.query-tab>.result-body{min-height:var(--query-result-min-height,96px)}
+.query-layout-panes,.query-layout-editor,.query-layout-results{display:contents}
+.query-layout-editor>.sql-editor-wrap{min-height:0}
+.query-layout-results>.result-body{min-height:var(--query-result-min-height,96px)}
+.query-tab[data-result-layout="results"] .query-layout-editor{display:none}
+.query-tab[data-result-layout="beside"] .query-layout-panes{display:flex;flex:1 0 0;min-height:230px}
+.query-tab[data-result-layout="beside"] .query-layout-editor,.query-tab[data-result-layout="beside"] .query-layout-results{display:flex;flex-direction:column;min-width:0}
+.query-tab[data-result-layout="beside"] .query-layout-editor{flex:0 0 43%;overflow:auto}
+.query-tab[data-result-layout="beside"] .query-layout-editor>.sql-editor-wrap{flex:1 0 130px}
+.query-tab[data-result-layout="beside"] .query-layout-results{flex:1 1 0;overflow:auto;border-inline-start:1px solid var(--line)}
 /* 执行选项使用既有上下文行，禁止中文标签被工具栏挤成竖排而侵占分栏空间。 */
 .query-execution-options{display:flex;align-items:center;gap:10px;flex:0 0 auto;white-space:nowrap}
 .query-execution-options>.check,.query-execution-options input{flex-shrink:0;white-space:nowrap}
@@ -9,8 +16,8 @@
 .query-tab>.context-bar:not(.query-context-bar)>:not(.grow){flex-shrink:0}
 .query-tab>.context-bar:not(.query-context-bar)>strong,.query-tab>.context-bar:not(.query-context-bar)>[aria-label="当前查询默认库"]{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 结果操作条保持单行并允许横向浏览，避免标签收缩断行侵占编辑区。 */
-.query-tab>.result-toolbar{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
-.query-tab>.result-toolbar>:not(.grow){flex-shrink:0;white-space:nowrap}
+.query-layout-results>.result-toolbar{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
+.query-layout-results>.result-toolbar>:not(.grow){flex-shrink:0;white-space:nowrap}
 .query-layout-bar{height:18px;display:flex;align-items:stretch;gap:6px;flex-shrink:0;background:var(--surface);border-block:1px solid var(--line-soft)}
 .query-layout-handle{flex:1;min-width:30px;cursor:row-resize;touch-action:none;position:relative}
 .query-layout-handle:after{content:"";position:absolute;left:calc(50% - 18px);top:6px;width:36px;border-top:2px solid var(--muted)}

@@ -225,6 +225,33 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     const ascending = ['-9223372036854775808', '9223372036854775807'], originalOrder = [...ascending].reverse();
     await step(() => exactHeader.click()); await step(() => expect.poll(shownIntegers).toEqual(ascending));
     await step(() => mixedHeader.click({ modifiers: [modifier] })); await step(() => expect(query().getByRole('list', { name: sortText.priorities, exact: true }).getByRole('listitem')).toHaveCount(2));
+    stage = '三种结果布局保留编辑器、原网格和两级排序';
+    const changePlacement = (name: string) => step(async () => {
+      await query().getByRole('button', { name: '查询结果布局', exact: true }).click();
+      await page.getByRole('menuitem', { name, exact: true }).click();
+    });
+    const originalSize = await step(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize()));
+    const resize = (width: number, height: number) => step(() => application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height), { width, height }));
+    const editorNode = await step(() => query().locator('.monaco-editor').elementHandle());
+    const gridNode = await step(() => grid.elementHandle());
+    await resize(1320, 860); await changePlacement('结果在右侧');
+    await step(() => expect(query()).toHaveAttribute('data-result-layout', 'beside'));
+    await step(() => expect.poll(async () => {
+      const editorBox = await query().locator('.query-editor-region').boundingBox(), resultBox = await query().locator('.result-body').boundingBox();
+      return !!editorBox && !!resultBox && editorBox.x + editorBox.width <= resultBox.x + 1 && Math.min(editorBox.y + editorBox.height, resultBox.y + resultBox.height) - Math.max(editorBox.y, resultBox.y) >= 96;
+    }).toBe(true));
+    await resize(1024, 760);
+    await step(() => expect(query()).toHaveAttribute('data-result-layout', 'below'));
+    await resize(1320, 860); await step(() => expect(query()).toHaveAttribute('data-result-layout', 'beside'));
+    await changePlacement('仅显示结果');
+    await step(() => expect(query().locator('.monaco-editor')).toBeHidden()); await step(() => expect(grid).toBeVisible());
+    await changePlacement('结果在下方'); await step(() => expect(query().locator('.monaco-editor')).toBeVisible());
+    expect(await step(() => editorNode!.evaluate(node => node.isConnected))).toBe(true);
+    expect(await step(() => gridNode!.evaluate(node => node.isConnected))).toBe(true);
+    await resize(originalSize[0], originalSize[1]);
+    await step(() => expect(query().getByRole('list', { name: sortText.priorities, exact: true }).getByRole('listitem')).toHaveCount(2));
+    expect((await step(audit)).executions).toBe(1);
+    stage = '独立排序草稿及已应用排序';
     await step(async () => (await navigationMenuItem(query(), { name: sortText.panelTitle, exact: true }, check)).click());
     const sorting = query().getByRole('region', { name: sortText.panelTitle, exact: true }); await step(() => expect(sorting).toBeVisible());
     await step(() => expect(sorting.getByLabel(sortText.panelField(1), { exact: true })).toHaveValue('c0')); await step(() => expect(sorting.getByLabel(sortText.panelField(2), { exact: true })).toHaveValue('c4'));
@@ -475,7 +502,10 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeDisabled()); expect(disk()).toEqual(baselineDisk);
     stage = '明确自动提交写入及重启前未执行草稿'; await execute(committedSql, 3);
     const committedDisk = [...baselineDisk, { id: 20, note: '明确提交🚢' }]; expect(disk()).toEqual(committedDisk);
-    await write(restoredSql); const persisted = await settings(), firstHistory = await history(), firstTasks = await tasks(), firstFacts = await step(audit);
+    await write(restoredSql);
+    await changePlacement('结果在右侧'); await changePlacement('仅显示结果');
+    await step(() => expect.poll(async () => { const state = await settings(); return state.tabs.find(tab => tab.id === state.activeTabId)?.queryResultPlacement; }).toBe('beside'));
+    const persisted = await settings(), firstHistory = await history(), firstTasks = await tasks(), firstFacts = await step(audit);
     await step(() => expect(query().locator('.query-result-tabs').getByRole('button', { name: '结果 1', exact: true })).toBeVisible());
     expect(firstFacts.executions).toBe(3); expect(firstFacts.denied).toEqual([]); expect(firstFacts.forks.length).toBeGreaterThan(0); expect(firstFacts.forks.every(path => /(?:^|[\\/])sqliteWorker\.cjs$/.test(path))).toBe(true); expect(runtime.pageErrors).toEqual([]);
     // 检查pending与撤观察器放在同一Main同步回合，不能让400ms防抖保存插进两次evaluate之间。
@@ -484,6 +514,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     stage = '同profile严格owned重启'; await runtime.restartOwnedDesktop(info); owner = runtime.ownedDesktopResources(info); application = owner.application; page = owner.page; originalProcess = application.process(); closed = false; check(); expect(originalProcess.pid).not.toBe(firstPid);
     await arm(profile.id); armed = true;
     await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible()); expect(await settings()).toEqual(persisted);
+    await step(() => expect.poll(async () => { const state = await settings(); return state.tabs.find(tab => tab.id === state.activeTabId)?.queryResultPlacement; }).toBe('beside'));
     expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(profiles); expect(await tasks()).toEqual(firstTasks); expect(await history()).toEqual(firstHistory); expect(disk()).toEqual(committedDisk);
     expect((await step(audit)).executions).toBe(0); await step(() => expect(query().getByRole('grid')).toHaveCount(0));
     stage = '恢复后明确执行SELECT'; await execute(restoredSql, 4);

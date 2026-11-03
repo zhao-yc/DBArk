@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { assertQueryLayoutWrite, queryLayoutLimits, readQueryEditorHeight } from '../../src/shared/queryLayout';
+import { assertQueryLayoutWrite, queryLayoutLimits, readQueryEditorHeight, readQueryResultPlacement } from '../../src/shared/queryLayout';
 
 it('查询高度合同固定像素范围与缺省值，缺项保持旧调用兼容', () => {
   expect(queryLayoutLimits).toEqual({ minEditorHeight: 130, maxEditorHeight: 8192, defaultEditorHeight: 300 });
@@ -22,4 +22,16 @@ it('继承的高度不能被转成可写字段；合同验证不修改原标签�
   expect(() => assertQueryLayoutWrite({ tabs: [inherited] })).toThrow('自有');
   const settings = Object.freeze({ tabs: Object.freeze([Object.freeze({ kind: 'query', sql: '原文\t🚢', queryEditorHeight: 450 })]) });
   assertQueryLayoutWrite(settings); expect(settings.tabs[0]).toEqual({ kind: 'query', sql: '原文\t🚢', queryEditorHeight: 450 });
+});
+
+it('仅查询标签可保存下方或右侧，缺项与坏值读取时使用下方', () => {
+  expect(readQueryResultPlacement('beside')).toBe('beside');
+  for (const value of ['below', 'beside']) expect(() => assertQueryLayoutWrite({ tabs: [{ kind: 'query', queryResultPlacement: value }] })).not.toThrow();
+  for (const value of [undefined, null, 'results', 1]) {
+    expect(readQueryResultPlacement(value)).toBe('below');
+    expect(() => assertQueryLayoutWrite({ tabs: [{ kind: 'query', queryResultPlacement: value }] })).toThrow('有效的结果位置');
+  }
+  expect(() => assertQueryLayoutWrite({ tabs: [{ kind: 'table', queryResultPlacement: 'beside' }] })).toThrow('只有查询');
+  const inherited = Object.assign(Object.create({ queryResultPlacement: 'beside' }), { kind: 'query' });
+  expect(() => assertQueryLayoutWrite({ tabs: [inherited] })).toThrow('有效的结果位置');
 });

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQL 工作区新增下方、右侧和仅结果三种布局。下方与右侧按查询标签保存，窄窗临时回退，结果专注模式随重启结束。Windows SQLite 原生整例通过，核对了分栏位置、窄窗回退、编辑器和网格实例、两级排序、重启恢复及原四次 SQL。相关 240 项单元、类型检查和构建通过。macOS 原生与安装包另验。
+
 SQL 编辑器支持从原生「编辑」菜单或右键菜单将选区转为大写或小写。Windows 的 MySQL 和 SQLite 离线窗口均验证了只改选区、保留原模型、每次转换单独撤销，以及零 SQL 执行。类型和构建通过。修复内存夹具的 Monaco 初始化后，原 78 项格式化断言全部通过，相关 12 份套件共 170 项通过。macOS 及安装包另验。转换入口参照 Navicat 查询编辑器。[Navicat 编辑器说明](https://www.navicat.com/en/products/query-editing?product=navicat-premium)
 
 SQL 查询支持在语句头使用 `NAME` 注释命名结果标签，复用本次执行语句与结果序号；无有效名称时沿用序号。该语法参照 Navicat 17。[官方查询结果手册](https://www.navicat.com/manual/pdf_manual/en/navicat_17/linux_manual/navicat_en.pdf)
