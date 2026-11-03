@@ -1,5 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron';
 import { uiMenuStateSchema, type UiCommandId, type UiCommandInvocation, type UiMenuState } from '../shared/uiCommands';
+import { sqlLineCommandIds } from '../shared/uiCommandIds';
 import { uiCommandLabels as labels, uiMenuLabels as text } from '../shared/uiCommands.zh-CN';
 
 export interface ApplicationMenuPort {
@@ -59,7 +60,8 @@ export class ApplicationMenu {
         { label: text.undo, role: 'undo' }, { label: text.redo, role: 'redo' }, separator,
         { label: text.cut, role: 'cut' }, { label: text.copy, role: 'copy' }, { label: text.paste, role: 'paste' }, { label: text.selectAll, role: 'selectAll' }, separator,
         item('find', 'CmdOrCtrl+F'), item('replace', mac ? 'Alt+Cmd+F' : 'Ctrl+H'), item('sql-goto-line', 'Ctrl+G'), separator,
-        item('sql-toggle-comment', 'CmdOrCtrl+/'), item('sql-uppercase'), item('sql-lowercase')
+        item('sql-toggle-comment', 'CmdOrCtrl+/'), item('sql-uppercase'), item('sql-lowercase'),
+        { label: text.sqlLines, enabled: sqlLineCommandIds.some(id => statuses.get(id)?.enabled === true), submenu: sqlLineCommandIds.map(id => item(id)) }
       ] },
       { label: text.view, submenu: [
         item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), separator,

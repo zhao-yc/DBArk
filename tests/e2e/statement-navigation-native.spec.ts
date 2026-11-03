@@ -99,6 +99,9 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     await step(() => query().getByRole('button', { name: '查询结果布局', exact: true }).click());
     await step(() => page.getByRole('menuitem', { name: '仅显示结果', exact: true }).click());
     await step(() => expect(query().locator('.monaco-editor')).toBeHidden());
+    const lineEditEnabled = () => step(() => application.evaluate(({ Menu }) =>
+      Menu.getApplicationMenu()?.getMenuItemById('sql-duplicate-lines')?.enabled === true));
+    await expect.poll(lineEditEnabled).toBe(false);
     const gotoLine = async () => {
       await expect.poll(() => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-goto-line')?.enabled === true))).toBe(true);
       await step(() => application.evaluate(({ Menu, BrowserWindow }) => {
@@ -137,6 +140,61 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     await expect.poll(async () => (await model()).source).toBe(beforePosition.source + '--8');
     await step(() => page.keyboard.press(modifier + '+Z'));
     await expect.poll(async () => (await model()).source).toBe(beforePosition.source);
+    stage = '原生整行编辑与右键删除分别可撤销';
+    await gotoLine();
+    await step(() => quickInput.fill(':2:1')); await step(() => quickInput.press('Enter'));
+    await step(() => page.keyboard.press('Shift+ArrowDown'));
+    const originalLines = await model();
+    const selectedLine = originalLines.source.slice(originalLines.selection.start, originalLines.selection.end);
+    expect(selectedLine.replaceAll('\r\n', '\n')).toBe("SELECT 'duplicate;😀';\n");
+    const lineCommand = (id: 'sql-duplicate-lines' | 'sql-move-lines-up' | 'sql-move-lines-down') =>
+      step(() => application.evaluate(({ Menu, BrowserWindow }, id) => {
+        const item = Menu.getApplicationMenu()?.getMenuItemById(id), windows = BrowserWindow.getAllWindows();
+        if (!item?.enabled || windows.length !== 1) throw Error('行操作原生命令不可用');
+        item.click(item, windows[0], {} as Electron.KeyboardEvent);
+      }, id));
+    const { start, end } = originalLines.selection;
+    const firstLine = originalLines.source.slice(0, start), tail = originalLines.source.slice(end);
+    await expect.poll(lineEditEnabled).toBe(true);
+    await gotoLine();
+    await step(() => quickInput.fill(':1:1')); await step(() => quickInput.press('Enter'));
+    await step(() => page.keyboard.press('Shift+ArrowDown'));
+    await step(() => page.keyboard.press('Shift+ArrowDown'));
+    await expect.poll(async () => (await model()).selection).toEqual({ start: 0, end });
+    await lineCommand('sql-duplicate-lines');
+    await expect.poll(async () => (await model()).source).toBe((firstLine + selectedLine).repeat(2) + tail);
+    await step(() => page.keyboard.press(modifier + '+Z'));
+    await expect.poll(async () => (await model()).source).toBe(originalLines.source);
+    await gotoLine();
+    await step(() => quickInput.fill(':2:1')); await step(() => quickInput.press('Enter'));
+    await step(() => page.keyboard.press('Shift+ArrowDown'));
+    await expect.poll(async () => (await model()).selection).toEqual({ start, end });
+    await lineCommand('sql-duplicate-lines');
+    await expect.poll(async () => (await model()).source).toBe(firstLine + selectedLine.repeat(2) + tail);
+    await step(() => page.keyboard.press(modifier + '+Z'));
+    await expect.poll(async () => (await model()).source).toBe(originalLines.source);
+    await lineCommand('sql-move-lines-up');
+    await expect.poll(async () => (await model()).source).toBe(selectedLine + firstLine + tail);
+    await lineCommand('sql-move-lines-down');
+    await expect.poll(async () => (await model()).source).toBe(originalLines.source);
+    await step(() => page.keyboard.press(modifier + '+Z'));
+    await expect.poll(async () => (await model()).source).toBe(selectedLine + firstLine + tail);
+    await step(() => page.keyboard.press(modifier + '+Z'));
+    await expect.poll(async () => (await model()).source).toBe(originalLines.source);
+    const linePoint = await step(() => page.evaluate(() => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const editor = api?.editor.getEditors().find(item => item.getContainerDomNode().closest('.query-tab'));
+      const position = editor?.getScrolledVisiblePosition({ lineNumber: 2, column: 3 });
+      const bounds = editor?.getDomNode()?.getBoundingClientRect();
+      if (!position || !bounds) throw Error('删除行右键坐标不可用');
+      return { x: bounds.x + position.left, y: bounds.y + position.top + position.height / 2 };
+    }));
+    await step(() => page.mouse.click(linePoint.x, linePoint.y, { button: 'right' }));
+    await step(() => page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: uiCommandLabels['sql-delete-lines'], exact: true }).click({ delay: 120 }));
+    await expect.poll(async () => (await model()).source).toBe(firstLine + tail);
+    await step(() => page.keyboard.press(modifier + '+Z'));
+    await expect.poll(async () => (await model()).source).toBe(originalLines.source);
+    await step(() => page.keyboard.press('ArrowRight'));
     stage = '真实原生菜单与右键仅转换选区并可一次撤销';
     const nativeEnabled = () => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-lowercase')?.enabled === true));
     await expect.poll(nativeEnabled).toBe(false);

@@ -45,6 +45,7 @@ import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN'
 import '../queryResultSort.css';
 import { zh, formatText } from '../locales/zh-CN';
 import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
+import { sqlLineCommandIds } from '../../shared/uiCommandIds';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { sqlLineCommentAction } from '../sqlLineComment';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -141,6 +142,16 @@ import { ActionMenu, ActionMenuSection } from './ActionMenu';
 import { AdaptiveToolbar } from './AdaptiveToolbar';
 import { useUiCommandScope } from '../uiCommands';
 import { actionMenuZh as menuText } from '../locales/actionMenu.zh-CN';
+
+/** 复用 Monaco 的整行、多选区及撤销行为。 */
+const sqlTextActions = {
+  'sql-uppercase': 'editor.action.transformToUppercase',
+  'sql-lowercase': 'editor.action.transformToLowercase',
+  'sql-duplicate-lines': 'editor.action.copyLinesDownAction',
+  'sql-move-lines-up': 'editor.action.moveLinesUpAction',
+  'sql-move-lines-down': 'editor.action.moveLinesDownAction',
+  'sql-delete-lines': 'editor.action.deleteLines',
+} as const;
 const completionStatusInfo={sessionUnknown:{text:completionZh.sessionUnknown,hint:completionZh.sessionUnknownHint},partial:{text:completionZh.partial,hint:completionZh.partialHint},unavailable:{text:completionZh.unavailable,hint:completionZh.unavailableHint},limited:{text:completionZh.limited,hint:completionZh.limitedHint},databaseUnknown:{text:completionZh.databaseUnknown,hint:completionZh.databaseUnknownHint},startupTimeout:{text:completionZh.startupTimeout,hint:completionZh.startupTimeoutHint},analysisTimeout:{text:completionZh.analysisTimeout,hint:completionZh.analysisTimeoutHint}};
 
 interface SqliteParameterForm { id: string; source: string; connectionId: string; connection: unknown; version: number; fileBinding: unknown; savedBinding: unknown; session: string; recognized: boolean; submitted: boolean; valid: boolean; }
@@ -1717,14 +1728,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   const queryMenuKey = JSON.stringify([tab.id, tab.connectionId, connectionVersion, sessionId, tab.database, tab.databaseContext, tab.fileSourceBinding, tab.sourceBinding, settings.activeTabId, busy, queryRunning, !!closeRequest, fileSource.busy]);
   /** 只对当前查询已同步的模型调用原生编辑动作，保留原撤销组。 */
-  async function editSqlText(command: 'sql-toggle-comment' | 'sql-uppercase' | 'sql-lowercase', instance = editor.current): Promise<void> {
+  async function editSqlText(command: keyof typeof sqlTextActions | 'sql-toggle-comment', instance = editor.current): Promise<void> {
     const workspace = useWorkspace.getState();
     if (!instance || instance !== editor.current || !queryMenuCurrent() || busyRef.current || workspace.activeJobs[tab.id] || workspace.queryFileOpenings?.[tab.id] || fileSource.isBusy() || formatting.current) return;
     const model = instance.getModel(), draft = workspace.settings.tabs.find(item => item.id === tab.id)?.sql ?? '';
     if (!model || model.isDisposed() || instance.getRawOptions().readOnly || model.getValue() !== draft.replace(/\r\n|\r|\n/g, model.getEOL())) return;
-    const comment = command === 'sql-toggle-comment', selections = instance.getSelections();
-    if (!selections?.length || (comment ? resultsOnly : !hasExplicitCaseSelection(instance))) return;
-    const action = instance.getAction(comment ? sqlLineCommentAction(model, selections, sqlite) : command === 'sql-uppercase' ? 'editor.action.transformToUppercase' : 'editor.action.transformToLowercase');
+    const caseChange = command === 'sql-uppercase' || command === 'sql-lowercase';
+    const selections = instance.getSelections();
+    if (!selections?.length || (caseChange ? !hasExplicitCaseSelection(instance) : resultsOnly)) return;
+    const action = instance.getAction(command === 'sql-toggle-comment' ? sqlLineCommentAction(model, selections, sqlite) : sqlTextActions[command]);
     if (!action?.isSupported()) return;
     await action.run();
     if (instance === editor.current && queryMenuCurrent()) instance.focus();
@@ -1736,6 +1748,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       id: `dbark-${id}:${uid()}`, label: uiCommandLabels[id], precondition: id === 'sql-toggle-comment' ? '!editorReadonly' : 'editorHasSelection && !editorReadonly', contextMenuGroupId: 'modification', contextMenuOrder: 2 + order,
       run: () => { if (active) return editSqlText(id, searchEditor); },
     }));
+    for (const [order, id] of sqlLineCommandIds.entries()) {
+      actions.push(searchEditor.addAction({
+        id: `dbark-${id}:${uid()}`, label: uiCommandLabels[id], precondition: '!editorReadonly',
+        contextMenuGroupId: 'modification-lines', contextMenuOrder: order,
+        run: () => { if (active) return editSqlText(id, searchEditor); },
+      }));
+    }
     return () => { active = false; actions.forEach(action => action.dispose()); };
   }, [searchEditor, queryMenuKey, connection, tab.sql, sqlite, resultsOnly]);
   useEffect(() => {
@@ -1786,6 +1805,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     replace: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind(true) },
     'sql-goto-line': { enabled: !!searchEditor?.getAction?.('editor.action.gotoLine') && !closeRequest && !fileSource.busy, run: () => openEditorPosition() },
     'sql-toggle-comment': { enabled: !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-toggle-comment') },
+    ...Object.fromEntries(sqlLineCommandIds.map(id => [id, {
+      enabled: !!searchEditor?.getAction?.(sqlTextActions[id])?.isSupported() && !resultsOnly && !busy && !closeRequest && !fileSource.busy,
+      run: () => editSqlText(id),
+    }])),
     'sql-uppercase': { enabled: hasCaseSelection && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-uppercase') },
     'sql-lowercase': { enabled: hasCaseSelection && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-lowercase') },
     export: { enabled: !!selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease, run: exportVisibleResult },

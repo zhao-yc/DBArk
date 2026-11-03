@@ -29,6 +29,11 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(edit.filter(item => item.role).map(item => item.role)).toEqual(['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);
     expect(edit.filter(item => item.id?.startsWith('sql-')).map(item => [item.id, item.enabled])).toEqual([['sql-goto-line', false], ['sql-toggle-comment', false], ['sql-uppercase', false], ['sql-lowercase', false]]);
     expect(windows.find('sql-toggle-comment')?.accelerator).toBe('CmdOrCtrl+/');
+    const lines = edit.find(item => item.label === '行操作');
+    expect(lines).toMatchObject({ enabled: false, submenu: [
+      { id: 'sql-duplicate-lines', enabled: false }, { id: 'sql-move-lines-up', enabled: false },
+      { id: 'sql-move-lines-down', enabled: false }, { id: 'sql-delete-lines', enabled: false },
+    ] });
     expect(windows.find('sql-goto-line')?.accelerator).toBe('Ctrl+G');
     expect(fixture('darwin').find('sql-goto-line')?.accelerator).toBe('Ctrl+G');
   });

@@ -8,6 +8,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'sql-uppercase': '选区转为大写', 'sql-lowercase': '选区转为小写',
   'sql-goto-line': '跳到行列',
   'sql-toggle-comment': '切换行注释',
+  'sql-duplicate-lines': '向下复制行', 'sql-move-lines-up': '上移行', 'sql-move-lines-down': '下移行', 'sql-delete-lines': '删除行',
   'toggle-theme': '切换明暗主题', 'focus-mode': '专注模式', 'editor-font': '编辑器字体',
   'editor-word-wrap': '自动换行', 'editor-indent': '编辑器缩进', 'favorite-toggle': '添加／取消当前对象收藏',
   'favorites-manage': '管理收藏与分组', 'object-link': '粘贴对象链接', 'execute': '执行查询',
@@ -25,6 +26,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
 export const uiMenuLabels = {
   file: '文件', edit: '编辑', view: '查看', favorites: '收藏夹', tools: '工具', window: '窗口', help: '帮助',
   query: '查询执行与分析', transfer: '数据导入导出', snapshots: '快照', editor: '编辑器',
+  sqlLines: '行操作',
   undo: '撤销', redo: '重做', cut: '剪切', copy: '复制', paste: '粘贴', selectAll: '全选',
   zoomIn: '放大', zoomOut: '缩小', resetZoom: '重置缩放', fullscreen: '全屏', quit: '退出',
   addFavorite: '添加当前对象收藏', removeFavorite: '取消当前对象收藏',

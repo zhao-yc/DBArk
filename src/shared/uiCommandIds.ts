@@ -1,7 +1,11 @@
+/** SQL 编辑器行操作在各入口使用相同的命令顺序。 */
+export const sqlLineCommandIds = ['sql-duplicate-lines', 'sql-move-lines-up', 'sql-move-lines-down', 'sql-delete-lines'] as const;
+
 /** 沙箱预加载只依赖纯白名单，不引入校验器、文件系统或数据库运行时。 */
 export const uiCommandIds = [
   'new-connection', 'new-query', 'open-sql-file', 'recent-sql-file', 'save-query', 'save-sql-file',
   'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-goto-line', 'sql-toggle-comment', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
+  ...sqlLineCommandIds,
   'editor-font', 'editor-word-wrap', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
   'execute', 'execute-current', 'execute-all', 'stop', 'format', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation',
   'transaction-settings', 'import', 'export', 'schema-compare', 'structure-search', 'server-monitor',
