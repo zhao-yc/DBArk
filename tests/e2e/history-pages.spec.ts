@@ -21,6 +21,46 @@ async function search(text:string){await dialog().getByLabel('搜索完整历史
 /** 仅持久化不可连接的本地来源元数据，不打开数据库连接。 */
 function source(store:LocalStore,id='source'){store.saveConnection({id,name:'离线来源 '+id,group:'',color:'#123456',dialect:'mysql',host:'127.0.0.1',port:1,user:'offline',database:'配置默认库'});}
 
+test('来源已删除仍可原地分段查看完整历史 SQL', async () => {
+ const head='UPDATE offline_fixture SET n=9007199254740993; -- ';
+ const sql=head+'x'.repeat(65535-head.length)+'\r\n'+'y'.repeat(65534)+'😀历史尾部';
+ await seed(store=>store.addHistory(entry({id:'orphan-full',connectionId:'deleted',sql})));
+ await desktop.evaluate(({ipcMain})=>{
+  const handlers=(ipcMain as unknown as {_invokeHandlers:Map<string, (...args:any[])=>unknown>})._invokeHandlers;
+  const previous=handlers.get('dbark:request');if(!previous)throw Error('缺少原历史 IPC 入口');
+  const observed={reads:0,denied:0};Object.assign(globalThis,{__historySqlPreview:observed});
+  handlers.set('dbark:request',(event,payload)=>{
+   const command=String(payload.command);
+   if(command==='history.readSql')observed.reads++;
+   if(command==='connections.open'||/^(query|sessions|metadata|table|schema|sqlite)\./.test(command)){observed.denied++;throw Error('离线历史查看禁止数据库请求');}
+   return previous(event,payload);
+  });
+ });
+ await open();
+ const card=dialog().locator('[data-history-id="orphan-full"]');
+ await expect(card.getByRole('button',{name:'在新标签打开',exact:true})).toBeDisabled();
+ const before=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));
+ await card.getByRole('button',{name:'查看完整 SQL',exact:true}).click();
+ const preview=card.getByRole('region',{name:'完整历史 SQL',exact:true}), value=()=>preview.locator('pre').textContent();
+ const chunks:string[]=[];
+ await expect(preview.getByRole('status')).toHaveText('第 1 / 3 段');
+ chunks.push((await value())!);expect(chunks[0]).toBe(sql.slice(0,65535));
+ await preview.getByRole('button',{name:'下一段 SQL',exact:true}).click();
+ await expect(preview.getByRole('status')).toHaveText('第 2 / 3 段');
+ chunks.push((await value())!);expect(chunks[1].startsWith('\r\n')).toBe(true);
+ await preview.getByRole('button',{name:'下一段 SQL',exact:true}).click();
+ await expect(preview.getByRole('status')).toHaveText('第 3 / 3 段');
+ chunks.push((await value())!);expect(chunks.join('')).toBe(sql);expect(chunks[2]).toBe('😀历史尾部');
+ await preview.getByRole('button',{name:'上一段 SQL',exact:true}).click();
+ await expect(preview.getByRole('status')).toHaveText('第 2 / 3 段');
+ expect(await value()).toBe(chunks[1]);
+ await preview.getByRole('button',{name:'收起完整 SQL',exact:true}).click();await expect(preview).toHaveCount(0);
+ expect(await desktop.evaluate(()=> (globalThis as typeof globalThis & {__historySqlPreview?:unknown}).__historySqlPreview)).toEqual({reads:1,denied:0});
+ expect(await page.evaluate(()=>window.dbark.invoke('settings.get',{}))).toEqual(before);
+ expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);
+ expect(pageErrors).toEqual([]);
+});
+
 test('读取进度、选择数量和筛选提示可独立定位且保留各自状态', async () => {
  await seed(store => {
   source(store);

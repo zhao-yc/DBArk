@@ -1,5 +1,5 @@
 import{createHash}from'node:crypto';
-import{historyPageInputSchema,historyReadSchema,historyErrorReadSchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult}from'../shared/historyPages';
+import{historyPageInputSchema,historyReadSchema,historyRecordReferenceSchema,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition,type HistoryOpenResult}from'../shared/historyPages';
 import{LocalSqlPages}from'./localSqlPages';
 import{parseHistoryRecord}from'./historyPageMatch';
 
@@ -17,5 +17,10 @@ export class HistoryPages extends LocalSqlPages<HistoryPageInput,HistoryPageEntr
  /** 原连接缺失需显式选替代连接；替代后默认库变为未知，且只创建新草稿。 */
  read(raw:unknown):HistoryOpenResult{const input=historyReadSchema.parse(raw),record=this.current(input.id,input.digest);if(!this.store.queryConnectionExists(input.connectionId))throw Error('所选连接不存在，请明确选择有效连接');const{error,...entry}=record,contextChanged=entry.connectionId!==input.connectionId;return{entry,connectionId:input.connectionId,...(contextChanged?{databaseContext:{state:'unknown' as const}}:{database:entry.databaseContext?entry.databaseContext.state==='known'?entry.databaseContext.database??undefined:undefined:entry.database,databaseContext:entry.databaseContext}),contextChanged};}
  /** 错误全文按单条显式读取，概要列表不传完整错误或SQL。 */
- readError(raw:unknown):{error:string}{const input=historyErrorReadSchema.parse(raw),record=this.current(input.id,input.digest);return{error:record.error??''};}
+ readError(raw:unknown):{error:string}{const input=historyRecordReferenceSchema.parse(raw),record=this.current(input.id,input.digest);return{error:record.error??''};}
+ /** 只返回摘要对应的本地 SQL，不要求来源连接仍存在，也不建立会话。 */
+ readSql(raw: unknown): { sql: string } {
+  const { id, digest } = historyRecordReferenceSchema.parse(raw);
+  return { sql: this.current(id, digest).sql };
+ }
 }

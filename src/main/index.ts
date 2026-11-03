@@ -1330,6 +1330,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'history.pageRelease':return historyPages.release(input);
     case 'history.read':return historyPages.read(input);
     case 'history.readError':return historyPages.readError(input);
+    case 'history.readSql':return historyPages.readSql(input);
     case 'history.deletePreview': {
       if (shuttingDown) throw Error('客户端正在退出，不能清理执行历史');
       if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId) || historyDelete.owns(input.taskId)) throw Error('请求编号已使用');

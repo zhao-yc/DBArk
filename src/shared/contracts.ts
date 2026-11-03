@@ -366,6 +366,7 @@ export interface CommandMap {
   'history.pageRelease':{input:{cursor:string};output:void};
   'history.read':{input:{id:string;digest:string;connectionId:string};output:HistoryOpenResult};
   'history.readError':{input:{id:string;digest:string};output:{error:string}};
+  'history.readSql':{input:{id:string;digest:string};output:{sql:string}};
   'history.deletePreview': { input: HistoryDeletePreviewInput; output: HistoryDeletePreviewOutput };
   'history.deleteApply': { input: HistoryDeleteApplyInput; output: HistoryDeleteApplyOutput };
   'history.deleteRelease': { input: HistoryDeleteReleaseInput; output: void };
