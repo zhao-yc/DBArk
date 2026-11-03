@@ -113,10 +113,15 @@ test('SQLite 统一可见列宽保留隐藏列与冻结，并通过原保存流�
   await modal.getByRole('button', { name: batchText.apply, exact: true }).click();
   await expect(idWidth).toHaveValue('240');
   await expect(nameWidth).toHaveValue('210');
+  await modal.getByRole('button', { name: batchText.fit, exact: true }).click();
+  const fitted = Number(await idWidth.inputValue());
+  expect(fitted).toBeGreaterThanOrEqual(64);
+  expect(fitted).toBeLessThan(240);
+  await expect(nameWidth).toHaveValue('210');
   await modal.getByRole('button', { name: tableGridZh.save, exact: true }).click();
   await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('sqlite.tableLayout.get', { connectionId: 'row-jump-offline', database: 'main', table: 'subject_view' }))).preferences).toEqual({
     version: 1, frozenThrough: 'id', columns: [
-      { name: 'id', hidden: false, width: 240 },
+      { name: 'id', hidden: false, width: fitted },
       { name: 'name', hidden: true, width: 210 },
     ],
   });

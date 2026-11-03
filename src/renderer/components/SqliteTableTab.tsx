@@ -13,6 +13,7 @@ import { sqliteLayoutProjection } from '../../shared/sqliteTableLayout';
 import { sqliteTableLayoutZh as layoutText } from '../locales/sqliteTableLayout.zh-CN';
 import { changeTablePreference } from '../tableColumnPreferences';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
+import type { GridColumnFitSource } from '../gridColumnFit';
 import type { TablePreferences } from '../../shared/tablePreferences';
 import { sqliteTablePresetsZh as presetText } from '../locales/sqliteTablePresets.zh-CN';
 import { sqlitePresetDraft } from '../sqliteTablePresetDraft';
@@ -39,7 +40,7 @@ import type { SqliteOriginalValue, SqliteTableEditPreview } from '../../shared/s
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteTableBrowseLimits } from '../../shared/sqliteTableBrowse';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab, type WorkspaceBusyLease } from '../store';
-import { invoke, uid, errorMessage } from '../lib';
+import { cellPreview, invoke, ownCell, uid, errorMessage } from '../lib';
 import { resultExportData } from '../resultExport';
 import { SqliteTableBrowser, sqliteTableDraft, type SqliteTableQuery, type SqliteTableView, type SqliteFilterDraft, type SqliteSortDraft } from '../sqliteTableBrowser';
 import { sqliteHeaderSortFromGrid, sqliteHeaderSortToGrid, type SqliteHeaderSort } from '../sqliteTableHeaderSort';
@@ -515,6 +516,21 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   function moveSort(index: number, offset: -1 | 1) { setSort(values => { const next = [...values], to = index + offset; if (to < 0 || to >= next.length) return values; [next[index], next[to]] = [next[to], next[index]]; return next; }); }
   useUiCommandScope('tab:' + tab.id, { 'sql-goto-line': { enabled: active && !!page?.result.rows.length && !view.busy && !externalBusy && !cellInput, run: () => { if (latest.current.active && useWorkspace.getState().settings.activeTabId === tab.id) openFocusedGridRowJump(); } }, find: { enabled: active && !!editView && !view.busy && !externalBusy && !findPreview, run: () => openFind('find') }, replace: { enabled: active && !!editView && !view.busy && !externalBusy && !findPreview, run: () => openFind('replace') }, stop: { enabled: active && view.busy, run: () => { void controller.stop(); } }, export: { enabled: active && !!page && !view.busy && !externalBusy, run: exportPage }, import: { enabled: active && page?.target.kind === 'table' && !invalidTarget && !view.busy && !externalBusy && !fullExport && !exportData && !tableImport && !editView?.dirty && !editView?.busy && !editView?.unknown && !cellInput && !previewOpen, run: openImport } }, { active, contextKey: JSON.stringify([tab.id, version, page?.offset, page?.limit, page?.schemaKey, view.busy, externalBusy, !!tableImport, !!fullExport, !!exportData, !!editView?.dirty, !!editView?.unknown, !!cellInput, !!previewOpen, findOpen?.id, findPreview]) });
   const renderedEditor = editorRef.current?.page === editView?.page ? editorRef.current : null, editRows = editView?.rows ?? [];
+  /** SQLite 布局按列名存储；读写网格各自使用当前显示预览。 */
+  function columnFitSource(): GridColumnFitSource | undefined {
+    if (!page || !layoutUiCurrent()) return;
+    const editing = editView?.page === page;
+    if (editing && renderedEditor?.view.rows !== editRows) return;
+    const columns = page.result.columns.map(column => ({ ...column, key: column.name }));
+    const indices = new Map(columns.map((column, index) => [column.key, index]));
+    return { columns, rowCount: editing ? editRows.length : page.result.rows.length, cell: (row, key) => {
+      const index = indices.get(key)!;
+      if (!editing) return cellPreview(ownCell(page.result.rows[row], page.result.columns[index].key));
+      const value = editRows[row].values[index];
+      if (!value) return editText.omitted;
+      return value.kind === 'null' ? 'NULL' : value.kind.toUpperCase() + ' · ' + value.value.slice(0, 240);
+    } };
+  }
   /** 每个编辑入口绑定准确渲染、编辑器、页和草稿数组；同名 row id 不提供跨页授权。 */
   function editActionCurrent(writable = true): boolean {
     return editRender.current === editRenderTicket && !!renderedEditor && editorRef.current === renderedEditor && renderedEditor.page === page && renderedEditor.view.rows === editRows && latest.current.active && useWorkspace.getState().settings.activeTabId === tab.id && (!writable || renderedEditor.canEdit());
@@ -861,7 +877,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
     {diagramOpen && <SqliteRelationshipDialog key={diagramOpen.id} source={diagramOpen.page} current={diagramOpen.current} onActivity={diagramOpen.activity} onClose={() => { if (diagramRef.current === diagramOpen) { diagramOpen.valid = false; diagramRef.current = undefined; setDiagramOpen(undefined); } }}/>}
     {valuesOpen && <SqliteValueOptionsDialog key={valuesOpen.id} tabId={tab.id} base={valuesOpen.base} columns={valuesOpen.columns} mode={valuesOpen.mode} current={valuesOpen.current} onApply={valuesOpen.apply} onClose={() => { if (valuesRef.current === valuesOpen) { valuesOpen.valid = false; valuesRef.current = undefined; setValuesOpen(undefined); } }} onCleanup={reason => useWorkspace.getState().notify(errorMessage(reason), true)}/>}
     {statisticsOpen && <SqliteStatisticsDialog key={statisticsOpen.id} tabId={tab.id} base={statisticsOpen.base} columns={statisticsOpen.columns} current={statisticsOpen.current} onClose={() => { if (statisticsRef.current === statisticsOpen) { statisticsOpen.valid = false; statisticsRef.current = undefined; setStatisticsOpen(undefined); } }} onCleanup={reason => useWorkspace.getState().notify(errorMessage(reason), true)}/>}
-    {layoutDialog?.scope === layoutScope && <TablePreferencesDialog title={layoutText.title} hint={layoutText.hint} maximumNameLength={512} defaultWidth={editView ? 180 : 170} preferences={layoutView.preferences} pending={layoutView.pending} dirty={layoutView.dirty} error={layoutView.error} onChange={changeLayout} onSave={() => { if (layoutUiCurrent()) void layout.persist().catch(reason => setValidation(errorMessage(reason))); }} onReset={() => { if (layoutUiCurrent() && window.confirm(layoutText.reset) && layoutUiCurrent()) void layout.persist(true).catch(reason => setValidation(errorMessage(reason))); }} onReload={() => { if (layoutUiCurrent() && (!layout.view.dirty || window.confirm(layoutText.discard)) && layoutUiCurrent()) void layout.reload(); }} reloadLabel={layoutText.reload} onClose={closeLayout}/>}
+    {layoutDialog?.scope === layoutScope && <TablePreferencesDialog title={layoutText.title} hint={layoutText.hint} maximumNameLength={512} defaultWidth={editView ? 180 : 170} preferences={layoutView.preferences} pending={layoutView.pending} dirty={layoutView.dirty} error={layoutView.error} fitSource={columnFitSource} onChange={changeLayout} onSave={() => { if (layoutUiCurrent()) void layout.persist().catch(reason => setValidation(errorMessage(reason))); }} onReset={() => { if (layoutUiCurrent() && window.confirm(layoutText.reset) && layoutUiCurrent()) void layout.persist(true).catch(reason => setValidation(errorMessage(reason))); }} onReload={() => { if (layoutUiCurrent() && (!layout.view.dirty || window.confirm(layoutText.discard)) && layoutUiCurrent()) void layout.reload(); }} reloadLabel={layoutText.reload} onClose={closeLayout}/>}
     {fullExport && <SqliteTableExportDialog intent={fullExport.intent} onActivity={delta => fullExportActivity(fullExport, delta)} onClose={() => closeAllExport(fullExport)} onCleanupError={message => useWorkspace.getState().notify(message, true)} onCommitted={(output, _changed, content) => useWorkspace.getState().notify(content === 'structure' ? exportText.structureCommittedChanged : exportText.committedChanged(output.rows))}/>}
     {tableImport && <SqliteTableImportDialog key={tableImport.source.id} source={tableImport.source} onActivity={delta => importActivity(tableImport, delta)} onDirtyChange={dirty => importDirty(tableImport, dirty)} onClose={() => closeImport(tableImport)} onCommitted={(output, changed) => imported(tableImport, output, changed)} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
     {exportData && <ResultExportDialog result={exportData} tabId={tab.id} scope="table" allowSql={false} onClose={() => setExportData(null)}/>}

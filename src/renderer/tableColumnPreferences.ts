@@ -72,8 +72,18 @@ export function changeTablePreference(preferences: TablePreferences, name: strin
 
 /** 一次更新全部可见列，保留隐藏列、顺序和冻结边界。 */
 export function setVisibleTableColumnWidths(preferences: TablePreferences, width: number): TablePreferences {
-  if (!Number.isInteger(width) || width < tablePreferencesLimits.minWidth || width > tablePreferencesLimits.maxWidth) throw Error(text.widthInvalid);
-  return preserveTableFrozenThrough(preferences, preferences.columns.map(column => column.hidden ? column : { ...column, width }));
+  return setTableColumnWidths(preferences, new Map(visibleTableKeys(preferences).map(name => [name, width])));
+}
+
+/** 统一和自适应宽度都一次应用到可见列，隐藏列及边界保持原身份。 */
+export function setTableColumnWidths(preferences: TablePreferences, widths: ReadonlyMap<string, number>): TablePreferences {
+  for (const width of widths.values()) {
+    if (!Number.isInteger(width) || width < tablePreferencesLimits.minWidth || width > tablePreferencesLimits.maxWidth) throw Error(text.widthInvalid);
+  }
+  return preserveTableFrozenThrough(preferences, preferences.columns.map(column => {
+    const width = widths.get(column.name);
+    return column.hidden || width === undefined ? column : { ...column, width };
+  }));
 }
 
 /** 重排按列名移动，选择列不进入偏好数组或拖动目标。 */

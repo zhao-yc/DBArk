@@ -80,6 +80,7 @@ import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visi
 import { applyPageReplacement, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
 import { PageFindPanel } from './PageFindPanel';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
+import type { GridColumnFitSource } from '../gridColumnFit';
 import { tableGridZh } from '../locales/tableGrid.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { blocksBinaryTextInput, tableCellKeyIsComposing } from '../tableCellKeyboard';
@@ -386,6 +387,14 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     const values = [rowsRef.current, context.info, context.connectionVersion, refreshVersion, context.stale, recordTargetKey(context.target), context.loaded, context.generation, pageIndex, pageSize, sort, filters, filterMode, filterGroup, visibleKeys];
     if (values.some((value, index) => value !== pageFindContext.current.values[index])) pageFindContext.current = { values, generation: pageFindContext.current.generation + 1 };
     return pageFindContext.current.generation;
+  }
+  /** 只使用当前页网格的预览，包括本地草稿值。 */
+  function columnFitSource(): GridColumnFitSource | undefined {
+    if (!page || rowsRef.current !== rows || !getRecordPageContext().active || blockedRef.current || externalStale) return;
+    return { columns: page.columns, rowCount: rows.length, cell: (index, key) => {
+      const value = ownCell(rows[index].data, key);
+      return value === undefined ? zh.common.defaultValue : cellPreview(value);
+    } };
   }
   const rowJumpScope = pageFindGeneration();
   const rowJumpDisabled = blocked || externalStale || gridEditing || record.hasInput() || record.pending || !visibleKeys.length;
@@ -1413,7 +1422,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     {filteredSelectDialog && <TableQueryTemplateDialog info={filteredSelectDialog.info} limit={filteredSelectDialog.limit} readScope={filteredSelectDialog.readScope} isCurrent={() => filteredSelectDialog.current()} onOpen={(sql, kind, options) => openFilteredSelectQuery(filteredSelectDialog, sql, kind, options)} onClose={() => closeFilteredSelect(filteredSelectDialog)}/>}
     {pasteInsertDialog && <PasteInsertDialog info={pasteInsertDialog.context.info!} visibleKeys={pasteInsertDialog.visible} invalidReason={pasteInsertDialog.reason(rowsRef.current, getRecordContext())} onStage={plan => stagePasteInsert(pasteInsertDialog, plan)} onClose={() => closePasteInsert(pasteInsertDialog)}/>}
     {batchFillDialog && <TableBatchFillDialog intent={batchFillDialog} initialColumn={selection?.key} invalidReason={batchFillDialog.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)} onStage={assignments => stageBatchFill(batchFillDialog, assignments)} onClose={() => closeBatchFill(batchFillDialog)}/>}
-    {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
+    {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} fitSource={columnFitSource} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
     {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
     {childReferenceDialog && <ChildReferenceDialog base={base} intent={childReferenceDialog} onClose={() => closeChildReferences(childReferenceDialog)} onActivity={referenceActivity}/>}
     {foreignKeyJoinDialog && <TableForeignKeyJoinDialog intent={foreignKeyJoinDialog} onOpen={preview => openForeignKeyJoinQuery(foreignKeyJoinDialog, preview)} onClose={() => closeForeignKeyJoin(foreignKeyJoinDialog)} onActivity={foreignKeyJoinActivity} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}

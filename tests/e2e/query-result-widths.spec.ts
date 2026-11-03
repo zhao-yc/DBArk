@@ -12,7 +12,7 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
 test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再次执行仍用默认值', async () => {
   const id = 'offline-result-widths';
-  const sql = "SELECT '短文本' AS 重复列, '长一点的文本' AS 重复列";
+  const sql = "SELECT '短文本' AS 重复列, '这是一段较长的内容，用于测量同名列不同的显示宽度' AS 重复列";
   // 只为独立临时配置建立一个本地只读连接，查询仍经过正式 SQLite 引擎。
   await quitDesktop();
   const databasePath = join(dataDir, 'result-widths.sqlite');
@@ -56,6 +56,15 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   await open();
   await expect(first).toHaveValue('340');
   await expect(second).toHaveValue('210');
+  await modal.getByRole('button', { name: batchText.fit, exact: true }).click();
+  const fitted = [Number(await first.inputValue()), Number(await second.inputValue())];
+  expect(fitted[0]).toBeGreaterThanOrEqual(64);
+  expect(fitted[1]).toBeGreaterThan(fitted[0]);
+  expect(fitted[1]).toBeLessThanOrEqual(640);
+  await apply.click();
+  await expect.poll(() => width(0)).toBe(fitted[0]);
+  await expect.poll(() => width(1)).toBe(fitted[1]);
+  await open();
   const batch = modal.getByRole('textbox', { name: batchText.width, exact: true });
   const batchApply = modal.getByRole('button', { name: batchText.apply, exact: true });
   await batch.fill('2001');
