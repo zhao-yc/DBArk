@@ -1,0 +1,3 @@
+.grid-row-jump { display: inline-flex; align-items: center; gap: 4px; }
+.grid-row-jump input { width: 92px; }
+.sqlite-grid-row-jump { padding: 4px 8px; }
