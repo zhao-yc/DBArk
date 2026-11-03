@@ -403,6 +403,27 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     const afterOptions = await model();
     unchanged(beforeOptions, afterOptions);
     expect(afterOptions.selection).toEqual(beforeOptions.selection);
+    stage = '原生菜单定位匹配括号，编辑器右键选中完整范围';
+    const matchingOpen = beforeOptions.selection.start, matchingClose = matchingOpen + closeColumn - bracketColumn;
+    await expect.poll(() => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-goto-bracket')?.enabled === true))).toBe(true);
+    await step(() => application.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('sql-goto-bracket'), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('括号导航原生命令不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    }));
+    await expect.poll(async () => (await model()).selection).toEqual({ start: matchingClose, end: matchingClose });
+    const bracketPoint = await step(() => page.evaluate(({ line, column }) => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const editor = api?.editor.getEditors().find(item => item.getContainerDomNode().closest('.query-tab'));
+      const position = editor?.getScrolledVisiblePosition({ lineNumber: line, column });
+      const bounds = editor?.getDomNode()?.getBoundingClientRect();
+      if (!position || !bounds) throw Error('括号右键坐标不可用');
+      return { x: bounds.x + position.left, y: bounds.y + position.top + position.height / 2 };
+    }, { line: bracketLine, column: bracketColumn }));
+    await step(() => page.mouse.click(bracketPoint.x, bracketPoint.y, { button: 'right' }));
+    await step(() => page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: uiCommandLabels['sql-select-bracket'], exact: true }).click({ delay: 120 }));
+    await expect.poll(async () => (await model()).selection).toEqual({ start: matchingOpen, end: matchingClose + 1 });
+    unchanged(beforeOptions, await model());
     const displayAudit = await audit();
     expect(displayAudit.denied).toEqual([]);
     expect(displayAudit.commands.filter(command => /^(?:metadata|sessions|query|table|schema|sqlite|serverMonitor)\./.test(command))).toEqual([]);

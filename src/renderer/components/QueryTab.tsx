@@ -156,6 +156,13 @@ const sqlTextActions = {
   'sql-move-lines-down': 'editor.action.moveLinesDownAction',
   'sql-delete-lines': 'editor.action.deleteLines',
 } as const;
+/** 行列及括号导航使用 Monaco 已注册的动作与当前模型。 */
+const sqlPositionActions = {
+  'sql-goto-line': 'editor.action.gotoLine',
+  'sql-goto-bracket': 'editor.action.jumpToBracket',
+  'sql-select-bracket': 'editor.action.selectToBracket',
+} as const;
+const bracketCommands = ['sql-goto-bracket', 'sql-select-bracket'] as const;
 const completionStatusInfo={sessionUnknown:{text:completionZh.sessionUnknown,hint:completionZh.sessionUnknownHint},partial:{text:completionZh.partial,hint:completionZh.partialHint},unavailable:{text:completionZh.unavailable,hint:completionZh.unavailableHint},limited:{text:completionZh.limited,hint:completionZh.limitedHint},databaseUnknown:{text:completionZh.databaseUnknown,hint:completionZh.databaseUnknownHint},startupTimeout:{text:completionZh.startupTimeout,hint:completionZh.startupTimeoutHint},analysisTimeout:{text:completionZh.analysisTimeout,hint:completionZh.analysisTimeoutHint}};
 
 interface SqliteParameterForm { id: string; source: string; connectionId: string; connection: unknown; version: number; fileBinding: unknown; savedBinding: unknown; session: string; recognized: boolean; submitted: boolean; valid: boolean; }
@@ -1813,10 +1820,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const instance = editor.current, action = instance.getAction(replace ? 'editor.action.startFindReplaceAction' : 'actions.find');
     if (action) { instance.focus(); void action.run().catch(reason => setError(errorMessage(reason))); }
   }
-  /** 聚焦原查询编辑器后调用 Monaco 行列导航，结果专注模式先恢复编辑区。 */
-  async function openEditorPosition(instance = editor.current): Promise<void> {
+  /** 聚焦原查询编辑器后定位或选中，结果专注模式先恢复编辑区。 */
+  async function openEditorPosition(command: keyof typeof sqlPositionActions = 'sql-goto-line', instance = editor.current): Promise<void> {
     if (!instance || instance !== editor.current || !queryMenuCurrent() || fileSource.isBusy()) return;
-    const model = instance.getModel(), action = instance.getAction('editor.action.gotoLine');
+    const model = instance.getModel(), action = instance.getAction(sqlPositionActions[command]);
     if (!model || model.isDisposed() || !action?.isSupported()) return;
     if (resultsOnly) flushSync(() => setResultsOnly(false));
     if (instance !== editor.current || instance.getModel() !== model || model.isDisposed() || !queryMenuCurrent()) return;
@@ -1882,9 +1889,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const action = searchEditor.addAction({ id: 'dbark-statement-navigation:' + uid(), label: navigationText.entry, precondition: '!editorReadonly', contextMenuGroupId: 'navigation', contextMenuOrder: 1.7,
       run: () => { if (active && editor.current === searchEditor) openStatementNavigation(searchEditor); },
     });
-    const position = searchEditor.addAction({ id: 'dbark-sql-goto-line:' + uid(), label: uiCommandLabels['sql-goto-line'], contextMenuGroupId: 'navigation', contextMenuOrder: 1.6,
-      run: () => { if (active) return openEditorPosition(searchEditor); },
-    });
+    const positions = (['sql-goto-line', ...bracketCommands] as const).map((id, index) => searchEditor.addAction({
+      id: `dbark-${id}:${uid()}`, label: uiCommandLabels[id], contextMenuGroupId: 'navigation', contextMenuOrder: 1.6 + index / 100,
+      run: () => { if (active) return openEditorPosition(id, searchEditor); },
+    }));
     const select = searchEditor.addAction({ id: 'dbark-select-current-statement:' + uid(), label: uiCommandLabels['select-current-statement'], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.65,
       run: () => { if (active) openStatementNavigation(searchEditor, 'select'); },
     });
@@ -1892,7 +1900,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       id: `dbark-${direction}-statement:${uid()}`, label: uiCommandLabels[`${direction}-statement`], precondition: '!editorReadonly && !editorHasMultipleSelections', contextMenuGroupId: 'navigation', contextMenuOrder: 1.66 + index / 100,
       run: () => { if (active) openStatementNavigation(searchEditor, direction); },
     }));
-    return () => { active = false; action.dispose(); position.dispose(); select.dispose(); adjacent.forEach(item => item.dispose()); };
+    return () => { active = false; action.dispose(); positions.forEach(item => item.dispose()); select.dispose(); adjacent.forEach(item => item.dispose()); };
   }, [searchEditor, queryMenuKey, connection, navigationView?.busy, tab.sql, resultsOnly]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
@@ -1932,9 +1940,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind(true) },
     'sql-goto-line': {
-      enabled: (!!selectionBinding || !!searchEditor?.getAction?.('editor.action.gotoLine')) && !closeRequest && !fileSource.busy,
+      enabled: (!!selectionBinding || !!searchEditor?.getAction?.(sqlPositionActions['sql-goto-line'])) && !closeRequest && !fileSource.busy,
       run: () => { if (queryMenuCurrent() && !openFocusedGridRowJump()) return openEditorPosition(); },
     },
+    ...Object.fromEntries(bracketCommands.map(id => [id, {
+      enabled: !!searchEditor?.getAction?.(sqlPositionActions[id])?.isSupported() && !closeRequest && !fileSource.busy,
+      run: () => openEditorPosition(id),
+    }])),
     'sql-toggle-comment': { enabled: !!searchEditor && !resultsOnly && !busy && !closeRequest && !fileSource.busy, run: () => editSqlText('sql-toggle-comment') },
     ...Object.fromEntries(sqlLineCommandIds.map(id => [id, {
       enabled: !!searchEditor?.getAction?.(sqlTextActions[id])?.isSupported() && !resultsOnly && !busy && !closeRequest && !fileSource.busy,

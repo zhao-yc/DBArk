@@ -7,6 +7,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'connections-transfer': '连接导入导出', 'connections-organize': '整理连接', 'find': '查找', 'replace': '替换',
   'sql-uppercase': '选区转为大写', 'sql-lowercase': '选区转为小写',
   'sql-goto-line': '跳到行列',
+  'sql-goto-bracket': '跳到匹配括号', 'sql-select-bracket': '选中括号范围',
   'sql-selection-to-snippet': '将选区保存为片段',
   'sql-toggle-comment': '切换行注释',
   'sql-duplicate-lines': '向下复制行', 'sql-move-lines-up': '上移行', 'sql-move-lines-down': '下移行', 'sql-delete-lines': '删除行',
