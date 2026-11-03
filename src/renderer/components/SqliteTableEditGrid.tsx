@@ -146,20 +146,31 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
       if (!current(row) || !noModal()) return; writeSqliteClipboardData(event.clipboardData, content); setError('');
     } catch (reason) { try { event.clipboardData.clearData(); } catch { /* 仅原事件可清理，不借系统剪贴板重试。 */ } if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
   }
-  /** 按钮只读取当前有效的勾选或活动格，不接触系统剪贴板读取入口。 */
-  function copyWithHeaders() {
+  /** 当前列与含表头复制都只读本页，并共用 SQLite 类型化剪贴板。 */
+  function copyFromGrid(mode: 'headers' | 'column') {
     const allowed = () => !disabled && current() && noModal();
     if (!allowed()) return;
     try {
       const checked = rows.filter(item => selectedRows.has(item.id) && !item.deleted);
       const cell = activeCell.current.position;
       if (selectedRows.size && !checked.length) throw Error(headerCopyText.stale);
-      const content = clipboardContent(checked, cell?.row, cell?.key ?? '', true);
+      let content;
+      if (mode === 'column') {
+        const index = cell ? order.find(index => cell.key === 'c' + index) : undefined;
+        if (index === undefined) throw Error(headerCopyText.stale);
+        const records = selectedRows.size ? checked : rows.filter(row => !row.deleted);
+        if (!records.length) throw Error(headerCopyText.stale);
+        if (records.some(row => row.values.length !== page.columns.length)) throw Error(clipboardText.invalid);
+        content = encodeSqliteClipboard(records.map(row => [row.values[index]]), [page.columns[index].name]);
+      } else {
+        content = clipboardContent(checked, cell?.row, cell?.key ?? '', true);
+      }
       if (!content) throw Error(headerCopyText.stale);
       writeTableClipboardEvent(allowed, data => writeSqliteClipboardData(data, content));
       setError('');
     } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : headerCopyText.unavailable); }
   }
+  const hasActiveDataColumn = order.some(index => activeCell.current.position?.key === 'c' + index);
   /** 当前RDG无内联editor，onCellPaste不会派发；在原生capture接管一次，不伪造editable/onRowsChange。 */
   function paste(event: ClipboardEvent<HTMLDivElement>): void {
     if (inputTarget(event) || !onPaste) return; event.preventDefault(); event.stopPropagation();
@@ -182,7 +193,7 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
     handle.setActivePosition(position, { enableEditor: false, shouldFocus: true });
     return true;
   }
-  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !/^c\d+$/.test(activeCell.current.position?.key ?? ''))} onClick={copyWithHeaders}>{headerCopyText.action}</button></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}`} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
+  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !hasActiveDataColumn)} onClick={() => copyFromGrid('headers')}>{headerCopyText.action}</button><button type="button" title={headerCopyText.columnHint} disabled={disabled || !hasActiveDataColumn} onClick={() => copyFromGrid('column')}>{headerCopyText.column}</button></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}`} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
     sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }} onColumnResize={onColumnResize ? (column, width) => { if (!disabled && baseCurrent() && noModal() && /^c(?:0|[1-9]\d*)$/.test(column.key) && order.includes(Number(column.key.slice(1)))) onColumnResize(column.key, width); } : undefined}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={ids => { if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return; selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} }; notifyChecked(); selectionChanged(value => value + 1); }}

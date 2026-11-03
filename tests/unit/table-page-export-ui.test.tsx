@@ -89,7 +89,7 @@ function button(name: string) { let node: MemoryNode | undefined; act(() => { no
 async function click(name: string) { const node = button(name); expect(node.disabled).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 /** 通过真实网格回调勾选，倒序Set不能改变文件中的显示顺序。 */
 async function select(indices: number[]) { await act(async () => grid.props.onSelectedRowsChange(new Set(indices.map(index => grid.rows[index].id)))); }
-it('MySQL 表格含列名复制按可见列及行顺序，内部保留原类型且无请求', async () => {
+it('MySQL 表格复制表头和当前列沿显示顺序，内部保留原类型且无请求', async () => {
   await mount();
   await select([2, 0]);
   const before = [...commands], content = new Map<string, string>();
@@ -108,6 +108,18 @@ it('MySQL 表格含列名复制按可见列及行顺序，内部保留原类型�
       [{ type: 'binary', base64: 'AP8=' }, '1', '0.00000000000000000000001', '原1'],
       [{ type: 'binary', base64: 'AP8=' }, '3', '0.00000000000000000000001', '原3'],
     ]);
+    expect(button(tableHeaderCopyZh.column).disabled).toBe(true);
+    await act(async () => grid.props.onActivePositionChange({ row: grid.rows[0], column: { key: 'note' } }));
+    await click(tableHeaderCopyZh.column);
+    expect(content.get('text/plain')).toBe('原1\n原3');
+    expect(JSON.parse(content.get('application/x-dbark-cells')!).rows).toEqual([['原1'], ['原3']]);
+    const old = callback(button(tableHeaderCopyZh.column));
+    await select([]);
+    content.clear();
+    await act(async () => old());
+    expect(content.size).toBe(0);
+    await click(tableHeaderCopyZh.column);
+    expect(JSON.parse(content.get('application/x-dbark-cells')!).rows).toEqual([['原1'], [null], ['原3']]);
     expect(commands).toEqual(before);
   } finally {
     if (previous) Object.defineProperty(document, 'execCommand', previous);
