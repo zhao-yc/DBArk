@@ -1,0 +1,57 @@
+name: 对象结构源码验收
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/object-definition.yml', 'scripts/sqlite-workspace-ci.mjs', 'src/shared/**', 'src/main/**', 'src/engine/**', 'src/renderer/**', 'tests/unit/**', 'tests/e2e/object-definition-native.spec.ts', 'tests/e2e/desktop-fixture.ts', 'package.json', 'pnpm-lock.yaml']
+  pull_request:
+    paths: ['.github/workflows/object-definition.yml', 'scripts/sqlite-workspace-ci.mjs', 'src/shared/**', 'src/main/**', 'src/engine/**', 'src/renderer/**', 'tests/unit/**', 'tests/e2e/object-definition-native.spec.ts', 'tests/e2e/desktop-fixture.ts', 'package.json', 'pnpm-lock.yaml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 原窗口及失败上传保留，每个run独立，不因新提交取消旧轮。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  references:
+    name: 对象结构 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装锁定依赖和Electron
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec install-electron
+      - name: 单次运行结构读取、原声明、值预算及取消回归
+        run: pnpm exec vitest run tests/unit/application-menu-document.test.ts tests/unit/application-menu.test.ts tests/unit/completion-analysis.test.ts tests/unit/completion-call-routines.test.ts tests/unit/completion-context.test.ts tests/unit/completion-definition-cost.test.ts tests/unit/completion-definition.test.ts tests/unit/completion-insert-row-alias-as-position.test.ts tests/unit/completion-insert-row-alias.test.ts tests/unit/completion-insert-set-row-alias.test.ts tests/unit/completion-lateral-scope.test.ts tests/unit/completion-lexical.test.ts tests/unit/completion-named-windows.test.ts tests/unit/completion-output-aliases.test.ts tests/unit/completion-warmup.test.ts tests/unit/completion-window-frame.test.ts tests/unit/completion-window-inheritance-completeness.test.ts tests/unit/completion-window-inheritance.test.ts tests/unit/completion-window-scope.test.ts tests/unit/completion-window-worker.test.ts tests/unit/local-references-ci.test.ts tests/unit/local-references-worker.test.ts tests/unit/local-references.test.ts tests/unit/local-rename-worker.test.ts tests/unit/local-rename.test.ts tests/unit/main-object-definition.test.ts tests/unit/mysql-definition-analysis.test.ts tests/unit/object-definition-contract.test.ts tests/unit/object-definition-engine.test.ts tests/unit/object-definition-independent.test.ts tests/unit/object-definition-reader.test.ts tests/unit/physical-object-analysis.test.ts tests/unit/physical-object-worker.test.ts tests/unit/sqlite-broker-routing.test.ts tests/unit/sqlite-completion-runtime.test.ts tests/unit/sqlite-driver.test.ts tests/unit/sqlite-object-definition-runtime.test.ts tests/unit/sqlite-offline-ci.test.ts tests/unit/sqlite-query-session.test.ts tests/unit/sqlite-raw-frames.test.ts tests/unit/sqlite-raw-statement.test.ts tests/unit/sqlite-raw-value.test.ts tests/unit/sqlite-rebuild-driver.test.ts tests/unit/sqlite-rebuild-value-budget.test.ts tests/unit/object-definition-session-cache.test.ts tests/unit/sqlite-runtime.test.ts tests/unit/sqlite-table-browse.test.ts tests/unit/task-privacy.test.ts tests/unit/ui-command-preload.test.ts tests/unit/ui-command-profile-refresh.test.ts tests/unit/ui-command-registry.test.ts tests/unit/ui-object-definition.test.tsx tests/unit/completion-worker-client.test.ts tests/unit/local-rename-lifecycle.test.ts tests/unit/local-references-lifecycle.test.ts tests/unit/sqlite-completion-worker-client.test.ts tests/unit/sqlite-completion-analysis.test.ts tests/unit/sqlite-definition.test.ts tests/unit/sqlite-definition-provider.test.ts tests/unit/sqlite-local-references.test.ts tests/unit/sqlite-local-references-worker.test.ts tests/unit/sqlite-local-references-runtime.test.ts --maxWorkers=1
+      - name: 严格类型检查和构建
+        run: pnpm build
+      - name: 单次真实查询结构、会话临时对象与事务窗口验收
+        run: node scripts/sqlite-workspace-ci.mjs object-definition
+      - name: 记录准确源码和平台
+        if: always()
+        run: |
+          node -e "const fs=require('node:fs');fs.mkdirSync('test-results/object-definition',{recursive:true});fs.writeFileSync('test-results/object-definition/platform.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version}))"
+          git rev-parse HEAD > test-results/object-definition/head.txt
+      - name: 保存原报告、截图及退出清理原件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: object-definition-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/object-definition/
+          if-no-files-found: warn

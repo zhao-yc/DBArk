@@ -7,6 +7,7 @@ import { sqliteCompletionLimits } from '../shared/sqliteCompletion';
 import { completionLexicalContext } from '../shared/completionLexical';
 import { sqliteReferenceContext } from '../shared/sqliteCompletionAnalysis';
 import { quoteLocalRename, validLocalRename, type LocalRename, type LocalRenameContext } from '../shared/localRename';
+import { validPhysicalObjectAnalysis, type PhysicalObjectAnalysis } from '../shared/physicalObjectAnalysis';
 
 type WorkerPort = Pick<Worker, 'postMessage' | 'terminate' | 'onmessage' | 'onerror' | 'onmessageerror'>;
 
@@ -32,8 +33,12 @@ export class LocalReferencesWorkerClient {
       return validLocalRename(value, context, this.dialect, newName);
     });
   }
+  /** 物理对象分析复用独占可终止线程，只交付原语句的名称及范围，不交付可执行内容。 */
+  object(source: string, offset: number, mode: CompletionLexicalMode, signal: AbortSignal, capabilities: CompletionScopeCapabilities): Promise<PhysicalObjectAnalysis> {
+    return this.request<PhysicalObjectAnalysis>(source, offset, mode, signal, capabilities, { intent: 'object' }, (value, snapshot): value is PhysicalObjectAnalysis => validPhysicalObjectAnalysis(value, source, offset, this.dialect, snapshot));
+  }
   /** 分析类型不改变8秒握手／2秒正文期限，替换或取消都终止准确owner。 */
-  private request<T extends LocalReferences | LocalRename>(source: string, offset: number, mode: CompletionLexicalMode, signal: AbortSignal, capabilities: CompletionScopeCapabilities, intent: { intent?: 'references' | 'rename'; newName?: string }, valid: (value: unknown, snapshot: CompletionLexicalMode) => value is T): Promise<T | { status: 'blocked'; reason: string }> {
+  private request<T extends LocalReferences | LocalRename | PhysicalObjectAnalysis>(source: string, offset: number, mode: CompletionLexicalMode, signal: AbortSignal, capabilities: CompletionScopeCapabilities, intent: { intent?: 'references' | 'rename' | 'object'; newName?: string }, valid: (value: unknown, snapshot: CompletionLexicalMode) => value is T): Promise<T | { status: 'blocked'; reason: string }> {
     if (this.disposed || signal.aborted) return Promise.resolve({ status: 'blocked', reason: 'cancelled' });
     if (source.length > (this.dialect === 'sqlite' ? sqliteCompletionLimits : completionLimits).sourceUnits) return Promise.resolve({ status: 'blocked', reason: 'budget' });
     this.active?.stop('replaced');
@@ -53,10 +58,13 @@ export class LocalReferencesWorkerClient {
       timer = setTimeout(() => owner.stop('startup-timeout'), 8000);
       try {
         worker = this.create();
+        // 构造器期间也可能同步取消；新取得的准确线程仍须释放，不能留下无人持有的owner。
+        if (finished) { worker.terminate(); worker = undefined; return; }
         worker.onmessage = event => {
           if (finished) return;
           const message = event.data;
           const prefix = this.dialect === 'sqlite' ? 'dbark-sqlite-local-references' : 'dbark-completion';
+          if (intent.intent === 'object' && (message?.type === prefix + '-ready' || message?.type === prefix + '-unavailable') && (typeof message !== 'object' || Array.isArray(message) || Object.keys(message).sort().join(',') !== 'type,version')) { owner.stop('worker'); return; }
           if (message?.type === prefix + '-unavailable') { owner.stop('worker'); return; }
           if (message?.type === prefix + '-ready') {
             if (message.version !== 1) { owner.stop('worker'); return; }
@@ -65,7 +73,7 @@ export class LocalReferencesWorkerClient {
             try { worker!.postMessage(this.dialect === 'sqlite' ? { id: 1, source, offset, ...intent } : { id: 1, source, offset, mode: snapshot, capabilities: facts, ...intent }); } catch { owner.stop('worker'); }
             return;
           }
-          if (!sent || message?.id !== 1 || !valid(message.result, snapshot)) { owner.stop('worker'); return; }
+          if (!sent || message?.id !== 1 || intent.intent === 'object' && (!message || typeof message !== 'object' || Array.isArray(message) || Object.keys(message).sort().join(',') !== 'id,result') || !valid(message.result, snapshot)) { owner.stop('worker'); return; }
           finish(message.result);
         };
         worker.onerror = event => { event.preventDefault(); owner.stop('worker'); };

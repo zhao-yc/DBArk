@@ -22,7 +22,7 @@ export function quoteCompletionIdentifier(value:string):string{if(!completionIde
 const blocked=(reason:Extract<CompletionLexicalResult,{status:'blocked'}>['reason']):CompletionLexicalResult=>({status:'blocked',reason});
 
 /** 单个确定模式的纯词法扫描，不执行SQL、不读取连接，也不记录用户文本。 */
-function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number,signature?:'mysql'|'sqlite'):CompletionLexicalResult{
+function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number,signature?:'mysql'|'sqlite',complete=false):CompletionLexicalResult{
   const statements:Statement[]=[],regions:Region[]=[];let current:Statement={start:0,end:source.length,tokens:[],executable:false};
   let index=0,depth=0,total=0,delimiter=';',lineStart=true,hasCode=false;
   /** 限制全文件token数与括号深度，避免大脚本在每次键盘输入时无限分配。 */
@@ -52,6 +52,7 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
     }
     if(char==='/'&&next==='*'){
       const start=index,end=source.indexOf('*/',index+2);index=end<0?source.length:end+2;
+      if(complete&&end<0&&offset>=current.start)return blocked('comment');
       if(signature!=='sqlite'&&(source[start+2]==='!'||source.slice(start+2,start+4)==='M!')){current.executable=true;hasCode=true;}
       regions.push({start,end:index,kind:'comment',open:end<0});continue;
     }
@@ -113,13 +114,13 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
 }
 
 /** 未知会话模式分别扫描四种组合；仅当前语句及编辑范围完全一致时提供候选。 */
-export function completionLexicalContext(source:string,offset:number,mode:CompletionLexicalMode={},prefixUnits:number=completionLimits.prefixUnits):CompletionLexicalResult{
+export function completionLexicalContext(source:string,offset:number,mode:CompletionLexicalMode={},prefixUnits:number=completionLimits.prefixUnits,complete=false):CompletionLexicalResult{
   if(![completionLimits.prefixUnits,completionLimits.aliasUnits].includes(prefixUnits as 64|256))return blocked('budget');
   if(!Number.isInteger(offset)||offset<0||offset>source.length)return blocked('position');
   if(source.length>completionLimits.sourceUnits)return blocked('budget');
   if(source.includes('\0'))return blocked('identifier');
   const results:CompletionLexicalResult[]=[];
-  for(const quotes of mode.ansiQuotes===undefined?[false,true]:[mode.ansiQuotes])for(const escapes of mode.noBackslashEscapes===undefined?[false,true]:[mode.noBackslashEscapes])results.push(scan(source,offset,quotes,escapes,prefixUnits));
+  for(const quotes of mode.ansiQuotes===undefined?[false,true]:[mode.ansiQuotes])for(const escapes of mode.noBackslashEscapes===undefined?[false,true]:[mode.noBackslashEscapes])results.push(scan(source,offset,quotes,escapes,prefixUnits,undefined,complete));
   const first=JSON.stringify(results[0]);return results.every(value=>JSON.stringify(value)===first)?results[0]:blocked('ambiguous');
 }
 

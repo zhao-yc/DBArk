@@ -5,6 +5,8 @@ import { sqliteDriverLimits, type SqliteProcessExit, type SqliteProcessTransport
 import { createSqliteProcess } from './sqliteProcess';
 import { SqliteQuerySession } from './sqliteQuerySession';
 import { readSqliteCompletion } from './sqliteCompletion';
+import { readSqliteObjectDefinition, sqliteObjectDefinitionDatabase } from './sqliteObjectDefinition';
+import { objectDefinitionInputSchema, objectDefinitionLimits, objectDefinitionTaskPrefix, type ObjectDefinitionOutput } from '../shared/objectDefinition';
 import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTaskPrefix, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteTablePageSchema, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import { readSqliteTablePage, SqliteTableBrowseCancelled } from './sqliteTableBrowse';
@@ -132,6 +134,7 @@ export class SqliteRuntime {
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, Task>();
   private readonly completionReads = new Map<string, CompletionTask>();
+  private readonly definitionReads = new Map<string, CompletionTask>();
   private stopping = false;
   private closeWork?: Promise<void>;
   private forceWork?: Promise<void>;
@@ -152,7 +155,7 @@ export class SqliteRuntime {
   /** 命名空间归属永久有效，迟到或未知的SQLite编号也不能进入mysql2。 */
   ownsSession(id: string): boolean { return typeof id === 'string' && id.startsWith('sqlite:'); }
   /** 历史任务编号仍属于原路由，旧取消不会影响下一项任务。 */
-  ownsTask(id: string): boolean { return this.tasks.has(id) || typeof id === 'string' && id.startsWith(sqliteCompletionTaskPrefix); }
+  ownsTask(id: string): boolean { return this.tasks.has(id) || this.definitionReads.has(id) || typeof id === 'string' && id.startsWith(sqliteCompletionTaskPrefix); }
   /** 已知、打开中及关闭失败的连接均保留在本路由。 */
   ownsConnection(id: string): boolean { return this.connections.has(id); }
 
@@ -261,6 +264,46 @@ export class SqliteRuntime {
     task.cancelled = true;
     return task.active?.then(() => {}, () => {}) ?? Promise.resolve();
   }
+  /** 对象定义与补全共用原session边界取消；独立只读任务占槽直到准确exit确认。 */
+  private objectDefinition(source: unknown): Promise<ObjectDefinitionOutput> {
+    const input = objectDefinitionInputSchema.parse(source);
+    const database = sqliteObjectDefinitionDatabase(input.database);
+    if (!input.sessionId && database === 'temp') return Promise.reject(Error('SQLite临时对象必须从原查询会话读取'));
+    if (this.definitionReads.has(input.taskId) || this.completionReads.has(input.taskId) || this.tasks.has(input.taskId) || this.definitionReads.size >= objectDefinitionLimits.active) return Promise.reject(Error('SQLite对象定义任务编号已使用或读取繁忙'));
+    const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id); this.assertTarget(connection, profile);
+    const session = input.sessionId === undefined ? undefined : this.session(input.sessionId);
+    if (session && (session.connection !== connection || session.query.connectionId !== input.connectionId || !sameTarget(session.profile, profile))) return Promise.reject(Error('SQLite对象定义会话不属于原连接'));
+    if (session && (!session.driver.isUsable || session.userHandoff || session.pending || session.query.completionState().busy)) return Promise.reject(Error('SQLite原查询会话不可用或已有运行操作'));
+    const revision = session?.query.completionState().objectsRevision;
+    const task: CompletionTask = { kind: 'browse', connection, session, cancelled: false, boundaryCancelled: false, cleaning: false };
+    // 借用原资源但不关闭它；若失效且exit未确认，该任务仍占并发槽，直到显式断开连接。
+    if (session) task.resource = [...connection.resources].find(resource => resource.driver === session.driver);
+    this.definitionReads.set(input.taskId, task);
+    const check = () => {
+      this.browseCheck(task);
+      if (!sameTarget(profile, this.options.resolveProfile(profile.id)) || session && (session.closing || !session.driver.isUsable || this.sessions.get(input.sessionId!) !== session || session.query.completionState().objectsRevision !== revision)) throw Error('SQLite对象定义原连接或会话目录已失效');
+    };
+    const action = async () => {
+      if (session) { check(); return readSqliteObjectDefinition(session.driver, input, { check, revision }); }
+      let value: ObjectDefinitionOutput | undefined, failed = false, failure: unknown;
+      try { check(); task.driver = await this.driver(connection, profile, true, resource => { task.resource = resource; }); check(); value = await readSqliteObjectDefinition(task.driver, input, { check }); }
+      catch (reason) { failed = true; failure = reason; if (task.driver && !task.driver.isUsable && !task.driver.isClosed) this.block(connection, reason); }
+      if (task.driver) {
+        task.cleaning = true;
+        try { await task.driver.close(); }
+        catch (reason) { task.cleanupFailure = reason; if (!task.driver.isClosed) this.block(connection, reason); failure = failed ? new AggregateError([failure, reason], 'SQLite对象定义读取失败且原资源关闭未确认') : reason; failed = true; }
+      }
+      if (task.resource && connection.resources.has(task.resource)) { task.cleanupFailure = Error('SQLite对象定义准确进程exit尚未确认'); this.block(connection, task.cleanupFailure); failure = task.cleanupFailure; failed = true; }
+      if (failed) throw failure; check(); return value!;
+    };
+    const work = session ? this.sessionOperation(session, action) : this.track(connection, action); task.active = work;
+    const retire = () => {
+      task.active = undefined;
+      const safe = session ? session.driver.isUsable || session.driver.isClosed : !task.resource || !connection.resources.has(task.resource);
+      if (safe && this.definitionReads.get(input.taskId) === task) this.definitionReads.delete(input.taskId);
+    };
+    void work.then(retire, retire); return work;
+  }
   /** 已有连接身份不能因外部配置变化而静默更换；活动标签持有创建时的完整快照。 */
   private assertTarget(connection: Connection, profile: SqliteConnectionProfile): void {
     if (connection.profile && !sameTarget(connection.profile, profile)) throw Error('SQLite连接配置已变化，请先显式关闭原连接，现有会话未重连');
@@ -294,7 +337,7 @@ export class SqliteRuntime {
     if (session.userHandoff) return Promise.reject(Error('SQLite原查询会话已有运行操作'));
     const pending = session.pending;
     if (!pending) return this.sessionOperation(session, async () => { check(); return action(); });
-    const completion = [...this.completionReads.values()].find(task => task.session === session && task.active === pending);
+    const completion = [...this.completionReads.values(), ...this.definitionReads.values()].find(task => task.session === session && task.active === pending);
     if (!completion) return Promise.reject(Error('SQLite原查询会话已有运行操作'));
     const owner: { work?: Promise<unknown> } = {}, connection = session.connection;
     session.userHandoff = owner; completion.cancelled = true;
@@ -1075,7 +1118,7 @@ export class SqliteRuntime {
       case 'query.executeParameterized':
       case 'query.explain': {
         const session = this.session(input.sessionId);
-        if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || input.taskId.startsWith(sqliteCompletionTaskPrefix) || this.tasks.has(input.taskId) || this.completionReads.has(input.taskId)) throw Error('SQLite任务编号无效或已经使用');
+        if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || input.taskId.startsWith(sqliteCompletionTaskPrefix) || input.taskId.startsWith(objectDefinitionTaskPrefix) || this.tasks.has(input.taskId) || this.completionReads.has(input.taskId) || this.definitionReads.has(input.taskId)) throw Error('SQLite任务编号无效或已经使用');
         const task: QueryTask = { kind: 'query', session, preparing: true, cancelled: false }; this.tasks.set(input.taskId, task);
         const check = () => { if (task.cancelled || this.tasks.get(input.taskId) !== task) throw Error('SQLite用户操作在会话交接期间已取消，尚未发送SQL'); };
         const work = this.userSessionOperation(session, () => { check(); task.preparing = false; return command === 'query.explain' ? session.query.explain(input as CommandMap['query.explain']['input']) : command === 'query.executeParameterized' ? session.query.executeParameterized(input as CommandMap['query.executeParameterized']['input']) : session.query.execute(input as CommandMap['query.execute']['input']); }, check); task.active = work;
@@ -1083,6 +1126,7 @@ export class SqliteRuntime {
       }
       case 'query.transaction': { const session = this.session(input.sessionId, input.action === 'rollback'); return this.userSessionOperation(session, () => session.query.transaction(input)); }
       case 'query.cancel': {
+        const definition = this.definitionReads.get(input.taskId); if (definition) return this.cancelCompletion(definition);
         const completion = this.completionReads.get(input.taskId); if (completion) return this.cancelCompletion(completion);
         const task = this.tasks.get(input.taskId);
         if (task?.active && readTask(task)) return this.cancelBrowse(task);
@@ -1095,6 +1139,7 @@ export class SqliteRuntime {
       case 'sqlite.statistics': return this.statistics(input);
       case 'sqlite.relationships': return this.relationships(input);
       case 'sqlite.completion': return this.completion(input);
+      case 'query.objectDefinition': return this.objectDefinition(input);
       case 'sqlite.tableExport': return this.tableExport(input);
       case 'sqlite.tableEdit.preview': {
         if (this.stopping || this.tasks.has(input.taskId)) throw Error('SQLite正在退出或任务编号已经使用');
@@ -1156,7 +1201,7 @@ export class SqliteRuntime {
     session.closing = true;
     const work = (async () => {
       const active = [...this.tasks.entries()].filter(([, task]) => task.kind === 'query' && task.session === session && task.active);
-      const completion = [...this.completionReads.values()].filter(task => task.session === session && task.active);
+      const completion = [...this.completionReads.values(), ...this.definitionReads.values()].filter(task => task.session === session && task.active);
       const cancelled = await Promise.allSettled([...active.map(([id]) => session.query.cancel(id)), ...completion.map(task => this.cancelCompletion(task))]);
       await Promise.allSettled([...(session.pending ? [session.pending] : []), ...(session.userHandoff?.work ? [session.userHandoff.work] : [])]);
       failures(cancelled, 'SQLite取消尚未确认，保留原会话');
@@ -1179,7 +1224,7 @@ export class SqliteRuntime {
     this.columns.releaseConnection(id);this.rebuilds.releaseConnection(id); this.objects.releaseConnection(id); this.tableMaintenance.releaseConnection(id); this.tableRenames.releaseConnection(id);
     const work = (async () => {
       const browse = [...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && task.connection === connection && !!task.active);
-      const completion = [...this.completionReads.values()].filter(task => task.connection === connection && task.active);
+      const completion = [...this.completionReads.values(), ...this.definitionReads.values()].filter(task => task.connection === connection && task.active);
       const browseDrivers = new Set([...browse.map(task => task.driver), ...completion.map(task => task.session?.driver ?? task.driver)]);
       const cancelled = await Promise.allSettled([...browse.map(task => this.cancelBrowse(task)), ...completion.map(task => this.cancelCompletion(task)), ...[...connection.resources].filter(resource => resource.driver?.isBusy && !browseDrivers.has(resource.driver)).map(resource => resource.driver!.cancel())]);
       await Promise.allSettled([...connection.pending]);
@@ -1190,6 +1235,7 @@ export class SqliteRuntime {
       if (connection.resources.size) throw Error('SQLite仍有未确认退出的准确句柄，连接保持关闭屏障', { cause: connection.failure });
       if (connection.files.size) throw Error('SQLite仍有未确认清理的原导出文件，保留连接关闭屏障');
       for (const [taskId, task] of this.completionReads) if (task.connection === connection) this.completionReads.delete(taskId);
+      for (const [taskId, task] of this.definitionReads) if (task.connection === connection) this.definitionReads.delete(taskId);
       this.connections.delete(id);
     })();
     connection.closeWork = work; void work.catch(() => { if (connection.closeWork === work) connection.closeWork = undefined; }); return work;
@@ -1208,6 +1254,7 @@ export class SqliteRuntime {
     const work = (async () => {
       for (const task of this.tasks.values()) if (readTask(task) && !committing(task) && task.active) { task.cancelled = true; if (task.kind === 'import') task.abort.abort(); }
       for (const task of this.completionReads.values()) task.cancelled = true;
+      for (const task of this.definitionReads.values()) task.cancelled = true;
       for (const id of this.connections.keys()) { this.edits.releaseConnection(id); this.creates.releaseConnection(id); this.imports.releaseConnection(id); this.importSources.releaseConnection(id); this.indexes.releaseConnection(id); this.columns.releaseConnection(id);this.rebuilds.releaseConnection(id); this.objects.releaseConnection(id); this.tableMaintenance.releaseConnection(id); this.tableRenames.releaseConnection(id); }
       const protectedResources = new Set([...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && committing(task) && !!task.active).map(task => task.resource));
       const resources = [...this.connections.values()].flatMap(connection => { connection.closing = true; return [...connection.resources]; });
@@ -1219,7 +1266,7 @@ export class SqliteRuntime {
         const files = await Promise.allSettled([...this.connections.values()].flatMap(connection => [...connection.files]).map(file => file.recover())); failures(files, 'SQLite强退仍有原导出文件未确认清理');
         if ([...this.connections.values()].some(connection => connection.resources.size)) throw Error('SQLite强退资源账本仍未清零');
         if ([...this.connections.values()].some(connection => connection.files.size)) throw Error('SQLite强退原导出文件账本仍未清零');
-        this.sessions.clear(); this.connections.clear(); this.completionReads.clear();
+        this.sessions.clear(); this.connections.clear(); this.completionReads.clear(); this.definitionReads.clear();
       } finally { clearTimeout(timer); }
     })();
     this.forceWork = work; void work.catch(() => { if (this.forceWork === work) this.forceWork = undefined; }); return work;

@@ -164,13 +164,14 @@ export class SqliteWorkerCore {
       try { opened.loadExtension(nativeResource, 'sqlite3_dbarkrawprobe_init'); } finally { opened.enableLoadExtension(false); }
       const after = statSync(path, { bigint: true }); if (!after.isFile() || before.dev !== after.dev || before.ino !== after.ino) throw invalid();
       opened.enableLoadExtension(false); opened.enableDefensive(true);
-      opened.limits.length = Math.min(opened.limits.length, limits.valueBytes);
+      // SQLite必须先读取完整schema记录，随后才能对DDL作有界BLOB分块；公开值仍受nativeRows/rawFrames的1MiB门约束。
+      opened.limits.length = Math.min(opened.limits.length, limits.recordBytes);
       opened.limits.sqlLength = Math.min(opened.limits.sqlLength, limits.sqlBytes);
       // private候选额外ordinal及window复制的隐藏投影留原生余量，公开结果列仍由statement保持1024门槛。
       const nativeColumnLimit = rebuild ? limits.columns * 2 + 2 : limits.columns;
       opened.limits.column = Math.min(opened.limits.column, nativeColumnLimit);
       opened.limits.variableNumber = Math.min(opened.limits.variableNumber, limits.columns);
-      if (!integer(opened.limits.length, 1, limits.valueBytes) || !integer(opened.limits.sqlLength, 1, limits.sqlBytes) || !integer(opened.limits.column, 1, nativeColumnLimit)) throw invalid();
+      if (!integer(opened.limits.length, 1, limits.recordBytes) || !integer(opened.limits.sqlLength, 1, limits.sqlBytes) || !integer(opened.limits.column, 1, nativeColumnLimit)) throw invalid();
       // 唯一私有模式在安装通用authorizer之前设置固定值；不向普通execute开放任何PRAGMA setter。
       opened.exec(rebuild ? 'PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=ON' : 'PRAGMA foreign_keys=ON');
       const foreignKeys = opened.prepare('PRAGMA foreign_keys').get(); if (!foreignKeys || Object.values(foreignKeys)[0] !== (rebuild ? 0 : 1)) throw invalid();
@@ -189,7 +190,8 @@ export class SqliteWorkerCore {
         const decoder = new TextDecoder(label, { fatal: true, ignoreBOM: true });
         opened.function(sqliteExportTextFunction, { deterministic: true, directOnly: true, useBigIntArguments: true }, (text, bytes) => {
           try {
-            if (typeof text !== 'string' || !(bytes instanceof Uint8Array) || decoder.decode(bytes) !== text) throw Error('文本原字节与原文不一致');
+            // 内部record预算不授权复制或导出超量单格；原库编码与UTF8输出表示均保留原1MiB门。
+            if (typeof text !== 'string' || !(bytes instanceof Uint8Array) || bytes.byteLength > limits.valueBytes || Buffer.byteLength(text, 'utf8') > limits.valueBytes || decoder.decode(bytes) !== text) throw Error('文本原字节、单值预算与原文不一致');
             return text;
           } catch {
             const failure = new DriverFailure('SQLITE_TEXT_ENCODING_UNREPRESENTABLE', 'SQLite源TEXT包含无效编码或无法无损表示的文本，本次操作已停止');

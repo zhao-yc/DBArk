@@ -5,6 +5,8 @@ import type { SqliteRebuildComparisonInput, SqliteRebuildComparisonResult } from
 export const sqliteDriverLimits = {
   sqlBytes: 20 * 1024 * 1024, statements: 1000, columns: 1024,
   rows: 1000000, batchRows: 1000, resultBytes: 32 * 1024 * 1024, valueBytes: 1024 * 1024,
+  // SQLite内部需要解析完整schema和记录；该预算不扩大原生帧及公开单值的1MiB门槛。
+  recordBytes: 4 * 1024 * 1024,
   openTimeoutMs: 10000, cancelGraceMs: 250, exitTimeoutMs: 5000,
 } as const;
 /** 仅Main生成导出/编辑投影使用；纯校验且禁止schema间接调用，不授予任何写能力。 */

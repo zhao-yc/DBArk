@@ -11,6 +11,9 @@ import { completionProcedureScope } from './completionProcedureScope';
 import{completionLateralTokens,completionLateralScope,completionLateralAllows}from'./completionLateralScope';
 import type{CompletionScopeCapabilities}from'./completionCapabilities';
 import {completionInsertRowAlias} from './completionInsertRowAlias';
+import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
+import { MySqlParserListener } from 'dt-sql-parser/dist/lib/mysql/MySqlParserListener';
+import { MultipleDeleteStatementContext, SingleDeleteStatementContext, SingleUpdateStatementContext } from 'dt-sql-parser/dist/lib/mysql/MySqlParser';
 
 export interface CompletionCatalogSource{database?:string;table:string}
 /** 派生列只携带名称与需惰性展开的目录来源，不把AST循环引用传出worker。 */
@@ -40,7 +43,7 @@ const contains=(start:number,end:number,offset:number)=>start<=offset&&offset<=e
 const scopeKey=(scope:StmtContext)=>scope.position.startIndex+':'+scope.position.endIndex+':'+scope.scopeDepth;
 
 /** 只将当前语句投影为模式无关的解析文本；注释及字符串内容不会进入语法库错误输出。 */
-function normalize(source:string,context:CompletionLexicalContext){
+function normalize(source:string,context:CompletionLexicalContext,preserveTarget=false){
   const names=new Set(context.tokens.map(token=>token.value.toLowerCase()));let serial=0,sentinel:string;
   do{sentinel='__dbark_caret_'+serial+++'__';}while(names.has(sentinel));
   let text='',previous=context.statement.start,caret=-1,inserted=false;const origins=new Map<number,CompletionToken>();
@@ -54,8 +57,13 @@ function normalize(source:string,context:CompletionLexicalContext){
     return!['.','@',':'].includes(tokens[head-1]?.value??'');
   };
   for(const[index,token]of context.tokens.entries()){
-    if(!inserted&&context.target.start<=token.start){gap(context.target.start);caret=text.length;text+=sentinel;inserted=true;previous=context.target.end;}
-    if(token.start<context.target.end&&token.end>context.target.start)continue;
+    if(!inserted&&context.target.start<=token.start){
+      gap(context.target.start);caret=text.length;
+      // 对象模式保留完整引用名，解析光标必须位于投影引号内；开引号本身不是合法编辑位置。
+      if(preserveTarget&&(token.kind==='identifier'||qualifiedRange(index)))caret++;
+      if(!preserveTarget){text+=sentinel;previous=context.target.end;}inserted=true;
+    }
+    if(!preserveTarget&&token.start<context.target.end&&token.end>context.target.start)continue;
     if(previous>token.start)continue;
     gap(token.start);
     origins.set(text.length,token);text+=token.kind==='identifier'||qualifiedRange(index)?quoteCompletionAlias(token.value):token.kind==='string'?"'0'":source.slice(token.start,token.end);previous=token.end;
@@ -98,13 +106,13 @@ function collectCtes(tokens:CompletionToken[],end:number):Cte[]{
 }
 
 /** SQL补全语义分析在可终止worker内调用；返回结构有界，异常不包含SQL正文。 */
-export function analyzeCompletion(source:string,offset:number,mode:CompletionLexicalMode={},capabilities:CompletionScopeCapabilities={},intent?:'definition',definitionKind?:(kind:'alias'|'cte'|'physical')=>void):CompletionAnalysis{
-  const lexical=completionLexicalContext(source,offset,mode,completionLimits.aliasUnits);if(lexical.status!=='ready')return lexical;
+export function analyzeCompletion(source:string,offset:number,mode:CompletionLexicalMode={},capabilities:CompletionScopeCapabilities={},intent?:'definition'|'object',definitionKind?:(kind:'alias'|'cte'|'physical')=>void,physicalObject?:(value:Extract<PhysicalObjectAnalysis,{status:'ready'}>)=>void):CompletionAnalysis{
+  const lexical=completionLexicalContext(source,offset,mode,completionLimits.aliasUnits,intent==='object');if(lexical.status!=='ready')return lexical;
   const lateralCount=completionLateralTokens(lexical.tokens).length;
   if(lateralCount>completionLimits.entries)return{status:'blocked',reason:'budget'};
   const hasLateral=lateralCount>0;if(hasLateral&&capabilities?.lateralDerivedTables!==true)return{status:'blocked',reason:'capability'};
   try{
-    const normalized=normalize(source,lexical);if(normalized.text.length>completionLimits.sourceUnits)return{status:'blocked',reason:'budget'};
+    const normalized=normalize(source,lexical,intent==='object');if(normalized.text.length>completionLimits.sourceUnits)return{status:'blocked',reason:'budget'};
     const context=completionLexicalContext(normalized.text,normalized.caret,{ansiQuotes:false,noBackslashEscapes:true},completionLimits.aliasUnits);if(context.status!=='ready')return{status:'blocked',reason:'syntax'};
     const normalizedTokens=context.tokens;
     // 规范化会脱敏参数；原始token未闭合时不能借替换后的完整字面量恢复非法调用。
@@ -114,9 +122,22 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     if(procedure)return{status:'ready',target:lexical.target,syntax:['procedure'],keywords:[],relations:[],localRelations:[],columnMode:'expression',incomplete:false};
     const before=normalized.text.slice(0,normalized.caret).split('\n'),position={lineNumber:before.length,column:before.at(-1)!.length+1},parser=new QuietMySQL();
     // 声明定位只消费完整语法树与作用域，不计算随后会丢弃的补全候选；语法校验仍在交付定义前执行。
-    const suggestions=intent==='definition'?null:parser.getSuggestionAtCaretPosition(normalized.text,position),entities=parser.getAllEntities(normalized.text,position)??[];
+    const suggestions=intent?null:parser.getSuggestionAtCaretPosition(normalized.text,position),entities=parser.getAllEntities(normalized.text,position)??[];
     if(entities.length>completionLimits.tokens)return{status:'blocked',reason:'budget'};
     const tables=entities.filter(entity=>entity.entityContextType==='table') as CommonEntityContext[],queries=entities.filter(entity=>entity.entityContextType==='queryResult') as CommonEntityContext[],ctes=collectCtes(normalizedTokens,normalized.text.length);
+    const objectAliases=new Map<number,{startIndex:number}>(),objectExcluded=new Set<number>();
+    if(intent==='object'){
+      // 收集器漏记单表UPDATE/DELETE别名，且把多表DELETE的删除别名也记作表；必须回到真实AST角色修正。
+      const listener=new MySqlParserListener();let nodes=0;
+      listener.enterEveryRule=()=>{if(++nodes>completionLimits.tokens*128)throw Error('budget');};
+      listener.enterEmptyColumn=()=>{throw Error('syntax');};
+      listener.exitTableName=ctx=>{
+        const parent=ctx.parent,at=ctx.start?.start;if(at===undefined)return;
+        if(parent instanceof MultipleDeleteStatementContext)objectExcluded.add(at);
+        else if(parent instanceof SingleUpdateStatementContext||parent instanceof SingleDeleteStatementContext){const alias=parent._table_alias?.start;if(alias)objectAliases.set(at,{startIndex:alias.start});}
+      };
+      parser.listen(listener,parser.parse(normalized.text));
+    }
     // 新行别名仅供同条 INSERT 更新右侧使用；不支持的局部名称在例程目录回退之前停止。
     const insertRow=completionInsertRowAlias(normalizedTokens,normalized.caret,lexical.target.qualifiers);
     if(insertRow){
@@ -185,6 +206,7 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
       const boundaries=tables.filter(entity=>entity.declareType===1&&contains(entity.position.startIndex,entity.position.endIndex+1,at));
       const cteBoundary=ctes.filter(cte=>contains(cte.bodyStart,cte.bodyEnd,at)).sort((a,b)=>b.bodyStart-a.bodyStart)[0];
       const candidates=tables.filter(entity=>{
+        if(intent==='object'&&objectExcluded.has(entity.position.startIndex))return false;
         const scope=entity.belongStmt.position;if(!contains(scope.startIndex,scope.endIndex+1,at))return false;
         if(!sameBranch(entity.belongStmt,entity.position.startIndex,at))return false;
         if(entity.declareType===1&&contains(entity.position.startIndex,entity.position.endIndex+1,at))return false;
@@ -202,11 +224,46 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
       const visible=[...selected.values()].flatMap(value=>includeDuplicates||value.items.length===1?value.items:[]);if(visible.length>completionLimits.entries)truncated=true;return visible.slice(0,completionLimits.entries);
     }
     /** 表别名覆盖原名称；没有别名时只使用真实表名这一段。 */
-    function relationName(entity:CommonEntityContext):string|undefined{if(entity._alias)return intent==='definition'?aliasName(entity._alias):entityName(entity._alias.text)?.[0];return entityName(entity.text)?.at(-1);}
+    function objectAlias(entity:CommonEntityContext){return objectAliases.get(entity.position.startIndex)??entity._alias;}
+    function relationName(entity:CommonEntityContext):string|undefined{const alias=intent==='object'?objectAlias(entity):entity._alias;if(alias)return intent?aliasName(alias):entityName(entity._alias!.text)?.[0];return entityName(entity.text)?.at(-1);}
     /** WITH的前向引用与未声明递归自引用都不回退成物理表请求。 */
     function cteFor(entity:CommonEntityContext,name:string):Cte|null|undefined{
       const at=entity.position.startIndex,candidates=ctes.filter(cte=>cte.name===name&&contains(cte.start,cte.scopeEnd,at)).sort((a,b)=>b.start-a.start);if(!candidates.length)return undefined;
       const cte=candidates[0];if(at<cte.end&&!(cte.recursive&&contains(cte.bodyStart,cte.bodyEnd,at)))return null;return cte;
+    }
+    // 对象预览保留原名称构建完整AST；只承认真实关系角色与唯一可见限定来源。
+    if(intent==='object'){
+      if(!targetToken||!targetToken.closed||!['word','identifier'].includes(targetToken.kind)||!completionAliasIdentifier(targetToken.value)||lexical.tokens.some(token=>!token.closed)||parser.validate(normalized.text).length)return{status:'blocked',reason:'syntax'};
+      const index=lexical.tokens.indexOf(targetToken),next=lexical.tokens[index+1],qualifiers=lexical.target.qualifiers;
+      const command=lexical.tokens.find(token=>token.depth===0&&token.kind==='word')?.value.toUpperCase();
+      if(!command||!['SELECT','WITH','UPDATE','INSERT','DELETE','REPLACE'].includes(command)||['@',':'].includes(lexical.tokens[index-1]?.value??''))return{status:'blocked',reason:'syntax'};
+      /** 声明段使用AST的起点映射回原token，不拆名称内的点号。 */
+      const physical=(entity:CommonEntityContext)=>{
+        if(entity.declareType!==0||objectExcluded.has(entity.position.startIndex))return;
+        const parts=entityName(entity.text);if(!parts?.length||parts.length>2||parts.some(part=>!completionIdentifier(part)))return;
+        if(parts.length===1&&cteFor(entity,parts[0])!==undefined)return;
+        const head=normalized.origins.get(entity.position.startIndex),at=head?lexical.tokens.indexOf(head):-1;
+        const table=at<0?undefined:lexical.tokens[at+(parts.length===2?2:0)],database=parts.length===2?head:undefined;
+        if(!table||!nameToken(table)||table.value!==parts.at(-1)||database&&(!nameToken(database)||database.value!==parts[0]||lexical.tokens[at+1]?.value!=='.'))return;
+        return{table:table.value,tableRange:{start:table.start,end:table.end},...(database?{database:database.value,databaseRange:{start:database.start,end:database.end}}:{})};
+      };
+      const headers=tables.filter(entity=>entity.declareType===0&&contains(entity.position.startIndex,entity.position.endIndex+1,normalized.caret));
+      let matches:CommonEntityContext[]=[];
+      const declarations=tables.filter(entity=>{const alias=objectAlias(entity);return alias&&normalized.origins.get(alias.startIndex)?.start===targetToken.start;});
+      if(declarations.length)matches=declarations;
+      else if(headers.length){
+        // schema词和关系名后的字段都不属于可预览的物理对象目标。
+        matches=headers.filter(entity=>{const object=physical(entity);return object?.tableRange.start===targetToken.start&&object.tableRange.end===targetToken.end;});
+      }else{
+        if(next?.value==='.'&&qualifiers.length<=1&&(nameToken(lexical.tokens[index+2])||lexical.tokens[index+2]?.value==='*')&&!['.','('].includes(lexical.tokens[index+3]?.value??'')){
+          matches=visible(normalized.caret,true).filter(entity=>relationName(entity)===targetToken.value&&(!qualifiers.length||!objectAlias(entity)&&entityName(entity.text)?.length===2&&entityName(entity.text)?.[0]===qualifiers[0]));
+        }
+      }
+      if(truncated)return{status:'blocked',reason:'budget'};
+      if(matches.length!==1)return{status:'blocked',reason:'ambiguous'};
+      const object=physical(matches[0]);if(!object)return{status:'blocked',reason:'local'};
+      physicalObject?.({status:'ready',target:{start:targetToken.start,end:targetToken.end},object});
+      return{status:'ready',target:lexical.target,syntax:[],keywords:[],relations:[],localRelations:[],columnMode:'expression',incomplete:false};
     }
     // 本文导航只用同一AST的可见来源；不生成目录请求，也不把物理表名当作外部对象定义。
     if(intent==='definition'){

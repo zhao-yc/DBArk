@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { foldSqliteCompletionName as fold, sqliteCompletionLimits as limits } from './sqliteCompletion';
 import type { LocalReferenceToken } from './localReferenceIndex';
+import type { PhysicalObjectAnalysis } from './physicalObjectAnalysis';
 
 export type SqliteCompletionRelation = ({ kind: 'physical'; name: string; schema?: 'main' | 'temp'; alias?: string } | { kind: 'local'; source: 'cte' | 'derived'; name: string; alias?: string; columns: string[]; declaration?: true }) & { scopeDepth?: number };
-export type SqliteAnalysisIntent = 'hover' | 'definition';
+export type SqliteAnalysisIntent = 'hover' | 'definition' | 'object';
 export interface SqliteLocalDefinition { start: number; end: number; }
 export type SqliteCompletionAnalysis = { status: 'ready'; target: { start: number; end: number; prefix: string; quoted: boolean }; syntax: ('relation' | 'column' | 'keyword')[]; qualifiers: string[]; relations: SqliteCompletionRelation[]; unqualifiedColumns?: true; definition?: SqliteLocalDefinition } | { status: 'blocked'; reason: string };
 type Token = { kind: 'id' | 'string' | 'number' | 'parameter' | 'symbol'; value: string; start: number; end: number; depth: number; quoted?: boolean; closed?: boolean; pair?: number };
@@ -20,7 +21,7 @@ const keyword = (token: Token | undefined, word: string) => !!token && token.kin
 const structural = new Set('select from where group having order limit offset returning set values into update delete insert replace join on using as left right full outer inner cross natural union except intersect window indexed not by and or when then else end case'.split(' '));
 
 /** SQLite词法独立实现：--无需空白、块注释不嵌套、方括号在第一个]结束，不借用MySQL模式。 */
-function lex(source: string, offset: number): Token[] {
+function lex(source: string, offset: number, complete = false): Token[] {
   const tokens: Token[] = [], stack: number[] = []; let i = 0, depth = 0;
   const push = (token: Token) => { if (tokens.length >= limits.tokens) fail('budget'); tokens.push(token); };
   const inSpan = (start: number, end: number, open: boolean) => offset >= start && (offset < end || open && offset === end);
@@ -28,7 +29,7 @@ function lex(source: string, offset: number): Token[] {
     const start = i, character = source[i];
     if (/[\t\n\v\f\r ]/.test(character)) { i++; continue; }
     if (source.startsWith('--', i)) { i += 2; while (i < source.length && source[i] !== '\r' && source[i] !== '\n') i++; if (inSpan(start, i, i === source.length)) fail('comment'); continue; }
-    if (source.startsWith('/*', i)) { const close = source.indexOf('*/', i + 2); i = close < 0 ? source.length : close + 2; if (inSpan(start, i, close < 0)) fail('comment'); continue; }
+    if (source.startsWith('/*', i)) { const close = source.indexOf('*/', i + 2); i = close < 0 ? source.length : close + 2; if (inSpan(start, i, close < 0) || complete && close < 0) fail('comment'); continue; }
     if (character === "'" || character === '"' || character === '\u0060' || character === '[') {
       const closing = character === '[' ? ']' : character; let value = '', closed = false; i++;
       while (i < source.length) {
@@ -68,7 +69,7 @@ function targetAt(source: string, tokens: Token[], offset: number, intent?: Sqli
   // 悬停解析完整标识符而不是光标前缀；未闭合引用、关键字和函数名不能冒充字段。
   if (intent) {
     const index = token ? tokens.indexOf(token) : -1;
-    if (!token || token.quoted && !token.closed || !token.quoted && structural.has(fold(token.value)) || tokens[index + 1]?.value === '(' || ['as', 'collate', 'over', 'window'].some(word => keyword(tokens[index - 1], word))) fail('hover-target');
+    if (!token || token.quoted && !token.closed || !token.quoted && structural.has(fold(token.value)) || intent !== 'object' && (tokens[index + 1]?.value === '(' || ['as', 'collate', 'over', 'window'].some(word => keyword(tokens[index - 1], word)))) fail('hover-target');
     return { start: token.start, end: token.end, prefix: token.value, quoted: !!token.quoted };
   }
   if (!token) return { start: offset, end: offset, prefix: '', quoted: false };
@@ -115,6 +116,18 @@ export function sqliteReferenceContext(source: string, offset: number): { status
   } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
 }
 
+/** 对象回包校验复用方言词法并保留点号token，限定名无需字符串拆分或正则猜测。 */
+export function sqlitePhysicalObjectContext(source: string, offset: number): { status: 'ready'; target: LocalReferenceToken; tokens: Token[] } | { status: 'blocked'; reason: string } {
+  try {
+    if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
+    if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
+    const tokens = lex(source, offset, true), statement = statementAt(tokens, offset), target = targetAt(source, tokens, offset, 'object'), active = tokens.slice(statement.start, statement.end);
+    const token = active.find(token => token.start === target.start && token.end === target.end);
+    if (!token || active.some(token => token.closed === false || token.value === '(' && token.pair === undefined || token.value === ')' && token.pair === undefined)) fail('syntax');
+    return { status: 'ready', target: { start: token.start, end: token.end, value: token.value }, tokens: active };
+  } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && /^[a-z-]{1,64}$/.test(reason.message) ? reason.message : 'analysis' }; }
+}
+
 /** 仅推导SQLite可证明的简单投影名/显式alias；星号和无alias复杂表达式绝不借永久同名表补列。 */
 function projectionColumns(tokens: Token[], start: number, end: number): string[] | undefined {
   const depth = tokens[start]?.depth ?? 0; let select = -1;
@@ -138,17 +151,18 @@ function projectionColumns(tokens: Token[], start: number, end: number): string[
 }
 
 /** 纯分析入口不读取文件、会话、IPC或数据库；预算与未知语法均以固定原因阻断。 */
-export function analyzeSqliteCompletion(source: string, offset: number, intent?: SqliteAnalysisIntent, definitionKind?: (kind: 'alias' | 'cte' | 'physical') => void): SqliteCompletionAnalysis {
+export function analyzeSqliteCompletion(source: string, offset: number, intent?: SqliteAnalysisIntent, definitionKind?: (kind: 'alias' | 'cte' | 'physical') => void, physicalObject?: (value: Extract<PhysicalObjectAnalysis, { status: 'ready' }>) => void): SqliteCompletionAnalysis {
   try {
     if (typeof source !== 'string' || source.length > limits.sourceUnits) fail('budget');
     if (!unicode(source) || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length || !boundary(source, offset)) fail('input');
-    if (intent !== undefined && intent !== 'hover' && intent !== 'definition') fail('input');
-    const tokens = lex(source, offset), target = targetAt(source, tokens, offset, intent), statement = statementAt(tokens, offset), beforeTarget = tokens.filter(token => token.end <= target.start), qualifiers: string[] = [];
+    if (intent !== undefined && intent !== 'hover' && intent !== 'definition' && intent !== 'object') fail('input');
+    const tokens = lex(source, offset, intent === 'object'), target = targetAt(source, tokens, offset, intent), statement = statementAt(tokens, offset), beforeTarget = tokens.filter(token => token.end <= target.start), qualifiers: string[] = [];
     let q = beforeTarget.length - 1;
     while (q >= 1 && beforeTarget[q].value === '.' && beforeTarget[q - 1].kind === 'id') { qualifiers.unshift(beforeTarget[q - 1].value); q -= 2; }
     if (qualifiers.length > 2) fail('qualifier');
     const active = tokens.slice(statement.start, statement.end);
     if (active.some(token => token.value === '#' || token.value === ']' || token.value === ')' && token.pair === undefined)) fail('syntax');
+    if (intent === 'object' && active.some(token => token.closed === false || token.value === '(' && token.pair === undefined)) fail('syntax');
     let relationBudget = 0;
     /** 收集本层CTE头后再推导输出，前向引用与递归名先遮蔽永久对象。 */
     function withClause(start: number, end: number, inherited: Map<string, Cte>): { head: number; ctes: Map<string, Cte>; declared: Cte[] } {
@@ -186,7 +200,7 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
       }
       const compounds = tokens.map((token, index) => index >= head && index < end && token.depth === base && ['union', 'intersect', 'except'].some(word => keyword(token, word)) ? index : -1).filter(index => index >= 0);
       if (compounds.length) {
-        if (intent !== 'definition') fail('compound');
+        if (intent !== 'definition' && intent !== 'object') fail('compound');
         // 声明导航只解析光标所属分支；复合查询末尾ORDER/LIMIT不猜测第一输出的血缘。
         if (tokens.some((token, index) => index > compounds.at(-1)! && index < end && token.depth === base && ['order', 'limit'].some(word => keyword(token, word)) && offset >= token.start)) fail('compound');
         let branchStart = head, branchEnd = compounds[0];
@@ -255,9 +269,9 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
           if (alias && fold(alias.value) === fold(target.prefix)) fail('output-alias');
         }
       }
-      const aliases = new Set<string>(); for (const binding of own) { const name = fold(binding.relation.alias ?? binding.relation.name), previous = own.find(item => item !== binding && aliases.has(name) && fold(item.relation.alias ?? item.relation.name) === name); if (previous && !((qualifiers.length === 2 || intent === 'definition' && qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0]))) && binding.relation.kind === 'physical' && previous.relation.kind === 'physical' && !binding.relation.alias && !previous.relation.alias && !!binding.relation.schema && !!previous.relation.schema && binding.relation.schema !== previous.relation.schema)) fail('ambiguous'); aliases.add(name); }
+      const aliases = new Set<string>(); for (const binding of own) { const name = fold(binding.relation.alias ?? binding.relation.name), previous = own.find(item => item !== binding && aliases.has(name) && fold(item.relation.alias ?? item.relation.name) === name); if (previous && !((qualifiers.length === 2 || (intent === 'definition' || intent === 'object') && qualifiers.length === 1 && ['main', 'temp'].includes(fold(qualifiers[0]))) && binding.relation.kind === 'physical' && previous.relation.kind === 'physical' && !binding.relation.alias && !previous.relation.alias && !!binding.relation.schema && !!previous.relation.schema && binding.relation.schema !== previous.relation.schema)) fail('ambiguous'); aliases.add(name); }
       const bindings = [...own, ...outer.filter(binding => !aliases.has(fold(binding.relation.alias ?? binding.relation.name)))];
-      if (aliasContext) fail('alias');
+      if (aliasContext && intent !== 'object') fail('alias');
       let unqualified = false;
       if (insertList && offset >= tokens[insertList.start].end && offset <= (tokens[insertList.end]?.start ?? source.length)) unqualified = true;
       const returning = tokens.findIndex((token, at) => at >= head && at < end && token.depth === base && keyword(token, 'returning'));
@@ -288,10 +302,22 @@ export function analyzeSqliteCompletion(source: string, offset: number, intent?:
         const prior = tokens.filter((token, at) => at >= head && at < end && token.end <= target.start).at(-1);
         relationContext = !!prior && ['from', 'join', 'update', 'into'].some(word => keyword(prior, word)) || !!prior && prior.value === ',' && inFrom;
       }
-      if (intent !== 'definition' && !relationContext && bindings.some(binding => binding.unknown && (!qualifiers.length || fold(binding.relation.alias ?? binding.relation.name) === fold(qualifiers[0])))) fail('local-output');
+      if (intent !== 'definition' && intent !== 'object' && !relationContext && bindings.some(binding => binding.unknown && (!qualifiers.length || fold(binding.relation.alias ?? binding.relation.name) === fold(qualifiers[0])))) fail('local-output');
       return { bindings, ctes, syntax: relationContext ? ['relation', 'keyword'] : ['column', 'keyword'] };
     }
     const parsed = scope(statement.start, statement.end, new Map(), [], 0);
+    if (intent === 'object') {
+      const index = tokens.findIndex(token => token.start === target.start && token.end === target.end);
+      let matches = parsed.bindings.filter(binding => binding.referenceIndex === index || binding.aliasIndex === index);
+      if (!matches.length && tokens[index + 1]?.value === '.' && parsed.syntax.includes('column') && qualifiers.length <= 1 && (tokens[index + 2]?.kind === 'id' || tokens[index + 2]?.value === '*') && !['.', '('].includes(tokens[index + 3]?.value ?? '')) {
+        matches = parsed.bindings.filter(({ relation }) => fold(relation.alias ?? relation.name) === fold(target.prefix) && (!qualifiers.length || !relation.alias && relation.kind === 'physical' && relation.schema === fold(qualifiers[0])));
+      }
+      if (matches.length !== 1) fail('ambiguous');
+      const binding = matches[0]; if (binding.relation.kind !== 'physical' || binding.referenceIndex === undefined) fail('local');
+      const table = tokens[binding.referenceIndex], database = binding.relation.schema ? tokens[binding.start] : undefined;
+      if (table.kind !== 'id' || !table.closed && table.quoted || database && (database.kind !== 'id' || tokens[binding.start + 1]?.value !== '.')) fail('syntax');
+      physicalObject?.({ status: 'ready', target: { start: target.start, end: target.end }, object: { table: table.value, tableRange: { start: table.start, end: table.end }, ...(database ? { database: database.value, databaseRange: { start: database.start, end: database.end } } : {}) } });
+    }
     let definition: SqliteLocalDefinition | undefined, kind: 'alias' | 'cte' | 'physical' = 'physical';
     if (intent === 'definition') {
       const index = tokens.findIndex(token => token.start === target.start && token.end === target.end);

@@ -32,6 +32,7 @@ const messages = {
   SQLITE_REBUILD_COMPARISON_ORDINAL_INVALID: 'SQLite重建核对的候选序号定义或连续性无效。',
   SQLITE_REBUILD_COMPARISON_ROW_COUNT_MISMATCH: 'SQLite重建核对的完整行数不一致。',
   SQLITE_REBUILD_COMPARISON_VALUE_MISMATCH: 'SQLite重建核对发现值、字节或精度变化。',
+  SQLITE_REBUILD_COMPARISON_VALUE_LIMIT: 'SQLite重建核对单值超过原1MiB预算。',
   SQLITE_REBUILD_COMPARISON_NATIVE_FAILED: 'SQLite重建原生核对未完成。',
   SQLITE_REBUILD_COMPARISON_CLEANUP_FAILED: 'SQLite重建核对游标收尾未确认。',
 } as const;
@@ -140,6 +141,8 @@ function equalBytes(left: unknown, right: unknown): boolean { return left instan
 interface Cell { kind: 'null' | 'integer' | 'real' | 'text' | 'blob'; value: null | bigint | number | string | Uint8Array; bytes: null | Uint8Array; }
 function cell(cells: Row, start: number): Cell {
   const kind = cells[start], value = cells[start + 1], bytes = cells[start + 2];
+  // SQLite投影先阻止超量原值进入JS；这里仍核实际BLOB和TEXT的原编码及UTF8预算，不能借内部record预算放行。
+  if (kind === null || kind === 'blob' && value instanceof Uint8Array && value.byteLength > sqliteDriverLimits.valueBytes || kind === 'text' && (typeof value === 'string' && Buffer.byteLength(value, 'utf8') > sqliteDriverLimits.valueBytes || bytes instanceof Uint8Array && bytes.byteLength > sqliteDriverLimits.valueBytes)) return fail('SQLITE_REBUILD_COMPARISON_VALUE_LIMIT');
   if (kind === 'null' && value === null && bytes === null || kind === 'integer' && typeof value === 'bigint' && value >= -maxInteger - 1n && value <= maxInteger && bytes === null || kind === 'real' && typeof value === 'number' && !Number.isNaN(value) && bytes === null || kind === 'text' && typeof value === 'string' && bytes instanceof Uint8Array || kind === 'blob' && value instanceof Uint8Array && bytes === null) return { kind, value, bytes } as Cell;
   return fail('SQLITE_REBUILD_COMPARISON_NATIVE_FAILED');
 }
@@ -251,7 +254,12 @@ export async function compareSqliteRebuildTables(db: DatabaseSync, raw: SqliteRe
   for (let group = 0; group < columnGroups; group++) {
     control.check(); if (!db.isTransaction) return fail('SQLITE_REBUILD_COMPARISON_TRANSACTION_REQUIRED'); const names = input.columns.slice(group * limits.groupColumns, (group + 1) * limits.groupColumns);
     const sourceAlias = '"__dbark_source"', candidateAlias = '"__dbark_candidate"', field = (alias: string, name: string) => alias + '.' + quote(name);
-    const project = (alias: string) => names.flatMap(name => { const value = field(alias, name); return ['typeof(' + value + ')', value, "CASE WHEN typeof(" + value + ")='text' THEN CAST(" + value + ' AS BLOB) ELSE NULL END']; });
+    // 完整比较不走公开结果帧：必须在SQLite内先拦原TEXT/BLOB超量值，不能把4MiB内部记录整格交给Node再判断。
+    const project = (alias: string) => names.flatMap(name => {
+      const value = field(alias, name), bounded = "(typeof(" + value + ") NOT IN ('text','blob') OR length(CAST(" + value + ' AS BLOB))<=' + sqliteDriverLimits.valueBytes + ')';
+      // typeof永远返回非NULL文本，因此类型槽NULL是不能与任何用户值碰撞的内部拒绝标记，列数仍保持每格三列。
+      return ['CASE WHEN ' + bounded + ' THEN typeof(' + value + ') ELSE NULL END', 'CASE WHEN ' + bounded + ' THEN ' + value + ' ELSE NULL END', "CASE WHEN " + bounded + " AND typeof(" + value + ")='text' THEN CAST(" + value + ' AS BLOB) ELSE NULL END'];
+    });
     const sourcePrefix = input.rowid ? [field(sourceAlias, input.rowid.source)] : [], candidatePrefix = [field(candidateAlias, input.candidateOrdinal), ...(input.rowid ? [field(candidateAlias, input.rowid.candidate)] : [])];
     const sourceSql = 'SELECT ' + [...sourcePrefix, ...project(sourceAlias)].join(',') + ' FROM main.' + quote(input.source) + ' AS ' + sourceAlias + ' ORDER BY ' + input.sourceOrder.map(name => field(sourceAlias, name) + ' COLLATE BINARY ASC').join(',');
     const candidateSql = 'SELECT ' + [...candidatePrefix, ...project(candidateAlias)].join(',') + ' FROM main.' + quote(input.candidate) + ' AS ' + candidateAlias + ' ORDER BY ' + field(candidateAlias, input.candidateOrdinal) + ' ASC';

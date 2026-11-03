@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/session';
 import type { SqliteExecutionResult, SqliteProcessExit, SqliteProcessTransport, SqliteValue, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
+import { sqliteDriverLimits } from '../../src/engine/sqlite/protocol';
 
 const directories: string[] = [], sessions = new Set<SqliteDriverSession>();
 const processes: { child: ChildProcess; kills: number; exited: Promise<SqliteProcessExit> }[] = [];
@@ -40,6 +41,21 @@ async function collect(session: SqliteDriverSession, sql: string) { const rows: 
 function diskCount(path: string) { const db = new DatabaseSync(path); try { return { count: db.prepare('SELECT count(*) AS n FROM subject').get()!.n, integrity: Object.values(db.prepare('PRAGMA integrity_check').get()!)[0] }; } finally { db.close(); } }
 
 describe('SQLite真实磁盘原生驱动与进程生命周期', () => {
+  it('内部记录4MiB与公开单值1MiB分层，超量TEXT和BLOB仍明确拒绝且不发半行', async () => {
+    expect(sqliteDriverLimits.recordBytes).toBe(4 * 1024 * 1024); expect(sqliteDriverLimits.valueBytes).toBe(1024 * 1024);
+    const { path } = fixture(), bytes = sqliteDriverLimits.valueBytes + 1, setup = new DatabaseSync(path);
+    try { setup.exec('CREATE TABLE oversized(note TEXT,payload BLOB)'); setup.prepare('INSERT INTO oversized VALUES(?,?)').run('a'.repeat(bytes), Buffer.alloc(bytes, 7)); } finally { setup.close(); }
+    const session = await open(path, true);
+    // 同一真实记录可用于有界计算及分块，直接返回任一超量值仍走原nativeRows/rawFrames门。
+    expect((await collect(session, 'SELECT length(note),length(payload),length(substr(payload,1,262144)) FROM oversized')).rows).toEqual([[{ type: 'integer', value: String(bytes) }, { type: 'integer', value: String(bytes) }, { type: 'integer', value: '262144' }]]);
+    for (const column of ['note', 'payload']) {
+      const rows: SqliteValue[][] = [];
+      await expect(session.execute('SELECT ' + column + ' FROM oversized', { onBatch: batch => { rows.push(...batch.rows); } })).rejects.toMatchObject({ code: 'SQLITE_VALUE_INVALID', completedStatements: 0, transaction: false, sessionClosed: false });
+      expect(rows).toEqual([]); expect(session.isUsable).toBe(true);
+    }
+    await expect(session.execute('SELECT zeroblob(' + (sqliteDriverLimits.recordBytes + 1) + ')')).rejects.toMatchObject({ code: 'SQLITE_NATIVE_18', completedStatements: 0, sessionClosed: false });
+    expect((await collect(session, 'SELECT 7')).rows).toEqual([[{ type: 'integer', value: '7' }]]);
+  });
   it.each(['UTF-8', 'UTF-16le', 'UTF-16be'] as const)('%s任意查询坏TEXT明确拒绝，真实BOM/NUL/替代字符不误拒或改写', async encoding => {
     const { path } = fixture('DELETE', encoding), invalid = encoding === 'UTF-8' ? '80' : encoding === 'UTF-16le' ? '00d8' : 'd800', valid = '\uFEFF真实\0🚢\uFFFD';
     const setup = new DatabaseSync(path); setup.prepare('INSERT INTO subject VALUES(1,?)').run(valid); setup.exec("INSERT INTO subject VALUES(2,CAST(X'" + invalid + "' AS TEXT))");

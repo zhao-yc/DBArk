@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQL 高频导航新增[查询中查看对象结构](development/object-definition-20261103.md)：物理表／视图完整只读 DDL、原查询会话及 SQLite TEMP 身份保持。本文声明导航和结构读取分开，完整语义与跨库依赖未完成；O05 仍部分，不增加完整工作包或发行计数，暂不发布。
+
 SQL 声明定位后续[去除冗余候选计算并核对原 CI](development/definition-work-cost-20261103.md)，794 项相关、严格类型／同 2 GiB 构建及 Windows 双方言原完整窗口通过。准确 d066 的 Mac 两架构字段概况原件已核；原 Worker 超时和 arm64 引用退出未确认独立保留，不以专项代替全量或安装验收，暂不发布。
 
 数据浏览新增[SQLite 全筛选字段概况](development/sqlite-statistics-20261103.md)，有界只读聚合、实际存储类型、NULL／不同值及准确极值，原页／草稿保持；277 项相关与 37 项定向分轮、类型／构建和 Windows 原完整窗口通过。另补[MySQL 8.4 关系图真实 Main／实库原例](development/relationship-diagram-live-20261103.md)，复合／自引用／跨库目标、完整定义保持及两准确库清理已核。D09／R02／E01 仍部分，不增加完整工作包或发行计数，暂不发布。

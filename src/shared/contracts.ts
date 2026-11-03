@@ -1,3 +1,4 @@
+import type { ObjectDefinitionInput, ObjectDefinitionOutput } from './objectDefinition';
 import type { QueryFileCheckInput, QueryFileCheckResult, QueryFileReloadInput, QueryFileReloadResult, QueryFileDiscardInput } from './queryFileReload';
 import type { SqliteCompletionInput, SqliteCompletionOutput } from './sqliteCompletion';
 import type { UiCommandInvocation, UiMenuState, ObjectCategory } from './uiCommands';
@@ -197,6 +198,7 @@ export interface CommandMap {
   'metadata.databases': { input: { connectionId: string }; output: string[] };
   'serverMonitor.read': { input: import('./serverMonitor').ServerMonitorInput; output: import('./serverMonitor').ServerMonitorSnapshot };
   'metadata.completion': { input: CompletionMetadataInput; output: CompletionMetadataOutput };
+  'query.objectDefinition': { input: ObjectDefinitionInput; output: ObjectDefinitionOutput };
   'sqlite.completion': { input: SqliteCompletionInput; output: SqliteCompletionOutput };
   'search.structure':{input:StructureSearchInput;output:StructureSearchPage};
   'search.savedQueries':{input:SavedQuerySearchInput;output:SavedQuerySearchPage};

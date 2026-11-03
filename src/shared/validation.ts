@@ -103,6 +103,7 @@ const foreignKeyTargetName = z.string().min(1).max(64).refine(value => !value.in
 import { indexAcknowledgementIds } from './tableIndexTasks';
 import { completionLimits } from './sqlCompletion';
 import {completionIdentifier} from './completionLexical';
+import { objectDefinitionInputSchema } from './objectDefinition';
 import {structureSearchInputSchema,structureSearchContinueSchema,structureSearchReleaseSchema} from './databaseSearch';
 import {dataSearchInputSchema,dataSearchNextSchema,dataSearchReleaseSchema} from './dataSearch';
 import {dataSearchCatalogueSchema} from './dataSearchCatalogue';
@@ -322,6 +323,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.temporaryState':z.object({sessionId:id}).strict(),
   'query.temporaryCompletion':z.discriminatedUnion('kind',[z.object({sessionId:id,database:completionName,prefix:completionPrefix,kind:z.literal('objects')}).strict(),z.object({sessionId:id,database:completionName,table:completionName,prefix:completionPrefix,kind:z.literal('columns'),details:z.literal(true).optional()}).strict()]),
   'query.temporaryRead':z.object({sessionId:id,database:completionName,table:completionName,taskId:id}).strict(),
+  'query.objectDefinition': objectDefinitionInputSchema,
   'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000), continueOnError: z.boolean().optional(), collectWarnings: z.boolean().optional() }).strict(),
   'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json', 'csv-zip', 'sql']), csvDelimiter: z.enum(csvExportDelimiters).optional(), insertTarget: queryInsertTargetSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {
     if (Object.hasOwn(input, 'csvDelimiter') && (input.csvDelimiter === undefined || input.format !== 'csv' && input.format !== 'csv-zip')) context.addIssue({ code: 'custom', path: ['csvDelimiter'], message: '分隔符只适用于CSV或CSV ZIP，且必须为逗号、分号或Tab' });

@@ -12,6 +12,7 @@ import { sqliteTableEditMessages } from '../shared/sqliteTableEdit';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command === 'query.objectDefinition') return event.status === 'completed' ? '对象结构读取完成；定义正文和错误原文未保存。' : event.status === 'running' ? '正在读取对象结构；定义只留在当前窗口。' : '对象结构读取未完成；定义正文和错误原文未保存。';
   if (command === 'sqlite.statistics') return event.status === 'completed' ? 'SQLite字段概况完成；筛选、极值和统计结果未保存。' : event.status === 'running' ? '正在统计SQLite字段；原值仅留在当前窗口。' : 'SQLite字段概况未完成；筛选、极值及错误原文未保存。';
   if (command === 'sqlite.valueOptions') return event.status === 'completed' ? 'SQLite不同值读取完成；条件、搜索和候选值未保存。' : event.status === 'running' ? '正在读取SQLite不同值；原值仅留在当前窗口。' : 'SQLite不同值读取未完成；条件、搜索、候选值及错误原文未保存。';
   if (command.startsWith('sqlite.objects.')) return sqliteObjectsTaskMessage(command, event.status);
@@ -68,6 +69,7 @@ export function persistedTaskMessage(command: string, event: TaskEvent): string 
 
 /** 执行历史保存模板；新执行导出同样隐藏可能含真实参数的错误原文。 */
 export function persistedQueryError(command: Command, message: string): string {
+  if (command === 'query.objectDefinition') return '对象结构读取未完成，细节仅在当前窗口显示；定义正文未保存。';
   if (command === 'query.executeParameterized') return '参数查询失败，细节仅在当前标签显示；参数值未保存。';
   return command === 'query.exportStream' ? '执行未完成，细节仅在当前标签显示；错误原文及参数值未保存。' : message;
 }

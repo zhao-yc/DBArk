@@ -1,3 +1,5 @@
+import { ObjectDefinitionDialog, type ObjectDefinitionSource } from './ObjectDefinitionDialog';
+import { objectDefinitionZh } from '../locales/objectDefinition.zh-CN';
 import { connectionDatabase, connectionOverview } from '../sqliteWorkspace';
 import { sqliteZh } from '../locales/sqlite.zh-CN';
 import { QueryRowDetails, type QueryRowDetailsBinding, type QueryRowDetailsView } from '../queryRowDetails';
@@ -188,6 +190,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   useEffect(() => { transactionSettingsIntent.current?.current(); }, [closeRequest, tab.id, tab.connectionId, connectionVersion, sessionId]);
   useEffect(() => () => { analyzeIntent.current?.dispose(); }, []);
   const [searchEditor,setSearchEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
+  const [objectDefinition, setObjectDefinition] = useState<ObjectDefinitionSource | null>(null), objectDefinitionRef = useRef<ObjectDefinitionSource | null>(null);
   const [pins, setPins] = useState<PinnedQueryResult[]>([]); const [selectedPin, setSelectedPin] = useState(''); const pinSequence = useRef(0);
   type SnapshotOperation = { intent: QueryResultSnapshotIntent; job?: WorkspaceBusyLease; acquiring: boolean };
   const snapshotOperation = useRef<SnapshotOperation | null>(null);
@@ -1097,7 +1100,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     shownColumns.current=next;return next;
   },[sourceResult,columnLayout,layoutMatches]);
   const frozenKeys=useMemo(()=>sourceResult&&layoutMatches&&columnLayout?frozenQueryResultKeys(sourceResult.columns,columnLayout.layout):[],[sourceResult,columnLayout,layoutMatches]);
-  const resultModal=!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||save||showPinSql||showSnippets||parameterSource!==null||streamExportSource!==null||sessionObjects||recovery||!!databaseSwitchDialog;
+  const resultModal=!!objectDefinition||!!warningsDialog||!!comparisonLease||!!statisticsLease||!!presetLease||!!closeRequest||!!exportResult||save||showPinSql||showSnippets||parameterSource!==null||streamExportSource!==null||sessionObjects||recovery||!!databaseSwitchDialog;
   const failureLocator = failureSource.current;
   // SQLite筛选明确选择原存储类，先筛选再排序；所有消费者共用同一最终视图与租约。
   const filterBinding=resultFilter.bind(viewSource,resultContext,visibleColumns);
@@ -1488,12 +1491,66 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && !closeRequestRef.current && !document.querySelector('[role="dialog"], [role="alertdialog"]');
   }
   /** 使用当前Monaco实例的正式查找动作，不发送模拟按键或点击旧按钮。 */
+  /** 捕获活动查询的原模型与连接；树选择不会成为这个对象导航的目标。 */
+  function openObjectStructure(instance = editor.current): void {
+    if (!queryMenuCurrent() || !connection || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || objectDefinitionRef.current) return;
+    const model = instance.getModel(), position = instance.getPosition();
+    if (!model || model.isDisposed() || !position || instance.getRawOptions().readOnly) return;
+    const version = model.getVersionId(), originalSession = sessionRef.current, profile = connection;
+    const key = JSON.stringify([tab.connectionId, tab.database, tab.databaseContext, tab.sourceBinding, tab.fileSourceBinding]);
+    let valid = true;
+    const intent: ObjectDefinitionSource = { id: uid(), tabId: tab.id, connectionName: profile.name, source: model.getValue(), offset: model.getOffsetAt(position), dialect: profile.dialect,
+      scope: { connectionId: tab.connectionId, connectionVersion, database: draftContext.state === 'known' ? draftContext.database ?? undefined : undefined, databaseUnknown: draftContext.state === 'unknown', sessionId: originalSession || undefined },
+      current: () => {
+        if (!valid) return false;
+        const workspace = useWorkspace.getState(), now = workspace.settings.tabs.find(value => value.id === tab.id);
+        const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')];
+        const okay = alive.current && objectDefinitionRef.current === intent && workspace.settings.activeTabId === tab.id && now?.kind === 'query'
+          && JSON.stringify([now.connectionId, now.database, now.databaseContext, now.sourceBinding, now.fileSourceBinding]) === key
+          && workspace.connections.find(value => value.id === profile.id) === profile && (workspace.connectionVersions[profile.id] ?? 0) === connectionVersion
+          && sessionRef.current === originalSession && !closeRequestRef.current && !model.isDisposed() && editor.current === instance && instance.getModel() === model && model.getVersionId() === version
+          && dialogs.length <= 1 && dialogs.every(dialog => dialog.querySelector('[data-object-definition]')?.getAttribute('data-object-definition') === intent.id);
+        if (!okay) valid = false; return okay;
+      },
+      watch: changed => {
+        const subscriptions = [model.onDidChangeContent(changed), model.onWillDispose(changed), instance.onDidChangeModel(changed), instance.onDidDispose(changed)];
+        const release = useWorkspace.subscribe(changed);
+        return () => { release(); subscriptions.forEach(subscription => subscription.dispose()); };
+      },
+      settled: async () => {
+        if (!originalSession) return;
+        // 失败的SHOW也可能令原协议缓存降为未知；仅同步准确会话缓存，不附加SQL或冒称事务已结束。
+        const ownsSession = () => {
+          const workspace = useWorkspace.getState(), now = workspace.settings.tabs.find(value => value.id === tab.id);
+          return alive.current && objectDefinitionRef.current === intent && intent.current() && sessionRef.current === originalSession && now?.connectionId === profile.id
+            && workspace.connections.some(value => value.id === profile.id) && (workspace.connectionVersions[profile.id] ?? 0) === connectionVersion && !busyRef.current;
+        };
+        if (!ownsSession()) return;
+        const [state, cached] = await Promise.all([invoke('query.sessionState', { sessionId: originalSession }).catch(() => null), invoke('query.completionState', { sessionId: originalSession }).catch(() => undefined)]);
+        if (!ownsSession()) return;
+        setCompletionSession(cached);
+        if (state) { setTransaction(state.transactionOpen); setTransactionKnown(state.transactionKnown && !state.broken); useWorkspace.getState().setDirty(tab.id, state.transactionOpen || !state.transactionKnown || state.broken); }
+        else { setTransactionKnown(false); useWorkspace.getState().setDirty(tab.id, true); }
+      },
+    };
+    objectDefinitionRef.current = intent; setObjectDefinition(intent);
+  }
+  /** 关闭保持原查询与草稿，不能把旧弹窗的回调交给继任弹窗。 */
+  function closeObjectStructure(intent: ObjectDefinitionSource): void { if (objectDefinitionRef.current !== intent) return; objectDefinitionRef.current = null; setObjectDefinition(null); }
   function openEditorFind(replace = false): void {
     if (!queryMenuCurrent() || !editor.current || fileSource.isBusy()) return;
     const instance = editor.current, action = instance.getAction(replace ? 'editor.action.startFindReplaceAction' : 'actions.find');
     if (action) { instance.focus(); void action.run().catch(reason => setError(errorMessage(reason))); }
   }
   const queryMenuKey = JSON.stringify([tab.id, tab.connectionId, connectionVersion, sessionId, tab.database, tab.databaseContext, tab.fileSourceBinding, tab.sourceBinding, settings.activeTabId, busy, queryRunning, !!closeRequest, fileSource.busy]);
+  useEffect(() => {
+    if (!searchEditor) return;
+    let active = true;
+    const action = searchEditor.addAction({ id: 'dbark-object-definition', label: objectDefinitionZh.entry, contextMenuGroupId: 'navigation', contextMenuOrder: 1.8,
+      run: () => { if (active && editor.current === searchEditor) openObjectStructure(searchEditor); },
+    });
+    return () => { active = false; action.dispose(); };
+  }, [searchEditor, queryMenuKey, connection]);
   const menuResult = useRef<{ result?: QueryResult; revision: number }>({ revision: 0 });
   if (menuResult.current.result !== sourceResult) menuResult.current = { result: sourceResult, revision: menuResult.current.revision + 1 };
   const resultMenuKey = JSON.stringify([queryMenuKey, menuResult.current.revision, resultIndex, selectedPin, resultSelectionRevision, !!activeColumnLease, !!activeFilterLease, !!activeSortLease]);
@@ -1509,6 +1566,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     'transaction-settings': { enabled: !sqlite && !busy && !!connection && !closeRequest, run: openTransactionSettings },
     'save-query': { enabled: !busy && !closeRequest && !fileSource.busy, run: saveCurrentSource },
     find: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind() },
+    'object-definition': { enabled: !!searchEditor && !!connection && !busy && !closeRequest && !fileSource.busy && !objectDefinition, run: () => openObjectStructure() },
     replace: { enabled: !!searchEditor && !closeRequest && !fileSource.busy, run: () => openEditorFind(true) },
     export: { enabled: !!selectionBinding && !activeColumnLease && !activeFilterLease && !activeSortLease, run: exportVisibleResult },
   }, { active: settings.activeTabId === tab.id && !closeRequest, contextKey: queryMenuKey });
@@ -1516,7 +1574,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const databaseCaption=sessionId?(completionSession?.databaseKnown?completionSession.database||queryContextZh.none:queryContextZh.unknown):draftContext.state==='known'?draftContext.database||queryContextZh.none:queryContextZh.unknown;
   const sqliteParameterDialog = sqliteParameterForm.current;
   const recoveryDialog=recovery&&<Modal title={queryContextZh.title} onClose={()=>setRecovery(false)}><form onSubmit={event=>{event.preventDefault();if(sessionRef.current||busyRef.current)return;rememberDatabase({state:'known',database:sqlite?'main':recoveryDatabase||null});setRecovery(false);setError('');}}><div className="modal-content"><p className="muted small">{sqlite ? sqliteZh.recoveryHint : queryContextZh.hint}</p><Field label={queryContextZh.database}><input autoFocus readOnly={sqlite} value={sqlite ? 'main' : recoveryDatabase} maxLength={256} onChange={event=>setRecoveryDatabase(event.target.value)}/></Field></div><footer className="modal-footer"><span className="grow"/><button type="button" onClick={()=>setRecovery(false)}>{zh.common.cancel}</button><button className="primary" type="submit" disabled={busy}>{queryContextZh.confirm}</button></footer></form></Modal>;
-  return <div ref={layoutRoot} className="workspace-tab query-tab"><div className="context-bar query-context-bar"><div className="query-context-target"><span className="connection-dot" style={{ background: connection?.color }}/><strong title={connection?.name ?? zh.common.connectionDeleted}>{connection?.name ?? zh.common.connectionDeleted}</strong><ChevronDown size={12}/><span className="breadcrumb-divider">/</span><span className="query-database-caption" aria-label="当前查询默认库" title={databaseCaption}>{databaseCaption}</span></div><QueryFileSourceCaption tab={tab} files={fileSource} compact/><span className="muted small query-session-state" title={sessionId ? zh.query.text008 : zh.query.text009}>{sessionId ? zh.query.text008 : zh.query.text009}</span>{!sqlite && <ActionMenu label={menuText.sessionOptions} className="query-context-options" contextKey={queryMenuKey} isCurrent={queryMenuCurrent} disabled={resultModal || !!transactionSettingsDialog || !!analyzeDialog || settings.activeTabId !== tab.id || !!closeRequest}><button aria-label={queryDatabaseSwitchZh.open} disabled={busy||!sessionId||!connection||settings.activeTabId!==tab.id||!!closeRequest||!!databaseSwitchDialog} onClick={openDatabaseSwitch}>{queryDatabaseSwitchZh.open}</button>{!sessionId&&draftContext.state==='unknown'&&<button disabled={busy} onClick={()=>{invalidateResultSelection();setRecoveryDatabase('');setRecovery(true);}}>{queryContextZh.choose}</button>}<button disabled={busy||!sessionId} title={!sessionId?sessionObjectsZh.needsSession:sessionObjectsZh.title} onClick={()=>{invalidateResultSelection();setSessionObjects(true);}}>{sessionObjectsZh.open}</button><div className="query-execution-options query-menu-options" role="group" aria-label={menuText.executionOptions}><label className="check" title={queryWarningsZh.hint}><input type="checkbox" aria-label={queryWarningsZh.option} checked={collectWarnings} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setCollectWarnings(event.target.checked); }}/>{queryWarningsZh.option}</label><label className="check" title={queryContinueOnErrorZh.hint}><input type="checkbox" aria-label={queryContinueOnErrorZh.option} checked={continueOnError} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setContinueOnError(event.target.checked); }}/>{queryContinueOnErrorZh.option}</label></div></ActionMenu>}</div><QueryFileActions tab={tab} files={fileSource} renderActions={fileActions => <AdaptiveToolbar
+  return <div ref={layoutRoot} className="workspace-tab query-tab">{objectDefinition && <ObjectDefinitionDialog key={objectDefinition.id} source={objectDefinition} onClose={() => closeObjectStructure(objectDefinition)}/>}<div className="context-bar query-context-bar"><div className="query-context-target"><span className="connection-dot" style={{ background: connection?.color }}/><strong title={connection?.name ?? zh.common.connectionDeleted}>{connection?.name ?? zh.common.connectionDeleted}</strong><ChevronDown size={12}/><span className="breadcrumb-divider">/</span><span className="query-database-caption" aria-label="当前查询默认库" title={databaseCaption}>{databaseCaption}</span></div><QueryFileSourceCaption tab={tab} files={fileSource} compact/><span className="muted small query-session-state" title={sessionId ? zh.query.text008 : zh.query.text009}>{sessionId ? zh.query.text008 : zh.query.text009}</span>{!sqlite && <ActionMenu label={menuText.sessionOptions} className="query-context-options" contextKey={queryMenuKey} isCurrent={queryMenuCurrent} disabled={resultModal || !!transactionSettingsDialog || !!analyzeDialog || settings.activeTabId !== tab.id || !!closeRequest}><button aria-label={queryDatabaseSwitchZh.open} disabled={busy||!sessionId||!connection||settings.activeTabId!==tab.id||!!closeRequest||!!databaseSwitchDialog} onClick={openDatabaseSwitch}>{queryDatabaseSwitchZh.open}</button>{!sessionId&&draftContext.state==='unknown'&&<button disabled={busy} onClick={()=>{invalidateResultSelection();setRecoveryDatabase('');setRecovery(true);}}>{queryContextZh.choose}</button>}<button disabled={busy||!sessionId} title={!sessionId?sessionObjectsZh.needsSession:sessionObjectsZh.title} onClick={()=>{invalidateResultSelection();setSessionObjects(true);}}>{sessionObjectsZh.open}</button><div className="query-execution-options query-menu-options" role="group" aria-label={menuText.executionOptions}><label className="check" title={queryWarningsZh.hint}><input type="checkbox" aria-label={queryWarningsZh.option} checked={collectWarnings} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setCollectWarnings(event.target.checked); }}/>{queryWarningsZh.option}</label><label className="check" title={queryContinueOnErrorZh.hint}><input type="checkbox" aria-label={queryContinueOnErrorZh.option} checked={continueOnError} disabled={busy || parameterSource !== null} onChange={event => { if (!busyRef.current && parameterSource === null) setContinueOnError(event.target.checked); }}/>{queryContinueOnErrorZh.option}</label></div></ActionMenu>}</div><QueryFileActions tab={tab} files={fileSource} renderActions={fileActions => <AdaptiveToolbar
       className="toolbar query-primary-toolbar" ariaLabel={menuText.queryToolbar} contextKey={queryMenuKey} isCurrent={queryMenuCurrent}
       items={[
         { key: 'execute', content: (<div className="query-execute-split"><button className="primary" disabled={busy || !connection} onClick={() => void execute()}><Play size={14}/>{zh.query.text010}<kbd>⌘ / Ctrl ↵</kbd></button><ActionMenu label={menuText.executeOptions} disabled={busy || !connection} contextKey={queryMenuKey} isCurrent={queryMenuCurrent}><button disabled={busy || !connection} title={menuText.selectedOrScriptHint} onClick={() => void execute()}>{menuText.selectedOrScript}</button><button disabled={busy || !connection || !!closeRequest || fileSource.busy} title={currentStatementZh.hint} aria-label={currentStatementZh.action} onClick={() => void executeCurrentStatement()}><Play size={14}/>{currentStatementZh.action}</button><button disabled={busy} onClick={() => void execute('all')}>{zh.query.text011}</button></ActionMenu></div>), overflow: (<ActionMenuSection label={menuText.executeOptions}><button className="primary" disabled={busy || !connection} onClick={() => void execute()}><Play size={14}/>{zh.query.text010}<kbd>⌘ / Ctrl ↵</kbd></button>
@@ -1528,6 +1586,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       ]}
       moreLabel={menuText.queryMore}
       more={<>
+        <ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
         <ActionMenuSection label={menuText.execution}>{!sqlite && <button disabled={busy || !connection} title={queryStreamZh.title} aria-label={queryStreamZh.open} onClick={openStreamExport}><Download size={14}/>{queryStreamZh.open}</button>}
 <button aria-label={parameterZh.open} disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={openParameters}><Braces size={14}/>{parameterZh.open}</button>
 {!sqlite && <button disabled={busy || !connection || !!closeRequest} onClick={openTransactionSettings}>{queryTransactionSettingsZh.open}</button>}

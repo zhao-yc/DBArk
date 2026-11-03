@@ -12,6 +12,7 @@ describe('SQLite独立源码CI的原生门与环境隔离', () => {
     expect(result.dropped).toContain('PGPASSWORD'); expect(JSON.stringify(result)).not.toContain('合成PG秘密');
   });
   it.each([
+    ['object-definition', 'object-definition-native.spec.ts', 'object-definition', 'DBARK_OBJECT_DEFINITION_NATIVE_TEST'],
     ['statistics', 'sqlite-value-frequency-native.spec.ts', 'sqlite-statistics', 'DBARK_SQLITE_VALUE_FREQUENCY_NATIVE_TEST'],
     ['workspace', 'sqlite-workspace-native.spec.ts', 'sqlite-workspace', 'DBARK_SQLITE_WORKSPACE_NATIVE_TEST'],
     ['relationships', 'sqlite-relationships-native.spec.ts', 'sqlite-relationships', 'DBARK_SQLITE_RELATIONSHIPS_NATIVE_TEST'],
@@ -52,4 +53,10 @@ describe('SQLite独立源码CI的原生门与环境隔离', () => {
     expect(env.PLAYWRIGHT_JSON_OUTPUT_NAME.replaceAll('\\', '/')).toContain('/test-results/' + output + '/report.json');
   });
   it('未知类型和路径不能改写固定专项入口', () => { for (const value of ['installed', '../外部', '', '__proto__']) { expect(() => sqliteOfflineCommand(value)).toThrow(); expect(() => sqliteOfflineEnvironment({}, value)).toThrow(); } });
+  it('对象结构专项只保留准确门项，移除其它原生门、用户路径、实库认证与trace覆盖', () => {
+    const result = sqliteOfflineEnvironment({ PATH: '系统路径', DBARK_OBJECT_DEFINITION_NATIVE_TEST: '0', DBARK_INTEGRATION_ENABLED: '1', DBARK_SQLITE_COMPLETION_NATIVE_TEST: '1', DBARK_USER_DATA: '不能继承', DBARK_EXECUTABLE_PATH: '不能继承', DBARK_TEST_PASSWORD: '合成秘密', SSH_AUTH_SOCK: '不能继承', SSH_PASSWORD: '合成秘密', DB_PASSWORD: '合成秘密', PGPASSWORD: '合成秘密', PLAYWRIGHT_TRACE: 'on', PLAYWRIGHT_JSON_OUTPUT_NAME: '不能覆盖', NODE_OPTIONS: '--require 注入' }, 'object-definition');
+    expect(result.env).toEqual({ PATH: '系统路径', DBARK_INTEGRATION_ENABLED: '0', DBARK_OBJECT_DEFINITION_NATIVE_TEST: '1', PLAYWRIGHT_JSON_OUTPUT_NAME: expect.stringMatching(/[\\/]test-results[\\/]object-definition[\\/]report\.json$/) });
+    expect(sqliteOfflineCommand('object-definition')).toEqual([expect.stringMatching(/[\\/]node_modules[\\/]@playwright[\\/]test[\\/]cli\.js$/), 'test', 'tests/e2e/object-definition-native.spec.ts', '--workers=1', '--retries=0', '--trace=off', '--reporter=list,json', '--output=test-results/object-definition']);
+    expect(result.dropped).toContain('DBARK_USER_DATA'); expect(result.dropped).toContain('PLAYWRIGHT_TRACE'); expect(JSON.stringify(result)).not.toContain('合成秘密');
+  });
 });

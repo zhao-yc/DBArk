@@ -7,16 +7,21 @@ import { analyzeCompletionHover } from '../shared/completionHoverAnalysis';
 import { analyzeCompletionDefinition } from '../shared/completionDefinitionAnalysis';
 import { analyzeLocalReferences } from '../shared/localReferencesAnalysis';
 import { analyzeMysqlLocalRename } from '../shared/mysqlLocalRename';
+import { analyzeMysqlPhysicalObject } from '../shared/mysqlPhysicalObject';
 
 /** 仅同安装包的本地编辑器发送有界快照；不访问网络、IPC、凭据或用户查询会话。 */
-self.onmessage=(event:MessageEvent<{id:number;source:string;offset:number;mode:CompletionLexicalMode;capabilities?:CompletionScopeCapabilities;intent?:'hover'|'definition'|'references'|'rename';newName?:string}>)=>{
+self.onmessage=(event:MessageEvent<{id:number;source:string;offset:number;mode:CompletionLexicalMode;capabilities?:CompletionScopeCapabilities;intent?:'hover'|'definition'|'references'|'rename'|'object';newName?:string}>)=>{
   const input=event.data;
   if(!input||!Number.isSafeInteger(input.id)||input.id<1||typeof input.source!=='string'||input.source.length>completionLimits.sourceUnits||!Number.isInteger(input.offset)||input.offset<0||input.offset>input.source.length){self.postMessage({id:input?.id,result:{status:'blocked',reason:'budget'}});return;}
   const mode=input.mode??{};
   if([mode.ansiQuotes,mode.noBackslashEscapes].some(value=>value!==undefined&&typeof value!=='boolean')){self.postMessage({id:input.id,result:{status:'blocked',reason:'mode'}});return;}
   // 本地能力缺省关闭；未知字段和非布尔值不能开启任何未核验服务器语法。
   const capabilities=input.capabilities;if(capabilities!==undefined&&(!capabilities||typeof capabilities!=='object'||Array.isArray(capabilities)||Object.keys(capabilities).some(key=>!['lateralDerivedTables','windowFunctions','insertRowAliases'].includes(key))||[capabilities.lateralDerivedTables,capabilities.windowFunctions,capabilities.insertRowAliases].some(value=>value!==undefined&&typeof value!=='boolean'))){self.postMessage({id:input.id,result:{status:'blocked',reason:'capability'}});return;}
-  if (input.intent !== undefined && !['hover','definition','references','rename'].includes(input.intent)) { self.postMessage({ id: input.id, result: { status: 'blocked', reason: 'intent' } }); return; }
+  if (input.intent !== undefined && !['hover','definition','references','rename','object'].includes(input.intent)) { self.postMessage({ id: input.id, result: { status: 'blocked', reason: 'intent' } }); return; }
+  if (input.intent === 'object') {
+    if (Object.keys(input).some(key => !['id','source','offset','mode','capabilities','intent'].includes(key))) { self.postMessage({ id: input.id, result: { status: 'blocked', reason: 'input' } }); return; }
+    self.postMessage({ id: input.id, result: analyzeMysqlPhysicalObject(input.source, input.offset, mode, capabilities) }); return;
+  }
   if (input.intent === 'rename') { self.postMessage({ id: input.id, result: analyzeMysqlLocalRename(input.source, input.offset, mode, capabilities, input.newName) }); return; }
   // 共用构建产物，不共用实际线程；引用调用方仍独占Worker并使用自己的严格回包校验。
   if (input.intent === 'references') { self.postMessage({ id: input.id, result: analyzeLocalReferences(input.source, input.offset, mode, capabilities) }); return; }

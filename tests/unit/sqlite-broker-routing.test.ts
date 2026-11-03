@@ -25,6 +25,25 @@ function fixture() {
 }
 beforeEach(() => { vi.clearAllMocks(); ports.sqlite.mockReset().mockResolvedValue('sqlite'); ports.close.mockReset().mockResolvedValue(undefined); ports.force.mockReset().mockResolvedValue(undefined); });
 
+it('未知对象结构取消不启动任何驱动或物理文件', async () => {
+  const { broker } = fixture(); await broker.request('query.cancel', { taskId: 'object-definition:unknown' });
+  expect(ports.fork).not.toHaveBeenCalled(); expect(ports.sqlite).not.toHaveBeenCalled();
+});
+it('对象结构完成后仍保留SQLite方言墓碑，改连接或删配置不把旧取消发往网络', async () => {
+  const { broker, profiles } = fixture(), taskId = 'object-definition:file';
+  await broker.request('query.objectDefinition', { connectionId: profile.id, table: 'subject', taskId }); profiles.length = 0;
+  await broker.request('query.cancel', { taskId }); expect(ports.sqlite).toHaveBeenLastCalledWith('query.cancel', { taskId }); expect(ports.fork).not.toHaveBeenCalled();
+  await expect(broker.request('query.objectDefinition', { connectionId: profile.id, table: 'subject', taskId })).rejects.toThrow();
+});
+it('网络对象结构旧编号不能被后继SQLite连接重用或借错取消通道', async () => {
+  const { broker, profiles, child, reply } = fixture(); profiles.push({ id: 'network', name: '网络', group: '', color: '', dialect: 'mysql', host: 'never.invalid', port: 1, user: '仅RAM' });
+  const input = { connectionId: 'network', table: 'subject', taskId: 'object-definition:network' };
+  const reading = broker.request('query.objectDefinition', input); reply(); await reading;
+  profiles.splice(1,1,{ ...profile, id: 'network' }); const cancel = broker.request('query.cancel', { taskId: input.taskId });
+  expect(child.postMessage.mock.calls.at(-1)![0].command).toBe('query.cancel'); reply(); await cancel;
+  expect(ports.sqlite).not.toHaveBeenCalled(); await expect(broker.request('query.objectDefinition', input)).rejects.toThrow('编号已使用');
+});
+
 it.each(['sqlite.tableImport.inspect', 'sqlite.tableImport.preview', 'sqlite.tableImport.apply', 'sqlite.tableImport.release'])('%s沿SQLite原账本，缺连接或后端拒绝不能降级网络引擎', async command => {
   const { broker, profiles } = fixture(); profiles.length = 0; const input = { inspectionId: '原检查', previewId: '原预检', taskId: '原任务' }, failure = Error('原SQLite能力已撤销');
   ports.sqlite.mockRejectedValueOnce(failure); await expect(broker.request(command, input)).rejects.toBe(failure);

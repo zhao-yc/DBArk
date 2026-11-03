@@ -195,6 +195,16 @@ static void read_value(sqlite3_context *ctx, RawProbe *p, int op, int column) {
   copy = sqlite3_value_dup(sqlite3_column_value(p->statement,column));
   if (!copy) { sqlite3_result_error_nomem(ctx); return; }
   type = sqlite3_value_type(copy); encoding = type == SQLITE_TEXT ? sqlite3_value_encoding(copy) : 0;
+  /* 私有逐值读取同样保留公开1MiB门，不能依赖已扩大的SQLite内部记录限制。
+   * 在描述符和字节返回之前验证独立副本，不改变原statement或事务。 */
+  if (type == SQLITE_TEXT || type == SQLITE_BLOB) {
+    int text_result;
+    bytes=sqlite3_value_blob(copy); count=sqlite3_value_bytes(copy);
+    if (count && !bytes) { sqlite3_result_error_nomem(ctx); sqlite3_value_free(copy); return; }
+    if (count>RAW_VALUE_BYTES) { sqlite3_result_error_code(ctx,SQLITE_TOOBIG); sqlite3_value_free(copy); return; }
+    text_result=type==SQLITE_TEXT ? valid_text(bytes,count,encoding) : SQLITE_OK;
+    if (text_result!=SQLITE_OK) { sqlite3_result_error_code(ctx,text_result==RAW_VALUE_ERROR ? SQLITE_TOOBIG : SQLITE_MISMATCH); sqlite3_value_free(copy); return; }
+  }
   if (op == 3) sqlite3_result_int(ctx,type | (encoding << 8));
   else if (type == SQLITE_INTEGER || type == SQLITE_FLOAT) {
     uint64_t bits; unsigned char output[8]; int i;

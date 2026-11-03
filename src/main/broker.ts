@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { ConnectionProfile, TaskEvent } from '../shared/contracts';
 import { SqliteRuntime } from './sqliteRuntime';
+import { objectDefinitionTaskPrefix } from '../shared/objectDefinition';
 
 /** 数据库执行与界面生命周期分离；进程故障时拒绝所有等待请求，绝不自动重试。 */
 export class EngineBroker {
@@ -11,6 +12,8 @@ export class EngineBroker {
   private closePending?: Promise<void>;
   private pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
   private readonly sqlite: SqliteRuntime;
+  /** 仅对象定义使用跨方言编号；保留方言墓碑，迟到取消不能落到另一驱动。 */
+  private readonly objectDefinitionRoutes = new Map<string, 'sqlite' | 'network'>();
   /** 接收任务事件和进程故障出口，不向渲染进程暴露底层消息通道。 */
   constructor(private emit: (event: TaskEvent) => void, private failed: () => void, private readonly profile: (id: string) => ConnectionProfile | undefined = () => undefined) {
     this.sqlite = new SqliteRuntime({ emit, resolveProfile: id => { const profile = this.profile(id); return profile?.dialect === 'sqlite' ? profile : undefined; } });
@@ -43,6 +46,19 @@ export class EngineBroker {
 
   /** 以独立编号关联响应；发送失败立即清理等待记录。 */
   request(command: string, input: unknown): Promise<any> {
+    const definition = input as { taskId?: unknown; connectionId?: unknown } | null;
+    if (command === 'query.cancel' && typeof definition?.taskId === 'string' && definition.taskId.startsWith(objectDefinitionTaskPrefix)) {
+      const route = this.objectDefinitionRoutes.get(definition.taskId);
+      return route === 'sqlite' ? this.sqlite.request(command, input) : route === 'network' ? this.networkRequest(command, input) : Promise.resolve();
+    }
+    if (command === 'query.objectDefinition') {
+      if (this.closePending || this.stopping) return Promise.reject(Error('数据库执行进程正在收尾，不能读取对象结构'));
+      if (typeof definition?.taskId !== 'string' || !definition.taskId.startsWith(objectDefinitionTaskPrefix) || typeof definition.connectionId !== 'string' || !this.profile(definition.connectionId)) return Promise.reject(Error('对象结构需要已保存连接和准确任务编号'));
+      if (this.objectDefinitionRoutes.has(definition.taskId) || this.objectDefinitionRoutes.size >= 8192) return Promise.reject(Error('对象结构任务编号已使用或登记已满，请关闭后重新打开客户端'));
+      const route = this.isSqliteConnection(definition.connectionId) ? 'sqlite' : 'network';
+      this.objectDefinitionRoutes.set(definition.taskId, route);
+      return route === 'sqlite' ? this.sqlite.request(command, input) : this.networkRequest(command, input);
+    }
     // 编辑能力由原SQLite账本解析目标；公共输入没有连接ID，释放也必须能越过退出屏障。
     if (command === 'sqlite.tableEdit.release' || command === 'sqlite.tableCreate.release' || command === 'sqlite.tableImport.release' || command === 'sqlite.importSource.release' || command === 'sqlite.indexes.release' || command === 'sqlite.objects.release' || command === 'sqlite.tableMaintenance.release' || command === 'sqlite.tableRename.release' || command === 'sqlite.tableRebuild.release' || command === 'sqlite.columns.release') return this.sqlite.request(command, input);
     if (this.closePending && !['query.cancel', 'sessions.close', 'connections.close', 'query.sessionState', 'query.completionState'].includes(command)) return Promise.reject(Error('数据库执行进程正在收尾，不能开始新操作'));

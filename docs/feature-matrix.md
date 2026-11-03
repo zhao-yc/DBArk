@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-03 源码增量：[查询中查看对象结构](development/object-definition-20261103.md)提供 MySQL／MariaDB 与 SQLite 表／视图完整只读 DDL，目标绑定活动查询原会话，不被左树选择覆盖。SQLite 保留 TEMP 遮蔽及原事务；不确定语法拒绝猜测。O05 仍部分，不增加完整工作包或发行计数，暂不发布。
+
 2026-11-03 源码增量：[SQLite 全筛选字段概况](development/sqlite-statistics-20261103.md)支持存储类型、非空／不同值、精度极值，Windows 原完整窗口覆盖 640／100 行且原页保持，277 项相关与 37 项定向分轮、类型／构建通过；D09／R02 部分。另闭合[MySQL 8.4 关系图实库原例](development/relationship-diagram-live-20261103.md)，复合／自引用／跨库目标及精确资源清理已核；E01 部分，Mac／安装继续，暂不发布。
 
 2026-11-03 源码增量：[本文别名／CTE 重命名](development/local-rename-20261103.md)支持双方言 F2、整组修改和单次撤销／重做，冲突或绑定不全明确拒绝，不执行 SQL。482 项相关、严格类型、同 2 GiB 构建及 Windows 双方言原完整窗口通过，资源核清；新 Mac／安装和完整重构继续，O05 仍部分，暂不发布。

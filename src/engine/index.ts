@@ -45,6 +45,8 @@ import { completionMetadata } from './completionMetadata';
 import type {CompletionMetadataInput} from '../shared/sqlCompletion';
 import {completionSessionState, initialCompletionDatabase, invalidateCompletionDatabase} from './completionSession';
 import {readSessionObject} from './sessionObjectRead';
+import { readObjectDefinition } from './objectDefinition';
+import { objectDefinitionInputSchema, objectDefinitionIdentifier, objectDefinitionLimits } from '../shared/objectDefinition';
 import {StructureSearches} from './structureSearch';
 import {DataSearchTasks} from './dataSearchTasks';
 import {readDataSearchCatalogue} from './dataSearchCatalogue';
@@ -146,6 +148,7 @@ export class Engine {
   private readonly insertConfirmations=new QueryInsertConfirmations();
   private closing = false;
   private readonly independentTasks = new Map<string, IndependentTask>();
+  private readonly objectDefinitions = new Set<string>();
   private readonly independentResources = new IndependentTaskResources();
   private readonly disconnecting = new Set<string>();
   private readonly connectionUses = new Map<string, number>();
@@ -370,6 +373,43 @@ export class Engine {
         if(profile){if(profile.id!==input.connectionId)throw new Error('补全连接配置目标不符');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);}
         // 补全结果也须等待原流真实关闭，不能在 QUIT 回调先到时被资源确认门拒绝。
         return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>completionMetadata(managed,input as CompletionMetadataInput,control),undefined,'读取补全元数据',true);
+      }
+      case 'query.objectDefinition': {
+        const { profile, ...raw } = input;
+        const request = objectDefinitionInputSchema.parse(raw);
+        // 严格关闭未确认时旧资源仍占据用途槽位，显式断开恢复后才在下一次准入归还。
+        for (const id of this.objectDefinitions) if (!this.tasks.has(id) && !this.independentTasks.has(id) && !this.independentResources.owns(id)) this.objectDefinitions.delete(id);
+        if (this.objectDefinitions.size >= objectDefinitionLimits.active || this.objectDefinitions.has(request.taskId)) throw Error('对象定义读取已达并发上限，请等待原任务及资源收尾');
+        this.objectDefinitions.add(request.taskId);
+        try {
+          if (request.sessionId) {
+            const session = this.sessions.get(request.sessionId);
+            if (!session || session.connectionId !== request.connectionId) throw Error('对象定义原会话与连接不符');
+            return await this.withSession(request.sessionId, managed => this.runTask(request.taskId, managed, '读取对象完整定义', task => {
+              const state = completionSessionState(managed, false);
+              if (state.broken) throw Error('对象定义原会话已断开');
+              const database = request.database ?? (state.databaseKnown ? state.database : undefined);
+              if (!objectDefinitionIdentifier(database)) throw Error('当前会话默认数据库未确认，请明确选择数据库');
+              return readObjectDefinition(managed, request, database, {
+                start: () => { this.checkCancelled(task); task.inFlight = true; task.generation++; },
+                check: () => this.checkCancelled(task),
+                finish: async () => { task.inFlight = false; await task.cancelPending; },
+              });
+            }));
+          }
+          // Main注入保存配置，直接使用可取消短读；不新建用户查询会话或猜测配置默认库。
+          if (!request.database) throw Error('独立对象定义读取必须明确数据库');
+          if (profile) { if (profile.id !== request.connectionId) throw Error('对象定义连接配置目标不符'); if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile); }
+          return await this.withIndependentTask(request.connectionId, request.taskId, (managed, control) => {
+            let ended: (() => void) | undefined;
+            return readObjectDefinition(managed, request, request.database!, {
+              start: () => { ended = control.commandStarted(); }, check: control.checkCancelled,
+              finish: async () => { ended?.(); },
+            });
+          }, undefined, '读取对象完整定义', true);
+        } finally {
+          if (!this.tasks.has(request.taskId) && !this.independentTasks.has(request.taskId) && !this.independentResources.owns(request.taskId)) this.objectDefinitions.delete(request.taskId);
+        }
       }
       case 'metadata.objects': return this.withConnection(input.connectionId, connection => metadata.objects(connection, input.database));
       case 'metadata.routineInvocation': {
