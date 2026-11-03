@@ -43,6 +43,25 @@ async function noExecution() {
 async function openLibrary() { await (await (await import('./navigation-menu')).navigationMenuItem(query(), { name: 'SQL 片段库', exact: true })).click(); await expect(dialog()).toBeVisible(); }
 async function selectSnippet(name: string) { await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: `选择片段：${name}`, exact: true })).click(); }
 
+test('编辑器名称补全只替换片段前缀，保留正文原样并能一次撤销', async () => {
+  await offlineQuery();
+  const name = 'temp临时检查片段', prefix = 'SELECT 0;\n  ', sql = source.replace('SELECT JSON', '  SELECT JSON');
+  const editorText = (value: string) => process.platform === 'win32' ? value.replaceAll('\n', '\r\n') : value;
+  await page.evaluate(({ name, sql }) => window.dbark.invoke('snippets.save', { id: 'completion-fixture', name, group: '离线', description: '', sql, updatedAt: '' }), { name, sql });
+  await writeSql(editorText(prefix));
+  await page.keyboard.type('temp');
+  await expectSql(editorText(prefix + 'temp'));
+  const widget = page.locator('.suggest-widget.visible');
+  const suggestion = widget.locator('.monaco-list-row .label-name').filter({ hasText: /^temp临时检查片段$/ });
+  await expect(suggestion).toHaveCount(1);
+  await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText(name);
+  await page.keyboard.press('Enter');
+  await expectSql(editorText(prefix + sql));
+  await page.keyboard.press(`${modifier}+Z`);
+  await expectSql(editorText(prefix + 'temp'));
+  await noExecution();
+});
+
 test('编辑器选区可从右键与原生菜单直接打开片段草稿，取消不保存且只写入选中原文', async () => {
   const id = 'sql-selection-to-snippet', original = 'SELECT 0;\n' + source + 'SELECT 9;';
   const editorOriginal = process.platform === 'win32' ? original.replaceAll('\n', '\r\n') : original;

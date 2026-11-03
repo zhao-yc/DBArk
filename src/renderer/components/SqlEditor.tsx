@@ -41,6 +41,7 @@ import { createSqlRenameProvider } from '../sqlRenameProvider';
 import { localRenameZh } from '../locales/localRename.zh-CN';
 import '../localRename.css';
 import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared/sqliteCompletion';
+import { matchSnippetPrefix, snippetAtStatementStart, snippetCatalog, snippetPrefix } from '../snippetCompletion';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export type { SqlCompletionScope } from '../completionContext';
@@ -51,7 +52,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void> }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void> }) {
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
@@ -173,6 +174,43 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const registration = monaco.languages.registerDefinitionProvider('sql', navigation.provider);
     return () => { registration.dispose(); void navigation.dispose().catch(() => {}); };
   }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
+  useEffect(() => {
+    if (!snippetCompletion || readOnly || !contentReady || !dialect) return;
+    let active = true;
+    const registration = monaco.languages.registerCompletionItemProvider('sql', {
+      /** 独立的本地片段补全，不请求元数据，也不使用 Monaco 的变量插值。 */
+      async provideCompletionItems(model, position, _context, token) {
+        const instance = editorRef.current;
+        const current = () => active && aliveRef.current && contentRef.current?.ready === true
+          && dialectRef.current === dialect && !propsRef.current.readOnly && !token.isCancellationRequested
+          && !!instance?.hasTextFocus() && instance.getModel() === model && !model.isDisposed()
+          && !suggestionsBlocked() && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+        if (!current() || instance?.getSelections()?.length !== 1 || !instance.getSelection()?.isEmpty()) return;
+        if (model.getValueLength() > 65_536) return;
+        const prefix = snippetPrefix(model.getLineContent(position.lineNumber).slice(0, position.column - 1));
+        if (!prefix || !snippetAtStatementStart(model.getValue(), model.getOffsetAt(position), prefix, dialect)) return;
+        const version = model.getVersionId(), rows = await snippetCatalog.list();
+        const cursor = instance.getPosition();
+        if (!rows || !current() || model.getVersionId() !== version || cursor?.lineNumber !== position.lineNumber || cursor.column !== position.column
+          || instance.getSelections()?.length !== 1 || !instance.getSelection()?.isEmpty()) return;
+        const range = {
+          startLineNumber: position.lineNumber, startColumn: position.column - prefix.length,
+          endLineNumber: position.lineNumber, endColumn: position.column,
+        };
+        return { incomplete: true, suggestions: matchSnippetPrefix(rows, prefix, dialect).map((item, index) => ({
+          label: { label: item.name, description: item.group || zh.snippets.ungrouped },
+          detail: zh.snippets.suggestion,
+          documentation: item.description || item.sql.slice(0, 256),
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          range,
+          insertText: item.sql,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.KeepWhitespace,
+          sortText: '1' + String(index).padStart(2, '0'),
+        })) };
+      },
+    });
+    return () => { active = false; registration.dispose(); };
+  }, [snippetCompletion, readOnly, contentReady, dialect]);
   useEffect(() => {
     if(readOnly||!completion){statusRef.current?.('idle');return;}
     // SQLite使用自己的词法和目录，不能将其正文、临时对象或标识符预算交给MySQL分析器。
