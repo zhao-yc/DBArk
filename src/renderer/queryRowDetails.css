@@ -4,6 +4,8 @@
 .query-row-details header, .query-row-details footer, .query-row-details-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .query-row-details header { justify-content: space-between; }
 .query-row-details-actions input { width: 70px; }
+.query-row-details-search { display: flex; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+.query-row-details-search input { flex: 1; min-width: 100px; }
 .query-row-details-fields article { border-top: 1px solid var(--line); padding: 10px 0; }
 .query-row-details-fields h4 { margin: 0 0 5px; overflow-wrap: anywhere; }
 .query-row-details-fields pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; user-select: text; }

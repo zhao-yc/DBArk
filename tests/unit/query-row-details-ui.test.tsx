@@ -89,6 +89,26 @@ it('重复row引用按原行位置，非法rowIdx不启用；旧侧栏翻页/关
   await act(async () => change({ target: { value: '2' } })); await click(detailsText.go); expect(region()!.textContent).toContain('行详情 · 2 / 2');
 });
 
+it('按字段名查找重复列和隐藏列，切行保留搜索，重开清空', async () => {
+  await mount(); await layout(); await flush(); const calls = [...commands];
+  await openDetails();
+  const search = () => region()!.querySelector('input[aria-label="' + detailsText.fieldSearch + '"]')!;
+  const fillSearch = (value: string) => act(async () => callback(search(), 'onChange')({ target: { value } }));
+  const values = () => region()!.querySelectorAll('pre').map(node => node.textContent);
+  await fillSearch('同名');
+  expect(values()).toEqual(['18446744073709551615', '0.12345678901234567890']);
+  const oldFilter = callback(search(), 'onChange');
+  await click(detailsText.next);
+  expect(search().value).toBe('同名'); expect(values()).toEqual([detailsText.empty, '1.00000000000000000001']);
+  await act(async () => oldFilter({ target: { value: '迟到旧事件' } })); expect(search().value).toBe('同名');
+  await fillSearch('隐藏内容'); expect(values()).toEqual(['秘密']);
+  expect(region()!.querySelectorAll('article')[0].textContent).toContain('5. 隐藏内容');
+  await fillSearch('不存在'); expect(values()).toEqual([]); expect(region()!.textContent).toContain(detailsText.noFields);
+  await click(detailsText.clearFieldSearch); expect(values()).toHaveLength(5);
+  await fillSearch('隐藏内容'); await click(detailsText.close); await openDetails(); expect(search().value).toBe('');
+  expect(commands).toEqual(calls);
+});
+
 it.each(['result', 'pin', 'version', 'job', 'inactive', 'connection', 'closed', 'new', 'modal', 'unmount'] as const)('%s变化及恢复后旧活动行/详情回调永久失效且不能关闭新详情', async change => {
   await mount(); await openDetails(); const oldGrid = mainGrid(), oldOpen = callback(button(detailsText.open)), oldNext = callback(button(detailsText.next)), oldClose = callback(button(detailsText.close)), state = store.getState();
   if (change === 'result') { await click(zh.query.text017 + '2'); await click(zh.query.text017 + '1'); }

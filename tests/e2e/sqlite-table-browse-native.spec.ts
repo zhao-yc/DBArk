@@ -219,9 +219,16 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(() => expect(detailField('nullable').locator('pre')).toHaveText(detailText.null));
     await step(() => expect(detailField('payload').locator('small')).toHaveText('BLOB'));
     await step(() => expect(detailField('payload').locator('pre')).toHaveText('AP8='));
+    const fieldSearch = () => details().getByRole('searchbox', { name: detailText.fieldSearch, exact: true });
+    await step(() => fieldSearch().fill('MIXED'));
+    await step(() => expect(details().locator('article')).toHaveCount(1));
     await step(() => details().getByRole('button', { name: detailText.next, exact: true }).click());
+    await step(() => expect(fieldSearch()).toHaveValue('MIXED'));
     await step(() => expect(detailField('mixed').locator('small')).toHaveText('TEXT'));
     await step(() => expect(detailField('mixed').locator('pre')).toHaveText('2'));
+    await step(() => fieldSearch().fill('不存在'));
+    await step(() => expect(details().getByRole('status')).toHaveText(detailText.noFields));
+    await step(() => details().getByRole('button', { name: detailText.clearFieldSearch, exact: true }).click());
     await step(() => details().getByLabel(detailText.sqliteRow, { exact: true }).fill('5'));
     await step(() => details().getByRole('button', { name: detailText.go, exact: true }).click());
     await step(() => expect(detailField('note').locator('pre')).toHaveText(rows[4].note));
@@ -382,7 +389,8 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
       const left = await step(() => id.evaluate(element => { const rect = element.getBoundingClientRect(); if (Math.abs(rect.width - 220) > 1) throw Error('SQLite保存列宽未应用'); return rect.left; }));
       await step(() => grid.evaluate(element => { element.scrollLeft = 400; })); await step(() => expect.poll(() => id.evaluate(element => element.getBoundingClientRect().left)).toBeCloseTo(left, 0)); await step(() => grid.evaluate(element => { element.scrollLeft = 0; }));
     };
-    await assertLayout(); await openDetail();
+    await assertLayout(); await openDetail(); await step(() => fieldSearch().fill('nullable'));
+    await step(() => expect(details().locator('article')).toHaveCount(1));
     await step(() => expect(detailField('nullable')).toBeVisible());
     await step(() => details().getByRole('button', { name: detailText.close, exact: true }).click()); await step(() => expect(details()).toHaveCount(0));
     const afterLayout = await step(audit); expect(afterLayout.pages.length).toBe(beforeLayout.pages.length); expect(afterLayout.forks).toEqual(beforeLayout.forks); expect(disk()).toEqual(baseline);
