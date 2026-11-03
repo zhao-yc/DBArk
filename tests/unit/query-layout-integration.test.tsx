@@ -3,7 +3,9 @@ let restoreNavigationMenuPort: () => void = () => {};
 import React, { act } from 'react';
 import { beforeAll, afterAll, beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
-const io = vi.hoisted(() => ({ entries: [] as any[] }));
+const io = vi.hoisted(() => ({ entries: [] as any[], actions: new Set<unknown>() }));
+/** 布局只使用编辑器RAM端口；意外触发语法标记仍失败，不能静默吞掉新业务。 */
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers() { throw Error('布局用例不应设置SQL语法标记'); } }, MarkerSeverity: { Warning: 4 } }));
 /** 仅Monaco/IPC/几何使用RAM端口；QueryTab、分隔条、store及正文订阅为真实接线。 */
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { useEffect, useLayoutEffect, useRef, createElement } = await import('react');
@@ -12,7 +14,7 @@ vi.mock('../../src/renderer/components/SqlEditor', async () => {
     useEffect(() => {
       let value = props.value, version = 1; const content = new Set<() => void>(), changes = new Set<() => void>(), disposal = new Set<() => void>();
       const model = { getValue: () => value, getVersionId: () => version, isDisposed: () => false, onDidChangeContent(callback: () => void) { content.add(callback); return { dispose: () => content.delete(callback) }; }, onWillDispose: () => ({ dispose() {} }) };
-      const editor = { getModel: () => model, onDidChangeModel(callback: () => void) { changes.add(callback); return { dispose: () => changes.delete(callback) }; }, onDidDispose(callback: () => void) { disposal.add(callback); return { dispose: () => disposal.delete(callback) }; } };
+      const editor = { getModel: () => model, onDidChangeModel(callback: () => void) { changes.add(callback); return { dispose: () => changes.delete(callback) }; }, onDidDispose(callback: () => void) { disposal.add(callback); return { dispose: () => disposal.delete(callback) }; }, addAction(action: unknown) { io.actions.add(action); return { dispose: () => io.actions.delete(action) }; } };
       const state = { model, editor, undo: ['原撤销边界'], controlled: 0, input(next: string) { value = next; version++; for (const callback of content) callback(); current.current.onChange?.(next); }, controlledValue(next: string) { if (next !== value) { value = next; version++; state.controlled++; } } };
       entry.current = state; io.entries.push(state); props.onReady?.(editor); return () => { for (const callback of disposal) callback(); };
     }, []);
@@ -37,24 +39,26 @@ beforeAll(async () => {
   ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store'));
 });
 beforeEach(() => {
-  commands = []; io.entries = []; listeners = new Map(); captures = new Map(); rectangles = 850; resizeCallbacks = []; saveHook = undefined;
+  commands = []; io.entries = []; io.actions.clear(); listeners = new Map(); captures = new Map(); rectangles = 850; resizeCallbacks = []; saveHook = undefined;
   window.addEventListener = ((name: string, callback: EventListener) => { const set = listeners.get(name) ?? new Set(); set.add(callback); listeners.set(name, set); }) as typeof window.addEventListener;
   window.removeEventListener = ((name: string, callback: EventListener) => { listeners.get(name)?.delete(callback); }) as typeof window.removeEventListener;
   Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: class { constructor(callback: () => void) { resizeCallbacks.push(callback); } observe() {} unobserve() {} disconnect() {} } });
   (window as any).dbark = { onTask: () => () => {}, onMenu: () => () => {}, invoke: async (command: string, input: unknown) => { commands.push({ command, input: structuredClone(input) }); if (command !== 'settings.save') throw Error('布局禁止SQL或其它外界调用：' + command); return saveHook?.(); } };
   useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 'a', tabs: [{ id: 'a', kind: 'query', title: '查询A', connectionId: 'c', sql: 'SELECT 原SQL;' }, { id: 'b', kind: 'query', title: '查询B', connectionId: 'c', sql: 'SELECT B;' }] }, connections: [{ id: 'c', name: 'RAM连接', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'ram' }], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, notice: undefined });
 });
-afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; saveHook = undefined; await flushSettings(); expect([...listeners.values()].every(list => !list.size)).toBe(true); expect([...captures.values()].every(set => !set.size)).toBe(true); doc.body.textContent = ''; });
+afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; saveHook = undefined; await flushSettings(); expect([...listeners.values()].every(list => !list.size)).toBe(true); expect([...captures.values()].every(set => !set.size)).toBe(true); expect(io.actions.size).toBe(0); doc.body.textContent = ''; });
 afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of originalProperties) if (descriptor) Object.defineProperty(MemoryNode.prototype, name, descriptor); else Reflect.deleteProperty(MemoryNode.prototype, name); for (const [name, descriptor] of originalGlobals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 async function mount() { function View() { const tabs = useWorkspace(state => state.settings.tabs); return <>{tabs.map(tab => <section key={tab.id} data-layout-tab={tab.id}><QueryTab tab={tab} onHistory={() => {}}/></section>)}</>; } const node = doc.createElement('div'); doc.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>)); }
 function section(id = 'a') { return doc.querySelector(`[data-layout-tab="${id}"]`)!; }
+/** 仍在原标签内定位同一编辑器容器，允许新增布局类，不放宽高度／模型断言。 */
+function editorWrap(id = 'a') { const node = section(id).querySelectorAll('[class]').find(value => value.classList.contains('sql-editor-wrap')); if (!node) throw Error('原标签编辑器容器缺失'); return node; }
 function splitter(id = 'a') { const node = section(id).querySelector('[role="separator"]'); if (!node) throw Error('真实QueryTab未接入分隔条'); return node; }
 async function down() { await act(async () => splitter().dispatchEvent(Object.assign(new MemoryEvent('pointerdown'), { pointerId: 7, clientY: 100, isPrimary: true }))); }
 async function pointer(type: string, y: number) { const event = Object.assign(new MemoryEvent(type), { pointerId: 7, clientY: y }); await act(async () => { for (const callback of [...listeners.get(type) ?? []]) callback(event as unknown as Event); }); }
 
 it('真实QueryTab默认300接原编辑器；预览和取消不保存或替换model/正文/撤销', async () => {
   await mount(); const original = io.entries[0], version = original.model.getVersionId(), undo = original.undo;
-  expect(section().querySelector('[class="sql-editor-wrap"]')!.style).toMatchObject({ height: '300px' }); expect(commands).toEqual([]);
+  expect(editorWrap().style).toMatchObject({ height: '300px' }); expect(commands).toEqual([]);
   await down(); await pointer('pointermove', 150); await pointer('pointercancel', 150);
   expect(io.entries[0]).toBe(original); expect(original.model.getVersionId()).toBe(version); expect(original.undo).toBe(undo); expect(original.controlled).toBe(0); expect(commands).toEqual([]);
 });
@@ -90,7 +94,7 @@ it('整合：键盘按标签保存并明确恢复300，重新挂载只读取各�
   expect(useWorkspace.getState().settings.tabs.map(tab => tab.queryEditorHeight)).toEqual([360, 290]);
   await flushSettings(); const saved = structuredClone(useWorkspace.getState().settings);
   await act(async () => root!.unmount()); root = undefined; io.entries = []; useWorkspace.setState({ settings: saved }); await mount();
-  expect(section('a').querySelector('[class="sql-editor-wrap"]')!.style).toMatchObject({ height: '360px' }); expect(section('b').querySelector('[class="sql-editor-wrap"]')!.style).toMatchObject({ height: '290px' });
+  expect(editorWrap('a').style).toMatchObject({ height: '360px' }); expect(editorWrap('b').style).toMatchObject({ height: '290px' });
   await act(async () => splitter('b').dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Home' }))); expect(useWorkspace.getState().settings.tabs.map(tab => tab.queryEditorHeight)).toEqual([360, 300]);
 });
 it('整合：提交合并结束时新SQL/标题/来源，保存晚回包不还原后来的正文', async () => {
@@ -111,8 +115,8 @@ it('整合：当前窗口变矮再恢复只视觉压缩，不落盘并保留900�
   const state = useWorkspace.getState(); useWorkspace.setState({ settings: { ...state.settings, tabs: state.settings.tabs.map(tab => tab.id === 'a' ? { ...tab, queryEditorHeight: 900 } : tab) } });
   await mount(); expect(useWorkspace.getState().settings.tabs[0].queryEditorHeight).toBe(900); expect(commands).toEqual([]);
   rectangles = 250; await act(async () => { for (const callback of resizeCallbacks) callback(); });
-  expect(Number(String((section().querySelector('[class="sql-editor-wrap"]')!.style as any).height).replace('px', ''))).toBeLessThan(130);
+  expect(Number(String((editorWrap().style as any).height).replace('px', ''))).toBeLessThan(130);
   expect(useWorkspace.getState().settings.tabs[0].queryEditorHeight).toBe(900); expect(commands).toEqual([]);
   rectangles = 1400; await act(async () => { for (const callback of resizeCallbacks) callback(); });
-  expect(section().querySelector('[class="sql-editor-wrap"]')!.style).toMatchObject({ height: '900px' }); expect(commands).toEqual([]);
+  expect(editorWrap().style).toMatchObject({ height: '900px' }); expect(commands).toEqual([]);
 });

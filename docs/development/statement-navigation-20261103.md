@@ -32,6 +32,8 @@ WIN11-TEST 本轮读取不可达，未派发；按既有授权在本机 Windows 
 
 Mac 两架构、安装包及完整方言环境另验，O05保持部分，暂不发布。准确573b0c26的前序语法检查CI：Windows成功，ARM类型／构建步骤exit134（仅核原步骤和注释，具体日志尚待）；Intel原physical-object-worker 5000ms超时。对象结构CI：Windows／ARM成功，Intel原physical-object-worker及completion-window-worker 5000ms超时。原失败分别保留，不算本功能通过，不提高期限。
 
+后续恢复原布局 RAM 套件：为已隔离的 Monaco 接线补动作注册和释放，意外写入语法标记直接失败；按容器原 class 标记定位，允许新增布局 class。产品代码、原业务断言和期限保持。原4份布局／输入门回归117项通过（含原先未执行10项），严格类型通过；WIN11-TEST不可达且未派发，本机只做CLI。原初始化失败继续保留，本轮不重跑上一次窗口或安装验收。
+
 ## 复验
 
 ```powershell
