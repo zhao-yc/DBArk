@@ -25,6 +25,32 @@ beforeEach(() => { mocks.connect.mockReset().mockImplementation(async (_profile,
 afterEach(async () => { vi.useRealTimers(); vi.restoreAllMocks(); await engine.closeAll(); });
 
 describe('引擎表复制源与原普通表页隔离', () => {
+  it.each(['mysql', 'mariadb'] as const)('%s 结构草稿只在独立连接读取准确表和视图，原定义保留', async dialect => {
+    for (const kind of ['table', 'view'] as const) {
+      const source = { connectionId: profile.id, database: '库`名', name: '物`件', kind, taskId: randomUUID() };
+      const target = managed(); target.sqlMode = 'ANSI_QUOTES'; target.status.dialect = dialect;
+      mocks.connect.mockResolvedValueOnce(target);
+      const ddl = kind === 'table' ? 'CREATE TABLE `物``件` (`id` int NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB' : 'CREATE ALGORITHM=UNDEFINED DEFINER=`用户`@`localhost` SQL SECURITY DEFINER VIEW `库``名`.`物``件` AS select 1 AS `id`';
+      const type = kind === 'table' ? 'Table' : 'View';
+      mocks.execute.mockClear().mockResolvedValueOnce({ rows: [{ [type]: source.name, ['Create ' + type]: ddl }], fields: [] });
+      const output = await engine.handle('metadata.schemaScript', { ...source, profile });
+      expect(output).toEqual({ source, sql: expect.stringContaining(ddl + '\n;\n') });
+      expect(mocks.execute).toHaveBeenCalledExactlyOnceWith(target, `SHOW CREATE ${type.toUpperCase()} \`库\`\`名\`.\`物\`\`件\``, []);
+      expect(target.close).toHaveBeenCalledWith({ strict: true });
+      expect(events).toEqual([]);
+    }
+  });
+  it('拒绝隐藏定义的模式、错误对象种类及冒充视图的其他语句', async () => {
+    const source = { connectionId: profile.id, database: 'db', name: 'records', kind: 'view', taskId: randomUUID() };
+    const masked = managed(); masked.sqlMode = 'NO_FIELD_OPTIONS'; mocks.connect.mockResolvedValueOnce(masked);
+    await expect(engine.handle('metadata.schemaScript', { ...source, profile })).rejects.toThrow('隐藏完整');
+    expect(mocks.execute).not.toHaveBeenCalled();
+    for (const row of [{ Table: source.name, 'Create Table': 'CREATE TABLE records (id int)' }, { View: source.name, 'Create View': 'DROP VIEW records' }, { View: source.name, 'Create View': 'CREATE VIEW other AS SELECT 1' }]) {
+      const target = managed(); target.sqlMode = ''; mocks.connect.mockResolvedValueOnce(target); mocks.execute.mockResolvedValueOnce({ rows: [row], fields: [] });
+      await expect(engine.handle('metadata.schemaScript', { ...source, taskId: randomUUID(), profile })).rejects.toThrow();
+      expect(target.close).toHaveBeenCalledWith({ strict: true });
+    }
+  });
   it('主进程注入的profile只用于建连，公开严格租约输入仍拒绝其他字段', async () => { const read = vi.spyOn(TableCopySources.prototype, 'read').mockImplementation(async (_context, raw) => tableCopySourceReadSchema.parse(raw) as never); const request = { connectionId: 'conn', taskId: randomUUID(), pageRef: randomUUID(), rowRef: randomUUID() }; expect(await engine.handle('table.copySourceRead', { ...request, profile })).toEqual(request); expect(read.mock.calls[0][1]).toEqual(request); await expect(engine.handle('table.copySourceRead', { ...request, taskId: randomUUID(), profile, sql: 'SELECT 1' })).rejects.toThrow(); });
   it.each([undefined, false])('普通copySource=%s仍走原读取，不创建独立事务/来源', async copySource => {
     await engine.handle('connections.open', { id: 'conn', profile }); mocks.connect.mockClear();

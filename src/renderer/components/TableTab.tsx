@@ -17,6 +17,7 @@ import { cellClipboardType, decodeClipboard, encodeClipboard, maxClipboardCells,
 import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import { maxTablePage, parsePageJump, setAllFilterRulesEnabled, type FilterMode, type FilterDraft } from '../tableFilters';
 import { tableLastPageBounds } from '../../shared/tableLastPage';
+import { openNetworkSchemaScript, schemaScriptLabel } from '../schemaScriptNavigation';
 import { tableCellFilterDraft } from '../tableCellFilter';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
 import { buildTableSelectedFilter, type TableSelectedFilterProposal } from '../tableSelectedFilter';
@@ -1006,6 +1007,15 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     intent.invalidate(); filteredSelectIntent.current = null; setFilteredSelectDialog(null); onQueryTemplateNavigation?.();
   }
   const templateAvailable = !!onOpenGeneratedQuery && !!info && !blocked && !externalStale && !gridEditing && !record.dirty && !record.pending && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb');
+  const structureScriptAvailable = countPageAvailable && !blocked && !externalStale && !gridEditing && (connection?.dialect === 'mysql' || connection?.dialect === 'mariadb') && (info?.objectKind === 'table' || info?.objectKind === 'view');
+  /** 表页入口从已加载的原对象取定义；刷新或改变读取范围会撤销旧草稿。 */
+  function openStructureScript(): void {
+    if (!structureScriptAvailable || !info || !loadedCountPage || tableReadAction.current !== tableReadRender || reloadBlocked() || activeGridEditor.current) return;
+    const { database, name, objectKind } = info;
+    if (objectKind !== 'table' && objectKind !== 'view') return;
+    const sourceCurrent = () => mounted.current && filteredSelectPage.current === loadedCountPage && loadGeneration.current === loadedCountPage.generation && getRecordPageContext().scope === loadedCountPage.scope;
+    void openNetworkSchemaScript(tab.connectionId, database, { name, kind: objectKind }, sourceCurrent);
+  }
   let foreignKeyJoinAvailable = templateAvailable && info?.objectKind === 'table';
   if (foreignKeyJoinAvailable) { try { foreignKeyJoinAvailable = foreignKeyJoinChoices(info!).length > 0; } catch { foreignKeyJoinAvailable = false; } }
   /** JOIN只消费真实FK结构；已有暂存草稿、选行、筛选排序都留在原表页。 */
@@ -1516,6 +1526,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button title={tableCommentZh.title} aria-label={tableCommentZh.title} disabled={info?.objectKind !== 'table' || blocked} onClick={onTableComment}>{tableCommentZh.title}</button>
 <button title={tableDefaultEncodingZh.title} aria-label={tableDefaultEncodingZh.title} disabled={info?.objectKind !== 'table' || blocked} onClick={onTableDefaultEncoding}>{tableDefaultEncodingZh.title}</button></ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.generate}><button disabled={!templateAvailable} onClick={openQueryTemplate}>{templateText.entry}</button>
+<button disabled={!structureScriptAvailable} onClick={openStructureScript}>{schemaScriptLabel}</button>
 <button aria-label={tableForeignKeyJoinZh.entry} title={tableForeignKeyJoinZh.scope} disabled={!foreignKeyJoinAvailable} onClick={openForeignKeyJoin}>{tableForeignKeyJoinZh.entry}</button>
 <button aria-label={filteredSelectText.entry} title={filteredSelectText.hint} disabled={!filteredSelectAvailable} onClick={openFilteredSelect}>{filteredSelectText.entry}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selection} onClick={() => copyRowsAsInsert(false)}>{copyInsertSqlZh.current}</button>

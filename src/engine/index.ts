@@ -83,8 +83,8 @@ import type { StructureTaskContext, StructureTaskOptions } from './structureDefi
 import { structureTaskQuery } from './structureDefinition';
 import { StructurePatchCache } from './structurePatchCache';
 import { StructureExecutionLocks } from './structureExecutionLocks';
-import { parseTableColumnDefinition } from './tableColumnDefinition';
-import { assertStructureExportMode, assertTableStructureExportable } from '../shared/tableColumnPatches';
+import { assertStructureExportMode } from '../shared/tableColumnPatches';
+import { assertNetworkTableExportable, readNetworkSchemaScript } from './networkSchemaScript';
 import { createQueryStreamFile } from './queryStreamFile';
 import { QueryInsertConfirmations } from './queryInsertConfirmations';
 import { queryInsertTargetSchema } from '../shared/queryInsertExport';
@@ -428,6 +428,11 @@ export class Engine {
       }, undefined, '读取表格元数据', true) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
       }
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
+      case 'metadata.schemaScript': {
+        this.copySourceProfile(input);
+        const { profile: trustedProfile, ...request } = input;
+        return this.withCopySourceTask(input.connectionId, input.taskId, context => readNetworkSchemaScript(context, request), '读取结构 SQL 草稿');
+      }
       case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows, undefined, input.currentStatement, 'query', input.continueOnError, input.collectWarnings), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
       case 'query.exportStream': {
         this.assertFile(input);
@@ -820,13 +825,13 @@ export class Engine {
   }
 
   /** 新增只读任务受15秒总期限及原KILL/关闭终态保护，不以Promise超时抢先返回。 */
-  private async withCopySourceTask<T>(connectionId: string, taskId: string, action: (context: Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>) => Promise<T>): Promise<T> {
+  private async withCopySourceTask<T>(connectionId: string, taskId: string, action: (context: Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>) => Promise<T>, label = '读取完整复制源'): Promise<T> {
     let expired = false, settled = false, cancelling: Promise<unknown> | undefined;
-    const pending = this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, '读取完整复制源', true, () => ({}), true);
+    const pending = this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, label, true, () => ({}), true);
     // 保留原Promise供finally等待并传播控制失败，旁路处理器仅防止等待期间的未处理拒绝。
     const timer = setTimeout(() => { if (settled) return; expired = true; cancelling = this.cancelTask(taskId); void cancelling.catch(() => undefined); }, tableCopySourceLimits.timeoutMs);
     timer.unref();
-    try { const result = await pending; if (expired) throw new Error('完整复制源读取超过15秒；请求已收尾，未生成草稿。'); return result; }
+    try { const result = await pending; if (expired) throw new Error(label === '读取完整复制源' ? '完整复制源读取超过15秒；请求已收尾，未生成草稿。' : label + '超过15秒，请求已收尾。'); return result; }
     // pending等待真正的命令及连接终态；保留取消控制或关闭失败，不能统一包装成已成功取消。
     catch (error) { throw error; }
     finally { settled = true; clearTimeout(timer); await cancelling; }
@@ -2188,14 +2193,11 @@ export class Engine {
     const info = await metadata.tableInfo(task.managed, input.database, input.table);
     if (input.format === 'sql' && input.includeStructure) {
       // 使用本次独立导出连接的完整缓存模式；在创建临时文件前拒绝不可保真定义，不重写或删除默认值。
-      const mode = task.managed.sqlMode;
-      assertStructureExportMode(mode);
-      if (info.objectKind === 'table') {
-        const modes = mode.toUpperCase().split(',');
-        const document = parseTableColumnDefinition(info.ddl, { dialect: task.managed.status.dialect, mode: { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: modes.includes('ANSI_QUOTES') } });
-        assertTableStructureExportable(document, mode);
-        if (document.table !== input.table || (document.database !== undefined && document.database !== input.database)) throw new Error('结构定义与导出目标不一致，未写入目标文件');
-      } else if (info.objectKind !== 'view') throw new Error('无法确认服务器对象为基本表或视图，未导出结构；可以单独导出数据');
+      if (info.objectKind === 'table') assertNetworkTableExportable(task.managed, info.ddl, input.database, input.table);
+      else {
+        assertStructureExportMode(task.managed.sqlMode);
+        if (info.objectKind !== 'view') throw new Error('无法确认服务器对象为基本表或视图，未导出结构；可以单独导出数据');
+      }
     }
     this.checkCancelled(task);
     const dataColumns = projection ? this.csvExportFields.project(projection, info, task.managed) : info.columns.filter(column => input.format !== 'sql' || !column.generated);

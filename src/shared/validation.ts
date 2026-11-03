@@ -6,6 +6,7 @@ import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteT
 import { sqliteTableRebuildInspectSchema, sqliteTableRebuildPreviewSchema, sqliteTableRebuildApplySchema, sqliteTableRebuildReleaseSchema } from './sqliteTableRebuild';
 import { sqliteColumnsInspectSchema, sqliteColumnsPreviewSchema, sqliteColumnsApplySchema, sqliteColumnsReleaseSchema } from './sqliteColumns';
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
+import { networkSchemaScriptSchema } from './networkSchemaScript';
 import { maxTablePage } from './tableLastPage';
 import { sqliteValueOptionsInputSchema } from './sqliteValueOptions';
 import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema } from './sqliteStatistics';
@@ -313,6 +314,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'metadata.objects': z.object({ connectionId: id, database: name }).strict(),
   'metadata.table': z.object({ ...target, taskId: id.optional() }).strict(),
   'metadata.ddl': z.object({ connectionId: id, database: name, name, kind: z.enum(['table','view','procedure','function','trigger','event']) }).strict(),
+  'metadata.schemaScript': networkSchemaScriptSchema,
   'metadata.routineInvocation': z.object({ connectionId: id, database: name, name, kind: z.enum(['procedure', 'function']), taskId: id }).strict().superRefine((value, context) => {
     try { parseRoutineInvocationTarget({ connectionId: value.connectionId, database: value.database, name: value.name, kind: value.kind }); }
     catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : routineInvocationZh.invalid }); }

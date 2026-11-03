@@ -1230,14 +1230,28 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'search.structure':case 'search.structureContinue':case 'search.dataStart':case 'search.recordRead':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
       input={...input,profile:store.resolveConnection(input.connectionId)};break;
-    case 'table.page':case 'table.copySourceRead': {
+    case 'table.page':case 'table.copySourceRead':case 'metadata.schemaScript': {
       if (command === 'table.page' && !input.copySource) break;
       // 表来源短读仅占用内存任务编号，沿原取消通道；不写执行历史或持久化行值。
       if (shuttingDown) throw new Error('客户端正在退出，不能读取完整复制源');
       if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId) || (typeof historyDelete !== 'undefined' && historyDelete?.owns(input.taskId))) throw new Error('任务编号已使用');
       if (completionTasks.size >= 8) throw new Error('只读请求繁忙，请稍后再读取');
-      connectionConfig.assertAvailable(input.connectionId); completionTasks.add(input.taskId);
-      try { return await broker.request(command, { ...input, profile: store.resolveConnection(input.connectionId) }); }
+      connectionConfig.assertAvailable(input.connectionId);
+      const profile = store.resolveConnection(input.connectionId);
+      const revision = command === 'metadata.schemaScript' ? store.connectionRevision() : undefined;
+      if (revision !== undefined) {
+        columnsMain.assertCapturedOwner(columns);
+        if (profile.dialect === 'sqlite') throw Error('网络结构草稿需要 MySQL 或 MariaDB 连接');
+      }
+      completionTasks.add(input.taskId);
+      try {
+        const result = await broker.request(command, { ...input, profile });
+        if (revision !== undefined) {
+          columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(input.connectionId);
+          if (shuttingDown || store.connectionRevision() !== revision) throw Error('原窗口或连接配置已变化，请重新读取结构草稿');
+        }
+        return result;
+      }
       finally { completionTasks.delete(input.taskId); }
     }
     case 'sqlite.completion': {
@@ -1907,6 +1921,7 @@ else {
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
         if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
+        if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);

@@ -4,6 +4,7 @@ import { useWorkspace } from './store';
 import { sqliteSelectSource } from './sqliteWorkspace';
 import { sqliteZh } from './locales/sqlite.zh-CN';
 import { assertSqliteSchemaScript } from '../shared/sqliteSchemaScript';
+import { openSchemaScriptDraft } from './schemaScriptNavigation';
 
 /** 文件表和视图沿原 table 标签打开只读浏览，触发器仍使用原定义草稿。 */
 export function openSqliteObject(connectionId: string, database: string, object: DatabaseObject): boolean {
@@ -39,23 +40,6 @@ export async function openSqliteDefinition(connectionId: string, database: strin
 export async function openSqliteSchemaScript(connectionId: string, database: string, object: DatabaseObject, sourceCurrent = () => true): Promise<void> {
   const workspace = useWorkspace.getState(), profile = workspace.connections.find(item => item.id === connectionId);
   if (profile?.dialect !== 'sqlite' || database !== 'main' || object.kind !== 'table' && object.kind !== 'view') return;
-  const { activeTabId } = workspace.settings, selection = workspace.selection, version = workspace.connectionVersions[connectionId] ?? 0;
   const source = { connectionId, database, table: object.name, kind: object.kind } as const;
-  let valid = true;
-  const current = () => {
-    const next = useWorkspace.getState();
-    return valid && next.settings.activeTabId === activeTabId && next.selection === selection && next.connections.find(item => item.id === connectionId) === profile && (next.connectionVersions[connectionId] ?? 0) === version && sourceCurrent();
-  };
-  if (!current()) return;
-  const unsubscribe = useWorkspace.subscribe(() => { if (!current()) valid = false; });
-  try {
-    const output = await invoke('sqlite.schemaScript', source);
-    if (!current() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
-    const { sql } = assertSqliteSchemaScript(output, source);
-    // 标签标题遵循工作区保存上限，完整对象名继续保留在脚本中。
-    const suffix = ' · ' + sqliteZh.structureScript;
-    const title = source.table.slice(0, 256 - suffix.length).replace(/[\uD800-\uDBFF]$/, '') + suffix;
-    useWorkspace.getState().openTab({ kind: 'query', connectionId, database, databaseContext: { state: 'known', database }, title, sql });
-  } catch (reason) { if (current()) useWorkspace.getState().notify(errorMessage(reason), true); }
-  finally { unsubscribe(); }
+  return openSchemaScriptDraft(connectionId, database, source.table, async () => assertSqliteSchemaScript(await invoke('sqlite.schemaScript', source), source).sql, sourceCurrent);
 }

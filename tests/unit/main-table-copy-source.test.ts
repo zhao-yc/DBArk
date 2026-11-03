@@ -26,5 +26,17 @@ describe('主进程表复制源瞬时请求', () => {
     await f.dispatch('query.cancel', { taskId: 'copy' }); expect(f.request.mock.calls[1]).toEqual(['query.cancel', { taskId: 'copy' }]); expect(f.context.completionTasks.has('copy')).toBe(true);
     await expect(f.dispatch('table.page', { connectionId: 'conn', copySource: true, taskId: 'copy' })).rejects.toThrow('编号'); reject(new Error('受控失败')); await pending; expect(f.context.completionTasks.size).toBe(0); expect(f.saves).not.toHaveBeenCalled(); expect(f.history).not.toHaveBeenCalled();
   });
+  it('结构草稿回包前重核原窗口和配置修订，拒绝迟到结果且释放任务号', async () => {
+    const f = fixture(); let revision = 1, finish!: (output: { complete: boolean }) => void;
+    f.context.store.connectionRevision = () => revision;
+    const assertCapturedOwner = vi.fn(); f.context.columnsMain = { assertCapturedOwner };
+    f.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const input = { connectionId: 'conn', database: 'db', name: 't', kind: 'table', taskId: 'draft' };
+    const pending = f.dispatch('metadata.schemaScript', input).catch(error => error);
+    expect(f.context.completionTasks.has('draft')).toBe(true); expect(assertCapturedOwner).toHaveBeenCalledOnce();
+    revision++; finish({ complete: true });
+    await expect(pending).resolves.toMatchObject({ message: expect.stringContaining('连接配置已变化') }); expect(assertCapturedOwner).toHaveBeenCalledTimes(2);
+    expect(f.context.completionTasks.size).toBe(0); expect(f.saves).not.toHaveBeenCalled(); expect(f.history).not.toHaveBeenCalled();
+  });
   it.each(['shutdown', 'busy', 'duplicate'])('%s在发送引擎前拒绝', async condition => { const f = fixture(); if (condition === 'shutdown') f.context.shuttingDown = true; else if (condition === 'busy') for (let i = 0; i < 8; i++) f.context.completionTasks.add('t' + i); else f.context.tasks.set('copy', {}); await expect(f.dispatch('table.copySourceRead', { connectionId: 'conn', taskId: 'copy' })).rejects.toThrow(); expect(f.request).not.toHaveBeenCalled(); });
 });
