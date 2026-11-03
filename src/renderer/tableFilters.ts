@@ -89,9 +89,9 @@ export function filterRuleSummary(rule: FilterRule): string {
 }
 
 /** 直接跳页只接受十进制正整数，不接受指数、小数或超范围页码。 */
-export function parsePageJump(text: string): number {
+export function parsePageJump(text: string, maximum = maxTablePage): number {
   const trimmed = text.trim(); const page = Number(trimmed);
-  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(page) || page < 1 || page > maxTablePage) throw new Error(formatText(zh.table.pageJumpInvalid, maxTablePage));
+  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(page) || page < 1 || page > maximum) throw new Error(formatText(zh.table.pageJumpInvalid, maximum));
   return page;
 }
 

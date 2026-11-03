@@ -27,4 +27,5 @@
 /* 窄侧栏工作区把底部完整操作移至下一行，计数不能被压成竖排或溢出到分页／状态栏。 */
 .sqlite-table-tab .table-action-bar { height: auto; min-height: 39px; flex-wrap: wrap; padding-block: 6px; }
 .sqlite-table-tab .table-action-bar > [role="status"], .sqlite-table-tab .table-action-bar > button { flex-shrink: 0; white-space: nowrap; }
-.sqlite-table-tab .tab-status small { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sqlite-table-tab .tab-status { height: auto; min-height: 33px; flex-wrap: wrap; padding-block: 3px; }
+.sqlite-table-tab .tab-status small { flex: 1 1 5rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

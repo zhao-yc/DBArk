@@ -254,6 +254,22 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await headerSort('id', [{ column: 'id', direction: 'desc' }], [34, 33, 32, 31, 30]); await controls(true); await step(() => expect(table().getByLabel('SQLite 筛选 1 条件值', { exact: true })).toHaveValue('30')); await step(() => expect(table().getByLabel('SQLite 筛选关系', { exact: true })).toHaveValue('or')); await step(() => expect(table().getByLabel('SQLite 每页条数', { exact: true })).toHaveValue('3')); await step(() => expect(table().getByLabel('SQLite 排序 1 方向', { exact: true })).toHaveValue('desc')); await apply([34, 33, 32]);
     expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 0, limit: 3, mode: 'or', filters: [{ column: 'id', operator: 'gte', value: { kind: 'integer', value: '30' } }], sort: [{ column: 'id', direction: 'desc' }] });
     const draftNext = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: 'SQLite 下一页', exact: true }).click()); await step(() => expect.poll(async () => { const pages = (await audit()).pages; return pages.length === draftNext + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true)); await expectIds([31, 30]); expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 3, limit: 3, mode: 'or' });
+    stage = '按页码跳转沿已应用配置，非法页码零读取，空页可回首页';
+    await controls(true); await step(() => table().getByLabel(browseText.limit, { exact: true }).fill('7')); await controls(false);
+    const jumpInput = () => table().getByLabel(browseText.pageJumpLabel, { exact: true });
+    const jumpButton = () => table().getByRole('button', { name: browseText.pageJump, exact: true });
+    const beforeJump = (await step(audit)).pages.length;
+    await step(() => expect(jumpInput()).toHaveValue('2'));
+    await step(() => jumpInput().fill('1e2')); await step(() => jumpButton().click());
+    await step(() => expect(table().getByText(/页码必须是/)).toBeVisible()); expect((await step(audit)).pages.length).toBe(beforeJump);
+    await step(() => jumpInput().fill('2')); await step(() => jumpInput().press('Enter')); expect((await step(audit)).pages.length).toBe(beforeJump);
+    await step(() => jumpInput().fill('1')); await step(() => jumpInput().press('Enter')); await expectIds([34, 33, 32]);
+    expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 0, limit: 3, mode: 'or', filters: [{ column: 'id', operator: 'gte', value: { kind: 'integer', value: '30' } }], sort: [{ column: 'id', direction: 'desc' }] });
+    await step(() => jumpInput().fill('3')); await step(() => jumpButton().click());
+    await step(() => expect(table().locator('.tab-status')).toContainText('行偏移 6 · 本页 0 行'));
+    expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 6, limit: 3 });
+    await step(() => table().getByRole('button', { name: browseText.first, exact: true }).click()); await expectIds([34, 33, 32]);
+    await step(() => expect(jumpInput()).toHaveValue('1'));
     // 回原明确已应用状态，原分页、typed筛选和排序表单回归全部继续执行。
     await controls(true); await step(() => table().getByRole('button', { name: '删除 SQLite 筛选 1', exact: true }).click()); await step(() => table().getByLabel('SQLite 筛选关系', { exact: true }).selectOption('and')); await step(() => table().getByLabel('SQLite 每页条数', { exact: true }).fill('5')); await step(() => table().getByLabel('SQLite 排序 1 方向', { exact: true }).selectOption('asc')); await apply([1, 2, 3, 4, 5]);
     // 右侧原列通过真实水平滚动显露，不能以虚拟网格尚未挂载的单元格冒称可见。

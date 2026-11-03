@@ -317,6 +317,13 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     expect(afterPresets.forks).toEqual(beforePresets.forks); expect(disk()).toEqual(baseline);
     await step(() => (require('./sqlite-grid-navigation') as typeof import('./sqlite-grid-navigation')).revealSqliteEditColumn(page, grid(), 0, check)); const beforeHeaderCancel = await step(audit), draftIds = await columnValues('id'), headerBeforeCancel = grid().getByRole('columnheader').filter({ hasText: /^id(?:[1-9]|\s|$)/ }); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending'));
     await confirm(() => headerBeforeCancel.click(), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1); await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending')); const afterHeaderCancel = await step(audit); for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterHeaderCancel, command)).toHaveLength(operations(beforeHeaderCancel, command).length); expect(disk()).toEqual(baseline);
+    const jumpInput = () => table().getByLabel('SQLite 跳转页码', { exact: true });
+    await step(() => jumpInput().fill('2'));
+    await confirm(() => jumpInput().press('Enter'), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1);
+    await step(() => expect(jumpInput()).toHaveValue('2'));
+    await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); expect(disk()).toEqual(baseline);
+    const afterJumpCancel = await step(audit);
+    for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterJumpCancel, command)).toHaveLength(operations(afterHeaderCancel, command).length);
     stage = '脏页不同值只读已提交原文，加入和删除筛选草稿均保整批增改删';
     await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '筛选与排序', exact: true }, check)).click()); const beforeValues = await step(audit), valuesDraftIds = await columnValues('id');
     await step(() => table().getByRole('button', { name: '清空排序草稿', exact: true }).click());
