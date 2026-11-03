@@ -1,5 +1,5 @@
 import{createHash}from'node:crypto';
-import{savedQueryRecordSchema,savedQuerySearchInputSchema,savedQuerySearchLimits as limits,type SavedQuerySearchInput,type SavedQuerySearchHit,type SavedQueryMatch,type SavedQuerySqlOccurrences}from'../shared/savedQuerySearch';
+import{savedQueryRecordSchema,savedQuerySearchInputSchema,savedQuerySearchLimits as limits,type SavedQueryScope,type SavedQuerySearchInput,type SavedQuerySearchHit,type SavedQueryMatch,type SavedQuerySqlOccurrences}from'../shared/savedQuerySearch';
 import{savedQueryPageLimits,type SavedQueryPageEntry}from'../shared/savedQueryPages';
 
 /** 本地匹配采用JavaScript Unicode正则语义，与数据库服务器正则明确分开；普通文字先完整转义。 */
@@ -16,18 +16,24 @@ function sqlOccurrences(source:string,first:RegExpExecArray,compiled:ReturnType<
  }
  return{ranges,limitReached:false};
 }
+/** 用本地记录的原连接 ID 匹配，缺失来源与未绑定记录分别处理。 */
+function matchesScope(connectionId: string | undefined, scope?: SavedQueryScope): boolean {
+ if(scope?.kind==='connection')return connectionId===scope.connectionId;
+ if(scope?.kind==='unbound')return connectionId===undefined;
+ return true;
+}
 /** 一次只处理一条本地JSON记录；文本从不作为SQL或JavaScript代码执行。 */
 export function matchSavedQueryRecord(id:string,raw:string,compiled:ReturnType<typeof compileSavedQueryPattern>):SavedQuerySearchHit|undefined{
  const query=parseSavedQueryRecord(id,raw),input=compiled.input;
- if(input.scope.kind==='connection'&&query.connectionId!==input.scope.connectionId||input.scope.kind==='unbound'&&query.connectionId!==undefined)return;
+ if(!matchesScope(query.connectionId,input.scope))return;
  const filter=input.database,context=query.databaseContext;if(filter.kind==='known'&&(context?.state!=='known'||context.database!==filter.database)||filter.kind==='unknown'&&context?.state!=='unknown'||filter.kind==='legacy'&&context!==undefined)return;
  const matches:SavedQueryMatch[]=[];let occurrences:SavedQuerySqlOccurrences|undefined;for(const field of input.fields){const source=query[field],match=compiled.expression.exec(source);if(!match)continue;if(input.pattern.mode==='whole'&&(match.index!==0||match[0].length!==source.length)||input.pattern.mode==='prefix'&&match.index!==0)continue;matches.push(location(source,match.index,match[0].length,field));if(field==='sql')occurrences=sqlOccurrences(source,match,compiled);}
  if(!matches.length)return;const{sql,...summary}=query;return{query:summary,digest:createHash('sha256').update(raw).digest('hex'),matches,...(occurrences?{sqlOccurrences:occurrences}:{})};
 }
 
 /** 列表只做普通文字筛选，完整正文在线程内比较，预览不拆开Unicode代理对。 */
-export function summarizeSavedQueryRecord(id:string,raw:string,search:string):SavedQueryPageEntry|undefined{
- const query=parseSavedQueryRecord(id,raw),needle=search.toLowerCase();if(needle&&!query.name.toLowerCase().includes(needle)&&!query.sql.toLowerCase().includes(needle))return;
+export function summarizeSavedQueryRecord(id:string,raw:string,search:string,scope?:SavedQueryScope):SavedQueryPageEntry|undefined{
+ const query=parseSavedQueryRecord(id,raw),needle=search.toLowerCase();if(!matchesScope(query.connectionId,scope)||needle&&!query.name.toLowerCase().includes(needle)&&!query.sql.toLowerCase().includes(needle))return;
  let end=Math.min(query.sql.length,savedQueryPageLimits.previewUnits);if(end<query.sql.length&&/[\ud800-\udbff]/.test(query.sql[end-1])&&/[\udc00-\udfff]/.test(query.sql[end]))end--;
  const{sql,...summary}=query;return{query:summary,digest:createHash('sha256').update(raw).digest('hex'),sqlPreview:sql.slice(0,end),sqlUnits:sql.length,previewTruncated:end<sql.length};
 }

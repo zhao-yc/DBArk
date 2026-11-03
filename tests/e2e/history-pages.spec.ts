@@ -27,6 +27,10 @@ test('查询内历史按活动标签连接打开，分页保持范围，全局�
   for(let i=0;i<28;i++)store.addHistory(entry({id:'src-'+String(i).padStart(2,'0')}));
   store.addHistory(entry({id:'z-other',connectionId:'other',sql:'SELECT 2'}));
   store.addHistory(entry({id:'z-deleted',connectionId:'deleted',sql:'SELECT 3'}));
+  const saved={sql:'SELECT 42',updatedAt:'2026-10-15T00:00:00Z'};
+  store.saveQuery({...saved,id:'saved-source',name:'甲来源保存',connectionId:'source'});
+  store.saveQuery({...saved,id:'saved-other',name:'乙来源保存',connectionId:'other'});
+  store.saveQuery({...saved,id:'saved-unbound',name:'未绑定保存'});
   store.saveSettings({...store.settings(),activeTabId:'query-source',tabs:[
    {id:'query-source',kind:'query',title:'原连接查询',connectionId:'source',sql:'SELECT 10'},
    {id:'query-other',kind:'query',title:'另一连接查询',connectionId:'other',sql:'SELECT 20'},
@@ -61,10 +65,24 @@ test('查询内历史按活动标签连接打开，分页保持范围，全局�
  await dialog().getByRole('button',{name:'读取下一批',exact:true}).click();
  await expect(cards).toHaveCount(3);expect(await ids()).toEqual(['src-02','src-01','src-00']);
  await scope.selectOption('all');await search('');
- expect((await ids()).slice(0,2)).toEqual(['z-other','z-deleted']);await close();
+ expect((await ids()).slice(0,2)).toEqual(['z-other','z-deleted']);
+ await dialog().getByRole('button',{name:zh.activity.text005,exact:true}).click();
+ const savedScope=dialog().getByLabel('保存查询来源',{exact:true}), savedNames=cards.locator('strong');
+ await expect(savedScope).toHaveValue('connection:source');
+ await expect(savedNames).toHaveText(['甲来源保存']);
+ await cards.getByRole('checkbox').check();
+ await savedScope.selectOption('unbound');
+ await expect(savedNames).toHaveText(['未绑定保存']);
+ await expect(cards.getByRole('checkbox')).not.toBeChecked();
+ await savedScope.selectOption('all');
+ await expect(savedNames).toHaveCount(3);
+ await close();
  await page.locator('[data-workspace-tab-id="query-other"]').getByRole('button',{name:'另一连接查询',exact:true}).click();
  await openForQuery();await expect(scope).toHaveValue('connection:other');expect(await ids()).toEqual(['z-other']);await close();
  await open();await expect(scope).toHaveValue('all');expect((await ids()).slice(0,2)).toEqual(['z-other','z-deleted']);
+ await dialog().getByRole('button',{name:zh.activity.text005,exact:true}).click();
+ await expect(savedScope).toHaveValue('all');
+ await expect(savedNames).toHaveCount(3);
  await close();
  expect(await desktop.evaluate(()=> (globalThis as typeof globalThis & {__historyScopeTest?:unknown}).__historyScopeTest)).toEqual({
   scopes:[{kind:'connection',connectionId:'source'},{kind:'all'},{kind:'connection',connectionId:'other'},{kind:'all'}],continued:1,denied:0,

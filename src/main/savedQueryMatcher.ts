@@ -1,5 +1,5 @@
 import{Worker}from'node:worker_threads';
-import{savedQuerySearchLimits as limits,type SavedQuerySearchHit,type SavedQuerySearchInput}from'../shared/savedQuerySearch';
+import{savedQuerySearchLimits as limits,type SavedQueryScope,type SavedQuerySearchHit,type SavedQuerySearchInput}from'../shared/savedQuerySearch';
 import type{SavedQueryPageEntry}from'../shared/savedQueryPages';
 import type{HistoryPageInput,HistoryPagePosition,HistoryPageEntry}from'../shared/historyPages';
 
@@ -14,7 +14,7 @@ export class SavedQueryMatcher{
  /** 正则时间预算逐条生效；调用方可在失败后继续其它记录，不能重放此条。 */
  match(id:string,raw:string){return this.request<SavedQuerySearchHit|undefined>({kind:'record',id,raw},this.matchMs);}
  /** 列表概要不运行正则，不返回完整SQL，仍受线程时间和堆预算约束。 */
- summarize(id:string,raw:string,search:string){return this.request<SavedQueryPageEntry|undefined>({kind:'summary',id,raw,search},this.matchMs);}
+ summarize(id:string,raw:string,search:string,scope?:SavedQueryScope){return this.request<SavedQueryPageEntry|undefined>({kind:'summary',id,raw,search,scope},this.matchMs);}
  /** 历史全文和索引一致性在线程内处理，字段/来源筛选不会隐藏损坏记录。 */
  summarizeHistory(id:string,raw:string,input:HistoryPageInput,position:HistoryPagePosition){return this.request<HistoryPageEntry|undefined>({kind:'historySummary',id,raw,input,position},this.matchMs);}
  /** 仅拒绝当前请求，线程回收由close或原生exit负责。 */

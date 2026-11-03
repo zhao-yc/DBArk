@@ -28,12 +28,41 @@ beforeEach(async()=>{directory=mkdtempSync(join(tmpdir(),'dbark-test-querypages-
 afterEach(async()=>{await service?.close();for(const worker of workers)expect(worker.threadId).toBe(-1);store?.close();removeDirectory(directory);});
 
 describe('保存查询概要和协议',()=>{
+ it('仅第一页允许传入严格的来源范围',()=>{
+  const scope={kind:'connection' as const,connectionId:'source'};
+  expect(validateCommand('queries.page',request({scope}))).toMatchObject({scope});
+  for(const invalid of [{kind:'connection'},{kind:'connection',connectionId:''},{kind:'unbound',connectionId:'source'},{kind:'missing'}]){
+   expect(()=>validateCommand('queries.page',{...request(),scope:invalid})).toThrow();
+  }
+  expect(()=>validateCommand('queries.pageContinue',{taskId:randomUUID(),cursor:randomUUID(),scope})).toThrow();
+ });
  it('请求不接受SQL、外部位置或篡改续页范围，编号和摘要严格校验',()=>{expect(validateCommand('queries.page',request())).toMatchObject({search:''});for(const patch of[{search:'x'.repeat(513)},{taskId:'q'},{sql:'SELECT 1'},{after:{id:'q'}},{onError:'skip'}])expect(()=>validateCommand('queries.page',{...request(),...patch})).toThrow();expect(()=>validateCommand('queries.pageContinue',{taskId:randomUUID(),cursor:randomUUID(),search:'新范围'})).toThrow();expect(()=>validateCommand('queries.deleteChecked',{id:'q',digest:'bad'})).toThrow();});
  it('完整SQL尾部文字可筛选，概要保留精确字符串长度但不传全文',()=>{const value=query({sql:'x'.repeat(12000)+'尾部_9007199254740993'}),entry=summarizeSavedQueryRecord(value.id,JSON.stringify(value),'尾部_9007199254740993')!;expect(entry.sqlPreview).toHaveLength(512);expect(entry.sqlUnits).toBe(value.sql.length);expect(entry.previewTruncated).toBe(true);expect('sql'in entry.query).toBe(false);expect(entry.digest).toMatch(/^[a-f0-9]{64}$/);expect(JSON.stringify(entry)).not.toContain('尾部_9007199254740993');});
  it('普通包含不将正则或通配符执行，Unicode代理对预览不被拆分',()=>{const value=query({sql:'x'.repeat(511)+'😀_A.*%尾'}),raw=JSON.stringify(value);expect(summarizeSavedQueryRecord('q',raw,'a.*%')?.sqlPreview).toHaveLength(511);expect(summarizeSavedQueryRecord('q',raw,'^.*$')).toBeUndefined();expect(summarizeSavedQueryRecord('q',raw,'😀')).toBeTruthy();});
 });
 
 describe('真实SQLite键分页及工作线程',()=>{
+ it('续页沿用来源、分组和全文条件，未绑定与已删除来源分别处理',async()=>{
+  const search='正文尾部', group={kind:'unfiled' as const};
+  for(let index=0;index<25;index++)store.saveQuery(query({id:'z-'+index,connectionId:'other',sql:search}));
+  store.saveQuery(query({id:'a',connectionId:'source',sql:'x'.repeat(12000)+search}));
+  store.saveQuery(query({id:'b',connectionId:'source'}));
+  store.saveQuery(query({id:'c',connectionId:'deleted',sql:search}));
+  store.saveQuery(query({id:'d',sql:search}));
+  const first=await service.start(request({scope:{kind:'connection',connectionId:'source'},group,search}));
+  expect(first.items).toEqual([]);
+  expect(first.scanned).toBe(25);
+  expect(first.cursor).toBeTruthy();
+  const last=await service.next({taskId:randomUUID(),cursor:first.cursor!});
+  expect(last.items.map(item=>item.query.id)).toEqual(['a']);
+  expect(last.matched).toBe(1);
+  expect(last.cursor).toBeUndefined();
+  for(const [scope,id] of [[{kind:'unbound'},'d'],[{kind:'connection',connectionId:'deleted'},'c']] as const){
+   const page=await service.start(request({scope,group,search}));
+   const continued=await service.next({taskId:randomUUID(),cursor:page.cursor!});
+   expect(continued.items.map(item=>item.query.id)).toEqual([id]);
+  }
+ });
  it('真实分组SQL位置过滤与线程全文匹配共同分页，原摘要保持且组织变化撤销续页',async()=>{
   for(let index=0;index<58;index++)store.saveQuery(query({id:'group-'+String(index).padStart(2,'0'),sql:index===0?'SELECT 0;\r\n/*'+'x'.repeat(12000)+'组织全文尾部😀*/':'SELECT '+index}));
   const originals=new Map(Array.from({length:58},(_,index)=>{const id='group-'+String(index).padStart(2,'0');return[id,store.querySearchRaw(id)];}));

@@ -9,7 +9,7 @@ export class SavedQueryPages extends LocalSqlPages<SavedQueryPageInput,SavedQuer
  constructor(private readonly store:PageStore,workerPath:string){super({
   label:'保存查询',parse:raw=>savedQueryPageInputSchema.parse(raw),revision:()=>store.querySearchRevision(),
   next:(after,input)=>{const record=store.queryPageNext(after,input);return record?{...record,orderValue:record.updatedAt,position:{id:record.id,updatedAt:record.updatedAt}}:null;},
-  match:(matcher,record,input)=>matcher.summarize(record.id,record.raw!,input.search),
+  match:(matcher,record,input)=>matcher.summarize(record.id,record.raw!,input.search,input.scope),
   // 原SQLite成员关系在字节预算之前加入概要，不能通过额外字段绕过128KiB门槛。
   verify:(entry,record)=>{if(entry.query.updatedAt!==record.orderValue)throw Error('保存查询更新时间与索引不一致');const groupId=(record as typeof record&{groupId?:string}).groupId;if(groupId!==undefined)entry.groupId=groupId;}
  },workerPath);}

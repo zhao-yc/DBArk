@@ -1,11 +1,12 @@
 import {z} from 'zod';
 import type {SavedQuery} from './contracts';
 import {savedQueryGroupScopeSchema} from './savedQueryOrganization';
+import {savedQueryScopeSchema} from './savedQuerySearch';
 import{localSqlPageLimits,localSqlPageNextSchema,localSqlPageReleaseSchema,type LocalSqlPage}from'./localSqlPages';
 
 /** 列表按需取概要；正文只在明确打开时通过原摘要重新读取。 */
 export const savedQueryPageLimits=localSqlPageLimits;
-export const savedQueryPageInputSchema=z.object({taskId:z.string().uuid(),search:z.string().max(512),onError:z.enum(['stop','continue']),group:savedQueryGroupScopeSchema.optional()}).strict();
+export const savedQueryPageInputSchema=z.object({taskId:z.string().uuid(),search:z.string().max(512),onError:z.enum(['stop','continue']),group:savedQueryGroupScopeSchema.optional(),scope:savedQueryScopeSchema.optional()}).strict();
 export const savedQueryPageNextSchema=localSqlPageNextSchema;
 export const savedQueryPageReleaseSchema=localSqlPageReleaseSchema;
 export const savedQueryDeleteCheckedSchema=z.object({id:z.string().min(1).max(200),digest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
