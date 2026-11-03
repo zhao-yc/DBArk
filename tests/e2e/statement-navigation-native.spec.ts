@@ -2,6 +2,7 @@ import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { statementNavigationZh as text } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { validStatementNavigationResult, type StatementNavigationResult } from '../../src/shared/statementNavigation';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -92,7 +93,37 @@ for (const dialect of ['mysql', 'sqlite'] as const) test(`${dialect}真实菜单
     await step(() => expect(page.locator('html')).toHaveAttribute('data-theme', dialect === 'sqlite' ? 'light' : 'dark'));
     const compound = dialect === 'sqlite' ? "CREATE TEMP TRIGGER nav_trigger AFTER INSERT ON sample BEGIN UPDATE sample SET note=';'; SELECT CASE WHEN 1 THEN ';' END; END;" : "DELIMITER $$\nCREATE PROCEDURE nav_proc() BEGIN SELECT ';'; SELECT 2; END$$\nDELIMITER ;";
     const script = (dialect === 'sqlite' ? '--前导注释;😀\n' : '#前导注释;😀\n') + "SELECT 'duplicate;😀';\n" + compound + "\nSELECT '" + 'x'.repeat(200) + "hidden_needle';\n" + "SELECT 'duplicate;😀';\n".repeat(10);
-    await step(() => query().locator('.monaco-editor').getByRole('textbox').focus()); await step(() => page.keyboard.insertText(script)); await step(() => expect.poll(async () => (await model()).source.replaceAll('\r\n', '\n')).toBe(script)); const before = await model();
+    await step(() => query().locator('.monaco-editor').getByRole('textbox').focus()); await step(() => page.keyboard.insertText(script)); await step(() => expect.poll(async () => (await model()).source.replaceAll('\r\n', '\n')).toBe(script));
+    stage = '真实原生菜单与右键仅转换选区并可一次撤销';
+    const nativeEnabled = () => step(() => application.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('sql-lowercase')?.enabled === true));
+    await expect.poll(nativeEnabled).toBe(false);
+    await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home'));
+    await step(() => page.keyboard.press('ArrowDown'));
+    await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home'));
+    for (let index = 0; index < 6; index++) await step(() => page.keyboard.press('Shift+ArrowRight'));
+    const originalCase = await model(), range = originalCase.selection;
+    expect(originalCase.source.slice(range.start, range.end)).toBe('SELECT');
+    await expect.poll(nativeEnabled).toBe(true);
+    await step(() => application.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('sql-lowercase'), windows = BrowserWindow.getAllWindows();
+      if (!item?.enabled || windows.length !== 1) throw Error('当前选区的原生小写命令不可用');
+      item.click(item, windows[0], {} as Electron.KeyboardEvent);
+    }));
+    const lower = originalCase.source.slice(0, range.start) + 'select' + originalCase.source.slice(range.end);
+    await expect.poll(async () => (await model()).source).toBe(lower);
+    const point = await step(() => page.evaluate(() => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const editor = api?.editor.getEditors().find(item => { const node = item.getContainerDomNode(); return !!node.closest('.query-tab') && node.getClientRects().length > 0; });
+      const visible = editor?.getScrolledVisiblePosition({ lineNumber: 2, column: 3 }), box = editor?.getDomNode()?.getBoundingClientRect();
+      if (!visible || !box) throw Error('选区坐标不可用');
+      return { x: box.x + visible.left + 1, y: box.y + visible.top + visible.height / 2 };
+    }));
+    await step(() => page.mouse.click(point.x, point.y, { button: 'right' }));
+    await step(() => page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: uiCommandLabels['sql-uppercase'], exact: true }).click({ delay: 120 }));
+    await expect.poll(async () => (await model()).source).toBe(originalCase.source);
+    await step(() => page.keyboard.press(modifier + '+Z')); await expect.poll(async () => (await model()).source).toBe(lower);
+    await step(() => page.keyboard.press(modifier + '+Z')); await expect.poll(async () => (await model()).source).toBe(originalCase.source);
+    const before = await model(); expect(before.uri).toBe(originalCase.uri);
     stage = '真实更多/右键导航，13条完整分段与原源回包核对';
     if (dialect === 'mysql') await click(query(), text.entry);
     else { await step(() => query().locator('.monaco-editor').click({ button: 'right', position: { x: 150, y: 28 } })); const item = page.locator('.monaco-menu-container:visible').getByRole('menuitem', { name: text.entry, exact: true }); await step(() => expect(item).toBeVisible()); await step(() => item.click({ delay: 120 })); }

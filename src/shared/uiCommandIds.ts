@@ -1,7 +1,7 @@
 /** 沙箱预加载只依赖纯白名单，不引入校验器、文件系统或数据库运行时。 */
 export const uiCommandIds = [
   'new-connection', 'new-query', 'open-sql-file', 'recent-sql-file', 'save-query', 'save-sql-file',
-  'connections-transfer', 'connections-organize', 'find', 'replace', 'toggle-theme', 'focus-mode',
+  'connections-transfer', 'connections-organize', 'find', 'replace', 'sql-uppercase', 'sql-lowercase', 'toggle-theme', 'focus-mode',
   'editor-font', 'editor-word-wrap', 'editor-indent', 'favorite-toggle', 'favorites-manage', 'object-link',
   'execute', 'execute-current', 'execute-all', 'stop', 'format', 'parameters', 'explain', 'analyze', 'object-definition', 'syntax-check', 'statement-navigation',
   'transaction-settings', 'import', 'export', 'schema-compare', 'structure-search', 'server-monitor',

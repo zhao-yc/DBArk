@@ -4,6 +4,7 @@ import { editorFontOptions, readEditorFontSize } from '../../shared/editorFont';
 import { editorIndentationOptions, readEditorInsertSpaces, readEditorTabSize } from '../../shared/editorIndentation';
 import { bindEditorIndentation } from '../editorIndentation';
 import { zh } from '../locales/zh-CN';
+import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
@@ -49,7 +50,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, onCompletionStatus, onExecute, onExecuteCurrent, onFormat }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, onCompletionStatus, onCaseSelection, onExecute, onExecuteCurrent, onFormat }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onCaseSelection?:(available:boolean)=>void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void }) {
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
@@ -63,6 +64,17 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const dialectRef = useRef(dialect);
   useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
+  /** 原生菜单只收到可用状态，选区内容留在当前模型内。 */
+  useEffect(() => {
+    if (!onCaseSelection) return;
+    const instance = editorRef.current;
+    if (!instance || !contentReady || readOnly) { onCaseSelection(false); return; }
+    const sync = () => onCaseSelection(hasExplicitCaseSelection(instance));
+    const selection = instance.onDidChangeCursorSelection(sync), model = instance.onDidChangeModel(sync);
+    const disposal = instance.onDidDispose(() => onCaseSelection(false));
+    sync();
+    return () => { selection.dispose(); model.dispose(); disposal.dispose(); onCaseSelection(false); };
+  }, [contentReady, onCaseSelection, readOnly]);
   const [renameMessage, setRenameMessage] = useState<string | null>(null);
   useEffect(() => { setRenameMessage(null); }, [value, readOnly, dialect, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.sessionId]);
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。

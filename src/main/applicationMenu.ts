@@ -58,7 +58,8 @@ export class ApplicationMenu {
       { label: text.edit, submenu: [
         { label: text.undo, role: 'undo' }, { label: text.redo, role: 'redo' }, separator,
         { label: text.cut, role: 'cut' }, { label: text.copy, role: 'copy' }, { label: text.paste, role: 'paste' }, { label: text.selectAll, role: 'selectAll' }, separator,
-        item('find', 'CmdOrCtrl+F'), item('replace', mac ? 'Alt+Cmd+F' : 'Ctrl+H')
+        item('find', 'CmdOrCtrl+F'), item('replace', mac ? 'Alt+Cmd+F' : 'Ctrl+H'), separator,
+        item('sql-uppercase'), item('sql-lowercase')
       ] },
       { label: text.view, submenu: [
         item('toggle-theme'), item('focus-mode', 'CmdOrCtrl+Shift+L'), separator,

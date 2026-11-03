@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+SQL 编辑器支持从原生「编辑」菜单或右键菜单将选区转为大写或小写。Windows 的 MySQL 和 SQLite 离线窗口均验证了只改选区、保留原模型、每次转换单独撤销，以及零 SQL 执行。类型和构建通过。相关单元 92 项通过，另有一份格式化夹具在 Monaco 初始化时失败，78 项断言未运行。macOS 及安装包另验。转换入口参照 Navicat 查询编辑器。[Navicat 编辑器说明](https://www.navicat.com/en/products/query-editing?product=navicat-premium)
+
 SQL 查询支持在语句头使用 `NAME` 注释命名结果标签，复用本次执行语句与结果序号；无有效名称时沿用序号。该语法参照 Navicat 17。[官方查询结果手册](https://www.navicat.com/manual/pdf_manual/en/navicat_17/linux_manual/navicat_en.pdf)
 
 相关 15 份单元共 509 项、严格类型和构建通过。Windows SQLite 原工作区整例通过，覆盖两种命名写法、未执行草稿隔离、重启后明确执行及原四次 SQL 边界。首轮 SQLite 原用例超时已保留，按原时限复验通过。MySQL／MariaDB 已核真实脚本分段模板，本轮未验其数据库窗口；macOS 与安装包另验。

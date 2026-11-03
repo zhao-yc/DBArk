@@ -27,6 +27,7 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(JSON.stringify(windows.current())).not.toMatch(/BI|自动运行|用户管理|模型|备份/);
     const edit = windows.current().find(item => item.label === '编辑')!.submenu as MenuItemConstructorOptions[];
     expect(edit.filter(item => item.role).map(item => item.role)).toEqual(['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);
+    expect(edit.filter(item => item.id?.startsWith('sql-')).map(item => [item.id, item.enabled])).toEqual([['sql-uppercase', false], ['sql-lowercase', false]]);
   });
 
   it('状态仅控制白名单项，缺项禁用并在发出时携带准确修订', () => {
