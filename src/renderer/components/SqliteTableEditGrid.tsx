@@ -12,6 +12,8 @@ import '../sqliteTableClipboard.css';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
 import { GridRowJump } from './GridRowJump';
 import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeight';
+import { writeTableClipboardEvent } from '../gridClipboard';
+import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 
 export interface SqliteTableFindGridHit { id: string; page: SqliteTablePage; rows: readonly SqliteDraftRow[]; row: SqliteDraftRow; column: number; focus: boolean; range?: { start: number; end: number }; }
 interface Props { page: SqliteTablePage; rows: SqliteDraftRow[]; disabled: boolean; selected?: string; isCurrent(): boolean; onSelect(row: SqliteDraftRow): void; onEdit(row: SqliteDraftRow, column: number): void; onPaste?(data: Pick<DataTransfer, 'types' | 'getData'>, anchor?: SqlitePasteAnchor): void; onActiveCell?(anchor: SqlitePasteAnchor | undefined): void; onFilterCell?(anchor: SqlitePasteAnchor | undefined): void; onCheckedRows?(selection: SqliteCheckedRows): void; findHit?: SqliteTableFindGridHit; rowHeight?: GridRowHeight; sort?: readonly SortColumn[]; onSortChange?(next: readonly SortColumn[]): void; projection?: readonly { index: number; width?: number; frozen: boolean }[]; onColumnResize?(key: string, width: number): void; }
@@ -126,17 +128,37 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
   }))];
   /** F2和双击只打开本地typed编辑，不直接投递写入。 */
   function edit(row: SqliteDraftRow, key: string): void { const column = Number(key.slice(1)); if (current(row) && !disabled && !row.deleted && /^c\d+$/.test(key) && page.columns[column] && !page.columns[column].generated) onEdit(row, column); }
+  /** 复制沿当前可见列取原值；SQLite 类型化格式始终保留原始数据行。 */
+  function clipboardContent(checked: SqliteDraftRow[], row: SqliteDraftRow | undefined, key: string, headers = false) {
+    const index = Number(key.slice(1));
+    if (!checked.length && (!row || row.deleted || !/^c\d+$/.test(key) || !order.includes(index) || !page.columns[index] || row.values.length !== page.columns.length)) return;
+    if (checked.some(item => item.values.length !== page.columns.length)) throw Error(clipboardText.invalid);
+    const values = checked.length ? checked.map(item => order.map(index => item.values[index])) : [[row!.values[index]]];
+    return encodeSqliteClipboard(values, checked.length ? order.map(index => page.columns[index].name) : [page.columns[index].name], headers);
+  }
   /** RDG的真实copy事件同步写三种MIME；先编码完整内容，失败只清本事件已写的数据。 */
   function copy(row: SqliteDraftRow, key: string, event: ClipboardEvent<HTMLDivElement>): void {
     if (inputTarget(event)) return; event.preventDefault();
     if (!current(row) || !noModal() || row.deleted) return;
     try {
-      const checked = rows.filter(item => selectedRows.has(item.id) && !item.deleted), index = Number(key.slice(1));
-      if (!checked.length && (!/^c\d+$/.test(key) || !order.includes(index) || !page.columns[index] || row.values.length !== page.columns.length)) return;
-      if (checked.some(item => item.values.length !== page.columns.length)) throw Error(clipboardText.invalid);
-      const values = checked.length ? checked.map(item => order.map(index => item.values[index])) : [[row.values[index]]], content = encodeSqliteClipboard(values, checked.length ? order.map(index => page.columns[index].name) : [page.columns[index].name]);
+      const content = clipboardContent(rows.filter(item => selectedRows.has(item.id) && !item.deleted), row, key);
+      if (!content) return;
       if (!current(row) || !noModal()) return; writeSqliteClipboardData(event.clipboardData, content); setError('');
     } catch (reason) { try { event.clipboardData.clearData(); } catch { /* 仅原事件可清理，不借系统剪贴板重试。 */ } if (current()) setError(reason instanceof Error ? reason.message : clipboardText.invalid); }
+  }
+  /** 按钮只读取当前有效的勾选或活动格，不接触系统剪贴板读取入口。 */
+  function copyWithHeaders() {
+    const allowed = () => !disabled && current() && noModal();
+    if (!allowed()) return;
+    try {
+      const checked = rows.filter(item => selectedRows.has(item.id) && !item.deleted);
+      const cell = activeCell.current.position;
+      if (selectedRows.size && !checked.length) throw Error(headerCopyText.stale);
+      const content = clipboardContent(checked, cell?.row, cell?.key ?? '', true);
+      if (!content) throw Error(headerCopyText.stale);
+      writeTableClipboardEvent(allowed, data => writeSqliteClipboardData(data, content));
+      setError('');
+    } catch (reason) { if (allowed()) setError(reason instanceof Error ? reason.message : headerCopyText.unavailable); }
   }
   /** 当前RDG无内联editor，onCellPaste不会派发；在原生capture接管一次，不伪造editable/onRowsChange。 */
   function paste(event: ClipboardEvent<HTMLDivElement>): void {
@@ -160,7 +182,7 @@ export function SqliteTableEditGrid({ page, rows, disabled, selected, isCurrent,
     handle.setActivePosition(position, { enableEditor: false, shouldFocus: true });
     return true;
   }
-  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}`} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
+  return <div className="sqlite-edit-clipboard-region" onPasteCapture={paste}>{error && <p role="alert">{error}</p>}<div className="sqlite-grid-row-jump"><GridRowJump grid={grid} key={orderKey} scope={owner} count={rows.length} disabled={disabled} onJump={jumpToGridRow}/><button type="button" title={headerCopyText.hint} disabled={disabled || (!selectedRows.size && !/^c\d+$/.test(activeCell.current.position?.key ?? ''))} onClick={copyWithHeaders}>{headerCopyText.action}</button></div><DataGrid<SqliteDraftRow, unknown, string> ref={grid} aria-label={text.grid} aria-description={onSortChange ? browseText.headerHint : undefined} className={`results-grid grid-row-height-${height}`} columns={columns} rows={rows} rowKeyGetter={row => row.id} rowHeight={height} headerRowHeight={42}
     sortColumns={sort} onSortColumnsChange={next => { if (!disabled && baseCurrent() && noModal()) onSortChange?.(next); }} onColumnResize={onColumnResize ? (column, width) => { if (!disabled && baseCurrent() && noModal() && /^c(?:0|[1-9]\d*)$/.test(column.key) && order.includes(Number(column.key.slice(1)))) onColumnResize(column.key, width); } : undefined}
     renderers={{ renderCheckbox: props => renderCheckbox({ ...props, 'aria-label': props['aria-label'] === 'Select All' ? clipboardText.copyAll : clipboardText.copyRow }) }}
     selectedRows={selectedRows} isRowSelectionDisabled={row => row.deleted} onSelectedRowsChange={ids => { if (!baseCurrent() || selection.current.revision !== selectionTicket || !noModal()) return; selection.current = { owner, ids: new Set(rows.filter(row => ids.has(row.id) && !row.deleted).map(row => row.id)), revision: {} }; notifyChecked(); selectionChanged(value => value + 1); }}

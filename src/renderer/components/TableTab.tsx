@@ -13,7 +13,8 @@ import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease, type Works
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Modal, Spinner } from './ui';
 import { collectChanges, newDraftRow, type DraftRow } from '../dataChanges';
-import { cellClipboardType, decodeClipboard, encodeClipboard, pasteCells } from '../gridClipboard';
+import { cellClipboardType, decodeClipboard, encodeClipboard, maxClipboardCells, pasteCells, writeTableClipboardEvent } from '../gridClipboard';
+import { tableHeaderCopyZh as headerCopyText } from '../locales/tableHeaderCopy.zh-CN';
 import { maxTablePage, parsePageJump, type FilterMode, type FilterDraft } from '../tableFilters';
 import { tableCellFilterDraft } from '../tableCellFilter';
 import { tableCellFilterZh as cellFilterText } from '../locales/tableCellFilter.zh-CN';
@@ -1254,6 +1255,26 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     try { const content = encodeClipboard(matrix); event.clipboardData.setData('text/plain', content.text); event.clipboardData.setData(cellClipboardType, content.typed); }
     catch (reason) { setError(errorMessage(reason)); }
   }
+  const headerCopyLayoutRevision = layoutRevision.current;
+  /** 表头只加入外部文本，类型化粘贴仍接收当前显示顺序中的原值。 */
+  function copyTableWithHeaders(): void {
+    const current = () => tableToolbarCurrent() && !blockedRef.current && !externalStale && !activeGridEditor.current && !record.hasInput()
+      && rowsRef.current === rows && selectedRowsRef.current === selectedRows && selectionRef.current === selection
+      && layoutRevision.current === headerCopyLayoutRevision;
+    if (!current()) return;
+    try {
+      const columns = selectedRows.size ? visibleColumns : visibleColumns.filter(column => column.key === selection?.key);
+      const records = rows.filter(row => !row.deleted && (selectedRows.size ? selectedRows.has(row.id) : row.id === selection?.rowId));
+      if (!columns.length || !records.length) throw Error(headerCopyText.stale);
+      if ((records.length + 1) * columns.length > maxClipboardCells) throw Error(zh.clipboard.copyLimit);
+      const content = encodeClipboard(records.map(row => columns.map(column => ownCell(row.data, column.key))), columns.map(column => column.name));
+      writeTableClipboardEvent(current, data => {
+        data.setData('text/plain', content.text);
+        data.setData(cellClipboardType, content.typed);
+      });
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   /** 原生粘贴事件提供内容，完全不依赖被禁用的浏览器剪贴板权限。 */
   function pasteClipboard({ row, column }: { row: DraftRow; column: { key: string } }, event: React.ClipboardEvent) {
     event.preventDefault(); pendingPaste.current = null;
@@ -1407,7 +1428,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button aria-label={filteredSelectText.entry} title={filteredSelectText.hint} disabled={!filteredSelectAvailable} onClick={openFilteredSelect}>{filteredSelectText.entry}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selection} onClick={() => copyRowsAsInsert(false)}>{copyInsertSqlZh.current}</button>
 <button title={copyInsertSqlZh.policy} disabled={insertCopyBlockedRef.current || !selectedRows.size} onClick={() => copyRowsAsInsert(true)}>{copyInsertSqlZh.selected}</button></ActionMenuSection>
-    <ActionMenuSection label={tableToolbarZh.transfer}>{onTableCopyData && <button title={tableCopyDataZh.title} aria-label={tableCopyDataZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableCopyData(); }}>{tableCopyDataZh.title}</button>}
+    <ActionMenuSection label={tableToolbarZh.transfer}><button title={headerCopyText.hint} disabled={blocked || externalStale || gridEditing || record.hasInput() || (!selection && !selectedRows.size)} onClick={copyTableWithHeaders}>{headerCopyText.action}</button>{onTableCopyData && <button title={tableCopyDataZh.title} aria-label={tableCopyDataZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableCopyData(); }}>{tableCopyDataZh.title}</button>}
 {onTableCopyStructure && <button title={tableCopyStructureZh.title} aria-label={tableCopyStructureZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableCopyStructure(); }}>{tableCopyStructureZh.title}</button>}
 <button aria-label={filteredUpdateText.entry} title={filteredUpdateText.scope} disabled={!filteredUpdateAvailable} onClick={openFilteredUpdate}>{filteredUpdateText.entry}</button>
 <button aria-label={filteredDeleteText.entry} title={filteredDeleteText.scope} disabled={!filteredDeleteAvailable} onClick={openFilteredDelete}>{filteredDeleteText.entry}</button>

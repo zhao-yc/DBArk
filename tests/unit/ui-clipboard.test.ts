@@ -3,6 +3,12 @@ import { decodeClipboard, encodeClipboard, parseTabularText, pasteCells } from '
 import type { DraftRow } from '../../src/renderer/dataChanges';
 
 describe('网格剪贴板', () => {
+  it('普通文本的表头按 TSV 转义，内部类型化内容只包含数据行', () => {
+    const values = [['18446744073709551615', null, undefined]];
+    const content = encodeClipboard(values, ['id', '名称\t字段', '默认']);
+    expect(parseTabularText(content.text)[0]).toEqual(['id', '名称\t字段', '默认']);
+    expect(decodeClipboard(content.typed, content.text)).toEqual(values);
+  });
   it('识别电子表格中的带引号换行、制表符和引号，不产生末尾空行', () => {
     expect(parseTabularText('名称\t内容\r\n甲\t"第一行\n第二行\t""引号"""\r\n')).toEqual([['名称', '内容'], ['甲', '第一行\n第二行\t"引号"']]);
     expect(parseTabularText('')).toEqual([['']]);

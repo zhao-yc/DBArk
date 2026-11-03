@@ -2,6 +2,7 @@ import { zh } from './locales/zh-CN';
 import type { CellValue } from '../shared/contracts';
 import type { DraftRow } from './dataChanges';
 import { cellText } from './lib';
+import { tableHeaderCopyZh } from './locales/tableHeaderCopy.zh-CN';
 
 export const cellClipboardType = 'application/x-dbark-cells';
 /** undefined 仅表示新增行尚未填写的 DEFAULT，不能编码成实际 NULL。 */
@@ -56,15 +57,41 @@ export function parseTabularText(text: string): string[][] {
 }
 
 /** 外部程序读取通用 TSV；DBArk 内部复制额外保存 NULL 和二进制类型。 */
-export function encodeClipboard(values: ClipboardCell[][]) {
-  if (values.reduce((count, row) => count + row.length, 0) > maxClipboardCells) throw new Error(zh.clipboard.copyLimit);
+export function encodeClipboard(values: ClipboardCell[][], headers?: readonly string[]) {
+  if (values.reduce((count, row) => count + row.length, headers?.length ?? 0) > maxClipboardCells) throw new Error(zh.clipboard.copyLimit);
   /** 仅对含分隔符或引号的值加引号，确保电子表格可完整还原单元格边界。 */
   const quote = (value: ClipboardCell) => { const text = cellText(value); return /[\t\r\n"]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text; };
   const typed = JSON.stringify({ version: 1, rows: values.map(row => row.map(value => value === undefined ? { type: 'default' } : value)) });
   if (typed.length > maxClipboardCharacters) throw new Error(zh.clipboard.copySizeLimit);
-  const text = values.map(row => row.map(quote).join('\t')).join('\n');
+  const body = values.map(row => row.map(quote).join('\t')).join('\n');
+  const text = headers ? headers.map(quote).join('\t') + '\n' + body : body;
   if (text.length > maxClipboardCharacters) throw new Error(zh.clipboard.copySizeLimit);
   return { text, typed };
+}
+
+/** 从显式复制入口同步写当前事件，不读取剪贴板，也不重试过期的操作。 */
+export function writeTableClipboardEvent(current: () => boolean, write: (data: DataTransfer) => void, target: Document = document): void {
+  if (!current()) throw Error(tableHeaderCopyZh.stale);
+  let copied = false, failure: unknown;
+  const copy = (event: ClipboardEvent) => {
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (copied || failure) return;
+    try {
+      if (!current()) throw Error(tableHeaderCopyZh.stale);
+      if (!event.clipboardData) throw Error(tableHeaderCopyZh.unavailable);
+      write(event.clipboardData);
+      copied = true;
+    } catch (reason) {
+      try { event.clipboardData?.clearData(); } catch { /* 只处理本次写入的格式。 */ }
+      failure = reason;
+    }
+  };
+  target.addEventListener('copy', copy, true);
+  try {
+    const accepted = target.execCommand('copy');
+    if (failure) throw failure;
+    if (!accepted || !copied) throw Error(tableHeaderCopyZh.unavailable);
+  } finally { target.removeEventListener('copy', copy, true); }
 }
 
 /** 剪贴板属于外部输入，类型化数据必须逐格校验，不能直接信任 JSON 内容。 */

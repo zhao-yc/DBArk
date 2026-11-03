@@ -6,6 +6,7 @@ import type { DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo } from '../../src/shared/contracts';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 import { tablePageExportZh as text } from '../../src/renderer/locales/tablePageExport.zh-CN';
+import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { tableRowTransferZh as transferText } from '../../src/renderer/locales/tableRowTransfer.zh-CN';
 import { resultInsertZh as insertText } from '../../src/renderer/locales/resultInsert.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -88,6 +89,31 @@ function button(name: string) { let node: MemoryNode | undefined; act(() => { no
 async function click(name: string) { const node = button(name); expect(node.disabled).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 /** 通过真实网格回调勾选，倒序Set不能改变文件中的显示顺序。 */
 async function select(indices: number[]) { await act(async () => grid.props.onSelectedRowsChange(new Set(indices.map(index => grid.rows[index].id)))); }
+it('MySQL 表格含列名复制按可见列及行顺序，内部保留原类型且无请求', async () => {
+  await mount();
+  await select([2, 0]);
+  const before = [...commands], content = new Map<string, string>();
+  const previous = Object.getOwnPropertyDescriptor(document, 'execCommand');
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: () => {
+    const event = new MemoryEvent('copy') as unknown as ClipboardEvent;
+    Object.defineProperty(event, 'clipboardData', { value: { setData: (type: string, value: string) => content.set(type, value) } });
+    event.stopImmediatePropagation = () => event.stopPropagation();
+    document.dispatchEvent(event as unknown as MemoryEvent);
+    return true;
+  } });
+  try {
+    await click(tableHeaderCopyZh.action);
+    expect(content.get('text/plain')?.split('\n').map(line => line.split('\t').slice(0, 2))).toEqual([['bin', 'id'], ['0x00ff', '1'], ['0x00ff', '3']]);
+    expect(JSON.parse(content.get('application/x-dbark-cells')!).rows).toEqual([
+      [{ type: 'binary', base64: 'AP8=' }, '1', '0.00000000000000000000001', '原1'],
+      [{ type: 'binary', base64: 'AP8=' }, '3', '0.00000000000000000000001', '原3'],
+    ]);
+    expect(commands).toEqual(before);
+  } finally {
+    if (previous) Object.defineProperty(document, 'execCommand', previous);
+    else Reflect.deleteProperty(document, 'execCommand');
+  }
+});
 function dialog(title: string) { return document.querySelector(`[aria-label="${title}"]`); }
 /** 只取得旧按钮闭包，反证迟到事件不能导出后来选择。 */
 function callback(node: MemoryNode): Function { const key = Object.keys(node).find(key => key.startsWith('__reactProps$')); if (!key) throw Error('缺少真实React事件'); return (node as any)[key].onClick; }

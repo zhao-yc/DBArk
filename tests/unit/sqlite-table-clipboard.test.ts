@@ -15,6 +15,14 @@ function generic(rows: unknown[][], version = 1) { return JSON.stringify({ versi
 
 
 describe('SQLite三MIME复制及严格来源解码', () => {
+  it('含列名的文本仍保留原生类型化行和列映射', () => {
+    const values: SqliteClipboardCell[][] = [[{ kind: 'integer', value: '9223372036854775807' }, { kind: 'null' }, undefined]];
+    const columns = ['id', '空值', '默认'];
+    const content = encodeSqliteClipboard(values, columns, true);
+    expect(content.text).toBe('id\t空值\t默认\n9223372036854775807\tNULL\t');
+    expect(decodeSqliteClipboard(content.sqlite, content.typed, content.text)).toMatchObject({ values, columns, plain: false });
+    expect(JSON.parse(content.typed).rows).toHaveLength(1);
+  });
   it('原生格式逐格保留int64/REAL文本/BLOB/NULL/DEFAULT，不经过Number或JSON null替换', () => {
     const values: SqliteClipboardCell[][] = [[{ kind: 'integer', value: '9223372036854775807' }, { kind: 'integer', value: '-9223372036854775808' }, { kind: 'real', value: '-0' }, { kind: 'real', value: '1.2345678901234567' }, { kind: 'blob', value: '00ff80' }, { kind: 'null' }, undefined, cell('引号"\t换行\n\0🚢')]];
     const encoded = encodeSqliteClipboard(values), decoded = decodeSqliteClipboard(encoded.sqlite, encoded.typed, encoded.text); expect(decoded.values).toEqual(values); expect(decoded.plain).toBe(false); expect(decoded.text).toBe(encoded.text);

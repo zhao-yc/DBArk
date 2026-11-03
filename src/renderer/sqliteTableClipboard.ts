@@ -63,8 +63,11 @@ function sourceColumnNames(raw: unknown, width: number): string[] {
 /** 通用MIME保兼容，int64与REAL仍按原文字串交给非SQLite网格，不经过Number。 */
 function genericCell(value: SqliteClipboardCell): ClipboardCell { if (value === undefined) return undefined; if (value.kind === 'null') return null; if (value.kind === 'blob') { let binary = ''; for (let index = 0; index < value.value.length; index += 2) binary += String.fromCharCode(parseInt(value.value.slice(index, index + 2), 16)); return { type: 'binary', base64: btoa(binary) }; } return value.value; }
 /** 原页最多1000行可复制；三种格式分别受2MiB限制，原生MIME完整区分NULL和DEFAULT。 */
-export function encodeSqliteClipboard(input: readonly (readonly SqliteClipboardCell[])[], columns?: readonly string[]): SqliteClipboardContent {
-  if (Array.isArray(input) && input.length > sqliteClipboardLimits.copyRows) throw Error(text.copyRowLimit); const values = matrix(input, sqliteClipboardLimits.copyRows), names = columns === undefined ? undefined : sourceColumnNames(columns, values[0].length), generic = encodeClipboard(values.map(row => row.map(genericCell))), sqlite = JSON.stringify({ version: 1, rows: values.map(row => row.map(value => value ?? { kind: 'default' })), ...(names ? { columns: names } : {}) });
+export function encodeSqliteClipboard(input: readonly (readonly SqliteClipboardCell[])[], columns?: readonly string[], includeHeaders = false): SqliteClipboardContent {
+  if (Array.isArray(input) && input.length > sqliteClipboardLimits.copyRows) throw Error(text.copyRowLimit);
+  const values = matrix(input, sqliteClipboardLimits.copyRows), names = columns === undefined ? undefined : sourceColumnNames(columns, values[0].length);
+  if (includeHeaders && (!names || (values.length + 1) * names.length > sqliteClipboardLimits.cells)) throw Error(text.cellLimit);
+  const generic = encodeClipboard(values.map(row => row.map(genericCell)), includeHeaders ? names : undefined), sqlite = JSON.stringify({ version: 1, rows: values.map(row => row.map(value => value ?? { kind: 'default' })), ...(names ? { columns: names } : {}) });
   return { text: rawText(generic.text), typed: rawText(generic.typed), sqlite: rawText(sqlite) };
 }
 /** 浏览器copy事件内同步写三MIME；不能await后再依赖已结束的原事件。 */

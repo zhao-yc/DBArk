@@ -9,6 +9,7 @@ import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
 import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
+import { tableHeaderCopyZh } from '../../src/renderer/locales/tableHeaderCopy.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { dataDir, desktop, expect, launchDesktop, page, pageErrors, quitDesktop, test } from './desktop-fixture';
 
@@ -129,4 +130,49 @@ test('SQLite 统一可见列宽保留隐藏列与冻结，并通过原保存流�
   });
   await expect.poll(() => table.locator('.results-grid .rdg-row').first().evaluate(element => Math.round(element.getBoundingClientRect().height))).toBe(24);
   expect(pageErrors).toEqual([]);
+});
+
+test('SQLite 可编辑网格含列名复制只在 TSV 中加入表头，内部 MIME 保持原数据行', async () => {
+  await seed();
+  await page.locator('[data-workspace-tab-id="t-jump"]').getByRole('button', { name: '表格定位', exact: true }).click();
+  const pane = page.locator('.sqlite-table-tab:visible');
+  const copy = pane.getByRole('button', { name: tableHeaderCopyZh.action, exact: true });
+  const idCell = (id: number) => pane.getByRole('gridcell', { name: `INTEGER · ${id}`, exact: true });
+  await expect(pane).toHaveAttribute('data-readonly', 'false');
+  await expect(idCell(1)).toBeVisible();
+  // 原按钮和复制事件都运行真实实现，只将系统复制端口换成本例内存 DataTransfer。
+  await page.evaluate(() => {
+    const previous = Object.getOwnPropertyDescriptor(document, 'execCommand');
+    const transfers: DataTransfer[] = [];
+    Object.defineProperty(document, 'execCommand', { configurable: true, value(command: string) {
+      if (command !== 'copy') throw Error('拒绝本例外的命令');
+      const data = new DataTransfer();
+      document.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }));
+      transfers.push(data);
+      return true;
+    } });
+    Object.assign(globalThis, { __headerCopyTest: { transfers, restore() {
+      if (previous) Object.defineProperty(document, 'execCommand', previous);
+      else Reflect.deleteProperty(document, 'execCommand');
+      Reflect.deleteProperty(globalThis, '__headerCopyTest');
+    } } });
+  });
+  try {
+    await idCell(1).click();
+    await copy.click();
+    for (const id of [2, 1]) {
+      await idCell(id).locator('..').getByRole('checkbox', { name: '勾选 SQLite 记录', exact: true }).check();
+    }
+    await copy.click();
+    const result = await page.evaluate(() => (globalThis as typeof globalThis & { __headerCopyTest: { transfers: DataTransfer[] } }).__headerCopyTest.transfers.map(data => ({
+      text: data.getData('text/plain'), typed: JSON.parse(data.getData('application/x-dbark-cells')), sqlite: JSON.parse(data.getData('application/x-dbark-sqlite-cells')),
+    })));
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ text: 'id\n1', typed: { rows: [['1']] }, sqlite: { columns: ['id'], rows: [[{ kind: 'integer', value: '1' }]] } });
+    expect(result[1]).toMatchObject({ text: 'id\tname\n1\t记录 1\n2\t记录 2', typed: { rows: [['1', '记录 1'], ['2', '记录 2']] }, sqlite: { columns: ['id', 'name'] } });
+    expect(result[1].sqlite.rows).toHaveLength(2);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await page.evaluate(() => (globalThis as typeof globalThis & { __headerCopyTest: { restore(): void } }).__headerCopyTest.restore());
+  }
 });
