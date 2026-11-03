@@ -56,17 +56,21 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   if (options.plainKey) info.columns[0].extra = '';
   const sourceRows = options.batch ? [source, { ...source, id: '18446744073709551614', note: '' }] : [source];
   const pageSource = { status: 'ready', pageRef: 'RAM页引用', rowRefs: ['RAM行1', 'RAM行2'], expiresAt: Date.now() + 60_000, metadataKey: tableCopyMetadataKey(info), missingColumns: [] as string[] };
-  let failApply = false;
+  let failApply = false, failPage = false;
   const invoke = vi.fn(async (command: string, input: any) => {
     if (command === 'metadata.table') return info;
-    if (command === 'table.page') return { page: input.page, pageSize: input.pageSize, hasMore: true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: structuredClone(sourceRows), copyMetadataKey: tableCopyMetadataKey(info), ...(options.batch && options.lease ? { copySource: pageSource } : {}) };
+    if (command === 'table.page') {
+      if (failPage) { failPage = false; throw Error('合成分页失败'); }
+      return { page: input.page, pageSize: input.pageSize, hasMore: true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: structuredClone(sourceRows), copyMetadataKey: tableCopyMetadataKey(info), ...(options.batch && options.lease ? { copySource: pageSource } : {}) };
+    }
     if (command === 'table.preview') return { sql: '仅RAM模拟预览', warnings: [] };
     if (command === 'table.apply') { if (failApply) throw Error('合成执行结果未知'); return { affectedRows: 1 }; }
     if (command === 'table.preferences.get' || command === 'connections.open') return null;
     throw Error('未授权的RAM端口：' + command);
   });
   const store = Object.assign((selector: (value: any) => any) => selector(stateApi.getState()), stateApi);
-  const context = createContext({ Error, Object, queueMicrotask, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: { querySelector: () => dialog ? {} : null }, window: { confirm: () => true } });
+  const confirm = vi.fn(() => true);
+  const context = createContext({ Error, Object, queueMicrotask, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: { querySelector: () => dialog ? {} : null }, window: { confirm } });
   const modules = new Map<string, { exports: any }>();
   function load(file: string): any {
     file = path.resolve(file); if (modules.has(file)) return modules.get(file)!.exports;
@@ -111,7 +115,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     grid().onCellKeyDown({ mode, row: grid().rows[0], column: { key: 'note' } }, event); await render(); return event;
   }
   await render(); expect(grid().rows).toHaveLength(options.batch ? 2 : 1);
-  return { render, click, change, press, grid, record, button, all, props, workspace, store, invoke, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
+  return { render, click, change, press, grid, record, button, all, props, workspace, store, invoke, confirm, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; }, failNextPage() { failPage = true; } };
 }
 
 
@@ -120,6 +124,7 @@ import { afterAll, afterEach, beforeAll } from 'vitest';
 import { memoryDocument } from '../fixtures/memory-dom';
 import type { TableStatisticsServices } from '../../src/renderer/components/TableStatisticsDialog';
 import { tableStatisticsZh as statisticsText } from '../../src/renderer/locales/tableStatistics.zh-CN';
+import { tableFilterEnabledZh as filterEnabledText } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
 import { relationshipDiagramZh as relationshipText } from '../../src/renderer/locales/relationshipDiagram.zh-CN';
 
 let memory: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], dialogRoot: ReturnType<typeof createRoot> | undefined;
@@ -183,6 +188,55 @@ it('分页栏计数仅发送原筛选，关闭后显示精确值，换页后不�
   expect(footerCount()).toBeUndefined();
   element.props.onCount('1'); await f.render();
   expect(footerCount()).toBeUndefined();
+});
+
+it('暂停和恢复混合启停的筛选只各读一次，保留分组、多列排序和原精确值', async () => {
+  const f = await fixture(); await f.click(zh.table.text006);
+  const preset = f.all('TablePresetPanel')[0].props;
+  const filterGroup = { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] };
+  const sort = [{ column: 'note', direction: 'DESC', nulls: 'LAST' }, { column: 'id', direction: 'ASC' }];
+  const filters = [{ column: 'id', operator: '>=', value: '9007199254740993' }, { column: 'note', operator: '=', value: '', enabled: false }, { column: 'doc', operator: 'IS NOT NULL' }];
+  expect(preset.beforeApply()).toBe(true); expect(preset.onApply({ filters, filterMode: 'all', filterGroup, sort })).toBe(true);
+  await f.render(); await f.click(zh.common.pageNext); await f.change('未提交修改');
+  const reads = () => f.invoke.mock.calls.filter(([command]) => command === 'table.page').map(([, input]) => input);
+  const original = reads().at(-1), before = reads().length;
+  expect(original).toMatchObject({ page: 2, filters, filterGroup, sort });
+
+  const { TableFilterPanel } = await import('../../src/renderer/components/TableFilterPanel');
+  const { MemoryEvent } = await import('../fixtures/memory-dom');
+  const host = memory.createElement('div'); memory.body.appendChild(host); dialogRoot = createRoot(host as any);
+  const panel = () => f.all('TableFilterPanel')[0].props;
+  const render = async () => { await f.render(); await act(async () => dialogRoot!.render(<TableFilterPanel {...panel() as any} children={undefined}/>)); };
+  const click = async (label: string) => {
+    const button = host.querySelectorAll('button').find(node => node.textContent === label)!;
+    expect(button).toBeTruthy(); expect(button.disabled).toBe(false);
+    await act(async () => button.dispatchEvent(new MemoryEvent('click'))); await render();
+  };
+  await render(); f.confirm.mockReturnValueOnce(false);
+  await click(filterEnabledText.pause);
+  expect(reads()).toHaveLength(before); expect(f.grid().rows[0].data.note).toBe('未提交修改'); expect(panel().pause.active).toBe(false);
+  const oldPause = panel().pause.onToggle;
+  await click(filterEnabledText.pause);
+  expect(reads()).toHaveLength(before + 1); expect(reads().at(-1)).toMatchObject({ page: 1, filters: filters.map(rule => ({ ...rule, enabled: false })), filterGroup, sort });
+  expect(f.confirm).toHaveBeenCalledTimes(2); expect(panel().pause.active).toBe(true); expect(oldPause()).toBe(false);
+
+  await f.click(zh.common.pageNext); await render();
+  await click(filterEnabledText.resume);
+  expect(reads()).toHaveLength(before + 3); expect(reads().at(-1)).toMatchObject({ page: 1, filters: original.filters, filterGroup, sort });
+  expect(panel().pause.active).toBe(false);
+
+  await click(filterEnabledText.pause);
+  const oldResume = panel().pause.onToggle;
+  const edited = panel().filters.map((rule: object, index: number) => index === 0 ? { ...rule, enabled: true } : rule);
+  expect(panel().onFiltersChange(edited)).toBe(true); await render();
+  expect(panel().pause.active).toBe(false); expect(oldResume()).toBe(false);
+  expect(reads().at(-1).filters).toEqual(edited);
+
+  f.failNextPage(); await click(filterEnabledText.pause);
+  expect(panel().pause.active).toBe(true);
+  await click(filterEnabledText.resume);
+  expect(reads().at(-1)).toMatchObject({ filters: edited, filterGroup, sort, page: 1 });
+  expect(f.grid().rows).toHaveLength(1);
 });
 
 it('关系图正式表页入口不读库，自己的忙碌计数不撤销来源且父草稿保持', async () => {
