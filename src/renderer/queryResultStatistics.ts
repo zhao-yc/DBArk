@@ -3,6 +3,7 @@ import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultSortKind
 import { queryResultStatisticsZh as text } from './locales/queryResultStatistics.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
 import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultComparisonKey } from './sqliteResultCompare';
+import { QueryResultFrequencyCounter, type QueryResultFrequency, type QueryResultFrequencyKind } from './queryResultFrequency';
 
 export interface QueryResultStatisticsCapture {
   readonly column: Readonly<ResultColumn>;
@@ -14,6 +15,7 @@ export interface QueryResultStatisticsResult {
   readonly distinct?: number; readonly min?: string; readonly max?: string; readonly sum?: string; readonly average?: string;
   readonly approximate: boolean; readonly floatInput: boolean; readonly averageRounded: boolean; readonly reason?: string;
   readonly sqliteTypes?: Readonly<Record<'integer' | 'real' | 'text' | 'blob' | 'null', number>>;
+  readonly frequency?: QueryResultFrequency;
 }
 type OrdinaryKey = ReturnType<typeof queryResultFilterKey>;
 type Key = OrdinaryKey | SqliteResultComparisonKey;
@@ -194,6 +196,7 @@ export class QueryResultStatisticsScan {
   private completed = false;
   private published?: QueryResultStatisticsResult;
   private distinct = new Set<string>();
+  private readonly frequency?: QueryResultFrequencyCounter;
   private minimum?: { key: Key; literal: string };
   private maximum?: { key: Key; literal: string };
   private sum: Decimal = { coefficient: 0n, scale: 0 };
@@ -203,17 +206,23 @@ export class QueryResultStatisticsScan {
   private finiteNumbers = true;
   private readonly kind: ReturnType<typeof queryResultSortKind>;
   /** 私有WeakMap拒绝伪造capture；声明为字节的列即使返回字符串也不参加值聚合。 */
-  constructor(capture: QueryResultStatisticsCapture) {
+  constructor(capture: QueryResultStatisticsCapture, includeFrequency = false) {
     const binding = bindings.get(capture);
     if (!binding || !currentQueryResultStatistics(capture, binding.columns, binding.rows)) throw Error(text.stale);
     this.binding = binding; this.capture = capture; this.total = capture.rowCount; this.kind = queryResultSortKind(capture.column.type);
+    if (includeFrequency) this.frequency = new QueryResultFrequencyCounter();
     if (binding.sqlite) this.sqliteTypes = { integer: 0, real: 0, text: 0, blob: 0, null: 0 };
     else if (!this.kind || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(capture.column.type.trim())) this.reason = text.unsupported;
   }
   /** 取消释放不同值集合及部分聚合，不能通过后续step/result复活旧结果。 */
-  cancel(): void { this.cancelled = true; this.distinct.clear(); this.minimum = undefined; this.maximum = undefined; this.published = undefined; this.sum = { coefficient: 0n, scale: 0 }; this.binding = undefined; this.capture = undefined; }
+  cancel(): void { this.cancelled = true; this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined; this.published = undefined; this.sum = { coefficient: 0n, scale: 0 }; this.binding = undefined; this.capture = undefined; }
   /** 坏值只撤销所有值指标，完整计数仍继续；不发布部分不同值或极值。 */
-  private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; }
+  private rejectValues(reason: string): void { this.reason = reason; this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined; this.sum = { coefficient: 0n, scale: 0 }; }
+  /** 同一完整身份服务于摘要和分布；仅当前模式需要的集合持有它。 */
+  private observeValue(identity: string, literal: string, kind: QueryResultFrequencyKind): void {
+    if (this.frequency) this.frequency.add(identity, literal, kind);
+    else this.distinct.add(identity);
+  }
   /** 每批至多512个原格或32Ki原文；结构检查不遍历整张行数组，最后一次才全量复核。 */
   step(): { processed: number; total: number; done: boolean } {
     const total = this.total, binding = this.binding, capture = this.capture;
@@ -245,13 +254,14 @@ export class QueryResultStatisticsScan {
             key = sqliteResultComparisonKey(value as CellValue, ({ integer: 'i', real: 'r', text: 't', blob: 'b' } as const)[type]);
             if (!key) throw Error(text.value);
             literal = type === 'blob' ? `X'${cell.literal}'` : cell.literal;
-            this.distinct.add(sqliteIdentity(key));
             numeric = type === 'integer' || type === 'real';
+            this.observeValue(sqliteIdentity(key), literal, numeric ? 'number' : type === 'blob' ? 'blob' : 'text');
             this.numericOnly &&= numeric;
             if (type === 'real' && !Number.isFinite(Number(value))) { this.finiteNumbers = false; numeric = false; }
           } else {
-            key = queryResultFilterKey(capture.column, value as CellValue); literal = String(value); this.distinct.add(identity(key));
+            key = queryResultFilterKey(capture.column, value as CellValue); literal = String(value);
             numeric = this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'float';
+            this.observeValue(identity(key), literal, numeric ? 'number' : this.kind === 'text' ? 'text' : 'temporal');
           }
           if (!this.minimum || compareKeys(key, this.minimum.key) < 0) this.minimum = { key, literal };
           if (!this.maximum || compareKeys(key, this.maximum.key) > 0) this.maximum = { key, literal };
@@ -272,7 +282,7 @@ export class QueryResultStatisticsScan {
   private finish(): void {
     const count = this.total, nonNull = count - this.nulls, floatInput = this.sqliteTypes ? this.sqliteTypes.real > 0 : this.kind === 'float' && nonNull > 0;
     const types = this.sqliteTypes && !this.reason ? { sqliteTypes: Object.freeze({ ...this.sqliteTypes }) } : {};
-    if (!nonNull && (!this.sqliteTypes || !this.reason)) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false, ...types }); return; }
+    if (!nonNull && (!this.sqliteTypes || !this.reason)) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false, ...types, ...(this.frequency ? { frequency: this.frequency.result(0) } : {}) }); return; }
     if (this.reason) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, approximate: false, floatInput: false, averageRounded: false, reason: this.reason }); return; }
     let sum: string | undefined, average: string | undefined, averageRounded = false;
     if (this.sqliteTypes ? this.numericOnly && this.finiteNumbers : this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'float') {
@@ -289,8 +299,8 @@ export class QueryResultStatisticsScan {
       }
     }
     const reason = this.sqliteTypes && (!this.numericOnly || !this.finiteNumbers) ? text.sqliteNumericOnly : undefined;
-    this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, approximate: floatInput || averageRounded, floatInput, averageRounded, ...types, ...(reason ? { reason } : {}) });
-    this.distinct.clear(); this.minimum = undefined; this.maximum = undefined;
+    this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.frequency?.distinct ?? this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, approximate: floatInput || averageRounded, floatInput, averageRounded, ...types, ...(reason ? { reason } : {}), ...(this.frequency ? { frequency: this.frequency.result(nonNull) } : {}) });
+    this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined;
   }
   /** 最后发布仍核源，调用方无需信任较早某一帧的current判断。 */
   result(): QueryResultStatisticsResult | undefined {

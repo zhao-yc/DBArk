@@ -4,6 +4,7 @@ import { captureQueryResultStatistics, currentQueryResultStatistics, QueryResult
 import { queryResultStatisticsZh as text } from '../locales/queryResultStatistics.zh-CN';
 import { errorMessage } from '../lib';
 import { UsageHelp, ErrorBox, Modal  } from './ui';
+import { QueryResultFrequencyChart } from './QueryResultFrequencyChart';
 
 interface Props {
   columns: ResultColumn[]; rows: DataRow[]; initialColumn: ResultColumn;
@@ -11,7 +12,7 @@ interface Props {
   sqliteSource?: QueryResult;
   isCurrent(): boolean; onClose(): void;
 }
-type Request = { column: string; scope: 'all' | 'selected' };
+type Request = { column: string; scope: 'all' | 'selected'; mode: 'summary' | 'frequency' };
 type Operation = { request: Request; capture: QueryResultStatisticsCapture; scan: QueryResultStatisticsScan; timer?: ReturnType<typeof setTimeout> };
 type View = { request: Request; processed: number; total: number; result?: QueryResultStatisticsResult; error?: string };
 
@@ -28,7 +29,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
       return { indices, capture, options, error: '' };
     } catch (reason) { return { indices: new Set<number>() as ReadonlySet<number>, capture: undefined, options: [] as { key: string; name: string }[], error: errorMessage(reason) }; }
   });
-  const [request, setRequest] = useState<Request>(() => ({ column: prepared.capture?.column.key ?? '', scope: prepared.indices.size ? 'selected' : 'all' }));
+  const [request, setRequest] = useState<Request>(() => ({ column: prepared.capture?.column.key ?? '', scope: prepared.indices.size ? 'selected' : 'all', mode: 'summary' }));
   const requestRef = useRef(request), firstRequest = useRef(request).current;
   const [view, setView] = useState<View>({ request, processed: 0, total: prepared.capture?.rowCount ?? 0, error: prepared.error });
   const operation = useRef<Operation | undefined>(undefined), alive = useRef(true), invalid = useRef(false), closed = useRef(false);
@@ -61,7 +62,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
       if (!column) throw Error(text.stale);
       const capture = request === firstRequest ? prepared.capture : captureQueryResultStatistics(origin.columns, origin.rows, column, request.scope === 'selected' ? prepared.indices : undefined, origin.sqliteSource);
       lastCapture.current = capture;
-      active = { request, capture, scan: new QueryResultStatisticsScan(capture) }; operation.current = active;
+      active = { request, capture, scan: new QueryResultStatisticsScan(capture, request.mode === 'frequency') }; operation.current = active;
       setView({ request, processed: 0, total: capture.rowCount });
     } catch (reason) { setView({ request, processed: 0, total: 0, error: errorMessage(reason) }); return; }
 
@@ -88,7 +89,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
   /** 选择只使用首次勾选快照；同步换请求引用，旧列或范围回调不能覆盖后继扫描。 */
   function change(next: Request): void {
     if (committed.current !== ticket || requestRef.current !== request || !environment() || next.scope === 'selected' && !prepared.indices.size || !prepared.options.some(column => column.key === next.column)) return;
-    if (next.column === request.column && next.scope === request.scope) return;
+    if (next.column === request.column && next.scope === request.scope && next.mode === request.mode) return;
     // 显式切换时允许一次完整复核，不能用新捕获追认上一轮已经漂移的原值。
     if (lastCapture.current && !currentQueryResultStatistics(lastCapture.current, origin.columns, origin.rows)) {
       invalid.current = true; stop(); setView({ request, processed: 0, total: 0, error: text.stale }); return;
@@ -106,11 +107,12 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
   const result = valid && current ? view.result : undefined;
   const labels = ['count', 'nonNull', 'nulls', 'distinct', 'min', 'max', 'sum', 'average'] as const;
   return <div data-query-result-statistics-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
-    <p>{text.notice}</p><UsageHelp><p>{sqliteSource ? text.sqliteHint : text.hint}</p></UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
+    <p>{text.notice}</p><UsageHelp><p>{request.mode === 'frequency' ? text.frequencyHint : sqliteSource ? text.sqliteHint : text.hint}</p></UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs"><label>{text.column}<select aria-label={text.column} value={request.column} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...request, column: event.target.value }); }}>{prepared.options.map(column => <option key={column.key} value={column.key}>{column.name || column.key} · {column.key}</option>)}</select></label>
       <label>{text.scope}<select aria-label={text.scope} value={request.scope} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (event.target.value === 'all' || event.target.value === 'selected')) change({ ...request, scope: event.target.value }); }}><option value="all">{text.all}</option><option value="selected" disabled={!prepared.indices.size}>{text.selected}</option></select></label></div>
+    <div className="query-result-frequency-modes" role="group" aria-label={text.mode}>{(['summary', 'frequency'] as const).map(mode => <button key={mode} type="button" aria-pressed={mode === request.mode} className={mode === request.mode ? 'selected' : ''} disabled={!valid || !prepared.capture} onClick={() => change({ ...request, mode })}>{text[mode]}</button>)}</div>
     {!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={current ? view.error : undefined}/>
-    {valid && current && !view.result && !view.error && <p role="status">{text.scanning} {text.progress(view.processed, view.total)}</p>}
-    {result && <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.sqliteTypes && <dl aria-label={text.sqliteTypes}>{(['integer', 'real', 'text', 'blob', 'null'] as const).map(kind => <div key={kind}><dt>{kind.toUpperCase()}</dt><dd aria-label={text.sqliteTypeCount(kind)}>{result.sqliteTypes![kind]}</dd></div>)}</dl>}{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>}
+    {valid && current && !view.result && !view.error && <p role="status">{request.mode === 'frequency' ? text.scanningFrequency : text.scanning} {text.progress(view.processed, view.total)}</p>}
+    {result && (request.mode === 'frequency' ? <>{result.frequency ? <QueryResultFrequencyChart frequency={result.frequency} count={result.count} nulls={result.nulls}/> : <p>{text.frequencyUnavailable} {result.reason}</p>}{result.floatInput && <p>{text.floatInput}</p>}</> : <><dl aria-label={text.title}>{labels.map(label => <div key={label}><dt>{text[label]}</dt><dd aria-label={text[label]} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result[label] ?? text.unavailable}</dd></div>)}</dl>{result.sqliteTypes && <dl aria-label={text.sqliteTypes}>{(['integer', 'real', 'text', 'blob', 'null'] as const).map(kind => <div key={kind}><dt>{kind.toUpperCase()}</dt><dd aria-label={text.sqliteTypeCount(kind)}>{result.sqliteTypes![kind]}</dd></div>)}</dl>}{result.approximate && <p>{text.approximate}</p>}{result.floatInput && <p>{text.floatInput}</p>}{result.averageRounded && <p title={text.averageRounded}>{text.rounded}</p>}{result.reason && <p>{text.reason}：{result.reason}</p>}</>)}
   </div><footer className="modal-footer"><span className="grow"/><button onClick={close}>{result ? text.close : text.cancel}</button></footer></Modal></div>;
 }

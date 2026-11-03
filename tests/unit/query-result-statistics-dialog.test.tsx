@@ -72,6 +72,19 @@ async function finish() { await act(async () => { vi.runAllTimers(); }); }
 async function batch() { await act(async () => { vi.advanceTimersToNextTimer(); }); }
 
 describe('查询结果列统计的真实对话框', () => {
+  it('明确切换值分布才发布，当前勾选与全部范围的占比正确，失效时撤下整图', async () => {
+    const f = await mount({ selectedIndices: new Set([2, 0]), truncated: true }); await finish();
+    expect(metric(text.count)).toBe('2'); expect(document.querySelector(`[aria-label="${text.frequencyTitle}"]`)).toBeNull();
+    await act(async () => button(text.frequency).dispatchEvent(new MemoryEvent('click')));
+    expect(hasMetrics()).toBe(false); expect(document.body.textContent).toContain(text.scanningFrequency);
+    await finish(); const chart = node(text.frequencyTitle);
+    expect(chart.querySelectorAll('td').map(value => value.textContent)).toEqual(['1', '50.00%', '', '1', '50.00%', '']);
+    expect(chart.querySelectorAll('code').map(value => value.textContent)).toEqual(['9007199254740993', 'NULL']);
+    await change(text.scope, 'all'); expect(document.querySelector(`[aria-label="${text.frequencyTitle}"]`)).toBeNull(); await finish();
+    expect(node(text.frequencyTitle).querySelectorAll('code').map(value => value.textContent)).toEqual(['9007199254740993', '9007199254740995', 'NULL']);
+    expect(node(text.frequencyTitle).textContent).toContain('33.33%');
+    f.invalidate(); await f.update(); f.restore(); await f.update(); expect(document.querySelector(`[aria-label="${text.frequencyTitle}"]`)).toBeNull(); expect(document.body.textContent).toContain(text.stale);
+  });
   it('挂载显示来源范围及截断提示，完成前无部分指标，BIGINT合计和平均值精确', async () => {
     await mount({ truncated: true });
     expect(node(text.title).getAttribute('role')).toBe('dialog'); expect(document.querySelector('[data-query-result-statistics-owner="ram-statistics-owner"]')).not.toBeNull();

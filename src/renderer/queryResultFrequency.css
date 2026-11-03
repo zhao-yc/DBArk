@@ -1,0 +1,12 @@
+.query-result-frequency-modes { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.query-result-frequency { min-width: 0; margin-top: 12px; }
+.query-result-frequency table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.query-result-frequency caption { text-align: left; font-weight: 650; margin-bottom: 6px; }
+.query-result-frequency th, .query-result-frequency td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.query-result-frequency thead th:first-child { width: 50%; }
+.query-result-frequency tbody th { font-weight: normal; overflow-wrap: anywhere; }
+.query-result-frequency tbody code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.query-result-frequency tbody th span { display: block; margin-top: 2px; }
+.query-result-frequency-bar { background: var(--surface-3); border-radius: 3px; height: 8px; }
+.query-result-frequency-bar span { display: block; min-width: 1px; height: 100%; border-radius: inherit; background: var(--accent); }
+.query-result-frequency > p:last-child { margin: 8px 0 0; }

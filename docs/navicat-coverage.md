@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+查询结果新增[常见值分布](development/query-result-frequency-20261103.md)：已返回筛选或勾选范围内，按完整原值排名，精确区分数值低位、SQLite 文本／字节和 NULL。不重查数据库；D09 保持部分，不增加完整工作包或发行计数。
+
 SQL 高频编辑新增[语句导航](development/statement-navigation-20261103.md)：长脚本按完整正文搜索、分页、跳转与选中，复用原MySQL／MariaDB／SQLite分段规则，不执行SQL。O05保持部分，Mac两架构及安装另验，不增加完整工作包或发行计数，暂不发布。
 
 SQL 高频编辑新增[本地语法检查](development/sql-syntax-check-20261103.md)：整份脚本、DELIMITER、问题定位和独立标记，不执行SQL。139项相关、类型／构建及Windows原窗口通过；MySQL本地grammar提示不代表服务器接受，MariaDB扩展／SQLite／Mac／安装另验，O05仍部分，不增加完整工作包或发行计数。

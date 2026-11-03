@@ -248,12 +248,24 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(statistics().getByLabel(statisticsText.sum, { exact: true })).toHaveText(statisticsText.unavailable));
     await step(() => expect(statistics().getByLabel(statisticsText.sqliteTypeCount('text'), { exact: true })).toHaveText('1'));
     await step(async () => info.attach('SQLite混合存储列统计', { body: await page.screenshot(), contentType: 'image/png' }));
+    const frequency = () => statistics().getByRole('table', { name: statisticsText.frequencyTitle, exact: true });
+    await step(() => statistics().getByRole('button', { name: statisticsText.frequency, exact: true }).click());
+    await step(() => expect(frequency().locator('tbody tr')).toHaveCount(2));
+    await step(() => expect.poll(async () => (await frequency().locator('tbody th code').allTextContents()).sort()).toEqual(['"2"', '2']));
+    await step(() => expect(frequency().locator('tbody td:nth-child(2)')).toHaveText(['1', '1']));
+    await step(() => expect(frequency().locator('tbody td:nth-child(3)')).toHaveText(['50.00%', '50.00%']));
+    await step(async () => info.attach('SQLite等显示值分域频率', { body: await page.screenshot(), contentType: 'image/png' }));
+    await step(() => statistics().getByRole('button', { name: statisticsText.summary, exact: true }).click());
     await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c3'));
     await step(() => expect(statistics().getByLabel(statisticsText.min, { exact: true })).toHaveText("X'00ff'"));
     await step(() => expect(statistics().getByLabel(statisticsText.max, { exact: true })).toHaveText("X'ff00'"));
     await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c2'));
     await step(() => expect(statistics().getByLabel(statisticsText.nulls, { exact: true })).toHaveText('2'));
     await step(() => expect(statistics().getByLabel(statisticsText.distinct, { exact: true })).toHaveText('0'));
+    await step(() => statistics().getByRole('button', { name: statisticsText.frequency, exact: true }).click());
+    await step(() => expect(frequency().locator('tbody th code')).toHaveText(['NULL']));
+    await step(() => expect(frequency().locator('tbody td:nth-child(2)')).toHaveText(['2']));
+    await step(() => expect(frequency().locator('tbody td:nth-child(3)')).toHaveText(['100.00%']));
     await step(() => statistics().getByRole('button', { name: statisticsText.close, exact: true }).click());
     await step(() => expect(statistics()).toHaveCount(0)); await step(() => expect.poll(shownIntegers).toEqual(ascending));
     expect((await step(audit)).executions).toBe(1); expect(disk()).toEqual(baselineDisk);
@@ -269,6 +281,13 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(filtering.getByLabel(filterText.sqliteType(1), { exact: true })).toHaveValue('text'));
     await step(() => expect.poll(shownIntegers).toEqual(ascending)); await applyFiltering([ascending[0]]);
     await step(() => expect(query().getByText(filterText.counts(2, 1), { exact: true })).toBeVisible());
+    await step(async () => (await navigationMenuItem(query(), { name: statisticsText.open, exact: true }, check)).click());
+    await step(() => statistics().getByLabel(statisticsText.column, { exact: true }).selectOption('c4'));
+    await step(() => statistics().getByRole('button', { name: statisticsText.frequency, exact: true }).click());
+    await step(() => expect(frequency().locator('tbody th code')).toHaveText(['"2"']));
+    await step(() => expect(frequency().locator('tbody td:nth-child(3)')).toHaveText(['100.00%']));
+    await step(() => statistics().getByRole('button', { name: statisticsText.close, exact: true }).click());
+    await step(() => expect(statistics()).toHaveCount(0)); expect((await step(audit)).executions).toBe(1);
     await openFiltering(); await step(() => filtering.getByLabel(filterText.sqliteType(1), { exact: true }).selectOption('integer'));
     await step(() => expect.poll(shownIntegers).toEqual([ascending[0]]));
     // 仅成功草稿态手动截图，画面为本例合成数据；自动trace/video仍关闭。

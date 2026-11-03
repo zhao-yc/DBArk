@@ -22,6 +22,39 @@ function finish(scan: QueryResultStatisticsScan, initialProcessed = 0) {
   }
 }
 
+describe('当前已返回行的常见值分布', () => {
+  it('按完整范围计数再取前十，后出现高频值与同次数原顺序、其余和NULL均对齐', () => {
+    const values = [...Array.from({ length: 12 }, (_, index) => `值${index + 1}`), ...Array(520).fill('后来'), '值3', '值3', null];
+    const f = fixture('VARCHAR', values), before = structuredClone(f.rows), result = finish(new QueryResultStatisticsScan(f.capture, true));
+    expect(result).toMatchObject({ count: 535, nonNull: 534, nulls: 1, distinct: 13, frequency: { otherRows: 3, otherValues: 3 } });
+    expect(result.frequency?.entries.map(entry => [entry.label, entry.count])).toEqual([['"后来"', 520], ['"值3"', 3], ...[1, 2, 4, 5, 6, 7, 8, 9].map(index => [`"值${index}"`, 1])]);
+    expect(f.rows).toEqual(before); expect(finish(f.scan).frequency).toBeUndefined();
+  });
+  it('勾选范围保留相邻UINT64身份及完整首个代表值，重复数值不合并为浮点', () => {
+    const f = fixture('BIGINT UNSIGNED', ['18446744073709551615', '18446744073709551614', '18446744073709551615', null, '3'], new Set([3, 2, 0, 1]));
+    expect(finish(new QueryResultStatisticsScan(f.capture, true))).toMatchObject({ count: 4, nulls: 1, distinct: 2, frequency: { otherRows: 0, otherValues: 0, entries: [
+      { label: '18446744073709551615', kind: 'number', count: 2, truncated: false }, { label: '18446744073709551614', kind: 'number', count: 1, truncated: false },
+    ] } });
+  });
+  it('空文本、文本NULL和实际NULL分开；相同有界预览不合并，控制字符只转义展示', () => {
+    const prefix = '🧭'.repeat(80), f = fixture('VARCHAR', ['', 'NULL', null, '\u0000\u202e示例', prefix + 'a', prefix + 'b', prefix + 'a']);
+    const result = finish(new QueryResultStatisticsScan(f.capture, true));
+    expect(result).toMatchObject({ distinct: 5, nulls: 1, frequency: { entries: [
+      { label: JSON.stringify(prefix) + '…', count: 2, truncated: true }, { label: '""', count: 1 }, { label: '"NULL"', count: 1 },
+      { label: '"\\u0000\\u202e示例"', count: 1 }, { label: JSON.stringify(prefix) + '…', count: 1, truncated: true },
+    ] } });
+  });
+  it('坏值落在后一批时也撤销全部分布；空集或全NULL不虚构普通值', () => {
+    const bad = fixture('BIGINT', [...Array(512).fill('2'), '坏值', null]);
+    const result = finish(new QueryResultStatisticsScan(bad.capture, true));
+    expect(result).toMatchObject({ count: 514, nonNull: 513, nulls: 1, reason: text.value }); expect(result.frequency).toBeUndefined();
+    for (const values of [[], [null, null]]) {
+      const f = fixture('BIGINT', values);
+      expect(finish(new QueryResultStatisticsScan(f.capture, true))).toMatchObject({ count: values.length, nulls: values.length, frequency: { entries: [], otherValues: 0, otherRows: 0 } });
+    }
+  });
+});
+
 describe('当前结果列的精确数值统计', () => {
   it.each(['LONGLONG', 'BIGINT', 'BIGINT UNSIGNED', 'NEWDECIMAL', 'DECIMAL(65,0)'])('%s不经过Number，保留20位整数合计与循环平均', type => {
     const f = fixture(type, ['18446744073709551615', '2', '9007199254740993', null]), before = structuredClone(f.rows), result = finish(f.scan);

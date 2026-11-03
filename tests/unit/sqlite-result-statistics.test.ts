@@ -29,6 +29,15 @@ function finish(scan: QueryResultStatisticsScan) {
 function literal(value: unknown): string { return value instanceof Uint8Array ? `X'${Buffer.from(value).toString('hex')}'` : String(value); }
 
 describe('SQLite已返回列统计', () => {
+  it('频率按完整SQLite原值与独立GROUP BY一致；相邻大整数、文本、字节及NULL不被显示值混淆', () => {
+    const f = fixture([2n, 2, '2', Uint8Array.of(0x32), 9007199254740993n, 9007199254740992n, 9007199254740992, null, '', Uint8Array.of(0x32), null]);
+    try {
+      const before = structuredClone(f.source), statement = f.db.prepare('SELECT value,typeof(value) AS storage,count(*) AS times FROM subject WHERE value IS NOT NULL GROUP BY value ORDER BY times DESC,min(id)'); statement.setReadBigInts(true);
+      const expected = statement.all().map(row => ({ label: row.storage === 'text' ? JSON.stringify(row.value) : literal(row.value), kind: row.storage === 'text' ? 'text' : row.storage === 'blob' ? 'blob' : 'number', count: Number(row.times), truncated: false }));
+      const result = finish(new QueryResultStatisticsScan(f.capture, true));
+      expect(result.frequency?.entries).toEqual(expected); expect(result).toMatchObject({ count: 11, nonNull: 9, nulls: 2, distinct: expected.length }); expect(f.source).toEqual(before);
+    } finally { f.db.close(); }
+  });
   it('混合存储的不同值及极值与独立UTF-8 SQLite一致，不猜测文本数值或丢整数低位', () => {
     const f = fixture([9223372036854775807n, 9007199254740993n, 9007199254740992, 2n, 2, '2', '10', -0, 0n, -Infinity, Infinity, '', '\0A', '\0B', '\uE000', '𐀀', Uint8Array.of(0xff), new Uint8Array(), Uint8Array.of(0xff), null]);
     try {

@@ -10,6 +10,9 @@ on:
       - 'tests/helpers/**'
       - 'tests/unit/sqlite-ci-shards.test.ts'
       - 'tests/unit/sqlite-offline-ci.test.ts'
+      - 'tests/unit/query-result-statistics*'
+      - 'tests/unit/sqlite-result-statistics.test.ts'
+      - 'tests/unit/query-result-value-frequency.test.ts'
       - 'scripts/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -25,6 +28,9 @@ on:
       - 'tests/helpers/**'
       - 'tests/unit/sqlite-ci-shards.test.ts'
       - 'tests/unit/sqlite-offline-ci.test.ts'
+      - 'tests/unit/query-result-statistics*'
+      - 'tests/unit/sqlite-result-statistics.test.ts'
+      - 'tests/unit/query-result-value-frequency.test.ts'
       - 'scripts/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -78,6 +84,9 @@ jobs:
         run: pnpm exec install-electron
       - name: 核对完整分片覆盖和离线门槛
         run: pnpm exec vitest run tests/unit/sqlite-ci-shards.test.ts tests/unit/sqlite-offline-ci.test.ts
+      - name: 核对已返回行的列统计和值分布
+        if: matrix.suite == 'workspace'
+        run: pnpm exec vitest run tests/unit/query-result-statistics.test.ts tests/unit/query-result-statistics-dialog.test.tsx tests/unit/sqlite-result-statistics.test.ts tests/unit/query-result-value-frequency.test.ts --maxWorkers=1
       - name: 构建当前源码
         run: pnpm build
       - name: 单次运行SQLite原工作区真实专项
