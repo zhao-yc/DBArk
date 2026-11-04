@@ -4,6 +4,7 @@ import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { sqliteTableBrowseZh as text } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
 import { relationshipDiagramZh as diagramText } from '../../src/renderer/locales/relationshipDiagram.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
+import { sqliteTableEditZh as editText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { sqliteReferenceZh as referenceText } from '../../src/renderer/locales/sqliteReference.zh-CN';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -14,7 +15,7 @@ if (active) {
   for (const [index, value] of process.argv.entries()) if (value === '--trace' && process.argv[index + 1] !== 'off' || value.startsWith('--trace=') && value !== '--trace=off') throw Error('关系图专项禁止自动trace');
 }
 type Desktop = typeof import('./desktop-fixture');
-interface MenuAudit { pending: number; commands: string[]; denied: string[]; pickerCalls: number; reads: unknown[]; references: { input: Record<string, unknown>; reply?: unknown }[]; connectionId?: string; restore(): void; }
+interface MenuAudit { pending: number; commands: string[]; denied: string[]; pickerCalls: number; reads: unknown[]; references: { input: Record<string, unknown>; reply?: unknown }[]; connectionId?: string; profiles: Record<string, boolean>; snapshots: string[]; previews: string[]; writes: unknown[]; restore(): void; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：显式离线启用SQLite关系图原生专项');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -35,34 +36,45 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
   const step = async <T,>(action: () => Promise<T>): Promise<T> => { check(); const result = await action(); check(); return result; };
   const audit = () => step(() => application.evaluate(() => {
     const state = (globalThis as typeof globalThis & { __sqliteRelationshipsAudit?: MenuAudit }).__sqliteRelationshipsAudit;
-    if (!state) throw Error('关系图Main观察器不存在'); return { pending: state.pending, commands: state.commands, denied: state.denied, pickerCalls: state.pickerCalls, reads: state.reads, references: state.references };
+    if (!state) throw Error('关系图Main观察器不存在'); return { pending: state.pending, commands: state.commands, denied: state.denied, pickerCalls: state.pickerCalls, reads: state.reads, references: state.references, profiles: state.profiles, snapshots: state.snapshots, previews: state.previews, writes: state.writes };
   }));
   const table = () => page.locator('.sqlite-table-tab:visible');
   const toolbar = () => table().getByRole('toolbar', { name: text.toolbar, exact: true });
   try {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); expect(dirname(resolve(database))).toBe(resolve(directory)); expect(basename(directory)).toMatch(/^dbark-e2e-/);
-    const db = new DatabaseSync(database); try { db.exec("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT,p REFERENCES parent); INSERT INTO parent VALUES(1); INSERT INTO subject VALUES(1,'合成原值','001')"); } finally { db.close(); }
+    const db = new DatabaseSync(database); try { db.exec("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT,p REFERENCES parent); INSERT INTO parent VALUES(1); INSERT INTO subject VALUES(1,'合成原值','001'); CREATE TABLE parent_pair(a TEXT COLLATE NOCASE NOT NULL,b INTEGER NOT NULL,label TEXT,PRIMARY KEY(a,b)) WITHOUT ROWID; INSERT INTO parent_pair VALUES('Alpha',9223372036854775807,'甲'),('Beta',2,'乙'),('Gamma',3,'丙'); CREATE TABLE child_pair(id INTEGER PRIMARY KEY,a TEXT,b INTEGER,note TEXT,FOREIGN KEY(a,b) REFERENCES parent_pair); INSERT INTO child_pair VALUES(1,'Alpha',9223372036854775807,'原值'),(2,NULL,NULL,'控制')"); } finally { db.close(); }
     await info.attach('关系图准确启动归属', { body: JSON.stringify({ directory, database, pid: process.pid }), contentType: 'application/json' });
     await step(() => application.evaluate(({ ipcMain, dialog, BrowserWindow }, input) => {
       type Root = typeof globalThis & { __sqliteRelationshipsAudit?: MenuAudit };
       const root = globalThis as Root, handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, packet: { command: string; input: Record<string, unknown> }) => Promise<unknown>> })._invokeHandlers;
       const original = handlers.get('dbark:request'), picker = dialog.showOpenDialog, window = BrowserWindow.getAllWindows()[0], frame = window.webContents.mainFrame;
       if (!original || root.__sqliteRelationshipsAudit || BrowserWindow.getAllWindows().length !== 1) throw Error('关系图Main原入口不明确');
-      const state: MenuAudit = { pending: 0, commands: [], denied: [], pickerCalls: 0, reads: [], references: [], restore() {} };
+      const state: MenuAudit = { pending: 0, commands: [], denied: [], pickerCalls: 0, reads: [], references: [], profiles: {}, snapshots: [], previews: [], writes: [], restore() {} };
       let choosing = false;
       const deny = (command: string): never => { state.denied.push(command); throw Error('关系图专项拒绝越界：' + command); };
       const current = () => { if (root.__sqliteRelationshipsAudit !== state || handlers.get('dbark:request') !== wrapped || dialog.showOpenDialog !== ownPicker || window.isDestroyed() || window.webContents.mainFrame !== frame || BrowserWindow.getAllWindows().length !== 1 || state.denied.length) throw Error('关系图Main原观察器失效'); };
-      const ownPicker = (async (...args: unknown[]) => { current(); const options = args.at(-1) as Electron.OpenDialogOptions; if (!choosing || state.pickerCalls || !options.properties?.includes('openFile')) return deny('其它文件对话框'); state.pickerCalls++; return { canceled: false, filePaths: [input.database] }; }) as typeof dialog.showOpenDialog;
-      const allowed = new Set(['app.menuState', 'app.setDirty', 'settings.get', 'settings.save', 'connections.list', 'connections.save', 'connections.test', 'connections.open', 'files.choose', 'metadata.databases', 'metadata.objects', 'tasks.list', 'history.list', 'sqlite.tablePage', 'sqlite.tableLayout.get', 'sqlite.relationships', 'sqlite.referencePage']);
+      const ownPicker = (async (...args: unknown[]) => { current(); const options = args.at(-1) as Electron.OpenDialogOptions; if (!choosing || state.pickerCalls >= 2 || !options.properties?.includes('openFile')) return deny('其它文件对话框'); state.pickerCalls++; return { canceled: false, filePaths: [input.database] }; }) as typeof dialog.showOpenDialog;
+      const allowed = new Set(['app.menuState', 'app.setDirty', 'settings.get', 'settings.save', 'connections.list', 'connections.save', 'connections.test', 'connections.open', 'files.choose', 'metadata.databases', 'metadata.objects', 'tasks.list', 'history.list', 'sqlite.tablePage', 'sqlite.tableLayout.get', 'sqlite.relationships', 'sqlite.referencePage', 'sqlite.tableEdit.release', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply']);
       const wrapped = async (event: Electron.IpcMainInvokeEvent, packet: { command: string; input: Record<string, unknown> }) => {
         current(); const command = packet?.command, value = packet?.input;
         if (event.sender !== window.webContents || event.senderFrame !== frame || !allowed.has(command) || !value || typeof value !== 'object') return deny(String(command));
-        if (command === 'files.choose') { if (value.purpose !== 'sqlite-database' || typeof value.sqliteConnectionId !== 'string') return deny(command); state.connectionId = value.sqliteConnectionId; choosing = true; }
-        if (command === 'connections.save' || command === 'connections.test') { const config = value.sqlite as { readOnly?: boolean } | undefined; if (value.id !== state.connectionId || value.dialect !== 'sqlite' || config?.readOnly !== true) return deny(command); }
-        if (command === 'connections.open' && value.id !== state.connectionId || command.startsWith('metadata.') && value.connectionId !== state.connectionId) return deny(command);
-        if (command.startsWith('sqlite.') && (value.connectionId !== state.connectionId || value.database !== 'main' || (command === 'sqlite.relationships' ? (value.anchor as { table?: string })?.table !== 'subject' || !Array.isArray(value.tables) || value.tables.some(name => !['subject', 'parent'].includes(String(name))) : value.table !== 'subject'))) return deny(command);
+        if (command === 'files.choose') { if (value.purpose !== 'sqlite-database' || typeof value.sqliteConnectionId !== 'string') return deny(command); if (state.pickerCalls >= 2 || value.sqliteConnectionId in state.profiles) return deny(command); state.connectionId = value.sqliteConnectionId; state.profiles[value.sqliteConnectionId] = state.pickerCalls === 0; choosing = true; }
+        if (command === 'connections.save' || command === 'connections.test') { const config = value.sqlite as { readOnly?: boolean } | undefined; if (typeof value.id !== 'string' || !(value.id in state.profiles) || value.dialect !== 'sqlite' || config?.readOnly !== state.profiles[value.id]) return deny(command); }
+        if (command === 'connections.open' && !(String(value.id) in state.profiles) || command.startsWith('metadata.') && !(String(value.connectionId) in state.profiles)) return deny(command);
+        if (command === 'sqlite.tableEdit.preview' && !state.snapshots.includes(String(value.snapshotId))) return deny(command);
+        if (command === 'sqlite.tableEdit.apply' && (!state.previews.includes(String(value.previewId)) || value.confirmation !== 'main.child_pair' || state.writes.length)) return deny(command);
+        if (command === 'sqlite.tableEdit.release' && (value.snapshotId !== undefined && !state.snapshots.includes(String(value.snapshotId)) || value.previewId !== undefined && !state.previews.includes(String(value.previewId)))) return deny(command);
+        if (command.startsWith('sqlite.') && !command.startsWith('sqlite.tableEdit.')) {
+          const id = String(value.connectionId), readOnly = state.profiles[id];
+          if (!(id in state.profiles) || value.database !== 'main' || (command === 'sqlite.relationships' ? !readOnly || (value.anchor as { table?: string })?.table !== 'subject' || !Array.isArray(value.tables) || value.tables.some(name => !['subject', 'parent'].includes(String(name))) : value.table !== (readOnly ? 'subject' : 'child_pair'))) return deny(command);
+        }
         state.pending++; state.commands.push(command);
-        try { const result = await original(event, packet); current(); if (command === 'sqlite.relationships') state.reads.push({ input: structuredClone(value), reply: structuredClone(result) }); if (command === 'sqlite.referencePage') state.references.push({ input: structuredClone(value), reply: structuredClone(result) }); return result; } finally { state.pending--; if (command === 'files.choose') choosing = false; }
+        try { const result = await original(event, packet); current();
+          const reply = result as { ok?: boolean; result?: { edit?: { kind?: string; snapshotId?: string }; previewId?: string } };
+          if (reply.ok && command === 'sqlite.tablePage' && reply.result?.edit?.kind === 'editable') { if (state.profiles[String(value.connectionId)] || value.table !== 'child_pair' || !reply.result.edit.snapshotId) return deny(command); state.snapshots.push(reply.result.edit.snapshotId); }
+          if (reply.ok && command === 'sqlite.tableEdit.preview' && reply.result?.previewId) state.previews.push(reply.result.previewId);
+          if (command === 'sqlite.tableEdit.apply') state.writes.push({ input: structuredClone(value), reply: structuredClone(result) });
+          if (command === 'sqlite.relationships') state.reads.push({ input: structuredClone(value), reply: structuredClone(result) }); if (command === 'sqlite.referencePage') state.references.push({ input: structuredClone(value), reply: structuredClone(result) }); return result; } finally { state.pending--; if (command === 'files.choose') choosing = false; }
       };
       state.restore = () => { current(); if (state.pending) throw Error('关系图原请求未完成'); handlers.set('dbark:request', original); dialog.showOpenDialog = picker; delete root.__sqliteRelationshipsAudit; };
       root.__sqliteRelationshipsAudit = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = ownPicker;
@@ -122,6 +134,41 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
     await info.attach('SQLite外键父记录真实窗口', { body: await page.screenshot(), contentType: 'image/png' });
     await step(() => reference.getByRole('button', { name: referenceText.close, exact: true }).click()); await step(() => expect(reference).toHaveCount(0));
     await info.attach('SQLite外键浏览原始回包', { body: JSON.stringify((await audit()).references), contentType: 'application/json' });
+    // 第二个准确profile只允许本例child_pair可写；候选、暂存、撤销和预览取消均核对磁盘零提前写。
+    await step(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click());
+    const writable = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+    await step(() => writable.getByLabel(zh.connections.text006, { exact: true }).fill('SQLite外键选择本例')); await step(() => writable.locator('select').selectOption('sqlite'));
+    await step(() => writable.getByRole('checkbox', { name: sqliteZh.readOnly, exact: true }).uncheck()); await step(() => writable.getByRole('button', { name: sqliteZh.choose, exact: true }).click()); await step(() => writable.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(writable).toBeHidden());
+    const connection = page.locator('.connection-row').filter({ hasText: 'SQLite外键选择本例' }); await step(() => connection.locator('.tree-label').click());
+    // 将数据库和表限定在准确连接容器内，不依赖连接排序或全局last节点。
+    const branch = connection.locator('..'); const databaseRows = branch.locator('.database-row .tree-label').filter({ hasText: /^main$/ }); await step(() => databaseRows.click());
+    const objects = branch.locator('.object-row .tree-label').filter({ hasText: /^child_pair$/ }); await step(() => objects.dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible());
+    const disk = () => { const db = new DatabaseSync(database, { readOnly: true }); try { return db.prepare('SELECT id,a,CAST(b AS TEXT) AS b,note FROM child_pair ORDER BY id').all(); } finally { db.close(); } };
+    const baseline = disk(), grid = () => table().getByRole('grid'), choose = () => page.getByRole('dialog', { name: referenceText.choiceTitle, exact: true });
+    await step(() => grid().getByRole('button', { name: editText.select(1), exact: true }).click()); await step(() => table().getByRole('button', { name: editText.editRow, exact: true }).click());
+    const rowForm = page.getByRole('dialog', { name: editText.editRow, exact: true }); await step(() => rowForm.getByLabel(editText.value('note'), { exact: true }).fill('保留本地草稿')); await step(() => rowForm.getByRole('button', { name: editText.saveInput, exact: true }).click());
+    const openChoice = async () => { const before = (await audit()).references.length; await step(async () => (await navigationMenuItem(toolbar(), { name: referenceText.choiceEntry, exact: true }, check)).click()); await step(() => expect(choose()).toBeVisible()); expect((await audit()).references).toHaveLength(before); await step(() => choose().getByRole('button', { name: referenceText.catalog, exact: true }).click()); };
+    const selectParent = async (label: string) => { await step(() => choose().getByRole('grid').getByRole('gridcell').filter({ hasText: new RegExp('^' + label + '$') }).click()); await step(() => expect(choose().getByRole('button', { name: referenceText.stage, exact: true })).toBeEnabled()); };
+    await openChoice(); await step(() => choose().getByRole('button', { name: referenceText.candidates, exact: true }).click()); await step(() => expect(choose().getByRole('grid').getByRole('gridcell').filter({ hasText: /^9223372036854775807$/ })).toHaveCount(1));
+    const beforeSearch = (await audit()).references.length; await step(() => choose().getByLabel(referenceText.searchColumn, { exact: true }).selectOption('label')); await step(() => choose().getByLabel(referenceText.search, { exact: true }).fill('乙')); expect((await audit()).references).toHaveLength(beforeSearch);
+    await step(() => choose().getByRole('button', { name: referenceText.candidates, exact: true }).click()); await selectParent('Beta'); expect(disk()).toEqual(baseline);
+    await info.attach('SQLite复合外键候选搜索', { body: await page.screenshot(), contentType: 'image/png' });
+    await step(() => choose().getByRole('button', { name: referenceText.stage, exact: true }).click()); await step(() => expect(choose()).toHaveCount(0)); expect(disk()).toEqual(baseline);
+    const assertDraft = async (a: string, b: string) => { await step(() => table().getByRole('button', { name: editText.editRow, exact: true }).click()); await step(() => expect(rowForm.getByLabel(editText.value('a'), { exact: true })).toHaveValue(a)); await step(() => expect(rowForm.getByLabel(editText.value('b'), { exact: true })).toHaveValue(b)); await step(() => expect(rowForm.getByLabel(editText.value('note'), { exact: true })).toHaveValue('保留本地草稿')); await step(() => rowForm.getByRole('button', { name: editText.cancelInput, exact: true }).click()); };
+    await assertDraft('Beta', '2'); await step(() => table().getByRole('button', { name: editText.undo, exact: true }).click()); await assertDraft('Alpha', '9223372036854775807'); await step(() => table().getByRole('button', { name: editText.redo, exact: true }).click()); await assertDraft('Beta', '2');
+    await openChoice(); await step(() => expect(choose().getByRole('button', { name: referenceText.clear, exact: true })).toBeDisabled()); await step(() => choose().getByRole('checkbox', { name: referenceText.clearConfirm, exact: true }).check()); const beforeClear = (await audit()).references.length;
+    await step(() => choose().getByRole('button', { name: referenceText.clear, exact: true }).click()); await step(() => expect(choose()).toHaveCount(0)); expect((await audit()).references.slice(beforeClear).map(value => value.input.reference)).toEqual(['catalog']); expect(disk()).toEqual(baseline);
+    await step(() => table().getByRole('button', { name: editText.editRow, exact: true }).click()); for (const name of ['a', 'b']) await step(() => expect(rowForm.getByLabel(editText.type(name), { exact: true })).toHaveValue('null')); await step(() => rowForm.getByRole('button', { name: editText.cancelInput, exact: true }).click());
+    await step(() => table().getByRole('button', { name: editText.undo, exact: true }).click()); await assertDraft('Beta', '2');
+    await openChoice(); await step(() => choose().getByRole('button', { name: referenceText.candidates, exact: true }).click()); await selectParent('Gamma');
+    const remove = new DatabaseSync(database); try { remove.exec("DELETE FROM parent_pair WHERE a='Gamma'"); } finally { remove.close(); }
+    await step(() => choose().getByRole('button', { name: referenceText.stage, exact: true }).click()); await step(() => expect(choose()).toContainText('所选父键已删除或变化')); expect(disk()).toEqual(baseline); await step(() => choose().getByRole('button', { name: referenceText.close, exact: true }).click()); await assertDraft('Beta', '2');
+    const restore = new DatabaseSync(database); try { restore.exec("INSERT INTO parent_pair VALUES('Gamma',3,'丙')"); } finally { restore.close(); }
+    await step(() => table().getByRole('button', { name: editText.preview, exact: true }).click()); const preview = page.getByRole('dialog', { name: editText.previewTitle, exact: true }); await step(() => expect(preview).toBeVisible()); expect(disk()).toEqual(baseline); await step(() => preview.getByRole('button', { name: editText.closePreview, exact: true }).click()); expect(disk()).toEqual(baseline);
+    await step(() => table().getByRole('button', { name: editText.preview, exact: true }).click()); await step(() => preview.getByRole('checkbox', { name: editText.confirmation, exact: true }).check()); await step(() => preview.getByRole('button', { name: editText.submit, exact: true }).click()); await step(() => expect(preview).toHaveCount(0));
+    await step(() => expect.poll(disk).toEqual([{ id: 1, a: 'Beta', b: '2', note: '保留本地草稿' }, baseline[1]]));
+    const finalFacts = await audit(); expect(finalFacts.denied).toEqual([]); expect(finalFacts.pickerCalls).toBe(2); expect(finalFacts.writes).toHaveLength(1); expect(runtime.pageErrors).toEqual([]);
+    await info.attach('SQLite外键选择最终草稿与提交', { body: await page.screenshot(), contentType: 'image/png' }); await info.attach('SQLite外键选择完整请求与零提前写入', { body: JSON.stringify({ baseline, finalDisk: disk(), finalFacts, applicationWrites: 1, systemFilePickerInputVerified: false, systemClipboardOperations: 0 }), contentType: 'application/json' });
     await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteRelationshipsAudit?: MenuAudit }).__sqliteRelationshipsAudit; if (!state) throw Error('原关系图观察器已消失'); state.restore(); })); armed = false;
     check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(process.exitCode).toBe(0);
     const verify = new DatabaseSync(database, { readOnly: true }); try { expect(verify.prepare('SELECT id,note,p FROM subject').all()).toEqual([{ id: 1, note: '合成原值', p: '001' }]); expect(verify.prepare('SELECT id FROM parent').all()).toEqual([{ id: 1 }]); } finally { verify.close(); }

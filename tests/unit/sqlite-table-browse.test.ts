@@ -628,6 +628,31 @@ it('父记录BLOB元组按真实字节分页；声明非唯一关系只读浏览
   await expect(app.request('sqlite.referencePage', { ...base, table: 'child_missing', schemaKey: missing.schemaKey, values: [{ kind: 'integer', value: '1' }], taskId: randomUUID() })).rejects.toThrow('父表不存在');
   await app.request('connections.close', { id: profile.id }); for (const record of processes) { expect(record.kills).toBe(0); expect(await record.exited).toEqual({ code: 0, signal: null }); }
 });
+it('父键候选真实worker支持字面搜索、BLOB HEX、精确复合键与分页；确认复读不借NOCASE伪造原键', async () => {
+  const profile = fixture(); disk(profile, db => db.exec(`
+    CREATE TABLE parent_pair(a TEXT COLLATE NOCASE NOT NULL,b INTEGER NOT NULL,label TEXT,payload BLOB,PRIMARY KEY(a,b)) WITHOUT ROWID;
+    INSERT INTO parent_pair VALUES('Alpha',9223372036854775807,'甲_100%',X'00FF'),('Beta',2,'乙''引号',X'FF00'),('Gamma',3,'gamma',X'');
+    CREATE TABLE child_pair(id INTEGER PRIMARY KEY,a TEXT,b INTEGER,note TEXT,FOREIGN KEY(a,b) REFERENCES parent_pair);
+    INSERT INTO child_pair VALUES(1,NULL,NULL,'原值');
+  `));
+  const { app } = runtime(profile), initial = await app.request('sqlite.tablePage', input(profile, randomUUID(), { table: 'child_pair', sort: [] })) as SqliteTablePage;
+  const base = { connectionId: profile.id, database: 'main' as const, table: 'child_pair', schemaKey: initial.schemaKey, reference: 'candidates' as const, foreignKey: 0, offset: 0, limit: 1 };
+  const read = async (patch: object = {}) => app.request('sqlite.referencePage', { ...base, ...patch, taskId: randomUUID() }) as Promise<import('../../src/shared/sqliteReference').SqliteReferenceOutput>;
+  const first = await read(); expect(first.page?.hasMore).toBe(true); expect(first.page?.result.rows).toEqual([{ c0: 'Alpha', c1: '9223372036854775807', c2: '甲_100%', c3: { type: 'binary', base64: 'AP8=' } }]); expect(first.page?.edit).toBeUndefined();
+  const second = await read({ offset: 1, parentSchemaKey: first.page!.schemaKey }); expect(second.page?.result.rows[0].c0).toBe('Beta');
+  for (const search of [{ column: 'label', text: '_100%' }, { column: 'payload', text: '00ff' }, { column: 'a', text: 'aLPHa' }]) expect((await read({ search })).page?.result.rows[0].c0).toBe('Alpha');
+  expect((await read({ search: { column: 'label', text: "乙'引号" } })).page?.result.rows[0].c0).toBe('Beta');
+  expect((await read({ search: { column: 'label', text: "' OR 1=1 --" } })).page?.result.rows).toEqual([]);
+  await expect(read({ search: { column: 'a) OR 1=1', text: 'x' } })).rejects.toThrow('搜索列已变化');
+  const verify = { ...base, reference: 'page', values: [{ kind: 'text', value: 'Alpha' }, { kind: 'integer', value: '9223372036854775807' }], parentSchemaKey: first.page!.schemaKey };
+  disk(profile, db => db.exec("UPDATE parent_pair SET a='ALPHA' WHERE a='Alpha'"));
+  const changed = await read(verify); expect(changed.page?.result.rows[0].c0).toBe('ALPHA');
+  const { assertSqliteReferenceChoice } = await import('../../src/renderer/sqliteReferenceChoice'); expect(() => assertSqliteReferenceChoice(changed, verify.values as any)).toThrow('删除或变化');
+  disk(profile, db => db.exec("DELETE FROM parent_pair WHERE a='Alpha'")); expect((await read(verify)).page?.result.rows).toEqual([]);
+  disk(profile, db => db.exec('ALTER TABLE parent_pair ADD COLUMN changed TEXT')); await expect(read({ parentSchemaKey: first.page!.schemaKey })).rejects.toThrow('父表结构已变化');
+  expect(disk(profile, db => db.prepare('SELECT a,b,note FROM child_pair').all())).toEqual([{ a: null, b: null, note: '原值' }]);
+  await app.request('connections.close', { id: profile.id }); for (const record of processes) { expect(record.kills).toBe(0); expect(await record.exited).toEqual({ code: 0, signal: null }); }
+});
 it.each(['foreign', 'rollback'] as const)('外键%s取消只影响准确读任务，原查询事务保持，资源退出后才终态', async phase => {
   const profile = fixture(), reached = deferred<void>(); let armed = false, paused = false, release!: () => void;
   const { app, events } = runtime(profile, () => transport((message, forward) => {

@@ -21,7 +21,7 @@ export async function readSqliteReference(driver: SqliteDriverSession, source: S
     const child = await readSqliteRelationshipTable(driver, request.table, control, request.schemaKey);
     if (request.reference === 'catalog') return assertSqliteReferenceOutput({ request, source: child }, request);
     const key = child.foreignKeys.find(key => key.ordinal === request.foreignKey);
-    if (!key || request.values.length !== key.columns.length) throw Error('SQLite原外键或值映射已经变化，请重新读取');
+    if (!key || request.reference === 'page' && request.values.length !== key.columns.length) throw Error('SQLite原外键或值映射已经变化，请重新读取');
     const candidates = await rows(driver, "SELECT name FROM main.sqlite_schema WHERE name=? COLLATE NOCASE AND type='table' LIMIT 2", [key.referencedTable], 2, control);
     const parentName = candidates[0]?.[0]; if (candidates.length !== 1 || typeof parentName !== 'string') throw Error('SQLite外键父表不存在或不是可浏览的物理表');
     const parent = await readSqliteRelationshipTable(driver, parentName, control), catalogue = await readSqliteTableCatalogue(driver, parentName, control);
@@ -29,9 +29,16 @@ export async function readSqliteReference(driver: SqliteDriverSession, source: S
     const declared = key.referencedColumns ?? parent.columns.filter(column => column.primaryKey).sort((a, b) => a.primaryKey - b.primaryKey).map(column => column.name);
     const names = declared.map(name => catalogue.columns.find(column => fold(column.name) === fold(name))?.name);
     if (names.length !== key.columns.length || names.some(name => !name)) throw Error('SQLite父表引用列或隐式主键映射不完整，不猜测rowid');
-    const referencedColumns = names as string[], parameters: SqliteValue[] = request.values.map(value => value.kind === 'null' ? null : value.kind === 'text' ? value.value : value.kind === 'blob' ? { type: 'binary', base64: Buffer.from(value.value, 'hex').toString('base64') } : { type: value.kind, value: value.value });
+    const referencedColumns = names as string[], parameters: SqliteValue[] = request.reference === 'page' ? request.values.map(value => value.kind === 'null' ? null : value.kind === 'text' ? value.value : value.kind === 'blob' ? { type: 'binary', base64: Buffer.from(value.value, 'hex').toString('base64') } : { type: value.kind, value: value.value }) : [];
+    let where = request.reference === 'page' ? referencedColumns.map(name => quote(parentName) + '.' + quote(name) + ' = ?').join(' AND ') : '';
+    // 搜索是参数化字面子串；列名只取真实目录，BLOB使用HEX，大小写遵循SQLite lower的ASCII规则。
+    if (request.reference === 'candidates' && request.search) {
+      const column = catalogue.columns.find(column => column.name === request.search!.column); if (!column) throw Error('SQLite父候选搜索列已变化');
+      const field = quote(parentName) + '.' + quote(column.name);
+      where = "instr(lower(CASE WHEN typeof(" + field + ")='blob' THEN hex(" + field + ') ELSE CAST(' + field + ' AS TEXT) END), lower(?)) > 0'; parameters.push(request.search.text);
+    }
     const sql = 'SELECT ' + catalogue.columns.map(column => sqliteExactTextProjection(quote(parentName) + '.' + quote(column.name)) + ' AS ' + quote(column.name)).join(', ') + ' FROM "main".' + quote(parentName)
-      + ' WHERE ' + referencedColumns.map(name => quote(parentName) + '.' + quote(name) + ' = ?').join(' AND ') + ' LIMIT ? OFFSET ?';
+      + (where ? ' WHERE ' + where : '') + ' LIMIT ? OFFSET ?';
     const values = await rows(driver, sql, [...parameters, { type: 'integer', value: String(request.limit + 1) }, { type: 'integer', value: String(request.offset) }], request.limit + 1, control,
       actual => { if (actual.length !== catalogue.columns.length || actual.some((column, i) => column.name !== catalogue.columns[i].name)) throw Error('SQLite父记录列目录不一致'); });
     const original = values.slice(0, request.limit);

@@ -1,4 +1,4 @@
-import { assertSqliteReferenceOutput, type SqliteReferenceInput, type SqliteReferenceOutput } from '../shared/sqliteReference';
+import { assertSqliteReferenceOutput, type SqliteReferenceInput, type SqliteReferenceOutput, type SqliteReferenceSearch } from '../shared/sqliteReference';
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteRelationshipName as fold, type SqliteRelationshipTable } from '../shared/sqliteRelationships';
 import { sqliteEditValueSchema, type SqliteOriginalValue } from '../shared/sqliteTableEdit';
@@ -27,7 +27,7 @@ export class SqliteReferenceReader {
         op.sent = true; const output = await this.services.read(request);
         if (!this.current() || op.stopped || this.operation !== op) throw Error('SQLite外键读取已停止或来源变化');
         const value = assertSqliteReferenceOutput(output, request);
-        if (request.reference === 'page') this.parentKey = value.page!.schemaKey;
+        if (request.reference !== 'catalog') this.parentKey = value.page!.schemaKey;
         return value;
       } finally { await op.cancel?.catch(() => undefined); if (this.operation === op) this.operation = undefined; }
     })(); op.done = work; return work;
@@ -44,6 +44,16 @@ export class SqliteReferenceReader {
       return sqliteEditValueSchema.parse(value);
     });
     return this.run({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, taskId: this.services.id(), reference: 'page', foreignKey: key.ordinal, values, offset, limit, ...(this.parentKey ? { parentSchemaKey: this.parentKey } : {}) });
+  }
+  /** 候选读取不依赖尚未填写的子键；续页仍绑定首次读出的父表结构。 */
+  candidates(key: SqliteRelationshipTable['foreignKeys'][number], offset: number, search?: SqliteReferenceSearch): Promise<SqliteReferenceOutput> {
+    if (this.busy || !this.current()) return Promise.reject(Error('原外键读取未结束或已失效'));
+    if (this.selected !== key.ordinal) { this.parentKey = undefined; this.selected = key.ordinal; }
+    return this.run({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, taskId: this.services.id(), reference: 'candidates', foreignKey: key.ordinal, offset, limit: 50, ...(search ? { search } : {}), ...(this.parentKey ? { parentSchemaKey: this.parentKey } : {}) });
+  }
+  /** 确认前重新读取完整父键，强绑所选页的父结构；不复用先前候选作为存在性证明。 */
+  verify(key: SqliteRelationshipTable['foreignKeys'][number], values: readonly SqliteOriginalValue[], parentSchemaKey: string): Promise<SqliteReferenceOutput> {
+    return this.run({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, taskId: this.services.id(), reference: 'page', foreignKey: key.ordinal, values: values.map(value => sqliteEditValueSchema.parse(value)), parentSchemaKey, offset: 0, limit: 200 });
   }
   /** 只取消准确原任务；不把取消响应当作业务读取已结束。 */
   async stop(): Promise<void> {

@@ -8,11 +8,14 @@ import { sqliteResultCellMatches } from './sqliteResultStorage';
 export const sqliteReferenceLimits = { active: 2, rows: 200, parts: 64, bytes: 16 * 1024 * 1024 } as const;
 const base = { connectionId: sqliteTablePageSchema.shape.connectionId, database: z.literal('main'), table: sqliteTablePageSchema.shape.table,
   schemaKey: z.string().regex(/^[a-f0-9]{64}$/), taskId: z.string().uuid() };
+export const sqliteReferenceSearchSchema = z.object({ column: sqliteTablePageSchema.shape.table, text: z.string().min(1).max(256).refine(value => !value.includes('\0') && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)) }).strict();
+export type SqliteReferenceSearch = z.infer<typeof sqliteReferenceSearchSchema>;
+const paging = { foreignKey: z.number().int().min(0).max(2147483647), offset: sqliteTablePageSchema.shape.offset,
+  limit: z.number().int().min(1).max(sqliteReferenceLimits.rows), parentSchemaKey: z.string().regex(/^[a-f0-9]{64}$/).optional() };
 export const sqliteReferenceInputSchema = z.discriminatedUnion('reference', [
   z.object({ ...base, reference: z.literal('catalog') }).strict(),
-  z.object({ ...base, reference: z.literal('page'), foreignKey: z.number().int().min(0).max(2147483647),
-    values: z.array(sqliteEditValueSchema).min(1).max(sqliteReferenceLimits.parts), offset: sqliteTablePageSchema.shape.offset,
-    limit: z.number().int().min(1).max(sqliteReferenceLimits.rows), parentSchemaKey: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
+  z.object({ ...base, ...paging, reference: z.literal('page'), values: z.array(sqliteEditValueSchema).min(1).max(sqliteReferenceLimits.parts) }).strict(),
+  z.object({ ...base, ...paging, reference: z.literal('candidates'), search: sqliteReferenceSearchSchema.optional() }).strict(),
 ]);
 export type SqliteReferenceInput = z.infer<typeof sqliteReferenceInputSchema>;
 export interface SqliteReferenceOutput { request: SqliteReferenceInput; source: SqliteRelationshipTable; parent?: SqliteRelationshipTable; referencedColumns?: string[]; page?: SqliteTablePage; }
@@ -27,7 +30,7 @@ export function assertSqliteReferenceOutput(raw: unknown, input: SqliteReference
     if (value.page !== undefined || value.parent || value.referencedColumns) throw Error('SQLite外键目录不能夹带父记录');
   } else {
     const page = value.page as SqliteTablePage | undefined, key = value.source.foreignKeys.find(key => key.ordinal === request.foreignKey);
-    if (!key || request.values.length !== key.columns.length || !value.parent || !value.referencedColumns || value.referencedColumns.length !== key.columns.length || !page || page.edit !== undefined
+    if (!key || request.reference === 'page' && request.values.length !== key.columns.length || !value.parent || !value.referencedColumns || value.referencedColumns.length !== key.columns.length || !page || page.edit !== undefined
       || page.target.connectionId !== request.connectionId || page.target.database !== 'main' || page.target.kind !== 'table' || page.target.table !== value.parent.name
       || page.offset !== request.offset || page.limit !== request.limit || page.result.rows.length > request.limit || page.result.truncated !== false || typeof page.hasMore !== 'boolean'
       || !/^[a-f0-9]{64}$/.test(page.schemaKey) || request.parentSchemaKey !== undefined && page.schemaKey !== request.parentSchemaKey
