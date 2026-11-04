@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-04 源码增量：[SQLite只读记录树与完整JSON](development/sqlite-readonly-record-20261104.md)覆盖main物理表／视图，保真实INTEGER／TEXT、REAL原文、Base64及完整隐藏字段；查看／搜索／翻行零新增查询、零写入，磁盘哈希不变。144项相关、完整26861项与Mac三项原生回归通过；任意SQL结果新树、跨页草稿及持久恢复继续，D04／R02仍部分，暂不发布。
+
 2026-11-04 源码增量：[SQLite记录树及JSON节点编辑](development/sqlite-record-tree-20261104.md)与字段表单／整行JSON共享当前输入，明确TEXT解析后按原序号查看、替换及移动重复成员、改名／追加／移除和数组操作；保精确原文，节点先应用到窗口，再保存整行及原集中提交。368项相关、类型／构建与Mac三项真实窗口通过；只读对象完整树、Windows／安装另验，D04／R02继续部分，暂不发布。
 
 2026-11-04 源码增量：[SQLite整行JSON编辑](development/sqlite-record-json-20261104.md)与原字段表单共享输入，保留int64／HEX／NULL／新增default；严格核字段、生成列及重复成员，非法输入不切换或部分暂存，最终仍经原预览与明确提交。Mac真实窗口及原关联编辑回归通过，Windows／安装另验，D04／R02继续部分，暂不发布。

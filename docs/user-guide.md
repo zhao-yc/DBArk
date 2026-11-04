@@ -1,5 +1,7 @@
 # 使用指南
 
+SQLite表或视图的“查看记录详情”新增“SQLite只读记录树”和“SQLite只读整行JSON”。明确选择TEXT字段后查看JSON结构；完整JSON包含所有字段，与搜索或网格隐藏列无关。只读展示不重新查询，翻行保持展示方式，不提供编辑或恢复；超过2MiB不生成部分JSON，可返回树或字段。详见[使用与验收范围](development/sqlite-readonly-record-20261104.md)。
+
 SQLite可写记录窗口可选择“SQLite记录树”，查看全部字段输入；明确选择TEXT字段后才解析JSON。可按原文序号编辑重复成员、改名／追加／移除、移动对象成员及操作数组。先应用节点修改到当前输入，再保存整行；最后仍需预览并明确提交。未完成节点输入须先应用或取消，再切换或保存。详见[使用与验收范围](development/sqlite-record-tree-20261104.md)。
 
 SQLite编辑、新增或复制记录时，可选择“SQLite整行JSON”，与字段表单共享当前输入。只修改value，保留字段顺序及说明；整数、实数和HEX均用字符串，新增default表示省略，NULL单独表示。非法文档保留原输入，保存只暂存，最终仍须预览并明确提交。见[完整格式与验收范围](development/sqlite-record-json-20261104.md)。

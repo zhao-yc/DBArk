@@ -1,3 +1,7 @@
+import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
+import { sqliteReadonlyRecordAvailable } from '../sqliteReadonlyRecord';
+import { sqliteReadonlyRecordZh as sqliteText } from '../locales/sqliteReadonlyRecord.zh-CN';
+import { SqliteReadonlyRecordView } from './SqliteReadonlyRecordView';
 import { useMemo, useState } from 'react';
 import { queryRowDetailPrefix, queryRowDetailValue, queryRowDetailsLimits, type QueryRowDetails, type QueryRowDetailsView } from '../queryRowDetails';
 import { queryRowDetailsZh as text } from '../locales/queryRowDetails.zh-CN';
@@ -9,19 +13,20 @@ interface Props {
   isCurrent(): boolean;
   onMove(view: QueryRowDetailsView, index: number): void;
   onClose(view: QueryRowDetailsView): void;
-  sqlitePage?: { storageTypes?: string[] };
+  sqlitePage?: Partial<SqliteTablePage>;
   pageNavigation?: { previous: boolean; next: boolean; move(view: QueryRowDetailsView, direction: -1 | 1): void };
 }
 
 /** 搜索词随当前结果保留；换行后重新创建行号、展开和字段分页状态。 */
 export function QueryRowDetailsPanel(props: Props) {
+  const [mode, setMode] = useState<'fields' | 'tree' | 'json'>('fields');
   const [search, setSearch] = useState({ binding: props.view.binding, text: '' });
   const filter = search.binding === props.view.binding ? search.text : '';
-  return <RowDetailsContent key={props.view.id} {...props} filter={filter} onFilter={text => setSearch({ binding: props.view.binding, text })}/>;
+  return <RowDetailsContent key={props.view.id} {...props} filter={filter} mode={mode} onMode={setMode} onFilter={text => setSearch({ binding: props.view.binding, text })}/>;
 }
 
 /** 内联只读区域不参与全局模态观察；每个迟到事件仍复核准确原行租约。 */
-function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlitePage, pageNavigation, filter, onFilter }: Props & { filter: string; onFilter(text: string): void }) {
+function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlitePage, pageNavigation, filter, onFilter, mode, onMode }: Props & { filter: string; onFilter(text: string): void; mode: 'fields' | 'tree' | 'json'; onMode(mode: 'fields' | 'tree' | 'json'): void }) {
   const [page, setPage] = useState(0), [expanded, setExpanded] = useState<number | null>(null), [row, setRow] = useState(String(view.index + 1));
   const current = () => isCurrent() && controller.valid(view);
   const columns = view.binding.metadata;
@@ -31,6 +36,8 @@ function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlit
   }, [columns, filter]);
   if (!current()) return null;
   const lastPage = Math.max(0, Math.ceil(matching.length / queryRowDetailsLimits.page) - 1), start = page * queryRowDetailsLimits.page;
+  const fullSqlitePage = sqliteReadonlyRecordAvailable(sqlitePage, view) ? sqlitePage : undefined;
+  const display = fullSqlitePage ? mode : 'fields';
   const rowLabel = sqlitePage ? text.sqliteRow : text.row;
   const storage = sqlitePage?.storageTypes?.[view.index];
   const previousPage = view.index === 0 && pageNavigation?.previous, nextPage = view.index + 1 === view.binding.rows.length && pageNavigation?.next;
@@ -51,13 +58,14 @@ function RowDetailsContent({ controller, view, isCurrent, onMove, onClose, sqlit
     <header><strong>{text.open} · {view.index + 1} / {view.binding.rows.length}</strong><button onClick={() => { if (current()) onClose(view); }}>{text.close}</button></header>
     <p title={pageNavigation ? text.sqlitePageNavigation : text.readonly}>{text.scope}</p>{pageNavigation && <p>{text.sqlitePageNavigation}</p>}{view.binding.truncated && <p className="warning-text">{text.truncated}</p>}
     <div className="query-row-details-actions"><button disabled={view.index === 0 && !previousPage} onClick={() => move(-1)}>{previousPage ? text.sqlitePreviousPage : text.previous}</button><button disabled={view.index + 1 >= view.binding.rows.length && !nextPage} onClick={() => move(1)}>{nextPage ? text.sqliteNextPage : text.next}</button><label>{rowLabel}<input aria-label={rowLabel} value={row} inputMode="numeric" maxLength={6} onChange={event => { if (current()) setRow(event.target.value); }}/></label><button disabled={!/^[1-9][0-9]{0,5}$/u.test(row) || Number(row) > view.binding.rows.length} onClick={() => { if (current() && /^[1-9][0-9]{0,5}$/u.test(row) && Number(row) <= view.binding.rows.length) onMove(view, Number(row) - 1); }}>{text.go}</button></div>
-    <div className="query-row-details-search"><input type="search" aria-label={text.fieldSearch} placeholder={text.fieldSearch} value={filter} maxLength={256} onChange={event => changeFilter(event.target.value)}/><button disabled={!filter} onClick={() => changeFilter('')}>{text.clearFieldSearch}</button></div>
-    {!matching.length && <p role="status">{text.noFields}</p>}
-    <div className="query-row-details-fields">{matching.slice(start, start + queryRowDetailsLimits.page).map(({ column, index }) => {
+    {fullSqlitePage && <div className="query-row-details-actions" role="group" aria-label={sqliteText.modes}>{(['fields','tree','json'] as const).map(value => <button key={value} aria-pressed={display === value} onClick={() => { if (current()) onMode(value); }}>{sqliteText[value]}</button>)}</div>}
+    {display !== 'json' && <div className="query-row-details-search"><input type="search" aria-label={text.fieldSearch} placeholder={text.fieldSearch} value={filter} maxLength={256} onChange={event => changeFilter(event.target.value)}/><button disabled={!filter} onClick={() => changeFilter('')}>{text.clearFieldSearch}</button></div>}
+    {display !== 'json' && !matching.length && <p role="status">{text.noFields}</p>}
+    {fullSqlitePage && display !== 'fields' ? <SqliteReadonlyRecordView controller={controller} view={view} page={fullSqlitePage} current={current} mode={display} filter={filter}/> : <><div className="query-row-details-fields">{matching.slice(start, start + queryRowDetailsLimits.page).map(({ column, index }) => {
       const value = queryRowDetailValue(view.values[index], expanded === index);
       const storageType = storage?.[index] as keyof typeof text.sqliteStorage | undefined;
       return <article key={column.key}><h4 title={column.key}>{index + 1}. {queryRowDetailPrefix(column.name, 256)} <small>{storageType ? text.sqliteStorage[storageType] : queryRowDetailPrefix(column.type, 64)}</small></h4>{value.kind === 'binary' && <p>{text.binary}{value.units === 0 ? ' · 0' : ''}</p>}
         <pre>{value.kind === 'null' ? text.null : value.kind === 'empty' ? text.empty : value.text}</pre>{value.clipped && <p className="muted small">{value.units} UTF-16 · {expanded === index ? text.budget : text.preview}</p>}{value.units > queryRowDetailsLimits.preview && <button onClick={() => { if (current()) setExpanded(expanded === index ? null : index); }}>{expanded === index ? text.collapse : text.expand}</button>}</article>;
-    })}</div><footer><button disabled={page === 0} onClick={() => { if (current() && page > 0) { setPage(page - 1); setExpanded(null); } }}>{text.fieldsPrevious}</button><span>{matching.length ? start + 1 : 0}–{Math.min(start + queryRowDetailsLimits.page, matching.length)} / {matching.length}</span><button disabled={page >= lastPage} onClick={() => { if (current() && page < lastPage) { setPage(page + 1); setExpanded(null); } }}>{text.fieldsNext}</button></footer>
+    })}</div><footer><button disabled={page === 0} onClick={() => { if (current() && page > 0) { setPage(page - 1); setExpanded(null); } }}>{text.fieldsPrevious}</button><span>{matching.length ? start + 1 : 0}–{Math.min(start + queryRowDetailsLimits.page, matching.length)} / {matching.length}</span><button disabled={page >= lastPage} onClick={() => { if (current() && page < lastPage) { setPage(page + 1); setExpanded(null); } }}>{text.fieldsNext}</button></footer></>}
   </section>;
 }

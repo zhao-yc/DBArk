@@ -1,5 +1,7 @@
 # 开发与测试
 
+2026-11-04 新增[SQLite只读记录树与完整JSON](development/sqlite-readonly-record-20261104.md)：准确原页及存储类型事实绑定，纯Renderer展示、完整2MiB双预算，隐藏节点编辑控件；144项相关、完整26861项及类型／构建通过，Mac新只读／原浏览／原可写树三项窗口通过。离线入口node scripts/sqlite-workspace-ci.mjs readonly-record；Windows／安装另验，暂不发布。
+
 2026-11-04 新增[SQLite记录树与节点编辑](development/sqlite-record-tree-20261104.md)：抽取共享有界JsonLexicalTreeView，复用原词法跨度操作及最小泛型编辑器；SQLite父窗口绑定准确值数组和节点独占token，不新增IPC。368项相关、严格类型／构建及Mac新树／原整行JSON／原关联三项窗口通过；离线入口node scripts/sqlite-workspace-ci.mjs record-tree，保持原期限、零自动重试与owner退出账本，暂不发布。
 
 2026-11-04 新增[SQLite整行JSON编辑](development/sqlite-record-json-20261104.md)：纯Renderer严格typed整行编译，现有词法预检识别重复成员、2MiB双预算及同步票据守卫；复用原字段窗口、Editor和集中提交。136项相关、严格类型／构建及Mac新JSON与原关联编辑两项窗口通过；离线入口node scripts/sqlite-workspace-ci.mjs record-json，保持原owner／期限／零自动重试，暂不发布。

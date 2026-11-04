@@ -6,7 +6,7 @@ import { recordProjectionZh as text } from '../locales/recordProjections.zh-CN';
 import { recordJsonNodeInputZh as nodeText } from '../locales/recordJsonNodeInput.zh-CN';
 import { recordJsonStructureInputZh as structureText } from '../locales/recordJsonStructureInput.zh-CN';
 import type { RecordStructureKind } from '../recordJsonStructureInput';
-interface Props { columnName: string; document: ReadyLexicalDocument; reason: string; current?(): boolean; onEdit(document: ReadyLexicalDocument, segments: readonly LexicalPathSegment[]): void; onStructure(document: ReadyLexicalDocument, segments: readonly LexicalPathSegment[], kind: RecordStructureKind): void; }
+interface Props { columnName: string; document: ReadyLexicalDocument; reason: string; readOnly?: boolean; current?(): boolean; onEdit(document: ReadyLexicalDocument, segments: readonly LexicalPathSegment[]): void; onStructure(document: ReadyLexicalDocument, segments: readonly LexicalPathSegment[], kind: RecordStructureKind): void; }
 /** 共用有界词法树；即使同一字段换成等值新文档，也卸载旧节点选择和回调。 */
 export function JsonLexicalTreeView(props: Props) {
   const [source, setSource] = useState({ document: props.document, columnName: props.columnName, revision: 0 });
@@ -21,7 +21,7 @@ function nodeLabel(row: LexicalViewRow): string {
 }
 
 /** 原生列表和展开按钮提供键盘可访问入口，不冒用需要额外方向键实现的 ARIA tree。 */
-function TreeContent({ columnName, document, reason, onEdit, onStructure, current }: Props) {
+function TreeContent({ columnName, document, reason, onEdit, onStructure, current, readOnly = false }: Props) {
   const ticket = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = undefined; }; });
   const valid = () => committed.current === ticket && (!current || current());
@@ -43,9 +43,9 @@ function TreeContent({ columnName, document, reason, onEdit, onStructure, curren
       const token = count === null ? projectionPreview(lexicalToken(document, node)) : null;
       return <li className="record-projection-entry" key={row.id} style={{ paddingInlineStart: `${Math.min(row.depth, 8) * 10}px` }}><strong>{nodeLabel(row)}</strong><span>{text.lexicalKinds[node.kind]}{count === null ? '' : ` · ${formatText(text.containerCount, count)}`}</span>
         {token && <><pre tabIndex={0}>{token.text}</pre>{token.truncated && <small>{text.summaryOnly}</small>}</>}
-        <div>{count !== null && count > 0 && <button aria-expanded={expanded.has(row.id)} onClick={() => toggle(row.id)}>{expanded.has(row.id) ? text.collapse : text.expand}</button>}<button onClick={() => { if (valid()) setSelected(row); }}>{text.inspect}</button><button disabled={!!reason} title={reason||nodeText.hint} onClick={()=>{ if (valid()) onEdit(document,row.path); }}>{nodeText.edit}</button>{(row.path.length>0||count!==null)&&<button disabled={!!reason} title={reason} onClick={()=>{if(valid()){setSelected(row);setActionsRequested(value=>value+1);}}}>{structureText.more}</button>}</div>
+        <div>{count !== null && count > 0 && <button aria-expanded={expanded.has(row.id)} onClick={() => toggle(row.id)}>{expanded.has(row.id) ? text.collapse : text.expand}</button>}<button onClick={() => { if (valid()) setSelected(row); }}>{text.inspect}</button>{!readOnly && <button disabled={!!reason} title={reason||nodeText.hint} onClick={()=>{ if (!readOnly && valid()) onEdit(document,row.path); }}>{nodeText.edit}</button>}{!readOnly&&(row.path.length>0||count!==null)&&<button disabled={!!reason} title={reason} onClick={()=>{if(valid()){setSelected(row);setActionsRequested(value=>value+1);}}}>{structureText.more}</button>}</div>
       </li>;
     })}</ol>
-    {selected && <section ref={detail} className="record-token-detail">{selectedNode ? <><label>{text.token}<textarea readOnly spellCheck={false} value={lexicalToken(document, selectedNode)}/></label><label>{text.path}<textarea readOnly spellCheck={false} value={JSON.stringify({ columnName, segments: selected.path })}/></label><div className="record-structure-actions" role="group" aria-label={structureText.more}>{kinds.map(kind=><button key={kind} disabled={!!reason} title={reason} onClick={()=>{ if(valid()) onStructure(document,selected.path,kind); }}>{structureText.actions[kind]}</button>)}</div></> : <p role="status">{text.selectionExpired}</p>}</section>}
+    {selected && <section ref={detail} className="record-token-detail">{selectedNode ? <><label>{text.token}<textarea readOnly spellCheck={false} value={lexicalToken(document, selectedNode)}/></label><label>{text.path}<textarea readOnly spellCheck={false} value={JSON.stringify({ columnName, segments: selected.path })}/></label>{!readOnly && <div className="record-structure-actions" role="group" aria-label={structureText.more}>{kinds.map(kind=><button key={kind} disabled={!!reason} title={reason} onClick={()=>{ if(!readOnly&&valid()) onStructure(document,selected.path,kind); }}>{structureText.actions[kind]}</button>)}</div>}</> : <p role="status">{text.selectionExpired}</p>}</section>}
   </>;
 }
