@@ -9,8 +9,8 @@ afterEach(() => { for (const path of directories.splice(0)) rmSync(path, { recur
 
 /** 与新工作流身份一一对应，测试中的架构参数只送入纯函数，不冒充真实Mac执行。 */
 function environment() { return {
-  GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'zhao-yc/DBArk', GITHUB_REF: 'refs/heads/main', GITHUB_JOB: 'keyword-current-arm64',
-  GITHUB_WORKFLOW_REF: 'zhao-yc/DBArk/.github/workflows/sql-keyword-current.yml@refs/heads/main', GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
+  GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'zhao-yc/tabrelio', GITHUB_REF: 'refs/heads/main', GITHUB_JOB: 'keyword-current-arm64',
+  GITHUB_WORKFLOW_REF: 'zhao-yc/tabrelio/.github/workflows/sql-keyword-current.yml@refs/heads/main', GITHUB_WORKFLOW_SHA: 'a'.repeat(40),
   GITHUB_SHA: 'a'.repeat(40), GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', GITHUB_EVENT_NAME: 'push',
   KEYWORD_CURRENT_RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_OS: 'macOS', RUNNER_ARCH: 'ARM64',
 }; }
@@ -25,7 +25,7 @@ describe('当前源码关键字arm64专项上下文和原报告边界', () => {
   });
   it.each([
     { GITHUB_RUN_ATTEMPT: '2' }, { GITHUB_REF: 'refs/heads/codex/old' }, { GITHUB_JOB: 'desktop' },
-    { GITHUB_WORKFLOW_REF: 'zhao-yc/DBArk/.github/workflows/v028-keyword-native.yml@refs/heads/main' },
+    { GITHUB_WORKFLOW_REF: 'zhao-yc/tabrelio/.github/workflows/v028-keyword-native.yml@refs/heads/main' },
     { GITHUB_WORKFLOW_SHA: 'b'.repeat(40) }, { GITHUB_REPOSITORY: 'other/DBArk' }, { RUNNER_ARCH: 'X64' },
     { RUNNER_OS: 'Linux' }, { KEYWORD_CURRENT_RUNNER_ENVIRONMENT: 'self-hosted' }, { GITHUB_EVENT_NAME: 'pull_request' },
     { GITHUB_SHA: 'main' }, { GITHUB_RUN_ID: '' },

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 
 const runner: any = await import(new URL('../../scripts/foreign-key-join-macos-ci.mjs', import.meta.url).href);
 const original: any = await import(new URL('../../scripts/macos-mode-keeper-ci.mjs', import.meta.url).href);
-const env = { GITHUB_ACTIONS: 'true', MODE_KEEPER_RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'zhao-yc/DBArk', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'zhao-yc/DBArk/.github/workflows/foreign-key-join.yml@refs/heads/main', GITHUB_JOB: 'join-components', GITHUB_EVENT_NAME: 'push', GITHUB_SHA: 'a'.repeat(40), GITHUB_RUN_ID: '1234', GITHUB_RUN_ATTEMPT: '1' };
+const env = { GITHUB_ACTIONS: 'true', MODE_KEEPER_RUNNER_ENVIRONMENT: 'github-hosted', GITHUB_REPOSITORY: 'zhao-yc/tabrelio', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'zhao-yc/tabrelio/.github/workflows/foreign-key-join.yml@refs/heads/main', GITHUB_JOB: 'join-components', GITHUB_EVENT_NAME: 'push', GITHUB_SHA: 'a'.repeat(40), GITHUB_RUN_ID: '1234', GITHUB_RUN_ATTEMPT: '1' };
 const modes = ['dark', 'light', 'filter-dark', 'filter-light', 'group-dark', 'group-light', 'summary-dark', 'summary-light', 'having-dark', 'having-light', 'distinct-dark', 'distinct-light'];
 const plan = { mode: { logicalWidth: 1600, logicalHeight: 1200 } };
 /** 合成报告只供纯协议验收；不构建Swift、不访问显示器、PID或目录。 */
@@ -30,7 +30,7 @@ describe('JOIN临时显示租约准确上下文', () => {
   it.each([
     { GITHUB_ACTIONS: 'false' }, { MODE_KEEPER_RUNNER_ENVIRONMENT: 'self-hosted' }, { GITHUB_REPOSITORY: 'other/DBArk' },
     { GITHUB_REF: 'refs/pull/1/merge' }, { GITHUB_REF: 'refs/heads/other' }, { GITHUB_JOB: 'desktop' },
-    { GITHUB_WORKFLOW_REF: 'zhao-yc/DBArk/.github/workflows/ci.yml@refs/heads/main' }, { GITHUB_EVENT_NAME: 'pull_request' },
+    { GITHUB_WORKFLOW_REF: 'zhao-yc/tabrelio/.github/workflows/ci.yml@refs/heads/main' }, { GITHUB_EVENT_NAME: 'pull_request' },
     { GITHUB_SHA: 'a'.repeat(39) }, { GITHUB_RUN_ID: '../other' }, { GITHUB_RUN_ATTEMPT: '0' },
     { DBARK_TEST_PASSWORD: '' }, { DBARK_USER_DATA: '' }, { NODE_OPTIONS: '' }, { NODE_PATH: '' }, { DYLD_INSERT_LIBRARIES: '' },
   ])('外来上下文或模块注入拒绝：%j', change => expect(() => runner.requireJoinKeeperCI([], 'darwin', 'arm64', { ...env, ...change })).toThrow());

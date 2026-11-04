@@ -14,8 +14,8 @@ export const keywordCurrentJob = 'keyword-current-arm64';
 /** 仅当前main的独立托管arm64 job首次运行可领取；手动重跑不是同一次准许。 */
 export function requireKeywordCurrentCI(args, actualPlatform, actualArch, env) {
   assert.deepEqual(args, ['source']); assert.equal(actualPlatform, 'darwin'); assert.equal(actualArch, 'arm64');
-  assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.GITHUB_REPOSITORY, 'zhao-yc/DBArk'); assert.equal(env.GITHUB_REF, 'refs/heads/main');
-  assert.equal(env.GITHUB_WORKFLOW_REF, 'zhao-yc/DBArk/.github/workflows/sql-keyword-current.yml@refs/heads/main');
+  assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.GITHUB_REPOSITORY, 'zhao-yc/tabrelio'); assert.equal(env.GITHUB_REF, 'refs/heads/main');
+  assert.equal(env.GITHUB_WORKFLOW_REF, 'zhao-yc/tabrelio/.github/workflows/sql-keyword-current.yml@refs/heads/main');
   assert.equal(env.GITHUB_JOB, keywordCurrentJob); assert.equal(env.KEYWORD_CURRENT_RUNNER_ENVIRONMENT, 'github-hosted');
   assert.equal(env.RUNNER_OS, 'macOS'); assert.equal(env.RUNNER_ARCH, 'ARM64'); assert.equal(env.GITHUB_RUN_ATTEMPT, '1');
   assert.ok(['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME)); assert.match(env.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);

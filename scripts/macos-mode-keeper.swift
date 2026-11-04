@@ -22,14 +22,14 @@ let sourceBranch = environment["GITHUB_REF"] == "refs/heads/codex/macos-mode-kee
 let installedJob = environment["GITHUB_REF"] == "refs/heads/codex/v028-serial-closeout-20261019" && environment["GITHUB_JOB"] == "arm64-installed"
 let desktopRef = environment["GITHUB_REF"] ?? ""
 // 常规CI独立核对仓库、工作流、事件和真实ref，不改写环境来穿过旧入口。
-let desktopJob = environment["GITHUB_REPOSITORY"] == "zhao-yc/DBArk" && environment["GITHUB_JOB"] == "desktop" &&
+let desktopJob = environment["GITHUB_REPOSITORY"] == "zhao-yc/tabrelio" && environment["GITHUB_JOB"] == "desktop" &&
     ["refs/heads/main", "refs/heads/codex/query-result-range-filter-20261020"].contains(desktopRef) &&
-    environment["GITHUB_WORKFLOW_REF"] == "zhao-yc/DBArk/.github/workflows/ci.yml@" + desktopRef &&
+    environment["GITHUB_WORKFLOW_REF"] == "zhao-yc/tabrelio/.github/workflows/ci.yml@" + desktopRef &&
     ["push", "workflow_dispatch"].contains(environment["GITHUB_EVENT_NAME"] ?? "")
 // JOIN源码只新增准确main托管job，不借desktop或冻结安装入口放行其它工作流/PR/本机。
-let joinJob = environment["GITHUB_REPOSITORY"] == "zhao-yc/DBArk" && environment["GITHUB_JOB"] == "join-components" &&
+let joinJob = environment["GITHUB_REPOSITORY"] == "zhao-yc/tabrelio" && environment["GITHUB_JOB"] == "join-components" &&
     environment["GITHUB_REF"] == "refs/heads/main" &&
-    environment["GITHUB_WORKFLOW_REF"] == "zhao-yc/DBArk/.github/workflows/foreign-key-join.yml@refs/heads/main" &&
+    environment["GITHUB_WORKFLOW_REF"] == "zhao-yc/tabrelio/.github/workflows/foreign-key-join.yml@refs/heads/main" &&
     ["push", "workflow_dispatch"].contains(environment["GITHUB_EVENT_NAME"] ?? "")
 
 guard environment["GITHUB_ACTIONS"] == "true", sourceBranch || installedJob || desktopJob || joinJob,

@@ -17,7 +17,7 @@ function channel() {
 describe('Mac安装显示租约清理门', () => {
   /** 新CI上下文用真实仓库/工作流/ref组合，不复用冻结分支的环境声明。 */
   function desktop(ref='refs/heads/main') {
-    return { ...base, GITHUB_REPOSITORY:'zhao-yc/DBArk', GITHUB_REF:ref, GITHUB_JOB:'desktop', GITHUB_EVENT_NAME:'push', GITHUB_WORKFLOW_REF:`zhao-yc/DBArk/.github/workflows/ci.yml@${ref}` };
+    return { ...base, GITHUB_REPOSITORY:'zhao-yc/tabrelio', GITHUB_REF:ref, GITHUB_JOB:'desktop', GITHUB_EVENT_NAME:'push', GITHUB_WORKFLOW_REF:`zhao-yc/tabrelio/.github/workflows/ci.yml@${ref}` };
   }
   it.each(['refs/heads/main','refs/heads/codex/query-result-range-filter-20261020'])('准确desktop上下文%s分别接受源码和安装，仍拒绝阶段串用', ref => {
     const env=desktop(ref);
@@ -30,8 +30,8 @@ describe('Mac安装显示租约清理门', () => {
   });
   it.each([
     {GITHUB_REPOSITORY:'other/DBArk'}, {GITHUB_JOB:'keeper'}, {GITHUB_REF:'refs/heads/other'},
-    {GITHUB_EVENT_NAME:'pull_request'}, {GITHUB_EVENT_NAME:'schedule'}, {GITHUB_WORKFLOW_REF:'zhao-yc/DBArk/.github/workflows/other.yml@refs/heads/main'},
-    {GITHUB_WORKFLOW_REF:'zhao-yc/DBArk/.github/workflows/ci.yml@refs/heads/other'}, {GITHUB_WORKFLOW_REF:undefined},
+    {GITHUB_EVENT_NAME:'pull_request'}, {GITHUB_EVENT_NAME:'schedule'}, {GITHUB_WORKFLOW_REF:'zhao-yc/tabrelio/.github/workflows/other.yml@refs/heads/main'},
+    {GITHUB_WORKFLOW_REF:'zhao-yc/tabrelio/.github/workflows/ci.yml@refs/heads/other'}, {GITHUB_WORKFLOW_REF:undefined},
   ])('新上下文拒绝错误仓库/job/ref/工作流事件：%j', patch => {
     const env={...desktop(),...patch};expect(lease.isDesktopKeeperContext(env)).toBe(false);
     expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',env)).toThrow();

@@ -66,16 +66,16 @@ let originalDiagnosticBranch = approvalEnvironment["GITHUB_REF"] == "refs/heads/
 let serialIntelDiagnostic = approvalEnvironment["GITHUB_REF"] == "refs/heads/codex/v028-serial-closeout-20261019" &&
     approvalEnvironment["GITHUB_JOB"] == "x64-environment" && architecture == "x64"
 // main 只开放这个无窗口、无模式配置的诊断工作流；不能据此绕过keeper的独立镜像准入。
-let mainDiagnostic = approvalEnvironment["GITHUB_REPOSITORY"] == "zhao-yc/DBArk" &&
+let mainDiagnostic = approvalEnvironment["GITHUB_REPOSITORY"] == "zhao-yc/tabrelio" &&
     approvalEnvironment["GITHUB_REF"] == "refs/heads/main" &&
-    approvalEnvironment["GITHUB_WORKFLOW_REF"] == "zhao-yc/DBArk/.github/workflows/v028-macos-display-diagnostic.yml@refs/heads/main" &&
+    approvalEnvironment["GITHUB_WORKFLOW_REF"] == "zhao-yc/tabrelio/.github/workflows/v028-macos-display-diagnostic.yml@refs/heads/main" &&
     approvalEnvironment["GITHUB_EVENT_NAME"] == "push" && approvalEnvironment["GITHUB_JOB"] == "inspect"
 // 实际arm64验收job先采自己的只读原件；未知镜像仍由未改动的keeper拒绝。
 let desktopRef = approvalEnvironment["GITHUB_REF"] ?? ""
-let desktopDiagnostic = architecture == "arm64" && approvalEnvironment["GITHUB_REPOSITORY"] == "zhao-yc/DBArk" &&
+let desktopDiagnostic = architecture == "arm64" && approvalEnvironment["GITHUB_REPOSITORY"] == "zhao-yc/tabrelio" &&
     approvalEnvironment["GITHUB_JOB"] == "desktop" &&
     ["refs/heads/main", "refs/heads/codex/query-result-range-filter-20261020"].contains(desktopRef) &&
-    approvalEnvironment["GITHUB_WORKFLOW_REF"] == "zhao-yc/DBArk/.github/workflows/ci.yml@" + desktopRef &&
+    approvalEnvironment["GITHUB_WORKFLOW_REF"] == "zhao-yc/tabrelio/.github/workflows/ci.yml@" + desktopRef &&
     ["push", "workflow_dispatch"].contains(approvalEnvironment["GITHUB_EVENT_NAME"] ?? "")
 guard approvalEnvironment["GITHUB_ACTIONS"] == "true",
       originalDiagnosticBranch || serialIntelDiagnostic || mainDiagnostic || desktopDiagnostic,

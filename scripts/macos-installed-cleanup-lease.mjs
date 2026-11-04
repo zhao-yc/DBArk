@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 
 /** 常规CI只开放本仓库main及既有候选分支的desktop托管job；不冒充旧冻结分支。 */
 export function isDesktopKeeperContext(env) {
-  return env.GITHUB_REPOSITORY === 'zhao-yc/DBArk' && env.GITHUB_JOB === 'desktop' &&
+  return env.GITHUB_REPOSITORY === 'zhao-yc/tabrelio' && env.GITHUB_JOB === 'desktop' &&
     ['refs/heads/main', 'refs/heads/codex/query-result-range-filter-20261020'].includes(env.GITHUB_REF) &&
-    env.GITHUB_WORKFLOW_REF === `zhao-yc/DBArk/.github/workflows/ci.yml@${env.GITHUB_REF}` &&
+    env.GITHUB_WORKFLOW_REF === `zhao-yc/tabrelio/.github/workflows/ci.yml@${env.GITHUB_REF}` &&
     ['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME);
 }
 
