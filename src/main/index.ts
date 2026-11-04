@@ -94,6 +94,7 @@ import { captureObjectUriLaunch, receiveObjectUriLaunch } from './externalObject
 import { externalObjectUrisZh } from '../shared/externalObjectUris.zh-CN';
 import { objectUri } from '../shared/workbench';
 import { applyTablePreset, TablePresetSources } from './tablePresets';
+import { RecordTemplateMain, type RecordTemplateCommand } from './recordTemplateMain';
 import { QueryResultPresetSources } from './queryResultPresetSources';
 import { productName } from '../shared/productName';
 
@@ -197,6 +198,7 @@ const queryInsertExports=new QueryInsertExports(files,{assert:value=>columnsMain
 const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const sqliteTablePresets = new SqliteTablePresetMain({ get store() { return store; }, assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown });
 const sqliteTableLayouts = new SqliteTableLayoutMain({ get store() { return store; }, assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown });
+const recordTemplates = new RecordTemplateMain({ get store() { return store; }, assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown });
 const resultPresetSources=new QueryResultPresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
 // 连接关闭不修改磁盘配置修订；不同值另用私有对象代次防关闭后同名重开复活旧候选。
@@ -281,7 +283,7 @@ const sqliteTableImports = new SqliteTableImportMain({
   save: task => store.saveTask(task), event: event => taskEvent(event),
 });
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
-type MainInvocation = ColumnsInvocation & { sqliteValueOptionsPublication?: () => void; sqliteReadPublication?: () => void; objectDefinitionPublication?: (output?: unknown) => void; sqliteRelationshipsPublication?: () => void; sqlitePresetPublication?: () => void; tableChecksRequest?: TableChecksInvocation; databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
+type MainInvocation = ColumnsInvocation & { recordTemplatePublication?: () => void; sqliteValueOptionsPublication?: () => void; sqliteReadPublication?: () => void; objectDefinitionPublication?: (output?: unknown) => void; sqliteRelationshipsPublication?: () => void; sqlitePresetPublication?: () => void; tableChecksRequest?: TableChecksInvocation; databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 数据库属性能力也绑定真实文档；连接修订只由Main捕获，不接受渲染进程注入。 */
 const databaseEncodingOwners = new DatabaseDefaultEncodingOwners({
   assert: owner => { columnsMain.assertCapturedOwner(owner); if ((owner as MainInvocation).databaseEncodingRevision !== store.connectionRevision()) throw Error('连接配置已变化，请重新读取数据库属性'); },
@@ -1143,6 +1145,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       columns!.resultPresetPublication=()=>{resultPresetSources.assert(columns,input);connectionConfig.assertAvailable(input.connectionId);store.selectedQueryResultPreset(input);};
       return result;
     }
+    case 'record.templates.list':
+    case 'record.templates.save':
+    case 'record.templates.rename':
+    case 'record.templates.delete':
+    case 'record.templates.read': {
+      const result = recordTemplates.execute(command.slice('record.templates.'.length) as RecordTemplateCommand, input, columns);
+      columns!.recordTemplatePublication = result.publish; return result.value;
+    }
     case 'sqlite.tablePresets.list':
     case 'sqlite.tablePresets.save':
     case 'sqlite.tablePresets.delete':
@@ -1925,7 +1935,7 @@ else {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
-        if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
+        if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('record.templates.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
@@ -1938,6 +1948,7 @@ else {
         const trackedFileOperation=payload.command.startsWith('snippets.transfer') || (payload.command === 'files.preflight' || payload.command === 'files.inspectImport');if(trackedFileOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
+          if (payload.command.startsWith('record.templates.')) { if (!columns?.recordTemplatePublication) throw Error('记录模板缺少原请求发布门'); columns.recordTemplatePublication(); }
           if (payload.command === 'query.objectDefinition') { if (!columns?.objectDefinitionPublication) throw Error('对象结构缺少原窗口发布门'); columns.objectDefinitionPublication(result); }
           if (payload.command.startsWith('sqlite.tablePresets.') || payload.command.startsWith('sqlite.tableLayout.')) { if (!columns?.sqlitePresetPublication) throw Error('SQLite方案缺少原请求发布门'); columns.sqlitePresetPublication(); }
           if (payload.command === 'sqlite.relationships') { if (!columns?.sqliteRelationshipsPublication) throw Error('SQLite关系图缺少原窗口发布门'); columns.sqliteRelationshipsPublication(); }

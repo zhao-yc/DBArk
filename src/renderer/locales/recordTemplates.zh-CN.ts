@@ -1,0 +1,17 @@
+export const recordTemplatesZh = {
+  open: '记录模板', title: '记录模板', scope: '模板按当前连接、数据库和表保存在本机，包含所选字段的真实记录值。请只保存需要复用的字段。',
+  draft: '应用只生成新增草稿，仍需检查字段、预览 SQL 并明确提交。所有字段默认不选，未选字段使用数据库默认值。MySQL 自增列和两种驱动的生成列不提供捕获；SQLite 标识字段请按需要省略。',
+  list: '已保存模板', empty: '当前表还没有记录模板。', reload: '刷新模板列表', name: '模板名称', save: '保存为新模板', replace: '覆盖所选模板', rename: '重命名', remove: '删除模板',
+  preview: '预览模板', stage: '生成新增草稿', copies: '新增记录数量', capture: '从当前记录选择字段', noSource: '当前没有可捕获的记录。可先选中或填写一条记录，再重新打开模板；已保存模板仍可使用。',
+  field: (name: string) => `保存字段：${name}`, search: '搜索模板字段', noFields: '没有匹配的字段。', choose: '请选择至少一个可保存字段。',
+  saved: '记录模板已保存在本机。', removed: '记录模板已删除。', renamed: '记录模板已重命名。', busy: '正在处理本机记录模板…', stale: '原页、草稿或连接已变化，请关闭后重新打开记录模板。',
+  sourceChanged: '原连接配置已变化，模板不可使用；核对当前记录后可明确覆盖。', noPreview: '选择模板并预览后，才能生成新增草稿。',
+  replaceConfirm: (name: string) => `覆盖本机记录模板“${name}”？原模板字段和值将被本次所选内容替换。`,
+  removeConfirm: (name: string) => `删除本机记录模板“${name}”？不会删除数据库记录。`,
+  staged: (count: number) => `已生成 ${count} 条新增草稿，尚未提交数据库。`,
+  unfilled: '该字段尚未填写或未完整载入，将沿数据库默认值处理。', unsupported: '该字段类型或大小不适合保存为模板，请选择其它字段。',
+  fieldsChanged: '模板字段已删除、类型或属性已变化，整份模板未应用。', batchLimit: '模板新增数量或整批内容超过上限（最多100条、10000格、2 MiB）。',
+  binaryInvalid: '二进制来源无效', mysqlValueInvalid: '模板值不属于MySQL驱动', accessor: '模板来源含访问器',
+  null: 'SQL NULL', emptyString: '文本：空字符串', binary: (bytes: number) => `二进制 · ${bytes} 字节`,
+  types: { text: '文本', integer: '整数', real: '实数', boolean: '布尔', number: '数值' },
+} as const;

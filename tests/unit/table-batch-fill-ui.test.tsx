@@ -84,7 +84,7 @@ async function expectUndoModalBlocked() {
   };
   visit(source); expect(blocked).not.toBe(''); expect(disabled).not.toBe('');
   const value = runInNewContext(ts.transpileModule(`const historyBlocked=(${blocked});(${disabled})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
-    blocked: false, editable: true, record: { dirty: false, pending: false, cellKey: null, nodeInput: null, structureInput: null }, gridEditing: false, showPreferences: false, referenceDialog: null, pasteInsertDialog: null, batchFillDialog: {}, settings: { activeTabId: '原页' }, tab: { id: '原页' }, history: { status: { undo: 1 } }
+    blocked: false, editable: true, record: { dirty: false, pending: false, cellKey: null, nodeInput: null, structureInput: null }, gridEditing: false, showPreferences: false, referenceDialog: null, pasteInsertDialog: null, batchFillDialog: {}, templateDialog: null, settings: { activeTabId: '原页' }, tab: { id: '原页' }, history: { status: { undo: 1 } }
   });
   expect(value).toBe(true);
   const originalDialog = dialog(), menus = document.querySelectorAll('[role="menu"]').length;

@@ -6,11 +6,14 @@ import { createContext, runInContext } from 'node:vm';
 import * as jsxRuntime from 'react/jsx-runtime';
 import ts from 'typescript';
 import * as zod from 'zod';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as recordTemplates from '../../src/renderer/recordTemplates';
+afterEach(() => vi.unstubAllGlobals());
 import * as lib from '../../src/renderer/lib';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 import type { TableInfo } from '../../src/shared/contracts';
 import { draftHistoryZh as text } from '../../src/renderer/locales/draftHistory.zh-CN';
+import { recordTemplatesZh } from '../../src/renderer/locales/recordTemplates.zh-CN';
 import { pasteInsertZh } from '../../src/renderer/locales/pasteInsert.zh-CN';
 import { recordDuplicateZh } from '../../src/renderer/locales/recordDuplicate.zh-CN';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
@@ -66,7 +69,8 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     throw Error('未授权的RAM端口：' + command);
   });
   const store = Object.assign((selector: (value: any) => any) => selector(stateApi.getState()), stateApi);
-  const context = createContext({ Error, Object, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: { querySelector: () => dialog ? {} : null }, window: { confirm: () => true } });
+  const documentPort = { querySelector: () => dialog ? {} : null, querySelectorAll: () => [] }; vi.stubGlobal('document', documentPort);
+  const context = createContext({ Error, Object, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: documentPort, window: { confirm: () => true } });
   const modules = new Map<string, { exports: any }>();
   function load(file: string): any {
     file = path.resolve(file); if (modules.has(file)) return modules.get(file)!.exports;
@@ -79,6 +83,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
       if (name === 'react-data-grid') return { DataGrid: 'DataGrid', SelectColumn: { key: 'select-row' } };
       if (name.endsWith('.css')) return {};
       const target = path.resolve(path.dirname(file), name);
+      if (target === path.join(renderer, 'recordTemplates')) return recordTemplates;
       if (target === path.join(renderer, 'store')) return { useWorkspace: store };
       if (target === path.join(renderer, 'uiCommands')) return navigationMenuVmPort;
       if (target === path.join(renderer, 'lib')) return { ...lib, invoke, uid: vi.fn(() => 'UUID-' + ++counter) };
@@ -238,4 +243,30 @@ describe('完整TableTab勾选复制入口', () => {
     f.grid().onRowsChange(f.grid().rows.map((row: any, index: number) => index < 2 ? row : { ...row, data: { ...row.data, id: '1844674407370955161' + index } })); await f.render();
     f.button(zh.table.text019).props.onClick(); await f.render(); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.preview')).toHaveLength(1); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(0);
   });
+});
+
+/** 完整MySQL父页运行正式模板回调，保留原草稿和一步undo，不触发任何IPC。 */
+it('MySQL模板从当前暂存值生成整批新增，精确字节/JSON不变，原草稿单独保留', async () => {
+  const f = await fixture(); await f.change('已暂存原草稿');
+  f.grid().onActivePositionChange({ row: f.grid().rows[0], column: { key: 'note' } }); await f.render();
+  await f.click(recordTemplatesZh.open); const dialog = f.all('RecordTemplatesDialog')[0];
+  expect(dialog.props.candidate.fields.map((field: any) => field.name)).toEqual(['note', 'bytes', 'doc']);
+  expect(f.button(text.undo).props.disabled).toBe(true);
+  const content = { version: 1, dialect: 'mysql', fields: dialog.props.candidate.fields.map(({ name, signature, value }: any) => ({ name, signature, value })) };
+  const calls = f.invoke.mock.calls.length, original = f.grid().rows[0];
+  dialog.props.onStage(content, 2); await f.render(); const added = f.grid().rows.slice(1);
+  expect(added).toHaveLength(2); expect(f.grid().rows[0]).toBe(original);
+  for (const row of added) { expect(row.data).toEqual({ note: '已暂存原草稿', bytes: original.data.bytes, doc: original.data.doc }); expect(row.data).not.toHaveProperty('id'); }
+  expect(() => dialog.props.onStage(content, 2)).toThrow();
+  await f.click(text.undo); expect(f.grid().rows).toEqual([original]);
+  await f.click(text.redo); expect(f.grid().rows.slice(1).map((row: any) => row.id)).toEqual(added.map((row: any) => row.id));
+  expect(f.invoke).toHaveBeenCalledTimes(calls);
+});
+it('MySQL模板旧父回调在原草稿undo/redo ABA后永久拒绝，不追加部分记录', async () => {
+  const f = await fixture(); await f.change('暂存'); const oldUndo = f.button(text.undo).props.onClick; await f.click(recordTemplatesZh.open);
+  const dialog = f.all('RecordTemplatesDialog')[0], before = f.grid().rows, calls = f.invoke.mock.calls.length;
+  // 绕过按钮禁用模拟迟到旧回调；正式历史函数仍按原状态处理，模板必须额外识别代次。
+  oldUndo(); await f.render(); expect(f.grid().rows[0].data.note).toBe('原值'); const oldRedo = f.button(text.redo).props.onClick; oldRedo(); await f.render();
+  expect(f.grid().rows).toEqual(before); expect(() => dialog.props.onStage({ version: 1, dialect: 'mysql', fields: [] }, 1)).toThrow();
+  expect(f.grid().rows).toEqual(before); expect(f.invoke).toHaveBeenCalledTimes(calls);
 });

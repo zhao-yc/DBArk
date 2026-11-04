@@ -36,6 +36,9 @@ export function sqliteDraftChanges(page: SqliteTablePage, rows: readonly SqliteD
 }
 /** 独立草稿账本持有准确快照；离开活动标签可保留，来源 ABA 或未知提交永久撤销原批次。 */
 export class SqliteTableEditor {
+  private generationValue: object = {};
+  /** 记录每次可观察编辑状态变代，撤销/重做恢复原数组也不复活旧模板预览。 */
+  get generation(): object { return this.generationValue; }
   private rows: SqliteDraftRow[]; private past: SqliteDraftRow[][] = []; private future: SqliteDraftRow[][] = [];
   private valid = true; private unknown = false; private input = false; private disposed = false; private snapshotReleased = false; private message = ''; private previewValue?: SqliteTableEditPreview; private operation?: Operation;
   constructor(readonly page: SqliteTablePage, private readonly ports: Ports) {
@@ -53,7 +56,7 @@ export class SqliteTableEditor {
   get dirty(): boolean { return this.input || this.changes.length > 0 || this.unknown; }
   get busy(): boolean { return !!this.operation; }
   get view(): SqliteEditView { return { page: this.page, rows: this.rows, dirty: this.dirty, busy: this.busy, valid: this.valid && !this.disposed, unknown: this.unknown, undo: !!this.past.length, redo: !!this.future.length, message: this.message, preview: this.previewValue, taskId: this.operation?.id }; }
-  private emit(): void { if (!this.disposed) { this.ports.dirty(this.dirty || this.busy); this.ports.changed(this.view); } }
+  private emit(): void { if (!this.disposed) { this.generationValue = {}; this.ports.dirty(this.dirty || this.busy); this.ports.changed(this.view); } }
   /** 快照释放失败只报告，不认领或释放任何其它来源。 */
   private release(input: { snapshotId?: string; previewId?: string }): void { void this.ports.release(input).catch(reason => { if (!this.disposed) { this.message = String(reason instanceof Error ? reason.message : reason); this.emit(); } }); }
   /** 同一已接管快照只释放一次，严格模式或重复关闭不重复投递释放请求。 */

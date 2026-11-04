@@ -43,6 +43,9 @@ export class DraftHistory {
   private redoStack: Operation[] = [];
   private anchor: DraftRow[] | null = null;
   private bytes = 0;
+  private generationValue: object = {};
+  /** 即使撤销后回到相同内容，旧草稿捕获也不能重新认领；不暴露行值或内部历史。 */
+  get generation(): object { return this.generationValue; }
   notice = '';
   constructor(private readonly limits: { operations: number; bytes: number } = draftHistoryLimits) {
     if (!Number.isSafeInteger(limits.operations) || limits.operations < 1 || !Number.isSafeInteger(limits.bytes) || limits.bytes < 1) throw Error(text.changed);
@@ -55,9 +58,10 @@ export class DraftHistory {
     return ids;
   }
   /** 清除只释放历史，不回写当前草稿；加载/代次/提交边界同步调用。 */
-  clear() { this.undoStack = []; this.redoStack = []; this.bytes = 0; this.anchor = null; this.notice = ''; }
+  clear() { this.generationValue = {}; this.undoStack = []; this.redoStack = []; this.bytes = 0; this.anchor = null; this.notice = ''; }
   /** 一次已通过原入口守卫的本地发布就是一项操作；超限不拒绝或截断用户草稿。 */
   record(before: DraftRow[], after: DraftRow[]) {
+    if (before !== after) this.generationValue = {};
     if (this.anchor && this.anchor !== before) this.clear();
     this.anchor = after;
     if (before === after) return;
@@ -88,6 +92,7 @@ export class DraftHistory {
     if (this.anchor !== rows) { this.clear(); this.notice = text.changed; return null; }
     const from = direction === 'undo' ? this.undoStack : this.redoStack, to = direction === 'undo' ? this.redoStack : this.undoStack;
     const operation = from.at(-1); if (!operation) return null;
+    this.generationValue = {};
     const remaining = rows.filter(row => !operation.patches.has(row.id));
     const target = direction === 'undo' ? 'before' : 'after';
     let count = remaining.length;

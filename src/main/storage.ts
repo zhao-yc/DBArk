@@ -1,4 +1,6 @@
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetDocumentSchema, sqliteTablePresetLimits, type SqliteTablePresetTarget, type SqliteTablePresetDocument, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../shared/sqliteTablePresets';
+import { RecordTemplateStorage, readRecordTemplateDocuments } from './recordTemplateStorage';
+import type { RecordTemplateTarget, RecordTemplateSource } from '../shared/recordTemplates';
 import { sqliteLayoutTargetSchema, sqliteLayoutDocumentSchema, sqliteLayoutResetSchema, sqliteLayoutSaveSchema, type SqliteLayoutDocument, type SqliteLayoutTarget, type SqliteLayoutInput, type SqliteLayoutStoredSnapshot } from '../shared/sqliteTableLayout';
 import { recoverSqliteObjectsTask } from '../shared/sqliteObjectsFact';
 import { recoverSqliteTableMaintenanceTask } from '../shared/sqliteTableMaintenanceFact';
@@ -99,6 +101,7 @@ export class LocalStore {
     validateSavedQueryOrganizationStorage(this.db);
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_presets_sqlite'").length) this.validateSqlitePresetRows();
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_layouts_sqlite'").length) this.validateSqliteLayoutRows();
+    readRecordTemplateDocuments(this.db);
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
@@ -114,6 +117,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS table_preferences (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         CREATE TABLE IF NOT EXISTS table_apply_receipts (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_presets (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
+        CREATE TABLE IF NOT EXISTS record_templates (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
+        DELETE FROM record_templates WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=record_templates.connection_id);
         -- SQLite命名筛选为可选schema9元数据，与MySQL方案合同隔离。
         CREATE TABLE IF NOT EXISTS table_presets_sqlite (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         DELETE FROM table_presets_sqlite WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=table_presets_sqlite.connection_id);
@@ -330,6 +335,28 @@ export class LocalStore {
     this.connectionRevisionValue++;
     return this.connectionOrganization();
   }
+
+  /** 原连接概要决定方案来源，不解密秘密，也不读取SQLite数据库文件。 */
+  private recordTemplateStore(): RecordTemplateStorage {
+    return new RecordTemplateStorage(this.db, {
+      source: (target: RecordTemplateTarget): RecordTemplateSource => {
+        const profile = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [target.connectionId])[0];
+        if (!profile || !['mysql', 'mariadb', 'sqlite'].includes(profile.dialect) || profile.dialect === 'sqlite' && target.database !== 'main') throw Error('记录模板连接已删除、驱动或目标库无效');
+        return { connectionRevision: this.connectionRevisionValue, connectionDigest: queryConnectionDigest(profile), dialect: profile.dialect === 'sqlite' ? 'sqlite' : 'mysql' };
+      },
+      mutate: (action, assertCurrent) => this.mutate(action, assertCurrent),
+    });
+  }
+  /** 模板入口共用原原子存储，不把行值放到settings、任务、执行历史或日志。 */
+  recordTemplates(input: unknown) { return this.recordTemplateStore().list(input); }
+  /** 新增或明确覆盖模板，复用原子落盘与归属校验。 */
+  saveRecordTemplate(input: unknown, assertCurrent?: () => void) { return this.recordTemplateStore().save(input, assertCurrent); }
+  /** 只修改本机名称，不续借已变化的连接来源。 */
+  renameRecordTemplate(input: unknown, assertCurrent?: () => void) { return this.recordTemplateStore().rename(input, assertCurrent); }
+  /** 仅删除本机条目，不发起数据库记录操作。 */
+  deleteRecordTemplate(input: unknown, assertCurrent?: () => void) { return this.recordTemplateStore().remove(input, assertCurrent); }
+  /** 显式领取原值前核对来源与所见修订。 */
+  readRecordTemplate(input: unknown) { return this.recordTemplateStore().read(input); }
 
   /** 原连接概要决定方案来源，不解密秘密，也不读取SQLite数据库文件。 */
   private sqlitePresetSource(target: SqliteTablePresetTarget) {
@@ -692,6 +719,7 @@ export class LocalStore {
       this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets_sqlite WHERE connection_id=?', [id]);
+      this.db.run('DELETE FROM record_templates WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_layouts_sqlite WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM query_result_presets WHERE connection_id=?', [id]);
       for (const key of this.volatileSecrets.keys()) if (key.startsWith(`${id}\0`)) this.volatileSecrets.delete(key);

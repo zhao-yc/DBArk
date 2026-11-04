@@ -253,6 +253,11 @@ export interface CommandMap {
   'query.transactionSettings.read': { input: { sessionId: string; taskId: string }; output: QueryTransactionSettingsSnapshot };
   'query.transactionSettings.apply': { input: { sessionId: string; taskId: string; expected: QueryTransactionSettingsSnapshot; isolation: QueryTransactionIsolation; readOnly: boolean }; output: QueryTransactionSettingsSnapshot };
   'query.autocommit.apply': { input: QueryAutocommitApplyInput; output: QueryAutocommitOutput };
+  'record.templates.list': { input: import('./recordTemplates').RecordTemplateTarget; output: import('./recordTemplates').RecordTemplateSnapshot };
+  'record.templates.save': { input: import('./recordTemplates').RecordTemplateSave; output: import('./recordTemplates').RecordTemplateSnapshot };
+  'record.templates.rename': { input: import('./recordTemplates').RecordTemplateRename; output: import('./recordTemplates').RecordTemplateSnapshot };
+  'record.templates.delete': { input: import('./recordTemplates').RecordTemplateSelect; output: import('./recordTemplates').RecordTemplateSnapshot };
+  'record.templates.read': { input: import('./recordTemplates').RecordTemplateSelect; output: import('./recordTemplates').RecordTemplateContent };
   'sqlite.tablePresets.list': { input: import('./sqliteTablePresets').SqliteTablePresetTarget; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tableLayout.get': { input: import('./sqliteTableLayout').SqliteLayoutTarget; output: import('./sqliteTableLayout').SqliteLayoutSnapshot };
   'sqlite.tableLayout.save': { input: import('./sqliteTableLayout').SqliteLayoutSave; output: import('./sqliteTableLayout').SqliteLayoutSnapshot };

@@ -110,11 +110,15 @@ import { tableAutoIncrementZh } from '../locales/tableAutoIncrement.zh-CN';
 import { RecordPageNavigation, recordPageScope, type RecordPageContext } from '../recordPageNavigation';
 import { assertCopiedRecordKeys, duplicateRecordDraft, recordDuplicateReadonlyReason } from '../recordDuplicate';
 import { duplicateSelectedRecordDrafts } from '../recordDuplicateBatch';
+import { RecordTemplatesDialog } from './RecordTemplatesDialog';
+import { mysqlTemplateCandidate, mysqlTemplateColumns, mysqlTemplateRows, RecordTemplateLease, type RecordTemplateCandidate, type RecordTemplateColumn } from '../recordTemplates';
+import { recordTemplatesZh } from '../locales/recordTemplates.zh-CN';
+import type { RecordTemplateContent } from '../../shared/recordTemplates';
 import { recordDuplicateZh } from '../locales/recordDuplicate.zh-CN';
 import { beginRecordCopyRead, consumeRecordCopyRead, recordCopySourceReady, recordCopyMetadataReason, type RecordCopyReadIntent, type RecordCopyPage } from '../recordCopySource';
 import { recordCopySourceZh } from '../locales/recordCopySource.zh-CN';
 import { tableCopyMetadataKey, type TableCopyPageSources } from '../../shared/tableCopySource';
-import { PasteInsertIntent, type PasteInsertPlan } from '../pasteInsert';
+import { PasteInsertIntent, preparePasteInsert, type PasteInsertPlan } from '../pasteInsert';
 import { PasteInsertDialog } from './PasteInsertDialog';
 import { pasteInsertZh } from '../locales/pasteInsert.zh-CN';
 import { BatchFillIntent, type BatchFillAssignment } from '../recordBatchFill';
@@ -213,6 +217,9 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const pendingPaste = useRef<DraftRow[] | null>(null);
   const pasteInsertIntent = useRef<PasteInsertIntent | null>(null); const [pasteInsertDialog, setPasteInsertDialog] = useState<PasteInsertIntent | null>(null);
   const pasteInsertEnvironment = useRef<unknown[]>([]);
+  type TemplateDialog = { lease: RecordTemplateLease; insert: PasteInsertIntent; candidate?: RecordTemplateCandidate; columns: RecordTemplateColumn[] };
+  const templateRef = useRef<TemplateDialog | undefined>(undefined), [templateDialog, setTemplateDialog] = useState<TemplateDialog>();
+  useEffect(() => { const stop = useWorkspace.subscribe(() => { templateRef.current?.lease.current(); }); return () => { stop(); templateRef.current?.lease.invalidate(); }; }, []);
   const batchFillIntent = useRef<BatchFillIntent | null>(null), [batchFillDialog, setBatchFillDialog] = useState<BatchFillIntent | null>(null);
   const batchFillEnvironment = useRef<unknown[]>([]);
   useEffect(() => () => { batchFillIntent.current?.invalidate(); }, []);
@@ -1252,6 +1259,37 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   /** 数据网格先返回当前行，再统一替换整个矩阵，避免多行粘贴被默认单行更新覆盖。 */
   function changeRows(updated: DraftRow[]) { try { assertGridWritable(); setRows(acceptGridDrafts(rowsRef.current, rows, pendingPaste.current ?? updated)); } catch (reason) { setError(errorMessage(reason)); } finally { pendingPaste.current = null; } }
+  /** 捕获当前记录与草稿代次，模板只授权原页的一次整批新增。 */
+  function openRecordTemplates(): void {
+    try {
+      assertPasteInsertTarget(); if (document.querySelector('[role="dialog"], [role="alertdialog"]') || !getRecordContext().info) return;
+      const context = getRecordContext(), initialRows = rowsRef.current, generation = history.generation, workspace = useWorkspace.getState(), originalTab = workspace.settings.tabs.find(item => item.id === tab.id), profile = workspace.connections.find(item => item.id === tab.connectionId), refresh = observedRefresh.current;
+      const insert = new PasteInsertIntent(initialRows, context, visibleKeys);
+      const lease = new RecordTemplateLease(uid(), () => {
+        const now = useWorkspace.getState();
+        return mounted.current && now.settings.activeTabId === tab.id && now.settings.tabs.find(item => item.id === tab.id) === originalTab && now.connections.find(item => item.id === tab.connectionId) === profile
+          && (now.connectionVersions[tab.connectionId] ?? 0) === context.connectionVersion && !now.activeJobs[tab.id] && observedRefresh.current === refresh && history.generation === generation
+          && !recordControllerRef.current?.hasInput() && !activeGridEditor.current && !rootElement.current?.querySelector('.grid-input') && !insert.reason(rowsRef.current, getRecordContext());
+      });
+      const row = initialRows.find(row => row.id === selectionRef.current?.rowId && !row.deleted);
+      const value: TemplateDialog = { lease, insert, columns: mysqlTemplateColumns(context.info!), ...(row ? { candidate: mysqlTemplateCandidate(row.data, context.info!) } : {}) };
+      templateRef.current?.lease.invalidate(); templateRef.current = value; setTemplateDialog(value); setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 关闭仅撤销本模态票据，不放弃原页数据或已有草稿。 */
+  function closeRecordTemplates(value: TemplateDialog): void {
+    value.lease.invalidate(); value.insert.invalidate(); if (templateRef.current !== value) return;
+    templateRef.current = undefined; setTemplateDialog(undefined);
+  }
+  /** 新增走原粘贴计划与历史，一次发布且复用唯一键保护，不投递SQL。 */
+  function stageRecordTemplate(value: TemplateDialog, content: RecordTemplateContent, count: number): void {
+    if (templateRef.current !== value || !value.lease.current()) throw Error(recordTemplatesZh.stale);
+    const context = getRecordContext(), data = mysqlTemplateRows(content, context.info!, count), names = content.fields.map(field => field.name);
+    const plan = preparePasteInsert(context.info!, data.map(row => names.map(name => Object.getOwnPropertyDescriptor(row, name)!.value)), names);
+    const result = value.insert.consume(plan, rowsRef.current, context, uid);
+    closeRecordTemplates(value); result.ids.forEach(id => copiedDraftIds.current.add(id)); setRows(result.rows); setError(''); setDuplicateNotice(recordTemplatesZh.staged(count));
+  }
+
   /** 新增使用同一草稿 UUID；表单已打开时可立即编辑该新增记录。 */
   function addRow() {
     try { assertGridWritable(); const row = newDraftRow(uid()); setRows(current => [...current, row]); const key = visibleKeys[0]; if (key) { selectionRef.current = { rowId: row.id, key }; setSelection(selectionRef.current); } if (record.formOpen) record.select(row.id); }
@@ -1484,7 +1522,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     finally { applyingRef.current = false; setApplying(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || preferencesLock.current || copyPendingRef.current); }
   }
   insertCopyBlockedRef.current = observedRefresh.current !== refreshVersion || blocked || gridEditing || record.dirty || record.pending || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || !!record.documentInput || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || settings.activeTabId !== tab.id || !page;
-  const historyBlocked = blocked || !editable || record.dirty || record.pending || gridEditing || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || settings.activeTabId !== tab.id;
+  const historyBlocked = !!templateDialog || blocked || !editable || record.dirty || record.pending || gridEditing || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || settings.activeTabId !== tab.id;
   // 菜单和原生命令绑定同一个表页快照，切页、改草稿、改选区或换连接后旧入口立即失效。
   const tableToolbarScope = useMemo(() => ({}), [tab, connection, connectionVersion, refreshVersion, info, page, rows, selection, selectedRows, settings.activeTabId, blocked, gridEditing, record.dirty, record.pending, showPreferences, referenceDialog, pasteInsertDialog, historyBlocked, sortScope]);
   const tableToolbarOwner = useRef({ scope: tableToolbarScope, revision: 0 });
@@ -1520,6 +1558,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     <ActionMenuSection label={tableToolbarZh.editing}><button aria-label={recordDuplicateZh.action} title={copyMetadataReason || (copySourceReady ? recordCopySourceZh.hint : recordDuplicateReadonlyReason(getRecordContext(), referenceRow) || recordDuplicateZh.hint)} disabled={blocked || record.dirty || !!copyMetadataReason || (!!recordDuplicateReadonlyReason(getRecordContext(), referenceRow) && !copySourceReady)} onClick={duplicateCurrentRow}><CopyPlus size={14}/>{recordDuplicateZh.action}</button>
 <button aria-label={recordDuplicateZh.batchAction} title={recordDuplicateZh.batchHint} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={duplicateSelectedRows}><CopyPlus size={14}/>{recordDuplicateZh.batchAction}</button>
 <button aria-label={pasteInsertZh.action} disabled={!editable || blocked || record.dirty || !!pasteInsertDialog} onClick={openPasteInsert}>{pasteInsertZh.action}</button>
+<button aria-label={recordTemplatesZh.open} disabled={!editable || blocked || record.dirty || gridEditing || !!templateDialog} onClick={openRecordTemplates}>{recordTemplatesZh.open}</button>
 <button aria-label={recordBatchFillZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={openBatchFill}>{recordBatchFillZh.action}</button>
 <button aria-label={draftHistoryZh.undo} title={draftHistoryZh.limit} disabled={!history.status.undo || historyBlocked} onClick={() => moveHistory("undo")}>{draftHistoryZh.undo} ({history.status.undo})</button>
 <button aria-label={draftHistoryZh.redo} title={draftHistoryZh.limit} disabled={!history.status.redo || historyBlocked} onClick={() => moveHistory("redo")}>{draftHistoryZh.redo} ({history.status.redo})</button>
@@ -1584,6 +1623,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     {queryTemplate && <TableQueryTemplateDialog info={queryTemplate.info} limit={queryTemplate.limit} isCurrent={() => queryTemplateCurrent(queryTemplate)} onOpen={(sql, kind, options) => openGeneratedQuery(queryTemplate, sql, kind, options)} onClose={() => closeQueryTemplate(queryTemplate)}/>}
     {filteredSelectDialog && <TableQueryTemplateDialog info={filteredSelectDialog.info} limit={filteredSelectDialog.limit} readScope={filteredSelectDialog.readScope} isCurrent={() => filteredSelectDialog.current()} onOpen={(sql, kind, options) => openFilteredSelectQuery(filteredSelectDialog, sql, kind, options)} onClose={() => closeFilteredSelect(filteredSelectDialog)}/>}
     {pasteInsertDialog && <PasteInsertDialog info={pasteInsertDialog.context.info!} visibleKeys={pasteInsertDialog.visible} invalidReason={pasteInsertDialog.reason(rowsRef.current, getRecordContext())} onStage={plan => stagePasteInsert(pasteInsertDialog, plan)} onClose={() => closePasteInsert(pasteInsertDialog)}/>}
+    {templateDialog && <RecordTemplatesDialog key={templateDialog.lease.id} lease={templateDialog.lease} target={base} dialect="mysql" columns={templateDialog.columns} candidate={templateDialog.candidate} onStage={(content, count) => stageRecordTemplate(templateDialog, content, count)} onClose={() => closeRecordTemplates(templateDialog)}/>}
     {batchFillDialog && <TableBatchFillDialog intent={batchFillDialog} initialColumn={selection?.key} invalidReason={batchFillDialog.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)} onStage={assignments => stageBatchFill(batchFillDialog, assignments)} onClose={() => closeBatchFill(batchFillDialog)}/>}
     {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} fitSource={columnFitSource} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
     {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}

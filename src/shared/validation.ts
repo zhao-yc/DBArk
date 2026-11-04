@@ -84,6 +84,7 @@ import { assertResultSqlData, resultSqlTargetSchema, resultSqlSelectionSchema } 
 import { resultSqlZh } from './resultSql.zh-CN';
 import { FILTER_LIMITS, validateFilterGroup, assertFilterGroupInput, filterGroupSchema, filterRuleSchema as filterRule, sortRulesSchema } from './filtering';
 import { tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, tablePresetApplySchema } from './tablePresets';
+import { recordTemplateTargetSchema, recordTemplateSaveSchema, recordTemplateSelectSchema, recordTemplateRenameSchema } from './recordTemplates';
 import { queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema } from './queryResultPresets';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
@@ -219,6 +220,7 @@ const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
 });
 
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'record.templates.list': recordTemplateTargetSchema, 'record.templates.save': recordTemplateSaveSchema, 'record.templates.rename': recordTemplateRenameSchema, 'record.templates.delete': recordTemplateSelectSchema, 'record.templates.read': recordTemplateSelectSchema,
   'sqlite.tableLayout.get': sqliteLayoutTargetSchema, 'sqlite.tableLayout.save': sqliteLayoutSaveSchema, 'sqlite.tableLayout.reset': sqliteLayoutResetSchema,
   'sqlite.tablePresets.list': sqliteTablePresetTargetSchema, 'sqlite.tablePresets.save': sqliteTablePresetSaveSchema, 'sqlite.tablePresets.delete': sqliteTablePresetSelectSchema, 'sqlite.tablePresets.read': sqliteTablePresetSelectSchema,
   'sqlite.tablePage': sqliteTablePageSchema,

@@ -1,4 +1,8 @@
 import { SqliteTablePresetPanel } from './SqliteTablePresetPanel';
+import { RecordTemplatesDialog } from './RecordTemplatesDialog';
+import { RecordTemplateLease, sqliteTemplateCandidate, sqliteTemplateColumns, sqliteTemplateRows, type RecordTemplateCandidate, type RecordTemplateColumn } from '../recordTemplates';
+import { recordTemplatesZh } from '../locales/recordTemplates.zh-CN';
+import type { RecordTemplateContent } from '../../shared/recordTemplates';
 import { SqliteRelationshipDialog } from './SqliteRelationshipDialog';
 import { relationshipDiagramZh as diagramText } from '../locales/relationshipDiagram.zh-CN';
 import { SqliteValueOptionsDialog } from './SqliteValueOptionsDialog';
@@ -120,6 +124,9 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   const [fullExport, setFullExport] = useState<FullExportOwner | null>(null), fullExportRef = useRef<FullExportOwner | null>(null);
   const [tableImport, setTableImport] = useState<ImportOwner | null>(null), importRef = useRef<ImportOwner | null>(null);
   const editorRef = useRef<SqliteTableEditor | null>(null), [editView, setEditView] = useState<SqliteEditView | null>(null);
+  type TemplateDialog = { lease: RecordTemplateLease; editor: SqliteTableEditor; candidate?: RecordTemplateCandidate; columns: RecordTemplateColumn[] };
+  const templateRef = useRef<TemplateDialog | undefined>(undefined), [templateDialog, setTemplateDialog] = useState<TemplateDialog>(), [templateNotice, setTemplateNotice] = useState('');
+  useEffect(() => { const stop = useWorkspace.subscribe(() => { templateRef.current?.lease.current(); }); return () => { stop(); templateRef.current?.lease.invalidate(); }; }, []);
   const layoutDirtyRef = useRef(false), layoutScopeRef = useRef<SqliteLayoutScope | undefined>(undefined);
   const [layoutView, setLayoutView] = useState<SqliteLayoutView>({ preferences: { version: 1, columns: [] }, ready: false, pending: false, dirty: false, error: '' });
   const [layoutDialog, setLayoutDialog] = useState<{ scope: object; preferences: TablePreferences; dirty: boolean }>();
@@ -702,6 +709,35 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
       inputRef.current = ticket; editor.inputOpen(true); setCellInput(ticket);
     } catch (reason) { setValidation(errorMessage(reason)); }
   }
+  /** 当前编辑器占有模板输入；捕获原页typed值与不可复活的编辑代次，不派生SQL。 */
+  function openRecordTemplates(): void {
+    if (!editActionCurrent() || !available() || view.busy || externalBusy || inputRef.current || previewRef.current || pasteRef.current || rangeRef.current || fillRef.current || importRef.current || fullExportRef.current || exportData || findRef.current?.preview) return;
+    try {
+      const editor = renderedEditor!, source = editor.page, rows = editor.view.rows;
+      if (source.edit?.kind !== 'editable') return;
+      const row = rows.find(row => row.id === selectedRow && !row.deleted), columns = sqliteTemplateColumns(source.edit.columns), candidate = row ? sqliteTemplateCandidate(row.values, source.edit.columns) : undefined;
+      editor.inputOpen(true); const generation = editor.generation, originalTab = tab, originalProfile = profile, originalVersion = version, originalRefresh = refreshVersion;
+      const lease = new RecordTemplateLease(uid(), () => {
+        const now = useWorkspace.getState();
+        return editorRef.current === editor && editor.page === source && editor.view.rows === rows && editor.generation === generation && editor.canEdit()
+          && latest.current.active && latest.current.refreshVersion === originalRefresh && now.settings.activeTabId === originalTab.id && now.settings.tabs.find(item => item.id === originalTab.id) === originalTab
+          && now.connections.find(item => item.id === originalTab.connectionId) === originalProfile && (now.connectionVersions[originalTab.connectionId] ?? 0) === originalVersion && !now.activeJobs[originalTab.id]
+          && !inputRef.current && !previewRef.current && !pasteRef.current && !rangeRef.current && !fillRef.current && !importRef.current && !fullExportRef.current;
+      });
+      const value: TemplateDialog = { lease, editor, columns, candidate }; templateRef.current?.lease.invalidate(); templateRef.current = value; setTemplateDialog(value); setTemplateNotice(''); setValidation('');
+    } catch (reason) { setValidation(errorMessage(reason)); }
+  }
+  /** 仅释放自己占用的编辑器输入标志，旧模态不能关闭后继票据或更改其草稿。 */
+  function closeRecordTemplates(value: TemplateDialog): void {
+    value.lease.invalidate(); if (templateRef.current !== value) return;
+    templateRef.current = undefined; setTemplateDialog(undefined); if (editorRef.current === value.editor) value.editor.inputOpen(false);
+  }
+  /** 原appendRows整批校验与一步撤销保留，已有行、NULL、DEFAULT和动态类型不变。 */
+  function stageRecordTemplate(value: TemplateDialog, content: RecordTemplateContent, count: number): void {
+    if (templateRef.current !== value || !value.lease.current() || value.editor.page.edit?.kind !== 'editable') throw Error(recordTemplatesZh.stale);
+    const rows = sqliteTemplateRows(content, value.editor.page.edit.columns, count), ids = value.editor.appendRows(rows);
+    closeRecordTemplates(value); setSelectedRow(ids[0]); setTemplateNotice(recordTemplatesZh.staged(count)); setValidation('');
+  }
   function addRow(): void { if (!editActionCurrent() || !available() || inputRef.current || previewRef.current) return; const editor = renderedEditor!, id = editor.add(), row = editor.view.rows.find(row => row.id === id); if (row) { setSelectedRow(row.id); openInput(editor, row); } }
   /** 勾选只接纳当前Grid的原页原行对象；空选择同样带来源，旧effect不得清后来集合。 */
   function selectCheckedRows(capture: SqliteCheckedRows): void {
@@ -937,7 +973,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   }
   const checkedCount = checkedRows && checkedRows.editor === renderedEditor && checkedRows.capture.page === page && checkedRows.capture.rows === editRows ? checkedRows.capture.selected.length : 0;
   const changes = renderedEditor?.changes ?? [], counts = { insert: changes.filter(change => change.kind === 'insert').length, update: changes.filter(change => change.kind === 'update').length, delete: changes.filter(change => change.kind === 'delete').length };
-  const editBlocked = !active || externalBusy || !editView?.valid || editView.unknown || !!cellInput || !!pasteOpen || !!rangeOpen || !!fillOpen || !!filteredSelectOpen || findPreview;
+  const editBlocked = !!templateDialog || !active || externalBusy || !editView?.valid || editView.unknown || !!cellInput || !!pasteOpen || !!rangeOpen || !!fillOpen || !!filteredSelectOpen || findPreview;
   const headerSort: SqliteHeaderSort = page ? sqliteHeaderSortToGrid(applied.current.sort, page) : [];
   const shownQuery = applied.current;
   const draftChanged = useMemo(() => conditions && sqliteTableDraftChanged(shownQuery, { connectionId: tab.connectionId, database: tab.database, table: tab.table }, limit, mode, filters, sort), [conditions, shownQuery, tab.connectionId, tab.database, tab.table, limit, mode, filters, sort]);
@@ -978,7 +1014,8 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
       {visibleRowDetail && detailPage && <QueryRowDetailsPanel controller={rowDetails} view={visibleRowDetail} sqlitePage={detailPage} isCurrent={() => rowDetailsCurrent(visibleRowDetail.binding)} onMove={showRowDetail}
         onClose={current => { if (rowDetailsCurrent(current.binding) && rowDetails.close(current)) setRowDetail(null); }}/>}
       </div> : <Empty title={text.noPage}/>}</div>
-    {editView && <div className="table-action-bar"><span role="status">{editText.counts(counts.insert, counts.update, counts.delete)}</span><button aria-label={editText.add} disabled={editBlocked} onClick={addRow}>{editText.add}</button><button aria-label={editText.editRow} disabled={editBlocked || !selectedRow || editRows.find(row => row.id === selectedRow)?.deleted} onClick={() => { const row = editRows.find(row => row.id === selectedRow); if (row) editRow(row); }}>{editText.editRow}</button><button aria-label={editText.remove} disabled={editBlocked || !selectedRow || editRows.find(row => row.id === selectedRow)?.deleted} onClick={removeRow}>{editText.remove}</button><button aria-label={editText.undo} disabled={editBlocked || !editView.undo} onClick={undoEdit}>{editText.undo}</button><button aria-label={editText.redo} disabled={editBlocked || !editView.redo} onClick={redoEdit}>{editText.redo}</button><button aria-label={editText.discard} disabled={editView.busy || !editView.dirty} onClick={discardEdit}>{editText.discard}</button><button className="primary" aria-label={editText.preview} disabled={editBlocked || !changes.length} onClick={previewChanges}>{editText.preview}</button></div>}
+    {editView && <div className="table-action-bar"><span role="status">{editText.counts(counts.insert, counts.update, counts.delete)}</span><button aria-label={editText.add} disabled={editBlocked} onClick={addRow}>{editText.add}</button><button aria-label={recordTemplatesZh.open} disabled={editBlocked || !!templateDialog} onClick={openRecordTemplates}>{recordTemplatesZh.open}</button><button aria-label={editText.editRow} disabled={editBlocked || !selectedRow || editRows.find(row => row.id === selectedRow)?.deleted} onClick={() => { const row = editRows.find(row => row.id === selectedRow); if (row) editRow(row); }}>{editText.editRow}</button><button aria-label={editText.remove} disabled={editBlocked || !selectedRow || editRows.find(row => row.id === selectedRow)?.deleted} onClick={removeRow}>{editText.remove}</button><button aria-label={editText.undo} disabled={editBlocked || !editView.undo} onClick={undoEdit}>{editText.undo}</button><button aria-label={editText.redo} disabled={editBlocked || !editView.redo} onClick={redoEdit}>{editText.redo}</button><button aria-label={editText.discard} disabled={editView.busy || !editView.dirty} onClick={discardEdit}>{editText.discard}</button><button className="primary" aria-label={editText.preview} disabled={editBlocked || !changes.length} onClick={previewChanges}>{editText.preview}</button></div>}
+    {templateNotice && <p role="status" className="sqlite-browse-hint">{templateNotice}</p>}
     {editView?.message && <p role="status" className="sqlite-browse-hint">{editView.message}</p>}
     <div className="tab-status"><button aria-label={text.first} disabled={view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(0)}>{text.first}</button><button aria-label={text.previous} disabled={view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(Math.max(0, page!.offset - page!.limit))}>{text.previous}</button><button aria-label={text.next} disabled={view.busy || !page?.hasMore || externalBusy || page.offset + page.limit > sqliteTableBrowseLimits.offset} onClick={() => navigatePage(page!.offset + page!.limit)}>{text.next}</button>
       <button aria-label={text.last} title={text.lastHint} disabled={!page || !active || invalidTarget || view.busy || externalBusy} onClick={() => navigatePage('last')}>{text.last}</button>
@@ -1004,6 +1041,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
     {rangeOpen && <SqlitePasteRangeDialog key={rangeOpen.id} page={rangeOpen.page} rows={rangeOpen.rows} anchor={rangeOpen.anchor} initial={rangeOpen.source} current={() => rangeCurrent(rangeOpen)} onStage={plan => stageRange(rangeOpen, plan)} onClose={() => closeRange(rangeOpen)}/>}
     {pasteOpen && <SqlitePasteInsertDialog key={pasteOpen.id} page={pasteOpen.page} initial={pasteOpen.source} current={() => pasteCurrent(pasteOpen)} onStage={plan => stagePaste(pasteOpen, plan)} onClose={() => closePaste(pasteOpen)}/>}
     {filteredSelectOpen && <SqliteFilteredSelectDialog intent={filteredSelectOpen.intent} ownerId={filteredSelectOpen.id} onOpen={plan => openFilteredSelectQuery(filteredSelectOpen, plan)} onClose={() => closeFilteredSelect(filteredSelectOpen)}/>}
+    {templateDialog && <RecordTemplatesDialog key={templateDialog.lease.id} lease={templateDialog.lease} target={{ connectionId: tab.connectionId, database: 'main', table: tab.table ?? '' }} dialect="sqlite" columns={templateDialog.columns} candidate={templateDialog.candidate} onStage={(content, count) => stageRecordTemplate(templateDialog, content, count)} onClose={() => closeRecordTemplates(templateDialog)}/>}
     {fillOpen && <SqliteTableFillDialog key={fillOpen.id} ticket={fillOpen} ownerId={fillOpen.id} page={fillOpen.source.page} count={fillOpen.source.selected.length} allNew={fillOpen.source.allNew} current={() => fillCurrent(fillOpen)} onSave={fields => stageFill(fillOpen, fields)} onClose={() => closeFill(fillOpen)}/>}
     {cellInput && <SqliteTableValueDialog key={cellInput.id} ticket={cellInput} page={cellInput.page} row={cellInput.row} column={cellInput.column} duplicate={!!cellInput.duplicate} duplicateOwner={cellInput.duplicate ? cellInput.id : undefined}
       navigation={cellInput.column === undefined && !cellInput.duplicate && cellInput.row.index !== undefined ? {
