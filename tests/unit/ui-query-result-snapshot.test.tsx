@@ -16,6 +16,8 @@ import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom'
 const renders = vi.hoisted(() => ({ grids: [] as any[], editors: [] as any[] }));
 vi.mock('react-data-grid', () => ({ SelectColumn: { key: 'select-row' }, DataGrid: (props: any) => { renders.grids.push(props); return null; } }));
 vi.mock('../../src/renderer/components/SqlEditor', () => ({ SqlEditor: (props: any) => { renders.editors.push(props); return null; } }));
+// 查询页直接导入的语法标记同样属于浏览器编辑器端口。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
 const globals = ['window', 'document', 'navigator', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);

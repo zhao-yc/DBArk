@@ -80,7 +80,9 @@ function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraft
   context.setRestoredDraftView = vi.fn((value: boolean) => { context.restoredDraftView = value; });
   context.setSelectedRows = vi.fn((rows: unknown) => { context.selectedRows = rows; });
   context.setSelection = vi.fn((selection: unknown) => { context.selection = typeof selection === 'function' ? selection(context.selection) : selection; });
-  context.setPageIndex = vi.fn((index: number) => { context.pageIndex = index; context.recordPageScopeRef.current.page = index; });
+  // 页请求与显示页码是独立生产状态，跨页setter同步更新请求，末页读取初始未开始。
+  context.pageRequest = 1; context.lastPageRead = { current: undefined }; context.setLastPageStopping = vi.fn();
+  context.setPageIndex = vi.fn((index: number) => { context.pageRequest = index; context.pageIndex = index; context.recordPageScopeRef.current.page = index; });
   // 原确认前后守卫也从生产函数提取；复用原模态/布局/关联活动端口，不伪造确认成功。
   const names = ['getRecordPageContext', 'navigateRecordPage', 'jumpToMatch', 'selectCurrentCell', 'applyPagePlan', 'reloadBlocked', 'confirmPageReload', 'canReload', 'duplicateCurrentRow', 'invalidateCopyRead', 'releaseCopySources'];
   if (names.some(name => !functions.has(name)) || !load || !consume || !blocked || buttons.size !== 4) throw Error('缺少生产跨页或原有工具接线');

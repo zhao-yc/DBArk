@@ -7,11 +7,13 @@
   "author": "DBArk contributors",
   "main": "dist/main/index.cjs",
   "packageManager": "pnpm@12.11.2",
+  "engines": { "node": ">=24.17.0 <25" },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/typecheck.mjs && node scripts/build.mjs",
     "typecheck": "node scripts/typecheck.mjs",
     "check:local": "node scripts/check-local.mjs",
+    "check:runtime": "node scripts/check-node-runtime.mjs",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "pnpm build && playwright test",

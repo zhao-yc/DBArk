@@ -68,6 +68,8 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
   });
   // 本组不打开勾选转入窗口，仅补齐原setRows/load读取的可空来源意图。
   port.rowTransferIntent = { current: null };
+  // 普通读取沿生产的页码初值，不建立末页请求；真实load仍自行更新状态和回收来源。
+  port.pageRequest = 1; port.lastPageRead = { current: undefined }; port.setLastPageStopping = vi.fn();
   // 缺省平铺与实际分组都由同一load读取；同步范围引用模拟组件本轮渲染。
   port.filterGroup = filterGroup; port.recordPageScopeRef.current.value.filterGroup = filterGroup;
   if (filterGroup) {

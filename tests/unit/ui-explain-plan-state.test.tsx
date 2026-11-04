@@ -47,7 +47,7 @@ function fixture() {
     // 此端口不打开列管理，普通结果的可见列随当前结果更新，不能捕获执行前的计划列。
     get visibleColumns(): unknown[] { return context.result?.columns ?? []; },
     // 此计划端口未打开列管理，正式网格新增冻结属性沿真实初始空前缀。
-    frozenKeys: [],
+    frozenKeys: [], layoutMatches: false, resultColumnWidths: undefined, resizeResultColumns: vi.fn(),
     get viewSource(): unknown { return context.result; },
     // 原结果表达式新增只读字节来源，沿同一实际任务引用，不写死第二份结果代次。
     get resultContext(): readonly unknown[] { return [context.outcome, context.resultIndex, undefined, context.task.current, context.connectionVersion, tab.connectionId]; },

@@ -32,7 +32,7 @@ tabrelio（原名 DBArk）保留连接树、多标签查询和表格编辑等熟
 
 ## 开发运行
 
-需要 Node.js 24 和 pnpm 12.11.2。
+需要 Node.js 24.17.0 或更高的 24.x 和 pnpm 12.11.2。`.nvmrc` 固定已验版本；安装后用 `pnpm check:runtime` 核对 SQLite 原生预算等 API，旧 Node 24 无法运行完整 SQLite 测试。
 
 ```sh
 corepack enable

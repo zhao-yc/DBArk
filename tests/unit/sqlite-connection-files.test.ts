@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { SqliteConnectionFiles } from '../../src/main/sqliteConnectionFiles';
@@ -7,10 +7,11 @@ import type { SqliteConnectionProfile } from '../../src/shared/contracts';
 import { commandSchemas } from '../../src/shared/validation';
 
 const directories: string[] = [];
-afterEach(context => { vi.useRealTimers(); if (context.task.result?.state !== 'fail') for (const directory of directories.splice(0)) { expect(dirname(resolve(directory))).toBe(resolve(tmpdir())); expect(basename(directory).startsWith('dbark-sqlite-file-grant-')).toBe(true); rmSync(directory, { recursive: true, force: true }); } });
+afterEach(context => { vi.useRealTimers(); if (context.task.result?.state !== 'fail') for (const directory of directories.splice(0)) { expect(dirname(resolve(directory))).toBe(realpathSync.native(tmpdir())); expect(basename(directory).startsWith('dbark-sqlite-file-grant-')).toBe(true); rmSync(directory, { recursive: true, force: true }); } });
 /** 这里只核Main文件能力，不拿普通文件的选择证明其SQLite内容有效；原生driver另验格式。 */
 function fixture() {
-  const directory = mkdtempSync(join(tmpdir(), 'dbark-sqlite-file-grant-')); directories.push(directory);
+  // 文件能力返回规范路径；合成文件与清理边界也使用相同真实临时根。
+  const directory = mkdtempSync(join(realpathSync.native(tmpdir()), 'dbark-sqlite-file-grant-')); directories.push(directory);
   const path = join(directory, '主库.sqlite'); writeFileSync(path, '仅测试文件身份');
   let document = {}; const owner = { document };
   const grants = new SqliteConnectionFiles<{ document: object }>({ assert(value) { if (value.document !== document) throw Error('原文档已失效'); }, same: (a, b) => a.document === b.document });

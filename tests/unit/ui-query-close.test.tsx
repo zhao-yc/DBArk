@@ -6,6 +6,8 @@ import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import type { QueryCloseRequest } from '../../src/renderer/queryCloseIntent';
 const io = vi.hoisted(() => ({ editor: null as any, edit: null as any, replace: null as any }));
 /** 仅替换Monaco外界端口；QueryTab、BindingDialog、Modal、store和ReactDOM均为真实组件。 */
+// 查询页直接导入的语法标记同样属于浏览器编辑器端口。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { useEffect, createElement } = await import('react');
   return { SqlEditor(props: any) {
@@ -13,7 +15,9 @@ vi.mock('../../src/renderer/components/SqlEditor', async () => {
       let value = props.value, version = 1;
       const content = new Set<() => void>(), modelChanges = new Set<() => void>(), disposed = new Set<() => void>();
       const model: any = { getValue: () => value, getVersionId: () => version, isDisposed: () => false, onDidChangeContent: (fn: () => void) => { content.add(fn); return { dispose: () => content.delete(fn) }; }, onWillDispose: () => ({ dispose() {} }) };
-      const editor = { getModel: () => model, onDidChangeModel: (fn: () => void) => { modelChanges.add(fn); return { dispose: () => modelChanges.delete(fn) }; }, onDidDispose: (fn: () => void) => { disposed.add(fn); return { dispose: () => disposed.delete(fn) }; } };
+      // 查询页会注册并撤销编辑器动作；本组仅保存这些RAM命令，不触发对象结构或SQL操作。
+      const actions = new Map<string, unknown>();
+      const editor = { addAction: (action: { id: string }) => { actions.set(action.id, action); return { dispose: () => actions.delete(action.id) }; }, getModel: () => model, onDidChangeModel: (fn: () => void) => { modelChanges.add(fn); return { dispose: () => modelChanges.delete(fn) }; }, onDidDispose: (fn: () => void) => { disposed.add(fn); return { dispose: () => disposed.delete(fn) }; } };
       io.editor = editor; io.edit = (text: string) => { value = text; version++; for (const fn of content) fn(); props.onChange?.(text); }; io.replace = () => { for (const fn of modelChanges) fn(); };
       props.onReady?.(editor); return () => { for (const fn of disposed) fn(); };
     }, []);

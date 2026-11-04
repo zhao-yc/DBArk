@@ -15,6 +15,8 @@ const grid = vi.hoisted(() => ({ props: null as any }));
 /** 仅用无布局网格端口接收父组件公开props；排序、筛选、选择、源租约和store均为生产实现。 */
 vi.mock('../../src/renderer/components/ResultsGrid', () => ({ ResultsGrid(props: any) { grid.props = props; return <div role="grid"/>; } }));
 vi.mock('../../src/renderer/components/SqlEditor', () => ({ SqlEditor: () => null }));
+// 查询页直接导入的语法标记同样属于浏览器编辑器端口。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let Dialog: typeof import('../../src/renderer/components/ResultInsertDialog')['ResultInsertDialog'], QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT', 'MutationObserver', 'Element'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);

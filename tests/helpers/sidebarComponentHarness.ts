@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { CompletionServerFacts } from '../../src/renderer/completionServerFacts';
+import { uid } from '../../src/renderer/lib';
 
 type Node = { type: unknown; props: Record<string, any> };
 interface Deferred { command: string; input: any; settled: boolean; resolve(value: any): void; reject(error: Error): void }
@@ -17,7 +18,7 @@ function compile(): Promise<string> {
       react: 'export const useState=(...a)=>globalThis.host.state(...a),useRef=(...a)=>globalThis.host.ref(...a),useEffect=(...a)=>globalThis.host.effect(...a);',
       jsx: 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";',
       icons: 'export const ChevronDown="down",ChevronRight="right",Database="database",Table2="table",Search="search",Plus="plus",Pencil="pencil",RefreshCw="refresh",FileCode2="file",Folder="folder",Unplug="unplug",Trash2="trash",Copy="copy",ListChecks="list-checks";',
-      lib: 'export const invoke=(...a)=>globalThis.sidebarIpcInvoke(...a),errorMessage=e=>e instanceof Error?e.message:String(e),kindLabels={table:"表",view:"视图"};',
+      lib: 'export const invoke=(...a)=>globalThis.sidebarIpcInvoke(...a),uid=()=>globalThis.sidebarUid(),errorMessage=e=>e instanceof Error?e.message:String(e),kindLabels={table:"表",view:"视图"};',
       store: 'export const useWorkspace=s=>s(globalThis.store);useWorkspace.getState=()=>globalThis.store;',
       ui: 'export const Spinner="spinner",FavoriteButton="favorite",WorkbenchShelf="shelf",SidebarTreeRow="tree-row",SidebarTreeProvider="tree-provider";'
     } as Record<string, string>)[args.path] }));
@@ -54,7 +55,7 @@ export class SidebarComponentRenderer {
 export async function sidebarHarness() {
   const calls: Deferred[] = [], notices: string[] = [], renderers: SidebarComponentRenderer[] = [];
   const state = { connections: [{ id: 'c', name: '测试连接', color: '#123456' } as ConnectionProfile], selection: null, connectionVersions: { c: 0 } as Record<string, number>, select() {}, notify(message: string) { notices.push(message); }, openTab() {}, setConnections() {} };
-  const module = { exports: {} as Record<string, any> }, context = { module, exports: module.exports, store: state, window: { confirm: () => true }, sidebarIpcInvoke: (command: string, input: unknown) => new Promise((resolve, reject) => calls.push({ command, input, resolve, reject, settled: false })) };
+  const module = { exports: {} as Record<string, any> }, context = { module, exports: module.exports, store: state, window: { confirm: () => true }, sidebarUid: uid, sidebarIpcInvoke: (command: string, input: unknown) => new Promise((resolve, reject) => calls.push({ command, input, resolve, reject, settled: false })) };
   runInNewContext(await compile(), context);
   const facts = module.exports.completionServerFacts as CompletionServerFacts;
   const callbacks = { onNewConnection() {}, onEditConnection() {}, onCopyConnection() {}, onOpenWorkbench() {}, onEdit() {}, onCopy() {}, onDesign() {}, onColumnPatches() {}, onIndexPatches() {}, onForeignKeyPatches() {}, onTableRename() {}, onTableAutoIncrement() {}, onTableComment() {}, onTableDefaultEncoding() {}, onDdl() {} };

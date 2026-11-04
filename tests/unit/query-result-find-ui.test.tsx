@@ -14,6 +14,8 @@ vi.mock('react-data-grid', async () => {
   return { SelectColumn: { key: 'select-row' }, DataGrid(props: any) { const host = useRef<HTMLDivElement>(null); ports.grids.push(props); useImperativeHandle(props.ref, () => ({ element: host.current, scrollToCell: ports.scroll, setActivePosition: ports.activate })); return <div key={ports.hostKey} ref={host} role="grid" tabIndex={0}/>; } };
 });
 vi.mock('../../src/renderer/components/SqlEditor', () => ({ SqlEditor: () => <div role="textbox" aria-label="RAM SQL编辑器"/> }));
+// 查询页直接导入的语法标记同样属于浏览器编辑器端口。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 let Grid: typeof import('../../src/renderer/components/ResultsGrid')['ResultsGrid'];
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'];
 let store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];

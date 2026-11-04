@@ -5,6 +5,8 @@ import{queryStreamZh as text}from'../../src/renderer/locales/queryStreamExport.z
 import{queryInsertZh as insertText}from'../../src/shared/queryInsertExport.zh-CN';
 import type{QueryStreamExportOutput}from'../../src/shared/queryStreamExport';
 import{readFileSync}from'node:fs';
+import { createContext, runInContext } from 'node:vm';
+import ts from 'typescript';
 // 参数编辑器不在本片交互内；只替代Monaco渲染，真实导出表单和控制器仍运行。
 vi.mock('../../src/renderer/components/SqlEditor',()=>({SqlEditor:()=>null}));
 let document:ReturnType<typeof memoryDocument>,root:ReturnType<typeof import('react-dom/client').createRoot>|undefined,createRoot:typeof import('react-dom/client').createRoot,Dialog:typeof import('../../src/renderer/components/QueryStreamExportDialog').QueryStreamExportDialog;
@@ -50,8 +52,23 @@ describe('完整INSERT真实React交互（RAM IPC端口）',()=>{
   it('卸载仅取消自有原任务，旧启动和发布回调不能再执行',async()=>{
     await mount();await configure();const start=callback(button(insertText.start));await click(insertText.start);const taskId=execute.mock.calls[0][0].taskId;await act(async()=>root!.unmount());root=undefined;expect(cancel).toHaveBeenCalledWith(taskId);await act(async()=>start());expect(execute).toHaveBeenCalledOnce();
   });
-  it('正式QueryTab的INSERT分支保留原outcome，不清原返回行；CSV/JSON原路径仍更新预览',()=>{
+  it.each(['sql', 'csv', 'json'] as const)('正式QueryTab的%s完整导出按原分支保留或更新预览，不重写执行流程', async format => {
     const source=readFileSync(new URL('../../src/renderer/components/QueryTab.tsx',import.meta.url),'utf8'),start=source.indexOf('async function runStreamExport('),end=source.indexOf('/** 会话尚在建立时取消',start),body=source.slice(start,end);
-    expect(body).toContain("if(options.format!=='sql'){setSelectedPin(''); setShowPinSql(false);setOutcome(null); setStream([]); setResultIndex(0);}");expect(body).toContain("if(options.format!=='sql')setOutcome(result.preview)");
+    expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+    const original = { results: [{ rows: [{ exact: '18446744073709551615' }] }] }, preview = { results: [{ rows: [{ exact: '0.12345678901234567890' }] }] };
+    const output = { preview, transactionOpen: false, transactionKnown: true }, setOutcome = vi.fn(), setStream = vi.fn(), setSelectedPin = vi.fn(), setShowPinSql = vi.fn(), setResultIndex = vi.fn();
+    // 真实函数只替换会话和IPC边界；分别观察首次await前清理与完整回包后的预览发布。
+    const context = createContext({ Error, queryStreamZh: text, streamExportSource: 'SELECT 原文', busyRef: { current: false }, streamCancelled: { current: '' }, cancelledQuery: { current: '' }, task: { current: '' }, tab: { id: 'query' },
+      clearFailureSource: vi.fn(), invalidateResultSelection: vi.fn(), setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setOutcome, setStream, setSelectedPin, setShowPinSql, setResultIndex,
+      useWorkspace: { getState: () => ({ setBusy: vi.fn(), setDirty: vi.fn() }) }, ensureSession: async () => 'session', prepareExecutionContext: vi.fn(), invoke: vi.fn(async () => output), setTransaction: vi.fn(), setTransactionKnown: vi.fn(), handleQueryError: vi.fn(),
+    });
+    runInContext(ts.transpileModule(body + '\nglobalThis.run = runStreamExport;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+    let displayed = original; setOutcome.mockImplementation(value => { displayed = value; });
+    const running = context.run({ format, taskId: 'export' });
+    if (format === 'sql') { expect(displayed).toBe(original); expect(setOutcome).not.toHaveBeenCalled(); expect(setStream).not.toHaveBeenCalled(); expect(setSelectedPin).not.toHaveBeenCalled(); expect(setShowPinSql).not.toHaveBeenCalled(); expect(setResultIndex).not.toHaveBeenCalled(); }
+    else { expect(displayed).toBeNull(); expect(setStream).toHaveBeenCalledExactlyOnceWith([]); expect(setSelectedPin).toHaveBeenCalledExactlyOnceWith(''); expect(setShowPinSql).toHaveBeenCalledExactlyOnceWith(null); expect(setResultIndex).toHaveBeenCalledExactlyOnceWith(0); }
+    expect(await running).toBe(output);
+    expect(displayed).toBe(format === 'sql' ? original : preview);
+    expect(context.invoke).toHaveBeenCalledExactlyOnceWith('query.exportStream', { format, taskId: 'export', sql: 'SELECT 原文', sessionId: 'session' });
   });
 });

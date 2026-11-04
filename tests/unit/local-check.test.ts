@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -50,6 +50,14 @@ describe('本地定向检查入口', () => {
     const root = fixture();
     expect(localCheck.parseLocalCheckArguments(['--', '--build', 'tests/unit/one.test.ts', 'tests/unit/space name.test.tsx', 'tests/unit/one.test.ts'], root))
       .toEqual({ build: true, tests: ['tests/unit/one.test.ts', 'tests/unit/space name.test.tsx'] });
+  });
+
+  it('从工程目录别名调用仍返回准确单元相对路径，不把真实根差异带到Vitest参数', () => {
+    const root = fixture(), alias = join(root, '工程别名');
+    // Windows用无需创建文件符号链接权限的目录junction；其余平台使用目录符号链接。
+    symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    expect(localCheck.parseLocalCheckArguments(['tests/unit/space name.test.tsx'], alias))
+      .toEqual({ build: false, tests: ['tests/unit/space name.test.tsx'] });
   });
 
   it('只执行一次类型检查、准确测试文件和可选普通构建', () => {

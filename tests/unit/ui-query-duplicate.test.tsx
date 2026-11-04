@@ -8,6 +8,8 @@ import { queryDuplicateZh as text } from '../../src/renderer/locales/queryDuplic
 import { zh } from '../../src/renderer/locales/zh-CN';
 const io = vi.hoisted(() => ({ entries: [] as { editor: ContentEditorPort; model: ContentModelPort }[] }));
 /** 只替换Monaco widget端口；真实QueryTab、正文桥、控制器、store与ReactDOM保留。 */
+// 查询页直接导入的语法标记同样属于浏览器编辑器端口。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { useEffect, useLayoutEffect, useRef, createElement } = await import('react');
   const { ContentEditorPort, ContentModelPort } = await import('./editor-content-test-ports');

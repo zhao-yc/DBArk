@@ -13,6 +13,8 @@ import { queryFileTextDifference } from '../../src/shared/queryFileReload';
 
 const io = vi.hoisted(() => ({ editor: null as any, entries: [] as Array<{ editor: any; initial: string }> }));
 /** 只替换Monaco端口；保存入口、正文桥、ReactDOM和工作区store均为真实实现。 */
+// 查询页直接导入的语法标记同样属于浏览器编辑器端口。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { createElement, useEffect, useLayoutEffect, useRef } = await import('react');
   const { editorContentBridge } = await import('../../src/renderer/editorContentBridge');

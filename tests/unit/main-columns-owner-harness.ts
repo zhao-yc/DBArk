@@ -21,6 +21,7 @@ import { ExternalObjectUris } from '../../src/main/externalObjectUris';
 import { resolveWorkbenchTarget } from '../../src/main/workbench';
 import { externalObjectUrisZh } from '../../src/shared/externalObjectUris.zh-CN';
 import { applicationMenuRamPort } from './application-menu-ram-port';
+import { productName } from '../../src/shared/productName';
 
 /** 可控等待只替换broker物理边界，真实Main dispatch/helper/IPC保持原文。 */
 export function deferred<T = any>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -82,7 +83,7 @@ export function mainColumnsHarness() {
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),
-    app: { isPackaged: false, quit() {} }, files: new Map(),
+    app: { isPackaged: false, quit() {} }, productName, files: new Map(),
     BrowserWindow: function () { const window = fakeWindow(); windows.push(window); return window; },
     ipcMain: { handle(channel: string, callback: typeof handler) { if (channel !== 'dbark:request') throw Error('非预期IPC通道'); handler = callback; } },
     validateCommand,

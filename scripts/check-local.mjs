@@ -25,6 +25,8 @@ export function parseLocalCheckArguments(argv, project = projectRoot) {
   }
   if (!files.length) throw new Error(`必须明确指定至少一个单元测试文件。${usage}`);
   const unitRoot = realpathSync(resolve(project, 'tests/unit'));
+  // macOS的/var与/private/var、工程符号链接必须按同一真实根生成相对参数。
+  const canonicalProject = realpathSync(project);
   const tests = files.map(file => {
     if (!/\.test\.tsx?$/.test(file) || /[*?\[\]{}]/.test(file)) {
       throw new Error(`请指定 tests/unit/ 中的完整 .test.ts 或 .test.tsx 文件：${file}`);
@@ -40,7 +42,7 @@ export function parseLocalCheckArguments(argv, project = projectRoot) {
     if (isAbsolute(withinUnit) || withinUnit === '..' || withinUnit.startsWith(`..${sep}`)) {
       throw new Error(`只允许 tests/unit/ 内的文件：${file}`);
     }
-    return relative(project, actual).split(sep).join('/');
+    return relative(canonicalProject, actual).split(sep).join('/');
   });
   return { build, tests: [...new Set(tests)] };
 }

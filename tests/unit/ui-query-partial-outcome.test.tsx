@@ -24,7 +24,11 @@ const functions = new Map<string, string>(), declarations = new Map<string, stri
 /** 从实际QueryTab读取函数、按钮、订阅和结果租约表达式，不在测试重写执行或取结果逻辑。 */
 function inspect(node: ts.Node) {
   if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node.getText(file));
-  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) declarations.set(node.name.text, node.getText(file));
+  // 只提取QueryTab本层状态，菜单闭包内同名result等变量不能覆盖正式结果声明。
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+    const block = node.parent.parent.parent;
+    if (ts.isBlock(block) && ts.isFunctionDeclaration(block.parent) && block.parent.name?.text === 'QueryTab') declarations.set(node.name.text, node.getText(file));
+  }
   if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(file) === 'useEffect' && node.getText(file).includes('window.dbark?.onTask(event =>')) subscription = node.getText(file);
   if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === 'button') {
     const value = node.getText(file); if (value.includes('onClick={() => void execute()}')) buttons.set('execute', value); if (value.includes('onClick={pinResult}')) buttons.set('pin', value); if (value.includes('onClick={exportVisibleResult}')) buttons.set('export', value);

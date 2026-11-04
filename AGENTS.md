@@ -11,7 +11,7 @@ tabrelio：MIT 开源 Electron/React/TypeScript 数据库客户端，支持 Wind
 
 ## 安装、开发与构建
 
-使用 Node.js 24、pnpm 12.11.2：
+使用 Node.js 24.17.0 或更高的 24.x、pnpm 12.11.2；`.nvmrc` 固定已验版本。旧 Node 24 缺少 SQLite 原生预算 API，测试前执行 `pnpm check:runtime`：
 
 ```sh
 corepack enable

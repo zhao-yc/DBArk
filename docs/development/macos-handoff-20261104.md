@@ -4,6 +4,8 @@
 
 Mac 本次接续已完成[列名搜索与单列内容适宽](grid-column-focus-20261104.md)：原夹具错误已修复，111 项定向单元、严格类型、构建和 Mac arm64 两项真实 Electron 窗口通过。下文的暂停失败记录保留为交接当时事实，未验平台与完整功能继续推进。
 
+后续[Mac 完整单元回归](macos-unit-baseline-20261104.md)已通过 1,269 套件／26,525 项，10 项原 Windows 条件跳过；开发运行时统一到 Node 24.17.0 或更高的 24.x，旧 Node 缺失原生预算 API 时在收集测试前明确拒绝。严格类型及构建通过，完整目标继续。
+
 ## 代码位置与当前状态
 
 - 仓库为 `https://github.com/zhao-yc/tabrelio.git`，产品名已改为 `tabrelio`。更名提交为 `97ca2f49`。
@@ -25,7 +27,7 @@ tests/e2e/sqlite-table-browse-native.spec.ts
 
 ## Mac 首次准备
 
-使用 Node.js 24 和 pnpm 12.11.2。先运行 `xcode-select -p` 检查 Command Line Tools，缺少时安装。SQLite 原生模块需要本机 `cc` 和 `codesign`，构建脚本会校验并下载固定公共头文件。
+使用 Node.js 24.17.0 或更高的 24.x 和 pnpm 12.11.2。`.nvmrc` 固定已验版本，`pnpm check:runtime` 核对真实 SQLite API；24.14.0 缺少 `DatabaseSync.limits`，不可用于完整测试。先运行 `xcode-select -p` 检查 Command Line Tools，缺少时安装。SQLite 原生模块需要本机 `cc` 和 `codesign`，构建脚本会校验并下载固定公共头文件。
 
 在新的本地目录接续可运行以下命令。
 

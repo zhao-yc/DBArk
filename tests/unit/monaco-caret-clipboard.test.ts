@@ -5,6 +5,7 @@ import {describe,expect,it} from 'vitest';
 import {CompletionWorkerClient} from '../../src/renderer/completionWorkerClient';
 import {resolveCompletionContext,completionContextCapabilities,sameCompletionScope} from '../../src/renderer/completionContext';
 import {completionLimits} from '../../src/shared/sqlCompletion';
+import { SqlReferenceCompletionGuard } from '../../src/renderer/sqlReferenceCompletionGuard';
 
 type Payload=Blob|{title:string;url:string};
 type Entry=Record<string,Payload>;
@@ -71,7 +72,9 @@ function replay(initial:Entry[],options:Options={}){
   context.dbark={invoke:async(command:string)=>{if(command==='settings.get')return{activeTabId:'query',tabs:hasQuery?[{id:'query',sql:options.preparedSqlOverride??modelSource}]:[]};if(command==='connections.list')return options.startupDirty?[{id:'合成既有连接'}]:[];if(command==='tasks.list'||command==='history.list')return[];throw Error('禁止其它IPC');}};
   const client=new CompletionWorkerClient(()=>new (context.Worker as typeof RendererWorker)() as unknown as Worker);
   const completion={connectionId:'合成连接',connectionVersion:0};
-  const environment={aliveRef:{current:true},propsRef:{current:{readOnly:false}},completionRef:{current:completion},sameCompletionScope,hover:undefined,disposed:false,readOnly:false,editorRef:{current:{getModel:()=>model}},active:undefined,statusRef:{current:()=>undefined},completion,completionServerFacts:{get:()=>undefined},completionLimits,AbortController,resolveCompletionContext,completionContextCapabilities,worker:client};
+  const referenceGuard = new SqlReferenceCompletionGuard();
+  // 使用真实引用导航守卫的初始空状态，不跳过生产补全回调中的新增资格检查。
+  const environment={suggestionsBlocked:()=>referenceGuard.blocked(null),aliveRef:{current:true},propsRef:{current:{readOnly:false}},completionRef:{current:completion},sameCompletionScope,hover:undefined,disposed:false,readOnly:false,editorRef:{current:{getModel:()=>model}},active:undefined,statusRef:{current:()=>undefined},completion,completionServerFacts:{get:()=>undefined},completionLimits,AbortController,resolveCompletionContext,completionContextCapabilities,worker:client};
   const provider=runInNewContext('(function(env){with(env){'+providerCode+';return extracted;}})',{})(environment) as (model:unknown,position:{offset:number},context:unknown,token:unknown)=>Promise<unknown>;
   const token={isCancellationRequested:false,onCancellationRequested:()=>({dispose(){}})};
   const desktop={evaluate:async(callback:(api:{clipboard:typeof clipboard},argument:unknown)=>unknown,argument?:unknown)=>callback({clipboard},argument)};
