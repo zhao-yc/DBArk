@@ -60,8 +60,15 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   await open();
   await expect(first).toHaveValue('340');
   await expect(second).toHaveValue('210');
+  await modal.getByRole('button', { name: batchText.fitColumn(1), exact: true }).click();
+  const singleWidth = Number(await first.inputValue());
+  expect(singleWidth).toBeGreaterThanOrEqual(64);
+  expect(singleWidth).toBeLessThan(340);
+  await expect(second).toHaveValue('210');
+  await expect.poll(() => width(0)).toBe(340);
   await modal.getByRole('button', { name: batchText.fit, exact: true }).click();
   const fitted = [Number(await first.inputValue()), Number(await second.inputValue())];
+  expect(fitted[0]).toBe(singleWidth);
   expect(fitted[0]).toBeGreaterThanOrEqual(64);
   expect(fitted[1]).toBeGreaterThan(fitted[0]);
   expect(fitted[1]).toBeLessThanOrEqual(640);

@@ -35,11 +35,11 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
   const frozenPosition=layout.frozenThrough===undefined?undefined:original.get(layout.frozenThrough)?.position;
   const invalidWidth = Array.from(widthDraft.values()).some(value => Number.isNaN(parseQueryResultColumnWidth(value)));
   /** 查询结果使用唯一内部列键，重名列及隐藏列各自保留身份。 */
-  function applyVisibleWidths(width?: number) {
-    if (!current(layout)) return;
+  function applyVisibleWidths(width?: number, column?: string) {
+    if (!current(layout) || column !== undefined && !visible.has(column)) return;
     try {
       const widths = width === undefined
-        ? fitGridColumnWidths({ columns: binding.columns, rowCount: binding.rows.length, cell: (index, key) => cellPreview(ownCell(binding.rows[index], key)) }, visible)
+        ? fitGridColumnWidths({ columns: binding.columns, rowCount: binding.rows.length, cell: (index, key) => cellPreview(ownCell(binding.rows[index], key)) }, column === undefined ? visible : new Set([column]))
         : new Map(layout.visible.map(key => [key, width]));
       setWidthDraft(previous => new Map([...previous, ...Array.from(widths, ([key, value]) => [key, String(value)] as const)]));
       setFitError('');
@@ -64,6 +64,7 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
       <div className="query-result-columns-list">{matches.map(key=>{const item=original.get(key)!,index=layout.order.indexOf(key);return <div className="query-result-column" key={key}>
         <label><input type="checkbox" aria-label={text.visible(item.position)} checked={visible.has(key)} disabled={!valid||visible.has(key)&&visible.size===1} onChange={event=>changeVisible(layout,key,event.target.checked)}/><strong>{item.column.name||zh.resultExport.emptyName}</strong><small>{text.ordinal(item.position)} · {item.column.type}</small>{layout.frozenThrough===key&&<span className="tag">{text.boundary}</span>}</label>
         <input className="query-result-column-width" aria-label={text.width(item.position)} aria-invalid={Number.isNaN(parseQueryResultColumnWidth(widthDraft.get(key) ?? ''))} inputMode="numeric" maxLength={16} placeholder={String(queryResultColumnWidth.default)} value={widthDraft.get(key) ?? ''} disabled={!valid} onChange={event => { if (current(layout)) { const value = event.target.value; setWidthDraft(previous => new Map(previous).set(key, value)); } }}/>
+        <button disabled={!valid || !visible.has(key)} aria-label={widthText.fitColumn(item.position)} title={widthText.fitHint} onClick={() => applyVisibleWidths(undefined, key)}>{widthText.fitOne}</button>
         <button disabled={!valid||!visible.has(key)} aria-label={text.freezeThrough(item.position)} aria-pressed={layout.frozenThrough===key} onClick={()=>freeze(layout,key)}>{text.freezeButton}</button>
         <button disabled={!valid||index===0} aria-label={text.up(item.position)} onClick={()=>replace(layout,moveQueryResultColumn(layout,key,-1))}>↑</button><button disabled={!valid||index===layout.order.length-1} aria-label={text.down(item.position)} onClick={()=>replace(layout,moveQueryResultColumn(layout,key,1))}>↓</button>
       </div>;})}{!matches.length&&<p>{text.empty}</p>}</div>{!valid&&<ErrorBox message={text.stale}/>}{invalidWidth && <ErrorBox message={text.widthInvalid}/>}<ErrorBox message={fitError}/></div>

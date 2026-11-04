@@ -7,6 +7,7 @@ import { sqliteTablePresetsZh as presetText } from '../../src/renderer/locales/s
 import { sqliteTableLayoutZh as layoutText } from '../../src/renderer/locales/sqliteTableLayout.zh-CN';
 import { sqliteValueOptionsZh as valuesText } from '../../src/renderer/locales/sqliteValueOptions.zh-CN';
 import { tableGridZh as layoutFields } from '../../src/renderer/locales/tableGrid.zh-CN';
+import { gridColumnWidthBatchZh as batchText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
 
 // 默认及--list仅注册跳过项；真实桌面、文件和NodeSQLite只在显式专项内部加载。
@@ -461,7 +462,19 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: layoutText.entry, exact: true }, check)).click());
     const layoutModal = () => page.getByRole('dialog', { name: layoutText.title, exact: true });
     await step(() => layoutModal().getByRole('checkbox', { name: layoutFields.visible + ' nullable', exact: true }).uncheck());
+    const searchColumns = () => layoutModal().getByRole('searchbox', { name: layoutFields.columnSearch, exact: true });
+    const bucketWidth = await step(() => layoutModal().getByLabel(layoutFields.width + ' bucket', { exact: true }).inputValue());
+    await step(() => searchColumns().fill('not_present'));
+    await step(() => expect(layoutModal().getByText(layoutFields.noMatchingColumns, { exact: true })).toBeVisible());
+    await step(() => searchColumns().fill(' ID '));
+    await step(() => expect(layoutModal().getByLabel(layoutFields.width + ' bucket', { exact: true })).toHaveCount(0));
     await step(() => layoutModal().getByRole('button', { name: layoutFields.down + ' id', exact: true }).click());
+    await step(() => layoutModal().getByRole('button', { name: batchText.fitColumn('id'), exact: true }).click());
+    const idFit = Number(await step(() => layoutModal().getByLabel(layoutFields.width + ' id', { exact: true }).inputValue()));
+    expect(idFit).toBeGreaterThanOrEqual(64); expect(idFit).toBeLessThan(170);
+    await step(() => searchColumns().fill(''));
+    await step(() => expect(layoutModal().getByLabel(layoutFields.width + ' bucket', { exact: true })).toHaveValue(bucketWidth));
+    await step(() => expect(layoutModal().getByRole('button', { name: batchText.fitColumn('nullable'), exact: true })).toBeDisabled());
     await step(() => layoutModal().getByLabel(layoutFields.width + ' id', { exact: true }).fill('220'));
     await step(() => layoutModal().getByRole('button', { name: layoutFields.freezeThrough('id'), exact: true }).click());
     await step(() => layoutModal().getByRole('button', { name: layoutFields.save, exact: true }).click()); await step(() => expect(layoutModal().getByText(layoutFields.saved, { exact: true })).toBeVisible());
