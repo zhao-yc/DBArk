@@ -993,6 +993,32 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   }
   function undoEdit(): void { if (editActionCurrent() && available()) renderedEditor!.undo(); }
   function redoEdit(): void { if (editActionCurrent() && available()) renderedEditor!.redo(); }
+  /** 只放弃被确认的准确原页；确认期间观察全组和来源，ABA、旧渲染与其它输入不能借用此授权。 */
+  function discardRetainedPage(editor: SqliteTableEditor): void {
+    const members = drafts.pages, currentEditor = editorRef.current, query = applied.current, queryKey = JSON.stringify(query);
+    const captured = members.map(item => ({ editor: item, generation: item.generation, rows: item.view.rows }));
+    let valid = true;
+    const current = () => valid && editActionCurrent(false) && available() && !browserViewRef.current.busy && !drafts.unknown
+      && latest.current.refreshVersion === refreshVersion && editorRef.current === currentEditor && applied.current === query && JSON.stringify(query) === queryKey
+      && drafts.pages.length === members.length && captured.every(item => drafts.has(item.editor) && item.editor.generation === item.generation && item.editor.view.rows === item.rows && !item.editor.busy && !item.editor.hasInput && !item.editor.view.preview && !item.editor.view.unknown);
+    if (!members.includes(editor) || !current()) return;
+    const stop = useWorkspace.subscribe(() => { if (!current()) valid = false; });
+    try {
+      const state = editor.view;
+      if (!window.confirm(workspaceText.confirmPageDiscard(editor.page.offset, editor.page.limit, editor.changes.length, state.undo || state.redo, editor === currentEditor)) || !current()) return;
+      const activePage = editor === currentEditor;
+      if (!drafts.discardPage(editor)) return;
+      if (activePage) {
+        dropEditor(undefined, false, true); editorRef.current = null; setEditView(null); structureDisplay.current = undefined;
+        // 重读失败时仍可回到准确的其它保留页；不让已放弃页成为恢复兜底或丢掉其它页的导航入口。
+        const fallback = drafts.pages.find(item => item.view.valid && !item.view.unknown);
+        if (fallback && controller.restore(fallback.page)) { editorRef.current = fallback; drafts.select(fallback); setEditView(fallback.view); setSelectedRow(fallback.view.rows[0]?.id); }
+      }
+      syncDraftDirty(); setValidation(''); useWorkspace.getState().notify(workspaceText.pageDiscarded(editor.page.offset, editor.page.limit));
+      // 后台页移除不读库；当前页明确重读一次，只为该偏移签发全新快照，不清其余草稿。
+      if (activePage) { automaticReads.current.blocked = false; void controller.load(query, editor.page.offset); }
+    } finally { stop(); }
+  }
   function discardEdit(): void { if (!editActionCurrent(false) || renderedEditor!.busy || !available() || !window.confirm(workspaceText.confirmDiscard) || !editActionCurrent(false)) return; const offset = page?.offset ?? 0; dropEditor(); setValidation(''); void controller.load(applied.current, offset); }
   function previewChanges(): void { if (!editActionCurrent() || !available() || previewRef.current || inputRef.current) return; const editor = renderedEditor!, ticket: EditPreviewTicket = { id: uid(), editor, page: editor.page, rows: editRows }; previewRef.current = ticket; setPreviewOpen(ticket); void editor.preview(); }
   /** 预览事件同时绑定准确回执与 task；旧 pending 预览的 stop 不得取消后继 apply。 */
@@ -1197,7 +1223,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     {recordPageNotice && <p role="status" className="sqlite-browse-hint">{recordPageNotice}</p>}
     {templateNotice && <p role="status" className="sqlite-browse-hint">{templateNotice}</p>}
     {editView?.message && <p role="status" className="sqlite-browse-hint">{editView.message}</p>}
-    {drafts.pages.length > 0 && <section className="query-row-details-actions" aria-label={workspaceText.region}><strong>{workspaceText.summary(drafts.pages.length, drafts.changes)}</strong><small>{workspaceText.hint}</small>{drafts.pages.map(editor => <button key={editor.page.edit?.kind === 'editable' ? editor.page.edit.snapshotId : editor.page.offset} disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} aria-label={workspaceText.page(editor.page.offset, editor.page.limit)} aria-pressed={drafts.isActive(editor)} title={editor.view.valid ? undefined : workspaceText.stalePage} onClick={() => navigatePage(editor.page.offset)}>{workspaceText.page(editor.page.offset, editor.page.limit)} · {editor.changes.length}{drafts.isActive(editor) ? ' · ' + workspaceText.active : ''}</button>)}</section>}
+    {drafts.pages.length > 0 && <section className="query-row-details-actions" aria-label={workspaceText.region}><strong>{workspaceText.summary(drafts.pages.length, drafts.changes)}</strong><small>{workspaceText.hint}</small>{drafts.pages.map(editor => <span className="query-row-details-actions" key={editor.page.edit?.kind === 'editable' ? editor.page.edit.snapshotId : editor.page.offset}><button disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} aria-label={workspaceText.page(editor.page.offset, editor.page.limit)} aria-pressed={drafts.isActive(editor)} title={editor.view.valid ? undefined : workspaceText.stalePage} onClick={() => navigatePage(editor.page.offset)}>{workspaceText.page(editor.page.offset, editor.page.limit)} · {editor.changes.length}{drafts.isActive(editor) ? ' · ' + workspaceText.active : ''}</button><button aria-label={workspaceText.discardPage(editor.page.offset, editor.page.limit)} disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} onClick={() => discardRetainedPage(editor)}>{workspaceText.discardPageShort}</button></span>)}</section>}
     <div className="tab-status"><button aria-label={text.first} disabled={drafts.unknown || drafts.busy || view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(0)}>{text.first}</button><button aria-label={text.previous} disabled={drafts.unknown || drafts.busy || view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(Math.max(0, page!.offset - page!.limit))}>{text.previous}</button><button aria-label={text.next} disabled={drafts.unknown || drafts.busy || view.busy || !page?.hasMore || externalBusy || page.offset + page.limit > sqliteTableBrowseLimits.offset} onClick={() => navigatePage(page!.offset + page!.limit)}>{text.next}</button>
       <button aria-label={text.last} title={text.lastHint} disabled={drafts.unknown || drafts.busy || !page || !active || invalidTarget || view.busy || externalBusy} onClick={() => navigatePage('last')}>{text.last}</button>
       <form className="page-jump" title={text.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}>

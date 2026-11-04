@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-05 源码增量：[SQLite草稿逐页放弃](development/sqlite-workspace-page-discard-20261105.md)补齐16页工作区的单页移除与槽位释放，确认绑定准确来源，旧按钮／版本ABA不能移除新页；其它页原值及历史保持。保留整组事务及unknown锁定，不增加完整工作包或发行计数，暂不发布。
+
 2026-11-05 源码增量：[SQLite跨页草稿工作区](development/sqlite-multipage-workspace-20261105.md)接通最多16个原页的草稿／撤销保持、缓存零重读、干净页统一预览和一次事务；晚期冲突回滚后全部草稿保持，unknown锁全组。391项相关、完整26958项与Mac三项原生通过，10既有平台跳过；其它驱动／批量／完整持久恢复及Windows／安装另验，不增加完整工作包或发行计数，D04／R02仍部分。
 
 2026-11-05 底层增量：[SQLite多页统一事务](development/sqlite-multipage-edit-core-20261105.md)为跨页草稿补齐准确来源组合、单次原子提交、次页冲突／trigger回滚和整组ACK／撤权；Main／真实worker与Mac正式Electron协议链已验。跨页草稿保留／导航／统一预览UI仍需接通，不增加完整工作包或发行计数，D04／R02仍部分，暂不发布。

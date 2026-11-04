@@ -1,5 +1,7 @@
 # 开发与测试
 
+2026-11-05 接续[SQLite草稿逐页放弃](development/sqlite-workspace-page-discard-20261105.md)：确认后仅移除准确原页，后台页零读取，当前页只重读同一偏移，其它页草稿与undo／redo保持；读取失败回到其它有效原页。16页满额可明确释放一个槽，输入／预览／busy及unknown不允许拆组。248项相关、类型／构建、完整26970项通过／10既有平台跳过及Mac真实窗口通过；Windows／安装另验，暂不发布。
+
 2026-11-05 接通[SQLite跨页草稿工作区](development/sqlite-multipage-workspace-20261105.md)：最多16份原页保留草稿／撤销历史，缓存返回不重读，干净页也可发起全部修改统一预览和一次提交，回滚留全组、unknown锁全组。391项相关、类型／构建、完整26958项通过／10既有条件跳过及Mac三项原生通过；Windows／安装另验，D04／R02继续部分，暂不发布。
 
 2026-11-05 新增[SQLite多页统一事务底层](development/sqlite-multipage-edit-core-20261105.md)：原预览协议可组合最多16个同表原页，整批预算保持，Main逐页签发与撤权，原一次BEGIN／COMMIT逐行冲突检查覆盖全部页。240项相关、类型／构建及Mac真实Main→Runtime→worker协议专项通过；完整回归26936项通过／10既有条件跳过。跨页草稿UI尚未接通，旧脏稿翻页保护保持，暂不发布。

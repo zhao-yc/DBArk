@@ -56,6 +56,17 @@ export class SqliteEditWorkspace {
   }
   /** 任何已发送未知结果锁住全组，不能切换到另一页重试相同草稿。 */
   settled(actor:SqliteTableEditor,outcome:SqliteTableEditOutcome['outcome']):void{if(this.has(actor)&&outcome==='unknown'){this.unknown=true;this.ports.changed();}}
+  /** 明确放弃一个准确原页；输入、预览或在途事务存在时不允许拆组，未知结果不能借移页解锁。 */
+  discardPage(editor: SqliteTableEditor): boolean {
+    const entry = [...this.entries.values()].find(item => item.editor === editor);
+    if (!entry || this.unknown || this.pages.some(item => item.busy || item.hasInput || item.view.preview || item.view.unknown)) return false;
+    this.entries.delete(entry.key);
+    if (this.selected === editor) this.selected = undefined;
+    editor.dispose(); this.ports.forgotten(entry.page);
+    // 最后一页明确放弃后允许建立全新来源；有剩余页时保持旧账本及失效墓碑。
+    if (!this.entries.size) { this.query = undefined; this.queryKey = ''; this.scopeKey = ''; this.dead = false; }
+    this.ports.changed(); return true;
+  }
   /** 明确放弃／成功提交／卸载才释放所有已采用页，各Editor自行等待准确在途终态。 */
   clear(notify=true):void{const entries=[...this.entries.values()];this.entries.clear();this.selected=undefined;this.query=undefined;this.queryKey='';this.scopeKey='';this.dead=false;this.unknown=false;for(const entry of entries){entry.editor.dispose();this.ports.forgotten(entry.page);}if(notify)this.ports.changed();}
 }
