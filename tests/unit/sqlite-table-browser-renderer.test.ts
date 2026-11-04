@@ -82,3 +82,9 @@ it('索引结构代次改变时旧准确页和在途读取均失效，恢复数�
   const f = fixture(), pending = f.controller.load(query(), 0), page = result(f.reads[0].input); f.reads[0].pending.resolve(page); await pending; expect(f.controller.pageCurrent(page)).toBe(true);
   f.scope.schemaRevision = 1; f.emit(); expect(f.controller.pageCurrent(page)).toBe(false); expect(f.view().page).toBeUndefined(); f.scope.schemaRevision = undefined; f.emit(); expect(f.controller.pageCurrent(page)).toBe(false); f.controller.dispose();
 });
+
+it('浏览器只恢复自身已交接的准确缓存页，返回不读取；配置ABA及forget后永久拒绝',async()=>{
+ const f=fixture();f.scope.editing=true;
+ const finish=async(index:number)=>{const pending=f.controller.load(query(),index*10),input=f.reads.at(-1)!.input,page=result(input,index);page.edit={kind:'editable',snapshotId:'原页'+index,expiresAt:new Date(Date.now()+60000).toISOString(),columns:[{name:'id',declaredType:'INTEGER',generated:false,nullable:false,hasDefault:false}],rows:[[{kind:'integer',value:String(index)}]],locator:{kind:'rowid',columns:[]}};f.reads.at(-1)!.pending.resolve(page);await pending;expect(f.controller.adopt(page)).toBe(true);return page;};
+ const first=await finish(0),second=await finish(1);expect(f.controller.restore(first)).toBe(true);expect(f.controller.pageCurrent(first)).toBe(true);expect(f.reads).toHaveLength(2);expect(f.controller.restore({...second})).toBe(false);f.scope.active=false;f.emit();f.scope.active=true;expect(f.controller.restore(second)).toBe(true);f.controller.forget(second);expect(f.controller.restore(second)).toBe(false);f.scope.version++;f.emit();f.scope.version--;f.emit();expect(f.controller.restore(first)).toBe(false);f.controller.dispose();
+});

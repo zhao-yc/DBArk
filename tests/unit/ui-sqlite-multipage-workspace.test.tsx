@@ -1,0 +1,68 @@
+import { sqliteTableEditZh as editText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
+import { sqliteTableBrowseZh as browse } from '../../src/renderer/locales/sqliteTableBrowse.zh-CN';
+import { sqliteEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
+import type { SqliteTableEditOutcome, SqliteTableEditPreviewInput } from '../../src/shared/sqliteTableEdit';
+import { act } from 'react';
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
+import type { SqliteConnectionProfile } from '../../src/shared/contracts';
+import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+
+const { request, sequence } = vi.hoisted(() => ({ request: vi.fn(), sequence: { value: 0 } }));
+vi.mock('../../src/renderer/lib', async original => ({ ...await original<object>(), invoke: request, uid: () => 'import-parent-' + ++sequence.value }));
+// 仅替代无布局的网格/编辑器端口；真实TableTab、Browser、Source、导入事件/effect与store完整运行。
+vi.mock('../../src/renderer/components/ResultsGrid', () => ({ ResultsGrid: ({ rows }: { rows: Record<string, unknown>[] }) => <div role="grid">{rows.map(row => Object.values(row).join('|')).join(';')}</div> }));
+vi.mock('../../src/renderer/components/SqliteTableEditGrid', () => ({ SqliteTableEditGrid: ({ rows }: { rows: any[] }) => <div role="grid">{rows.map(row => row.values.map((value: any) => value?.value ?? value?.kind ?? 'DEFAULT').join('|')).join(';')}</div> }));
+vi.mock('../../src/renderer/components/SqlEditor', () => ({ SqlEditor: () => null }));
+vi.mock('../../src/renderer/components/ResultExportDialog', () => ({ ResultExportDialog: () => null }));
+let uiCommands: typeof import('../../src/renderer/uiCommands')['uiCommands'];
+const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
+let useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], baseline: ReturnType<typeof useWorkspace.getState>, Tab: typeof import('../../src/renderer/components/SqliteTableTab')['SqliteTableTab'];
+let restoreNavigationMenu: () => void = () => {};
+beforeAll(async () => {
+  document = memoryDocument(); restoreNavigationMenu = installNavigationMenuRamPort(document); Object.defineProperty(window, 'dbark', { configurable: true, value: { onTask: () => () => {} } }); const create = document.createElement.bind(document);
+  document.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key, value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key); if (key === 'disabled') node.disabled = false; }; if (name === 'select') Object.defineProperty(node, 'options', { get: () => node.querySelectorAll('option') }); if (name === 'option') Object.defineProperty(node, 'value', { configurable: true, get: () => node.getAttribute('value') ?? node.textContent, set: value => node.attributes.set('value', value) }); return node; };
+  ({ useWorkspace } = await import('../../src/renderer/store')); ({ uiCommands } = await import('../../src/renderer/uiCommands')); baseline = useWorkspace.getState(); ({ createRoot } = await import('react-dom/client')); ({ SqliteTableTab: Tab } = await import('../../src/renderer/components/SqliteTableTab'));
+});
+afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } document.body.textContent = ''; uiCommands.setBlocked(true); useWorkspace.setState(baseline, true); request.mockReset(); });
+afterAll(() => { restoreNavigationMenu(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+function props(node: MemoryNode): Record<string, any> { const key = Object.keys(node).find(name => name.startsWith('__reactProps$')); if (!key) throw Error('缺少React事件端口'); return (node as any)[key]; }
+function button(label: string) { const node = navigationMenuRamButton(document.body, label) ?? document.querySelectorAll('button').find(node => node.textContent === label || node.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
+async function click(label: string) { const node = button(label); expect(node.disabled, label).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
+async function input(label: string, value: string) { const node = document.querySelector('[aria-label="' + label + '"]'); expect(node).not.toBeNull(); await act(async () => props(node!).onChange({ target: { value } })); }
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
+/** 真实只读原页让保护不依赖已有editor的dirty兜底，覆盖原缺口。 */
+/** 完整正式TableTab／Browser／Workspace／Editor及表单、预览Dialog；只有数据端口与无布局网格替换。 */
+async function mountMulti(){
+ const tab={id:'multi',kind:'table' as const,title:'多页',connectionId:'c',database:'main',table:'items'},profile:SqliteConnectionProfile={id:'c',name:'RAM',group:'',color:'',dialect:'sqlite',sqlite:{filePath:'仅RAM不打开',readOnly:false,busyTimeoutMs:100}};
+ const values=['原一','原二','原三'];let serial=0,outcome:SqliteTableEditOutcome['outcome']='rolled-back',previewInput:SqliteTableEditPreviewInput|undefined;const snapshots=new Map<string,number>(),confirm=vi.fn(()=>false);Object.assign(window,{confirm});
+ useWorkspace.setState({settings:{...baseline.settings,tabs:[tab],activeTabId:tab.id},connections:[profile],connectionVersions:{c:0},activeJobs:{},dirtyTabs:{}});
+ request.mockImplementation(async(command:string,input:any)=>{
+  if(command==='sqlite.tablePage'){const id='s'+ ++serial;snapshots.set(id,input.offset);const rows=values.slice(input.offset,input.offset+input.limit);return{target:{connectionId:'c',database:'main',table:'items',kind:'table'},schemaKey:'a'.repeat(64),offset:input.offset,limit:input.limit,hasMore:input.offset+input.limit<3,columns:[{name:'id',declaredType:'INTEGER'},{name:'note',declaredType:'TEXT'}],storageTypes:rows.map(()=>'it'),result:{columns:[{key:'c0',name:'id',type:'SQLITE'},{key:'c1',name:'note',type:'SQLITE'}],rows:rows.map((note,index)=>({c0:String(input.offset+index+1),c1:note})),elapsedMs:0,statement:'原读取',truncated:false},edit:{kind:'editable',snapshotId:id,expiresAt:new Date(Date.now()+1800000).toISOString(),columns:[{name:'id',declaredType:'INTEGER',generated:false,nullable:false,hasDefault:false},{name:'note',declaredType:'TEXT',generated:false,nullable:true,hasDefault:false}],rows:rows.map((note,index)=>[{kind:'integer',value:String(input.offset+index+1)},{kind:'text',value:note}]),locator:{kind:'rowid',columns:[]}}} satisfies SqliteTablePage;}
+  if(command==='sqlite.tableEdit.preview'){previewInput=structuredClone(input);const groups=[input,...(input.additionalPages??[])];return{previewId:'p'+ ++serial,snapshotId:input.snapshotId,...(groups.length>1?{snapshotIds:groups.map(g=>g.snapshotId)}:{}),target:{connectionId:'c',database:'main',table:'items'},schemaKey:'a'.repeat(64),expiresAt:new Date(Date.now()+300000).toISOString(),confirmation:'main.items',sql:groups.map(g=>'原页 '+g.snapshotId),counts:{insert:0,update:groups.reduce((n,g)=>n+g.changes.length,0),delete:0}};}
+  if(command==='sqlite.tableEdit.apply'){const groups=[previewInput!,...(previewInput!.additionalPages??[])],count=groups.reduce((n,g)=>n+g.changes.length,0);if(outcome==='committed')for(const group of groups)for(const change of group.changes)if(change.kind==='update')for(const field of change.values)if(field.column==='note'&&field.value.kind==='text')values[snapshots.get(group.snapshotId)!+change.row]=field.value.value;
+   const target={connectionId:'c',database:'main',table:'items'};return{operationId:input.taskId,target,outcome,counts:{insert:0,update:count,delete:0},fact:{operationId:input.taskId,target,phase:outcome,requestedRows:count,appliedRows:outcome==='committed'?count:0,commitMayHaveBeenSent:outcome==='committed'||outcome==='unknown',commitAcknowledged:outcome==='committed',rollbackAcknowledged:outcome==='rolled-back'},message:outcome};}
+  if(['sqlite.tableEdit.release','settings.save','sqlite.tableLayout.get','sqlite.tablePresets.list','query.cancel'].includes(command))return command==='sqlite.tablePresets.list'?[]:undefined;
+  throw Error('多页表单禁止未知外界请求：'+command);
+ });
+ uiCommands.setBlocked(false);const host=document.createElement('div');document.body.appendChild(host);root=createRoot(host as any);await act(async()=>root!.render(<Tab tab={tab} active/>));
+ await input(browse.pageSizeLabel,'1');const form=document.querySelector('[aria-label="'+browse.pageSizeLabel+'"]')!.parentNode!;await act(async()=>props(form as MemoryNode).onSubmit({preventDefault:()=>{}}));
+ return{tab,values,confirm,reads:()=>request.mock.calls.filter(call=>call[0]==='sqlite.tablePage'),plans:()=>request.mock.calls.filter(call=>call[0]==='sqlite.tableEdit.preview'),writes:()=>request.mock.calls.filter(call=>call[0]==='sqlite.tableEdit.apply'),outcome:(value:typeof outcome)=>{outcome=value;},active:async(value:boolean)=>act(async()=>{useWorkspace.setState(s=>({settings:{...s.settings,activeTabId:value?tab.id:undefined}}));root!.render(<Tab tab={tab} active={value}/>);})};
+}
+const field=()=>document.querySelector('[aria-label="'+editText.value('note')+'"]')!;
+async function open(){await click(editText.editRow);expect(field()).not.toBeNull();}
+async function stageAndNext(value:string){await open();await input(editText.value('note'),value);await click(editText.saveNextPageRecord);}
+async function confirmApply(){const checkbox=document.querySelector('[aria-label="'+editText.confirmation+'"]')!;await act(async()=>props(checkbox).onChange({target:{checked:true}}));await click(editText.submit);}
+it('正式父页表单暂存跨页、原输入返回及旧关闭回调不借新票据，缓存往返零额外读取',async()=>{
+ const f=await mountMulti(),value=' {"n":9007199254740993,"n":1e999}\r\n';await stageAndNext(value);expect(field().value).toBe('原二');const close=props(button(editText.cancelInput)).onClick,reads=f.reads().length;await click(editText.previousPageRecord);expect(field().value).toBe(value.replace(/\r\n/g,'\n'));expect(f.reads()).toHaveLength(reads);await act(async()=>close());expect(field().value).toBe(value.replace(/\r\n/g,'\n'));await click(editText.cancelInput);expect(document.querySelector('[role="grid"]')!.textContent).toContain(value);await click(editText.preview);expect(f.plans()[0][1].changes[0].values.find((field:any)=>field.column==='note').value.value).toBe(value);await click(editText.closePreview);expect(f.confirm).not.toHaveBeenCalled();expect(f.writes()).toHaveLength(0);expect(useWorkspace.getState().dirtyTabs[f.tab.id]).toBe(true);
+});
+it.each(['rolled-back','committed','unknown'] as const)('在干净第三页统一预览前两页，%s准确作用于整组，数据库端口只有一次明确apply',async outcome=>{
+ const f=await mountMulti();await stageAndNext('第一修改');await input(editText.value('note'),'第二修改');await click(editText.saveInput);await click(browse.next);expect(document.querySelector('[role="grid"]')!.textContent).toContain('原三');expect(document.body.textContent).toContain(workspaceText.summary(3,2));await click(editText.preview);expect(f.plans()).toHaveLength(1);expect(f.plans()[0][1].additionalPages).toHaveLength(1);expect(document.body.textContent).toContain(workspaceText.previewPages(2));f.outcome(outcome);await confirmApply();expect(f.writes()).toHaveLength(1);
+ if(outcome==='committed'){expect(f.values).toEqual(['第一修改','第二修改','原三']);expect(useWorkspace.getState().dirtyTabs[f.tab.id]).toBe(false);expect(f.reads().at(-1)![1].offset).toBe(2);expect(document.body.textContent).toContain(workspaceText.summary(1,0));}
+ else{expect(f.values).toEqual(['原一','原二','原三']);expect(useWorkspace.getState().dirtyTabs[f.tab.id]).toBe(true);await click(editText.closePreview);if(outcome==='rolled-back'){const reads=f.reads().length;await click(workspaceText.page(0,1));expect(f.reads()).toHaveLength(reads);expect(document.querySelector('[role="grid"]')!.textContent).toContain('第一修改');}else{expect(button(browse.previous).disabled).toBe(true);expect(button(editText.preview).disabled).toBe(true);}}
+});
+it('标签失活再恢复不重读或释放后台草稿，明确改变条件取消保持全部页',async()=>{
+ const f=await mountMulti();await stageAndNext('第一页保留');await click(editText.cancelInput);const reads=f.reads().length;await f.active(false);await f.active(true);expect(f.reads()).toHaveLength(reads);expect(document.body.textContent).toContain(workspaceText.summary(2,1));await click(workspaceText.page(0,1));expect(document.querySelector('[role="grid"]')!.textContent).toContain('第一页保留');await click(browse.refresh);expect(f.confirm).toHaveBeenCalledWith(workspaceText.confirmDiscard);expect(f.reads()).toHaveLength(reads);expect(document.querySelector('[role="grid"]')!.textContent).toContain('第一页保留');
+});

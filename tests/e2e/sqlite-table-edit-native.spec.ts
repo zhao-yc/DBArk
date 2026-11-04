@@ -1,3 +1,4 @@
+import { sqliteEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -345,21 +346,26 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     }
     expect(afterPresets.forks).toEqual(beforePresets.forks); expect(disk()).toEqual(baseline);
     await step(() => (require('./sqlite-grid-navigation') as typeof import('./sqlite-grid-navigation')).revealSqliteEditColumn(page, grid(), 0, check)); const beforeHeaderCancel = await step(audit), draftIds = await columnValues('id'), headerBeforeCancel = grid().getByRole('columnheader').filter({ hasText: /^id(?:[1-9]|\s|$)/ }); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending'));
-    await confirm(() => headerBeforeCancel.click(), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1); await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending')); const afterHeaderCancel = await step(audit); for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterHeaderCancel, command)).toHaveLength(operations(beforeHeaderCancel, command).length); expect(disk()).toEqual(baseline);
+    await confirm(() => headerBeforeCancel.click(), workspaceText.confirmDiscard, 1); await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); await step(() => expect(headerBeforeCancel).toHaveAttribute('aria-sort', 'ascending')); const afterHeaderCancel = await step(audit); for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterHeaderCancel, command)).toHaveLength(operations(beforeHeaderCancel, command).length); expect(disk()).toEqual(baseline);
     const jumpInput = () => table().getByLabel('SQLite 跳转页码', { exact: true });
     await step(() => jumpInput().fill('2'));
-    await confirm(() => jumpInput().press('Enter'), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1);
-    await step(() => expect(jumpInput()).toHaveValue('2'));
+    // 跳页现在保留原页草稿，不再丢弃确认；实际读空目标后从缓存返回，原rows及撤销记录不变。
+    const beforeDraftJump = operations(await step(audit), 'sqlite.tablePage').length;
+    await step(() => jumpInput().press('Enter'));
+    await step(() => expect.poll(async () => operations(await audit(), 'sqlite.tablePage').length).toBe(beforeDraftJump + 1));
+    await step(() => expect(table().getByRole('button', { name: workspaceText.page(0, 100), exact: true })).toBeVisible());
+    await step(() => table().getByRole('button', { name: workspaceText.page(0, 100), exact: true }).click());
     await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); expect(disk()).toEqual(baseline);
-    const afterJumpCancel = await step(audit);
-    for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterJumpCancel, command)).toHaveLength(operations(afterHeaderCancel, command).length);
-    await confirm(() => table().getByRole('button', { name: 'SQLite 末页', exact: true }).click(), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1);
+    expect(operations(await step(audit), 'sqlite.tablePage')).toHaveLength(beforeDraftJump + 1);
+    const afterJumpCancel = await step(audit), beforeDraftLast = operations(afterJumpCancel, 'sqlite.tablePage').length;
+    await step(() => table().getByRole('button', { name: 'SQLite 末页', exact: true }).click());
+    await step(() => expect.poll(async () => operations(await audit(), 'sqlite.tablePage').length).toBe(beforeDraftLast + 1));
     await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); expect(disk()).toEqual(baseline);
     const afterLastCancel = await step(audit);
-    for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release']) expect(operations(afterLastCancel, command)).toHaveLength(operations(afterJumpCancel, command).length);
+    for (const command of ['sqlite.tableEdit.preview', 'sqlite.tableEdit.apply']) expect(operations(afterLastCancel, command)).toHaveLength(operations(afterJumpCancel, command).length);
     const sizeInput = () => table().getByLabel(browseText.pageSizeLabel, { exact: true });
     await step(() => sizeInput().fill('12'));
-    await confirm(() => sizeInput().press('Enter'), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。', 1);
+    await confirm(() => sizeInput().press('Enter'), workspaceText.confirmDiscard, 1);
     await step(() => expect(sizeInput()).toHaveValue('12'));
     await counts(1, 1, 1); expect(await columnValues('id')).toEqual(draftIds); expect(disk()).toEqual(baseline);
     const afterSizeCancel = await step(audit);
@@ -421,7 +427,7 @@ test('SQLite真实表格草稿增改删、预览取消、独立事务提交与�
     check(); const observer = new DatabaseSync(database); try { expect(observer.prepare('UPDATE "编辑复合键" SET note=? WHERE tenant=? AND id=?').run(observerNote, 'A', 3n).changes).toBe(1); } finally { observer.close(); check(); }
     const afterObserver = { ...afterCommit, compound: compoundRows.map(row => row.tenant === 'A' && row.id === '3' ? { ...row, note: observerNote } : row) }; expect(disk()).toEqual(afterObserver);
     const rolledBack = await apply(); expect(rolledBack.output).toMatchObject({ outcome: 'rolled-back', counts: { insert: 0, update: 2, delete: 0 }, fact: { phase: 'rolled-back', requestedRows: 2, appliedRows: 1, commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: true } }); expect(disk()).toEqual(afterObserver); await step(() => expect(preview().getByRole('button', { name: '关闭 SQLite 修改预览', exact: true })).toBeEnabled()); await step(() => preview().getByRole('button', { name: '关闭 SQLite 修改预览', exact: true }).click()); await counts(0, 2, 0); await step(() => expect(grid().getByText('TEXT · ' + conflictFirst, { exact: true })).toBeVisible()); await step(() => expect(grid().getByText('TEXT · ' + conflictLast, { exact: true })).toBeVisible()); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toHaveLength(2);
-    stage = '明确放弃已核保留草稿并核readonly/view禁写'; await confirm(() => table().getByRole('button', { name: '放弃 SQLite 草稿', exact: true }).click(), '当前页有 SQLite 本地草稿。放弃草稿并继续读取？选择取消会保留草稿和当前页。'); await counts(0, 0, 0); await step(() => expect(grid().getByText('TEXT · ' + observerNote, { exact: true })).toBeVisible()); expect(disk()).toEqual(afterObserver);
+    stage = '明确放弃已核保留草稿并核readonly/view禁写'; await confirm(() => table().getByRole('button', { name: '放弃 SQLite 草稿', exact: true }).click(), workspaceText.confirmDiscard); await counts(0, 0, 0); await step(() => expect(grid().getByText('TEXT · ' + observerNote, { exact: true })).toBeVisible()); expect(disk()).toEqual(afterObserver);
     const beforeReadonly = operations(await step(audit), 'sqlite.tableEdit.preview').length; await openObject(rwName, viewName); await step(() => expect(table().getByRole('grid')).toBeVisible()); await step(() => expect(grid()).toHaveCount(0)); await step(() => expect(table().getByRole('button', { name: '新增 SQLite 记录', exact: true })).toHaveCount(0)); await step(() => expect(table().getByRole('button', { name: '预览 SQLite 修改', exact: true })).toHaveCount(0)); const viewPage = operations(await step(audit), 'sqlite.tablePage').at(-1); expect(result(viewPage?.reply)).toMatchObject({ target: { kind: 'view', table: viewName }, edit: { kind: 'readonly' } });
     await openObject(roName, pkTable); await step(() => expect(table().getByRole('grid')).toBeVisible()); await step(() => expect(grid()).toHaveCount(0)); for (const button of ['新增 SQLite 记录', '删除 SQLite 当前行', '编辑 SQLite 当前行', '预览 SQLite 修改']) await step(() => expect(table().getByRole('button', { name: button, exact: true })).toHaveCount(0)); expect(operations(await step(audit), 'sqlite.tableEdit.preview')).toHaveLength(beforeReadonly); expect(operations(await step(audit), 'sqlite.tableEdit.apply')).toHaveLength(2); expect(disk()).toEqual(afterObserver);
     stage = '只读连接原BLOB查看器另存完整原值，不开放载入或增加读页';

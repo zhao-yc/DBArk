@@ -45,6 +45,7 @@ export function assertSqliteTablePage(page: SqliteTablePage, input: SqliteTableP
 export class SqliteTableBrowser {
   private generation = 0; private wanted?: number; private operation?: Operation; private pageScope?: SqliteTableScope; private disposed = true; private unsubscribe?: () => void;
   private unadopted?: SqliteTablePage; private readonly released = new WeakSet<SqliteTablePage>(); private readonly adopted = new WeakSet<SqliteTablePage>();
+  private readonly retained = new Map<SqliteTablePage, { scope: SqliteTableScope; valid: boolean }>();
   private view: SqliteTableView = { busy: false, stopping: false, error: '', columns: [] };
   constructor(private readonly ports: Ports) {}
   /** 严格模式恢复只重新订阅；旧请求仍保持已取消墓碑，不能重新获得交付权。 */
@@ -56,7 +57,16 @@ export class SqliteTableBrowser {
   /** 只允许当前准确页用于复制与导出；别的作业接管后原读取不能释放其占用。 */
   pageCurrent(page: SqliteTablePage): boolean { return this.view.page === page && !!this.pageScope && this.same(this.pageScope) && !this.view.busy; }
   /** 编辑器构造成功后同步接管准确当前页；接管前任何失活/替换均由浏览器收尾。 */
-  adopt(page: SqliteTablePage): boolean { if (this.unadopted !== page || !this.pageCurrent(page) || page.edit?.kind !== 'editable' || this.adopted.has(page) || this.released.has(page)) return false; this.unadopted = undefined; this.adopted.add(page); return true; }
+  adopt(page: SqliteTablePage): boolean { if (this.unadopted !== page || !this.pageCurrent(page) || page.edit?.kind !== 'editable' || this.adopted.has(page) || this.released.has(page)) return false; this.unadopted = undefined; this.adopted.add(page); this.retained.set(page, { scope: this.pageScope!, valid: true }); return true; }
+  /** 只恢复由本浏览器交接过且仍属原目标的页；不重新读取，也不重新签发快照。 */
+  restore(page: SqliteTablePage, preserveError = false): boolean {
+    this.observe(); const retained = this.retained.get(page);
+    if (!retained?.valid || this.view.busy || !this.same(retained.scope)) return false;
+    this.releaseUnadopted(); this.pageScope = retained.scope;
+    this.emit({ page, columns: page.columns, error: preserveError ? this.view.error : '' }); return true;
+  }
+  /** Editor才拥有snapshot释放；这里只移除缓存展示票据，避免浏览器长期持有已放弃原页。 */
+  forget(page: SqliteTablePage): void { this.retained.delete(page); }
   /** 只释放仍由浏览器持有的页面，构造失败或旧 effect 不能撤销已交接的草稿。 */
   releaseUnadopted(page = this.unadopted): void { if (page && this.unadopted === page) { this.unadopted = undefined; this.releaseSnapshot(page); } }
   /** 迟到及未交接页都只释放一次准确 snapshot；没有编辑能力的只读页不发送释放请求。 */
@@ -68,6 +78,8 @@ export class SqliteTableBrowser {
   }
   /** store 的同步通知留下永久失效墓碑，连接/标签 ABA 不会复活旧回包。 */
   observe(): void {
+    const now = this.ports.scope();
+    for (const retained of this.retained.values()) { const old = retained.scope; if (!now.present || !now.sqlite || now.tab !== old.tab || now.profile !== old.profile || now.version !== old.version || now.schemaRevision !== old.schemaRevision || now.connectionId !== old.connectionId || now.database !== old.database || now.table !== old.table || now.relation !== old.relation) retained.valid = false; }
     const operation = this.operation;
     if (operation && (!this.same(operation.scope) || !operation.acquiring && !operation.terminal && operation.lease && !operation.lease.owns())) { this.wanted = undefined; this.generation++; void this.cancelOperation(operation); }
     if (this.pageScope && !this.same(this.pageScope)) { this.releaseUnadopted(); this.pageScope = undefined; this.emit({ page: undefined, columns: [] }); }
@@ -114,5 +126,5 @@ export class SqliteTableBrowser {
     }
   }
   /** 卸载只取消准确旧任务；busy 等真实终态再按原租约释放，不同步清他人的作业。 */
-  dispose(): void { this.disposed = true; this.unsubscribe?.(); this.unsubscribe = undefined; this.generation++; this.wanted = undefined; this.releaseUnadopted(); this.pageScope = undefined; const operation = this.operation; if (operation) void this.cancelOperation(operation); }
+  dispose(): void { this.disposed = true; this.retained.clear(); this.unsubscribe?.(); this.unsubscribe = undefined; this.generation++; this.wanted = undefined; this.releaseUnadopted(); this.pageScope = undefined; const operation = this.operation; if (operation) void this.cancelOperation(operation); }
 }

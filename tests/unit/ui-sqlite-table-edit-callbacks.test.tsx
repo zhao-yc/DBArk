@@ -111,7 +111,7 @@ it('跨页按钮明确区别页内暂存，父页拒绝跨页时保留真实输�
  const save=vi.fn(()=>true),close=vi.fn(),move=vi.fn((_direction:number,_values:unknown)=>{throw Error(text.recordPageDirty);});
  await mount(()=><ValueDialog ticket={{}} page={page('原页')} row={row('原值')} current={()=>true} onSave={save} onClose={close} navigation={{ownerId:'page-input',previous:false,next:true,pageNext:true,move}}/>);
  await act(async()=>callback(node(text.value('mixed'),'textarea'),'onChange')({target:{value:'未暂存原文'}}));
- expect(document.body.textContent).not.toContain(text.saveNextRecord);await act(async()=>callback(node(text.nextPageRecord))());
+ expect(document.body.textContent).not.toContain(text.saveNextRecord);await act(async()=>callback(node(text.saveNextPageRecord))());
  expect(move).toHaveBeenCalledExactlyOnceWith(1,[{kind:'text',value:'未暂存原文'}]);expect(node(text.value('mixed'),'textarea').value).toBe('未暂存原文');expect(document.body.textContent).toContain(text.recordPageDirty);expect(save).not.toHaveBeenCalled();expect(close).not.toHaveBeenCalled();
 });
 

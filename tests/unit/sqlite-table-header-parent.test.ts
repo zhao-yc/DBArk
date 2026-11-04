@@ -1,3 +1,5 @@
+import { SqliteEditWorkspace } from '../../src/renderer/sqliteEditWorkspace';
+import { sqliteEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -27,12 +29,13 @@ async function fixture(writable = false) {
   const displayed = view.page as SqliteTablePage;
   const editor = writable ? new SqliteTableEditor(displayed, { current: () => state.alive && workspace.settings.tabs[0] === tab && workspace.connections[0] === profile && workspace.connectionVersions.c === 0, active: () => state.active, available: () => !workspace.activeJobs.t, acquire: () => ({ owns: () => true, release: () => true }), now: Date.now, id: () => 'new', changed: () => {}, dirty: () => {}, preview: vi.fn(), apply: vi.fn(), release, cancel: vi.fn(), committed: () => {} }) : null;
   if (editor) expect(browser.adopt(displayed)).toBe(true);
-  const editorRef = { current: editor }, confirm = vi.fn(() => false), dropEditor = vi.fn(() => { editorRef.current?.dispose(); editorRef.current = null; }), setSort = vi.fn(), setValidation = vi.fn(), load = vi.spyOn(browser, 'load');
-  const context: any = createContext({ related: undefined, page: displayed, tab, profile, version: 0, refreshVersion: 0, latest, active: true, invalidTarget: false, view, useWorkspace: { getState: () => workspace, subscribe: (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; } }, document: { querySelector: () => state.modal ? {} : null }, window: { confirm }, editRender: { current: token }, editRenderTicket: token, renderedEditor: editor, editRows: editor?.view.rows ?? [], editorRef, controller: browser, ...refs, exportData: null, applied, sqliteHeaderSortFromGrid, editText, dropEditor, setSort, setValidation, uid: () => 'sort-id', errorMessage: (reason: Error) => reason.message });
+  const drafts = new SqliteEditWorkspace({ now: Date.now, changed: () => {}, forgotten: page => browser.forget(page) }); if (editor) drafts.add(editor, applied.current);
+  const editorRef = { current: editor }, confirm = vi.fn(() => false), dropEditor = vi.fn((_continuation?: unknown, _notice?: boolean, preserve = false) => { if (!preserve) { drafts.clear(); editorRef.current = null; } }), setSort = vi.fn(), setValidation = vi.fn(), load = vi.spyOn(browser, 'load');
+  const context: any = createContext({ drafts, workspaceText, related: undefined, page: displayed, tab, profile, version: 0, refreshVersion: 0, latest, active: true, invalidTarget: false, view, useWorkspace: { getState: () => workspace, subscribe: (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; } }, document: { querySelector: () => state.modal ? {} : null }, window: { confirm }, editRender: { current: token }, editRenderTicket: token, renderedEditor: editor, editRows: editor?.view.rows ?? [], editorRef, controller: browser, ...refs, exportData: null, applied, sqliteHeaderSortFromGrid, editText, dropEditor, setSort, setValidation, uid: () => 'sort-id', errorMessage: (reason: Error) => reason.message });
   Object.assign(context, { sqliteTableBrowseLimits, parsePageJump, pageJump: '3', setPageJump: vi.fn(), automaticReads: { current: { blocked: true } } });
   runInContext(ts.transpileModule(methods.join('\n') + '\nglobalThis.api={' + names.join(',') + '};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   const emit = () => { [...listeners].forEach(cb => cb()); editor?.observe(); };
-  return { api: context.api, context, state, page: displayed, workspace, latest, refs, browser, editor, editorRef, applied, read, load, confirm, dropEditor, setSort, setValidation, emit, listeners, dirty() { editor!.save(editor!.view.rows[0].id, [{ kind: 'integer', value: '9223372036854775807' }, { kind: 'text', value: '未提交' }]); context.editRows = editor!.view.rows; }, dispose() { editor?.dispose(); browser.dispose(); } };
+  return { api: context.api, context, state, page: displayed, workspace, latest, refs, browser, editor, editorRef, applied, read, load, confirm, dropEditor, setSort, setValidation, emit, listeners, dirty() { editor!.save(editor!.view.rows[0].id, [{ kind: 'integer', value: '9223372036854775807' }, { kind: 'text', value: '未提交' }]); context.editRows = editor!.view.rows; }, dispose() { drafts.clear(); browser.dispose(); } };
 }
 it.each([false, true])('准确%s读写来源立即offset0读取，保已应用筛选／limit而不采表单草稿', async writable => {
   const f = await fixture(writable), original = f.applied.current, rows = structuredClone(f.page.result.rows), before = f.listeners.size;
@@ -50,15 +53,15 @@ it('跳页沿原页长和查询，原页码及超上限均零读取', async () =
   expect(f.read.mock.calls[0][0]).toMatchObject({ offset: 110, limit: 10, filters: f.applied.current.filters, sort: f.applied.current.sort }); f.dispose();
 });
 
-it('编辑页确认期间活动标签往返，旧跳转不丢弃草稿', async () => {
+it('编辑页改变页长的确认期间活动标签往返，旧意图不丢弃全部草稿', async () => {
   const f = await fixture(true); f.dirty(); const rows = f.editor!.view.rows;
   f.context.pageJump = '4'; f.confirm.mockImplementation(() => { f.workspace.settings.activeTabId = 'other'; f.emit(); f.workspace.settings.activeTabId = 't'; f.emit(); return true; });
-  f.api.jumpToPage(); expect(f.confirm).toHaveBeenCalledOnce(); expect(f.load).not.toHaveBeenCalled(); expect(f.dropEditor).not.toHaveBeenCalled(); expect(f.editor!.view.rows).toBe(rows); f.dispose();
+  f.api.navigatePage(0, 20); expect(f.confirm).toHaveBeenCalledOnce(); expect(f.load).not.toHaveBeenCalled(); expect(f.dropEditor).not.toHaveBeenCalled(); expect(f.editor!.view.rows).toBe(rows); f.dispose();
 });
 it('脏页取消不改变原rows、撤销栈、排序、输入与请求', async () => {
   const f = await fixture(true); f.dirty(); const rows = f.editor!.view.rows, query = f.applied.current, listeners = f.listeners.size;
   f.api.sortFromHeader([{ columnKey: 'c0', direction: 'DESC' }]);
-  expect(f.confirm).toHaveBeenCalledWith(editText.confirmDiscard); expect(f.editor!.view.rows).toBe(rows); expect(f.editor!.view.undo).toBe(true); expect(f.editor!.dirty).toBe(true); expect(f.applied.current).toBe(query); expect(f.dropEditor).not.toHaveBeenCalled(); expect(f.load).not.toHaveBeenCalled(); expect(f.setSort).not.toHaveBeenCalled(); expect(f.listeners.size).toBe(listeners); f.dispose();
+  expect(f.confirm).toHaveBeenCalledWith(workspaceText.confirmDiscard); expect(f.editor!.view.rows).toBe(rows); expect(f.editor!.view.undo).toBe(true); expect(f.editor!.dirty).toBe(true); expect(f.applied.current).toBe(query); expect(f.dropEditor).not.toHaveBeenCalled(); expect(f.load).not.toHaveBeenCalled(); expect(f.setSort).not.toHaveBeenCalled(); expect(f.listeners.size).toBe(listeners); f.dispose();
 });
 it('脏页确认后只丢原editor，清排序也走原查询服务端重读', async () => {
   const f = await fixture(true); f.dirty(); f.confirm.mockReturnValue(true); f.api.sortFromHeader([]);
