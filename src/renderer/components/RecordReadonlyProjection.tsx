@@ -1,18 +1,17 @@
+import { JsonLexicalTreeView } from './JsonLexicalTreeView';
 import { UsageHelp } from './ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ColumnInfo } from '../../shared/contracts';
 import type { DraftRow } from '../dataChanges';
-import { lexicalToken, type LexicalDocument, type ReadyLexicalDocument } from '../jsonLexicalTree';
+import { type LexicalDocument, type ReadyLexicalDocument } from '../jsonLexicalTree';
 import { formatText } from '../locales/zh-CN';
 import { recordProjectionZh as text } from '../locales/recordProjections.zh-CN';
-import { buildRecordProjection, buildRecordSummary, RecordJsonTreeCache, resolveProjectionPath, sameProjectionIdentity, type ProjectionFailure, type ProjectionIdentity, type ProjectionSummaryField } from '../recordProjections';
-import { lexicalViewWindow, projectionPreview, projectionViewLimits, type LexicalViewRow } from '../recordProjectionView';
+import { buildRecordProjection, buildRecordSummary, RecordJsonTreeCache, sameProjectionIdentity, type ProjectionFailure, type ProjectionIdentity, type ProjectionSummaryField } from '../recordProjections';
+import { projectionViewLimits } from '../recordProjectionView';
 import { recordFieldOrder, recordMetadataKey, recordTargetKey, type RecordContext, type RecordDraft } from '../recordViews';
 import { recordReadonlyReason } from '../recordViews';
 import type { RecordNodeSelection } from '../recordJsonNodeInput';
-import { recordJsonNodeInputZh as nodeText } from '../locales/recordJsonNodeInput.zh-CN';
 import type {RecordStructureKind} from '../recordJsonStructureInput';
-import {recordJsonStructureInputZh as structureText} from '../locales/recordJsonStructureInput.zh-CN';
 import '../recordProjections.css';
 
 interface Props { row?: DraftRow; draft: RecordDraft | null; context: RecordContext; visibleKeys: string[]; showHidden: boolean; mode: 'tree' | 'json'; onEdit(selection: RecordNodeSelection, document: ReadyLexicalDocument): void; onStructure(selection:RecordNodeSelection,document:ReadyLexicalDocument,kind:RecordStructureKind):void }
@@ -93,42 +92,9 @@ function ProjectionContent({ row, context, identity, columns, visibleKeys, showH
       </li>;
     })}</ol>
     {selected && <section className="record-lexical-section" aria-label={selected.name}><h3>{selected.name}</h3><UsageHelp><p>{text.jsonSource}</p><p>{text.ordered}</p></UsageHelp>
-      {selected.result.status === 'ready' ? <LexicalTree key={selected.name} identity={identity} columnName={selected.name} document={selected.result} reason={recordReadonlyReason(context,row,selected.name)} onEdit={segments=>editNode(selected.result as ReadyLexicalDocument,selected.name,segments)} onStructure={(segments,kind)=>structureNode(selected.result as ReadyLexicalDocument,selected.name,segments,kind)}/> : <div role="status"><strong>{selected.result.status === 'invalid' ? text.invalid : selected.result.status === 'limited' ? text.lexicalLimited : text.unavailable}</strong><p>{'offset' in selected.result ? formatText(text.failureAt, selected.result.offset, selected.result.reason) : selected.result.reason}</p></div>}
+      {selected.result.status === 'ready' ? <JsonLexicalTreeView key={selected.name} columnName={selected.name} document={selected.result} reason={recordReadonlyReason(context,row,selected.name)} onEdit={(document,segments)=>editNode(document,selected.name,segments)} onStructure={(document,segments,kind)=>structureNode(document,selected.name,segments,kind)}/> : <div role="status"><strong>{selected.result.status === 'invalid' ? text.invalid : selected.result.status === 'limited' ? text.lexicalLimited : text.unavailable}</strong><p>{'offset' in selected.result ? formatText(text.failureAt, selected.result.offset, selected.result.reason) : selected.result.reason}</p></div>}
     </section>}
   </section>;
 }
 
 /** 成员名显示有界前缀且始终携带序号；同名成员与特殊符号不会被当作访问表达式。 */
-function nodeLabel(row: LexicalViewRow): string {
-  const part = row.segment; if (!part) return text.root;
-  if (part.kind === 'element') return formatText(text.element, part.index);
-  const key = projectionPreview(part.key); return `${formatText(text.member, part.memberIndex + 1)} · ${JSON.stringify(key.text)}${key.truncated ? ` · ${text.summaryOnly}` : ''}`;
-}
-
-/** 原生列表和展开按钮提供键盘可访问入口，不冒用需要额外方向键实现的 ARIA tree。 */
-function LexicalTree({ identity, columnName, document, reason, onEdit, onStructure }: { identity: ProjectionIdentity; columnName: string; document: ReadyLexicalDocument; reason: string; onEdit(segments: RecordNodeSelection['segments']): void; onStructure(segments:RecordNodeSelection['segments'],kind:RecordStructureKind):void }) {
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set([document.root]));
-  const [offset, setOffset] = useState(0), [selected, setSelected] = useState<LexicalViewRow | null>(null);
-  const detail=useRef<HTMLElement>(null),[actionsRequested,setActionsRequested]=useState(0);
-  // 显式打开菜单后聚焦第一项操作，不要求键盘用户遍历后续数百个结构按钮。
-  useEffect(()=>{if(actionsRequested)detail.current?.querySelector<HTMLButtonElement>('.record-structure-actions button:not(:disabled)')?.focus();},[actionsRequested]);
-  const window = useMemo(() => lexicalViewWindow(document, expanded, offset), [document, expanded, offset]);
-  const path = selected ? { identity, columnName, document, segments: selected.path } : null;
-  const selectedNode = path ? resolveProjectionPath(identity, columnName, document, path) : null;
-  const kinds:RecordStructureKind[]=[];
-  if(selectedNode&&selected){if(selected.path.at(-1)?.kind==='member')kinds.push('rename');if(selected.path.length)kinds.push('remove');if(selectedNode.kind==='object'){kinds.push('append-member');if(selectedNode.members.length)kinds.push('move-member');}if(selectedNode.kind==='array'){kinds.push('insert-element');if(selectedNode.elements.length)kinds.push('move-element');}}
-  /** 展开只改变显示集合；收起不改原文、词法路径或页内草稿。 */
-  function toggle(id: number) { setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
-  return <><p>{formatText(text.nodeRange, window.offset + 1, Math.min(window.offset + projectionViewLimits.nodes, window.total), window.total)}</p>
-    <div className="record-projection-pager"><button disabled={!window.previous} onClick={() => setOffset(window.offset - projectionViewLimits.nodes)}>{text.nodePrevious}</button><button disabled={!window.next} onClick={() => setOffset(window.offset + projectionViewLimits.nodes)}>{text.nodeNext}</button></div>
-    <ol className="record-lexical-list" aria-label={text.lexicalTree}>{window.rows.map(row => {
-      const node = document.nodes[row.id]; const count = node.kind === 'object' ? node.members.length : node.kind === 'array' ? node.elements.length : null;
-      const token = count === null ? projectionPreview(lexicalToken(document, node)) : null;
-      return <li className="record-projection-entry" key={row.id} style={{ paddingInlineStart: `${Math.min(row.depth, 8) * 10}px` }}><strong>{nodeLabel(row)}</strong><span>{text.lexicalKinds[node.kind]}{count === null ? '' : ` · ${formatText(text.containerCount, count)}`}</span>
-        {token && <><pre tabIndex={0}>{token.text}</pre>{token.truncated && <small>{text.summaryOnly}</small>}</>}
-        <div>{count !== null && count > 0 && <button aria-expanded={expanded.has(row.id)} onClick={() => toggle(row.id)}>{expanded.has(row.id) ? text.collapse : text.expand}</button>}<button onClick={() => setSelected(row)}>{text.inspect}</button><button disabled={!!reason} title={reason||nodeText.hint} onClick={()=>onEdit(row.path)}>{nodeText.edit}</button>{(row.path.length>0||count!==null)&&<button disabled={!!reason} title={reason} onClick={()=>{setSelected(row);setActionsRequested(value=>value+1);}}>{structureText.more}</button>}</div>
-      </li>;
-    })}</ol>
-    {selected && <section ref={detail} className="record-token-detail">{selectedNode ? <><label>{text.token}<textarea readOnly spellCheck={false} value={lexicalToken(document, selectedNode)}/></label><label>{text.path}<textarea readOnly spellCheck={false} value={JSON.stringify({ columnName, segments: selected.path })}/></label><div className="record-structure-actions" role="group" aria-label={structureText.more}>{kinds.map(kind=><button key={kind} disabled={!!reason} title={reason} onClick={()=>onStructure(selected.path,kind)}>{structureText.actions[kind]}</button>)}</div></> : <p role="status">{text.selectionExpired}</p>}</section>}
-  </>;
-}

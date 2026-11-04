@@ -1,11 +1,12 @@
 import { useEffect, useId, useRef } from 'react';
-import type { RecordJsonNodeInput } from '../recordJsonNodeInput';
+import type { JsonNodeInput } from '../jsonNodeInput';
+interface NodeInput { readonly session: object; readonly columnName: string; readonly value: JsonNodeInput; }
 import { recordJsonNodeInputZh as text } from '../locales/recordJsonNodeInput.zh-CN';
 import { jsonNodeInputBudget } from '../jsonNodeInput';
 import { BoundedRecordTextarea } from './BoundedRecordTextarea';
 
 /** 节点只拥有互斥原文缓冲；没有自己的页面数据、IPC 或自动提交入口。 */
-export function RecordJsonNodeEditor({input,reason,onChange,onClose}:{input:RecordJsonNodeInput;reason:string;onChange(value:string,captured:RecordJsonNodeInput):void;onClose():void}) {
+export function RecordJsonNodeEditor<T extends NodeInput>({input,reason,onChange,onClose}:{input:T;reason:string;onChange(value:string,captured:T):void;onClose():void}) {
   const editor=useRef<HTMLTextAreaElement>(null);
   const id=useId();
   // 同一次节点输入改字不抢光标；打开新节点或关闭后重开才恢复输入焦点。
