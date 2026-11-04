@@ -43,3 +43,8 @@ describe('完整导出持久化与目标互斥', () => {
     } finally { await rmdir(directory); }
   });
 });
+
+it.each(['running', 'completed', 'failed', 'cancelled'] as const)('SQLite外键%s概要不保存关联值、记录或错误原文', status => {
+  const message = persistedTaskMessage('sqlite.referencePage', { taskId: '外键只读任务', status, progress: 50, message: '本例私有原值和错误全文' });
+  expect(message).not.toContain('本例私有原值'); expect(message).toContain('关联值');
+});

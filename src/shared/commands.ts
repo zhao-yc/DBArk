@@ -10,6 +10,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.tablePresets.list': true, 'sqlite.tablePresets.save': true, 'sqlite.tablePresets.delete': true, 'sqlite.tablePresets.read': true,
   'sqlite.tablePage': true,
   'sqlite.relationships': true,
+  'sqlite.referencePage': true,
   'sqlite.valueOptions': true,
   'sqlite.statistics': true,
   'sqlite.schemaScript': true,

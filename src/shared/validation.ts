@@ -12,6 +12,7 @@ import { sqliteValueOptionsInputSchema } from './sqliteValueOptions';
 import { sqliteRowCountInputSchema, sqliteStatisticsInputSchema } from './sqliteStatistics';
 import { sqliteSchemaScriptSchema } from './sqliteSchemaScript';
 import { sqliteRelationshipsInputSchema } from './sqliteRelationships';
+import { sqliteReferenceInputSchema } from './sqliteReference';
 import { tableHistogramSchema } from './tableHistogram';
 import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from './sqliteImportSource';
 import { sqliteIndexesInspectSchema, sqliteIndexesPreviewSchema, sqliteIndexesApplySchema, sqliteIndexesReleaseSchema } from './sqliteIndexes';
@@ -229,6 +230,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.schemaScript': sqliteSchemaScriptSchema,
   'sqlite.countRows': sqliteRowCountInputSchema,
   'sqlite.relationships': sqliteRelationshipsInputSchema,
+  'sqlite.referencePage': sqliteReferenceInputSchema,
   'sqlite.tableExport': sqliteTableExportSchema,
   'sqlite.tableEdit.preview': sqliteTableEditPreviewSchema,
   'sqlite.tableEdit.apply': sqliteTableEditApplySchema,

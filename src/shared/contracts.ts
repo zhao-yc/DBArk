@@ -270,6 +270,7 @@ export interface CommandMap {
   'sqlite.statistics': { input: import('./sqliteStatistics').SqliteStatisticsInput; output: import('./sqliteStatistics').SqliteStatisticsOutput };
   'sqlite.schemaScript': { input: import('./sqliteSchemaScript').SqliteSchemaScriptInput; output: import('./sqliteSchemaScript').SqliteSchemaScriptOutput };
   'sqlite.countRows': { input: import('./sqliteStatistics').SqliteRowCountInput; output: import('./sqliteStatistics').SqliteRowCountOutput };
+  'sqlite.referencePage': { input: import('./sqliteReference').SqliteReferenceInput; output: import('./sqliteReference').SqliteReferenceOutput };
   'sqlite.relationships': { input: import('./sqliteRelationships').SqliteRelationshipsInput; output: import('./sqliteRelationships').SqliteRelationshipsOutput };
   'sqlite.tableExport': { input: import('./sqliteTableExport').SqliteTableExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
   'sqlite.tableEdit.preview': { input: import('./sqliteTableEdit').SqliteTableEditPreviewInput; output: import('./sqliteTableEdit').SqliteTableEditPreview };

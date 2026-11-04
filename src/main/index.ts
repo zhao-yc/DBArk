@@ -1356,6 +1356,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       try { await broker.request('connections.close', input); store.deleteConnection(input.id); return; }
       finally { if (tableValueOptionsClosing.get(input.id) === owner) tableValueOptionsClosing.delete(input.id); }
     }
+    case 'sqlite.referencePage':
     case 'sqlite.relationships':
     case 'sqlite.valueOptions':
     case 'sqlite.schemaScript':
@@ -1373,7 +1374,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         columnsMain.assertCapturedOwner(columns); const revision = store.connectionRevision();
         columns!.sqliteRelationshipsPublication = () => { columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(input.connectionId); if (shuttingDown || store.connectionRevision() !== revision) throw Error('SQLite关系图原窗口或连接配置已变化，请重新读取'); };
       }
-      if (command === 'sqlite.statistics' || command === 'sqlite.countRows' || command === 'sqlite.schemaScript') {
+      if (command === 'sqlite.referencePage' || command === 'sqlite.statistics' || command === 'sqlite.countRows' || command === 'sqlite.schemaScript') {
         columnsMain.assertCapturedOwner(columns); const revision = store.connectionRevision();
         columns!.sqliteReadPublication = () => { columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(input.connectionId); if (shuttingDown || store.connectionRevision() !== revision) throw Error('SQLite只读操作的原窗口或连接配置已变化，请重新读取'); };
       }
@@ -1935,7 +1936,7 @@ else {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
-        if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('record.templates.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
+        if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('sqlite.tablePresets.')||payload.command.startsWith('sqlite.tableLayout.')||payload.command.startsWith('record.templates.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
@@ -1953,7 +1954,7 @@ else {
           if (payload.command.startsWith('sqlite.tablePresets.') || payload.command.startsWith('sqlite.tableLayout.')) { if (!columns?.sqlitePresetPublication) throw Error('SQLite方案缺少原请求发布门'); columns.sqlitePresetPublication(); }
           if (payload.command === 'sqlite.relationships') { if (!columns?.sqliteRelationshipsPublication) throw Error('SQLite关系图缺少原窗口发布门'); columns.sqliteRelationshipsPublication(); }
           if (payload.command === 'sqlite.valueOptions') { if (!columns?.sqliteValueOptionsPublication) throw Error('SQLite不同值缺少原窗口发布门'); columns.sqliteValueOptionsPublication(); }
-          if (payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }
+          if (payload.command === 'sqlite.referencePage' || payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
           if (payload.command === 'queries.exportSql' || payload.command === 'queries.exportSqlArchive' || payload.command === 'queries.importSql') columnsMain.assertCapturedOwner(columns);
           if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);
@@ -1985,7 +1986,7 @@ else {
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           if (payload.command.startsWith('queryFileSources.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
-          if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
+          if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
             // 文件已提交后的最后发布门失效时，不能诱导用户自动重试覆盖文件。
             if (columns?.snapshotSaved) throw Error(payload.command.startsWith('resultSnapshotFiles.') ? queryResultSnapshotFileMessages.unknownWrite : payload.command.startsWith('tableDraftFiles.') ? tableDraftFileMessages.unknownWrite : explainSnapshotZh.unknownWrite);
             throw error;

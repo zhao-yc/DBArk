@@ -15,13 +15,13 @@ export const sqliteRelationshipsInputSchema = z.object({
   if (new Set(value.tables.map(sqliteRelationshipName)).size !== value.tables.length || !value.tables.includes(value.anchor.table)) context.addIssue({ code: 'custom', message: '关系图须包含原表且不能重复选择表' });
 });
 const action = z.enum(['NO ACTION', 'RESTRICT', 'SET NULL', 'SET DEFAULT', 'CASCADE']);
-const tableSchema = z.object({
+export const sqliteRelationshipTableSchema = z.object({
   name, columns: z.array(z.object({ name, type: z.string().max(4096), notNull: z.boolean(), primaryKey: z.number().int().min(0).max(sqliteRelationshipsLimits.parts), hidden: z.number().int().min(0).max(3) }).strict()).min(1).max(sqliteRelationshipsLimits.columns),
   foreignKeys: z.array(z.object({ ordinal: z.number().int().min(0).max(2147483647), columns: names.min(1), referencedTable: name, referencedColumns: names.min(1).nullable(), onUpdate: action, onDelete: action }).strict()).max(sqliteRelationshipsLimits.foreignKeys),
 }).strict();
 export const sqliteRelationshipsOutputSchema = z.object({
   request: sqliteRelationshipsInputSchema, schemaVersion: z.string().regex(/^-?(?:0|[1-9][0-9]*)$/),
-  tables: z.array(tableSchema).min(1).max(sqliteRelationshipsLimits.tables),
+  tables: z.array(sqliteRelationshipTableSchema).min(1).max(sqliteRelationshipsLimits.tables),
 }).strict();
 export type SqliteRelationshipsInput = z.infer<typeof sqliteRelationshipsInputSchema>;
 export type SqliteRelationshipsOutput = z.infer<typeof sqliteRelationshipsOutputSchema>;

@@ -19,6 +19,26 @@ async function rows(driver: SqliteDriverSession, sql: string, parameters: Sqlite
   return values;
 }
 
+/** 调用方持有同一只读快照；完整读取一张真实物理表的列和外键映射。 */
+export async function readSqliteRelationshipTable(driver: SqliteDriverSession, name: string, control: SqliteTableBrowseControl, expectedSchemaKey?: string): Promise<SqliteRelationshipTable> {
+  const catalogue = await readSqliteTableCatalogue(driver, name, control);
+  if (catalogue.kind !== 'table' || /^sqlite_/i.test(name)) throw Error('SQLite关系图只接受main中的用户物理表');
+  if (expectedSchemaKey && catalogue.schemaKey !== expectedSchemaKey) throw Error('SQLite原表结构已变化，请刷新表页后重新打开关系图');
+  const columns = catalogue.xinfo.map(row => ({ name: row[1] as string, type: row[2] as string, notNull: !!integer(row[3], 1), primaryKey: integer(row[5], limits.parts), hidden: integer(row[6], 3) }));
+  const foreignRows = await rows(driver, 'SELECT id,seq,"table","from","to",on_update,on_delete FROM pragma_foreign_key_list(?, \'main\') ORDER BY id,seq LIMIT ?', [name, { type: 'integer', value: String(limits.foreignKeys * limits.parts + 1) }], limits.foreignKeys * limits.parts + 1, control);
+  if (foreignRows.length > limits.foreignKeys * limits.parts) throw Error('SQLite关系图外键目录超限');
+  const foreignKeys: SqliteRelationshipTable['foreignKeys'] = [];
+  for (const row of foreignRows) {
+    if (row.length !== 7 || typeof row[2] !== 'string' || typeof row[3] !== 'string' || row[4] !== null && typeof row[4] !== 'string') throw Error('SQLite关系图外键目录无效');
+    const ordinal = integer(row[0], 2147483647), sequence = integer(row[1], limits.parts - 1);
+    let key = foreignKeys.at(-1);
+    if (!key || key.ordinal !== ordinal) { if (foreignKeys.length >= limits.foreignKeys || sequence !== 0) throw Error('SQLite关系图外键目录不完整或超限'); key = { ordinal, columns: [], referencedTable: row[2], referencedColumns: row[4] === null ? null : [], onUpdate: row[5] as SqliteRelationshipTable['foreignKeys'][number]['onUpdate'], onDelete: row[6] as SqliteRelationshipTable['foreignKeys'][number]['onDelete'] }; foreignKeys.push(key); }
+    if (sequence !== key.columns.length || row[2] !== key.referencedTable || row[5] !== key.onUpdate || row[6] !== key.onDelete || (row[4] === null) !== (key.referencedColumns === null)) throw Error('SQLite关系图复合外键映射不完整');
+    key.columns.push(row[3]); if (key.referencedColumns) key.referencedColumns.push(row[4] as string);
+  }
+  return { name, columns, foreignKeys };
+}
+
 /** 所选main物理表共享一个独立只读快照；不读取业务行、不检查全库数据、不借用用户事务。 */
 export async function readSqliteRelationships(driver: SqliteDriverSession, source: SqliteRelationshipsInput, control: SqliteTableBrowseControl): Promise<SqliteRelationshipsOutput> {
   const request = sqliteRelationshipsInputSchema.parse(source);
@@ -29,22 +49,7 @@ export async function readSqliteRelationships(driver: SqliteDriverSession, sourc
     if (version.length !== 1 || version[0].length !== 1 || !rawVersion || typeof rawVersion !== 'object' || rawVersion.type !== 'integer') throw Error('SQLite关系图结构版本无效');
     const tables: SqliteRelationshipTable[] = [];
     for (const name of request.tables) {
-      const catalogue = await readSqliteTableCatalogue(driver, name, control);
-      if (catalogue.kind !== 'table' || /^sqlite_/i.test(name)) throw Error('SQLite关系图只接受main中的用户物理表');
-      if (name === request.anchor.table && catalogue.schemaKey !== request.anchor.schemaKey) throw Error('SQLite原表结构已变化，请刷新表页后重新打开关系图');
-      const columns = catalogue.xinfo.map(row => ({ name: row[1] as string, type: row[2] as string, notNull: !!integer(row[3], 1), primaryKey: integer(row[5], limits.parts), hidden: integer(row[6], 3) }));
-      const foreignRows = await rows(driver, 'SELECT id,seq,"table","from","to",on_update,on_delete FROM pragma_foreign_key_list(?, \'main\') ORDER BY id,seq LIMIT ?', [name, { type: 'integer', value: String(limits.foreignKeys * limits.parts + 1) }], limits.foreignKeys * limits.parts + 1, control);
-      if (foreignRows.length > limits.foreignKeys * limits.parts) throw Error('SQLite关系图外键目录超限');
-      const foreignKeys: SqliteRelationshipTable['foreignKeys'] = [];
-      for (const row of foreignRows) {
-        if (row.length !== 7 || typeof row[2] !== 'string' || typeof row[3] !== 'string' || row[4] !== null && typeof row[4] !== 'string') throw Error('SQLite关系图外键目录无效');
-        const ordinal = integer(row[0], 2147483647), sequence = integer(row[1], limits.parts - 1);
-        let key = foreignKeys.at(-1);
-        if (!key || key.ordinal !== ordinal) { if (foreignKeys.length >= limits.foreignKeys || sequence !== 0) throw Error('SQLite关系图外键目录不完整或超限'); key = { ordinal, columns: [], referencedTable: row[2], referencedColumns: row[4] === null ? null : [], onUpdate: row[5] as SqliteRelationshipTable['foreignKeys'][number]['onUpdate'], onDelete: row[6] as SqliteRelationshipTable['foreignKeys'][number]['onDelete'] }; foreignKeys.push(key); }
-        if (sequence !== key.columns.length || row[2] !== key.referencedTable || row[5] !== key.onUpdate || row[6] !== key.onDelete || (row[4] === null) !== (key.referencedColumns === null)) throw Error('SQLite关系图复合外键映射不完整');
-        key.columns.push(row[3]); if (key.referencedColumns) key.referencedColumns.push(row[4] as string);
-      }
-      tables.push({ name, columns, foreignKeys });
+      tables.push(await readSqliteRelationshipTable(driver, name, control, name === request.anchor.table ? request.anchor.schemaKey : undefined));
       // 总预算在每张表后立即检查，后继表不继续消耗资源。
       if (tables.reduce((sum, table) => sum + table.columns.length, 0) > limits.columns || tables.reduce((sum, table) => sum + table.foreignKeys.length, 0) > limits.foreignKeys) throw Error('SQLite关系图总目录超限');
     }
