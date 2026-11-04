@@ -13,9 +13,9 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 export function requireJoinKeeperCI(args, platform, arch, env) {
   assert.deepEqual(args, []); assert.equal(platform, 'darwin'); assert.equal(arch, 'arm64');
   assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.MODE_KEEPER_RUNNER_ENVIRONMENT, 'github-hosted');
-  assert.equal(env.GITHUB_REPOSITORY, 'zhao-yc/DBArk'); assert.equal(env.GITHUB_REF, 'refs/heads/main');
+  assert.equal(env.GITHUB_REPOSITORY, 'zhao-yc/tabrelio'); assert.equal(env.GITHUB_REF, 'refs/heads/main');
   assert.equal(env.GITHUB_JOB, 'join-components');
-  assert.equal(env.GITHUB_WORKFLOW_REF, 'zhao-yc/DBArk/.github/workflows/foreign-key-join.yml@refs/heads/main');
+  assert.equal(env.GITHUB_WORKFLOW_REF, 'zhao-yc/tabrelio/.github/workflows/foreign-key-join.yml@refs/heads/main');
   assert.ok(['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME));
   assert.match(env.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);
   for (const key of ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']) assert.match(env[key] ?? '', /^[1-9][0-9]*$/);

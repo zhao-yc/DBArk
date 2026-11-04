@@ -4,7 +4,7 @@
 
 ## 代码位置与当前状态
 
-- 仓库为 `https://github.com/zhao-yc/DBArk.git`，产品名已改为 `tabrelio`。更名提交为 `97ca2f49`。
+- 仓库为 `https://github.com/zhao-yc/tabrelio.git`，产品名已改为 `tabrelio`。更名提交为 `97ca2f49`。
 - `main` 包含已提交功能和本交接说明。`codex/macos-handoff-20261104` 保存暂停中的列名搜索和单列自动列宽改动，供换机接续，属于未完成代码。
 - 交接分支与 `main` 的产品代码差异仅为下列 8 个文件。Windows 原目录仍保留同样的未提交内容。
 
@@ -28,7 +28,7 @@ tests/e2e/sqlite-table-browse-native.spec.ts
 在新的本地目录接续可运行以下命令。
 
 ```sh
-git clone https://github.com/zhao-yc/DBArk.git tabrelio
+git clone https://github.com/zhao-yc/tabrelio.git tabrelio
 cd tabrelio
 git switch --track origin/codex/macos-handoff-20261104
 corepack enable
