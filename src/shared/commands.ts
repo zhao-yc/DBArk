@@ -3,6 +3,9 @@ export { isUiCommandInvocation } from './uiCommandIds';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
+  'sqliteDraftFiles.save': true,
+  'sqliteDraftFiles.open': true,
+  'sqliteDraftFiles.restore': true,
   'record.templates.list': true, 'record.templates.save': true, 'record.templates.rename': true, 'record.templates.delete': true, 'record.templates.read': true,
   'query.objectDefinition': true,
   'sqlite.completion': true,

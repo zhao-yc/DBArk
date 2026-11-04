@@ -35,6 +35,21 @@ export function sqliteDraftChanges(page: SqliteTablePage, rows: readonly SqliteD
     return values.length ? [{ kind: 'update', row: row.index, values }] : [];
   });
 }
+/** 恢复只把明确变化映射到刚核验的新快照，原页row编号不沿用；整个文件形成一次可撤销暂存。 */
+export function sqliteRestoredRows(page: SqliteTablePage, changes: readonly SqliteTableChange[], id: () => string): SqliteDraftRow[] {
+  if (page.edit?.kind !== 'editable') throw Error(text.invalid);
+  const parsed = sqliteTableEditPreviewSchema.parse({ snapshotId: page.edit.snapshotId, taskId: 'sqlite-draft-restore', changes });
+  const columns = page.edit.columns, rows: SqliteDraftRow[] = page.edit.rows.map((values, index) => ({ id: 'original-' + index, index, values: structuredClone(values), deleted: false })), touched = new Set<number>(), ids = new Set(rows.map(row => row.id));
+  for (const change of parsed.changes) {
+    const values = change.kind === 'insert' ? columns.map(() => undefined as SqliteOriginalValue | undefined) : rows[change.row]?.values;
+    if (!values || change.kind !== 'insert' && (touched.has(change.row) || change.row >= page.edit.rows.length)) throw Error(text.invalid);
+    if (change.kind !== 'insert') touched.add(change.row);
+    if (change.kind !== 'delete') for (const field of change.values) { const index = columns.findIndex(column => column.name === field.column); if (index < 0 || columns[index].generated) throw Error(text.invalid); values[index] = structuredClone(field.value); }
+    if (change.kind === 'insert') { const next = id(); if (!next || next.length > 200 || ids.has(next)) throw Error(text.invalid); ids.add(next); rows.push({ id: next, values, deleted: false }); }
+    else if (change.kind === 'delete') rows[change.row].deleted = true;
+  }
+  return rows;
+}
 /** 独立草稿账本持有准确快照；离开活动标签可保留，来源 ABA 或未知提交永久撤销原批次。 */
 export class SqliteTableEditor {
   private generationValue: object = {};
@@ -42,10 +57,11 @@ export class SqliteTableEditor {
   get generation(): object { return this.generationValue; }
   private rows: SqliteDraftRow[]; private past: SqliteDraftRow[][] = []; private future: SqliteDraftRow[][] = [];
   private valid = true; private unknown = false; private input = false; private disposed = false; private snapshotReleased = false; private message = ''; private previewValue?: SqliteTableEditPreview; private batchCurrent?: () => boolean; private operation?: Operation;
-  constructor(readonly page: SqliteTablePage, private readonly ports: Ports) {
+  constructor(readonly page: SqliteTablePage, private readonly ports: Ports, restored?: readonly SqliteTableChange[]) {
     const edit = page.edit;
     if (edit?.kind !== 'editable' || !edit.snapshotId || !Number.isFinite(Date.parse(edit.expiresAt)) || edit.columns.length !== page.columns.length || edit.rows.length !== page.result.rows.length || edit.columns.some((column, i) => column.name !== page.columns[i].name) || edit.rows.some(row => row.length !== edit.columns.length)) throw Error(text.invalid);
     this.rows = edit.rows.map((values, index) => ({ id: 'original-' + index, index, values: structuredClone(values), deleted: false }));
+    if (restored) { this.past = [this.rows]; this.rows = sqliteRestoredRows(page, restored, () => this.ports.id()); }
   }
   /** 任何失效观察留下墓碑，恢复相同引用或版本也不会复活提交资格。 */
   observe(): void {

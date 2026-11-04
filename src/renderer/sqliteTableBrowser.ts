@@ -58,6 +58,13 @@ export class SqliteTableBrowser {
   pageCurrent(page: SqliteTablePage): boolean { return this.view.page === page && !!this.pageScope && this.same(this.pageScope) && !this.view.busy; }
   /** 编辑器构造成功后同步接管准确当前页；接管前任何失活/替换均由浏览器收尾。 */
   adopt(page: SqliteTablePage): boolean { if (this.unadopted !== page || !this.pageCurrent(page) || page.edit?.kind !== 'editable' || this.adopted.has(page) || this.released.has(page)) return false; this.unadopted = undefined; this.adopted.add(page); this.retained.set(page, { scope: this.pageScope!, valid: true }); return true; }
+  /** 只接纳Main完整核验后返回的新恢复页；仍须正常adopt交接，不把文件本身当编辑能力。 */
+  publishRestored(page: SqliteTablePage): boolean {
+    const scope = this.ports.scope();
+    if (!scope.table || !this.same(scope) || this.view.busy || page.edit?.kind !== 'editable' || this.adopted.has(page) || this.released.has(page)) return false;
+    assertSqliteTablePage(page, { connectionId: scope.connectionId, database: 'main', table: scope.table, taskId: 'sqlite-draft-restored', offset: 0, limit: page.limit, filters: [], sort: [], mode: 'and', editing: true, ...(scope.relation ? { relation: scope.relation } : {}) });
+    this.releaseUnadopted(); this.unadopted = page; this.pageScope = scope; this.emit({ page, columns: page.columns, error: '' }); return true;
+  }
   /** 只恢复由本浏览器交接过且仍属原目标的页；不重新读取，也不重新签发快照。 */
   restore(page: SqliteTablePage, preserveError = false): boolean {
     this.observe(); const retained = this.retained.get(page);

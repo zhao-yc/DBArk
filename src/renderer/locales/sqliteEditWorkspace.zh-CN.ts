@@ -1,7 +1,7 @@
-/** 多页草稿只在当前表标签内存中保留，不把记录值保存到本机配置。 */
+/** 多页工作区只在标签内存保留；显式草稿文件独立保存，不把记录值放进本机配置。 */
 export const sqliteEditWorkspaceZh = {
   region: 'SQLite 多页草稿', summary: (pages: number, changes: number) => `保留 ${pages} 页 · 共 ${changes} 条本地修改`,
-  hint: '切页保留各页输入与撤销记录；统一预览后再明确提交。草稿仅在当前标签内存中，关闭或重启不会恢复。',
+  hint: '切页保留各页草稿与撤销记录；统一预览后再明确提交。可手动保存草稿文件，关闭或重启不会自动恢复。',
   page: (offset: number, limit: number) => `返回保留页 ${Math.floor(offset / limit) + 1}`,
   active: '当前页', stalePage: '来源已失效', stale: '保留页的原来源、条件或结构已变化。草稿保持，请核对后放弃全部并重新读取。',
   discardPage: (offset: number, limit: number) => `放弃保留页 ${Math.floor(offset / limit) + 1}`,

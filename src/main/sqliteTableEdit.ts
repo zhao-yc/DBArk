@@ -1,4 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { parseSqliteTableDraft, sqliteDraftChanges, sqliteTableDraftMessages, type SqliteTableDraftDocument } from '../shared/sqliteTableDraft';
+import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
+import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import type { BigIntStats } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import type { SqliteConnectionProfile } from '../shared/contracts';
@@ -6,8 +9,19 @@ import { sqliteTableEditApplySchema, sqliteTableEditPreviewSchema, sqliteTableEd
 import type { SqliteTableRelation, SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import { sqliteExportTextFunction, type SqliteFileIdentity, type SqliteValue } from '../engine/sqlite/protocol';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
-import { quoteSqliteIdentifier as quote, readSqliteTableCatalogue, verifySqliteTableScope, buildSqliteTableRelationWhere, type SqliteEditReadPlan, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
+import { quoteSqliteIdentifier as quote, readSqliteTableCatalogue, withSqliteReadSnapshot, verifySqliteTableScope, buildSqliteTableRelationWhere, type SqliteEditReadPlan, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
 import { sqliteInsertLiteral } from './sqliteTableExport';
+
+
+/** 文件路径与dev／inode只在Main计算摘要，文档不携带可执行路径或连接配置。 */
+export function sqliteDraftFileKey(identity: SqliteFileIdentity): string { return createHash('sha256').update(JSON.stringify([identity.path, identity.device, identity.inode])).digest('hex'); }
+/** 原TEXT和BLOB保持类型；原REAL无穷可用于旧值核对，不扩大新输入合同。 */
+function sqliteDraftParameter(value: SqliteOriginalValue): SqliteValue {
+  if (value.kind === 'null') return null;
+  if (value.kind === 'text') return value.value;
+  if (value.kind === 'blob') return { type: 'binary', base64: Buffer.from(value.value, 'hex').toString('base64') };
+  return { type: value.kind, value: value.value };
+}
 
 interface Locator { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[]; collations: string[]; rowid?: string; }
 interface Snapshot {
@@ -65,7 +79,7 @@ function parameter(value: SqliteEditValue): SqliteValue {
   const number = Number(value.value); return { type: 'real', value: Object.is(number, -0) ? '-0' : String(number) };
 }
 /** 精确locator使用原存储类型和可靠键的实际collation，不被列默认collation扩大匹配范围。 */
-function locate(snapshot: Snapshot, row: number): { sql: string; parameters: SqliteValue[] } {
+function locate(snapshot: Pick<Snapshot, 'locator' | 'locators'>, row: number): { sql: string; parameters: SqliteValue[] } {
   const values = snapshot.locators[row]; if (!values) throw Error(text.stale);
   const names = snapshot.locator.rowid ? [snapshot.locator.rowid] : snapshot.locator.columns;
   const parameters: SqliteValue[] = [], sql = names.map((name, index) => {
@@ -106,7 +120,7 @@ export class SqliteTableEdits {
   releaseConnection(connectionId: string): void { for (const snapshot of this.snapshots.values()) if (snapshot.target.connectionId === connectionId) this.invalidate(snapshot); }
   release(input: SqliteTableEditReleaseInput): void { const value = sqliteTableEditReleaseSchema.parse(input); if (value.previewId) this.dropPreview(value.previewId); if (value.snapshotId) { const snapshot = this.snapshots.get(value.snapshotId); if (snapshot) this.invalidate(snapshot); } }
   /** 只读判断也沿真实目录；virtual/shadow/系统表不靠名称猜测成普通可写表。 */
-  async preparePage(driver: SqliteDriverSession, input: SqliteTablePageInput, profile: SqliteConnectionProfile, catalogue: SqliteTableCatalogue, control: SqliteTableBrowseControl): Promise<SqliteEditReadPlan> {
+  async preparePage(driver: SqliteDriverSession, input: SqliteTablePageInput, profile: SqliteConnectionProfile, catalogue: SqliteTableCatalogue, control: SqliteTableBrowseControl, inspectLocator?: (value: Locator) => void): Promise<SqliteEditReadPlan> {
     const readonly = (reason = text.readonly): SqliteEditReadPlan => ({ capture: () => ({ kind: 'readonly', reason }) });
     if (profile.sqlite.readOnly || catalogue.kind !== 'table' || /^sqlite_/i.test(input.table) || !driver.identity) return readonly();
     const facts = await read(driver, "SELECT type,wr FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY", [input.table], control, 2);
@@ -127,7 +141,7 @@ export class SqliteTableEdits {
     }
     if (!locator) return readonly();
     const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1), schemaVersion = integer(schema[0]?.[0]);
-    const identity = driver.identity!, chosen = locator;
+    const identity = driver.identity!, chosen = locator; inspectLocator?.(structuredClone(chosen));
     return {
       project: projection, ...(chosen.rowid ? { extraColumn: '"__dbark_source".' + quote(chosen.rowid) } : {}),
       capture: values => {
@@ -143,6 +157,57 @@ export class SqliteTableEdits {
         return { kind: 'editable', snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), columns: structuredClone(columns), rows: rows.map(row => row.map(original)), locator: { kind: chosen.kind, columns: [...chosen.columns] } };
       },
     };
+  }
+  /** 从准确私有原页捕获可移植草稿；复用原整组验证及重复定位门，不信任客户端旧值。 */
+  captureDraft(source: SqliteTableEditPreviewInput, endpointKey: string): SqliteTableDraftDocument {
+    const input = sqliteTableEditPreviewSchema.parse(source), preview = this.preview(input);
+    try {
+      const claim = this.previews.get(preview.previewId)!, snapshot = claim.snapshot, pages = claim.sources ?? [snapshot];
+      const changes = [input, ...(input.additionalPages ?? [])].flatMap((group, index) => group.changes.map(change => {
+        if (change.kind === 'insert') return { kind: change.kind, values: change.values };
+        const page = pages[index]; return { kind: change.kind, before: page.rows[change.row].map(original), key: page.locators[change.row].map(original), ...(change.kind === 'update' ? { values: change.values } : {}) };
+      }));
+      return parseSqliteTableDraft({ kind: 'tabrelio.sqlite-table-draft', version: 1, endpointKey, target: { ...snapshot.target }, fileKey: sqliteDraftFileKey(snapshot.identity), schemaKey: snapshot.catalogue.schemaKey, schemaVersion: snapshot.schemaVersion, columns: snapshot.columns, locator: snapshot.locator, ...(snapshot.relation ? { relation: snapshot.relation } : {}), changes });
+    } finally { this.dropPreview(preview.previewId); }
+  }
+  /** 在独立物理只读快照中逐行核完整旧值和隐藏定位；全部通过及回滚后才签一份新编辑能力。 */
+  async restoreDraft(driver: SqliteDriverSession, source: SqliteTableDraftDocument, profile: SqliteConnectionProfile, control: SqliteTableBrowseControl): Promise<{ page: SqliteTablePage; changes: SqliteTableChange[] }> {
+    const document = parseSqliteTableDraft(source), started = performance.now(), identity = driver.identity;
+    if (!driver.readOnly || profile.sqlite.readOnly || !identity || profile.id !== document.target.connectionId) throw Error(sqliteTableDraftMessages.readonly);
+    if (sqliteDraftFileKey(identity) !== document.fileKey) throw Error(sqliteTableDraftMessages.changed);
+    const originalChanges = document.changes.filter(change => change.kind !== 'insert'), input: SqliteTablePageInput = { ...document.target, taskId: 'sqlite-draft-restore', mode: 'and', filters: [], sort: [], offset: 0, limit: Math.max(1, originalChanges.length), editing: true, ...(document.relation ? { relation: document.relation } : {}) };
+    let plan: SqliteEditReadPlan | undefined, catalogue: SqliteTableCatalogue | undefined;
+    const values = await withSqliteReadSnapshot(driver, control, async () => {
+      await assertSnapshotFile({ profile, identity } as Snapshot, control);
+      catalogue = await readSqliteTableCatalogue(driver, document.target.table, control);
+      const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1);
+      if (catalogue.kind !== 'table' || catalogue.schemaKey !== document.schemaKey || integer(schema[0]?.[0]) !== document.schemaVersion) throw Error(sqliteTableDraftMessages.changed);
+      await verifySqliteTableScope(driver, input, control);
+      let chosen: Locator | undefined;
+      plan = await this.preparePage(driver, input, profile, catalogue, control, value => { chosen = value; });
+      const signature = (value: Locator) => JSON.stringify([value.kind, value.columns, value.collations, value.rowid ?? null]);
+      if (!chosen || signature(chosen) !== signature(document.locator)) throw Error(sqliteTableDraftMessages.changed);
+      const projectionSql = catalogue.columns.map(column => projection('"__dbark_source".' + quote(column.name))).join(','), savedKeys = originalChanges.map(change => change.key.map(sqliteDraftParameter)), rows: SqliteValue[][] = [];
+      const scoped = document.relation ? buildSqliteTableRelationWhere(document.relation) : undefined;
+      for (let index = 0; index < originalChanges.length; index++) {
+        const where = locate({ locator: chosen, locators: savedKeys }, index);
+        const current = await read(driver, 'SELECT ' + (plan.extraColumn ? plan.extraColumn + ',' : '') + projectionSql + ' FROM "main".' + quote(document.target.table) + ' AS "__dbark_source" WHERE ' + where.sql + (scoped ? ' AND (' + scoped.sql + ')' : '') + ' LIMIT 2', [...where.parameters, ...(scoped?.parameters ?? [])], control, 2);
+        const offset = plan.extraColumn ? 1 : 0;
+        if (current.length !== 1 || !equal(current[0].slice(offset).map(original), originalChanges[index].before) || chosen.rowid && !equal(current[0].slice(0, 1).map(original), originalChanges[index].key)) throw Error(sqliteTableDraftMessages.changed);
+        rows.push(current[0]);
+      }
+      await assertSnapshotFile({ profile, identity } as Snapshot, control); return rows;
+    });
+    control.check(); await assertSnapshotFile({ profile, identity } as Snapshot, control);
+    const edit = plan!.capture(values); if (edit.kind !== 'editable') throw Error(edit.reason);
+    try {
+      if (!equal(edit.columns, document.columns)) throw Error(sqliteTableDraftMessages.changed);
+      const rows = values.map(row => row.slice(plan!.extraColumn ? 1 : 0));
+      const page: SqliteTablePage = { target: { ...document.target, kind: 'table' }, schemaKey: document.schemaKey, columns: catalogue!.columns, offset: 0, limit: input.limit, hasMore: false, ...(document.relation ? { relation: document.relation } : {}), edit,
+        storageTypes: rows.map(row => row.map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join('')),
+        result: { columns: catalogue!.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' })), rows: rows.map(row => Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)]))), elapsedMs: performance.now() - started, truncated: false, statement: '' } };
+      return { page, changes: sqliteDraftChanges(document) };
+    } catch (reason) { this.release({ snapshotId: edit.snapshotId }); throw reason; }
   }
   /** 预览只编译参数化DML，没有driver或SQL投递能力。 */
   preview(source: SqliteTableEditPreviewInput): SqliteTableEditPreview {

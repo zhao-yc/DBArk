@@ -8,7 +8,7 @@ interface Binding { owner: ColumnsInvocation; revision: number; epoch: object; t
 interface Snapshot extends Binding { id: string; schemaKey: string; }
 interface Preview extends Binding { id: string; snapshotId: string; source: Snapshot; sources: Snapshot[]; counts: SqliteTableEditPreview['counts']; }
 interface Operation { owner: ColumnsInvocation; check(): void; invalid: boolean; sent: boolean; stop?: Promise<void>; }
-export interface SqliteEditLease { beforeSend(): void; release(): Promise<void>; }
+export interface SqliteEditLease { check(): void; beforeSend(): void; release(): Promise<void>; }
 
 /** 文件页与预览能力属于准确主文档和配置修订，不能在同URL重载或连接ABA后继承。 */
 export class SqliteTableEditOwners {
@@ -45,11 +45,11 @@ export class SqliteTableEditOwners {
     for (const [id, operation] of this.operations) try { this.ports.assert(operation.owner); operation.check(); } catch { this.invalidate(id, operation); }
   }
   /** 页请求在首个await前捕获来源；回包只签原目标，不向新文档泄露可写快照。 */
-  page(owner: ColumnsInvocation, input: SqliteTablePageInput): { accept(value: SqliteTablePage): Promise<SqliteTablePage> } {
+  page(owner: ColumnsInvocation, input: SqliteTablePageInput): { check(): void; accept(value: SqliteTablePage): Promise<SqliteTablePage> } {
     this.ports.assert(owner); this.watch(owner); this.observe();
     const binding: Binding = { owner, revision: this.ports.revision(), epoch: this.ports.epoch(input.connectionId), target: { connectionId: input.connectionId, database: 'main', table: input.table }, expires: Date.now() + limits.snapshotLifetimeMs };
     this.valid(binding);
-    return { accept: async value => {
+    return { check: () => this.valid(binding), accept: async value => {
       const edit = value?.edit;
       try {
         this.valid(binding);
@@ -95,7 +95,8 @@ export class SqliteTableEditOwners {
   begin(taskId: string, owner: ColumnsInvocation, check: () => void): SqliteEditLease {
     if (this.operations.has(taskId)) throw Error(text.stale); this.ports.assert(owner); this.watch(owner); check();
     const operation: Operation = { owner, check, invalid: false, sent: false }; this.operations.set(taskId, operation);
-    return { beforeSend: () => { this.observe(); if (operation.invalid) throw Error(text.stale); operation.sent = true; }, release: async () => { try { if (operation.stop) await operation.stop.catch(() => {}); } finally { if (this.operations.get(taskId) === operation) this.operations.delete(taskId); } } };
+    const current = () => { this.observe(); if (operation.invalid || this.operations.get(taskId) !== operation) throw Error(text.stale); };
+    return { check: current, beforeSend: () => { current(); operation.sent = true; }, release: async () => { try { if (operation.stop) await operation.stop.catch(() => {}); } finally { if (this.operations.get(taskId) === operation) this.operations.delete(taskId); } } };
   }
   owns(taskId: string): boolean { return this.operations.has(taskId); }
   async cancel(taskId: string, owner: ColumnsInvocation): Promise<void> {

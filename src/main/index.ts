@@ -1,3 +1,6 @@
+import type { SqliteDraftRestored } from '../shared/sqliteTableDraft';
+import { SqliteTableDraftFiles, bindSqliteTableDraft, assertSqliteTableDraftBinding } from './sqliteTableDraftFiles';
+import { tableDraftEndpointKey } from './tableDraftBinding';
 import { objectDefinitionInputSchema, assertObjectDefinitionOutput } from '../shared/objectDefinition';
 import { SqliteTablePresetMain, type SqlitePresetCommand } from './sqliteTablePresetMain';
 import { SqliteTableLayoutMain } from './sqliteTableLayoutMain';
@@ -115,6 +118,7 @@ let queryFileSources: QueryFileSources;
 let explainSnapshotFiles: ExplainSnapshotFiles;
 let queryResultSnapshotFiles: QueryResultSnapshotFiles;
 let tableDraftFiles: TableDraftFiles;
+let sqliteDraftFiles: SqliteTableDraftFiles;
 let savedQuerySearches:SavedQuerySearches;
 let savedQueryPages:SavedQueryPages;
 let historyPages:HistoryPages;
@@ -951,6 +955,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     return releaseDatabaseEncoding(input);
   }
   // 文件能力仅绑定本次真实主窗口文档，不接收渲染进程传入的磁盘路径或连接。
+  if (command === 'sqliteDraftFiles.open' || command === 'sqliteDraftFiles.save') {
+    columnsMain.assertCapturedOwner(columns);
+    const sources = command === 'sqliteDraftFiles.save' ? sqliteEdits.preview(columns!, input.source.snapshotId, (input.source.additionalPages ?? []).map((page: { snapshotId: string }) => page.snapshotId)) : undefined;
+    const target = sources?.target ?? input.target, revision = store.connectionRevision(), profile = store.resolveConnection(target.connectionId);
+    if (profile.dialect !== 'sqlite' || profile.sqlite.readOnly) throw Error('SQLite草稿仅支持当前可写文件连接');
+    const owner = { assertCurrent: () => { columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(target.connectionId); sources?.check(); if (shuttingDown || revision !== store.connectionRevision()) throw Error('SQLite草稿原窗口或连接配置已变化'); } };
+    return queryFileOperation(async () => {
+      owner.assertCurrent();
+      if (command === 'sqliteDraftFiles.open') { const result = await sqliteDraftFiles.open(owner); if (result) assertSqliteTableDraftBinding(result.document, target, profile); owner.assertCurrent(); return result; }
+      const document = await broker.request('sqlite.tableDraft.capture', { source: input.source, endpointKey: tableDraftEndpointKey(profile) }); owner.assertCurrent();
+      const result = await sqliteDraftFiles.save(bindSqliteTableDraft(document, profile), owner); if (result) columns!.snapshotSaved = true; return result;
+    });
+  }
   if (command === 'tableDraftFiles.open' || command === 'tableDraftFiles.save') {
     columnsMain.assertCapturedOwner(columns);
     const target = command === 'tableDraftFiles.open' ? input.target : input.payload.target;
@@ -1301,7 +1318,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
-      if (tasks.get(input.taskId)?.kind === 'sqlite.tableEdit.apply' && sqliteEdits.owns(input.taskId)) return sqliteEdits.cancel(input.taskId, columns!);
+      if (['sqlite.tableEdit.apply', 'sqliteDraftFiles.restore'].includes(tasks.get(input.taskId)?.kind ?? '') && sqliteEdits.owns(input.taskId)) return sqliteEdits.cancel(input.taskId, columns!);
       if (typeof historyDelete !== 'undefined' && historyDelete?.owns(input.taskId)) return historyDelete.cancel(input.taskId, columns!);
       if (['table.exportFiltered', 'sqlite.tableExport'].includes(tasks.get(input.taskId)?.kind ?? '') && tableFilteredExports.has(input.taskId)) return tableFilteredExports.cancel(input.taskId, columns!);
       if(columns&&tasks.get(input.taskId)?.kind==='query.exportStream')queryInsertExports.assertOwned(input.taskId,columns);
@@ -1380,6 +1397,16 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         columns!.sqliteReadPublication = () => { columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(input.connectionId); if (shuttingDown || store.connectionRevision() !== revision) throw Error('SQLite只读操作的原窗口或连接配置已变化，请重新读取'); };
       }
       if (input.editing === true) sqlitePage = sqliteEdits.page(columns!, input);
+      break;
+    }
+    case 'sqliteDraftFiles.restore': {
+      if (shuttingDown) throw Error('客户端正在退出，不能恢复SQLite草稿');
+      const profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect !== 'sqlite') throw Error('SQLite草稿只支持当前SQLite连接');
+      assertSqliteTableDraftBinding(input.document, { connectionId: input.connectionId, database: input.database, table: input.table }, profile);
+      const document = input.document, count = document.changes.filter((change: { kind: string }) => change.kind !== 'insert').length;
+      sqlitePage = sqliteEdits.page(columns!, { connectionId: input.connectionId, database: 'main', table: input.table, taskId: input.taskId, offset: 0, limit: Math.max(1, count), filters: [], mode: 'and', sort: [], editing: true, ...(document.relation ? { relation: document.relation } : {}) });
+      input = { connectionId: input.connectionId, taskId: input.taskId, draft: document, assertCurrent: () => { sqlitePage!.check(); sqliteEditLease?.check(); } };
       break;
     }
     case 'sqlite.tableEdit.preview':
@@ -1523,6 +1550,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let sentToEngine = false;
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
   try {
+    if (command === 'sqliteDraftFiles.restore') sqliteEditLease = sqliteEdits.begin(taskId!, columns!, sqlitePage!.check);
     if (sqliteApplySource) {
       sqliteClaim = sqliteEdits.claim(columns!, input.previewId);
       const counts = sqliteClaim.counts, write = sqliteWriteOperation = sqliteWrites.begin(taskId!, sqliteClaim.target, counts.insert + counts.update + counts.delete);
@@ -1568,7 +1596,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!(result);
-    if (sqlitePage) result = await sqlitePage.accept(result);
+    if (command === 'sqliteDraftFiles.restore') try { sqliteEditLease!.check(); } catch (reason) { if (result?.page?.edit?.kind === 'editable') await broker.request('sqlite.tableEdit.release', { snapshotId: result.page.edit.snapshotId }).catch(() => {}); throw reason; }
+    if (sqlitePage) result = command === 'sqliteDraftFiles.restore' ? { ...result, page: await sqlitePage.accept(result.page) } : await sqlitePage.accept(result);
     if (sqlitePreview) result = await sqlitePreview.accept(result);
     if (sqliteClaim) {
       result = sqliteWrites.outcome(taskId!, result);
@@ -1867,6 +1896,12 @@ else {
       if (mode === 'open') { const selected = await dialog.showOpenDialog(ownerWindow, { title: '打开表格草稿', properties: ['openFile'], filters }); return selected.canceled ? undefined : selected.filePaths[0]; }
       const selected = await dialog.showSaveDialog(ownerWindow, { title: '保存表格草稿', defaultPath: '表格草稿.dbark-draft', filters }); return selected.canceled ? undefined : selected.filePath;
     } });
+    sqliteDraftFiles = new SqliteTableDraftFiles({ reserve: path => exportReservations.acquire(path), validateDestination: path => assertSqliteExportDestination(path, store.connections()), choose: async mode => {
+      const ownerWindow = window; if (!ownerWindow) throw Error('SQLite草稿所属窗口已关闭');
+      const filters = [{ name: productName + ' SQLite草稿（含完整原始数据）', extensions: ['sqlite-draft'] }];
+      if (mode === 'open') { const selected = await dialog.showOpenDialog(ownerWindow, { title: '打开SQLite草稿', properties: ['openFile'], filters }); return selected.canceled ? undefined : selected.filePaths[0]; }
+      const selected = await dialog.showSaveDialog(ownerWindow, { title: '保存SQLite草稿', defaultPath: 'SQLite草稿.sqlite-draft', filters }); return selected.canceled ? undefined : selected.filePath;
+    } });
     explainSnapshotFiles = new ExplainSnapshotFiles({ reserve: path => exportReservations.acquire(path), choose: async mode => {
       const ownerWindow = window;
       if (!ownerWindow) throw Error(explainSnapshotZh.stale);
@@ -1922,7 +1957,7 @@ else {
         if (sqliteIndexesRequest) columns = columnsMain.capture(event);
         const sqliteCreateRequest = payload.command.startsWith('sqlite.tableCreate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && !!tasks.get(payload.input.taskId)?.kind.startsWith('sqlite.tableCreate.') && sqliteTableCreates.owns(payload.input.taskId);
         if (sqliteCreateRequest) columns = columnsMain.capture(event);
-        const sqliteEditRequest = payload.command.startsWith('sqlite.tableEdit.') || payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' && 'editing' in payload.input && payload.input.editing === true || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind === 'sqlite.tableEdit.apply';
+        const sqliteEditRequest = payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('sqlite.tableEdit.') || payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' && 'editing' in payload.input && payload.input.editing === true || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['sqlite.tableEdit.apply', 'sqliteDraftFiles.restore'].includes(tasks.get(payload.input.taskId)?.kind ?? '');
         if (sqliteEditRequest) columns = columnsMain.capture(event);
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
@@ -1942,7 +1977,7 @@ else {
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
-        if (payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue'||payload.command.startsWith('history.delete');if(local)localSearchOperations.add(operation);
@@ -1987,9 +2022,11 @@ else {
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           if (payload.command.startsWith('queryFileSources.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
-          if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
+          if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.') || payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
+            const restored = payload.command === 'sqliteDraftFiles.restore' ? result as SqliteDraftRestored : undefined;
+            if (restored?.page?.edit?.kind === 'editable') { sqliteEdits.observe(); await broker.request('sqlite.tableEdit.release', { snapshotId: restored.page.edit.snapshotId }).catch(() => {}); }
             // 文件已提交后的最后发布门失效时，不能诱导用户自动重试覆盖文件。
-            if (columns?.snapshotSaved) throw Error(payload.command.startsWith('resultSnapshotFiles.') ? queryResultSnapshotFileMessages.unknownWrite : payload.command.startsWith('tableDraftFiles.') ? tableDraftFileMessages.unknownWrite : explainSnapshotZh.unknownWrite);
+            if (columns?.snapshotSaved) throw Error(payload.command.startsWith('resultSnapshotFiles.') ? queryResultSnapshotFileMessages.unknownWrite : payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('sqliteDraftFiles.') ? tableDraftFileMessages.unknownWrite : explainSnapshotZh.unknownWrite);
             throw error;
           }
           if(insertRequest)columnsMain.assertCapturedOwner(columns);

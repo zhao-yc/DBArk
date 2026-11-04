@@ -25,6 +25,8 @@ export interface TableDraftOwner { assertCurrent(): void }
 export interface TableDraftFilePorts {
   choose(mode: 'open' | 'save'): Promise<string | undefined>;
   reserve(path: string): Promise<() => void>;
+  /** SQLite草稿额外保护已保存数据库及日志目标；旧格式默认保持原行为。 */
+  validateDestination?(path: string): Promise<void>;
   io?: Pick<typeof fs, 'open' | 'lstat' | 'rename' | 'unlink'>;
 }
 
@@ -41,11 +43,13 @@ function checkedPath(value: string): string {
 }
 
 /** 独立离线文件能力；单个原始操作的锁覆盖对话框、磁盘提交与全部清理。 */
-export class TableDraftFiles {
+/** 相同磁盘状态机由不同草稿格式共用，格式解析器不能取得文件路径或操作所有权。 */
+export interface DraftFileCodec<Document> { bytes: number; encode(document: Document): string; decode(source: string): Document; }
+export class BoundedDraftFiles<Document> {
   private active = false;
   private readonly io: Pick<typeof fs, 'open' | 'lstat' | 'rename' | 'unlink'>;
 
-  constructor(private readonly ports: TableDraftFilePorts) { this.io = ports.io ?? fs; }
+  constructor(private readonly ports: TableDraftFilePorts, private readonly codec: DraftFileCodec<Document>) { this.io = ports.io ?? fs; }
 
   /** 同步占用，失效或取消只影响结果，绝不会提前释放仍在运行的操作。 */
   private async operation<T>(owner: TableDraftOwner, action: () => Promise<T>): Promise<T> {
@@ -75,10 +79,10 @@ export class TableDraftFiles {
   }
 
   /** 单句柄有界读取，严格 UTF-8 解码后才解析，来源变化时不发布任何草稿。 */
-  open(owner: TableDraftOwner): Promise<{ name: string; document: TableDraftDocument } | null> {
+  open(owner: TableDraftOwner): Promise<{ name: string; document: Document } | null> {
     return this.operation(owner, async () => {
       let handle: FileHandle | undefined;
-      let result: { name: string; document: TableDraftDocument } | null = null;
+      let result: { name: string; document: Document } | null = null;
       const errors: unknown[] = [];
       try {
         const selected = await this.guarded(owner, () => this.ports.choose('open'));
@@ -89,14 +93,14 @@ export class TableDraftFiles {
         owner.assertCurrent(); handle = await this.io.open(path, 'r'); owner.assertCurrent();
         const before = await this.guarded(owner, () => handle!.stat());
         if (!before.isFile() || !initial || !sameFile(initial, before)) throw new Error(text.changedBefore);
-        if (before.size > tableDraftLimits.bytes) throw new Error(text.tooLarge);
-        const data = Buffer.alloc(tableDraftLimits.bytes + 1);
+        if (before.size > this.codec.bytes) throw new Error(text.tooLarge);
+        const data = Buffer.alloc(this.codec.bytes + 1);
         let count = 0;
         while (count < data.length) {
           const read = await this.guarded(owner, () => handle!.read(data, count, Math.min(65536, data.length - count), count));
           if (!read.bytesRead) break;
           count += read.bytesRead;
-          if (count > tableDraftLimits.bytes) throw new Error(text.tooLarge);
+          if (count > this.codec.bytes) throw new Error(text.tooLarge);
         }
         const after = await this.guarded(owner, () => handle!.stat());
         const current = await this.guarded(owner, () => this.inspect(path, false));
@@ -104,7 +108,7 @@ export class TableDraftFiles {
         let decoded: string;
         try { decoded = new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(0, count)); }
         catch { throw new Error(text.encoding); }
-        result = { name: basename(path), document: decodeTableDraft(decoded) };
+        result = { name: basename(path), document: this.codec.decode(decoded) };
         owner.assertCurrent();
       } catch (error) { errors.push(error); }
       if (handle) {
@@ -117,9 +121,9 @@ export class TableDraftFiles {
   }
 
   /** 同目录独占临时文件同步后原子替换；先校验内容，再打开保存对话框。 */
-  save(document: TableDraftDocument, owner: TableDraftOwner): Promise<{ name: string } | null> {
+  save(document: Document, owner: TableDraftOwner): Promise<{ name: string } | null> {
     return this.operation(owner, async () => {
-      const encoded = Buffer.from(encodeTableDraft(document), 'utf8');
+      const encoded = Buffer.from(this.codec.encode(document), 'utf8');
       let handle: FileHandle | undefined;
       let temporary: string | undefined;
       let release: (() => void) | undefined;
@@ -130,6 +134,7 @@ export class TableDraftFiles {
         const selected = await this.guarded(owner, () => this.ports.choose('save'));
         if (selected === undefined) return null;
         const path = checkedPath(selected);
+        if (this.ports.validateDestination) await this.guarded(owner, () => this.ports.validateDestination!(path));
         owner.assertCurrent(); release = await this.ports.reserve(path); owner.assertCurrent();
         const initial = await this.guarded(owner, () => this.inspect(path, true));
         const candidate = join(dirname(path), `.dbark-draft-${randomUUID()}.tmp`);
@@ -142,6 +147,7 @@ export class TableDraftFiles {
         }
         await this.guarded(owner, () => handle!.sync());
         owner.assertCurrent(); await handle.close(); handle = undefined; owner.assertCurrent();
+        if (this.ports.validateDestination) await this.guarded(owner, () => this.ports.validateDestination!(path));
         const current = await this.guarded(owner, () => this.inspect(path, true));
         if (initial ? !current || !sameFile(initial, current) : current !== undefined) throw new Error(text.concurrent);
         owner.assertCurrent(); renameSubmitted = true;
@@ -160,4 +166,9 @@ export class TableDraftFiles {
       return result;
     });
   }
+}
+
+/** 保留已有MySQL／MariaDB草稿API和8MiB格式，SQLite仅复用文件IO状态机。 */
+export class TableDraftFiles extends BoundedDraftFiles<TableDraftDocument> {
+  constructor(ports: TableDraftFilePorts) { super(ports, { bytes: tableDraftLimits.bytes, encode: encodeTableDraft, decode: decodeTableDraft }); }
 }

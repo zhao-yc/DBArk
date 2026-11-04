@@ -274,6 +274,9 @@ export interface CommandMap {
   'sqlite.referencePage': { input: import('./sqliteReference').SqliteReferenceInput; output: import('./sqliteReference').SqliteReferenceOutput };
   'sqlite.relationships': { input: import('./sqliteRelationships').SqliteRelationshipsInput; output: import('./sqliteRelationships').SqliteRelationshipsOutput };
   'sqlite.tableExport': { input: import('./sqliteTableExport').SqliteTableExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
+  'sqliteDraftFiles.save': { input: { source: import('./sqliteTableEdit').SqliteTableEditPreviewInput }; output: { name: string } | null };
+  'sqliteDraftFiles.open': { input: { target: import('./sqliteTableDraft').SqliteTableDraftDocument['target'] }; output: { name: string; document: import('./sqliteTableDraft').SqliteTableDraftDocument } | null };
+  'sqliteDraftFiles.restore': { input: import('./sqliteTableDraft').SqliteTableDraftDocument['target'] & { taskId: string; document: import('./sqliteTableDraft').SqliteTableDraftDocument }; output: import('./sqliteTableDraft').SqliteDraftRestored };
   'sqlite.tableEdit.preview': { input: import('./sqliteTableEdit').SqliteTableEditPreviewInput; output: import('./sqliteTableEdit').SqliteTableEditPreview };
   'sqlite.tableEdit.apply': { input: import('./sqliteTableEdit').SqliteTableEditApplyInput; output: import('./sqliteTableEdit').SqliteTableEditOutcome };
   'sqlite.tableEdit.release': { input: import('./sqliteTableEdit').SqliteTableEditReleaseInput; output: void };

@@ -1,3 +1,4 @@
+import { decodeSqliteTableDraft, encodeSqliteTableDraft, type SqliteDraftRestored, type SqliteTableDraftDocument } from '../../src/shared/sqliteTableDraft';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { spawnSync, fork, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
@@ -310,4 +311,50 @@ it('BINARY复合可靠键的大小写不同记录仍独立，统一事务逐页�
 });
 it('同表的不同固定关联父键范围不得混入一份多页修改',async()=>{
  const profile=fixture();disk(profile,db=>db.exec("CREATE TABLE parent(id INTEGER PRIMARY KEY);INSERT INTO parent VALUES(1),(2);CREATE TABLE child(id INTEGER PRIMARY KEY,p INTEGER REFERENCES parent(id),note TEXT);INSERT INTO child VALUES(1,1,'父一'),(2,2,'父二')"));const{app}=runtime(profile),parent=await page(app,profile,'parent',false);const catalogue=await app.request('sqlite.incomingPage',{connectionId:profile.id,database:'main',table:'parent',schemaKey:parent.schemaKey,taskId:'00000000-0000-4000-8000-000000000099',incoming:'catalog'}) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput;const read=(id:string)=>app.request('sqlite.tablePage',{connectionId:profile.id,database:'main',table:'child',taskId:'关联原页'+ ++serial,offset:0,limit:1,mode:'and',filters:[],sort:[],editing:true,relation:{parentTable:'parent',parentSchemaKey:parent.schemaKey,childSchemaKey:catalogue.references[0].schemaKey,foreignKey:0,parentColumns:['id'],childColumns:['p'],values:[{kind:'integer',value:id}]}}) as Promise<SqliteTablePage>;const first=await read('1'),second=await read('2');await expect(multiPreview(app,[first,second])).rejects.toThrow('关联范围');expect(disk(profile,db=>db.prepare('SELECT note FROM child ORDER BY id').all())).toEqual([{note:'父一'},{note:'父二'}]);
+});
+
+/** 私有草稿服务必须从真实已签原页捕获，不能向Runtime提交客户端旧行或SQL。 */
+async function captureDraft(app: SqliteRuntime, profile: SqliteConnectionProfile, changes: SqliteTableChange[], source?: SqliteTablePage): Promise<SqliteTableDraftDocument> {
+  const original = source ?? await page(app, profile);
+  return app.request('sqlite.tableDraft.capture', { source: { snapshotId: snapshot(original), taskId: '捕获草稿' + ++serial, changes }, endpointKey: 'a'.repeat(64) });
+}
+/** 每轮恢复有全新任务编号及Main存活守卫，所有核验均由实际物理只读worker执行。 */
+function restoreDraft(app: SqliteRuntime, profile: SqliteConnectionProfile, document: SqliteTableDraftDocument, assertCurrent = () => {}): Promise<SqliteDraftRestored> {
+  return app.request('sqlite.tableDraft.restore', { connectionId: profile.id, taskId: '恢复草稿' + ++serial, draft: document, assertCurrent });
+}
+describe('SQLite草稿持久恢复真实worker', () => {
+  it('两个原页的row0及新增保存后跨Runtime重启，先零写核验，再以新单一来源预览混合事务', async () => {
+    const profile = fixture(), { app } = runtime(profile);
+    const a = await app.request('sqlite.tablePage', {connectionId:profile.id,database:'main',table:'subject',taskId:'原第一页'+ ++serial,offset:0,limit:1,mode:'and',filters:[],sort:[{column:'id',direction:'asc'}],editing:true}) as SqliteTablePage;
+    const b = await app.request('sqlite.tablePage', {connectionId:profile.id,database:'main',table:'subject',taskId:'原第二页'+ ++serial,offset:1,limit:1,mode:'and',filters:[],sort:[{column:'id',direction:'asc'}],editing:true}) as SqliteTablePage;
+    const count = processes.length, document:SqliteTableDraftDocument = await app.request('sqlite.tableDraft.capture',{source:{snapshotId:snapshot(a),taskId:'捕获双页'+ ++serial,changes:[update(0,'跨重启修改'),{kind:'insert',values:[{column:'note',value:{kind:'text',value:'新增候选'}}]}],additionalPages:[{snapshotId:snapshot(b),changes:[{kind:'delete',row:0}]}]},endpointKey:'a'.repeat(64)});
+    expect(processes).toHaveLength(count);expect(document.changes).toHaveLength(3);const raw=encodeSqliteTableDraft(document);expect(raw).not.toContain(profile.sqlite.filePath!);expect(raw).not.toContain(snapshot(a));expect(raw).not.toContain(snapshot(b));await app.forceClose();
+    const next=runtime(profile),baseline=notes(profile),restored=await restoreDraft(next.app,profile,decodeSqliteTableDraft(raw));expect(notes(profile)).toEqual(baseline);expect(restored.page.result.rows).toHaveLength(2);expect(restored.page.result.statement).toBe('');expect(snapshot(restored.page)).not.toBe(snapshot(a));expect(restored.changes).toMatchObject([{kind:'update',row:0},{kind:'insert'},{kind:'delete',row:1}]);
+    const reads=processes.slice(count).flatMap(p=>p.sent);expect(reads.filter(m=>m.kind==='open').every(m=>m.kind==='open'&&m.options.readOnly)).toBe(true);expect(reads.filter(m=>m.kind==='execute').every(m=>m.kind==='execute'&&!/^(INSERT|UPDATE|DELETE|COMMIT)/i.test(m.sql))).toBe(true);
+    const plan=await preview(next.app,restored.page,restored.changes),write=await apply(next.app,plan).result;expect(write.outcome).toBe('committed');expect(notes(profile)).toEqual([{id:1,note:'跨重启修改'},{id:3,note:'新增候选'}]);expect(JSON.stringify(next.events)).not.toContain('跨重启修改');
+  });
+  it('后继旧行已改时整份恢复拒绝，先前核验行也不发布可写页，零DML', async()=>{
+    const profile=fixture(),{app}=runtime(profile),document=await captureDraft(app,profile,[update(0,'候选甲'),update(1,'候选乙')]);disk(profile,db=>db.exec("UPDATE subject SET note='外部修改' WHERE id=2"));const baseline=notes(profile),count=processes.length;
+    await expect(restoreDraft(app,profile,document)).rejects.toThrow('原行已变化');expect(notes(profile)).toEqual(baseline);expect(processes.slice(count).flatMap(p=>p.sent).filter(m=>m.kind==='execute').every(m=>m.kind==='execute'&&!/^(INSERT|UPDATE|DELETE|COMMIT)/i.test(m.sql))).toBe(true);
+  });
+  it('相同路径复制新文件但inode改变时拒绝，不能用相同行值继承旧来源',async()=>{
+    const profile=fixture(),{app}=runtime(profile),document=await captureDraft(app,profile,[update(0,'候选')]);const old=profile.sqlite.filePath!,saved=old+'.原件';renameSync(old,saved);const db=new DatabaseSync(old);try{db.exec("CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT NOT NULL DEFAULT '默认',value,payload BLOB,generated INTEGER GENERATED ALWAYS AS (id*2) VIRTUAL); INSERT INTO subject(id,note,value,payload) VALUES(1,'原甲',9223372036854775807,x'00ff'),(2,'原乙',1.25,NULL); CREATE VIEW subject_view AS SELECT * FROM subject;");}finally{db.close();}
+    await expect(restoreDraft(app,profile,document)).rejects.toThrow('原文件');expect(notes(profile)).toEqual([{id:1,note:'原甲'},{id:2,note:'原乙'}]);
+  });
+  it('隐藏rowid旧行被替换成完全同值的新行也拒绝，不按offset或显示值套用候选',async()=>{
+    const profile=fixture();disk(profile,db=>db.exec("CREATE TABLE duplicates(note TEXT);INSERT INTO duplicates(rowid,note) VALUES(1,'相同'),(2,'相同')"));const{app}=runtime(profile),source=await page(app,profile,'duplicates'),document=await captureDraft(app,profile,[{kind:'update',row:0,values:[{column:'note',value:{kind:'text',value:'不能套给另一行'}}]}],source);disk(profile,db=>db.exec("DELETE FROM duplicates WHERE rowid=1;INSERT INTO duplicates(rowid,note) VALUES(3,'相同')"));await expect(restoreDraft(app,profile,document)).rejects.toThrow('原行已变化');expect(disk(profile,db=>db.prepare('SELECT rowid,note FROM duplicates ORDER BY rowid').all())).toEqual([{rowid:2,note:'相同'},{rowid:3,note:'相同'}]);
+  });
+  it('WITHOUT ROWID复合NOCASE键准确保存和核验，后续仍按完整旧值正常提交',async()=>{
+    const profile=fixture();disk(profile,db=>db.exec("CREATE TABLE composite(a TEXT COLLATE NOCASE,b TEXT,note TEXT,PRIMARY KEY(a,b)) WITHOUT ROWID;INSERT INTO composite VALUES('A','1','原值')"));const{app}=runtime(profile),source=await page(app,profile,'composite'),document=await captureDraft(app,profile,[{kind:'update',row:0,values:[{column:'note',value:{kind:'text',value:'新值'}}]}],source);expect(document.locator).toMatchObject({kind:'primary-key',columns:['a','b'],collations:['NOCASE','BINARY']});const restored=await restoreDraft(app,profile,document),plan=await preview(app,restored.page,restored.changes);expect((await apply(app,plan).result).outcome).toBe('committed');expect(disk(profile,db=>db.prepare('SELECT * FROM composite').all())).toEqual([{a:'A',b:'1',note:'新值'}]);
+  });
+  it('原REAL无穷及TEXT／空BLOB保真，保存后恢复仍只修改明确字段',async()=>{
+    const profile=fixture();disk(profile,db=>db.exec("UPDATE subject SET value=1e999,payload=x'' WHERE id=1"));const{app}=runtime(profile),document=await captureDraft(app,profile,[update(0,'只改note')]);expect(document.changes[0]).toMatchObject({before:[{kind:'integer',value:'1'},{kind:'text',value:'原甲'},{kind:'real',value:'Infinity'},{kind:'blob',value:''},{kind:'integer',value:'2'}]});const restored=await restoreDraft(app,profile,decodeSqliteTableDraft(encodeSqliteTableDraft(document))),plan=await preview(app,restored.page,restored.changes);expect((await apply(app,plan).result).outcome).toBe('committed');expect(disk(profile,db=>db.prepare("SELECT note,typeof(value) AS kind,CAST(value AS TEXT) AS exact,length(payload) AS bytes FROM subject WHERE id=1").get())).toEqual({note:'只改note',kind:'real',exact:'Inf',bytes:0});
+  });
+  it('仅新增草稿可从零原行恢复并省略DEFAULT，恢复阶段零写，确认后才插入',async()=>{
+    const profile=fixture(),{app}=runtime(profile),document=await captureDraft(app,profile,[{kind:'insert',values:[]}]);const baseline=notes(profile),restored=await restoreDraft(app,profile,document);expect(restored.page.result.rows).toEqual([]);expect(restored.changes).toEqual([{kind:'insert',values:[]}]);expect(notes(profile)).toEqual(baseline);const plan=await preview(app,restored.page,restored.changes);expect((await apply(app,plan).result).outcome).toBe('committed');expect(notes(profile)).toEqual([...baseline,{id:3,note:'默认'}]);
+  });
+  it.each(['schema','locator','readonly','main-owner'] as const)('%s变化整份拒绝，不发布旧预览或更换原值',async kind=>{
+    const profile=fixture(),{app}=runtime(profile),document=await captureDraft(app,profile,[update(0,'候选')]);if(kind==='schema')disk(profile,db=>db.exec('CREATE INDEX another ON subject(note)'));if(kind==='locator')document.locator.rowid='_rowid_';if(kind==='readonly')profile.sqlite.readOnly=true;
+    await expect(restoreDraft(app,profile,document,()=>{if(kind==='main-owner')throw Error('原Main文档已失效');})).rejects.toThrow();expect(notes(profile)).toEqual([{id:1,note:'原甲'},{id:2,note:'原乙'}]);
+  });
 });
