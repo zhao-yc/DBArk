@@ -5,12 +5,13 @@ import { expect, it, vi } from 'vitest';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
 import { SqliteTableEditor } from '../../src/renderer/sqliteTableEditor';
 import { prepareSqliteFill, sqliteFillSourceCurrent, type SqliteFillField } from '../../src/renderer/sqliteTableFill';
+import { sqliteRecordBatchZh as batchText } from '../../src/renderer/locales/sqliteRecordBatch.zh-CN';
 import { sqliteTableFillZh as fillText } from '../../src/renderer/locales/sqliteTableFill.zh-CN';
 
 /** 真实父处理器、来源签发与editor；DOM、store、Grid通知及React发布为RAM，不冒充窗口。 */
 function fixture() {
   const file = ts.createSourceFile('parent.tsx', readFileSync(new URL('../../src/renderer/components/SqliteTableTab.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const names = ['selectCheckedRows', 'checkedRowsCurrent', 'openFill', 'fillCurrent', 'stageFill', 'closeFill'], methods: string[] = [];
+  const names = ['selectCheckedRows', 'checkedRowsCurrent', 'openFill', 'fillCurrent', 'stageFill', 'stageRecordBatch', 'closeFill'], methods: string[] = [];
   function walk(node: ts.Node) { if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')) methods.push(node.getText(file)); ts.forEachChild(node, walk); }
   walk(file); expect(methods).toHaveLength(names.length);
   const columns = [{ name: 'id', declaredType: 'INTEGER' }, { name: 'note', declaredType: 'TEXT' }, { name: 'exact', declaredType: 'INTEGER' }, { name: 'g', declaredType: 'TEXT', generated: true }];
@@ -27,11 +28,11 @@ function fixture() {
     editActionCurrent: () => editorRef.current === editor && editor.canEdit(), available: () => !fillRef.current && !dialogs.owners.length,
     inputRef: { current: null }, previewRef: { current: null }, pasteRef: { current: null }, rangeRef: { current: null }, importRef: { current: null }, fullExportRef: { current: null }, findRef: { current: null }, exportData: null,
     document: { querySelectorAll: () => dialogs.owners.map(owner => ({ querySelectorAll: () => Array.from({ length: dialogs.count }, () => ({ getAttribute: () => owner })) })) },
-    useWorkspace: { getState: () => workspace }, uid: () => 'fill-' + ++sequence, prepareSqliteFill, sqliteFillSourceCurrent, fillText, closeFind: vi.fn(), setValidation: vi.fn(), setFillOpen: vi.fn(), errorMessage: (reason: Error) => reason.message });
+    useWorkspace: { getState: () => workspace }, uid: () => 'fill-' + ++sequence, prepareSqliteFill, sqliteFillSourceCurrent, fillText, batchText, closeFind: vi.fn(), setValidation: vi.fn(), setFillOpen: vi.fn(), errorMessage: (reason: Error) => reason.message });
   context.setCheckedRows = vi.fn((owner: unknown) => { context.checkedRows = owner; });
   runInContext(ts.transpileModule(methods.join('\n') + '\nglobalThis.api={' + names.join(',') + '};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   function choose(indices = [0, 1]) { context.editRows = editor.view.rows; captureLive.value = true; const capture = Object.freeze({ page, rows: editor.view.rows, selected: Object.freeze(indices.map(index => editor.view.rows[index])), current: () => captureLive.value }); context.api.selectCheckedRows(capture); expect(checkedRef.current?.capture).toBe(capture); return capture; }
-  function open() { choose(); context.api.openFill(); const ticket = fillRef.current; expect(ticket).toBeTruthy(); dialogs.owners = [ticket.id]; expect(context.api.fillCurrent(ticket)).toBe(true); return ticket; }
+  function open(mode: 'fill' | 'records' = 'fill') { choose(); context.api.openFill(mode); const ticket = fillRef.current; expect(ticket).toBeTruthy(); dialogs.owners = [ticket.id]; expect(context.api.fillCurrent(ticket)).toBe(true); return ticket; }
   return { context, api: context.api, editor, editorRef, page, rows, alive, active, dialogs, workspace, checkedRef, fillRef, captureLive, preview, apply, release, changed, choose, open, dispose: () => editor.dispose() };
 }
 const fields: readonly SqliteFillField[] = [{ column: 1, value: { kind: 'text', value: '新\0🚢' } }, { column: 2, value: { kind: 'integer', value: '-9223372036854775808' } }];
@@ -73,4 +74,27 @@ it('旧保存／关闭回调不能清后来窗口或写新页同ID记录', () =>
 });
 it.each(['inputRef', 'previewRef', 'pasteRef', 'rangeRef', 'importRef', 'fullExportRef'] as const)('%s占用时不打开填充输入', field => {
   const f = fixture(); f.choose(); f.context[field].current = {}; f.api.openFill(); expect(f.fillRef.current).toBeNull(); expect(f.editor.dirty).toBe(false); f.dispose();
+});
+
+/** 批量表单父入口沿用准确勾选能力；不同模式不能互相借票据。 */
+it('records父入口一次发布不同字段、清选择且只形成一步撤销，取消不发SQL', () => {
+ const f=fixture(),ticket=f.open('records');f.captureLive.value=false;
+ const patches=[{rowId:f.rows[0].id,fields:[{column:1,value:{kind:'text',value:'第一独立'}}]},{rowId:f.rows[1].id,fields:[{column:2,value:{kind:'integer',value:'9007199254740993'}}]}];
+ expect(f.api.stageFill(ticket,fields)).toBe(false);expect(f.api.stageRecordBatch(ticket,patches)).toBe(true);expect(f.editor.changes).toHaveLength(2);expect(f.editor.view.rows[0].values[1]).toEqual(patches[0].fields[0].value);expect(f.editor.view.rows[1].values[2]).toEqual(patches[1].fields[0].value);expect(f.editor.view.rows[2]).toBe(f.rows[2]);expect(f.checkedRef.current).toBeUndefined();expect(f.fillRef.current).toBeNull();expect(f.workspace.notify).toHaveBeenCalledWith(batchText.changed(2));
+ const after=f.editor.view.rows;f.dialogs.owners=[];f.editor.undo();expect(f.editor.view.rows).toBe(f.rows);expect(f.editor.view.undo).toBe(false);f.editor.redo();expect(f.editor.view.rows).toBe(after);expect(f.preview).not.toHaveBeenCalled();expect(f.apply).not.toHaveBeenCalled();f.dispose();
+});
+it('records取消／noop均不制造历史；fill模式票据不能提交records',()=>{
+ const f=fixture(),fill=f.open();expect(f.api.stageRecordBatch(fill,[])).toBe(false);f.api.closeFill(fill);f.dialogs.owners=[];const canceled=f.open('records');f.api.closeFill(canceled);expect(f.editor.view.rows).toBe(f.rows);expect(f.editor.view.undo).toBe(false);f.dialogs.owners=[];const noop=f.open('records');expect(f.api.stageRecordBatch(noop,[])).toBe(true);expect(f.editor.view.rows).toBe(f.rows);expect(f.editor.view.undo).toBe(false);expect(f.preview).not.toHaveBeenCalled();expect(f.apply).not.toHaveBeenCalled();f.dispose();
+});
+it('records后组非法拒绝整批且原票据可修正重试',()=>{
+ const f=fixture(),ticket=f.open('records'),good={rowId:f.rows[0].id,fields:[{column:1,value:{kind:'text',value:'第一'}}]};
+ expect(()=>f.api.stageRecordBatch(ticket,[good,{rowId:f.rows[1].id,fields:[{column:3,value:{kind:'text',value:'生成列'}}]}])).toThrow();expect(f.editor.view.rows).toBe(f.rows);expect(f.fillRef.current).toBe(ticket);expect(f.editor.view.undo).toBe(false);expect(f.api.stageRecordBatch(ticket,[good])).toBe(true);f.dispose();
+});
+it.each(['inactive','busy','metadata','foreign-modal','two-modals','duplicate-marker','detached']as const)('records %s观察失效后不可ABA复活，保留原草稿',change=>{
+ const f=fixture(),ticket=f.open('records'),name=f.page.columns[0].name;
+ if(change==='inactive')f.workspace.settings.activeTabId='other';if(change==='busy')f.workspace.activeJobs.t=true;if(change==='metadata')f.page.columns[0].name='变更';if(change==='foreign-modal')f.dialogs.owners=['other'];if(change==='two-modals')f.dialogs.owners.push('other');if(change==='duplicate-marker')f.dialogs.count=2;if(change==='detached')f.dialogs.owners=[];
+ expect(f.api.fillCurrent(ticket)).toBe(false);f.workspace.settings.activeTabId='t';delete f.workspace.activeJobs.t;f.page.columns[0].name=name;f.dialogs.owners=[ticket.id];f.dialogs.count=1;expect(f.api.stageRecordBatch(ticket,[{rowId:f.rows[0].id,fields:[{column:1,value:{kind:'text',value:'旧'}}]}])).toBe(false);expect(f.editor.view.rows).toBe(f.rows);expect(f.preview).not.toHaveBeenCalled();expect(f.apply).not.toHaveBeenCalled();f.api.closeFill(ticket);f.dispose();
+});
+it('records旧关闭和保存不接管后来窗口，原选择不是当前全页',()=>{
+ const f=fixture(),old=f.open('records');f.api.closeFill(old);f.dialogs.owners=[];f.choose([2]);f.api.openFill('records');const next=f.fillRef.current;f.dialogs.owners=[next.id];f.api.closeFill(old);expect(f.fillRef.current).toBe(next);expect(f.api.stageRecordBatch(old,[])).toBe(false);expect(()=>f.api.stageRecordBatch(next,[{rowId:f.rows[0].id,fields:[]}])).toThrow();expect(f.editor.view.rows).toBe(f.rows);expect(f.api.stageRecordBatch(next,[{rowId:f.rows[2].id,fields:[{column:1,value:{kind:'text',value:'仅第三'}}]}])).toBe(true);expect(f.editor.view.rows[0]).toBe(f.rows[0]);f.dispose();
 });

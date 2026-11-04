@@ -4,6 +4,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { sqliteTableEditZh as editText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { sqliteTableClipboardZh as clipboardText } from '../../src/renderer/locales/sqliteTableClipboard.zh-CN';
+import { sqliteEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/sqliteEditWorkspace.zh-CN';
 import { sqliteTableFillZh as fillText } from '../../src/renderer/locales/sqliteTableFill.zh-CN';
 import { tableToolbarZh } from '../../src/renderer/locales/tableToolbar.zh-CN';
 
@@ -95,7 +96,7 @@ test('真实勾选typed多字段填充、混合新增草稿单步undo/redo、Mai
   const stageFill = async (insert: number, update: number) => { await step(() => fillModal().getByRole('button', { name: fillText.save, exact: true }).click()); await step(() => expect(fillModal()).toBeHidden()); await counts(insert, update); };
   const assertNoFill = async () => { const before = await step(audit); await step(() => table().getByRole('button', { name: '更多', exact: true }).click()); await step(() => expect(page.locator('.action-menu-panel:not(.action-menu-submenu)').getByRole('menuitem', { name: tableToolbarZh.editing, exact: true })).toHaveCount(0)); await step(() => expect(page.locator('.action-menu-panel').getByRole('menuitem', { name: fillText.entry, exact: true })).toHaveCount(0)); await step(() => page.keyboard.press('Escape')); await step(() => expect(fillModal()).toHaveCount(0)); await step(() => expect(table().getByRole('button', { name: editText.preview, exact: true })).toHaveCount(0)); const after = await step(audit); for (const command of ['sqlite.tablePage', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply']) expect(operations(after, command)).toHaveLength(operations(before, command).length); return { before, after }; };
   /** 明确放弃只回答本例confirm，原Main回答证据和全部草稿一起核验。 */
-  const discard = async () => { await step(() => runtime.answerDialogs([0], application)); const waiting = page.waitForEvent('dialog'); const [prompt] = await Promise.all([waiting, step(() => table().getByRole('button', { name: editText.discard, exact: true }).click())]); check(); expect(prompt.type()).toBe('confirm'); expect(prompt.message()).toBe(editText.confirmDiscard); await counts(); };
+  const discard = async () => { await step(() => runtime.answerDialogs([0], application)); const waiting = page.waitForEvent('dialog'); const [prompt] = await Promise.all([waiting, step(() => table().getByRole('button', { name: editText.discard, exact: true }).click())]); check(); expect(prompt.type()).toBe('confirm'); expect(prompt.message()).toBe(workspaceText.confirmDiscard); await counts(); };
   const originalA = 'FILL_ORIGINAL_A_中文🚢', originalB = 'FILL_ORIGINAL_B_空文本', localNew = 'FILL_LOCAL_NEW_原草稿', canceledText = 'FILL_CANCELED_不得暂存', filledText = 'FILL_NATIVE_中文🚢\0JSON {"航船":"🚢"}', conflictText = 'FILL_CONFLICT_本地未入库', observerMemo = 'FILL_OBSERVER_MEMO_保留外部修改';
   const fillFields = [{ column: 'label', value: { kind: 'text', value: filledText } }, { column: 'exact', value: { kind: 'integer', value: '9007199254740993' } }, { column: 'real_num', value: { kind: 'real', value: '0.5' } }, { column: 'payload', value: { kind: 'blob', value: '00aaff' } }, { column: 'nullable', value: { kind: 'null' } }];
   try {

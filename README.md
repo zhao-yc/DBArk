@@ -1,5 +1,7 @@
 # tabrelio
 
+SQLite 高频编辑新增[勾选记录逐条批量表单](docs/development/sqlite-record-batch-20261105.md)：同一窗口为各勾选记录填写不同值，复用表单／JSON／树；切换只保留输入，取消整组不变，全部暂存形成一步撤销，最终仍须原预览和明确提交。当前页范围及实际验证见专项记录，暂不发布。
+
 SQLite 高频查询新增[从已应用筛选生成 SELECT](docs/development/sqlite-filtered-select-20261101.md)：表／视图及只读连接、字段选择与顺序、原typed条件与多列排序，默认不带当前页分页，可明确LIMIT；只开原连接独立草稿，不自动执行且保留父数据修改。验证与未支持名称边界见专项记录，暂不发布。
 
 SQLite 高频编辑新增[勾选记录多字段填充](docs/development/sqlite-table-fill-20261101.md)：当前页准确勾选、多字段显式typed输入、单次原子暂存及一步撤销；生成列排除，DEFAULT仅全新增草稿可选，最终仍须原SQL预览和集中提交。验证与未验范围见专项记录，暂不发布。

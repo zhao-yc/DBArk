@@ -1,3 +1,4 @@
+import type { SqliteRecordPatch } from './sqliteRecordBatch';
 import type { SqliteEditBatch } from './sqliteEditWorkspace';
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteEditValueSchema, sqliteTableEditPreviewSchema, sqliteTableEditLimits, type SqliteOriginalValue, type SqliteTableChange, type SqliteTableEditPreview, type SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
@@ -267,6 +268,38 @@ export class SqliteTableEditor {
     current(); if (!changedCells) return 0;
     const changes = sqliteDraftChanges(this.page, next); if (changes.length) sqliteTableEditPreviewSchema.parse({ snapshotId, taskId: 'sqlite-fill-validation', changes });
     current(); this.replace(next); return changedCells;
+  }
+  /** 批量表单按准确选中行分别赋值；全组验证及最终草稿预算通过后只发布一次，可一步撤销。 */
+  editRecords(source: SqliteFillSource, patches: readonly SqliteRecordPatch[]): number {
+    if (!this.canEdit() || this.page.edit?.kind !== 'editable' || !sqliteFillSourceCurrent(source, this.page, this.rows)) throw Error(text.stale);
+    const original = this.rows, generation = this.generation, edit = this.page.edit, input = this.input, raw = appendArray(patches, 0, 1500), members = new Map(source.selected.map(row => [row.id, row])), seen = new Set<string>();
+    const current = () => { if (!this.canEdit() || this.generation !== generation || this.input !== input || this.page.edit !== edit || this.rows !== original || !sqliteFillSourceCurrent(source, this.page, original)) throw Error(text.stale); };
+    const prepared: { row: SqliteDraftRow; fields: SqliteFillField[] }[] = []; let cells = 0, units = 0;
+    for (const item of raw) {
+      if (!item || typeof item !== 'object' || Array.isArray(item) || ![Object.prototype, null].includes(Object.getPrototypeOf(item))) throw Error(text.invalid);
+      const keys = Reflect.ownKeys(item), rowId = Object.getOwnPropertyDescriptor(item, 'rowId'), fields = Object.getOwnPropertyDescriptor(item, 'fields');
+      if (keys.length !== 2 || !keys.includes('rowId') || !keys.includes('fields') || !rowId?.enumerable || !('value' in rowId) || !fields?.enumerable || !('value' in fields) || typeof rowId.value !== 'string' || seen.has(rowId.value)) throw Error(text.invalid);
+      const row = members.get(rowId.value); if (!row || row.deleted) throw Error(text.invalid); seen.add(row.id);
+      const entries = appendArray(fields.value, 0, 1024), columns = new Set<number>(), copied: SqliteFillField[] = []; if ((cells += entries.length) > sqliteTableEditLimits.cells) throw Error(text.invalid);
+      for (const entry of entries) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry) || ![Object.prototype, null].includes(Object.getPrototypeOf(entry))) throw Error(text.invalid);
+        const names = Reflect.ownKeys(entry), column = Object.getOwnPropertyDescriptor(entry, 'column'), value = Object.getOwnPropertyDescriptor(entry, 'value');
+        if (names.length !== 2 || !names.includes('column') || !names.includes('value') || !column?.enumerable || !('value' in column) || !value?.enumerable || !('value' in value) || !Number.isInteger(column.value) || column.value < 0 || column.value >= edit.columns.length || columns.has(column.value) || edit.columns[column.value].generated || value.value === undefined && row.index !== undefined) throw Error(text.invalid);
+        columns.add(column.value); const plain = value.value === undefined ? undefined : appendValue(value.value);
+        units += edit.columns[column.value].name.length + (typeof plain?.value === 'string' ? plain.value.length : 0); if (units > sqliteTableEditLimits.inputUnits) throw Error(text.invalid);
+        copied.push({ column: column.value, value: plain === undefined ? undefined : sqliteEditValueSchema.parse(plain) });
+      }
+      prepared.push({ row, fields: copied });
+    }
+    current(); const next = [...original]; let changed = 0;
+    for (const group of prepared) for (const field of group.fields) {
+      if (sameDraftValue(group.row.values[field.column], field.value)) continue;
+      const index = original.indexOf(group.row); if (next[index] === group.row) next[index] = { ...group.row, values: [...group.row.values] };
+      const baseline = group.row.index === undefined ? undefined : edit.rows[group.row.index][field.column];
+      next[index].values[field.column] = sameDraftValue(baseline, field.value) ? baseline === undefined ? undefined : structuredClone(baseline) : field.value === undefined ? undefined : { ...field.value }; changed++;
+    }
+    const changes = sqliteDraftChanges(this.page, next); if (changes.length) sqliteTableEditPreviewSchema.parse({ snapshotId: edit.snapshotId, taskId: 'sqlite-record-batch-validation', changes });
+    current(); if (changed) this.replace(next); return changed;
   }
   undo(): void { if (!this.canEdit() || !this.past.length) return; this.invalidatePreview(); this.future.push(this.rows); this.rows = this.past.pop()!; this.emit(); }
   redo(): void { if (!this.canEdit() || !this.future.length) return; this.invalidatePreview(); this.past.push(this.rows); this.rows = this.future.pop()!; this.emit(); }
