@@ -20,7 +20,7 @@ beforeAll(async () => {
   };
   ({ createRoot } = await import('react-dom/client')); ({ SqliteTableValueDialog: ValueDialog, SqliteTablePreviewDialog: PreviewDialog } = await import('../../src/renderer/components/SqliteTableEditDialog'));
 });
-afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } document.body.textContent = ''; vi.restoreAllMocks(); });
+afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } delete (window as any).dbark; document.body.textContent = ''; vi.restoreAllMocks(); });
 afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
 function page(name: string): SqliteTablePage { return { schemaKey: 'a'.repeat(64), target: { connectionId: 'sqlite', database: 'main', table: name, kind: 'table' }, columns: [{ name: 'mixed', declaredType: '' }], offset: 0, limit: 10, hasMore: false, result: { columns: [{ key: 'c0', name: 'mixed', type: 'SQLITE' }], rows: [{ c0: name }], statement: '', elapsedMs: 0, truncated: false }, edit: { kind: 'editable', snapshotId: name, expiresAt: new Date(1800000).toISOString(), columns: [{ name: 'mixed', declaredType: '', generated: false, nullable: true, hasDefault: true }], rows: [[{ kind: 'text', value: name }]], locator: { kind: 'rowid', columns: [] } } }; }
 function row(value: string): SqliteDraftRow { return { id: 'original-0', index: 0, deleted: false, values: [{ kind: 'text', value }] }; }
@@ -113,4 +113,65 @@ it('跨页按钮明确区别页内暂存，父页拒绝跨页时保留真实输�
  await act(async()=>callback(node(text.value('mixed'),'textarea'),'onChange')({target:{value:'未暂存原文'}}));
  expect(document.body.textContent).not.toContain(text.saveNextRecord);await act(async()=>callback(node(text.nextPageRecord))());
  expect(move).toHaveBeenCalledExactlyOnceWith(1,[{kind:'text',value:'未暂存原文'}]);expect(node(text.value('mixed'),'textarea').value).toBe('未暂存原文');expect(document.body.textContent).toContain(text.recordPageDirty);expect(save).not.toHaveBeenCalled();expect(close).not.toHaveBeenCalled();
+});
+
+/** 本例文件端口仅返回RAM字节；表单、查看器、旧回调守卫和最终SQLite合同真实运行。 */
+async function binaryFieldMount(hex = '00ff', generated = false) {
+  const original = { id: 'original-0', index: 0, deleted: false, values: [{ kind: 'blob' as const, value: hex }] }, source = page('字节原表');
+  if (source.edit?.kind !== 'editable') throw Error('缺少合成编辑快照');
+  source.edit.columns = [{ name: 'payload', declaredType: 'BLOB', generated, nullable: true, hasDefault: false }]; source.edit.rows = [original.values];
+  let current = true; const save = vi.fn((_values: unknown[]) => true), close = vi.fn(), invoke = vi.fn(async (_command: string, _input?: unknown): Promise<any> => null);
+  (window as any).dbark = { invoke };
+  await mount(() => <ValueDialog ticket={{}} page={source} row={original} current={() => current} onSave={save} onClose={close}/>);
+  const fileButton = (label: string) => { const found = document.querySelectorAll('button').find(button => button.textContent === label); expect(found, label).toBeDefined(); expect(found!.disabled, label + '应在首次提交后可用').toBe(false); return found!; };
+  return { original, save, close, invoke, fileButton, invalidate: () => { current = false; } };
+}
+
+describe('SQLite原表单完整BLOB查看和文件缓冲', () => {
+  it('载入只更新准确字段缓冲，保留未触碰原行；取消不暂存、不预览或提交', async () => {
+    const f = await binaryFieldMount(); f.invoke.mockResolvedValue({ base64: 'AP8A', bytes: 3, name: '本例.bin' });
+    await act(async () => callback(f.fileButton('从文件载入字节'))());
+    expect(node(text.value('payload'), 'textarea').value).toBe('0x00ff00'); expect(f.original.values[0].value).toBe('00ff'); expect(f.save).not.toHaveBeenCalled();
+    await act(async () => callback(node(text.cancelInput))()); expect(f.close).toHaveBeenCalledOnce(); expect(f.save).not.toHaveBeenCalled();
+    expect(f.invoke.mock.calls.map(call => call[0])).toEqual(['binaryCellFiles.open']);
+  });
+  it.each(['', 'AP8A'])('文件%s保存到原集中草稿合同，零字节不变NULL，前缀不写入SQLite', async base64 => {
+    const f = await binaryFieldMount(); f.invoke.mockResolvedValue({ base64, bytes: Buffer.from(base64, 'base64').length, name: '本例.bin' });
+    await act(async () => callback(f.fileButton('从文件载入字节'))()); await act(async () => callback(node(text.saveInput))());
+    expect(f.save).toHaveBeenCalledExactlyOnceWith([{ kind: 'blob', value: Buffer.from(base64, 'base64').toString('hex') }]); expect(f.original.values[0].value).toBe('00ff');
+  });
+  it('32769字节载入整次拒绝，原缓冲不变；32768完整字节可暂存而不截断', async () => {
+    const f = await binaryFieldMount(), oversized = Buffer.alloc(32769, 255);
+    f.invoke.mockResolvedValue({ base64: oversized.toString('base64'), bytes: oversized.length, name: '超限.bin' }); await act(async () => callback(f.fileButton('从文件载入字节'))());
+    expect(document.body.textContent).toContain(text.blobEditLimit); expect(node(text.value('payload'), 'textarea').value).toBe('00ff'); expect(f.save).not.toHaveBeenCalled();
+    const maximum = oversized.subarray(0, 32768); f.invoke.mockResolvedValue({ base64: maximum.toString('base64'), bytes: maximum.length, name: '边界.bin' }); await act(async () => callback(f.fileButton('从文件载入字节'))());
+    await act(async () => callback(node(text.saveInput))()); expect(f.save.mock.calls[0][0][0]).toEqual({ kind: 'blob', value: maximum.toString('hex') });
+  });
+  it('原有大BLOB和生成列只读分页仍另存全部字节，无载入或误暂存片段', async () => {
+    const hex = '00ff'.repeat(17000), f = await binaryFieldMount(hex, true);
+    expect(document.querySelectorAll('button').some(button => button.textContent === '从文件载入字节')).toBe(false);
+    f.invoke.mockResolvedValue({ bytes: hex.length / 2, name: '完整.bin' }); await act(async () => callback(f.fileButton('原字节另存为'))());
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith('binaryCellFiles.save', { base64: Buffer.from(hex, 'hex').toString('base64'), suggestedName: 'binary-cell.bin' });
+    expect(document.querySelectorAll('textarea').find(node => node.getAttribute('aria-label') === '完整二进制 Hex')!.value.length).toBeLessThan(hex.length);
+    await act(async () => callback(node(text.saveInput))()); expect(f.save).toHaveBeenCalledExactlyOnceWith([{ kind: 'blob', value: hex }]);
+  });
+  it.each(['close', 'source', 'field'] as const)('文件等待期间%s后，迟到回包不能暂存或污染原行', async mode => {
+    const f = await binaryFieldMount(); let resolve!: (value: unknown) => void; f.invoke.mockReturnValue(new Promise(yes => { resolve = yes; }));
+    await act(async () => callback(f.fileButton('从文件载入字节'))());
+    if (mode === 'close') await act(async () => callback(node(text.cancelInput))());
+    if (mode === 'source') f.invalidate();
+    if (mode === 'field') await act(async () => callback(node(text.type('payload'), 'select'), 'onChange')({ target: { value: 'text' } }));
+    await act(async () => resolve({ base64: '/w==', bytes: 1, name: '迟到.bin' })); expect(f.save).not.toHaveBeenCalled(); expect(f.original.values[0].value).toBe('00ff'); expect(f.invoke).toHaveBeenCalledTimes(1);
+  });
+  it('非法Hex仍保留缓冲供修正，NULL必须显式选择', async () => {
+    const f = await binaryFieldMount(); await act(async () => callback(node(text.value('payload'), 'textarea'), 'onChange')({ target: { value: '0xGG' }, currentTarget: node(text.value('payload'), 'textarea') }));
+    expect(node(text.value('payload'), 'textarea').value).toBe('0xGG'); await act(async () => callback(node(text.saveInput))()); expect(f.save).not.toHaveBeenCalled();
+    await act(async () => callback(node(text.type('payload'), 'select'), 'onChange')({ target: { value: 'null' } })); await act(async () => callback(node(text.saveInput))()); expect(f.save).toHaveBeenCalledExactlyOnceWith([{ kind: 'null' }]);
+  });
+});
+
+it('超过完整查看预算的已有BLOB只显示明确错误，不误报DEFAULT或提供截断保存', async () => {
+  const f = await binaryFieldMount('00'.repeat(2 * 1024 * 1024 + 1));
+  expect(document.body.textContent).toContain('2 MiB'); expect(document.body.textContent).not.toContain('DEFAULT（尚未填写）');
+  expect(document.querySelectorAll('button').some(button => ['从文件载入字节', '原字节另存为'].includes(button.textContent))).toBe(false); expect(f.invoke).not.toHaveBeenCalled(); expect(f.save).not.toHaveBeenCalled();
 });

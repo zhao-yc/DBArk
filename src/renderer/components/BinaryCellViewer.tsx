@@ -10,9 +10,9 @@ import { ErrorBox, UsageHelp } from './ui';
 import { useWorkspace } from '../store';
 import '../binaryCell.css';
 
-interface Props { value: CellValue | undefined; hexInput?: string; onHexChange?(value: string): void; label?: string; reason?: string; focus?: boolean; source?: readonly unknown[]; isCurrent?(): boolean; }
+interface Props { value: CellValue | undefined; hexInput?: string; onHexChange?(value: string): void; label?: string; reason?: string; focus?: boolean; source?: readonly unknown[]; isCurrent?(): boolean; isAvailable?(): boolean; }
 /** 一份有界完整值提供三种展示；只有明确的 Hex 输入回调可进入既有记录缓冲。 */
-export function BinaryCellViewer({ value, hexInput, onHexChange, label = text.hexLabel, reason = '', focus = false, source = [], isCurrent }: Props) {
+export function BinaryCellViewer({ value, hexInput, onHexChange, label = text.hexLabel, reason = '', focus = false, source = [], isCurrent, isAvailable }: Props) {
   const host = useRef<HTMLElement>(null), alive = useRef(true), operation = useRef<object | null>(null);
   const [fileBusy, setFileBusy] = useState(false), [fileNotice, setFileNotice] = useState('');
   const identity = [...source, hexInput === undefined ? value : hexInput, reason, label, !!onHexChange];
@@ -34,7 +34,8 @@ export function BinaryCellViewer({ value, hexInput, onHexChange, label = text.he
   function fileCurrent(requireDom = true): boolean {
     if (!alive.current || lease.current.revision !== revision || !isCurrent) return false;
     try {
-      if (!isCurrent()) return false;
+      // 显示可用性不消费父组件尚未提交的事件票据；真实文件动作始终复核isCurrent。
+      if (!(requireDom || !isAvailable ? isCurrent : isAvailable)()) return false;
       if (!requireDom) return true;
       const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')];
       return !dialogs.length || dialogs.length === 1 && !!host.current && dialogs[0].contains(host.current);

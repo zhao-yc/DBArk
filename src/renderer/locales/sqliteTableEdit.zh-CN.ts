@@ -26,6 +26,7 @@ export const sqliteTableEditZh = {
   stopped: '原 SQLite 预览任务已停止，草稿保留；提交结果仍以原操作真实回执为准。',
   readonly: '当前连接或对象只能只读浏览。', noDraft: '没有 SQLite 本地修改', invalid: 'SQLite 编辑快照或提交回执无效，未授予写入能力。',
   kinds: { text: '文本 / JSON 文本', integer: '整数（64 位）', real: '实数（有限）', blob: '二进制（十六进制）', null: 'NULL' },
+  blobEditLimit: 'SQLite完整BLOB编辑最多32768字节；较大原值只读查看或另存，不暂存显示片段。',
   type: (name: string) => 'SQLite 字段 ' + name + ' 类型', value: (name: string) => 'SQLite 字段 ' + name + ' 值', include: (name: string) => '写入 SQLite 字段 ' + name,
   select: (row: number) => '选择 SQLite 第 ' + row + ' 行',
   removeSelected: '删除 SQLite 勾选记录',

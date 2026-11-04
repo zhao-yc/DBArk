@@ -88,3 +88,9 @@ describe('只读ResultsGrid原结果租约',()=>{
   it('本模态撤销普通选择后仍可另存同一完整原值，不恢复载入能力',async()=>{const f=await grid();f.ordinary=false;await act(async()=>root!.render(f.render()));port.invoke.mockResolvedValue({bytes:3,name:'结果.bin'});expect(doc.querySelectorAll('button').some(node=>node.textContent===text.load)).toBe(false);await click(button(text.save));expect(port.invoke).toHaveBeenCalledWith('binaryCellFiles.save',{base64:'AP+A',suggestedName:'binary-cell.bin'});});
   it.each(['tab','execution','result'] as const)('%s A→B→A撤销旧另存回执，不重放或误报新结果',async kind=>{const f=await grid(),pending=deferred<any>();port.invoke.mockReturnValue(pending.promise);await click(button(text.save));await act(async()=>{if(kind==='tab'){store.setState(state=>({settings:{...state.settings,activeTabId:'other'}}));store.setState(state=>({settings:{...state.settings,activeTabId:'q'}}));}else if(kind==='execution'){store.setState({activeJobs:{q:true}});store.setState({activeJobs:{}});}});if(kind==='result'){f.identity=['result2'];await act(async()=>root!.render(f.render()));f.identity=['result1'];await act(async()=>root!.render(f.render()));}await act(async()=>pending.resolve({bytes:3,name:'旧结果.bin'}));expect(doc.body.textContent).not.toContain('已另存 旧结果.bin');expect(port.invoke).toHaveBeenCalledTimes(1);});
 });
+
+it('显示可用性与事件票据分开：即使按钮可见可用，过期票据仍不发送任何文件命令', async () => {
+  await mount(<Viewer value={binary()} hexInput="00ff" source={[source]} isAvailable={() => true} isCurrent={() => false} onHexChange={vi.fn()}/>);
+  expect(button(text.load).disabled).toBe(false); expect(button(text.save).disabled).toBe(false);
+  await click(button(text.load)); await click(button(text.save)); expect(port.invoke).not.toHaveBeenCalled();
+});
