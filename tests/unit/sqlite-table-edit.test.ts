@@ -241,3 +241,20 @@ describe('SQLite表格编辑真实快照、参数预览与整批提交事实', (
     expect(await operation.result).toMatchObject({ outcome: 'committed', fact: { commitAcknowledged: true } }); await Promise.all([cancel, closing, forced]); expect(original.kills).toBe(0); expect(events.at(-1)?.status).toBe('completed'); expect(notes(profile)[0]).toEqual({ id: 1, note: '边界提交' });
   });
 });
+
+it('关联编辑只签发匹配行快照，原关联内修改仍经正式预览／apply；父数据删除后旧行拒写且整批回滚', async () => {
+  const profile = fixture(); disk(profile, db => db.exec("CREATE TABLE rp(id INTEGER PRIMARY KEY); INSERT INTO rp VALUES(1),(2); CREATE TABLE rc(id INTEGER PRIMARY KEY,p TEXT REFERENCES rp(id),note TEXT); INSERT INTO rc VALUES(1,'001','关联原值'),(2,'2','控制')"));
+  const { app } = runtime(profile), parent = await app.request('sqlite.tablePage', { connectionId: profile.id, database: 'main', table: 'rp', taskId: '关联父页', offset: 0, limit: 50, mode: 'and', filters: [], sort: [] }) as SqliteTablePage;
+  const catalog = await app.request('sqlite.incomingPage', { connectionId: profile.id, database: 'main', table: 'rp', schemaKey: parent.schemaKey, taskId: '00000000-0000-4000-8000-000000000001', incoming: 'catalog' }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput;
+  const entry = catalog.references[0], relation = { parentTable: 'rp', parentSchemaKey: parent.schemaKey, childSchemaKey: entry.schemaKey, foreignKey: 0, parentColumns: ['id'], childColumns: ['p'], values: [{ kind: 'integer' as const, value: '1' }] };
+  const request = { connectionId: profile.id, database: 'main', table: 'rc', taskId: '关联编辑页', offset: 0, limit: 50, mode: 'and', filters: [], sort: [], editing: true, relation };
+  const page = await app.request('sqlite.tablePage', request) as SqliteTablePage; expect(page.result.rows.map(row => row.c0)).toEqual(['1']); if (page.edit?.kind !== 'editable') throw Error('必须取得真实关联快照');
+  const preview = await app.request('sqlite.tableEdit.preview', { snapshotId: page.edit.snapshotId, taskId: '关联预览', changes: [{ kind: 'update', row: 0, values: [{ column: 'note', value: { kind: 'text', value: '关联已改' } }] }] }) as SqliteTableEditPreview;
+  const outcome = await apply(app, preview).result; expect(outcome.outcome).toBe('committed');
+  const again = await app.request('sqlite.tablePage', { ...request, taskId: '关联新快照' }) as SqliteTablePage; if (again.edit?.kind !== 'editable') throw Error('必须取得真实快照');
+  const second = await app.request('sqlite.tableEdit.preview', { snapshotId: again.edit.snapshotId, taskId: '父删除前预览', changes: [{ kind: 'update', row: 0, values: [{ column: 'note', value: { kind: 'text', value: '不得写入' } }] }] }) as SqliteTableEditPreview;
+  disk(profile, db => db.exec('PRAGMA foreign_keys=OFF; DELETE FROM rp WHERE id=1'));
+  const rejected = await apply(app, second).result; expect(rejected.outcome).toBe('rolled-back');
+  expect(disk(profile, db => db.prepare('SELECT id,p,note FROM rc ORDER BY id').all())).toEqual([{ id: 1, p: '001', note: '关联已改' }, { id: 2, p: '2', note: '控制' }]);
+  await app.request('connections.close', { id: profile.id }); for (const record of processes) { expect(record.kills).toBe(0); expect(await record.exited).toEqual({ code: 0, signal: null }); }
+});

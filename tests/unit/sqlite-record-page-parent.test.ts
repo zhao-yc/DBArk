@@ -19,7 +19,7 @@ async function fixture() {
  let sequence=0,owners:string[]=[],resolve!:(page:SqliteTablePage)=>void;const requests:any[]=[];
  const query={limit:2,mode:'and' as const,filters:[{column:'id',operator:'gt' as const,value:{kind:'integer' as const,value:'0'}}],sort:[{column:'id',direction:'desc' as const}]};
  const refs=Object.fromEntries(['editorRef','inputRef','previewRef','pasteRef','rangeRef','fillRef','importRef','fullExportRef','findRef','filteredSelectRef','checkedRef','checkedReadRef','cellFilterRef','rangeCellRef','templateRef','detailPageIntentRef'].map(name=>[name,{current:null}]));
- const invoke=vi.fn(async(_command:string,..._input:unknown[])=>undefined),context:any=createContext({...refs,SqliteTableEditor,SqliteRecordPageNavigation,sqliteAdjacentRecord,sqliteRecordPageOffset,editText,tab,profile,version:0,refreshVersion:0,latest:{current:{tab,active:true,refreshVersion:0}},layoutDirtyRef:{current:false},recordPageRef:{current:undefined},browserViewRef:{current:{busy:false}},applied:{current:query},useWorkspace:{getState:()=>state},uid:()=> 'id-'+ ++sequence,invoke,acquireWorkspaceBusy:()=>{throw Error('本例不允许写事务');},setValidation:vi.fn(),setRecordPageNotice:vi.fn(),setDetailPageNotice:vi.fn(),errorMessage:(reason:Error)=>reason.message,
+ const invoke=vi.fn(async(_command:string,..._input:unknown[])=>undefined),context:any=createContext({ related: undefined,...refs,SqliteTableEditor,SqliteRecordPageNavigation,sqliteAdjacentRecord,sqliteRecordPageOffset,editText,tab,profile,version:0,refreshVersion:0,latest:{current:{tab,active:true,refreshVersion:0}},layoutDirtyRef:{current:false},recordPageRef:{current:undefined},browserViewRef:{current:{busy:false}},applied:{current:query},useWorkspace:{getState:()=>state},uid:()=> 'id-'+ ++sequence,invoke,acquireWorkspaceBusy:()=>{throw Error('本例不允许写事务');},setValidation:vi.fn(),setRecordPageNotice:vi.fn(),setDetailPageNotice:vi.fn(),errorMessage:(reason:Error)=>reason.message,
  document:{querySelectorAll:()=>owners.map(owner=>({querySelector:()=>({getAttribute:()=>owner})}))},
  });
  for(const name of ['setCheckedReadRows','setCellFilterOwner','setFilteredSelectOpen','setFillOpen','setCheckedRows','setRangeOpen','setRangeCell','setPasteOpen','setPreviewOpen','setSelectedRow'])context[name]=vi.fn();
@@ -48,4 +48,9 @@ it('在途连接版本与活动标签ABA撤销旧自动打开，真实新页的�
 });
 it('外来模态先出现使续读失效，恢复后结果只显示新页，不抢占打开表单',async()=>{
  const f=await fixture(),input=f.open();expect(f.context.api.moveRecordInput(input,1)).toBe(true);f.foreign();expect(f.context.recordPageRef.current.current()).toBe(false);f.context.setCellInput(null);await f.settle(2);expect(f.context.inputRef.current).toBeNull();expect(f.context.setRecordPageNotice).toHaveBeenLastCalledWith(editText.recordPageStale);f.dispose();
+});
+
+it('关联来源失效撤销正式编辑器权限，但保留原行与草稿', async () => {
+ const f=await fixture(), editor=f.context.editorRef.current; editor.save(editor.view.rows[0].id,[{kind:'integer',value:'99'}]); const rows=editor.view.rows;
+ f.context.related={current:()=>false}; expect(editor.canEdit()).toBe(false); expect(editor.view.rows).toBe(rows); expect(editor.dirty).toBe(true); expect(f.requests).toHaveLength(1); expect(f.invoke).not.toHaveBeenCalledWith('sqlite.tableEdit.apply',expect.anything()); f.dispose();
 });

@@ -28,7 +28,7 @@ async function fixture(writable = false) {
   const editor = writable ? new SqliteTableEditor(displayed, { current: () => state.alive && workspace.settings.tabs[0] === tab && workspace.connections[0] === profile && workspace.connectionVersions.c === 0, active: () => state.active, available: () => !workspace.activeJobs.t, acquire: () => ({ owns: () => true, release: () => true }), now: Date.now, id: () => 'new', changed: () => {}, dirty: () => {}, preview: vi.fn(), apply: vi.fn(), release, cancel: vi.fn(), committed: () => {} }) : null;
   if (editor) expect(browser.adopt(displayed)).toBe(true);
   const editorRef = { current: editor }, confirm = vi.fn(() => false), dropEditor = vi.fn(() => { editorRef.current?.dispose(); editorRef.current = null; }), setSort = vi.fn(), setValidation = vi.fn(), load = vi.spyOn(browser, 'load');
-  const context: any = createContext({ page: displayed, tab, profile, version: 0, refreshVersion: 0, latest, active: true, invalidTarget: false, view, useWorkspace: { getState: () => workspace, subscribe: (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; } }, document: { querySelector: () => state.modal ? {} : null }, window: { confirm }, editRender: { current: token }, editRenderTicket: token, renderedEditor: editor, editRows: editor?.view.rows ?? [], editorRef, controller: browser, ...refs, exportData: null, applied, sqliteHeaderSortFromGrid, editText, dropEditor, setSort, setValidation, uid: () => 'sort-id', errorMessage: (reason: Error) => reason.message });
+  const context: any = createContext({ related: undefined, page: displayed, tab, profile, version: 0, refreshVersion: 0, latest, active: true, invalidTarget: false, view, useWorkspace: { getState: () => workspace, subscribe: (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; } }, document: { querySelector: () => state.modal ? {} : null }, window: { confirm }, editRender: { current: token }, editRenderTicket: token, renderedEditor: editor, editRows: editor?.view.rows ?? [], editorRef, controller: browser, ...refs, exportData: null, applied, sqliteHeaderSortFromGrid, editText, dropEditor, setSort, setValidation, uid: () => 'sort-id', errorMessage: (reason: Error) => reason.message });
   Object.assign(context, { sqliteTableBrowseLimits, parsePageJump, pageJump: '3', setPageJump: vi.fn(), automaticReads: { current: { blocked: true } } });
   runInContext(ts.transpileModule(methods.join('\n') + '\nglobalThis.api={' + names.join(',') + '};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   const emit = () => { [...listeners].forEach(cb => cb()); editor?.observe(); };
@@ -99,4 +99,11 @@ it.each(['modal', 'export', 'find-preview', 'busy', 'render', 'editor-unknown'] 
   if (blocker === 'render') f.context.editRender.current = {};
   if (blocker === 'editor-unknown') f.context.renderedEditor = {};
   f.api.sortFromHeader([]); expect(f.load).not.toHaveBeenCalled(); expect(f.confirm).not.toHaveBeenCalled(); expect(f.dropEditor).not.toHaveBeenCalled(); expect(f.editor!.dirty).toBe(true); f.dispose();
+});
+
+it('关联来源失效时列头动作不读取、不确认或丢弃原草稿', async () => {
+  const f = await fixture(true); f.dirty(); const rows = f.editor!.view.rows;
+  f.context.related = { current: () => false };
+  f.api.sortFromHeader([{ columnKey: 'c0', direction: 'DESC' }]);
+  expect(f.load).not.toHaveBeenCalled(); expect(f.confirm).not.toHaveBeenCalled(); expect(f.dropEditor).not.toHaveBeenCalled(); expect(f.editor!.view.rows).toBe(rows); expect(f.editor!.dirty).toBe(true); f.dispose();
 });

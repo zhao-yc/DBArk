@@ -9,11 +9,11 @@ const name = sqliteTablePageSchema.shape.table;
 export const sqliteValueOptionsInputSchema = z.object({
   connectionId: sqliteTablePageSchema.shape.connectionId, database: z.literal('main'), table: name, column: name,
   schemaKey: z.string().regex(/^[a-f0-9]{64}$/), taskId: sqliteTablePageSchema.shape.taskId,
-  mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters,
+  relation: sqliteTablePageSchema.shape.relation, mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters,
   search: z.string().max(sqliteValueOptionsLimits.search).refine(value => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)),
   order: sqliteValueOptionsOrderSchema.optional(),
 }).strict().superRefine((input, context) => {
-  const parsed = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, sort: [], offset: 0, limit: 1 });
+  const parsed = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: [], offset: 0, limit: 1 });
   if (!parsed.success) for (const issue of parsed.error.issues) context.addIssue({ code: 'custom', path: issue.path, message: issue.message });
 });
 /** 无穷REAL允许展示，但既有有限数值筛选不能选择；不转换成文本、NULL或有限近似。 */

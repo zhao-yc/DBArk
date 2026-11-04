@@ -10,7 +10,7 @@ import { EXCEL_LIMITS } from '../shared/excelTransfer';
 import { csvExportDelimiter } from '../shared/csvExport';
 import { csvCell, csvHeader } from '../engine/files';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
-import { buildSqliteTableSelect, quoteSqliteIdentifier, readSqliteTableCatalogue, type SqliteTableBrowseControl } from './sqliteTableBrowse';
+import { buildSqliteTableSelect, quoteSqliteIdentifier, readSqliteTableCatalogue, verifySqliteTableScope, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 import { readSqliteSchemaExport } from './sqliteSchemaExport';
 
 export const sqliteTableExportLimits = { fileBytes: 10 * 1024 ** 3 } as const;
@@ -190,6 +190,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     control.check(); await driver.execute('BEGIN'); control.check();
     const source = await readSqliteTableCatalogue(driver, parsed.table, control);
     if (source.schemaKey !== parsed.schemaKey) throw Error('SQLite源表结构已变化，请刷新表浏览后重新导出');
+    await verifySqliteTableScope(driver, parsed, control);
     const structure = parsed.format === 'sql' && (parsed.sqlContent === 'structure' || parsed.sqlContent === 'structure-data'), hasData = !(structure && parsed.sqlContent === 'structure');
     const names = new Map(source.columns.map(column => [column.name, column])), selected: SqliteTableColumn[] = parsed.columns.map(name => { const column = names.get(name); if (!column) throw Error('SQLite导出列已不存在，请刷新表结构'); return column; });
     if (parsed.format === 'sql' && (hasData && source.kind !== 'table' || selected.some(column => column.generated))) throw Error('SQLite INSERT导出不接受视图或显式生成列，请改用CSV/JSON/XLSX或重新选择普通列');
@@ -199,7 +200,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     }
     const schema = structure ? await readSqliteSchemaExport(driver, parsed.table, source, control) : undefined;
     // 只改变投影做原字节校验；WHERE/ORDER BY始终引用原表全限定列，保留原collation与动态类型。
-    const plan = hasData ? buildSqliteTableSelect({ connectionId: parsed.connectionId, database: 'main', table: parsed.table, taskId: parsed.taskId, mode: parsed.mode, filters: parsed.filters, sort: parsed.sort, limit: 1, offset: 0 }, source.columns, parsed.columns, true,
+    const plan = hasData ? buildSqliteTableSelect({ connectionId: parsed.connectionId, database: 'main', table: parsed.table, taskId: parsed.taskId, mode: parsed.mode, filters: parsed.filters, ...(parsed.relation ? { relation: parsed.relation } : {}), sort: parsed.sort, limit: 1, offset: 0 }, source.columns, parsed.columns, true,
       column => 'CASE WHEN typeof(' + column + ")='text' THEN " + sqliteExportTextFunction + '(' + column + ', CAST(' + column + ' AS BLOB)) ELSE ' + column + ' END') : undefined;
     await file.open(); control.check(); const delimiter = csvExportDelimiter(parsed.format, parsed.csvDelimiter);
     if (parsed.format !== 'xlsx' && parsed.encoding === 'utf16le') await file.write('\uFEFF');

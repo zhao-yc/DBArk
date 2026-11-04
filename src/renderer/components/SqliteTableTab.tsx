@@ -1,3 +1,7 @@
+import { isSqliteRelatedTabId, sqliteRelatedTabPrefix } from '../../shared/sqliteRelatedTab';
+import { sqliteRelatedTableScope, registerSqliteRelatedTable, sqliteRelatedTableRelation, sqliteRelatedTargetGuard, watchSqliteRelatedScope, type SqliteRelatedTableScope } from '../sqliteRelatedTable';
+import { sqliteRelatedTableZh as relatedText } from '../locales/sqliteRelatedTable.zh-CN';
+import type { SqliteIncomingOutput } from '../../shared/sqliteIncoming';
 import { SqliteRelationDialog } from './SqliteRelationDialog';
 import { sqliteRelationZh as relationText } from '../locales/sqliteRelation.zh-CN';
 import { SqliteIncomingDialog } from './SqliteIncomingDialog';
@@ -113,7 +117,15 @@ interface FilteredSelectOwner { id: string; intent: SqliteFilteredSelectIntent; 
 /** 初次请求只读取无条件第一页，不恢复未明确应用的草稿条件。 */
 const initialQuery = (): SqliteTableQuery => ({ limit: 100, mode: 'and', filters: [], sort: [] });
 /** 原 table 标签的 SQLite 分支复用分页来源；编辑采用独立快照，不借用查询标签事务。 */
-export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomatically = true, onIndexes, onColumns, onRename, onSqliteTableRebuild, onMaintenance, onObject }: { tab: WorkspaceTab; active: boolean; refreshVersion?: number; refreshAutomatically?: boolean; onIndexes?(): void; onColumns?(): void; onRename?(): void; onSqliteTableRebuild?(target: SqliteTableRebuildTarget): void; onMaintenance?(action: SqliteTableMaintenanceAction): void; onObject?(action: 'replace' | 'drop'): void }) {
+type SqliteTableTabProps = { tab: WorkspaceTab; active: boolean; refreshVersion?: number; refreshAutomatically?: boolean; onIndexes?(): void; onColumns?(): void; onRename?(): void; onSqliteTableRebuild?(target: SqliteTableRebuildTarget): void; onMaintenance?(action: SqliteTableMaintenanceAction): void; onObject?(action: 'replace' | 'drop'): void };
+/** 重启后关联来源缺失时显示失效状态，绝不自动读取普通全表。 */
+export function SqliteTableTab(props: SqliteTableTabProps) {
+  const [related] = useState(() => sqliteRelatedTableScope(props.tab.id));
+  if (isSqliteRelatedTabId(props.tab.id) && !related) return <div className="sqlite-table-tab"><ErrorBox message={relatedText.expired}/></div>;
+  return <SqliteTableTabBody {...props} related={related}/>;
+}
+/** 独立关联页复用原浏览及编辑器；固定范围失效只撤权，保留已有草稿供核对。 */
+function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatically = true, onIndexes, onColumns, onRename, onSqliteTableRebuild, onMaintenance, onObject, related }: SqliteTableTabProps & { related?: SqliteRelatedTableScope }) {
   const profile = useWorkspace(state => state.connections.find(item => item.id === tab.connectionId));
   const version = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const externalBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
@@ -166,7 +178,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   const [fillOpen, setFillOpen] = useState<FillInputTicket | null>(null), fillRef = useRef<FillInputTicket | null>(null);
   const [filteredSelectOpen, setFilteredSelectOpen] = useState<FilteredSelectOwner | null>(null), filteredSelectRef = useRef<FilteredSelectOwner | null>(null);
   type DiagramOwner = { id: string; page: SqliteTablePage; valid: boolean; acquiring: boolean; lease?: WorkspaceBusyLease; current(): boolean; activity(delta: 1 | -1): void; };
-  type ReferenceOwner = DiagramOwner & { values: readonly (SqliteOriginalValue | undefined)[]; stage?(choice: SqliteReferenceChoice): boolean; incoming?: boolean; navigation?: boolean };
+  type ReferenceOwner = DiagramOwner & { values: readonly (SqliteOriginalValue | undefined)[]; stage?(choice: SqliteReferenceChoice): boolean; incoming?: boolean; navigation?: boolean; open?(output: SqliteIncomingOutput): boolean };
   const [referenceOpen, setReferenceOpen] = useState<ReferenceOwner>(), referenceRef = useRef<ReferenceOwner | undefined>(undefined);
   const [diagramOpen, setDiagramOpen] = useState<DiagramOwner>(), diagramRef = useRef<DiagramOwner | undefined>(undefined);
   type ValuesOwner = { id: string; base: Omit<SqliteValueOptionsInput, 'column' | 'search' | 'taskId'>; columns: string[]; mode: 'and' | 'or'; current(): boolean; apply(filter: SqliteTableFilter): boolean; valid: boolean; };
@@ -196,7 +208,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   const [controller] = useState(() => new SqliteTableBrowser({
     scope: () => {
       const current = latest.current, workspace = useWorkspace.getState(), present = workspace.settings.tabs.find(item => item.id === current.tab.id), connection = workspace.connections.find(item => item.id === current.tab.connectionId);
-      return { tab: present, profile: connection, connectionId: current.tab.connectionId, database: current.tab.database, table: current.tab.table, version: workspace.connectionVersions[current.tab.connectionId] ?? 0, schemaRevision: current.refreshVersion, present: present === current.tab && present?.kind === 'table', active: current.active && workspace.settings.activeTabId === current.tab.id, sqlite: connection?.dialect === 'sqlite', ...(connection?.dialect === 'sqlite' && !connection.sqlite.readOnly ? { editing: true } : {}) };
+      return { tab: present, profile: connection, connectionId: current.tab.connectionId, database: current.tab.database, table: current.tab.table, version: workspace.connectionVersions[current.tab.connectionId] ?? 0, schemaRevision: current.refreshVersion, present: present === current.tab && present?.kind === 'table' && (!related || related.current()), ...(related ? { relation: related.relation } : {}), active: current.active && workspace.settings.activeTabId === current.tab.id, sqlite: connection?.dialect === 'sqlite', ...(connection?.dialect === 'sqlite' && !connection.sqlite.readOnly ? { editing: true } : {}) };
     },
     acquire: () => acquireWorkspaceBusy(latest.current.tab.id), read: input => invoke('sqlite.tablePage', input), release: snapshotId => invoke('sqlite.tableEdit.release', { snapshotId }), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: next => { browserViewRef.current = next; const continuation = recordPageRef.current; continuation?.observe(next); if (continuation && !continuation.current() && !next.busy) { recordPageRef.current = undefined; setRecordPageNotice(continuation.message); } const detailIntent = detailPageIntentRef.current; detailIntent?.observe(next); if (detailIntent && !detailIntent.current() && !next.busy) { detailPageIntentRef.current = undefined; setDetailPageNotice(detailIntent.message); } fullExportRef.current?.intent.current(); importRef.current?.source.observePage(next.page); setView(next); }, subscribe: changed => useWorkspace.subscribe(changed),
   }));
@@ -240,7 +252,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
     const captured = { tab, profile, version, schemaRevision: refreshVersion };
     try {
       const editor = new SqliteTableEditor(received, {
-        current: () => { const now = useWorkspace.getState(); return now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && now.connections.find(item => item.id === captured.tab.connectionId) === captured.profile && captured.profile?.dialect === 'sqlite' && !captured.profile.sqlite.readOnly && (now.connectionVersions[captured.tab.connectionId] ?? 0) === captured.version && latest.current.refreshVersion === captured.schemaRevision; },
+        current: () => { const now = useWorkspace.getState(); return (!related || related.current()) && now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && now.connections.find(item => item.id === captured.tab.connectionId) === captured.profile && captured.profile?.dialect === 'sqlite' && !captured.profile.sqlite.readOnly && (now.connectionVersions[captured.tab.connectionId] ?? 0) === captured.version && latest.current.refreshVersion === captured.schemaRevision; },
         active: () => latest.current.active && useWorkspace.getState().settings.activeTabId === captured.tab.id,
         available: () => !useWorkspace.getState().activeJobs[captured.tab.id], acquire: () => acquireWorkspaceBusy(captured.tab.id), id: uid, now: Date.now,
         changed: setEditView, dirty: dirty => { const now = useWorkspace.getState(); if ((importRef.current?.dirty || layoutDirtyRef.current) && !dirty) return; if (now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && !!now.dirtyTabs[captured.tab.id] !== dirty) now.setDirty(captured.tab.id, dirty); },
@@ -316,7 +328,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   function dropEditor(continuation?: SqliteRecordPageNavigation, preserveRecordNotice = false): void { detailPageIntentRef.current?.invalidate(); detailPageIntentRef.current = undefined; if (!preserveRecordNotice) setDetailPageNotice(''); if (!continuation || recordPageRef.current !== continuation) { recordPageRef.current?.invalidate(); recordPageRef.current = undefined; if (!preserveRecordNotice) setRecordPageNotice(''); } checkedReadRef.current = undefined; setCheckedReadRows(undefined); cellFilterRef.current = undefined; setCellFilterOwner(undefined); if (filteredSelectRef.current) closeFilteredSelect(filteredSelectRef.current); if (fillRef.current) closeFill(fillRef.current); checkedRef.current = undefined; setCheckedRows(undefined); if (findRef.current) closeFind(findRef.current); if (rangeRef.current) rangeRef.current.valid = false; rangeRef.current = null; rangeCellRef.current = undefined; setRangeOpen(null); setRangeCell(undefined); if (pasteRef.current) { pasteRef.current.valid = false; pasteRef.current = null; setPasteOpen(null); } editorRef.current?.dispose(); editorRef.current = null; inputRef.current = null; previewRef.current = null; setEditView(null); setCellInput(null); setPreviewOpen(null); const now = useWorkspace.getState(); if (now.settings.tabs.find(item => item.id === tab.id) === tab && now.dirtyTabs[tab.id]) now.setDirty(tab.id, layoutDirtyRef.current); }
   function prepareRead(): boolean { const editor = editorRef.current; if (editor?.busy) return false; if (editor?.dirty && !window.confirm(editText.confirmDiscard)) return false; dropEditor(); automaticReads.current.blocked = false; return true; }
   /** 操作读取同步目标和占用，旧按钮与隐藏标签不得开始新读取。 */
-  function available(): boolean { const workspace = useWorkspace.getState(); return active && !filteredSelectRef.current && !fillRef.current && !invalidTarget && workspace.settings.tabs.find(item => item.id === tab.id) === tab && workspace.settings.activeTabId === tab.id && workspace.connections.find(item => item.id === tab.connectionId) === profile && (workspace.connectionVersions[tab.connectionId] ?? 0) === version && (!workspace.activeJobs[tab.id] || view.busy) && !document.querySelector('[role="dialog"], [role="alertdialog"]'); }
+  function available(): boolean { if (related && !related.current()) return false; const workspace = useWorkspace.getState(); return active && !filteredSelectRef.current && !fillRef.current && !invalidTarget && workspace.settings.tabs.find(item => item.id === tab.id) === tab && workspace.settings.activeTabId === tab.id && workspace.connections.find(item => item.id === tab.connectionId) === profile && (workspace.connectionVersions[tab.connectionId] ?? 0) === version && (!workspace.activeJobs[tab.id] || view.busy) && !document.querySelector('[role="dialog"], [role="alertdialog"]'); }
   /** 原页租约与连接身份决定动作是否过期，普通重绘不撤销同一页的菜单。 */
   function rowDetailsCurrent(binding: QueryRowDetailsBinding | undefined): binding is QueryRowDetailsBinding {
     return !!detailPage && controller.pageCurrent(detailPage) && available() && rowDetails.current(binding);
@@ -387,6 +399,17 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
         editor.save(row.id, next); if (editor.generation === generation) return false;
         if (referenceRef.current === owner) { owner.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } return true;
       };
+      // 只移交已校验子页的typed关联；新标签有独立生命周期，不继承或改写源页草稿。
+      owner.open = output => {
+        if (!owner.current() || owner.lease || output.request.connectionId !== tab.connectionId || output.request.incoming !== 'page') return false;
+        if (useWorkspace.getState().settings.tabs.length >= 100) throw Error('标签已达到100个，请先关闭不需要的标签');
+        const relation = sqliteRelatedTableRelation(output), id = sqliteRelatedTabPrefix + uid(), childTable = output.request.childTable;
+        if (!owner.current()) return false;
+        const scope = registerSqliteRelatedTable(id, relation, sqliteRelatedTargetGuard(useWorkspace.getState, { id, connectionId: tab.connectionId, table: childTable, profile, version }));
+        try { useWorkspace.getState().openTab({ id, kind: 'table', title: relatedText.title(childTable), connectionId: tab.connectionId, database: 'main', table: childTable }); watchSqliteRelatedScope(scope, useWorkspace.subscribe); if (!scope.current()) throw Error(relatedText.expired); }
+        catch (failure) { scope.invalidate(); throw failure; }
+        if (referenceRef.current === owner) { owner.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } return true;
+      };
       referenceRef.current = owner; setReferenceOpen(owner); setValidation('');
     } catch (reason) { setValidation(errorMessage(reason)); }
   }
@@ -411,7 +434,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   function openValues(): void {
     if (editRender.current !== editRenderTicket || !page || !available() || view.busy || latest.current.refreshVersion !== refreshVersion) return;
     const original = applied.current, formKey = JSON.stringify(valuesForm.current), queryKey = JSON.stringify(original), editor = editorRef.current;
-    const owner: ValuesOwner = { id: uid(), base: { connectionId: tab.connectionId, database: 'main', table: page.target.table, schemaKey: page.schemaKey, mode: original.mode, filters: structuredClone(original.filters) }, columns: page.columns.map(column => column.name), mode, valid: true,
+    const owner: ValuesOwner = { id: uid(), base: { connectionId: tab.connectionId, database: 'main', table: page.target.table, schemaKey: page.schemaKey, mode: original.mode, filters: structuredClone(original.filters), ...(page.relation ? { relation: structuredClone(page.relation) } : {}) }, columns: page.columns.map(column => column.name), mode, valid: true,
       current: () => {
         if (!owner.valid) return false; if (valuesRef.current !== owner) { owner.valid = false; return false; } const now = useWorkspace.getState(), dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
         const okay = latest.current.active && now.settings.activeTabId === tab.id && now.settings.tabs.find(item => item.id === tab.id) === tab && now.connections.find(item => item.id === tab.connectionId) === profile && (now.connectionVersions[tab.connectionId] ?? 0) === version && latest.current.refreshVersion === refreshVersion && applied.current === original && JSON.stringify(original) === queryKey && JSON.stringify(valuesForm.current) === formKey && (editor ? editorRef.current === editor && editor.page === page && editor.view.valid : controller.pageCurrent(page)) && (dialogs.length === 0 || dialogs.length === 1 && dialogs[0].getAttribute('aria-label') === valuesText.title);
@@ -432,7 +455,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
     const original = applied.current, formKey = JSON.stringify(valuesForm.current), queryKey = JSON.stringify(original), editor = editorRef.current;
     if (countOnly && !controller.pageCurrent(page)) return;
     const title = countOnly ? statisticsText.countTitle : statisticsText.title;
-    const owner: StatisticsOwner = { id: uid(), base: { connectionId: tab.connectionId, database: 'main', table: page.target.table, schemaKey: page.schemaKey, mode: original.mode, filters: structuredClone(original.filters) }, columns: page.columns.map(column => column.name), valid: true,
+    const owner: StatisticsOwner = { id: uid(), base: { connectionId: tab.connectionId, database: 'main', table: page.target.table, schemaKey: page.schemaKey, mode: original.mode, filters: structuredClone(original.filters), ...(page.relation ? { relation: structuredClone(page.relation) } : {}) }, columns: page.columns.map(column => column.name), valid: true,
       current: () => {
         if (!owner.valid) return false; if (statisticsRef.current !== owner) { owner.valid = false; return false; } const now = useWorkspace.getState(), dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
         const okay = latest.current.active && now.settings.activeTabId === tab.id && now.settings.tabs.find(item => item.id === tab.id) === tab && now.connections.find(item => item.id === tab.connectionId) === profile && (now.connectionVersions[tab.connectionId] ?? 0) === version && latest.current.refreshVersion === refreshVersion && applied.current === original && JSON.stringify(original) === queryKey && JSON.stringify(valuesForm.current) === formKey && (editor ? editorRef.current === editor && editor.page === page && editor.view.valid : controller.pageCurrent(page)) && (dialogs.length === 0 || dialogs.length === 1 && dialogs[0].getAttribute('aria-label') === title);
@@ -851,7 +874,14 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
     const rows = sqliteTemplateRows(content, value.editor.page.edit.columns, count), ids = value.editor.appendRows(rows);
     closeRecordTemplates(value); setSelectedRow(ids[0]); setTemplateNotice(recordTemplatesZh.staged(count)); setValidation('');
   }
-  function addRow(): void { if (!editActionCurrent() || !available() || inputRef.current || previewRef.current) return; const editor = renderedEditor!, id = editor.add(), row = editor.view.rows.find(row => row.id === id); if (row) { setSelectedRow(row.id); openInput(editor, row); } }
+  /** 关联新增按原typed值预填可写子键，使用appendRows保持一次新增撤销步骤。 */
+  function addRow(): void {
+    if (!editActionCurrent() || !available() || inputRef.current || previewRef.current) return; const editor = renderedEditor!;
+    try { let id: string | undefined;
+    if (related) { const values: (SqliteOriginalValue | undefined)[] = editor.page.columns.map(() => undefined); related.relation.childColumns.forEach((name, i) => { const column = editor.page.columns.findIndex(column => column.name === name); if (column >= 0 && !editor.page.columns[column].generated) values[column] = structuredClone(related.relation.values[i]); }); id = editor.appendRows([values])[0]; }
+    else id = editor.add(); const row = editor.view.rows.find(row => row.id === id); if (row) { setSelectedRow(row.id); openInput(editor, row); }
+    } catch (failure) { setValidation(errorMessage(failure)); }
+  }
   /** 勾选只接纳当前Grid的原页原行对象；空选择同样带来源，旧effect不得清后来集合。 */
   function selectCheckedRows(capture: SqliteCheckedRows): void {
     try {
@@ -1095,6 +1125,7 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
   const cellFilterReady = !!cellFilterOwner && cellFilterRef.current === cellFilterOwner && cellFilterOwner.source.current();
   const checkedFilterReady = cellFilterReady && (renderedEditor ? !!checkedCount : !!checkedReadRows && checkedReadRows.selection.scope === page && checkedReadRows.selection.columns === displayColumns && !!checkedReadRows.selection.indices.size);
   return <div className="workspace-tab table-tab sqlite-table-tab" onKeyDownCapture={findKey} aria-label={text.title} data-readonly={editView ? 'false' : 'true'}>
+    {related && <p role="status">{related.current() ? relatedText.scope(related.relation.parentTable, related.relation.childColumns) : relatedText.expired}</p>}{related?.current() && <p>{relatedText.keys(related.relation.parentColumns, related.relation.values)}</p>}
     <div className="context-bar"><span className="connection-dot" style={{ background: profile?.color }}/><strong>{profile?.name ?? tab.connectionId}</strong><span>/</span><span>{tab.database}</span><span>/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">SQLite · {text.title}</span></div>
     {/* 只展示放得下的完整操作，其余沿原菜单回调展开，不让应用根容器被横向撑开。 */}
     <AdaptiveToolbar className="toolbar" ariaLabel={text.toolbar} moreLabel={navigationZh.more}
@@ -1147,8 +1178,8 @@ export function SqliteTableTab({ tab, active, refreshVersion = 0, refreshAutomat
         {recentCount !== undefined ? statisticsText.recentCount(recentCount) : page?.matchingRows !== undefined ? text.lastCount(page.matchingRows) : text.noCount}
       </small></div>
     {referenceOpen && !referenceOpen.incoming && !referenceOpen.navigation && <SqliteReferenceDialog key={referenceOpen.id} source={referenceOpen.page} values={referenceOpen.values} current={referenceOpen.current} onActivity={referenceOpen.activity} onStage={referenceOpen.stage} onClose={() => { if (referenceRef.current === referenceOpen) { referenceOpen.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } }}/>}
-    {referenceOpen?.incoming && <SqliteIncomingDialog key={referenceOpen.id} source={referenceOpen.page} values={referenceOpen.values} current={referenceOpen.current} onActivity={referenceOpen.activity} onClose={() => { if (referenceRef.current === referenceOpen) { referenceOpen.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } }}/>}
-    {referenceOpen?.navigation && <SqliteRelationDialog key={referenceOpen.id} source={referenceOpen.page} values={referenceOpen.values} current={referenceOpen.current} onActivity={referenceOpen.activity} onClose={() => { if (referenceRef.current === referenceOpen) { referenceOpen.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } }}/>}
+    {referenceOpen?.incoming && <SqliteIncomingDialog key={referenceOpen.id} source={referenceOpen.page} values={referenceOpen.values} current={referenceOpen.current} onActivity={referenceOpen.activity} onOpen={referenceOpen.open} onClose={() => { if (referenceRef.current === referenceOpen) { referenceOpen.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } }}/>}
+    {referenceOpen?.navigation && <SqliteRelationDialog key={referenceOpen.id} source={referenceOpen.page} values={referenceOpen.values} current={referenceOpen.current} onActivity={referenceOpen.activity} onOpen={referenceOpen.open} onClose={() => { if (referenceRef.current === referenceOpen) { referenceOpen.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } }}/>}
     {diagramOpen && <SqliteRelationshipDialog key={diagramOpen.id} source={diagramOpen.page} current={diagramOpen.current} onActivity={diagramOpen.activity} onClose={() => { if (diagramRef.current === diagramOpen) { diagramOpen.valid = false; diagramRef.current = undefined; setDiagramOpen(undefined); } }}/>}
     {valuesOpen && <SqliteValueOptionsDialog key={valuesOpen.id} tabId={tab.id} base={valuesOpen.base} columns={valuesOpen.columns} mode={valuesOpen.mode} current={valuesOpen.current} onApply={valuesOpen.apply} onClose={() => { if (valuesRef.current === valuesOpen) { valuesOpen.valid = false; valuesRef.current = undefined; setValuesOpen(undefined); } }} onCleanup={reason => useWorkspace.getState().notify(errorMessage(reason), true)}/>}
     {statisticsOpen && <SqliteStatisticsDialog key={statisticsOpen.id} tabId={tab.id} base={statisticsOpen.base} columns={statisticsOpen.columns} current={statisticsOpen.current} onCount={statisticsOpen.onCount} onClose={() => { if (statisticsRef.current === statisticsOpen) { statisticsOpen.valid = false; statisticsRef.current = undefined; setStatisticsOpen(undefined); } }} onCleanup={reason => useWorkspace.getState().notify(errorMessage(reason), true)}/>}

@@ -5,11 +5,11 @@ import { sqliteValueOptionSchema } from './sqliteValueOptions';
 export const sqliteStatisticsLimits = { groups: 5, bytes: 1024 * 1024, cellBytes: 65536, active: 2 } as const;
 export const sqliteStorageKinds = ['blob', 'integer', 'null', 'real', 'text'] as const;
 const page = sqliteTablePageSchema.shape;
-const aggregateSource = { connectionId: page.connectionId, database: z.literal('main'), table: page.table, schemaKey: z.string().regex(/^[a-f0-9]{64}$/), taskId: page.taskId, mode: page.mode, filters: page.filters };
+const aggregateSource = { connectionId: page.connectionId, database: z.literal('main'), table: page.table, schemaKey: z.string().regex(/^[a-f0-9]{64}$/), taskId: page.taskId, mode: page.mode, filters: page.filters, relation: page.relation };
 /** 聚合沿分页筛选预算，拒绝额外 SQL、路径、分页及会话权限。 */
 function validateConditions(input: z.infer<typeof sqliteRowCountInputBase>, context: z.RefinementCtx): void {
   // 只把分页合同声明的字段交给原条件验证，不能用额外统计字段绕过预算。
-  const conditions = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, sort: [], offset: 0, limit: 1 });
+  const conditions = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: [], offset: 0, limit: 1 });
   if (!conditions.success) for (const issue of conditions.error.issues) context.addIssue({ code: 'custom', path: issue.path, message: issue.message });
 }
 const sqliteRowCountInputBase = z.object(aggregateSource).strict();

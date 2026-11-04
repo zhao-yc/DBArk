@@ -1,7 +1,7 @@
 import { sqliteStatisticsInputSchema, assertSqliteStatistics, sqliteStatisticsLimits as limits, sqliteRowCountInputSchema, assertSqliteRowCount, type SqliteRowCountInput, type SqliteRowCountOutput, type SqliteStatisticsInput, type SqliteStatisticsOutput, type SqliteStatisticsValue } from '../shared/sqliteStatistics';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
-import { withSqliteReadSnapshot, readSqliteTableCatalogue, countSqliteMatchingRows, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
+import { withSqliteReadSnapshot, readSqliteTableCatalogue, verifySqliteTableScope, countSqliteMatchingRows, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 
 /** 原生聚合结果按真实存储类型传输；64位整数、REAL无穷和BLOB不经显示文本猜测。 */
 function typed(value: SqliteValue): SqliteStatisticsValue {
@@ -13,7 +13,8 @@ export async function readSqliteStatistics(driver: SqliteDriverSession, raw: Sql
   return withSqliteReadSnapshot(driver, control, async () => {
     const catalogue = await readSqliteTableCatalogue(driver, input.table, control), field = catalogue.columns.find(column => column.name === input.column);
     if (catalogue.schemaKey !== input.schemaKey || !field) throw Error('SQLite表结构或字段已变化，请刷新后重新统计');
-    const source = buildSqliteTableSelect({ connectionId: input.connectionId, database: 'main', table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, sort: [], offset: 0, limit: 1 }, catalogue.columns, [input.column], true);
+    await verifySqliteTableScope(driver, input, control);
+    const source = buildSqliteTableSelect({ connectionId: input.connectionId, database: 'main', table: input.table, taskId: input.taskId, mode: input.mode, filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: [], offset: 0, limit: 1 }, catalogue.columns, [input.column], true);
     const column = '"__dbark_statistics".' + quoteSqliteIdentifier(input.column), rows: SqliteValue[][] = [];
     const sql = 'SELECT typeof(' + column + '), count(*), count(DISTINCT ' + column + '), ' + sqliteExactTextProjection('min(' + column + ')') + ', ' + sqliteExactTextProjection('max(' + column + ')') + ' FROM (' + source.sql + ') AS "__dbark_statistics" GROUP BY typeof(' + column + ') ORDER BY typeof(' + column + ')';
     const result = await driver.execute(sql, { parameters: source.parameters, maxRows: limits.groups, batchRows: limits.groups, maxBytes: limits.bytes,

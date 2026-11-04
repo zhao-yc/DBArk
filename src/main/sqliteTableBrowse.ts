@@ -5,7 +5,7 @@ import type { SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteExportTextFunction, type SqliteColumn, type SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import type { SqliteTableEditPage } from '../shared/sqliteTableEdit';
-import { buildSqliteReadPlan, quoteSqliteIdentifier } from '../shared/sqliteReadSql';
+import { buildSqliteReadPlan, buildSqliteRelationPredicate, quoteSqliteIdentifier } from '../shared/sqliteReadSql';
 export { quoteSqliteIdentifier } from '../shared/sqliteReadSql';
 
 /** 仅供准确目录编译器生成的字段表达式使用；TEXT按源编码逐字节核对，其它存储类型原样返回。 */
@@ -46,6 +46,11 @@ export function buildSqliteTableSelect(source: SqliteTablePageInput, columns: re
   return { sql: plan.sql, parameters: plan.parameters.map(parameter => parameter.kind === 'storage-type' ? parameter.value : parameter.kind === 'count' ? { type: 'integer' as const, value: String(parameter.value) } : operand(parameter.value)) };
 }
 
+/** 编辑旧行校验复用同一固定谓词，不解析或截取已生成SQL。 */
+export function buildSqliteTableRelationWhere(relation: import('../shared/sqliteTableBrowse').SqliteTableRelation): { sql: string; parameters: SqliteValue[] } {
+  const parameters: SqliteValue[] = [], sql = buildSqliteRelationPredicate(relation, name => '"__dbark_source".' + quoteSqliteIdentifier(name), parameter => { if (parameter.kind !== 'operand') throw Error('SQLite关联参数类型无效'); parameters.push(operand(parameter.value)); return '?'; }); return { sql, parameters };
+}
+
 export interface SqliteTableCatalogue {
   kind: 'table' | 'view'; columns: SqliteTableColumn[]; schemaSql: string; schemaKey: string; xinfo: SqliteValue[][];
 }
@@ -67,10 +72,16 @@ async function rows(driver: SqliteDriverSession, sql: string, parameters: Sqlite
   return values;
 }
 
+/** 关联范围必须在同一物理事务中核目录；无关联的既有读取不增加目录IO。 */
+export async function verifySqliteTableScope(driver: SqliteDriverSession, input: { table: string; relation?: import('../shared/sqliteTableBrowse').SqliteTableRelation }, control: SqliteTableBrowseControl): Promise<void> {
+  if (input.relation) { const { verifySqliteTableRelation } = await import('./sqliteTableRelation'); await verifySqliteTableRelation(driver, input.table, input.relation, control); }
+}
+
 /** 在调用方已打开的快照中计数，只投影常量，不解码无关列的原值。 */
-export async function countSqliteMatchingRows(driver: SqliteDriverSession, input: Pick<SqliteTablePageInput, 'connectionId' | 'database' | 'table' | 'taskId' | 'mode' | 'filters'>, columns: readonly SqliteTableColumn[], control: SqliteTableBrowseControl): Promise<string> {
-  const { connectionId, database, table, taskId, mode, filters } = input;
-  const source = buildSqliteTableSelect({ connectionId, database, table, taskId, mode, filters, sort: [], offset: 0, limit: 1 }, columns, [columns[0].name], true, () => '1');
+export async function countSqliteMatchingRows(driver: SqliteDriverSession, input: Pick<SqliteTablePageInput, 'connectionId' | 'database' | 'table' | 'taskId' | 'mode' | 'filters' | 'relation'>, columns: readonly SqliteTableColumn[], control: SqliteTableBrowseControl): Promise<string> {
+  await verifySqliteTableScope(driver, input, control);
+  const { connectionId, database, table, taskId, mode, filters, relation } = input;
+  const source = buildSqliteTableSelect({ connectionId, database, table, taskId, mode, filters, ...(relation ? { relation } : {}), sort: [], offset: 0, limit: 1 }, columns, [columns[0].name], true, () => '1');
   const result = await rows(driver, 'SELECT count(*) FROM (' + source.sql + ') AS "__dbark_count"', source.parameters, 1, control, columns => {
     if (columns.length !== 1) throw Error('SQLite匹配行数返回非预期列');
   }, 1024);
@@ -102,6 +113,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
   try {
     control.check(); await driver.execute('BEGIN'); control.check();
     const catalogue = await readSqliteTableCatalogue(driver, requested.table, control), { kind, columns, schemaKey } = catalogue;
+    await verifySqliteTableScope(driver, requested, control);
     const matchingRows = requested.lastPage ? await countSqliteMatchingRows(driver, requested, columns, control) : undefined;
     const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
     const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
@@ -123,7 +135,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     };
     // 每格一个协议类型码，不新增SQL；与去掉编辑定位列后的本页原值一一对应。
     const storageTypes = originalRows.map(row => row.slice(extra).map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join(''));
-    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }) };
+    page = { target: { connectionId: input.connectionId, database: 'main', table: input.table, kind }, columns, schemaKey, result, storageTypes, offset: input.offset, limit: input.limit, hasMore: values.length > input.limit, ...(matchingRows === undefined ? {} : { matchingRows }), ...(input.relation ? { relation: input.relation } : {}) };
   } catch (reason) { failed = true; failure = reason; }
   // 即使边界取消也只回滚本次独立只读快照，绝不借用户查询标签的事务。
   control.beginCleanup();

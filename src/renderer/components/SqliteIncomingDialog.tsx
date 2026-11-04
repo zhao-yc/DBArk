@@ -1,3 +1,4 @@
+import { sqliteRelatedTableZh as relatedText } from '../locales/sqliteRelatedTable.zh-CN';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import type { SqliteOriginalValue } from '../../shared/sqliteTableEdit';
@@ -11,10 +12,10 @@ import { ResultsGrid } from './ResultsGrid';
 
 export const sqliteIncomingServices: SqliteIncomingServices = { read: input => invoke('sqlite.incomingPage', input), cancel: taskId => invoke('query.cancel', { taskId }), id: uid };
 /** 反向关联仅明确只读；旧回调、关闭及来源变化都不能恢复旧子页。 */
-export function SqliteIncomingDialog({ source, values, current, onActivity, onClose, services = sqliteIncomingServices }: {
-  source: SqliteTablePage; values: readonly (SqliteOriginalValue | undefined)[]; current(): boolean; onActivity(delta: 1 | -1): void; onClose(): void; services?: SqliteIncomingServices;
+export function SqliteIncomingDialog({ source, values, current, onActivity, onClose, onOpen, services = sqliteIncomingServices }: {
+  source: SqliteTablePage; values: readonly (SqliteOriginalValue | undefined)[]; current(): boolean; onActivity(delta: 1 | -1): void; onClose(): void; onOpen?(output: SqliteIncomingOutput): boolean; services?: SqliteIncomingServices;
 }) {
-  const origin = useRef({ source, values, current, onActivity, onClose, services }).current, alive = useRef(true), dead = useRef(false), closing = useRef(false), reading = useRef(false), work = useRef<Promise<void> | undefined>(undefined);
+  const origin = useRef({ source, values, current, onActivity, onClose, onOpen, services }).current, alive = useRef(true), dead = useRef(false), closing = useRef(false), reading = useRef(false), work = useRef<Promise<void> | undefined>(undefined);
   const [invalid, setInvalid] = useState(false), [busy, setBusy] = useState(false), [closeBusy, setCloseBusy] = useState(false), [error, setError] = useState('');
   const [catalog, setCatalog] = useState<SqliteIncomingOutput>(), [selected, setSelected] = useState<number>(), [data, setData] = useState<SqliteIncomingOutput>();
   if (source !== origin.source || values !== origin.values || services !== origin.services) dead.current = true;
@@ -41,5 +42,5 @@ export function SqliteIncomingDialog({ source, values, current, onActivity, onCl
     {entry && <p>{entry.table} ({entry.key.columns.join(', ')}) → {source.target.table} ({entry.referencedColumns?.join(', ') ?? text.unresolved})</p>}
     <div><button disabled={disabled || !entry?.referencedColumns} onClick={() => read(0)}>{text.read}</button><button disabled={disabled || !data?.page || data.page.offset === 0} onClick={() => read(Math.max(0, data!.page!.offset - data!.page!.limit))}>{text.previous}</button><button disabled={disabled || !data?.page?.hasMore} onClick={() => read(data!.page!.offset + data!.page!.limit)}>{text.next}</button>{busy && <button disabled={closeBusy} onClick={() => { if (renderCurrent() && !closing.current) void reader.stop().catch(failure => { if (alive.current) setError(errorMessage(failure)); }); }}>{text.stop}</button>}</div>
     <ErrorBox message={invalid ? text.stale : error}/>{busy && <Spinner text={text.loading}/>}{data?.page && <><p>{data.page.target.table} · {data.page.offset + 1}–{data.page.offset + data.page.result.rows.length}</p>{!data.page.result.rows.length && <p role="status">{text.empty}</p>}<ResultsGrid columns={data.page.result.columns} rows={data.page.result.rows} selectionScope={data.page} isCurrent={() => reader.current() && !busy} binaryFileActions={false}/></>}
-  </div><footer className="modal-footer"><button disabled={closeBusy} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
+  </div><footer className="modal-footer">{origin.onOpen && <button disabled={disabled || !data?.page} onClick={() => { if (actionCurrent() && data) try { if (!origin.onOpen?.(data)) throw Error(relatedText.expired); } catch (failure) { setError(errorMessage(failure)); } }}>{relatedText.open}</button>}<button disabled={closeBusy} onClick={() => { void close(); }}>{text.close}</button></footer></Modal>;
 }

@@ -1,7 +1,7 @@
 import { sqliteValueOptionsInputSchema, assertSqliteValueOptions, sqliteValueOptionsLimits as limits, type SqliteValueOptionsInput, type SqliteValueOptionsOutput } from '../shared/sqliteValueOptions';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
-import { readSqliteTableCatalogue, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
+import { readSqliteTableCatalogue, verifySqliteTableScope, buildSqliteTableSelect, quoteSqliteIdentifier, sqliteExactTextProjection, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 
 /** 一个只读事务内先核准确结构，再对完整匹配集分组；500+1用于判断截断，不COUNT整表或循环分页。 */
 export async function readSqliteValueOptions(driver: SqliteDriverSession, raw: SqliteValueOptionsInput, control: SqliteTableBrowseControl): Promise<SqliteValueOptionsOutput> {
@@ -10,7 +10,8 @@ export async function readSqliteValueOptions(driver: SqliteDriverSession, raw: S
     control.check(); await driver.execute('BEGIN'); control.check();
     const catalogue = await readSqliteTableCatalogue(driver, input.table, control);
     if (catalogue.schemaKey !== input.schemaKey || !catalogue.columns.some(column => column.name === input.column)) throw Error('SQLite表结构或字段已变化，请刷新后重新读取不同值');
-    const source = buildSqliteTableSelect({ connectionId: input.connectionId, database: 'main', table: input.table, taskId: input.taskId, offset: 0, limit: 1, mode: input.mode, filters: input.filters, sort: [] }, catalogue.columns, [input.column], true);
+    await verifySqliteTableScope(driver, input, control);
+    const source = buildSqliteTableSelect({ connectionId: input.connectionId, database: 'main', table: input.table, taskId: input.taskId, offset: 0, limit: 1, mode: input.mode, filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: [] }, catalogue.columns, [input.column], true);
     const column = '"__dbark_values".' + quoteSqliteIdentifier(input.column), parameters = [...source.parameters];
     // 搜索在分组和500组上限之前作用于全部匹配记录；计数为搜索后记录数，二进制使用十六进制原文。
     const search = input.search ? ' WHERE CASE typeof(' + column + ') WHEN \'blob\' THEN instr(lower(hex(' + column + ')), lower(?)) > 0 ELSE typeof(' + column + ') <> \'null\' AND instr(CAST(' + column + ' AS TEXT), ?) > 0 END' : '';

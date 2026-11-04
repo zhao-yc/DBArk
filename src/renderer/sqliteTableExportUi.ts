@@ -6,7 +6,7 @@ import { checkTableFilteredExportOutput } from './tableFilteredExportUi';
 import { sqliteTableExportZh as text } from './locales/sqliteTableExport.zh-CN';
 
 export type SqliteTableExportOptions = Pick<SqliteTableExportInput, 'format' | 'encoding' | 'csvDelimiter' | 'columns' | 'sqlContent'>;
-export interface SqliteExportSource { target: SqliteTablePage['target']; columns: readonly { name: string; declaredType: string; generated: boolean }[]; schemaKey: string; }
+export interface SqliteExportSource { target: SqliteTablePage['target']; columns: readonly { name: string; declaredType: string; generated: boolean }[]; schemaKey: string; relation?: import('../shared/sqliteTableBrowse').SqliteTableRelation; }
 /** 来源仅保留元数据，不把当前页行值当作完整导出的文件数据。 */
 function source(page: SqliteTablePage): SqliteExportSource {
   const schemaKey = 'schemaKey' in page ? page.schemaKey : undefined;
@@ -17,7 +17,7 @@ function source(page: SqliteTablePage): SqliteExportSource {
     return { name: column.name, declaredType: column.declaredType, generated: generated === true };
   });
   if (new Set(columns.map(column => column.name)).size !== columns.length) throw Error(text.invalid);
-  return { target: { ...page.target }, columns, schemaKey };
+  return { target: { ...page.target }, columns, schemaKey, ...(page.relation ? { relation: structuredClone(page.relation) } : {}) };
 }
 /** 递归冻结准确条件与列目录，外部后改草稿不能改变已捕获请求。 */
 function freeze<T>(value: T): T { if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; }
@@ -39,7 +39,7 @@ export class SqliteTableExportIntent {
   private readonly values: readonly unknown[]; private readonly identity: string; private readonly queryIdentity: string;
   private dead = false; private checking = false; private listeners = new Set<() => void>();
   constructor(private readonly page: SqliteTablePage, private readonly applied: SqliteTableQuery, values: readonly unknown[], private readonly guard: () => boolean) {
-    const metadata = source(page), parsed = sqliteTablePageSchema.parse({ connectionId: metadata.target.connectionId, database: metadata.target.database, table: metadata.target.table, taskId: 'sqlite-export-intent', offset: page.offset, limit: applied.limit, mode: applied.mode, filters: applied.filters, sort: applied.sort });
+    const metadata = source(page), parsed = sqliteTablePageSchema.parse({ connectionId: metadata.target.connectionId, database: metadata.target.database, table: metadata.target.table, taskId: 'sqlite-export-intent', offset: page.offset, limit: applied.limit, mode: applied.mode, filters: applied.filters, ...(metadata.relation ? { relation: metadata.relation } : {}), sort: applied.sort });
     if (applied.limit !== page.limit) throw Error(text.invalid);
     this.source = freeze(structuredClone(metadata)); this.query = freeze({ mode: parsed.mode, filters: structuredClone(parsed.filters), sort: structuredClone(parsed.sort) });
     this.identity = JSON.stringify(metadata); this.queryIdentity = JSON.stringify(applied); this.values = [...values];
@@ -60,7 +60,7 @@ export class SqliteTableExportIntent {
     if (!this.current()) throw Error(text.stale);
     if (options.format !== 'csv' && options.csvDelimiter !== undefined) throw Error(text.invalid);
     const columns = selectSqliteExportColumns(this.source, options);
-    return sqliteTableExportSchema.parse({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, mode: this.query.mode, filters: structuredClone(this.query.filters), sort: structuredClone(this.query.sort), columns, format: options.format, encoding: options.format === 'xlsx' ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), ...(options.format === 'sql' && options.sqlContent !== undefined ? { sqlContent: options.sqlContent } : {}), fileToken, taskId });
+    return sqliteTableExportSchema.parse({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, ...(this.source.relation ? { relation: this.source.relation } : {}), mode: this.query.mode, filters: structuredClone(this.query.filters), sort: structuredClone(this.query.sort), columns, format: options.format, encoding: options.format === 'xlsx' ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), ...(options.format === 'sql' && options.sqlContent !== undefined ? { sqlContent: options.sqlContent } : {}), fileToken, taskId });
   }
 }
 /** 复用完整原子提交回执校验；任务进度与取消意图不能取代已保存事实。 */

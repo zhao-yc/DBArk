@@ -3,14 +3,15 @@ import type { BigIntStats } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import type { SqliteConnectionProfile } from '../shared/contracts';
 import { sqliteTableEditApplySchema, sqliteTableEditPreviewSchema, sqliteTableEditReleaseSchema, sqliteTableEditLimits as limits, sqliteTableEditMessages as text, type SqliteEditColumn, type SqliteEditTarget, type SqliteEditValue, type SqliteOriginalValue, type SqliteTableChange, type SqliteTableEditApplyInput, type SqliteTableEditCounts, type SqliteTableEditOutcome, type SqliteTableEditPage, type SqliteTableEditPreview, type SqliteTableEditPreviewInput, type SqliteTableEditReleaseInput, type SqliteWriteFact } from '../shared/sqliteTableEdit';
-import type { SqliteTablePageInput } from '../shared/sqliteTableBrowse';
+import type { SqliteTableRelation, SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import { sqliteExportTextFunction, type SqliteFileIdentity, type SqliteValue } from '../engine/sqlite/protocol';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
-import { quoteSqliteIdentifier as quote, readSqliteTableCatalogue, type SqliteEditReadPlan, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
+import { quoteSqliteIdentifier as quote, readSqliteTableCatalogue, verifySqliteTableScope, buildSqliteTableRelationWhere, type SqliteEditReadPlan, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
 import { sqliteInsertLiteral } from './sqliteTableExport';
 
 interface Locator { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[]; collations: string[]; rowid?: string; }
 interface Snapshot {
+  relation?: SqliteTableRelation;
   id: string; target: SqliteEditTarget; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
   catalogue: SqliteTableCatalogue; columns: SqliteEditColumn[]; schemaVersion: string; locator: Locator;
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
@@ -134,7 +135,7 @@ export class SqliteTableEdits {
         const rows = values.map(row => structuredClone(chosen.rowid ? row.slice(1) : row));
         const locators = values.map((row, index) => chosen.rowid ? [structuredClone(row[0])] : chosen.columns.map(name => structuredClone(rows[index][columns.findIndex(column => column.name === name)])));
         if (rows.some(row => row.length !== columns.length) || locators.some(row => row.some(value => value === null)) || chosen.rowid && locators.some(row => !row[0] || typeof row[0] !== 'object' || row[0].type !== 'integer')) return { kind: 'readonly', reason: text.readonly };
-        const data = { target: { connectionId: profile.id, database: 'main' as const, table: input.table }, profile: structuredClone(profile), identity, catalogue: structuredClone(catalogue), columns, schemaVersion, locator: chosen, rows, locators };
+        const data = { ...(input.relation ? { relation: structuredClone(input.relation) } : {}), target: { connectionId: profile.id, database: 'main' as const, table: input.table }, profile: structuredClone(profile), identity, catalogue: structuredClone(catalogue), columns, schemaVersion, locator: chosen, rows, locators };
         const size = Buffer.byteLength(JSON.stringify(data));
         if (this.snapshots.size >= limits.snapshots || this.bytes + size > limits.snapshotBytes) return { kind: 'readonly', reason: 'SQLite编辑快照预算已满，请关闭旧编辑来源后重新读取' };
         const snapshot: Snapshot = { ...data, id: randomUUID(), expires: Date.now() + limits.snapshotLifetimeMs, bytes: size, active: 0, revoked: false };
@@ -192,12 +193,15 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
     const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1);
     const catalogue = await readSqliteTableCatalogue(driver, snapshot.target.table, control);
     if (integer(schema[0]?.[0]) !== snapshot.schemaVersion || catalogue.schemaKey !== snapshot.catalogue.schemaKey || !equal(catalogue.xinfo, snapshot.catalogue.xinfo)) throw Error('SQLite表结构已变化，请重新读取原页');
+    await verifySqliteTableScope(driver, { table: snapshot.target.table, relation: snapshot.relation }, control);
     record('writing');
     for (const statement of claim.statements) {
       control.check();
       if (statement.row !== undefined) {
         const where = locate(snapshot, statement.row), fields = snapshot.columns.map(column => projection('"__dbark_source".' + quote(column.name)) + ' AS ' + quote(column.name)).join(',');
-        const current = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' AS "__dbark_source" WHERE ' + where.sql + ' LIMIT 2', where.parameters, control, 2);
+        const scoped = snapshot.relation ? buildSqliteTableRelationWhere(snapshot.relation) : undefined;
+        const scopeWhere = scoped?.sql ?? '';
+        const current = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' AS "__dbark_source" WHERE ' + where.sql + (scopeWhere ? ' AND (' + scopeWhere + ')' : '') + ' LIMIT 2', [...where.parameters, ...(scoped?.parameters ?? [])], control, 2);
         if (current.length !== 1 || !equal(current[0], snapshot.rows[statement.row])) throw Error('SQLite原记录已被其他操作修改、删除或trigger改变，整批未继续');
       }
       control.check(); await driver.execute(statement.sql, { parameters: statement.parameters });

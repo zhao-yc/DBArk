@@ -67,4 +67,14 @@ describe('工作空间设置与连接上下文', () => {
     expect(workspace.useWorkspace.getState().selection).toBe(selection);
     expect(workspace.useWorkspace.getState().connectionVersions).toEqual({ '目标连接': 1 });
   });
+  it('关联标签始终独立，普通表入口不复用关联标签；只保存随机ID和目标，不覆盖已有草稿', async () => {
+    const ordinary = { id: '普通表', kind: 'table' as const, title: '原表', connectionId: 'c', database: 'main', table: 'child' };
+    workspace.useWorkspace.setState(state => ({ settings: { ...state.settings, tabs: [ordinary], activeTabId: ordinary.id }, dirtyTabs: { [ordinary.id]: true } }));
+    const open = workspace.useWorkspace.getState().openTab; open({ ...ordinary, id: 'sqlite-related:one', title: '关联一' }); open({ ...ordinary, id: 'sqlite-related:two', title: '关联二' });
+    expect(workspace.useWorkspace.getState().settings.tabs).toHaveLength(3); expect(workspace.useWorkspace.getState().dirtyTabs[ordinary.id]).toBe(true);
+    open({ kind: 'table', title: 'child', connectionId: 'c', database: 'main', table: 'child' }); expect(workspace.useWorkspace.getState().settings.activeTabId).toBe(ordinary.id);
+    await workspace.flushSettings(); const saved = request.mock.calls.filter(([command]) => command === 'settings.save').at(-1)![1];
+    expect(saved.tabs[1]).toEqual({ ...ordinary, id: 'sqlite-related:one', title: '关联一' }); expect(saved.tabs[2]).not.toHaveProperty('relation');
+  });
+
 });

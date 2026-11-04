@@ -74,10 +74,19 @@ export const sqliteTableFilterSchema = z.object({
   const range = filter.operator === 'between' || filter.operator === 'notBetween';
   if (range ? !filter.secondValue || filter.secondValue.kind !== filter.value?.kind || filter.secondValue.kind === 'blob' : filter.secondValue !== undefined) context.addIssue({ code: 'custom', message: '范围条件必须填写同类型的两个边界，且不支持二进制；其它条件不带第二个值' });
 });
+/** 关联范围独立于用户筛选，Main每次核对真实外键及两端结构；值只留在当前会话。 */
+export const sqliteTableRelationSchema = z.object({
+  parentTable: name, parentSchemaKey: z.string().regex(/^[a-f0-9]{64}$/), childSchemaKey: z.string().regex(/^[a-f0-9]{64}$/), foreignKey: z.number().int().min(0).max(2147483647),
+  parentColumns: z.array(name).min(1).max(64), childColumns: z.array(name).min(1).max(64), values: z.array(sqliteFilterSelectionSchema).min(1).max(64),
+}).strict().superRefine((value, context) => {
+  const fold = (name: string) => name.replace(/[A-Z]/g, character => character.toLowerCase());
+  if (value.parentColumns.length !== value.childColumns.length || value.values.length !== value.childColumns.length || new Set(value.parentColumns.map(fold)).size !== value.parentColumns.length || new Set(value.childColumns.map(fold)).size !== value.childColumns.length || value.values.reduce((sum, item) => sum + (item.kind === 'null' ? 0 : item.value.length), 0) > 131072) context.addIssue({ code: 'custom', message: 'SQLite关联元组映射不完整、重复或超过预算' });
+});
+export type SqliteTableRelation = z.infer<typeof sqliteTableRelationSchema>;
 export const sqliteTablePageSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.literal('main'), table: name, taskId: z.string().min(1).max(200),
   offset: z.number().int().min(0).max(sqliteTableBrowseLimits.offset), limit: z.number().int().min(1).max(sqliteTableBrowseLimits.pageSize),
-  lastPage: z.literal(true).optional(),
+  lastPage: z.literal(true).optional(), relation: sqliteTableRelationSchema.optional(),
   mode: z.enum(['and', 'or']), filters: z.array(sqliteTableFilterSchema).max(sqliteTableBrowseLimits.filters), editing: z.boolean().optional(),
   sort: z.array(z.object({ column: name, direction: z.enum(['asc', 'desc']) }).strict()).max(sqliteTableBrowseLimits.sorts),
 }).strict().superRefine((input, context) => {
@@ -86,12 +95,14 @@ export const sqliteTablePageSchema = z.object({
   if (input.filters.reduce((size, filter) => size + (filter.value?.value.length ?? 0) + (filter.secondValue?.value.length ?? 0) + (filter.values?.reduce((total, value) => total + value.value.length, 0) ?? 0) + (filter.selectedValues?.reduce((total, value) => total + (value.kind === 'null' ? 0 : value.value.length), 0) ?? 0), 0) > 131072) context.addIssue({ code: 'custom', message: 'SQLite筛选值总量超过预算' });
   // 保留utility原1024个位置绑定保护，预留分页两个；完整导出与生成查询沿同一准入。
   const parameters = input.filters.reduce((total, filter) => total + (filter.enabled === false || ['isNull', 'notNull'].includes(filter.operator) ? 0 : ['oneOf', 'notOneOf'].includes(filter.operator) ? (filter.selectedValues?.filter(value => value.kind !== 'null').length ?? 0) * 2 : ['in', 'notIn'].includes(filter.operator) ? 1 + (filter.values?.length ?? 0) : ['between', 'notBetween', 'endsWith', 'notEndsWith'].includes(filter.operator) ? 3 : 2), 2);
-  if (parameters > sqliteTableBrowseLimits.parameters) context.addIssue({ code: 'custom', message: '当前启用的筛选条件过多，请减少列表值或条件数量' });
+  if (parameters + (input.relation?.values.length ?? 0) > sqliteTableBrowseLimits.parameters) context.addIssue({ code: 'custom', message: '当前启用的筛选条件过多，请减少列表值或条件数量' });
 });
 export type SqliteTableFilter = z.infer<typeof sqliteTableFilterSchema>;
 export type SqliteTablePageInput = z.infer<typeof sqliteTablePageSchema>;
 export interface SqliteTableColumn { name: string; declaredType: string; generated?: boolean; }
 export interface SqliteTablePage {
+  /** 已核验的固定关联范围，派生读取不能丢失，也不能由普通OR筛选扩大。 */
+  relation?: SqliteTableRelation;
   /** 与原页行列一一对应：n=NULL、t=TEXT、i=INTEGER、r=REAL、b=BLOB；不由声明亲和性猜类型。 */
   storageTypes?: string[];
   /** 仅显式可编辑页请求签发，任意SQL结果和原只读页不获得写入能力。 */

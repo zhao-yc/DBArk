@@ -6,12 +6,12 @@ import { csvExportDelimiters } from './csvExport';
 export const sqliteTableExportSchema = z.object({
   connectionId: sqliteTablePageSchema.shape.connectionId, database: z.literal('main'), table: sqliteTablePageSchema.shape.table,
   taskId: sqliteTablePageSchema.shape.taskId, fileToken: z.string().min(1).max(200), schemaKey: z.string().regex(/^[a-f0-9]{64}$/),
-  mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters, sort: sqliteTablePageSchema.shape.sort,
+  relation: sqliteTablePageSchema.shape.relation, mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters, sort: sqliteTablePageSchema.shape.sort,
   columns: z.array(sqliteTablePageSchema.shape.table).max(sqliteTableBrowseLimits.columns),
   format: z.enum(['csv', 'json', 'sql', 'xlsx']), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
   sqlContent: z.enum(['data', 'structure', 'structure-data']).optional(),
 }).strict().superRefine((input, context) => {
-  const page = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, offset: 0, limit: 1, mode: input.mode, filters: input.filters, sort: input.sort });
+  const page = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, offset: 0, limit: 1, mode: input.mode, filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: input.sort });
   if (!page.success) for (const issue of page.error.issues) context.addIssue({ code: 'custom', path: issue.path, message: issue.message });
   if (new Set(input.columns).size !== input.columns.length) context.addIssue({ code: 'custom', message: 'SQLite导出列不能重复' });
   if (Object.hasOwn(input, 'sqlContent') && (input.format !== 'sql' || input.sqlContent === undefined)) context.addIssue({ code: 'custom', message: '只有SQL可指定结构或数据内容' });

@@ -93,6 +93,22 @@ async function completed(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite完整导出真实只读流、原子文件与精度回放', () => {
+  it('固定关联与整组OR筛选一起进入完整只读流，保父亲和性并拒绝结构漂移', async () => {
+    const profile = fixture(); disk(profile, db => db.exec("CREATE TABLE rp(id INTEGER PRIMARY KEY); INSERT INTO rp VALUES(1),(2); CREATE TABLE rc(id INTEGER PRIMARY KEY,p TEXT REFERENCES rp(id),note TEXT); INSERT INTO rc VALUES(1,'001','A'),(2,'1','B'),(3,'2','A'),(4,NULL,'A')"));
+    const { app } = runtime(profile), parent = await page(app, profile, '关联父页', 'rp');
+    const catalog = await app.request('sqlite.incomingPage', { connectionId: profile.id, database: 'main', table: 'rp', schemaKey: parent.schemaKey, taskId: '00000000-0000-4000-8000-000000000011', incoming: 'catalog' }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput;
+    const entry = catalog.references[0], relation = { parentTable: 'rp', parentSchemaKey: parent.schemaKey, childSchemaKey: entry.schemaKey, foreignKey: entry.key.ordinal, parentColumns: ['id'], childColumns: ['p'], values: [{ kind: 'integer' as const, value: '1' }] };
+    const child = await page(app, profile, '关联子页', 'rc'), before = await hash(profile.sqlite.filePath!);
+    // 当前页只有一行；完整导出须包含同父的两行，同时排除OR命中的另一父及NULL行。
+    expect(child.result.rows).toHaveLength(1);
+    const input = request(profile, child, { relation, columns: ['id', 'p', 'note'], mode: 'or', filters: [{ column: 'note', operator: 'eq', value: { kind: 'text', value: 'A' } }, { column: 'id', operator: 'eq', value: { kind: 'integer', value: '2' } }] });
+    expect(await app.request('sqlite.tableExport', input)).toEqual({ rows: 2, fileCommitted: true });
+    expect(JSON.parse(readFileSync(input.filePath, 'utf8'))).toEqual([{ id: '1', p: '001', note: 'A' }, { id: '2', p: '1', note: 'B' }]);
+    await completed(processes.at(-1)!); expect(await hash(profile.sqlite.filePath!)).toBe(before);
+    const previous = readFileSync(input.filePath); disk(profile, db => db.exec('ALTER TABLE rp ADD COLUMN changed TEXT'));
+    await expect(app.request('sqlite.tableExport', { ...input, taskId: '漂移后关联导出' })).rejects.toThrow('原表结构已变化');
+    expect(readFileSync(input.filePath)).toEqual(previous);
+  });
   it.each(['oneOf', 'notOneOf'] as const)('%s混合原类型集合沿完整流输出，包含NULL并保整数/二进制及源文件', async operator => {
     const profile = fixture(), { app } = runtime(profile), source = await page(app, profile), before = await hash(profile.sqlite.filePath!);
     const input = request(profile, source, { filters: [{ column: 'value', operator, selectedValues: [{ kind: 'integer', value: '9223372036854775807' }, { kind: 'null' }, { kind: 'blob', value: '0102' }] }] });
