@@ -106,3 +106,11 @@ describe('复制SQLite当前行为独立新增草稿',()=>{
  it('父拒绝暂存保留全部输入；明确修正后再次保存，不自动追加新行',async()=>{const f=await duplicateMount();f.save.mockReturnValueOnce(false);await act(async()=>callback(node(text.duplicateSave))());expect(f.close).not.toHaveBeenCalled();expect(node(text.value('id'),'textarea').value).toBe('9223372036854775807');await act(async()=>callback(node(text.include('id'),'input'),'onChange')({target:{checked:false}}));await act(async()=>callback(node(text.duplicateSave))());expect(f.save).toHaveBeenCalledTimes(2);expect(f.save.mock.calls[1][0][0]).toBeUndefined();expect(f.close).toHaveBeenCalledOnce();});
  it('换key后旧复制窗口回调不保存或关闭新窗口；新owner单独确认',async()=>{const f=await duplicateMount(),old=callback(node(text.duplicateSave)),close=callback(node(text.duplicateCancel)),next=duplicateFixture(),save=vi.fn(()=>true),cancel=vi.fn();await f.render({ticket:{},page:next.source,row:next.virtual,duplicateOwner:'duplicate-2',onSave:save,onClose:cancel},'duplicate-2');await act(async()=>{old();close();});expect(f.save).not.toHaveBeenCalled();expect(f.close).not.toHaveBeenCalled();expect(save).not.toHaveBeenCalled();await act(async()=>callback(node(text.duplicateSave))());expect(save).toHaveBeenCalledOnce();expect(cancel).toHaveBeenCalledOnce();});
 });
+
+it('跨页按钮明确区别页内暂存，父页拒绝跨页时保留真实输入和旧票据',async()=>{
+ const save=vi.fn(()=>true),close=vi.fn(),move=vi.fn((_direction:number,_values:unknown)=>{throw Error(text.recordPageDirty);});
+ await mount(()=><ValueDialog ticket={{}} page={page('原页')} row={row('原值')} current={()=>true} onSave={save} onClose={close} navigation={{ownerId:'page-input',previous:false,next:true,pageNext:true,move}}/>);
+ await act(async()=>callback(node(text.value('mixed'),'textarea'),'onChange')({target:{value:'未暂存原文'}}));
+ expect(document.body.textContent).not.toContain(text.saveNextRecord);await act(async()=>callback(node(text.nextPageRecord))());
+ expect(move).toHaveBeenCalledExactlyOnceWith(1,[{kind:'text',value:'未暂存原文'}]);expect(node(text.value('mixed'),'textarea').value).toBe('未暂存原文');expect(document.body.textContent).toContain(text.recordPageDirty);expect(save).not.toHaveBeenCalled();expect(close).not.toHaveBeenCalled();
+});
