@@ -6,6 +6,9 @@ import { frozenTableKeys, reconcileTablePreferences } from '../../src/renderer/t
 import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { cellClipboardType } from '../../src/renderer/gridClipboard';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
+import { installGridColumnFitRamPort } from '../helpers/gridColumnFitRamPort';
+import { gridColumnWidthBatchZh as widthText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
+import type { GridColumnFitSource } from '../../src/renderer/gridColumnFit';
 
 const port = vi.hoisted(() => ({ grids: [] as any[], invoke: vi.fn() }));
 // 内存端口不模拟浏览器sticky布局；实际ResultsGrid、选择/复制守卫和偏好对话框仍运行。
@@ -23,6 +26,12 @@ beforeAll(async () => {
     const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node);
     if (name === 'input') {
       let type = 'text'; Object.defineProperty(node, 'type', { configurable: true, get: () => type, set: value => { type = value; node.attributes.set('type', value); } });
+    }
+    // 行高字段使用真实受控select；只提供ReactDOM需要的选项集合和值端口。
+    if (name === 'option') Object.defineProperty(node, 'value', { configurable: true, get: () => node.attributes.get('value') ?? node.textContent, set: value => node.attributes.set('value', value) });
+    if (name === 'select') {
+      Object.defineProperty(node, 'options', { get: () => node.querySelectorAll('option') });
+      Object.defineProperty(node, 'value', { configurable: true, get: () => node.querySelectorAll('option').find(option => (option as any).selected)?.value ?? '', set: value => { for (const option of node.querySelectorAll('option')) (option as any).selected = option.value === value; } });
     }
     node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; };
     node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; };
@@ -43,12 +52,12 @@ function props(node: Node) { return (node as any)[Object.keys(node).find(key => 
 async function click(label: string) { expect(button(label).disabled).toBe(false); await act(async () => button(label).dispatchEvent(new MemoryEvent('click'))); }
 
 /** 偏好变化经真实React重渲染，保存端口只记录显式动作，不代替真实文件或数据库验收。 */
-async function preferences(initial: TablePreferences = { version: 1, columns: [{ name: 'id', hidden: false, width: 165 }, { name: 'amount', hidden: false, width: 200 }, { name: 'payload', hidden: false, width: 250 }, { name: 'secret', hidden: true }] }) {
+async function preferences(initial: TablePreferences = { version: 1, columns: [{ name: 'id', hidden: false, width: 165 }, { name: 'amount', hidden: false, width: 200 }, { name: 'payload', hidden: false, width: 250 }, { name: 'secret', hidden: true }] }, fitSource?: GridColumnFitSource) {
   let current = initial, replace!: (next: TablePreferences) => void;
   const changes = vi.fn(), saved = vi.fn(), reset = vi.fn(), closed = vi.fn();
   function Harness({ pending = false }: { pending?: boolean }) {
     const [value, setValue] = useState(initial); current = value; replace = setValue;
-    return <Preferences preferences={value} pending={pending} dirty={changes.mock.calls.length > 0} error="" onChange={next => { current = next; changes(next); setValue(next); }} onSave={() => saved(current)} onReset={() => { const next = reconcileTablePreferences(initial.columns.map(column => column.name), null); current = next; reset(); setValue(next); }} onClose={closed}/>;
+    return <Preferences preferences={value} fitSource={fitSource ? () => fitSource : undefined} pending={pending} dirty={changes.mock.calls.length > 0} error="" onChange={next => { current = next; changes(next); setValue(next); }} onSave={() => saved(current)} onReset={() => { const next = reconcileTablePreferences(initial.columns.map(column => column.name), null); current = next; reset(); setValue(next); }} onClose={closed}/>;
   }
   await mount(<Harness/>);
   return { get current() { return current; }, changes, saved, reset, closed, Harness, replace: async (next: TablePreferences) => { await act(async () => replace(next)); } };
@@ -86,6 +95,41 @@ it('pending、偏好ABA及卸载不能借旧冻结按钮追加布局变更', asy
   await render(<f.Harness/>); await f.replace({ ...original, columns: original.columns.map(column => ({ ...column })) }); await f.replace(original);
   await act(async () => old()); expect(f.changes).not.toHaveBeenCalled(); const current = props(button(text.freezeThrough('amount'))).onClick;
   await render(<span/>); await act(async () => current()); expect(f.changes).not.toHaveBeenCalled();
+});
+
+it('按列名搜索仍按完整顺序移动，单列适宽保留隐藏宽度、冻结边界与其它未失焦草稿', async () => {
+  const measurement = installGridColumnFitRamPort(document);
+  try {
+    const initial: TablePreferences = { version: 1, frozenThrough: 'amount', columns: [{ name: 'id', hidden: false, width: 300 }, { name: 'amount', hidden: false, width: 320 }, { name: 'payload', hidden: false, width: 350 }, { name: 'secret', hidden: true, width: 420 }] };
+    const cell = vi.fn(() => '短文本');
+    const f = await preferences(initial, { columns: initial.columns.map(column => ({ key: column.name, name: column.name })), rowCount: 1, cell });
+    const amount = document.querySelector(`input[aria-label="${text.width} amount"]`)!;
+    await act(async () => { amount.value = '333'; amount.dispatchEvent(new MemoryEvent('input')); });
+    const search = document.querySelector(`input[aria-label="${text.columnSearch}"]`)!;
+    await act(async () => { search.value = ' ID '; search.dispatchEvent(new MemoryEvent('input')); });
+    expect(document.querySelector(`input[aria-label="${text.width} amount"]`)).toBeNull();
+    await click(`${text.down} id`);
+    expect(f.current.columns.map(column => column.name)).toEqual(['amount', 'id', 'payload', 'secret']);
+    await click(widthText.fitColumn('id'));
+    expect(cell.mock.calls).toEqual([[0, 'id']]);
+    expect(f.current.columns.find(column => column.name === 'id')!.width).toBeLessThan(300);
+    expect(f.current.columns.find(column => column.name === 'amount')!.width).toBe(320);
+    expect(f.current.columns.find(column => column.name === 'secret')!.width).toBe(420);
+    expect(f.current.frozenThrough).toBe('amount');
+    await act(async () => { search.value = '无匹配'; search.dispatchEvent(new MemoryEvent('input')); });
+    expect(document.body.textContent).toContain(text.noMatchingColumns);
+    await act(async () => { search.value = ''; search.dispatchEvent(new MemoryEvent('input')); });
+    expect(document.querySelector(`input[aria-label="${text.width} amount"]`)!.value).toBe('333');
+    expect(button(widthText.fitColumn('secret')).disabled).toBe(true);
+    const staleFit = props(button(widthText.fitColumn('id'))).onClick;
+    await render(<f.Harness pending/>);
+    await act(async () => staleFit());
+    expect(cell).toHaveBeenCalledTimes(1);
+    await render(<f.Harness/>);
+    await click(text.save);
+    expect(f.saved.mock.calls[0][0].columns.find((column: { name: string }) => column.name === 'amount').width).toBe(333);
+    expect(port.invoke).not.toHaveBeenCalled();
+  } finally { measurement.restore(); }
 });
 
 const columns = Object.freeze([{ key: 'id', name: '重复列名', type: 'LONGLONG' }, { key: 'amount', name: '重复列名', type: 'NEWDECIMAL' }, { key: 'payload', name: '字节', type: 'BLOB' }].map(Object.freeze)) as unknown as ResultColumn[];

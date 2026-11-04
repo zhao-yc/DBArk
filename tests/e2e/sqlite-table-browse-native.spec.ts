@@ -472,6 +472,7 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(() => layoutModal().getByRole('button', { name: batchText.fitColumn('id'), exact: true }).click());
     const idFit = Number(await step(() => layoutModal().getByLabel(layoutFields.width + ' id', { exact: true }).inputValue()));
     expect(idFit).toBeGreaterThanOrEqual(64); expect(idFit).toBeLessThan(170);
+    await step(async () => info.attach('表列名搜索与单列适宽', { body: await page.screenshot(), contentType: 'image/png' }));
     await step(() => searchColumns().fill(''));
     await step(() => expect(layoutModal().getByLabel(layoutFields.width + ' bucket', { exact: true })).toHaveValue(bucketWidth));
     await step(() => expect(layoutModal().getByRole('button', { name: batchText.fitColumn('nullable'), exact: true })).toBeDisabled());

@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-04 Mac 接续完成[列名搜索与单列内容适宽](development/grid-column-focus-20261104.md)：按完整列顺序移动，同名结果列独立适宽，隐藏宽度及其它草稿保持。111 项相关单元、严格类型／构建和 Mac arm64 两项真实窗口通过；Windows 本增量、Intel、实库及安装另验，不增加完整工作包或发行计数，暂不发布。
+
 查询结果新增[常见值分布](development/query-result-frequency-20261103.md)：按筛选或勾选范围完整计数，展示前 10 个值、其他值和 NULL 的次数及占比，不重查。D09仍部分，暂不发布。
 
 SQL 高频编辑新增[语句导航](development/statement-navigation-20261103.md)：完整正文搜索、分页与原模型跳转，MySQL／MariaDB DELIMITER和SQLite触发器沿原执行扫描规则；不执行SQL。O05仍部分，Mac两架构和安装另验，不增加完整工作包或发行计数，暂不发布。

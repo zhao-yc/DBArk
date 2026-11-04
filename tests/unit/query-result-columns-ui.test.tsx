@@ -7,6 +7,8 @@ import type { QueryResult } from '../../src/shared/contracts';
 import { queryResultColumnsZh as text } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { validateResultExportData } from '../../src/shared/resultExport';
+import { installGridColumnFitRamPort } from '../helpers/gridColumnFitRamPort';
+import { gridColumnWidthBatchZh as widthText } from '../../src/renderer/locales/gridColumnWidthBatch.zh-CN';
 const grids=vi.hoisted(()=>({all:[] as any[]}));
 // 只替换Monaco和虚拟网格的外界渲染端口，真实QueryTab／管理器／导出窗口／store均运行。
 vi.mock('react-data-grid',()=>({DataGrid:(props:any)=>{grids.all.push(props);return null;},SelectColumn:{key:'select-row'}}));
@@ -74,6 +76,41 @@ it('结果宽度按内部键保存，保留隐藏列尺寸并忽略失效网格�
  expect(mainGrid().columns.find((column: {key: string}) => column.key === 'd').width).toBe(170);
  expect(mainGrid().rows).toBe(original.rows);
  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('搜索下单列适宽按内部键隔离同名列，隐藏列与非法草稿保持且取消不发布', async () => {
+ await mount();
+ const measurement = installGridColumnFitRamPort(document);
+ try {
+  const before = structuredClone(original);
+  await act(async () => mainGrid().onColumnWidthsChange(new Map([['__proto__', { type: 'resized', width: 260 }], ['d', { type: 'resized', width: 320 }], ['secret', { type: 'resized', width: 420 }]])));
+  await click(text.open);
+  const input = (position: number) => document.querySelector(`input[aria-label="${text.width(position)}"]`)!;
+  await act(async () => { input(2).value = '12.5'; input(2).dispatchEvent(new MemoryEvent('input')); });
+  await toggle(5, false);
+  const staleFit = callback(button(widthText.fitColumn(1)));
+  await click(text.up(2));
+  const search = document.querySelector(`input[aria-label="${text.search}"]`)!;
+  await act(async () => { search.value = 'BIGINT'; search.dispatchEvent(new MemoryEvent('input')); });
+  await act(async () => staleFit());
+  expect(measurement.measure).not.toHaveBeenCalled();
+  await click(widthText.fitColumn(1));
+  expect(Number(input(1).value)).toBeGreaterThanOrEqual(64);
+  expect(Number(input(1).value)).toBeLessThan(260);
+  expect(button(text.apply).disabled).toBe(true);
+  expect(mainGrid().columnWidths.get('__proto__').width).toBe(260);
+  await act(async () => { search.value = ''; search.dispatchEvent(new MemoryEvent('input')); });
+  expect(input(2).value).toBe('12.5');
+  expect(input(5).value).toBe('420');
+  expect(button(widthText.fitColumn(5)).disabled).toBe(true);
+  await click(zh.common.cancel);
+  await click(text.open);
+  expect(input(1).value).toBe('260');
+  expect(input(2).value).toBe('320');
+  expect(input(5).value).toBe('420');
+  expect(original).toEqual(before);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+ } finally { measurement.restore(); }
 });
 
 it('正式列管理器搜索、原序号显隐排序／恢复至少一列，搜索不重绘网格或深拷贝结果行',async()=>{

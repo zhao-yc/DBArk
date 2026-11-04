@@ -66,6 +66,7 @@ test('SQLite 查询结果拖动和精确输入共享列宽，恢复默认后再�
   expect(singleWidth).toBeLessThan(340);
   await expect(second).toHaveValue('210');
   await expect.poll(() => width(0)).toBe(340);
+  await test.info().attach('查询结果同名列单列适宽草稿', { body: await page.screenshot(), contentType: 'image/png' });
   await modal.getByRole('button', { name: batchText.fit, exact: true }).click();
   const fitted = [Number(await first.inputValue()), Number(await second.inputValue())];
   expect(fitted[0]).toBe(singleWidth);

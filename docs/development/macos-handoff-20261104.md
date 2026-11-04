@@ -1,6 +1,8 @@
 # tabrelio 的 Mac 开发交接
 
-交接日期为 2026-11-04。长期目标是按使用频率完善对标 Navicat 的数据库客户端，架构为 Electron、React 和 TypeScript，支持 Windows/macOS。长期目标当前处于暂停状态，恢复开发后继续完成必要验证并交付到 `main`，暂不正式发布。
+交接日期为 2026-11-04。长期目标是按使用频率完善对标 Navicat 的数据库客户端，架构为 Electron、React 和 TypeScript，支持 Windows/macOS。原 Windows 目标在交接时暂停；新 Mac 会话已创建进行中的持续目标，接续开发并交付到 `main`，暂不正式发布。
+
+Mac 本次接续已完成[列名搜索与单列内容适宽](grid-column-focus-20261104.md)：原夹具错误已修复，111 项定向单元、严格类型、构建和 Mac arm64 两项真实 Electron 窗口通过。下文的暂停失败记录保留为交接当时事实，未验平台与完整功能继续推进。
 
 ## 代码位置与当前状态
 

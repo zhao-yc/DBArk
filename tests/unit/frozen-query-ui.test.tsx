@@ -17,6 +17,8 @@ const grids = vi.hoisted(() => ({ all: [] as any[] }));
 // 只合成Monaco和虚拟网格端口，真实QueryTab、列管理、方案、暂存、历史和store仍共同运行。
 vi.mock('react-data-grid', () => ({ DataGrid: (props: any) => { grids.all.push(props); return null; }, SelectColumn: { key: 'select-row' } }));
 vi.mock('../../src/renderer/components/SqlEditor', () => ({ SqlEditor: () => null }));
+// 查询页也直接导入语法标记端口；冻结布局用例不加载浏览器编辑器运行时。
+vi.mock('monaco-editor', () => ({ editor: { setModelMarkers: vi.fn() }, MarkerSeverity: { Warning: 4 } }));
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
