@@ -1,0 +1,4 @@
+/* 批量窗口使用完整宽度，字段与树仍沿原记录编辑器布局。 */
+.record-batch-workspace .record-form-panel { width: 100%; max-width: none; min-width: 0; border-left: 0; padding: 0; background: transparent; }
+.record-batch-workspace .record-fields { overflow: visible; }
+.record-batch-workspace .record-form-panel header { margin-bottom: 8px; }

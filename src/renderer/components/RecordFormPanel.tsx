@@ -1,3 +1,4 @@
+import { recordBatchEditZh as batchText } from '../locales/recordBatchEdit.zh-CN';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { DraftRow } from '../dataChanges';
 import { formatText } from '../locales/zh-CN';
@@ -35,7 +36,7 @@ function binarySnapshotCurrent(row: DraftRow | undefined, draft: RecordDraft | n
 }
 
 /** 当前页侧面表单只有展示与缓冲，不拥有第二份页数据或数据库写路径。 */
-export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, pageNavigation }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[]; visibleKeys: string[]; onSelect(rowId: string): void; pageNavigation?: RecordPageNavigationView }) {
+export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, pageNavigation, batch = false }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[]; visibleKeys: string[]; onSelect(rowId: string): void; pageNavigation?: RecordPageNavigationView; batch?: boolean }) {
   const [showHidden, setShowHidden] = useState(false); const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const heading = useRef<HTMLHeadingElement>(null); const row = rows.find(item => item.id === editor.draft?.rowId);
   useEffect(() => { heading.current?.focus(); setExpanded(new Set()); }, [editor.draft?.rowId]);
@@ -48,14 +49,14 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, 
   const previous = adjacentRecordId(rows, row?.id, -1), next = adjacentRecordId(rows, row?.id, 1);
   const status = !row ? text.empty : row.deleted ? text.deleted : row.inserted ? text.inserted : row.original && !rowEqual(row.original, row.data) ? text.staged : text.unchanged;
   const binaryCurrent = binarySnapshotCurrent(row, editor.draft, context);
-  return <aside className="record-form-panel" aria-label={text.title} onKeyDown={event => {
+  return <aside className="record-form-panel" aria-label={batch ? batchText.panel : text.title} onKeyDown={event => {
     // 树和只读全文均阻止事件落入网格；只有显式节点输入才有本地暂存快捷键。
     if ((editor.displayMode === 'tree' || editor.displayMode === 'json') && ['Delete', 'Enter'].includes(event.key)) event.stopPropagation();
     localKeys(event, editor.displayMode === 'form' || editor.displayMode === 'input' || !!editor.nodeInput || !!editor.structureInput ? editor.stage : () => false, editor.closeForm);
   }}>
-    <header><h2 tabIndex={-1} ref={heading}>{text.title}</h2><button onClick={editor.closeForm}>{text.close}</button></header>
+    <header><h2 tabIndex={-1} ref={heading}>{batch ? batchText.panel : text.title}</h2>{!batch && <button onClick={editor.closeForm}>{text.close}</button>}</header>
     <p className="record-context">{context.target.database} / {context.target.table}</p>
-    <nav aria-label={text.title}><button disabled={(!previous && !pageNavigation?.previous) || context.busy} onClick={() => previous ? onSelect(previous) : pageNavigation?.onNavigate(-1)}>{text.previous}</button><span>{row ? formatText(text.position, rows.indexOf(row) + 1, rows.length) : text.empty}</span><button disabled={(!next && !pageNavigation?.next) || context.busy} onClick={() => next ? onSelect(next) : pageNavigation?.onNavigate(1)}>{text.next}</button></nav>
+    <nav aria-label={batch ? batchText.panel : text.title}><button disabled={(!previous && !pageNavigation?.previous) || context.busy} onClick={() => previous ? onSelect(previous) : pageNavigation?.onNavigate(-1)}>{batch ? batchText.previous : text.previous}</button><span>{row ? batch ? batchText.position(rows.indexOf(row) + 1, rows.length) : formatText(text.position, rows.indexOf(row) + 1, rows.length) : text.empty}</span><button disabled={(!next && !pageNavigation?.next) || context.busy} onClick={() => next ? onSelect(next) : pageNavigation?.onNavigate(1)}>{batch ? batchText.next : text.next}</button></nav>
     {pageNavigation?.message && <p role="note" aria-label={text.pageNavigation} aria-live="polite">{pageNavigation.message}</p>}
     <p aria-live="polite">{status}{editor.dirty ? ` · ${text.inputDirty}` : ''}</p>
     <div className="record-display-modes" role="group" aria-label={projectionText.mode}>{(['form', 'tree', 'json', 'input'] as const).map(mode => <button key={mode} aria-pressed={editor.displayMode === mode} disabled={context.busy || editor.pending || (mode==='input' && !!reason)} title={mode==='input' ? reason : mode==='tree' ? nodeText.treeHint : mode==='json' ? projectionText.readonly : undefined} onClick={() => editor.changeDisplayMode(mode)}>{mode==='input'?documentText.input:projectionText[mode]}</button>)}</div>
@@ -72,12 +73,14 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, 
         {expanded.has(key) && input && <RecordValueEditor column={column} input={input} inserted={row.inserted} reason={fieldReason} binaryStale={!binaryCurrent} source={[editor.draft, key, context.info, context.generation, context.connectionVersion, context.busy, context.stale]} isCurrent={() => !!editor.draft && editor.isFieldCurrent(editor.draft, key, input, fieldReason)} focus={editor.focusKey === key} onChange={value => editor.change(key, value)}/>}
       </section>;
     })}</div> : editor.displayMode==='input' ? <div className="record-document-input"><UsageHelp><p>{documentText.hint}</p><p>{documentText.formatHint}</p><p>{documentText.scope}</p></UsageHelp>{editor.documentInput ? <BoundedRecordTextarea aria-label={documentText.label} className="record-document-editor" value={editor.documentInput.text} readOnly={!!reason} spellCheck={false} budget={recordDocumentInputBudget} inputIdentity={editor.documentInput.draft} onValueChange={value=>editor.documentInput&&editor.changeDocument(value,editor.documentInput)}/> : <p>{reason||documentText.unavailable}</p>}</div> : <><div className="record-projection-workspace"><RecordReadonlyProjection row={row} draft={editor.draft} context={context} visibleKeys={visibleKeys} showHidden={showHidden} mode={editor.displayMode} onEdit={editor.openNode} onStructure={editor.openStructure}/>{editor.nodeInput&&<RecordJsonNodeEditor input={editor.nodeInput} reason={recordReadonlyReason(context,row,editor.nodeInput.columnName)} onChange={editor.changeNode} onClose={editor.closeNode}/>}{editor.structureInput&&<RecordJsonStructureEditor input={editor.structureInput} reason={reason} onChange={editor.changeStructure} onClose={editor.closeNode}/>}</div></>}
-    {(editor.displayMode !== 'json') && <footer><ErrorBox message={editor.error}/>{reason && <p className="muted small">{reason}</p>}<p className="muted small">{text.stageHint}</p><span role="status">{editor.notice}</span>{(editor.displayMode!=='tree'||editor.nodeInput||editor.structureInput)&&<div className="record-actions"><button disabled={!editor.dirty || context.busy} onClick={editor.discard}>{text.discard}</button><button className="primary" disabled={!editor.dirty || !!reason} onClick={editor.stage}>{text.stage}</button></div>}</footer>}
+    {(editor.displayMode !== 'json') && <footer><ErrorBox message={editor.error}/>{reason && <p className="muted small">{reason}</p>}<p className="muted small">{batch ? batchText.stageHint : text.stageHint}</p><span role="status">{editor.notice && batch ? batchText.kept : editor.notice}</span>{(editor.displayMode!=='tree'||editor.nodeInput||editor.structureInput)&&<div className="record-actions"><button disabled={!editor.dirty || context.busy} onClick={editor.discard}>{batch ? batchText.discard : text.discard}</button><button className="primary" disabled={!editor.dirty || !!reason} onClick={editor.stage}>{batch ? batchText.keep : text.stage}</button></div>}</footer>}
   </aside>;
 }
 
 /** 同一时刻仅一个模态层：确认期间保留字段编辑器状态，避免嵌套焦点陷阱。 */
-export function RecordEditorDialogs({ editor, context, rows }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[] }) {
+export function RecordEditorDialogs({ editor, context, rows, batch = false }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[]; batch?: boolean }) {
+  // 批量窗口内沿原三选守卫处理输入，不再叠加第二层Modal。
+  if (batch && editor.pending) return <section role="region" aria-label={text.leaveTitle}><p>{batchText.pending}</p><ErrorBox message={editor.error}/><footer className="modal-footer"><button onClick={() => editor.resolve('stay')}>{text.stay}</button><button onClick={() => editor.resolve('discard')}>{batchText.discardContinue}</button><button className="primary" onClick={() => editor.resolve('stage')}>{batchText.keepContinue}</button></footer></section>;
   if (editor.pending) return <Modal title={text.leaveTitle} onClose={() => editor.resolve('stay')}><div className="modal-content"><p>{text.leaveHint}</p><ErrorBox message={editor.error}/></div><footer className="modal-footer"><button onClick={() => editor.resolve('stay')}>{text.stay}</button><button onClick={() => editor.resolve('discard')}>{text.discardContinue}</button><button className="primary" onClick={() => editor.resolve('stage')}>{text.stageContinue}</button></footer></Modal>;
   if (editor.cellKey === null || !editor.draft) return null;
   const key = editor.cellKey; const column = context.info?.columns.find(item => item.name === key); const row = rows.find(item => item.id === editor.draft!.rowId);

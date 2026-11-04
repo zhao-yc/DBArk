@@ -1,3 +1,6 @@
+import { RecordBatchEditIntent } from '../recordBatchEdit';
+import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
+import { TableRecordBatchDialog } from './TableRecordBatchDialog';
 import { GridRowJump, openFocusedGridRowJump } from './GridRowJump';
 import { readGridRowHeight } from '../../shared/gridRowHeight';
 import { tableChecksZh } from '../locales/tableChecks.zh-CN';
@@ -207,7 +210,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [selectedRows, setSelectedRowsState] = useState<ReadonlySet<string>>(new Set());
   const selectedRowsRef = useRef(selectedRows);
   /** 勾选状态同步发布，旧回调也只能读取当前选择。 */
-  function setSelectedRows(value: ReadonlySet<string>) { rowTransferIntent.current?.invalidate(); batchFillIntent.current?.invalidate(); if (selectedFilterRef.current) selectedFilterRef.current.invalid = true; selectedRowsRef.current = value; setSelectedRowsState(value); }
+  function setSelectedRows(value: ReadonlySet<string>) { rowTransferIntent.current?.invalidate(); batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); if (selectedFilterRef.current) selectedFilterRef.current.invalid = true; selectedRowsRef.current = value; setSelectedRowsState(value); }
   const copiedDraftIds = useRef(new Set<string>()); const [duplicateNotice, setDuplicateNotice] = useState('');
   const [copyPending, setCopyPending] = useState(false); const copyPendingRef = useRef(false);
   const insertCopyBlockedRef = useRef(false);
@@ -221,8 +224,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const templateRef = useRef<TemplateDialog | undefined>(undefined), [templateDialog, setTemplateDialog] = useState<TemplateDialog>();
   useEffect(() => { const stop = useWorkspace.subscribe(() => { templateRef.current?.lease.current(); }); return () => { stop(); templateRef.current?.lease.invalidate(); }; }, []);
   const batchFillIntent = useRef<BatchFillIntent | null>(null), [batchFillDialog, setBatchFillDialog] = useState<BatchFillIntent | null>(null);
+  const recordBatchIntent = useRef<RecordBatchEditIntent | null>(null), [recordBatchDialog, setRecordBatchDialog] = useState<RecordBatchEditIntent | null>(null);
+  const recordBatchAttachment = useRef<{ intent: RecordBatchEditIntent; attached: boolean } | null>(null);
   const batchFillEnvironment = useRef<unknown[]>([]);
-  useEffect(() => () => { batchFillIntent.current?.invalidate(); }, []);
+  useEffect(() => () => { batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); }, []);
   // 工作区先变化再恢复也同步撤销票据，不等待React合并渲染才发现切页或作业变化。
   useEffect(() => {
     const identity = (state: ReturnType<typeof useWorkspace.getState>) => JSON.stringify([state.settings.activeTabId, state.settings.tabs.find(item => item.id === tab.id), state.connectionVersions[tab.connectionId] ?? 0, state.connections.find(item => item.id === tab.connectionId), !!state.activeJobs[tab.id]]);
@@ -245,7 +250,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       if (exportIdentity(state) !== exportIdentity(previous) || state.settings.tabs.find(item=>item.id===tab.id)!==previous.settings.tabs.find(item=>item.id===tab.id) || state.connections.find(item=>item.id===tab.connectionId)!==previous.connections.find(item=>item.id===tab.connectionId) || state.activeJobs[tab.id] && !previous.activeJobs[tab.id] && referenceCount.current===0) { filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate(); }
       if (identity(state) !== identity(previous) || state.settings.resultLimit !== previous.settings.resultLimit) filteredSelectIntent.current?.invalidate();
       if (identity(state) !== identity(previous)) {
-        batchFillIntent.current?.invalidate(); if (sortPanelRef.current) sortPanelRef.current.invalid = true; if (filterGroupsRef.current) filterGroupsRef.current.invalid = true;
+        batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); if (sortPanelRef.current) sortPanelRef.current.invalid = true; if (filterGroupsRef.current) filterGroupsRef.current.invalid = true;
         // 模板窗口也在标签／连接切走的当下失效，同轮恢复原值不能复活旧SQL来源。
         if (queryTemplateRef.current) queryTemplateRef.current.invalid = true;
         if (selectedFilterRef.current) selectedFilterRef.current.invalid = true;
@@ -273,11 +278,11 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [relationshipDialog, setRelationshipDialog] = useState<{ source: TableInfo; current(): boolean } | null>(null), relationshipRef = useRef<typeof relationshipDialog>(null);
   const [tableValueOptionsDialog, setTableValueOptionsDialog] = useState<{ intent: TableStatisticsIntent; column: string } | null>(null), tableValueOptionsIntent = useRef<TableStatisticsIntent | null>(null);
   /** 关联窗口即使打开后关闭，也永久推进原方案的上下文代次。 */
-  function setReferenceDialog(next:typeof referenceDialog){filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate();batchFillIntent.current?.invalidate();presetUiEpoch.current++;setReferenceDialogState(next);}
+  function setReferenceDialog(next:typeof referenceDialog){filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate();batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate();presetUiEpoch.current++;setReferenceDialogState(next);}
   const [referenceBusy, setReferenceBusy] = useState(false); const referenceCount = useRef(0);
   const grid = useRef<DataGridHandle>(null); const [showFind, setShowFind] = useState(false); const [showPreferences, setShowPreferencesState] = useState(false);
   /** 布局窗口变化同步记代，不依赖晚到的React effect或最终布尔值。 */
-  function setShowPreferences(next:boolean){filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate();batchFillIntent.current?.invalidate();presetUiEpoch.current++;setShowPreferencesState(next);}
+  function setShowPreferences(next:boolean){filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate();batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate();presetUiEpoch.current++;setShowPreferencesState(next);}
   const [findFocus, setFindFocus] = useState<{ target: 'query' | 'replacement'; generation: number }>({ target: 'query', generation: 0 });
   const [preferences, setPreferences] = useState<TablePreferences>({ version: 1, columns: [] }); const preferencesRef = useRef(preferences); preferencesRef.current = preferences;
   const [preferencesLoading, setPreferencesLoading] = useState(true); const [preferencesPending, setPreferencesPending] = useState(false); const preferencesLock = useRef(false);
@@ -308,7 +313,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     filteredExportIntent.current?.invalidate();
     filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate();
     filteredSelectIntent.current?.invalidate();
-    batchFillIntent.current?.invalidate();
+    batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate();
     if (selectedFilterRef.current) selectedFilterRef.current.invalid = true;
     invalidateCopyRead();
     const next = typeof value === 'function' ? value(rowsRef.current) : value;
@@ -371,7 +376,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   useEffect(() => { invalidateCopyRead(); }, [base, connectionVersion, refreshVersion]);
   useEffect(() => () => { invalidateCopyRead(); if (copyPageTask.current && !lastPageRead.current?.stopped) void invoke('query.cancel', { taskId: copyPageTask.current }).catch(() => undefined); void releaseCopySources(); }, []);
-  const record = useRecordViews({ rows, getRows: () => rowsRef.current, getContext: getRecordContext, onRows: setRows, onDirty: dirty => { childReferenceIntent.current?.invalidate(); tableStatisticsIntent.current?.invalidate(); tableValueOptionsIntent.current?.invalidate(); if (dirty && selectedFilterRef.current) selectedFilterRef.current.invalid = true; if (dirty) { filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate(); invalidateCopyRead(); batchFillIntent.current?.invalidate(); } inputDirtyRef.current = dirty; useWorkspace.getState().setDirty(tab.id, dirty || collectChanges(rowsRef.current).length > 0); }, onFocusGrid: () => restoreGridFocus(true) });
+  const record = useRecordViews({ rows, getRows: () => rowsRef.current, getContext: getRecordContext, onRows: setRows, onDirty: dirty => { childReferenceIntent.current?.invalidate(); tableStatisticsIntent.current?.invalidate(); tableValueOptionsIntent.current?.invalidate(); if (dirty && selectedFilterRef.current) selectedFilterRef.current.invalid = true; if (dirty) { filteredUpdateIntent.current?.invalidate(); filteredDeleteIntent.current?.invalidate(); invalidateCopyRead(); batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); } inputDirtyRef.current = dirty; useWorkspace.getState().setDirty(tab.id, dirty || collectChanges(rowsRef.current).length > 0); }, onFocusGrid: () => restoreGridFocus(true) });
   recordControllerRef.current = record;
   const childReferenceValues = [base, connectionVersion, refreshVersion, info, page, rows, loadGeneration.current, pageIndex, pageSize, sort, filters, filterMode, filterGroup, externalStale, selection?.rowId, settings.activeTabId, record.dirty, record.pending, record.formOpen, gridEditing];
   childReferenceIntent.current?.observe(childReferenceValues);
@@ -390,7 +395,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   filteredUpdateIntent.current?.observe(filteredUpdateValues);
   const filteredDeleteValues = [...filteredUpdateValues];
   filteredDeleteIntent.current?.observe(filteredDeleteValues);
-  if (batchFillValues.some((value, index) => value !== batchFillEnvironment.current[index])) { batchFillIntent.current?.invalidate(); batchFillEnvironment.current = batchFillValues; }
+  if (batchFillValues.some((value, index) => value !== batchFillEnvironment.current[index])) { batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); batchFillEnvironment.current = batchFillValues; }
   const recordPageScopeValue = { target: base, connectionVersion, refreshVersion, pageSize, filters, filterMode, filterGroup, sort };
   const recordPageScopeRef = useRef({ value: recordPageScopeValue, page: pageIndex }); recordPageScopeRef.current = { value: recordPageScopeValue, page: pageIndex };
   /** 异步完成仍读取当前工作区身份，连接版本或标签切换无需等待旧闭包更新。 */
@@ -701,7 +706,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       const state = useWorkspace.getState(), currentRow = rowsRef.current.find(item => item.id === row.id);
       return mounted.current && childReferenceIntent.current === intent && state.settings.activeTabId === tab.id && JSON.stringify(state.settings.tabs.find(item => item.id === tab.id)) === currentTab && state.connections.find(item => item.id === tab.connectionId) === profile && (state.connectionVersions[tab.connectionId] ?? 0) === version && recordContextRef.current.info === source && loadGeneration.current === generation && rowsRef.current === originalRows && currentRow === row && !row.deleted && selectionRef.current?.rowId === row.id && !recordControllerRef.current?.hasInput() && !activeGridEditor.current && JSON.stringify(source) === JSON.stringify(intent.source) && JSON.stringify(row.data) === JSON.stringify(intent.data) && recordPageSource.current === originalPage;
     });
-    childReferenceIntent.current = intent; batchFillIntent.current?.invalidate(); presetUiEpoch.current++; setChildReferenceDialog(intent);
+    childReferenceIntent.current = intent; batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); presetUiEpoch.current++; setChildReferenceDialog(intent);
   }
   const recordPageSource = useRef(page); recordPageSource.current = page;
   /** 对话框只有原请求实际结算后才关闭，旧实例不能关闭后来的关联窗口。 */
@@ -725,7 +730,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     const onCount = countOnly ? (count: string) => {
       if (intent.current()) setPageCount({ generation, refreshVersion, count });
     } : undefined;
-    tableStatisticsIntent.current = intent; batchFillIntent.current?.invalidate(); presetUiEpoch.current++; setTableStatisticsDialog({ intent, onCount });
+    tableStatisticsIntent.current = intent; batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); presetUiEpoch.current++; setTableStatisticsDialog({ intent, onCount });
   }
   /** 原窗口原任务结算后才关闭；旧关闭回调不能关闭后续统计实例。 */
   function closeTableStatistics(intent: TableStatisticsIntent) { if (tableStatisticsIntent.current !== intent) return; intent.invalidate(); tableStatisticsIntent.current = null; presetUiEpoch.current++; setTableStatisticsDialog(null); }
@@ -748,7 +753,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       const state = useWorkspace.getState();
       return mounted.current && tableValueOptionsIntent.current === intent && state.settings.activeTabId === tab.id && JSON.stringify(state.settings.tabs.find(item => item.id === tab.id)) === currentTab && state.connections.find(item => item.id === tab.connectionId) === profile && (state.connectionVersions[tab.connectionId] ?? 0) === version && recordContextRef.current.info === source && loadGeneration.current === generation && rowsRef.current === originalRows && selectionRef.current === originalSelection && recordPageSource.current === originalPage && !recordControllerRef.current?.hasInput() && !activeGridEditor.current && JSON.stringify(source) === JSON.stringify(intent.source) && JSON.stringify(statisticsConditions.current) === JSON.stringify(intent.conditions);
     });
-    tableValueOptionsIntent.current = intent; batchFillIntent.current?.invalidate(); presetUiEpoch.current++; setTableValueOptionsDialog({ intent, column: column.name });
+    tableValueOptionsIntent.current = intent; batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); presetUiEpoch.current++; setTableValueOptionsDialog({ intent, column: column.name });
   }
   /** 原读取结算后的关闭只处理自己的窗口，不释放后继实例。 */
   function closeTableValueOptions(intent: TableStatisticsIntent) {
@@ -910,7 +915,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
         const now = useWorkspace.getState(), dialogs = document.querySelectorAll('[role="dialog"]');
         return mounted.current && filteredExportIntent.current === intent && now.settings.activeTabId === tab.id && JSON.stringify(now.settings.tabs.find(item => item.id === tab.id)) === currentTab && now.connections.find(item => item.id === tab.connectionId) === profile && (now.connectionVersions[tab.connectionId] ?? 0) === version && recordContextRef.current.info === source && rowsRef.current === originalRows && recordPageSource.current === originalPage && loadGeneration.current === generation && sortScopeRef.current === scope && !recordControllerRef.current?.hasInput() && !activeGridEditor.current && !externalStale && !preferencesLock.current && dialogs.length <= 1 && !document.querySelector('[role="alertdialog"]') && JSON.stringify(source) === JSON.stringify(intent.source) && JSON.stringify(statisticsConditions.current) === JSON.stringify(intent.conditions);
       });
-      filteredExportIntent.current = intent; batchFillIntent.current?.invalidate(); presetUiEpoch.current++; setFilteredExportDialog(intent);
+      filteredExportIntent.current = intent; batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); presetUiEpoch.current++; setFilteredExportDialog(intent);
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 只有原文件选择/导出及取消均结算后的关闭，才能释放自己的窗口。 */
@@ -950,7 +955,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
         const now=useWorkspace.getState(),dialogs=document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
         return mounted.current&&filteredUpdateIntent.current===intent&&filteredUpdateReadReady(source)&&now.settings.activeTabId===tab.id&&now.settings.tabs.find(item=>item.id===tab.id)===originalTab&&now.connections.find(item=>item.id===tab.connectionId)===profile&&(now.connectionVersions[tab.connectionId]??0)===version&&rowsRef.current===originalRows&&sortScopeRef.current===scope&&!activeGridEditor.current&&!recordControllerRef.current?.hasInput()&&!collectChanges(rowsRef.current).length&&!preferencesLock.current&&!previewingRef.current&&!applyingRef.current&&dialogs.length<=1&&(!dialogs.length||!!dialogs[0].querySelector('[data-table-filtered-update-dialog]'))&&tableCopyMetadataKey(source.info)===intent.metadataKey&&JSON.stringify({...statisticsConditions.current,sort:recordPageScopeRef.current.value.sort})===JSON.stringify(intent.scope);
       });
-      filteredUpdateIntent.current=intent;batchFillIntent.current?.invalidate();presetUiEpoch.current++;setFilteredUpdateDialog(intent);setError('');
+      filteredUpdateIntent.current=intent;batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate();presetUiEpoch.current++;setFilteredUpdateDialog(intent);setError('');
     }catch(reason){setError(errorMessage(reason));}
   }
   /** 原任务与取消/预览释放均已终结后才到达这里；只在原scope仍有效时刷新原页。 */
@@ -977,7 +982,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
         const now=useWorkspace.getState(),dialogs=document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
         return mounted.current&&filteredDeleteIntent.current===intent&&filteredDeleteReadReady(source)&&now.settings.activeTabId===tab.id&&now.settings.tabs.find(item=>item.id===tab.id)===originalTab&&now.connections.find(item=>item.id===tab.connectionId)===profile&&(now.connectionVersions[tab.connectionId]??0)===version&&rowsRef.current===originalRows&&sortScopeRef.current===scope&&!activeGridEditor.current&&!recordControllerRef.current?.hasInput()&&!collectChanges(rowsRef.current).length&&!preferencesLock.current&&!previewingRef.current&&!applyingRef.current&&dialogs.length<=1&&(!dialogs.length||!!dialogs[0].querySelector('[data-table-filtered-delete-dialog]'))&&tableCopyMetadataKey(source.info)===intent.metadataKey&&JSON.stringify({...statisticsConditions.current,sort:recordPageScopeRef.current.value.sort})===JSON.stringify(intent.scope);
       });
-      filteredDeleteIntent.current=intent;batchFillIntent.current?.invalidate();presetUiEpoch.current++;setFilteredDeleteDialog(intent);setError('');
+      filteredDeleteIntent.current=intent;batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate();presetUiEpoch.current++;setFilteredDeleteDialog(intent);setError('');
     }catch(reason){setError(errorMessage(reason));}
   }
   /** 原任务与取消/预览释放均已终结后才到达这里；只在原scope仍有效时刷新原页。 */
@@ -1243,7 +1248,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   /** 刷新后网格可能保留同一活动坐标；点击也须用当前行同步选择，不能只等待坐标变化。 */
   function selectCurrentCell(row: DraftRow | undefined, key: string | undefined) {
     // 先永久撤销旧意图；忙碌时忽略新选择也不能让切走再切回的回包复活。
-    if (selectionRef.current?.rowId !== row?.id || selectionRef.current?.key !== key) { invalidateCopyRead(); batchFillIntent.current?.invalidate(); }
+    if (selectionRef.current?.rowId !== row?.id || selectionRef.current?.key !== key) { invalidateCopyRead(); batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); }
     if (selectionRef.current?.rowId !== row?.id) childReferenceIntent.current?.invalidate();
     if (selectionRef.current?.rowId !== row?.id || selectionRef.current?.key !== key) { tableStatisticsIntent.current?.invalidate(); tableValueOptionsIntent.current?.invalidate(); if (selectedFilterRef.current) selectedFilterRef.current.invalid = true; }
     if (blocked || document.querySelector('[role="dialog"]')) return;
@@ -1327,7 +1332,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     if (dialogs.length > 1 || dialogs.some(dialog => dialog.getAttribute('aria-label') !== recordBatchFillZh.title)) throw Error(recordBatchFillZh.changed);
   }
   function openBatchFill() {
-    try { assertBatchFillTarget(); if (rows !== rowsRef.current || selectedRows !== selectedRowsRef.current || selection !== selectionRef.current || document.querySelector('[role="dialog"]')) throw Error(recordBatchFillZh.changed); const intent = new BatchFillIntent(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page); batchFillIntent.current?.invalidate(); batchFillIntent.current = intent; setBatchFillDialog(intent); setError(''); }
+    try { assertBatchFillTarget(); if (rows !== rowsRef.current || selectedRows !== selectedRowsRef.current || selection !== selectionRef.current || document.querySelector('[role="dialog"]')) throw Error(recordBatchFillZh.changed); const intent = new BatchFillIntent(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page); batchFillIntent.current?.invalidate(); recordBatchIntent.current?.invalidate(); batchFillIntent.current = intent; setBatchFillDialog(intent); setError(''); }
     catch (reason) { setError(errorMessage(reason)); }
   }
   function closeBatchFill(intent: BatchFillIntent) { intent.invalidate(); if (batchFillIntent.current === intent) { batchFillIntent.current = null; setBatchFillDialog(null); } }
@@ -1338,6 +1343,43 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     const next = intent.consumeAssignments(assignments, rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page);
     const changed = next.filter((row, index) => row !== rowsRef.current[index]).length;
     setRows(next); recordPages.cancel(); record.reset(); setError(''); setDuplicateNotice(changed ? formatText(recordBatchFillZh.staged, changed) : recordBatchFillZh.unchanged); closeBatchFill(intent);
+  }
+  /** 仅原窗口唯一marker可保持来源；失活／忙态／外部输入和Modal脱离留下永久墓碑。 */
+  function recordBatchCurrent(intent: RecordBatchEditIntent): boolean {
+    if (recordBatchIntent.current !== intent || intent.invalidated || recordBatchAttachment.current?.intent !== intent) return false;
+    try {
+      assertPasteInsertTarget();
+      if (useWorkspace.getState().activeJobs[tab.id] || observedRefresh.current !== refreshVersion || blockedRef.current || loadingCount.current || referenceCount.current || applyingRef.current || preferencesLock.current || previewingRef.current || copyPendingRef.current || activeGridEditor.current || record.pending || record.cellKey !== null || record.nodeInput || record.structureInput || record.documentInput || showPreferences || referenceDialog || pasteInsertDialog || batchFillDialog) throw Error(recordBatchEditZh.stale);
+      const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')], markers = dialogs.length === 1 ? dialogs[0].querySelectorAll('[data-record-batch-owner]') : [];
+      if (dialogs.length === 0 ? recordBatchAttachment.current.attached : dialogs.length !== 1 || markers.length !== 1 || markers[0].getAttribute('data-record-batch-owner') !== intent.id) throw Error(recordBatchEditZh.stale);
+      if (intent.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)) throw Error(recordBatchEditZh.stale);
+      if (dialogs.length) recordBatchAttachment.current.attached = true; return true;
+    } catch { intent.invalidate(); return false; }
+  }
+  /** 打开准确当前页选择，窗口只编辑独立RAM副本；不读取新页或改变原记录表单。 */
+  function openRecordBatch(): void {
+    try {
+      assertPasteInsertTarget();
+      if (recordBatchIntent.current || insertCopyBlockedRef.current || document.querySelector('[role="dialog"], [role="alertdialog"]') || rows !== rowsRef.current || selectedRows !== selectedRowsRef.current) throw Error(recordBatchEditZh.stale);
+      const intent = new RecordBatchEditIntent(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page, uid());
+      recordBatchIntent.current = intent; recordBatchAttachment.current = { intent, attached: false }; setRecordBatchDialog(intent); setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 只关闭本批票据；失效窗口也可取消，重新计算真实原草稿dirty。 */
+  function closeRecordBatch(intent: RecordBatchEditIntent): void {
+    if (recordBatchIntent.current !== intent) return;
+    intent.invalidate(); recordBatchIntent.current = null; recordBatchAttachment.current = null; setRecordBatchDialog(null);
+    useWorkspace.getState().setDirty(tab.id, record.hasInput() || collectChanges(rowsRef.current).length > 0);
+  }
+  /** 所有行及原集中提交预算通过后只发布一次，原DraftHistory形成一个可撤销步骤。 */
+  function stageRecordBatch(intent: RecordBatchEditIntent, candidates: DraftRow[]): boolean {
+    if (!recordBatchCurrent(intent) || !recordBatchAttachment.current?.attached) return false;
+    const next = intent.consume(candidates, rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page), count = next.filter((row, at) => row !== rowsRef.current[at]).length;
+    setRows(next); recordPages.cancel(); record.reset(); closeRecordBatch(intent); setError(''); setDuplicateNotice(recordBatchEditZh.staged(count)); return true;
+  }
+  /** 未保留输入与已保留局部行均进入退出保护，取消后不遗留原页的伪dirty。 */
+  function recordBatchDirty(intent: RecordBatchEditIntent, dirty: boolean): void {
+    if (recordBatchIntent.current === intent) useWorkspace.getState().setDirty(tab.id, dirty || record.hasInput() || collectChanges(rowsRef.current).length > 0);
   }
   /** 点击时同步核对活动页和输入占门；IPC 只携带此刻的已加载原值，不等待补取或推断目标。 */
   function copyRowsAsInsert(selected: boolean) {
@@ -1521,8 +1563,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     }
     finally { applyingRef.current = false; setApplying(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || preferencesLock.current || copyPendingRef.current); }
   }
-  insertCopyBlockedRef.current = observedRefresh.current !== refreshVersion || blocked || gridEditing || record.dirty || record.pending || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || !!record.documentInput || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || settings.activeTabId !== tab.id || !page;
-  const historyBlocked = !!templateDialog || blocked || !editable || record.dirty || record.pending || gridEditing || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || settings.activeTabId !== tab.id;
+  insertCopyBlockedRef.current = observedRefresh.current !== refreshVersion || blocked || gridEditing || record.dirty || record.pending || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || !!record.documentInput || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || !!recordBatchDialog || settings.activeTabId !== tab.id || !page;
+  const historyBlocked = !!templateDialog || blocked || !editable || record.dirty || record.pending || gridEditing || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || !!recordBatchDialog || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || settings.activeTabId !== tab.id;
   // 菜单和原生命令绑定同一个表页快照，切页、改草稿、改选区或换连接后旧入口立即失效。
   const tableToolbarScope = useMemo(() => ({}), [tab, connection, connectionVersion, refreshVersion, info, page, rows, selection, selectedRows, settings.activeTabId, blocked, gridEditing, record.dirty, record.pending, showPreferences, referenceDialog, pasteInsertDialog, historyBlocked, sortScope]);
   const tableToolbarOwner = useRef({ scope: tableToolbarScope, revision: 0 });
@@ -1559,6 +1601,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button aria-label={recordDuplicateZh.batchAction} title={recordDuplicateZh.batchHint} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={duplicateSelectedRows}><CopyPlus size={14}/>{recordDuplicateZh.batchAction}</button>
 <button aria-label={pasteInsertZh.action} disabled={!editable || blocked || record.dirty || !!pasteInsertDialog} onClick={openPasteInsert}>{pasteInsertZh.action}</button>
 <button aria-label={recordTemplatesZh.open} disabled={!editable || blocked || record.dirty || gridEditing || !!templateDialog} onClick={openRecordTemplates}>{recordTemplatesZh.open}</button>
+<button aria-label={recordBatchEditZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={openRecordBatch}>{recordBatchEditZh.action}</button>
 <button aria-label={recordBatchFillZh.action} disabled={!editable || insertCopyBlockedRef.current || !selectedRows.size} onClick={openBatchFill}>{recordBatchFillZh.action}</button>
 <button aria-label={draftHistoryZh.undo} title={draftHistoryZh.limit} disabled={!history.status.undo || historyBlocked} onClick={() => moveHistory("undo")}>{draftHistoryZh.undo} ({history.status.undo})</button>
 <button aria-label={draftHistoryZh.redo} title={draftHistoryZh.limit} disabled={!history.status.redo || historyBlocked} onClick={() => moveHistory("redo")}>{draftHistoryZh.redo} ({history.status.redo})</button>
@@ -1624,6 +1667,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     {filteredSelectDialog && <TableQueryTemplateDialog info={filteredSelectDialog.info} limit={filteredSelectDialog.limit} readScope={filteredSelectDialog.readScope} isCurrent={() => filteredSelectDialog.current()} onOpen={(sql, kind, options) => openFilteredSelectQuery(filteredSelectDialog, sql, kind, options)} onClose={() => closeFilteredSelect(filteredSelectDialog)}/>}
     {pasteInsertDialog && <PasteInsertDialog info={pasteInsertDialog.context.info!} visibleKeys={pasteInsertDialog.visible} invalidReason={pasteInsertDialog.reason(rowsRef.current, getRecordContext())} onStage={plan => stagePasteInsert(pasteInsertDialog, plan)} onClose={() => closePasteInsert(pasteInsertDialog)}/>}
     {templateDialog && <RecordTemplatesDialog key={templateDialog.lease.id} lease={templateDialog.lease} target={base} dialect="mysql" columns={templateDialog.columns} candidate={templateDialog.candidate} onStage={(content, count) => stageRecordTemplate(templateDialog, content, count)} onClose={() => closeRecordTemplates(templateDialog)}/>}
+    {recordBatchDialog && <TableRecordBatchDialog key={recordBatchDialog.id} intent={recordBatchDialog} current={() => recordBatchCurrent(recordBatchDialog)} onStage={candidates => stageRecordBatch(recordBatchDialog, candidates)} onDirty={dirty => recordBatchDirty(recordBatchDialog, dirty)} onClose={() => closeRecordBatch(recordBatchDialog)}/>}
     {batchFillDialog && <TableBatchFillDialog intent={batchFillDialog} initialColumn={selection?.key} invalidReason={batchFillDialog.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)} onStage={assignments => stageBatchFill(batchFillDialog, assignments)} onClose={() => closeBatchFill(batchFillDialog)}/>}
     {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} fitSource={columnFitSource} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
     {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
