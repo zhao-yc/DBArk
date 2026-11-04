@@ -1,3 +1,7 @@
+import { queryReadonlyRecordZh as recordText } from '../../src/renderer/locales/queryReadonlyRecord.zh-CN';
+import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
+import { recordJsonNodeInputZh as nodeText } from '../../src/renderer/locales/recordJsonNodeInput.zh-CN';
+import { recordJsonStructureInputZh as structureText } from '../../src/renderer/locales/recordJsonStructureInput.zh-CN';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
@@ -89,6 +93,42 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     const db = new DatabaseSync(database, { readOnly: true });
     try { return db.prepare('SELECT id,note FROM subject ORDER BY id').all().map(row => ({ id: row.id, note: row.note })); } finally { db.close(); check(); }
   };
+  /** 从原网格打开当前查询及磁盘固定快照，核实际类型和零额外SQL，不修改输入或原数据。 */
+  async function inspectRecord(label: string): Promise<void> {
+    const before = await step(audit), originalDisk = disk();
+    const region = () => query().getByRole('region', { name: detailText.region, exact: true });
+    await step(() => query().getByRole('grid').getByText('9223372036854775807', { exact: true }).click());
+    await step(async () => (await navigationMenuItem(query(), { name: detailText.open, exact: true }, check)).click());
+    await step(() => expect(region()).toBeVisible());
+    await step(() => region().getByRole('button', { name: recordText.tree, exact: true }).click());
+    await step(() => region().getByRole('button', { name: recordText.parse('note'), exact: true }).click());
+    await step(() => expect(region().locator('.record-lexical-list').last()).toContainText('9007199254740993'));
+    await step(() => expect(region().getByRole('button', { name: nodeText.edit, exact: true })).toHaveCount(0));
+    await step(() => expect(region().getByRole('button', { name: structureText.more, exact: true })).toHaveCount(0));
+    await step(() => region().locator('.record-lexical-list').last().scrollIntoViewIfNeeded());
+    await info.attach(label + '查询只读树', { body: await page.screenshot(), contentType: 'image/png' });
+    await step(() => region().getByRole('searchbox', { name: detailText.fieldSearch, exact: true }).fill('note'));
+    await step(() => region().getByRole('button', { name: recordText.json, exact: true }).click());
+    const box = () => region().getByRole('textbox', { name: recordText.jsonText, exact: true });
+    await step(() => expect(box()).toHaveJSProperty('readOnly', true));
+    const first = JSON.parse(await step(() => box().inputValue()));
+    expect(first).toMatchObject({ format: 'DBArk-query-record-view', version: 1, complete: true, sourceTypes: 'sqlite-storage' });
+    expect(first.fields).toHaveLength(5); expect(first.fields.map((field: any) => field.key)).toEqual(['c0','c1','c2','c3','c4']);
+    expect(first.fields[0].value).toEqual({ kind: 'integer', value: '9223372036854775807' });
+    expect(first.fields[1].value).toEqual({ kind: 'text', value: '9007199254740993' });
+    expect(first.fields[2].value).toEqual({ kind: 'null' });
+    expect(first.fields[3].value).toEqual({ kind: 'blob', encoding: 'base64', value: 'AP8=', bytes: 2 });
+    expect(first.fields[4].value).toEqual({ kind: 'integer', value: '2' });
+    await step(() => region().getByRole('button', { name: detailText.next, exact: true }).click());
+    const second = JSON.parse(await step(() => box().inputValue()));
+    expect(second.fields[0].value).toEqual({ kind: 'integer', value: '-9223372036854775808' });
+    expect(second.fields[4].value).toEqual({ kind: 'text', value: '2' });
+    await step(() => region().getByRole('button', { name: detailText.previous, exact: true }).click());
+    expect(JSON.parse(await step(() => box().inputValue()))).toEqual(first);
+    await info.attach(label + '查询完整记录JSON', { body: JSON.stringify({ first, second }), contentType: 'application/json' });
+    await step(() => region().getByRole('button', { name: detailText.close, exact: true }).click());
+    expect((await step(audit)).executions).toBe(before.executions); expect(disk()).toEqual(originalDisk);
+  }
   /** 唯一替换点是本例原生文件选择结果；IPC、授权、preload、broker和SQLite执行全部透传原产品。 */
   const arm = (profileId?: string) => step(() => application.evaluate(({ ipcMain, BrowserWindow, dialog, utilityProcess }, input) => {
     const root = globalThis as any, handlers = (ipcMain as any)._invokeHandlers, original = handlers?.get('dbark:request'), windows = BrowserWindow.getAllWindows(), window = windows[0], frame = window?.webContents.mainFrame;
@@ -217,6 +257,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     for (const text of ['9223372036854775807', '-9223372036854775808', '9007199254740993', '中文🚢', '0x00ff', '0xff00']) await step(() => expect(grid.getByText(text, { exact: true })).toBeVisible());
     await step(() => expect(grid.locator('.null-value')).toHaveCount(2)); expect(disk()).toEqual(baselineDisk);
     expect((await step(audit)).resultTypes).toEqual([[{ codes: ['itnbi', 'itnbt'], columns: ['c0', 'c1', 'c2', 'c3', 'c4'], rowCount: 2 }]]);
+    stage = '当前查询只读记录树与完整JSON'; await inspectRecord('当前结果');
     stage = '真实列头与独立草稿本地多列排序，原四次SQL预算不变';
     const exactHeader = grid.getByRole('columnheader').filter({ hasText: 'exact_int' }), mixedHeader = grid.getByRole('columnheader').filter({ hasText: 'mixed' }), blobHeader = grid.getByRole('columnheader').filter({ hasText: 'payload' });
     await step(() => expect(exactHeader).toHaveCount(1)); await step(() => expect(mixedHeader).toHaveCount(1)); await step(() => expect(blobHeader).toHaveCount(1));
@@ -547,6 +588,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => expect(query().getByText(snapshotText.opened, { exact: true })).toBeVisible());
     await step(() => expect(query().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible());
     expect((require('node:fs') as typeof import('node:fs')).readFileSync(snapshotPath, 'utf8')).toBe(JSON.stringify(savedSnapshot) + '\n');
+    stage = '磁盘重开固定快照只读记录树与完整JSON'; await inspectRecord('磁盘快照');
     stage = '新owner从本机持久化方案应用到原类型快照，随后准确删除本例方案';
     await step(async () => (await navigationMenuItem(query(), { name: presetText.open, exact: true }, check)).click());
     const restoredPresets = page.getByRole('dialog', { name: presetText.title, exact: true });

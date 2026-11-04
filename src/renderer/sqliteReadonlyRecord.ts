@@ -14,7 +14,7 @@ export function sqliteReadonlyRecordAvailable(page: Partial<SqliteTablePage> | u
   return !!page && page.result === view.binding.result && view.binding.context[0] === page && view.binding.context[1] === page.storageTypes && !!page.target && page.target.database === 'main' && ['table', 'view'].includes(page.target.kind) && typeof page.schemaKey === 'string' && /^[a-f0-9]{64}$/.test(page.schemaKey) && Array.isArray(page.columns) && page.columns.length === view.values.length && page.columns.length <= 1024 && Array.isArray(page.storageTypes);
 }
 /** 类型来自原协议，不把同文TEXT猜成INTEGER；BLOB只核Base64，不解码或分配完整HEX。 */
-function typed(value: CellValue, code: string): SqliteReadonlyValue {
+export function sqliteReadonlyValue(value: CellValue, code: string): SqliteReadonlyValue {
   if (code === 'n' && value === null) return Object.freeze({ kind: 'null' });
   if (code === 't' && typeof value === 'string') return Object.freeze({ kind: 'text', value });
   if (code === 'i' && typeof value === 'string' && value.length <= 20 && /^-?(?:0|[1-9][0-9]*)$/.test(value) && BigInt(value) >= -9223372036854775808n && BigInt(value) <= 9223372036854775807n) return Object.freeze({ kind: 'integer', value });
@@ -35,7 +35,7 @@ export class SqliteReadonlyRecord {
     this.columns = page.columns; this.columnRefs = page.columns.slice(); this.types = page.storageTypes!; this.code = this.types[view.index]; this.target = page.target; this.targetValue = { ...page.target }; this.schemaKey = page.schemaKey;
     this.fields = Object.freeze(page.columns.map((column, index) => {
       if (column.name !== view.binding.metadata[index].name || typeof column.declaredType !== 'string') throw Error(text.invalid);
-      return Object.freeze({ name: column.name, declaredType: column.declaredType, generated: column.generated === true, value: typed(view.values[index], this.code[index]) });
+      return Object.freeze({ name: column.name, declaredType: column.declaredType, generated: column.generated === true, value: sqliteReadonlyValue(view.values[index], this.code[index]) });
     }));
     if (!this.current()) throw Error(text.stale);
   }
