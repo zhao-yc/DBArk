@@ -1,3 +1,4 @@
+import { sqliteIncomingZh as incomingText } from '../../src/renderer/locales/sqliteIncoming.zh-CN';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
@@ -15,7 +16,7 @@ if (active) {
   for (const [index, value] of process.argv.entries()) if (value === '--trace' && process.argv[index + 1] !== 'off' || value.startsWith('--trace=') && value !== '--trace=off') throw Error('关系图专项禁止自动trace');
 }
 type Desktop = typeof import('./desktop-fixture');
-interface MenuAudit { pending: number; commands: string[]; denied: string[]; pickerCalls: number; reads: unknown[]; references: { input: Record<string, unknown>; reply?: unknown }[]; connectionId?: string; profiles: Record<string, boolean>; snapshots: string[]; previews: string[]; writes: unknown[]; restore(): void; }
+interface MenuAudit { pending: number; commands: string[]; denied: string[]; pickerCalls: number; reads: unknown[]; incoming: { input: Record<string, unknown>; reply?: unknown }[]; references: { input: Record<string, unknown>; reply?: unknown }[]; connectionId?: string; profiles: Record<string, boolean>; snapshots: string[]; previews: string[]; writes: unknown[]; restore(): void; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：显式离线启用SQLite关系图原生专项');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -36,25 +37,25 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
   const step = async <T,>(action: () => Promise<T>): Promise<T> => { check(); const result = await action(); check(); return result; };
   const audit = () => step(() => application.evaluate(() => {
     const state = (globalThis as typeof globalThis & { __sqliteRelationshipsAudit?: MenuAudit }).__sqliteRelationshipsAudit;
-    if (!state) throw Error('关系图Main观察器不存在'); return { pending: state.pending, commands: state.commands, denied: state.denied, pickerCalls: state.pickerCalls, reads: state.reads, references: state.references, profiles: state.profiles, snapshots: state.snapshots, previews: state.previews, writes: state.writes };
+    if (!state) throw Error('关系图Main观察器不存在'); return { pending: state.pending, commands: state.commands, denied: state.denied, pickerCalls: state.pickerCalls, reads: state.reads, references: state.references, incoming: state.incoming, profiles: state.profiles, snapshots: state.snapshots, previews: state.previews, writes: state.writes };
   }));
   const table = () => page.locator('.sqlite-table-tab:visible');
   const toolbar = () => table().getByRole('toolbar', { name: text.toolbar, exact: true });
   try {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); expect(dirname(resolve(database))).toBe(resolve(directory)); expect(basename(directory)).toMatch(/^dbark-e2e-/);
-    const db = new DatabaseSync(database); try { db.exec("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT,p REFERENCES parent); INSERT INTO parent VALUES(1); INSERT INTO subject VALUES(1,'合成原值','001'); CREATE TABLE parent_pair(a TEXT COLLATE NOCASE NOT NULL,b INTEGER NOT NULL,label TEXT,PRIMARY KEY(a,b)) WITHOUT ROWID; INSERT INTO parent_pair VALUES('Alpha',9223372036854775807,'甲'),('Beta',2,'乙'),('Gamma',3,'丙'); CREATE TABLE child_pair(id INTEGER PRIMARY KEY,a TEXT,b INTEGER,note TEXT,FOREIGN KEY(a,b) REFERENCES parent_pair); INSERT INTO child_pair VALUES(1,'Alpha',9223372036854775807,'原值'),(2,NULL,NULL,'控制')"); } finally { db.close(); }
+    const db = new DatabaseSync(database); try { db.exec("PRAGMA foreign_keys=OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE subject(id INTEGER PRIMARY KEY,note TEXT,p REFERENCES parent); INSERT INTO parent VALUES(1); INSERT INTO subject VALUES(1,'合成原值','001'); CREATE TABLE parent_pair(a TEXT COLLATE NOCASE NOT NULL,b INTEGER NOT NULL,label TEXT,PRIMARY KEY(a,b)) WITHOUT ROWID; INSERT INTO parent_pair VALUES('Alpha',9223372036854775807,'甲'),('Beta',2,'乙'),('Gamma',3,'丙'); CREATE TABLE child_pair(id INTEGER PRIMARY KEY,a TEXT,b INTEGER,note TEXT,FOREIGN KEY(a,b) REFERENCES parent_pair); INSERT INTO child_pair VALUES(1,'Alpha',9223372036854775807,'原值'),(2,NULL,NULL,'控制'); CREATE TABLE related_child(id INTEGER PRIMARY KEY,p TEXT REFERENCES parent(id),label TEXT); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<52) INSERT INTO related_child SELECT x,'001','明细'||x FROM n; INSERT INTO related_child VALUES(53,NULL,'无关联'),(54,'2','其它父键'); CREATE TABLE child_note(id INTEGER PRIMARY KEY,owner INTEGER REFERENCES child_pair(id),payload BLOB); INSERT INTO child_note VALUES(1,1,X'00FF')"); } finally { db.close(); }
     await info.attach('关系图准确启动归属', { body: JSON.stringify({ directory, database, pid: process.pid }), contentType: 'application/json' });
     await step(() => application.evaluate(({ ipcMain, dialog, BrowserWindow }, input) => {
       type Root = typeof globalThis & { __sqliteRelationshipsAudit?: MenuAudit };
       const root = globalThis as Root, handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, packet: { command: string; input: Record<string, unknown> }) => Promise<unknown>> })._invokeHandlers;
       const original = handlers.get('dbark:request'), picker = dialog.showOpenDialog, window = BrowserWindow.getAllWindows()[0], frame = window.webContents.mainFrame;
       if (!original || root.__sqliteRelationshipsAudit || BrowserWindow.getAllWindows().length !== 1) throw Error('关系图Main原入口不明确');
-      const state: MenuAudit = { pending: 0, commands: [], denied: [], pickerCalls: 0, reads: [], references: [], profiles: {}, snapshots: [], previews: [], writes: [], restore() {} };
+      const state: MenuAudit = { pending: 0, commands: [], denied: [], pickerCalls: 0, reads: [], references: [], incoming: [], profiles: {}, snapshots: [], previews: [], writes: [], restore() {} };
       let choosing = false;
       const deny = (command: string): never => { state.denied.push(command); throw Error('关系图专项拒绝越界：' + command); };
       const current = () => { if (root.__sqliteRelationshipsAudit !== state || handlers.get('dbark:request') !== wrapped || dialog.showOpenDialog !== ownPicker || window.isDestroyed() || window.webContents.mainFrame !== frame || BrowserWindow.getAllWindows().length !== 1 || state.denied.length) throw Error('关系图Main原观察器失效'); };
       const ownPicker = (async (...args: unknown[]) => { current(); const options = args.at(-1) as Electron.OpenDialogOptions; if (!choosing || state.pickerCalls >= 2 || !options.properties?.includes('openFile')) return deny('其它文件对话框'); state.pickerCalls++; return { canceled: false, filePaths: [input.database] }; }) as typeof dialog.showOpenDialog;
-      const allowed = new Set(['app.menuState', 'app.setDirty', 'settings.get', 'settings.save', 'connections.list', 'connections.save', 'connections.test', 'connections.open', 'files.choose', 'metadata.databases', 'metadata.objects', 'tasks.list', 'history.list', 'sqlite.tablePage', 'sqlite.tableLayout.get', 'sqlite.relationships', 'sqlite.referencePage', 'sqlite.tableEdit.release', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply']);
+      const allowed = new Set(['app.menuState', 'app.setDirty', 'settings.get', 'settings.save', 'connections.list', 'connections.save', 'connections.test', 'connections.open', 'files.choose', 'metadata.databases', 'metadata.objects', 'tasks.list', 'history.list', 'sqlite.tablePage', 'sqlite.tableLayout.get', 'sqlite.relationships', 'sqlite.referencePage', 'sqlite.incomingPage', 'sqlite.tableEdit.release', 'sqlite.tableEdit.preview', 'sqlite.tableEdit.apply']);
       const wrapped = async (event: Electron.IpcMainInvokeEvent, packet: { command: string; input: Record<string, unknown> }) => {
         current(); const command = packet?.command, value = packet?.input;
         if (event.sender !== window.webContents || event.senderFrame !== frame || !allowed.has(command) || !value || typeof value !== 'object') return deny(String(command));
@@ -66,7 +67,10 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
         if (command === 'sqlite.tableEdit.release' && (value.snapshotId !== undefined && !state.snapshots.includes(String(value.snapshotId)) || value.previewId !== undefined && !state.previews.includes(String(value.previewId)))) return deny(command);
         if (command.startsWith('sqlite.') && !command.startsWith('sqlite.tableEdit.')) {
           const id = String(value.connectionId), readOnly = state.profiles[id];
-          if (!(id in state.profiles) || value.database !== 'main' || (command === 'sqlite.relationships' ? !readOnly || (value.anchor as { table?: string })?.table !== 'subject' || !Array.isArray(value.tables) || value.tables.some(name => !['subject', 'parent'].includes(String(name))) : value.table !== (readOnly ? 'subject' : 'child_pair'))) return deny(command);
+          if (!(id in state.profiles) || value.database !== 'main') return deny(command);
+          if (command === 'sqlite.relationships') { if (!readOnly || (value.anchor as { table?: string })?.table !== 'subject' || !Array.isArray(value.tables) || value.tables.some(name => !['subject', 'parent'].includes(String(name)))) return deny(command); }
+          else if (command === 'sqlite.incomingPage') { if (value.table !== (readOnly ? 'parent' : 'child_pair') || value.incoming === 'page' && !(readOnly ? ['related_child','subject'] : ['child_note']).includes(String(value.childTable))) return deny(command); }
+          else if (!(readOnly ? ['subject', 'parent'] : ['child_pair']).includes(String(value.table))) return deny(command);
         }
         state.pending++; state.commands.push(command);
         try { const result = await original(event, packet); current();
@@ -74,7 +78,7 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
           if (reply.ok && command === 'sqlite.tablePage' && reply.result?.edit?.kind === 'editable') { if (state.profiles[String(value.connectionId)] || value.table !== 'child_pair' || !reply.result.edit.snapshotId) return deny(command); state.snapshots.push(reply.result.edit.snapshotId); }
           if (reply.ok && command === 'sqlite.tableEdit.preview' && reply.result?.previewId) state.previews.push(reply.result.previewId);
           if (command === 'sqlite.tableEdit.apply') state.writes.push({ input: structuredClone(value), reply: structuredClone(result) });
-          if (command === 'sqlite.relationships') state.reads.push({ input: structuredClone(value), reply: structuredClone(result) }); if (command === 'sqlite.referencePage') state.references.push({ input: structuredClone(value), reply: structuredClone(result) }); return result; } finally { state.pending--; if (command === 'files.choose') choosing = false; }
+          if (command === 'sqlite.relationships') state.reads.push({ input: structuredClone(value), reply: structuredClone(result) }); if (command === 'sqlite.incomingPage') state.incoming.push({ input: structuredClone(value), reply: structuredClone(result) }); if (command === 'sqlite.referencePage') state.references.push({ input: structuredClone(value), reply: structuredClone(result) }); return result; } finally { state.pending--; if (command === 'files.choose') choosing = false; }
       };
       state.restore = () => { current(); if (state.pending) throw Error('关系图原请求未完成'); handlers.set('dbark:request', original); dialog.showOpenDialog = picker; delete root.__sqliteRelationshipsAudit; };
       root.__sqliteRelationshipsAudit = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = ownPicker;
@@ -134,6 +138,27 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
     await info.attach('SQLite外键父记录真实窗口', { body: await page.screenshot(), contentType: 'image/png' });
     await step(() => reference.getByRole('button', { name: referenceText.close, exact: true }).click()); await step(() => expect(reference).toHaveCount(0));
     await info.attach('SQLite外键浏览原始回包', { body: JSON.stringify((await audit()).references), contentType: 'application/json' });
+    // 只读父行反向读取：目录不带业务值，52条子记录完整分页，切换声明不隐式查询。
+    const readOnlyBranch = page.locator('.connection-row').filter({ hasText: 'SQLite关系图本例' }).locator('..');
+    await step(() => readOnlyBranch.locator('.object-row .tree-label').filter({ hasText: /^parent$/ }).dblclick());
+    await step(() => table().getByRole('grid').getByRole('gridcell').filter({ hasText: /^1$/ }).click());
+    const beforeIncoming = (await audit()).incoming.length, sourceIncomingReads = (await audit()).commands.filter(command => command === 'sqlite.tablePage').length;
+    await step(async () => (await navigationMenuItem(toolbar(), { name: incomingText.entry, exact: true }, check)).click());
+    const incoming = () => page.getByRole('dialog', { name: incomingText.title, exact: true }); await step(() => expect(incoming()).toBeVisible()); expect((await audit()).incoming).toHaveLength(beforeIncoming);
+    await step(() => incoming().getByRole('button', { name: incomingText.catalog, exact: true }).click()); await step(() => expect(incoming().getByLabel(incomingText.constraint, { exact: true }).locator('option')).toHaveCount(2));
+    const directoryFacts = await audit(); expect(directoryFacts.incoming.at(-1)!.input).toMatchObject({ incoming: 'catalog', table: 'parent' }); expect(directoryFacts.incoming.at(-1)!.input).not.toHaveProperty('values');
+    await step(() => incoming().getByRole('button', { name: incomingText.read, exact: true }).click()); await step(() => expect(incoming().getByRole('button', { name: incomingText.next, exact: true })).toBeEnabled()); expect(((await audit()).incoming.at(-1)!.reply as any).result.page.result.rows).toHaveLength(50);
+    expect((await audit()).incoming.at(-1)!.input).toMatchObject({ incoming: 'page', childTable: 'related_child', values: [{ kind: 'integer', value: '1' }], offset: 0, limit: 50 });
+    await info.attach('SQLite反向关联第一页', { body: await page.screenshot(), contentType: 'image/png' });
+    await step(() => incoming().getByRole('button', { name: incomingText.next, exact: true }).click()); await step(() => expect(incoming().getByRole('grid').getByRole('gridcell').filter({ hasText: /^明细52$/ })).toHaveCount(1)); await step(() => expect(incoming().getByRole('button', { name: incomingText.next, exact: true })).toBeDisabled());
+    await step(() => incoming().getByRole('button', { name: incomingText.previous, exact: true }).click()); await step(() => expect(incoming().getByRole('button', { name: incomingText.previous, exact: true })).toBeDisabled()); await step(() => expect(incoming().getByRole('button', { name: incomingText.next, exact: true })).toBeEnabled());
+    const beforeSwitch = (await audit()).incoming.length; await step(() => incoming().getByLabel(incomingText.constraint, { exact: true }).selectOption('1')); expect((await audit()).incoming).toHaveLength(beforeSwitch); await step(() => expect(incoming().getByRole('grid')).toHaveCount(0));
+    await step(() => incoming().getByRole('button', { name: incomingText.read, exact: true }).click()); await step(() => expect(incoming().getByRole('grid').getByRole('gridcell').filter({ hasText: /^合成原值$/ })).toHaveCount(1));
+    const deletedParent = new DatabaseSync(database); try { deletedParent.exec('PRAGMA foreign_keys=OFF; DELETE FROM parent WHERE id=1'); } finally { deletedParent.close(); }
+    await step(() => incoming().getByRole('button', { name: incomingText.read, exact: true }).click()); await step(() => expect(incoming()).toContainText(incomingText.empty));
+    const restoreParent = new DatabaseSync(database); try { restoreParent.exec('INSERT INTO parent VALUES(1)'); } finally { restoreParent.close(); }
+    expect((await audit()).commands.filter(command => command === 'sqlite.tablePage')).toHaveLength(sourceIncomingReads);
+    await step(() => incoming().getByRole('button', { name: incomingText.close, exact: true }).click()); await step(() => expect(incoming()).toHaveCount(0));
     // 第二个准确profile只允许本例child_pair可写；候选、暂存、撤销和预览取消均核对磁盘零提前写。
     await step(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click());
     const writable = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
@@ -167,6 +192,14 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
     await step(() => table().getByRole('button', { name: editText.preview, exact: true }).click()); const preview = page.getByRole('dialog', { name: editText.previewTitle, exact: true }); await step(() => expect(preview).toBeVisible()); expect(disk()).toEqual(baseline); await step(() => preview.getByRole('button', { name: editText.closePreview, exact: true }).click()); expect(disk()).toEqual(baseline);
     await step(() => table().getByRole('button', { name: editText.preview, exact: true }).click()); await step(() => preview.getByRole('checkbox', { name: editText.confirmation, exact: true }).check()); await step(() => preview.getByRole('button', { name: editText.submit, exact: true }).click()); await step(() => expect(preview).toHaveCount(0));
     await step(() => expect.poll(disk).toEqual([{ id: 1, a: 'Beta', b: '2', note: '保留本地草稿' }, baseline[1]]));
+    // 可写源行的父键草稿99不改变原保存键1，反向只读后仍可一步撤销草稿。
+    await step(() => grid().getByRole('button', { name: editText.select(1), exact: true }).click()); await step(() => table().getByRole('button', { name: editText.editRow, exact: true }).click()); await step(() => rowForm.getByLabel(editText.value('id'), { exact: true }).fill('99')); await step(() => rowForm.getByRole('button', { name: editText.saveInput, exact: true }).click());
+    const beforeWritableIncoming = (await audit()).incoming.length; await step(async () => (await navigationMenuItem(toolbar(), { name: incomingText.entry, exact: true }, check)).click()); await step(() => expect(incoming()).toBeVisible()); expect((await audit()).incoming).toHaveLength(beforeWritableIncoming);
+    await step(() => incoming().getByRole('button', { name: incomingText.catalog, exact: true }).click()); await step(() => incoming().getByRole('button', { name: incomingText.read, exact: true }).click());
+    await step(() => expect(incoming().getByRole('grid')).toBeVisible()); expect(((await audit()).incoming.at(-1)!.reply as any).result.page.result.rows[0].c2).toEqual({ type: 'binary', base64: 'AP8=' }); expect((await audit()).incoming.at(-1)!.input).toMatchObject({ incoming: 'page', table: 'child_pair', childTable: 'child_note', values: [{ kind: 'integer', value: '1' }] });
+    await info.attach('SQLite反向关联保留父键草稿', { body: await page.screenshot(), contentType: 'image/png' }); await step(() => incoming().getByRole('button', { name: incomingText.close, exact: true }).click());
+    await step(() => table().getByRole('button', { name: editText.editRow, exact: true }).click()); await step(() => expect(rowForm.getByLabel(editText.value('id'), { exact: true })).toHaveValue('99')); await step(() => rowForm.getByRole('button', { name: editText.cancelInput, exact: true }).click()); await step(() => table().getByRole('button', { name: editText.undo, exact: true }).click());
+    expect(disk()).toEqual([{ id: 1, a: 'Beta', b: '2', note: '保留本地草稿' }, baseline[1]]);
     const finalFacts = await audit(); expect(finalFacts.denied).toEqual([]); expect(finalFacts.pickerCalls).toBe(2); expect(finalFacts.writes).toHaveLength(1); expect(runtime.pageErrors).toEqual([]);
     await info.attach('SQLite外键选择最终草稿与提交', { body: await page.screenshot(), contentType: 'image/png' }); await info.attach('SQLite外键选择完整请求与零提前写入', { body: JSON.stringify({ baseline, finalDisk: disk(), finalFacts, applicationWrites: 1, systemFilePickerInputVerified: false, systemClipboardOperations: 0 }), contentType: 'application/json' });
     await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteRelationshipsAudit?: MenuAudit }).__sqliteRelationshipsAudit; if (!state) throw Error('原关系图观察器已消失'); state.restore(); })); armed = false;

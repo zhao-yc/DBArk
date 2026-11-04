@@ -1,3 +1,4 @@
+import { sqliteIncomingInputSchema } from './sqliteIncoming';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema } from './sqliteTablePresets';
 import { sqliteLayoutTargetSchema, sqliteLayoutSaveSchema, sqliteLayoutResetSchema } from './sqliteTableLayout';
 import { sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema } from './sqliteObjects';
@@ -231,6 +232,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.countRows': sqliteRowCountInputSchema,
   'sqlite.relationships': sqliteRelationshipsInputSchema,
   'sqlite.referencePage': sqliteReferenceInputSchema,
+  'sqlite.incomingPage': sqliteIncomingInputSchema,
   'sqlite.tableExport': sqliteTableExportSchema,
   'sqlite.tableEdit.preview': sqliteTableEditPreviewSchema,
   'sqlite.tableEdit.apply': sqliteTableEditApplySchema,

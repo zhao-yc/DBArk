@@ -666,3 +666,70 @@ it.each(['foreign', 'rollback'] as const)('外键%s取消只影响准确读任�
   expect(await reading).toBeInstanceOf(Error); expect(events.filter(event => event.taskId === request.taskId).at(-1)?.status).toBe('cancelled');
   expect(await app.request('query.sessionState', user)).toMatchObject({ transactionOpen: true, transactionKnown: true, broken: false }); await app.request('query.transaction', { ...user, action: 'rollback' }); await app.request('connections.close', { id: profile.id });
 });
+
+it('反向目录真实worker列出复合／隐式／自引用与无效声明，分页保留父NOCASE／INTEGER亲和性且不扫描未选业务表', async () => {
+  const profile = fixture(); disk(profile, db => db.exec(`PRAGMA foreign_keys=OFF;
+    CREATE TABLE Parent(tenant TEXT COLLATE NOCASE NOT NULL,id INTEGER NOT NULL,payload BLOB,ancestor_id,ancestor_tenant,PRIMARY KEY(id,tenant),FOREIGN KEY(ancestor_id,ancestor_tenant) REFERENCES Parent);
+    INSERT INTO Parent VALUES('Alpha',1,X'00FF',NULL,NULL),('Beta',2,X'FF00','001','alpha');
+    CREATE TABLE Child(id INTEGER PRIMARY KEY,tenant TEXT COLLATE BINARY,ref_id TEXT,FOREIGN KEY(ref_id,tenant) REFERENCES pArEnT);
+    INSERT INTO Child VALUES(1,'alpha','001'),(2,'ALPHA','1'),(3,'Beta','2'),(4,NULL,'1');
+    CREATE TABLE broken(v REFERENCES Parent(missing));
+    CREATE VIEW unrelated_view AS SELECT * FROM Child;
+  `));
+  const { app } = runtime(profile), initial = await app.request('sqlite.tablePage', input(profile, randomUUID(), { table: 'Parent', sort: [] })) as SqliteTablePage;
+  const base = { connectionId: profile.id, database: 'main' as const, table: 'Parent', schemaKey: initial.schemaKey };
+  const catalog = await app.request('sqlite.incomingPage', { ...base, incoming: 'catalog', taskId: randomUUID() }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput;
+  expect(catalog.page).toBeUndefined(); expect(catalog.references.map(e => e.table)).toEqual(['Child','Parent','broken']); expect(catalog.references[2].referencedColumns).toBeNull();
+  const entry = catalog.references[0]; expect(entry.referencedColumns).toEqual(['id','tenant']);
+  const request = { ...base, incoming: 'page' as const, childTable: entry.table, childSchemaKey: entry.schemaKey, foreignKey: entry.key.ordinal, values: [{ kind: 'integer', value: '1' }, { kind: 'text', value: 'Alpha' }], offset: 0, limit: 1 };
+  const self = await app.request('sqlite.incomingPage', { ...request, childTable: 'Parent', childSchemaKey: catalog.references[1].schemaKey, foreignKey: catalog.references[1].key.ordinal, taskId: randomUUID() }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput; expect(self.page?.result.rows[0].c0).toBe('Beta');
+  const first = await app.request('sqlite.incomingPage', { ...request, taskId: randomUUID() }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput;
+  const second = await app.request('sqlite.incomingPage', { ...request, taskId: randomUUID(), offset: 1 }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput;
+  expect(first.page?.edit).toBeUndefined(); expect(first.page?.hasMore).toBe(true); expect(second.page?.hasMore).toBe(false); expect([first.page!.result.rows[0].c0, second.page!.result.rows[0].c0].sort()).toEqual(['1','2']);
+  const empty = await app.request('sqlite.incomingPage', { ...request, taskId: randomUUID(), values: [{ kind: 'null' }, { kind: 'text', value: 'Alpha' }] }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput; expect(empty.page?.result.rows).toEqual([]);
+  await expect(app.request('sqlite.incomingPage', { ...request, taskId: randomUUID(), foreignKey: 99 })).rejects.toThrow('原反向外键已变化');
+  disk(profile, db => db.exec('ALTER TABLE Child ADD COLUMN extra TEXT'));
+  await expect(app.request('sqlite.incomingPage', { ...request, taskId: randomUUID() })).rejects.toThrow('原表结构已变化');
+  await expect(app.request('sqlite.incomingPage', { ...base, schemaKey: '0'.repeat(64), incoming: 'catalog', taskId: randomUUID() })).rejects.toThrow('原表结构已变化');
+  await app.request('connections.close', { id: profile.id }); for (const p of processes) { expect(p.kills).toBe(0); expect(await p.exited).toEqual({ code: 0, signal: null }); }
+});
+it('反向子页真实SQLite去掉子列亲和性，TEXT父0042不误匹配NUMERIC子42，非唯一父不重复子行；BLOB和大整数精确', async () => {
+  const profile = fixture(); disk(profile, db => db.exec(`PRAGMA foreign_keys=OFF;
+    CREATE TABLE parent_text(code TEXT PRIMARY KEY); INSERT INTO parent_text VALUES('0042'),('42');
+    CREATE TABLE child_numeric(v NUMERIC REFERENCES parent_text(code)); INSERT INTO child_numeric VALUES('0042');
+    CREATE TABLE parent_binary(code BLOB,n INTEGER); INSERT INTO parent_binary VALUES(X'00FF',9223372036854775807),(X'00FF',9223372036854775807);
+    CREATE TABLE "子""表"(id INTEGER PRIMARY KEY,v BLOB,n INTEGER,FOREIGN KEY(v,n) REFERENCES parent_binary(code,n)); INSERT INTO "子""表" VALUES(1,X'00FF',9223372036854775807),(2,X'FF00',9223372036854775807);
+  `));
+  const { app } = runtime(profile);
+  const read = async (table: string, values: object[]) => {
+    const source = await app.request('sqlite.tablePage', input(profile, randomUUID(), { table, sort: [] })) as SqliteTablePage;
+    const base = { connectionId: profile.id, database: 'main' as const, table, schemaKey: source.schemaKey };
+    const catalog = await app.request('sqlite.incomingPage', { ...base, incoming: 'catalog', taskId: randomUUID() }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput, entry = catalog.references[0];
+    return app.request('sqlite.incomingPage', { ...base, incoming: 'page', childTable: entry.table, childSchemaKey: entry.schemaKey, foreignKey: entry.key.ordinal, values, offset: 0, limit: 50, taskId: randomUUID() }) as Promise<import('../../src/shared/sqliteIncoming').SqliteIncomingOutput>;
+  };
+  expect((await read('parent_text', [{ kind: 'text', value: '0042' }])).page?.result.rows).toEqual([]);
+  expect((await read('parent_text', [{ kind: 'text', value: '42' }])).page?.result.rows).toEqual([{ c0: '42' }]);
+  const blob = await read('parent_binary', [{ kind: 'blob', value: '00ff' }, { kind: 'integer', value: '9223372036854775807' }]); expect(blob.page?.result.rows).toEqual([{ c0: '1', c1: { type: 'binary', base64: 'AP8=' }, c2: '9223372036854775807' }]); expect(blob.page?.storageTypes).toEqual(['ibi']);
+  await app.request('connections.close', { id: profile.id }); for (const p of processes) { expect(p.kills).toBe(0); expect(await p.exited).toEqual({ code: 0, signal: null }); }
+});
+it('反向目录超出500张表明确整份失败，不发布部分引用', async () => {
+  const profile = fixture(); disk(profile, db => db.exec(Array.from({ length: 501 }, (_, i) => 'CREATE TABLE t' + i + '(id INTEGER PRIMARY KEY)').join(';')));
+  const { app } = runtime(profile), source = await app.request('sqlite.tablePage', input(profile, randomUUID(), { table: 't0', sort: [] })) as SqliteTablePage;
+  await expect(app.request('sqlite.incomingPage', { connectionId: profile.id, database: 'main', table: 't0', schemaKey: source.schemaKey, incoming: 'catalog', taskId: randomUUID() })).rejects.toThrow('超过500张');
+  await app.request('connections.close', { id: profile.id }); for (const p of processes) { expect(p.kills).toBe(0); expect(await p.exited).toEqual({ code: 0, signal: null }); }
+});
+it.each(['catalog', 'page', 'rollback'] as const)('反向%s阶段取消等待原资源退出，用户查询事务保持', async phase => {
+  const profile = fixture(); disk(profile, db => db.exec('CREATE TABLE incoming_child(v REFERENCES mix(id)); INSERT INTO incoming_child VALUES(1)'));
+  const reached = deferred<void>(); let armed = false, paused = false, release!: () => void;
+  const { app, events } = runtime(profile, () => transport((message, forward) => {
+    const match = message.kind === 'statement' && (phase === 'catalog' ? message.sql.includes('pragma_table_list WHERE') : phase === 'page' ? message.sql.includes(' WHERE EXISTS ') : message.sql === 'ROLLBACK');
+    if (armed && !paused && match) { paused = true; release = forward; reached.resolve(); } else forward();
+  }));
+  const source = await app.request('sqlite.tablePage', input(profile, randomUUID())) as SqliteTablePage, base = { connectionId: profile.id, database: 'main' as const, table: 'mix', schemaKey: source.schemaKey };
+  const catalog = await app.request('sqlite.incomingPage', { ...base, incoming: 'catalog', taskId: randomUUID() }) as import('../../src/shared/sqliteIncoming').SqliteIncomingOutput, entry = catalog.references[0];
+  const user = await app.request('sessions.open', { connectionId: profile.id }); await app.request('query.transaction', { ...user, action: 'begin' });
+  const request = phase === 'page' ? { ...base, incoming: 'page', taskId: randomUUID(), childTable: entry.table, childSchemaKey: entry.schemaKey, foreignKey: entry.key.ordinal, values: [{ kind: 'integer', value: '1' }], offset: 0, limit: 50 } : { ...base, incoming: 'catalog', taskId: randomUUID() }; armed = true;
+  const reading = app.request('sqlite.incomingPage', request).catch(reason => reason); await reached.promise; const stopping = app.request('query.cancel', { taskId: request.taskId }); if (phase === 'rollback') release(); await stopping;
+  expect(await reading).toBeInstanceOf(Error); expect(events.filter(e => e.taskId === request.taskId).at(-1)?.status).toBe('cancelled'); expect(await app.request('query.sessionState', user)).toMatchObject({ transactionOpen: true, transactionKnown: true, broken: false });
+  await app.request('query.transaction', { ...user, action: 'rollback' }); await app.request('connections.close', { id: profile.id });
+});

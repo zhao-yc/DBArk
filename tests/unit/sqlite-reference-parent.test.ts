@@ -5,6 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { SqliteTableEditor } from '../../src/renderer/sqliteTableEditor';
 import { sqliteReferenceDraft } from '../../src/renderer/sqliteReferenceChoice';
 import { captureSqliteReferenceSource } from '../../src/renderer/sqliteReferenceSource';
+import { sqliteIncomingZh as incomingText } from '../../src/renderer/locales/sqliteIncoming.zh-CN';
 import { sqliteReferenceZh as referenceText } from '../../src/renderer/locales/sqliteReference.zh-CN';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
 
@@ -17,12 +18,12 @@ function fixture(editable = true) {
   const tab = { id: 't', connectionId: 'c' }, profile = { id: 'c' }, state = { settings: { activeTabId: 't', tabs: [tab] }, connections: [profile], connectionVersions: { c: 0 }, activeJobs: {} as Record<string, unknown> };
   const forbidden = vi.fn(async (_value: unknown): Promise<any> => { throw Error('父关联入口不能预览或提交'); }), editor = editable ? new SqliteTableEditor(page, { current: () => true, active: () => true, available: () => !state.activeJobs.t, acquire: () => { throw Error('原编辑器不得取得写事务'); }, id: () => 'id', now: () => 0, changed: () => {}, dirty: () => {}, preview: forbidden, apply: forbidden, release: async () => {}, cancel: async () => {}, committed: () => {} }) : undefined;
   if (editor) editor.save(editor.view.rows[0].id, [{ kind: 'text', value: '002' }]);
-  let modal: boolean | string = false; const context: any = createContext({ page, tab, profile, version: 0, refreshVersion: 0, view: { busy: false }, available: () => !modal && !state.activeJobs.t, editorRef: { current: editor ?? null }, inputRef: { current: null }, previewRef: { current: null }, selectedRow: editor?.view.rows[0].id, detailSelectionRef: { current: { binding: {}, index: 0 } }, rowDetailsCurrent: () => true, controller: { pageCurrent: (candidate: unknown) => candidate === page }, captureSqliteReferenceSource, sqliteReferenceDraft, referenceText, latest: { current: { active: true, tab, refreshVersion: 0 } }, referenceRef: { current: undefined }, useWorkspace: { getState: () => state }, uid: () => 'reference-owner', errorMessage: (error: Error) => error.message, setValidation: vi.fn(), document: { querySelectorAll: () => modal ? [{ getAttribute: () => modal === 'choose' ? referenceText.choiceTitle : referenceText.title }] : [] } });
-  context.setReferenceOpen = vi.fn((value: any) => { modal = value ? value.stage ? 'choose' : true : false; });
+  let modal: boolean | string = false; const context: any = createContext({ page, tab, profile, version: 0, refreshVersion: 0, view: { busy: false }, available: () => !modal && !state.activeJobs.t, editorRef: { current: editor ?? null }, inputRef: { current: null }, previewRef: { current: null }, selectedRow: editor?.view.rows[0].id, detailSelectionRef: { current: { binding: {}, index: 0 } }, rowDetailsCurrent: () => true, controller: { pageCurrent: (candidate: unknown) => candidate === page }, captureSqliteReferenceSource, sqliteReferenceDraft, referenceText, incomingText, latest: { current: { active: true, tab, refreshVersion: 0 } }, referenceRef: { current: undefined }, useWorkspace: { getState: () => state }, uid: () => 'reference-owner', errorMessage: (error: Error) => error.message, setValidation: vi.fn(), document: { querySelectorAll: () => modal ? [{ getAttribute: () => modal === 'incoming' ? incomingText.title : modal === 'choose' ? referenceText.choiceTitle : referenceText.title }] : [] } });
+  context.setReferenceOpen = vi.fn((value: any) => { modal = value ? value.incoming ? 'incoming' : value.stage ? 'choose' : true : false; });
   const publish = () => context.referenceRef.current?.current();
   context.acquireWorkspaceBusy = () => { const token = {}; state.activeJobs.t = token; publish(); return { owns: () => state.activeJobs.t === token, release: () => { if (state.activeJobs.t !== token) return false; delete state.activeJobs.t; publish(); return true; } }; };
   runInContext(ts.transpileModule(method + '\nglobalThis.open=openReference;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
-  return { context, state, page, editor, forbidden, publish, open: (mode: 'browse' | 'choose' = 'browse') => { context.open(mode); return context.referenceRef.current; }, dispose: () => editor?.dispose() };
+  return { context, state, page, editor, forbidden, publish, open: (mode: 'browse' | 'choose' | 'incoming' = 'browse') => { context.open(mode); return context.referenceRef.current; }, dispose: () => editor?.dispose() };
 }
 it.each([true, false])('父入口editable=%s捕获准确当前值，打开零读取／提交，源草稿和撤销栈保持', editable => {
   const f = fixture(editable), before = f.editor?.view.rows, owner = f.open(); expect(owner.values).toEqual([{ kind: 'text', value: editable ? '002' : '001' }]);
@@ -53,3 +54,9 @@ it('undo/redo恢复同一rows引用仍撤销选择权，不能利用未观察到
   f.editor!.undo(); f.editor!.redo(); expect(f.editor!.view.rows).toBe(rows); expect(owner.current()).toBe(false); f.dispose();
 });
 it('只读源不能打开外键选择入口', () => { const f = fixture(false); expect(f.open('choose')).toBeUndefined(); expect(f.context.setReferenceOpen).not.toHaveBeenCalled(); });
+
+it.each([true, false])('子记录入口editable=%s取已保存原值，保持源草稿和undo，打开零写任务', editable => {
+  const f = fixture(editable), before = f.editor?.view.rows, owner = f.open('incoming'); expect(owner.incoming).toBe(true); expect(owner.values).toEqual([{ kind: 'text', value: '001' }]); expect(owner.current()).toBe(true);
+  owner.activity(1); expect(owner.current()).toBe(true); expect(f.editor?.view.rows).toBe(before); owner.activity(-1); expect(owner.current()).toBe(true); expect(f.forbidden).not.toHaveBeenCalled(); f.dispose();
+});
+it('未保存新行不提供子记录入口，原草稿保留', () => { const f = fixture(); const id = f.editor!.add(); f.context.selectedRow = id; const before = f.editor!.view.rows; expect(f.open('incoming')).toBeUndefined(); expect(f.editor!.view.rows).toBe(before); f.dispose(); });

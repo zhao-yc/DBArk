@@ -13,6 +13,7 @@ import { sqliteTableEditMessages } from '../shared/sqliteTableEdit';
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
   if (command === 'query.objectDefinition') return event.status === 'completed' ? '对象结构读取完成；定义正文和错误原文未保存。' : event.status === 'running' ? '正在读取对象结构；定义只留在当前窗口。' : '对象结构读取未完成；定义正文和错误原文未保存。';
+  if (command === 'sqlite.incomingPage') return event.status === 'completed' ? 'SQLite关联子记录浏览完成；父键、子记录和错误原文未保存。' : event.status === 'running' ? '正在只读浏览SQLite关联子记录；关联值仅留在当前窗口。' : 'SQLite关联子记录浏览未完成；父键、子记录和错误原文未保存，请在原窗口核对。';
   if (command === 'sqlite.referencePage') return event.status === 'completed' ? 'SQLite外键浏览完成；关联值、父记录和错误原文未保存。' : event.status === 'running' ? '正在只读浏览SQLite父记录；关联值仅留在当前窗口。' : 'SQLite外键浏览未完成；关联值、父记录和错误原文未保存，请在原窗口核对。';
   if (command === 'sqlite.statistics') return event.status === 'completed' ? 'SQLite字段概况完成；筛选、极值和统计结果未保存。' : event.status === 'running' ? '正在统计SQLite字段；原值仅留在当前窗口。' : 'SQLite字段概况未完成；筛选、极值及错误原文未保存。';
   if (command === 'sqlite.countRows') return event.status === 'completed' ? 'SQLite匹配行数统计完成。' : event.status === 'running' ? '正在统计SQLite匹配行数。' : 'SQLite匹配行数统计未完成。';

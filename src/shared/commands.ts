@@ -11,6 +11,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.tablePage': true,
   'sqlite.relationships': true,
   'sqlite.referencePage': true,
+  'sqlite.incomingPage': true,
   'sqlite.valueOptions': true,
   'sqlite.statistics': true,
   'sqlite.schemaScript': true,

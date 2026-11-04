@@ -48,3 +48,8 @@ it.each(['running', 'completed', 'failed', 'cancelled'] as const)('SQLite外键%
   const message = persistedTaskMessage('sqlite.referencePage', { taskId: '外键只读任务', status, progress: 50, message: '本例私有原值和错误全文' });
   expect(message).not.toContain('本例私有原值'); expect(message).toContain('关联值');
 });
+
+it.each(['running', 'completed', 'failed', 'cancelled'] as const)('SQLite子记录%s概要不持久化父键或子记录', status => {
+  const message = persistedTaskMessage('sqlite.incomingPage', { taskId: '反向只读任务', status, progress: 50, message: '私有父键和子记录原文' });
+  expect(message).toContain('SQLite'); expect(message).not.toContain('私有父键和子记录原文'); expect(message).toContain('关联');
+});
