@@ -1034,7 +1034,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   }
   // 编辑能力释放不受保存锁和退出锁影响；只撤销准确来源，不取消已经发送的写入。
   if (command === 'sqlite.tableEdit.release') return sqliteEdits.release(columns!, input);
-  const sqlitePreview = command === 'sqlite.tableEdit.preview' ? sqliteEdits.preview(columns!, input.snapshotId) : undefined;
+  const sqlitePreview = command === 'sqlite.tableEdit.preview' ? sqliteEdits.preview(columns!, input.snapshotId, input.additionalPages?.map((page: { snapshotId: string }) => page.snapshotId)) : undefined;
   const sqliteApplySource = command === 'sqlite.tableEdit.apply' ? sqliteEdits.lookup(columns!, input.previewId) : undefined;
   let sqlitePage: ReturnType<SqliteTableEditOwners['page']> | undefined;
   let sqliteClaim: ReturnType<SqliteTableEditOwners['claim']> | undefined;

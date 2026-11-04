@@ -8,7 +8,7 @@ export const sqliteEditValueSchema = z.union([z.object({ kind: z.literal('null')
 export type SqliteEditValue = z.infer<typeof sqliteEditValueSchema>;
 /** 原页值可含SQLite原生非有限REAL；只有用户新输入的REAL才要求有限。 */
 export type SqliteOriginalValue = { kind: 'null' } | { kind: 'text' | 'integer' | 'real' | 'blob'; value: string };
-export const sqliteTableEditLimits = { changes: 500, cells: 10000, valueUnits: 65536, inputUnits: 2 * 1024 * 1024, snapshots: 64, snapshotBytes: 64 * 1024 * 1024, snapshotLifetimeMs: 30 * 60 * 1000, previewLifetimeMs: 5 * 60 * 1000 } as const;
+export const sqliteTableEditLimits = { pages: 16, changes: 500, cells: 10000, valueUnits: 65536, inputUnits: 2 * 1024 * 1024, snapshots: 64, snapshotBytes: 64 * 1024 * 1024, snapshotLifetimeMs: 30 * 60 * 1000, previewLifetimeMs: 5 * 60 * 1000 } as const;
 const fields = z.array(z.object({ column: name, value: sqliteEditValueSchema }).strict()).max(1024).refine(values => new Set(values.map(value => value.column)).size === values.length, '修改字段不能重复');
 export const sqliteTableChangeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('insert'), values: fields }).strict(),
@@ -16,28 +16,43 @@ export const sqliteTableChangeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('delete'), row: z.number().int().min(0).max(999) }).strict(),
 ]);
 export type SqliteTableChange = z.infer<typeof sqliteTableChangeSchema>;
-const previewShape = z.object({ snapshotId: id, taskId: id, changes: z.array(sqliteTableChangeSchema).min(1).max(sqliteTableEditLimits.changes) }).strict().superRefine((input, context) => {
-  const rows = input.changes.filter(change => change.kind !== 'insert').map(change => change.row);
-  if (new Set(rows).size !== rows.length) context.addIssue({ code: 'custom', message: '同一原记录只能修改一次' });
-  const values = input.changes.flatMap(change => change.kind === 'delete' ? [] : change.values);
-  if (values.length > sqliteTableEditLimits.cells || values.reduce((size, value) => size + value.column.length + ('value' in value.value ? value.value.value.length : 0), 0) > sqliteTableEditLimits.inputUnits) context.addIssue({ code: 'custom', message: 'SQLite整批修改超过字段或文本预算' });
-});
-/** 先按原始数组长度计整批预算，避免为必定超限的整组值深解析并复制几十万个单元格。 */
-export const sqliteTableEditPreviewSchema = z.unknown().superRefine((value, context) => {
-  const changes = value && typeof value === 'object' && 'changes' in value ? value.changes : undefined;
-  if (!Array.isArray(changes) || changes.length > sqliteTableEditLimits.changes) { context.addIssue({ code: 'custom', message: 'SQLite整批修改行数超限或格式无效' }); return; }
-  let cells = 0, units = 0;
-  const groups = changes.map(change => change && typeof change === 'object' && Array.isArray(change.values) ? change.values : []);
-  for (const fields of groups) {
-    cells += fields.length;
-    if (cells > sqliteTableEditLimits.cells) { context.addIssue({ code: 'custom', message: 'SQLite整批修改超过字段预算' }); return; }
+const pageChanges = z.array(sqliteTableChangeSchema).min(1).max(sqliteTableEditLimits.changes);
+const additionalPage = z.object({ snapshotId: id, changes: pageChanges }).strict();
+const previewShape = z.object({ snapshotId: id, taskId: id, changes: pageChanges, additionalPages: z.array(additionalPage).min(1).max(sqliteTableEditLimits.pages - 1).optional() }).strict().superRefine((input, context) => {
+  const groups = [input, ...(input.additionalPages ?? [])];
+  if (new Set(groups.map(page => page.snapshotId)).size !== groups.length) context.addIssue({ code: 'custom', message: 'SQLite原页快照不能重复' });
+  for (const group of groups) {
+    const rows = group.changes.filter(change => change.kind !== 'insert').map(change => change.row);
+    if (new Set(rows).size !== rows.length) context.addIssue({ code: 'custom', message: '同一原页记录只能修改一次' });
   }
-  for (const fields of groups) {
-    for (const field of fields) {
-      if (typeof field?.column === 'string') units += field.column.length;
-      if (typeof field?.value?.value === 'string') units += field.value.value.length;
-      if (units > sqliteTableEditLimits.inputUnits) { context.addIssue({ code: 'custom', message: 'SQLite整批修改超过文本预算' }); return; }
-    }
+  const changes = groups.flatMap(group => group.changes), values = changes.flatMap(change => change.kind === 'delete' ? [] : change.values);
+  if (changes.length > sqliteTableEditLimits.changes || values.length > sqliteTableEditLimits.cells || values.reduce((size, value) => size + value.column.length + ('value' in value.value ? value.value.value.length : 0), 0) > sqliteTableEditLimits.inputUnits) context.addIssue({ code: 'custom', message: 'SQLite整批修改超过行数、字段或文本预算' });
+});
+/** 多页仍共享原整批预算；先检查页数、原始变化数及累计格／文本，再深解析任何单元格。 */
+export const sqliteTableEditPreviewSchema = z.unknown().superRefine((value, context) => {
+  const input = value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+  const more = input?.additionalPages;
+  if (more !== undefined && (!Array.isArray(more) || more.length < 1 || more.length >= sqliteTableEditLimits.pages)) { context.addIssue({ code: 'custom', message: 'SQLite整批原页数量超限或格式无效' }); return; }
+  const pages = [input, ...(Array.isArray(more) ? more : [])];
+  let rows = 0, cells = 0, units = 0;
+  const groups: unknown[][] = [];
+  for (const page of pages) {
+    const changes = page && typeof page === 'object' ? page.changes : undefined;
+    if (!Array.isArray(changes) || changes.length < 1 || changes.length > sqliteTableEditLimits.changes || (rows += changes.length) > sqliteTableEditLimits.changes) { context.addIssue({ code: 'custom', message: 'SQLite整批修改行数超限或格式无效' }); return; }
+    groups.push(changes);
+  }
+  const fields: unknown[][] = [];
+  for (const changes of groups) for (const change of changes) {
+    const values = change && typeof change === 'object' && 'values' in change && Array.isArray(change.values) ? change.values : [];
+    cells += values.length;
+    if (cells > sqliteTableEditLimits.cells) { context.addIssue({ code: 'custom', message: 'SQLite整批修改超过字段预算' }); return; }
+    fields.push(values);
+  }
+  for (const values of fields) for (const item of values) {
+    const field = item && typeof item === 'object' ? item as { column?: unknown; value?: { value?: unknown } } : undefined;
+    if (typeof field?.column === 'string') units += field.column.length;
+    if (typeof field?.value?.value === 'string') units += field.value.value.length;
+    if (units > sqliteTableEditLimits.inputUnits) { context.addIssue({ code: 'custom', message: 'SQLite整批修改超过文本预算' }); return; }
   }
 }).pipe(previewShape);
 export const sqliteTableEditApplySchema = z.object({ previewId: id, taskId: id, confirmation: z.string().min(1).max(1024) }).strict();
@@ -49,7 +64,8 @@ export interface SqliteEditTarget { connectionId: string; database: 'main'; tabl
 export interface SqliteEditColumn { name: string; declaredType: string; generated: boolean; nullable: boolean; hasDefault: boolean; }
 export type SqliteTableEditPage = { kind: 'readonly'; reason: string } | { kind: 'editable'; snapshotId: string; expiresAt: string; columns: SqliteEditColumn[]; rows: SqliteOriginalValue[][]; locator: { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[] } };
 export interface SqliteTableEditCounts { insert: number; update: number; delete: number; }
-export interface SqliteTableEditPreview { previewId: string; snapshotId: string; target: SqliteEditTarget; schemaKey: string; expiresAt: string; confirmation: string; sql: string[]; counts: SqliteTableEditCounts; }
+export interface SqliteTableEditPreview { /** 多页预览按请求顺序回显准确快照集合；单页保持原合同。 */
+  previewId: string; snapshotId: string; snapshotIds?: string[]; target: SqliteEditTarget; schemaKey: string; expiresAt: string; confirmation: string; sql: string[]; counts: SqliteTableEditCounts; }
 export type SqliteWritePhase = 'not-sent' | 'writing' | 'commit-pending' | 'committed' | 'rolled-back' | 'unknown';
 /** 提交事实只记录目标、数量和ACK，禁止原值、SQL及文件路径进入任务持久记录。 */
 export interface SqliteWriteFact { operationId: string; target: SqliteEditTarget; phase: SqliteWritePhase; requestedRows: number; appliedRows: number; commitMayHaveBeenSent: boolean; commitAcknowledged: boolean; rollbackAcknowledged: boolean; }

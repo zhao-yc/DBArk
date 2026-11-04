@@ -5,8 +5,8 @@ import { sqliteTableEditLimits as limits, sqliteTableEditMessages as text } from
 
 interface Ports { assert(owner: ColumnsInvocation): void; same(left: ColumnsInvocation, right: ColumnsInvocation): boolean; revision(): number; epoch(id: string): object; available(id: string): void; closing(): boolean; release(input: SqliteTableEditReleaseInput): Promise<void>; stop(taskId: string): Promise<unknown>; }
 interface Binding { owner: ColumnsInvocation; revision: number; epoch: object; target: SqliteEditTarget; expires: number; }
-interface Snapshot extends Binding { id: string; }
-interface Preview extends Binding { id: string; snapshotId: string; source: Snapshot; counts: SqliteTableEditPreview['counts']; }
+interface Snapshot extends Binding { id: string; schemaKey: string; }
+interface Preview extends Binding { id: string; snapshotId: string; source: Snapshot; sources: Snapshot[]; counts: SqliteTableEditPreview['counts']; }
 interface Operation { owner: ColumnsInvocation; check(): void; invalid: boolean; sent: boolean; stop?: Promise<void>; }
 export interface SqliteEditLease { beforeSend(): void; release(): Promise<void>; }
 
@@ -30,7 +30,7 @@ export class SqliteTableEditOwners {
   private discardSnapshot(source: Snapshot): void {
     if (this.snapshots.get(source.id) !== source) return;
     this.snapshots.delete(source.id);
-    for (const [id, preview] of this.previews) if (preview.source === source) this.previews.delete(id);
+    for (const [id, preview] of this.previews) if (preview.sources.includes(source)) this.previews.delete(id);
     void this.ports.release({ snapshotId: source.id }).catch(() => { /* 已撤销Main能力；runtime仍持有原清理账本，不伪造释放成功。 */ });
   }
   /** 同步失效标记优先于异步取消，重复通知不重复取消同一任务。 */
@@ -57,7 +57,7 @@ export class SqliteTableEditOwners {
         if (edit?.kind === 'editable') {
           const expires = Date.parse(edit.expiresAt);
           if (!edit.snapshotId || !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + limits.snapshotLifetimeMs + 5000 || this.snapshots.has(edit.snapshotId) || this.snapshots.size >= limits.snapshots) throw Error(text.stale);
-          this.snapshots.set(edit.snapshotId, { ...binding, id: edit.snapshotId, expires });
+          this.snapshots.set(edit.snapshotId, { ...binding, id: edit.snapshotId, schemaKey: value.schemaKey, expires });
         }
         return value;
       } catch (reason) { if (edit?.kind === 'editable') await this.ports.release({ snapshotId: edit.snapshotId }); throw reason; }
@@ -67,25 +67,30 @@ export class SqliteTableEditOwners {
   snapshot(owner: ColumnsInvocation, id: string): Snapshot {
     const source = this.snapshots.get(id); if (!source || !this.ports.same(source.owner, owner)) throw Error(text.stale); this.valid(source); return source;
   }
-  preview(owner: ColumnsInvocation, snapshotId: string): { target: SqliteEditTarget; check(): void; accept(value: SqliteTableEditPreview): Promise<SqliteTableEditPreview> } {
-    const source = this.snapshot(owner, snapshotId);
-    const check = () => { if (this.snapshots.get(snapshotId) !== source) throw Error(text.stale); this.valid(source); };
+  /** 多页能力逐一属于同一原文档／配置和表结构；任一页撤权即撤整组预览。 */
+  preview(owner: ColumnsInvocation, snapshotId: string, additionalIds: readonly string[] = []): { target: SqliteEditTarget; check(): void; accept(value: SqliteTableEditPreview): Promise<SqliteTableEditPreview> } {
+    const ids = [snapshotId, ...additionalIds];
+    if (ids.length > limits.pages || new Set(ids).size !== ids.length) throw Error(text.stale);
+    const sources = ids.map(id => this.snapshot(owner, id)), source = sources[0];
+    if (sources.some(page => page.target.connectionId !== source.target.connectionId || page.target.database !== source.target.database || page.target.table !== source.target.table || page.schemaKey !== source.schemaKey)) throw Error(text.stale);
+    const check = () => { for (const page of sources) { if (this.snapshots.get(page.id) !== page) throw Error(text.stale); this.valid(page); } };
     return { target: source.target, check, accept: async value => {
       try {
         check(); const expires = Date.parse(value.expiresAt);
-        if (value.snapshotId !== snapshotId || value.target.connectionId !== source.target.connectionId || value.target.database !== source.target.database || value.target.table !== source.target.table || !value.previewId || this.previews.has(value.previewId) || !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + limits.previewLifetimeMs + 5000) throw Error(text.stale);
-        this.previews.set(value.previewId, { ...source, id: value.previewId, snapshotId, source, counts: { ...value.counts }, expires }); return value;
+        const outputIds = value.snapshotIds ?? [value.snapshotId];
+        if (outputIds.length !== ids.length || outputIds.some((id, index) => id !== ids[index]) || value.snapshotId !== snapshotId || value.schemaKey !== source.schemaKey || value.target.connectionId !== source.target.connectionId || value.target.database !== source.target.database || value.target.table !== source.target.table || !value.previewId || this.previews.has(value.previewId) || !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + limits.previewLifetimeMs + 5000 || sources.some(page => expires > page.expires)) throw Error(text.stale);
+        this.previews.set(value.previewId, { ...source, id: value.previewId, snapshotId, source, sources, counts: { ...value.counts }, expires }); return value;
       } catch (reason) { if (value?.previewId) await this.ports.release({ previewId: value.previewId }); throw reason; }
     } };
   }
   /** 先解析再在投递前claim；每个预览一次使用，不能靠失败重试原能力。 */
   lookup(owner: ColumnsInvocation, previewId: string): Preview {
-    const value = this.previews.get(previewId); if (!value || !this.ports.same(value.owner, owner) || this.snapshots.get(value.snapshotId) !== value.source) throw Error(text.stale); this.valid(value); return value;
+    const value = this.previews.get(previewId); if (!value || !this.ports.same(value.owner, owner) || value.sources.some(source => this.snapshots.get(source.id) !== source)) throw Error(text.stale); this.valid(value); for (const source of value.sources) this.valid(source); return value;
   }
   claim(owner: ColumnsInvocation, previewId: string): { target: SqliteEditTarget; counts: Preview['counts']; check(): void; finish(outcome: string): void } {
     const value = this.lookup(owner, previewId); this.previews.delete(previewId);
-    const check = () => { this.ports.assert(value.owner); if (this.ports.closing() || value.revision !== this.ports.revision() || value.epoch !== this.ports.epoch(value.target.connectionId) || this.snapshots.get(value.snapshotId) !== value.source) throw Error(text.stale); };
-    return { target: { ...value.target }, counts: { ...value.counts }, check, finish: outcome => { if (outcome === 'committed' || outcome === 'unknown') this.discardSnapshot(value.source); } };
+    const check = () => { this.ports.assert(value.owner); if (this.ports.closing() || value.revision !== this.ports.revision() || value.epoch !== this.ports.epoch(value.target.connectionId) || value.sources.some(source => this.snapshots.get(source.id) !== source)) throw Error(text.stale); };
+    return { target: { ...value.target }, counts: { ...value.counts }, check, finish: outcome => { if (outcome === 'committed' || outcome === 'unknown') for (const source of value.sources) this.discardSnapshot(source); } };
   }
   begin(taskId: string, owner: ColumnsInvocation, check: () => void): SqliteEditLease {
     if (this.operations.has(taskId)) throw Error(text.stale); this.ports.assert(owner); this.watch(owner); check();
@@ -103,7 +108,7 @@ export class SqliteTableEditOwners {
     this.ports.assert(owner);
     const source = input.snapshotId ? this.snapshots.get(input.snapshotId) : undefined, preview = input.previewId ? this.previews.get(input.previewId) : undefined;
     if (source && !this.ports.same(source.owner, owner) || preview && !this.ports.same(preview.owner, owner)) throw Error(text.stale);
-    if (source) { this.snapshots.delete(source.id); for (const [id, value] of this.previews) if (value.source === source) this.previews.delete(id); }
+    if (source) { this.snapshots.delete(source.id); for (const [id, value] of this.previews) if (value.sources.includes(source)) this.previews.delete(id); }
     if (preview) this.previews.delete(preview.id);
     if (source || preview) await this.ports.release({ ...(source ? { snapshotId: source.id } : {}), ...(preview ? { previewId: preview.id } : {}) });
   }

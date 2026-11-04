@@ -1,5 +1,7 @@
 # 开发与测试
 
+2026-11-05 新增[SQLite多页统一事务底层](development/sqlite-multipage-edit-core-20261105.md)：原预览协议可组合最多16个同表原页，整批预算保持，Main逐页签发与撤权，原一次BEGIN／COMMIT逐行冲突检查覆盖全部页。240项相关、类型／构建及Mac真实Main→Runtime→worker协议专项通过；完整回归26936项通过／10既有条件跳过。跨页草稿UI尚未接通，旧脏稿翻页保护保持，暂不发布。
+
 2026-11-05 新增[查询结果记录树与完整JSON](development/query-readonly-record-20261104.md)：原详情覆盖当前结果、整理视图和固定快照，保留唯一键／同名列、协议原文和SQLite逐格类型；提取共用只读呈现层，原SQLite表页独立模型保持。342项相关、类型／构建及Mac完整工作区／原只读／原可写树通过；完整单元26889通过／10既有条件跳过，Windows／安装另验，暂不发布。
 
 2026-11-04 新增[SQLite只读记录树与完整JSON](development/sqlite-readonly-record-20261104.md)：准确原页及存储类型事实绑定，纯Renderer展示、完整2MiB双预算，隐藏节点编辑控件；144项相关、完整26861项及类型／构建通过，Mac新只读／原浏览／原可写树三项窗口通过。离线入口node scripts/sqlite-workspace-ci.mjs readonly-record；Windows／安装另验，暂不发布。

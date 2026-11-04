@@ -50,3 +50,25 @@ describe('SQLite编辑来源Main能力', () => {
     await f.owners.release(f.owner, { previewId: 'preview' }); expect(f.release).toHaveBeenCalledExactlyOnceWith({ previewId: 'preview' }); expect(() => f.owners.snapshot(f.owner, 'snapshot')).not.toThrow();
   });
 });
+
+describe('SQLite多页预览准确Main能力',()=>{
+ it.each(['committed','unknown'] as const)('%s撤销整组原页与各页兄弟预览，不能只撤主快照',async outcome=>{
+  const f=fixture();await f.admit();await f.admit('第二页');await f.prepare('各页预览','第二页');const gate=f.owners.preview(f.owner,'snapshot',['第二页']);await gate.accept({...f.preview('多页'),snapshotIds:['snapshot','第二页']});const claim=f.owners.claim(f.owner,'多页');claim.check();claim.finish(outcome);expect(()=>f.owners.snapshot(f.owner,'snapshot')).toThrow();expect(()=>f.owners.snapshot(f.owner,'第二页')).toThrow();expect(()=>f.owners.lookup(f.owner,'各页预览')).toThrow();expect(f.release).toHaveBeenCalledWith({snapshotId:'snapshot'});expect(f.release).toHaveBeenCalledWith({snapshotId:'第二页'});
+ });
+ it('确认回滚保留每页来源，一次多页预览仍不可重用',async()=>{
+  const f=fixture();await f.admit();await f.admit('第二页');const gate=f.owners.preview(f.owner,'snapshot',['第二页']);await gate.accept({...f.preview('多页'),snapshotIds:['snapshot','第二页']});f.owners.claim(f.owner,'多页').finish('rolled-back');expect(()=>f.owners.lookup(f.owner,'多页')).toThrow();expect(()=>f.owners.preview(f.owner,'snapshot',['第二页'])).not.toThrow();
+ });
+ it('次页释放或换文档后迟到预览被准确释放，主快照不被误撤',async()=>{
+  const f=fixture();await f.admit();await f.admit('第二页');const gate=f.owners.preview(f.owner,'snapshot',['第二页']);await f.owners.release(f.owner,{snapshotId:'第二页'});await expect(gate.accept({...f.preview('迟到'),snapshotIds:['snapshot','第二页']})).rejects.toThrow();expect(f.release).toHaveBeenCalledWith({previewId:'迟到'});expect(()=>f.owners.snapshot(f.owner,'snapshot')).not.toThrow();
+ });
+ it.each(['other-table','schema','unknown','duplicate','too-many'] as const)('%s在任何Runtime投递前拒绝整组来源',async kind=>{
+  const f=fixture();await f.admit();const second=f.page('第二页');if(kind==='other-table')second.target.table='另一表';if(kind==='schema')second.schemaKey='b'.repeat(64);await f.owners.page(f.owner,{...input,table:second.target.table}).accept(second);
+  const ids=kind==='unknown'?['未知页']:kind==='duplicate'?['snapshot']:kind==='too-many'?Array(16).fill('第二页'):['第二页'];expect(()=>f.owners.preview(f.owner,'snapshot',ids)).toThrow();
+ });
+ it.each(['missing','reversed','extra','schema','expiry'] as const)('%s回包不签多页能力，不允许Worker漏页或改变来源',async kind=>{
+  const f=fixture();await f.admit();const second=f.page('第二页');if(kind==='expiry'&&second.edit?.kind==='editable')second.edit.expiresAt=new Date(Date.now()+10000).toISOString();await f.owners.page(f.owner,input).accept(second);const gate=f.owners.preview(f.owner,'snapshot',['第二页']);const value:any={...f.preview('不可靠'),snapshotIds:['snapshot','第二页']};if(kind==='missing')delete value.snapshotIds;if(kind==='reversed')value.snapshotIds.reverse();if(kind==='extra')value.snapshotIds.push('额外');if(kind==='schema')value.schemaKey='b'.repeat(64);await expect(gate.accept(value)).rejects.toThrow();expect(f.release).toHaveBeenCalledWith({previewId:'不可靠'});
+ });
+ it('次页在领取后释放会使准确操作租约停止，不能继续发送原apply',async()=>{
+  const f=fixture();await f.admit();await f.admit('第二页');await f.owners.preview(f.owner,'snapshot',['第二页']).accept({...f.preview('多页'),snapshotIds:['snapshot','第二页']});const claim=f.owners.claim(f.owner,'多页'),lease=f.owners.begin('多页操作',f.owner,claim.check);await f.owners.release(f.owner,{snapshotId:'第二页'});expect(()=>lease.beforeSend()).toThrow();expect(f.stop).not.toHaveBeenCalled();await lease.release();
+ });
+});

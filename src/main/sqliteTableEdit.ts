@@ -16,8 +16,8 @@ interface Snapshot {
   catalogue: SqliteTableCatalogue; columns: SqliteEditColumn[]; schemaVersion: string; locator: Locator;
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
 }
-interface Statement { sql: string; parameters: SqliteValue[]; row?: number; kind: SqliteTableChange['kind']; }
-export interface SqliteEditClaim { snapshot: Snapshot; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; }
+interface Statement { sql: string; parameters: SqliteValue[]; row?: number; source?: number; kind: SqliteTableChange['kind']; }
+export interface SqliteEditClaim { snapshot: Snapshot; sources?: Snapshot[]; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; }
 interface Preview extends SqliteEditClaim { id: string; expires: number; bytes: number; }
 export interface SqliteEditApplyRequest extends SqliteTableEditApplyInput {
   operationId: string; assertCurrent(): void; recordWriteFact(fact: SqliteWriteFact): void;
@@ -99,7 +99,7 @@ export class SqliteTableEdits {
   private dropPreview(id: string): void { const value = this.previews.get(id); if (value) { this.bytes -= value.bytes; this.previews.delete(id); } }
   /** 提交或未知时撤销所有兄弟预览；活动写持有原记录直到执行终态，不提前归还内存预算。 */
   private invalidate(snapshot: Snapshot): void {
-    snapshot.revoked = true; for (const preview of this.previews.values()) if (preview.snapshot === snapshot) this.dropPreview(preview.id);
+    snapshot.revoked = true; for (const preview of this.previews.values()) if ((preview.sources ?? [preview.snapshot]).includes(snapshot)) this.dropPreview(preview.id);
     if (!snapshot.active && this.snapshots.delete(snapshot.id)) { this.bytes -= snapshot.bytes; snapshot.rows = []; snapshot.locators = []; }
   }
   /** 连接显式关闭/配置切换撤销旧页，但不干预已经发送的SQL。 */
@@ -147,31 +147,48 @@ export class SqliteTableEdits {
   /** 预览只编译参数化DML，没有driver或SQL投递能力。 */
   preview(source: SqliteTableEditPreviewInput): SqliteTableEditPreview {
     const input = sqliteTableEditPreviewSchema.parse(source); this.prune(); const snapshot = this.snapshots.get(input.snapshotId);
-    if (!snapshot || snapshot.revoked || snapshot.active) throw Error(text.stale);
+    if (!snapshot) throw Error(text.stale);
+    const groups = [input, ...(input.additionalPages ?? [])], sources = groups.map(group => this.snapshots.get(group.snapshotId));
+    if (sources.some(source => !source || source.revoked || source.active)) throw Error(text.stale);
+    const pages = sources as Snapshot[];
+    // 目标、文件、配置、目录、定位及关联范围必须完全相同，不由Renderer提供旧行或SQL。
+    const scope = (source: Snapshot) => [source.target, source.profile, source.identity, source.catalogue, source.columns, source.schemaVersion, source.locator, source.relation ?? null];
+    const signature = JSON.stringify(scope(snapshot));
+    if (pages.some(source => JSON.stringify(scope(source)) !== signature)) throw Error('SQLite多页修改必须来自同一文件、表结构、定位和关联范围');
+    const touched = new Set<string>();
+    const changes = groups.flatMap((group, index) => group.changes.map(change => ({ change, source: index })));
     const table = '"main".' + quote(snapshot.target.table), counts = emptyCounts();
-    const statements = input.changes.map(change => {
+    const statements = changes.map(({ change, source: sourceIndex }) => {
+      const snapshot = pages[sourceIndex], origin = pages.length > 1 ? { source: sourceIndex } : {};
       counts[change.kind]++;
+      if (change.kind !== 'insert') {
+        const locator = snapshot.locators[change.row]; if (!locator) throw Error(text.stale);
+        // NOCASE只折ASCII，RTRIM只去末尾空格；与可靠键实际collation一致，拒绝重叠页重复修改同一行。
+        const key = JSON.stringify(locator.map((value, index) => typeof value !== 'string' ? value : snapshot.locator.collations[index] === 'NOCASE' ? value.replace(/[A-Z]/g, letter => letter.toLowerCase()) : snapshot.locator.collations[index] === 'RTRIM' ? value.replace(/ +$/, '') : value));
+        if (touched.has(key)) throw Error('SQLite不同原页包含同一定位记录，不能重复修改'); touched.add(key);
+      }
       if (change.kind !== 'insert' && !snapshot.rows[change.row]) throw Error(text.stale);
       const values = change.kind === 'delete' ? [] : change.values.map(value => { const column = snapshot.columns.find(column => column.name === value.column); if (!column || column.generated) throw Error('SQLite未知列或生成列不能写入'); return { column: column.name, value: parameter(value.value) }; });
       const where = change.kind === 'insert' ? undefined : locate(snapshot, change.row);
-      if (change.kind === 'delete') return { kind: change.kind, row: change.row, sql: 'DELETE FROM ' + table + ' WHERE ' + where!.sql, parameters: where!.parameters };
-      if (change.kind === 'insert') return { kind: change.kind, sql: values.length ? 'INSERT INTO ' + table + ' (' + values.map(value => quote(value.column)).join(',') + ') VALUES (' + values.map(() => '?').join(',') + ')' : 'INSERT INTO ' + table + ' DEFAULT VALUES', parameters: values.map(value => value.value) };
-      return { kind: change.kind, row: change.row, sql: 'UPDATE ' + table + ' SET ' + values.map(value => quote(value.column) + '=?').join(',') + ' WHERE ' + where!.sql, parameters: [...values.map(value => value.value), ...where!.parameters] };
+      if (change.kind === 'delete') return { ...origin, kind: change.kind, row: change.row, sql: 'DELETE FROM ' + table + ' WHERE ' + where!.sql, parameters: where!.parameters };
+      if (change.kind === 'insert') return { ...origin, kind: change.kind, sql: values.length ? 'INSERT INTO ' + table + ' (' + values.map(value => quote(value.column)).join(',') + ') VALUES (' + values.map(() => '?').join(',') + ')' : 'INSERT INTO ' + table + ' DEFAULT VALUES', parameters: values.map(value => value.value) };
+      return { ...origin, kind: change.kind, row: change.row, sql: 'UPDATE ' + table + ' SET ' + values.map(value => quote(value.column) + '=?').join(',') + ' WHERE ' + where!.sql, parameters: [...values.map(value => value.value), ...where!.parameters] };
     });
     const size = Buffer.byteLength(JSON.stringify(statements)); if (this.previews.size >= 64 || this.bytes + size > limits.snapshotBytes) throw Error('SQLite编辑预览超过内存预算，请释放旧预览');
-    const preview: Preview = { id: randomUUID(), snapshot, statements, counts, confirmation: snapshot.target.database + '.' + snapshot.target.table, expires: Math.min(snapshot.expires, Date.now() + limits.previewLifetimeMs), bytes: size };
+    const preview: Preview = { id: randomUUID(), snapshot, ...(pages.length > 1 ? { sources: pages } : {}), statements, counts, confirmation: snapshot.target.database + '.' + snapshot.target.table, expires: Math.min(...pages.map(source => source.expires), Date.now() + limits.previewLifetimeMs), bytes: size };
     this.previews.set(preview.id, preview); this.bytes += size;
-    return { previewId: preview.id, snapshotId: snapshot.id, target: { ...snapshot.target }, schemaKey: snapshot.catalogue.schemaKey, expiresAt: new Date(preview.expires).toISOString(), confirmation: preview.confirmation, sql: statements.map(display), counts: { ...counts } };
+    return { previewId: preview.id, snapshotId: snapshot.id, ...(pages.length > 1 ? { snapshotIds: pages.map(source => source.id) } : {}), target: { ...snapshot.target }, schemaKey: snapshot.catalogue.schemaKey, expiresAt: new Date(preview.expires).toISOString(), confirmation: preview.confirmation, sql: statements.map(display), counts: { ...counts } };
   }
   /** 一次领取后立即撤预览，客户端重复apply不能重放；快照原行仍由本次claim强引用。 */
   claim(source: SqliteTableEditApplyInput): SqliteEditClaim {
     const input = sqliteTableEditApplySchema.parse(source); this.prune(); const preview = this.previews.get(input.previewId);
     if (!preview) throw Error(text.stale); this.dropPreview(preview.id);
-    if (preview.confirmation !== input.confirmation || preview.snapshot.revoked || preview.snapshot.active) throw Error(text.stale);
-    preview.snapshot.active++; return preview;
+    const sources = preview.sources ?? [preview.snapshot];
+    if (preview.confirmation !== input.confirmation || sources.some(source => source.revoked || source.active || this.snapshots.get(source.id) !== source)) throw Error(text.stale);
+    for (const source of sources) source.active++; return preview;
   }
   /** 只有确认回滚保留快照；提交/未知永久撤原页和兄弟预览，释放不影响已执行事务。 */
-  settle(claim: SqliteEditClaim, outcome: SqliteTableEditOutcome['outcome']): void { claim.snapshot.active--; if (outcome === 'committed' || outcome === 'unknown' || claim.snapshot.revoked) this.invalidate(claim.snapshot); }
+  settle(claim: SqliteEditClaim, outcome: SqliteTableEditOutcome['outcome']): void { for (const source of claim.sources ?? [claim.snapshot]) { source.active--; if (outcome === 'committed' || outcome === 'unknown' || source.revoked) this.invalidate(source); } }
 }
 
 /** 领取后但尚未取得driver的失败也返回明确not-sent，不把参数错误冒充未知写入。 */
@@ -198,11 +215,12 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
     for (const statement of claim.statements) {
       control.check();
       if (statement.row !== undefined) {
-        const where = locate(snapshot, statement.row), fields = snapshot.columns.map(column => projection('"__dbark_source".' + quote(column.name)) + ' AS ' + quote(column.name)).join(',');
+        const source = (claim.sources ?? [snapshot])[statement.source ?? 0]; if (!source) throw Error(text.stale);
+        const where = locate(source, statement.row), fields = snapshot.columns.map(column => projection('"__dbark_source".' + quote(column.name)) + ' AS ' + quote(column.name)).join(',');
         const scoped = snapshot.relation ? buildSqliteTableRelationWhere(snapshot.relation) : undefined;
         const scopeWhere = scoped?.sql ?? '';
         const current = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' AS "__dbark_source" WHERE ' + where.sql + (scopeWhere ? ' AND (' + scopeWhere + ')' : '') + ' LIMIT 2', [...where.parameters, ...(scoped?.parameters ?? [])], control, 2);
-        if (current.length !== 1 || !equal(current[0], snapshot.rows[statement.row])) throw Error('SQLite原记录已被其他操作修改、删除或trigger改变，整批未继续');
+        if (current.length !== 1 || !equal(current[0], source.rows[statement.row])) throw Error('SQLite原记录已被其他操作修改、删除或trigger改变，整批未继续');
       }
       control.check(); await driver.execute(statement.sql, { parameters: statement.parameters });
       const changed = await read(driver, 'SELECT changes()', [], control, 1); if (integer(changed[0]?.[0]) !== '1') throw Error('SQLite顶层修改行数不是1，整批必须回滚');

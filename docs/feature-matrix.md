@@ -1,5 +1,7 @@
 # DBArk 功能与验收对照
 
+2026-11-05 底层增量：[SQLite多页原快照统一预览／事务](development/sqlite-multipage-edit-core-20261105.md)支持同表多页一次提交及晚期冲突全批回滚，共用原500行／10000格／2MiB预算；240项相关与Mac真实协议链通过。尚未接入跨页草稿界面，不能计为完整跨页编辑；D04／R02仍部分，暂不发布。
+
 2026-11-05 源码增量：[查询记录树与完整JSON](development/query-readonly-record-20261104.md)接通当前查询、整理视图及固定快照的原行详情；全部原列按唯一键保留，同名列不合并，SQLite真实类型与其它协议返回值区分，查看不执行SQL。342项相关、Mac工作区及原SQLite只读／可写树回归通过；Windows、安装及MySQL本增量实机另验，D04／R02仍部分，暂不发布。
 
 2026-11-04 源码增量：[SQLite只读记录树与完整JSON](development/sqlite-readonly-record-20261104.md)覆盖main物理表／视图，保真实INTEGER／TEXT、REAL原文、Base64及完整隐藏字段；查看／搜索／翻行零新增查询、零写入，磁盘哈希不变。144项相关、完整26861项与Mac三项原生回归通过；任意SQL结果新树、跨页草稿及持久恢复继续，D04／R02仍部分，暂不发布。

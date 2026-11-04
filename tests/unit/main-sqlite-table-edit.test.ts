@@ -78,3 +78,25 @@ describe('SQLite编辑真实Main边界', () => {
     pending.reject(Error('未收到COMMIT终态')); const result = await running; expect(result.outcome).toBe('unknown'); expect(result.fact.commitAcknowledged).toBe(false); expect(f.tasks.get('apply')?.sqliteWrite?.phase).toBe('unknown'); expect(() => f.owners.snapshot(f.capabilities.capture(f.event()), 's')).toThrow();
   });
 });
+
+describe('SQLite多页预览原Main dispatch',()=>{
+ /** 两个可控回包只替换数据库边界，窗口能力与请求校验仍运行真实Main。 */
+ async function pages(){
+  const f=fixture(),original=f.request.getMockImplementation()!,second=structuredClone(f.page);second.offset=10;second.edit.snapshotId='第二页';
+  f.request.mockImplementation(async(command,input)=>command==='sqlite.tablePage'&&input.offset===10?second:original(command,input));
+  await f.run('sqlite.tablePage',pageInput);await f.run('sqlite.tablePage',{...pageInput,offset:10,taskId:'读第二页'});Object.assign(f.preview,{snapshotIds:['s','第二页']});f.preview.counts.update=2;
+  const input={snapshotId:'s',taskId:'多页预览',changes:[change],additionalPages:[{snapshotId:'第二页',changes:[change]}]};return{f,input};
+ }
+ it('每个原页都经Main签发，附加组原样下发，统一计数及明确提交撤销全部来源',async()=>{
+  const{f,input}=await pages();const original=f.request.getMockImplementation()!;f.request.mockImplementation(async(command,value)=>{
+   if(command!=='sqlite.tableEdit.apply')return original(command,value);value.assertCurrent();const fact={...f.fact(value,'committed'),requestedRows:2,appliedRows:2};value.recordWriteFact(fact);return{operationId:value.operationId,target,outcome:'committed',counts:f.preview.counts,fact,message:'两页明确提交'};
+  });
+  expect((await f.run('sqlite.tableEdit.preview',input)).snapshotIds).toEqual(['s','第二页']);expect(f.request.mock.calls.find(([command])=>command==='sqlite.tableEdit.preview')?.[1]).toEqual(input);expect((await f.apply()).fact).toMatchObject({requestedRows:2,appliedRows:2});for(const id of ['s','第二页'])expect(()=>f.owners.snapshot(f.capabilities.capture(f.event()),id)).toThrow();expect(JSON.stringify(f.tasks.get('apply'))).not.toContain(change.values[0].value.value);
+ });
+ it('伪造次页snapshotId在投递前拒绝，原页来源保持可用',async()=>{
+  const{f,input}=await pages();input.additionalPages[0].snapshotId='未签发页';await expect(f.run('sqlite.tableEdit.preview',input)).rejects.toThrow();expect(f.request.mock.calls.some(([command])=>command==='sqlite.tableEdit.preview')).toBe(false);expect(()=>f.owners.snapshot(f.capabilities.capture(f.event()),'s')).not.toThrow();
+ });
+ it('等待预览回包时次页明确释放，迟到多页预览不签发且准确释放',async()=>{
+  const{f,input}=await pages(),pending=deferred(),original=f.request.getMockImplementation()!;f.request.mockImplementation(async(command,value)=>command==='sqlite.tableEdit.preview'?pending.promise:original(command,value));const work=f.run('sqlite.tableEdit.preview',input),refused=expect(work).rejects.toThrow();await flush();await f.run('sqlite.tableEdit.release',{snapshotId:'第二页'});pending.resolve(f.preview);await refused;expect(f.request).toHaveBeenCalledWith('sqlite.tableEdit.release',{previewId:'p'});expect(()=>f.owners.lookup(f.capabilities.capture(f.event()),'p')).toThrow();
+ });
+});

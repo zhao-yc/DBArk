@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-05 底层增量：[SQLite多页统一事务](development/sqlite-multipage-edit-core-20261105.md)为跨页草稿补齐准确来源组合、单次原子提交、次页冲突／trigger回滚和整组ACK／撤权；Main／真实worker与Mac正式Electron协议链已验。跨页草稿保留／导航／统一预览UI仍需接通，不增加完整工作包或发行计数，D04／R02仍部分，暂不发布。
+
 2026-11-05 源码增量：[任意查询结果的只读记录树与完整JSON](development/query-readonly-record-20261104.md)复用准确结果来源，覆盖当前／筛选排序／固定副本，SQLite有事实时保逐格存储类型，其它返回保协议原文；同名列、隐藏列、int64及Base64保持。Mac当前查询与磁盘快照完整整例和原SQLite两项回归通过，MySQL本增量实库、Windows及安装另验；跨页草稿／批量／持久恢复继续，D04／R02仍部分，暂不发布。
 
 2026-11-04 源码增量：[SQLite只读表／视图记录树与完整JSON](development/sqlite-readonly-record-20261104.md)补齐原详情中的三种展示方式，真实类型、完整字段、显式TEXT词法树及只读JSON；共享树在只读状态隐藏编辑动作。Mac物理表和视图核零新增读取／零写入及文件哈希保持，原浏览与可写树回归通过；Windows、安装、任意SQL结果新树及持久恢复继续，D04／R02仍部分，暂不发布。
