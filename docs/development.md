@@ -419,3 +419,5 @@ CI生成开发预览后，仍须独立下载全部资产并核GitHub摘要和SHA
 SQLite离线增量：父候选、字面搜索、确认复读及外键整组草稿暂存，见[2026-11-04 SQLite外键选择验证](development/sqlite-reference-choice-20261104.md)。`sqliteReferenceChoice`保留原typed值，正式父入口绑定Editor.generation，读取租约归还后才允许单次save；最终仍使用原SQLite预览／apply。原生`relationships`专项保留原关系图和只读父浏览，扩展准确可写profile、草稿／撤销／清空／父键删除／预览取消和一次正式提交；不代表跨平台安装验收。
 
 SQLite反向关联增量：独立`sqlite.incomingPage`严格合同、有界反向目录、父列比较语义及已保存值来源保护，见[2026-11-04 SQLite关联子记录验证](development/sqlite-incoming-20261104.md)。沿原只读worker、Main晚发布门及准确取消ACK账本，不修改编辑器草稿或查询事务；原生`relationships`整例同时覆盖父／子两个方向。
+
+SQLite连续关联浏览：纯Renderer的SqliteRelationNavigator复用原父／子读取合同，按精确只读页原值建立本地历史，受同一根来源及busy租约保护；返回后重建reader并保留父hash锚点。见[2026-11-04 连续关联浏览验证](development/sqlite-relations-20261104.md)。

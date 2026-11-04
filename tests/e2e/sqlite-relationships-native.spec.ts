@@ -1,3 +1,4 @@
+import { sqliteRelationZh as relationText } from '../../src/renderer/locales/sqliteRelation.zh-CN';
 import { sqliteIncomingZh as incomingText } from '../../src/renderer/locales/sqliteIncoming.zh-CN';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -16,7 +17,7 @@ if (active) {
   for (const [index, value] of process.argv.entries()) if (value === '--trace' && process.argv[index + 1] !== 'off' || value.startsWith('--trace=') && value !== '--trace=off') throw Error('关系图专项禁止自动trace');
 }
 type Desktop = typeof import('./desktop-fixture');
-interface MenuAudit { pending: number; commands: string[]; denied: string[]; pickerCalls: number; reads: unknown[]; incoming: { input: Record<string, unknown>; reply?: unknown }[]; references: { input: Record<string, unknown>; reply?: unknown }[]; connectionId?: string; profiles: Record<string, boolean>; snapshots: string[]; previews: string[]; writes: unknown[]; restore(): void; }
+interface MenuAudit { pending: number; commands: string[]; denied: string[]; pickerCalls: number; reads: unknown[]; incoming: { input: Record<string, unknown>; reply?: unknown }[]; references: { input: Record<string, unknown>; reply?: unknown }[]; connectionId?: string; navigation?: boolean; profiles: Record<string, boolean>; snapshots: string[]; previews: string[]; writes: unknown[]; restore(): void; }
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：显式离线启用SQLite关系图原生专项');
 test.use({ trace: 'off', screenshot: 'off', video: 'off', ...(active ? { preserveOnUnconfirmedExit: true } : {}) });
@@ -69,8 +70,8 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
           const id = String(value.connectionId), readOnly = state.profiles[id];
           if (!(id in state.profiles) || value.database !== 'main') return deny(command);
           if (command === 'sqlite.relationships') { if (!readOnly || (value.anchor as { table?: string })?.table !== 'subject' || !Array.isArray(value.tables) || value.tables.some(name => !['subject', 'parent'].includes(String(name)))) return deny(command); }
-          else if (command === 'sqlite.incomingPage') { if (value.table !== (readOnly ? 'parent' : 'child_pair') || value.incoming === 'page' && !(readOnly ? ['related_child','subject'] : ['child_note']).includes(String(value.childTable))) return deny(command); }
-          else if (!(readOnly ? ['subject', 'parent'] : ['child_pair']).includes(String(value.table))) return deny(command);
+          else if (command === 'sqlite.incomingPage') { if (!(readOnly ? ['parent'] : state.navigation ? ['child_pair','parent_pair'] : ['child_pair']).includes(String(value.table)) || value.incoming === 'page' && !(readOnly ? ['related_child','subject'] : state.navigation && value.table === 'parent_pair' ? ['child_pair'] : ['child_note']).includes(String(value.childTable))) return deny(command); }
+          else if (!(readOnly ? ['subject', 'parent'] : state.navigation && command === 'sqlite.referencePage' ? ['child_pair','child_note'] : ['child_pair']).includes(String(value.table))) return deny(command);
         }
         state.pending++; state.commands.push(command);
         try { const result = await original(event, packet); current();
@@ -198,6 +199,28 @@ test('SQLite真实表页关系图单快照读取、隐式主键、草稿与本�
     await step(() => incoming().getByRole('button', { name: incomingText.catalog, exact: true }).click()); await step(() => incoming().getByRole('button', { name: incomingText.read, exact: true }).click());
     await step(() => expect(incoming().getByRole('grid')).toBeVisible()); expect(((await audit()).incoming.at(-1)!.reply as any).result.page.result.rows[0].c2).toEqual({ type: 'binary', base64: 'AP8=' }); expect((await audit()).incoming.at(-1)!.input).toMatchObject({ incoming: 'page', table: 'child_pair', childTable: 'child_note', values: [{ kind: 'integer', value: '1' }] });
     await info.attach('SQLite反向关联保留父键草稿', { body: await page.screenshot(), contentType: 'image/png' }); await step(() => incoming().getByRole('button', { name: incomingText.close, exact: true }).click());
+    // 同一根草稿下连续父→子→子→父；方向和历史导航都不自动读，旧结果只作本地缓存。
+    await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteRelationshipsAudit?: MenuAudit }).__sqliteRelationshipsAudit; if (!state || state.pending || state.writes.length !== 1) throw Error('原关联验收阶段不正确'); state.navigation = true; }));
+    const totalRelated = async () => { const a = await audit(); return a.references.length + a.incoming.length; }, beforeNavigator = await totalRelated();
+    await step(async () => (await navigationMenuItem(toolbar(), { name: relationText.entry, exact: true }, check)).click());
+    const browser = page.getByRole('dialog', { name: relationText.title, exact: true }); await step(() => expect(browser).toBeVisible()); expect(await totalRelated()).toBe(beforeNavigator);
+    await step(() => browser.getByRole('button', { name: referenceText.catalog, exact: true }).click()); await step(() => browser.getByRole('button', { name: referenceText.read, exact: true }).click()); await step(() => browser.getByRole('grid').getByRole('gridcell').filter({ hasText: /^Beta$/ }).click());
+    const afterFirstLevel = await totalRelated(), firstParentHash = ((await audit()).references.at(-1)!.reply as any).result.page.schemaKey;
+    await step(() => browser.getByRole('button', { name: relationText.nextChildren, exact: true }).click()); await step(() => expect(browser).toContainText(relationText.current('parent_pair', 2, 2))); expect(await totalRelated()).toBe(afterFirstLevel);
+    await step(() => browser.getByRole('button', { name: incomingText.catalog, exact: true }).click()); await step(() => browser.getByRole('button', { name: incomingText.read, exact: true }).click()); await step(() => browser.getByRole('grid').getByRole('gridcell').filter({ hasText: /^1$/ }).click());
+    await step(() => browser.getByRole('button', { name: relationText.nextChildren, exact: true }).click()); await step(() => browser.getByRole('button', { name: incomingText.catalog, exact: true }).click()); await step(() => browser.getByRole('button', { name: incomingText.read, exact: true }).click());
+    await step(() => browser.getByRole('grid').locator('[role="row"][aria-rowindex="2"] [role="gridcell"]').first().click()); await step(() => browser.getByRole('button', { name: relationText.nextParents, exact: true }).click());
+    await step(() => browser.getByRole('button', { name: referenceText.catalog, exact: true }).click()); await step(() => browser.getByRole('button', { name: referenceText.read, exact: true }).click()); await step(() => expect(browser.getByRole('grid').getByRole('gridcell').filter({ hasText: /^Beta$/ })).toHaveCount(1));
+    await step(() => expect(browser.getByRole('button', { name: referenceText.read, exact: true })).toBeEnabled()); const beforeTravel = await totalRelated();
+    await info.attach('SQLite四层关联与历史', { body: await page.screenshot(), contentType: 'image/png' });
+    await step(() => browser.getByRole('button', { name: relationText.back, exact: true }).click()); await step(() => expect(browser).toContainText(relationText.current('child_pair', 3, 4))); await step(() => expect(browser.getByRole('button', { name: relationText.nextParents, exact: true })).toBeEnabled());
+    await step(() => browser.getByRole('button', { name: relationText.forward, exact: true }).click()); await step(() => expect(browser).toContainText(relationText.current('child_note', 4, 4))); expect(await totalRelated()).toBe(beforeTravel);
+    await step(() => browser.getByRole('button', { name: relationText.back, exact: true }).click()); await step(() => browser.getByRole('button', { name: relationText.back, exact: true }).click()); await step(() => expect(browser).toContainText(relationText.current('parent_pair', 2, 4)));
+    await step(() => browser.getByRole('button', { name: relationText.nextParents, exact: true }).click()); await step(() => expect(browser).toContainText(relationText.current('child_pair', 3, 3))); await step(() => expect(browser.getByRole('button', { name: relationText.forward, exact: true })).toBeDisabled()); expect(await totalRelated()).toBe(beforeTravel);
+    await step(() => browser.getByRole('button', { name: referenceText.catalog, exact: true }).click()); await step(() => browser.getByRole('button', { name: referenceText.read, exact: true }).click()); await step(() => expect(browser.getByRole('button', { name: referenceText.read, exact: true })).toBeEnabled());
+    await step(() => browser.getByRole('button', { name: relationText.back, exact: true }).click()); await step(() => browser.getByRole('button', { name: relationText.back, exact: true }).click()); await step(() => expect(browser).toContainText(relationText.current('child_pair', 1, 3)));
+    await step(() => browser.getByRole('button', { name: referenceText.read, exact: true }).click()); await step(() => expect(browser.getByRole('button', { name: referenceText.read, exact: true })).toBeEnabled()); expect((await audit()).references.at(-1)!.input).toHaveProperty('parentSchemaKey', firstParentHash);
+    await info.attach('SQLite关联返回根记录', { body: await page.screenshot(), contentType: 'image/png' }); await step(() => browser.getByRole('button', { name: relationText.close, exact: true }).click()); await step(() => expect(browser).toHaveCount(0));
     await step(() => table().getByRole('button', { name: editText.editRow, exact: true }).click()); await step(() => expect(rowForm.getByLabel(editText.value('id'), { exact: true })).toHaveValue('99')); await step(() => rowForm.getByRole('button', { name: editText.cancelInput, exact: true }).click()); await step(() => table().getByRole('button', { name: editText.undo, exact: true }).click());
     expect(disk()).toEqual([{ id: 1, a: 'Beta', b: '2', note: '保留本地草稿' }, baseline[1]]);
     const finalFacts = await audit(); expect(finalFacts.denied).toEqual([]); expect(finalFacts.pickerCalls).toBe(2); expect(finalFacts.writes).toHaveLength(1); expect(runtime.pageErrors).toEqual([]);

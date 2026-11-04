@@ -35,7 +35,7 @@ export class SqliteReferenceReader {
   /** 目录读取不发送记录值；返回真实源表外键后才允许明确选择。 */
   catalog(): Promise<SqliteReferenceOutput> { if (this.busy || !this.current()) return Promise.reject(Error('原外键读取未结束或已失效')); this.parentKey = undefined; this.selected = undefined; return this.run({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, taskId: this.services.id(), reference: 'catalog' }); }
   /** 只传所选映射的真实typed值，不从格式化网格或字段亲和性猜转换。 */
-  page(key: SqliteRelationshipTable['foreignKeys'][number], offset: number, limit = 50): Promise<SqliteReferenceOutput> {
+  page(key: SqliteRelationshipTable['foreignKeys'][number], offset: number, limit = 50, expectedParentSchemaKey?: string): Promise<SqliteReferenceOutput> {
     if (this.busy || !this.current()) return Promise.reject(Error('原外键读取未结束或已失效'));
     if (this.selected !== key.ordinal) { this.parentKey = undefined; this.selected = key.ordinal; }
     const values = key.columns.map(name => {
@@ -43,7 +43,7 @@ export class SqliteReferenceReader {
       if (index < 0 || value === undefined) throw Error('外键字段尚未填写或映射已变化，不使用数据库默认值猜父记录');
       return sqliteEditValueSchema.parse(value);
     });
-    return this.run({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, taskId: this.services.id(), reference: 'page', foreignKey: key.ordinal, values, offset, limit, ...(this.parentKey ? { parentSchemaKey: this.parentKey } : {}) });
+    return this.run({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, taskId: this.services.id(), reference: 'page', foreignKey: key.ordinal, values, offset, limit, ...((expectedParentSchemaKey ?? this.parentKey) ? { parentSchemaKey: expectedParentSchemaKey ?? this.parentKey } : {}) });
   }
   /** 候选读取不依赖尚未填写的子键；续页仍绑定首次读出的父表结构。 */
   candidates(key: SqliteRelationshipTable['foreignKeys'][number], offset: number, search?: SqliteReferenceSearch): Promise<SqliteReferenceOutput> {
