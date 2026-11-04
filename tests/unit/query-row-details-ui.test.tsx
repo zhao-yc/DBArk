@@ -173,3 +173,19 @@ it('宽行按24原列分页，单个长值展开有预算，HTML/JSON保持React
   controller.invalidate(); view = controller.open(controller.bind(source, []), 0); await act(async () => render());
   await act(async () => { oldExpand(); oldPage(); }); expect(region()!.querySelectorAll('article')).toHaveLength(24); expect(region()!.querySelectorAll('pre')[0].textContent.length).toBe(256);
 });
+
+it('只读表页边界明确显示跨页入口，页内仍本地翻行，旧跨页闭包不能借新行发起请求', async () => {
+  (window as any).dbark = { invoke: async (command: string) => { if (command !== 'settings.save') throw Error('禁止外界命令：' + command); } };
+  const controller = new QueryRowDetails(), result: QueryResult = { columns: [{ key: 'c0', name: '原值', type: 'SQLITE' }], rows: [{ c0: '9223372036854775807' }, { c0: '2' }], elapsedMs: 0, statement: '', truncated: false };
+  const binding = controller.bind(result, []); let view = controller.open(binding, 1);
+  const move = vi.fn(), cross = vi.fn(), container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container as any);
+  const render = () => root!.render(<QueryRowDetailsPanel controller={controller} view={view} isCurrent={() => true} sqlitePage={{ storageTypes: ['i', 't'] }} pageNavigation={{ previous: true, next: true, move: cross }} onMove={move} onClose={() => {}}/>);
+  await act(async () => render());
+  const oldCross = callback(button(detailsText.sqliteNextPage));
+  await act(async () => callback(button(detailsText.previous))()); expect(move).toHaveBeenCalledExactlyOnceWith(view, 0); expect(cross).not.toHaveBeenCalled();
+  await act(async () => oldCross()); expect(cross).toHaveBeenCalledExactlyOnceWith(view, 1);
+  view = controller.move(view, 0); await act(async () => render());
+  await act(async () => oldCross()); expect(cross).toHaveBeenCalledTimes(1);
+  await act(async () => callback(button(detailsText.sqlitePreviousPage))()); expect(cross.mock.calls.at(-1)).toEqual([view, -1]);
+  expect(document.body.textContent).toContain(detailsText.sqlitePageNavigation); expect(result.rows[0].c0).toBe('9223372036854775807');
+});

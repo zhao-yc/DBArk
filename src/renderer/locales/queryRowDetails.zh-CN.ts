@@ -6,5 +6,11 @@ export const queryRowDetailsZh = {
   truncated: '结果已截断；行号仅覆盖已返回数据。', preview: '预览已截断，可展开单值查看。', budget: '单次最多展开65,536个UTF-16单位，超限部分未展示；原值未修改。',
   invalid: '结果行详情已失效，请从当前结果重新选择一行',
   sqlitePage: 'SQLite 当前页行详情', sqliteRow: '当前页行号', sqliteChoose: '先在当前页网格选择一行',
+  sqlitePreviousPage: '上一页末行', sqliteNextPage: '下一页首行',
+  sqlitePageNavigation: '页内切换不查询；到达边界可沿已应用筛选和排序读取相邻页。不提供数据库快照分页。',
+  sqlitePageUnavailable: '当前行不在可读取相邻页的只读边界。',
+  sqlitePageStale: '原页、连接、条件或跨页读取已变化；未自动打开行详情，请核对当前页后重新选择。',
+  sqlitePageEmpty: '相邻页没有记录，未继续扫描；可使用表页分页按钮返回。',
+  sqlitePageStopped: '行详情跨页读取已停止，未自动打开行详情。',
   sqliteStorage: { i: 'INTEGER', r: 'REAL', t: 'TEXT', b: 'BLOB', n: 'NULL' },
 };

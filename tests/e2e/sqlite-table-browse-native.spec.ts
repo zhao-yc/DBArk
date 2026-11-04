@@ -234,9 +234,20 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await step(() => details().getByLabel(detailText.sqliteRow, { exact: true }).fill('5'));
     await step(() => details().getByRole('button', { name: detailText.go, exact: true }).click());
     await step(() => expect(detailField('note').locator('pre')).toHaveText(rows[4].note));
-    await step(() => expect(details().getByRole('button', { name: detailText.next, exact: true })).toBeDisabled());
+    await step(() => expect(details().getByRole('button', { name: detailText.sqliteNextPage, exact: true })).toBeEnabled());
     const afterDetails = await step(audit);
     expect(afterDetails.pages).toEqual(beforeDetails.pages); expect(afterDetails.forks).toEqual(beforeDetails.forks); expect(disk()).toEqual(baseline);
+    stage = '只读详情连续双向跨页，每次一读且准确打开首末行';
+    const crossRead = async (direction: -1 | 1, offset: number, expectedNote: string, expectedTable = tableName) => {
+      const before = await step(audit);
+      await step(() => details().getByRole('button', { name: direction === 1 ? detailText.sqliteNextPage : detailText.sqlitePreviousPage, exact: true }).click());
+      await step(() => expect(details()).toBeVisible()); await step(() => expect(detailField('note').locator('pre')).toHaveText(expectedNote));
+      const after = await step(audit); expect(after.pages).toHaveLength(before.pages.length + 1);
+      expect(after.pages.at(-1)?.request).toMatchObject({ table: expectedTable, offset }); pageRows(after.pages.at(-1)?.reply);
+      return after.pages.at(-1)!;
+    };
+    expect((await crossRead(1, 5, rows[5].note)).request).toMatchObject({ limit: 5, filters: [], sort: [{ column: 'id', direction: 'asc' }] });
+    await crossRead(-1, 0, rows[4].note); expect(disk()).toEqual(baseline);
     stage = '只读真实列头即时排序、分页沿服务端全表且ASC/DESC/移除循环';
     await headerSort('id', [{ column: 'id', direction: 'desc' }], [34, 33, 32, 31, 30]);
     await step(() => expect(details()).toHaveCount(0));
@@ -255,6 +266,12 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     await headerSort('id', [{ column: 'id', direction: 'desc' }], [34, 33, 32, 31, 30]); await controls(true); await step(() => expect(table().getByLabel('SQLite 筛选 1 条件值', { exact: true })).toHaveValue('30')); await step(() => expect(table().getByLabel('SQLite 筛选关系', { exact: true })).toHaveValue('or')); await step(() => expect(table().getByLabel('SQLite 每页条数', { exact: true })).toHaveValue('3')); await step(() => expect(table().getByLabel('SQLite 排序 1 方向', { exact: true })).toHaveValue('desc')); await apply([34, 33, 32]);
     expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 0, limit: 3, mode: 'or', filters: [{ column: 'id', operator: 'gte', value: { kind: 'integer', value: '30' } }], sort: [{ column: 'id', direction: 'desc' }] });
     const draftNext = (await step(audit)).pages.length; await step(() => table().getByRole('button', { name: 'SQLite 下一页', exact: true }).click()); await step(() => expect.poll(async () => { const pages = (await audit()).pages; return pages.length === draftNext + 1 && pages.at(-1)?.reply !== undefined; }).toBe(true)); await expectIds([31, 30]); expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ offset: 3, limit: 3, mode: 'or' });
+    stage = '只读详情沿已应用筛选和降序，未应用草稿不带入跨页';
+    await openDetail(); // 当前第二页首行31，向前应打开第一页末行32。
+    await controls(true); await step(() => table().getByLabel('SQLite 筛选 1 条件值', { exact: true }).fill('999')); await controls(false);
+    expect((await crossRead(-1, 0, rows[31].note)).request).toMatchObject({ limit: 3, mode: 'or', filters: [{ column: 'id', operator: 'gte', value: { kind: 'integer', value: '30' } }], sort: [{ column: 'id', direction: 'desc' }] });
+    await crossRead(1, 3, rows[30].note); // 第二页首行31，完整值不靠旧行位置推测。
+    await controls(true); await step(() => expect(table().getByLabel('SQLite 筛选 1 条件值', { exact: true })).toHaveValue('999')); await step(() => table().getByLabel('SQLite 筛选 1 条件值', { exact: true }).fill('30')); await controls(false);
     stage = '按页码跳转沿已应用配置，非法页码零读取，空页可回首页';
     await controls(true); await step(() => table().getByLabel(browseText.limit, { exact: true }).fill('7')); await controls(false);
     const jumpInput = () => table().getByLabel(browseText.pageJumpLabel, { exact: true });
@@ -435,8 +452,17 @@ test('SQLite原树只读表页真实分页、类型筛选及多列排序，正�
     expect((await step(audit)).pages.at(-1)?.request).toMatchObject({ sort: [{ column: 'rank_num', direction: 'asc' }, { column: 'bucket', direction: 'asc' }, { column: 'id', direction: 'asc' }] });
     stage = '原树视图与明确生成SELECT仍待执行'; await step(() => page.locator('.object-row .tree-label').filter({ hasText: viewName }).dblclick()); await step(() => expect(table().getByRole('grid')).toBeVisible()); await expectIds([30, 31, 32, 33, 34]);
     expect((await step(audit)).pages.at(-1)?.reply).toMatchObject({ ok: true, result: { target: { kind: 'view', table: viewName }, hasMore: false } });
+    await openDetail(); await step(() => expect(detailField('note').locator('pre')).toHaveText(rows[29].note));
+    stage = '视图详情按两行页双向续读，原五行视图及物理表保持';
+    await controls(true); await step(() => table().getByLabel(browseText.limit, { exact: true }).fill('2')); await apply([30, 31]);
+    await openDetail(); await step(() => details().getByLabel(detailText.sqliteRow, { exact: true }).fill('2')); await step(() => details().getByRole('button', { name: detailText.go, exact: true }).click());
+    const viewCross = await crossRead(1, 2, rows[31].note, viewName); expect(viewCross.reply).toMatchObject({ ok: true, result: { target: { kind: 'view' } } });
+    await crossRead(-1, 0, rows[30].note, viewName);
+    await step(async () => info.attach('SQLite只读详情跨页真实视图', { body: await page.screenshot(), contentType: 'image/png' }));
+    await controls(true); await step(() => table().getByLabel(browseText.limit, { exact: true }).fill('100')); await apply([30, 31, 32, 33, 34]);
     const beforeDraft = (await step(audit)).pages.length;
     await openDetail(); await step(() => expect(detailField('note').locator('pre')).toHaveText(rows[29].note));
+
     await step(async () => { const row = page.locator('.object-row').filter({ has: page.getByRole('button', { name: tableName, exact: true }) }); const item = await (require('./sidebar-menu') as typeof import('./sidebar-menu')).sidebarMenuItem(row, { name: sqliteZh.selectQuery + ' ' + tableName, exact: true }, check); check(); await item.click(); check(); });
     await step(() => expect(page.locator('.query-tab:visible .monaco-editor').getByRole('textbox')).toBeVisible());
     const drafted = await settings(), queryTab = drafted.tabs.find(tab => tab.id === drafted.activeTabId); expect(queryTab).toMatchObject({ kind: 'query', connectionId: profile.id, database: 'main', sql: 'SELECT * FROM "main"."浏览""航船🚢" LIMIT 100;' });
