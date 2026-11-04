@@ -175,3 +175,39 @@ it('超过完整查看预算的已有BLOB只显示明确错误，不误报DEFAUL
   expect(document.body.textContent).toContain('2 MiB'); expect(document.body.textContent).not.toContain('DEFAULT（尚未填写）');
   expect(document.querySelectorAll('button').some(button => ['从文件载入字节', '原字节另存为'].includes(button.textContent))).toBe(false); expect(f.invoke).not.toHaveBeenCalled(); expect(f.save).not.toHaveBeenCalled();
 });
+
+it('整行JSON与表单互换保typed输入；非法文档不切换、不部分暂存，正确文档才保存', async () => {
+  const jsonText = (await import('../../src/renderer/locales/sqliteRecordJson.zh-CN')).sqliteRecordJsonZh;
+  const save = vi.fn(() => true), close = vi.fn(); const props = { ticket: {}, page: page('输入'), row: row('原值'), current: () => true, onSave: save, onClose: close };
+  await mount(() => <ValueDialog {...props}/>);
+  await act(async () => callback(node(text.value('mixed'), 'textarea'), 'onChange')({ target: { value: '表单草稿🚢' } }));
+  await act(async () => callback(node(jsonText.json))());
+  const area = node(jsonText.input, 'textarea'), document = JSON.parse(area.value); expect(document.fields[0].value).toEqual({ kind: 'text', value: '表单草稿🚢' });
+  document.fields[0].value = { kind: 'integer', value: 9007199254740992 };
+  await act(async () => { area.value = JSON.stringify(document); callback(area, 'onChange')({ currentTarget: area }); });
+  await act(async () => callback(node(jsonText.form))()); expect(node(jsonText.input,'textarea').value).toBe(JSON.stringify(document)); expect(save).not.toHaveBeenCalled();
+  await act(async () => callback(node(text.saveInput))()); expect(save).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled();
+  document.fields[0].value.value = '9223372036854775807';
+  await act(async () => { const current = node(jsonText.input,'textarea'); current.value = JSON.stringify(document); callback(current,'onChange')({ currentTarget: current }); });
+  await act(async () => callback(node(jsonText.form))()); expect(node(text.value('mixed'),'textarea').value).toBe('9223372036854775807'); expect(node(text.type('mixed'),'select').value).toBe('integer');
+  await act(async () => callback(node(text.saveInput))()); expect(save).toHaveBeenCalledExactlyOnceWith([{ kind:'integer',value:'9223372036854775807' }]); expect(close).toHaveBeenCalledOnce();
+});
+it('整行JSON旧渲染和卸载回调不能改变新文档或新页；原来源失效保留正文并拒绝保存', async () => {
+  const jsonText = (await import('../../src/renderer/locales/sqliteRecordJson.zh-CN')).sqliteRecordJsonZh;
+  const save = vi.fn(() => true), close = vi.fn(); let live = true, key = 'first', props = { ticket: {}, page: page('原'), row: row('原'), current: () => live, onSave: save, onClose: close };
+  const rerender = await mount(() => <ValueDialog key={key} {...props}/>); await act(async () => callback(node(jsonText.json))());
+  const oldChange = callback(node(jsonText.input,'textarea'),'onChange'), oldSave = callback(node(text.saveInput)), oldForm = callback(node(jsonText.form));
+  live = false; await act(async () => oldSave()); expect(save).not.toHaveBeenCalled(); const original = node(jsonText.input,'textarea').value;
+  await act(async () => oldForm()); expect(node(jsonText.input,'textarea').value).toBe(original);
+  key = 'second'; live = true; props = { ...props, ticket:{}, page:page('新'), row:row('新') }; await rerender(); await act(async () => callback(node(jsonText.json))()); const next = node(jsonText.input,'textarea').value;
+  await act(async () => { oldChange({ currentTarget: { value:'旧正文污染' } }); oldSave(); oldForm(); }); expect(node(jsonText.input,'textarea').value).toBe(next); expect(save).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled();
+});
+it('整行JSON保存后导航传完整typed行，非法JSON则不导航；单格编辑不出现整行入口', async () => {
+  const jsonText = (await import('../../src/renderer/locales/sqliteRecordJson.zh-CN')).sqliteRecordJsonZh, move = vi.fn(() => true);
+  await mount(() => <ValueDialog ticket={{}} page={page('页')} row={row('原')} current={() => true} onSave={() => true} onClose={() => {}} navigation={{ ownerId:'json',previous:false,next:true,move }}/>);
+  await act(async () => callback(node(jsonText.json))()); const area=node(jsonText.input,'textarea'), value=JSON.parse(area.value); value.fields[0].value={kind:'null'};
+  await act(async () => { area.value='{';callback(area,'onChange')({currentTarget:area}); }); await act(async () => callback(node(text.saveNextRecord))()); expect(move).not.toHaveBeenCalled();
+  await act(async () => { const current=node(jsonText.input,'textarea');current.value=JSON.stringify(value);callback(current,'onChange')({currentTarget:current}); }); await act(async () => callback(node(text.saveNextRecord))()); expect(move).toHaveBeenCalledExactlyOnceWith(1,[{kind:'null'}]);
+  await act(async () => root!.unmount()); root=undefined;
+  await mount(() => <ValueDialog ticket={{}} page={page('单格')} row={row('单格')} column={0} current={() => true} onSave={() => true} onClose={() => {}}/>); expect(document.querySelectorAll('button').some(value=>value.getAttribute('aria-label')===jsonText.json)).toBe(false);
+});

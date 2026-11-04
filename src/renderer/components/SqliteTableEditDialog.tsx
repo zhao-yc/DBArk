@@ -1,3 +1,6 @@
+import { beginSqliteRecordJson, readSqliteRecordJson, sqliteRecordJsonBudget, type SqliteRecordJsonInput } from '../sqliteRecordJson';
+import { sqliteRecordJsonZh as jsonText } from '../locales/sqliteRecordJson.zh-CN';
+import { BoundedRecordTextarea } from './BoundedRecordTextarea';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { sqliteEditValueSchema, type SqliteOriginalValue } from '../../shared/sqliteTableEdit';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
@@ -25,15 +28,41 @@ export function SqliteTableValueDialog({ ticket, page, row, column, duplicate = 
   const [fields, setFields] = useState<FieldDraft[]>(() => row.values.map((value, index) => { const original = duplicate && page.edit?.kind === 'editable' && page.edit.columns[index]?.generated ? undefined : value; return { include: original !== undefined, kind: original?.kind ?? 'text', value: original && original.kind !== 'null' ? original.value : '', changed: false }; }));
   const live = useRef(fields); live.current = fields; const closed = useRef(false), saving = useRef(false), duplicateSource = useRef(!duplicate || row.index === undefined);
   const [error, setError] = useState('');
+  const [mode, setMode] = useState<'form' | 'json'>('form'), [json, setJson] = useState<{ input: SqliteRecordJsonInput; text: string } | null>(null);
+  const modeRef = useRef(mode), jsonRef = useRef(json); modeRef.current = mode; jsonRef.current = json;
   const columns = owner.page.edit?.kind === 'editable' ? owner.page.edit.columns : [];
   /** 即使误用相同组件 key，来源变化也永久拒绝旧字段与回调；关闭同样受原输入票据约束。 */
   const invalid = useRef(false); if (owner.ticket !== ticket || owner.page !== page || owner.row !== row || owner.column !== column || owner.duplicate !== duplicate || owner.duplicateOwner !== duplicateOwner) invalid.current = true;
   // 复制模式只拥有独立的新行草稿；观察到existing index后不因恢复undefined复活保存权。
   function duplicateCurrent(): boolean { if (owner.duplicate && owner.row.index !== undefined) duplicateSource.current = false; return duplicateSource.current; }
   duplicateCurrent();
-  function localCurrent(): boolean { return !invalid.current && !closed.current && committed.current === renderTicket && live.current === fields; }
+  function localCurrent(): boolean { return !invalid.current && !closed.current && committed.current === renderTicket && live.current === fields && modeRef.current === mode && jsonRef.current === json; }
   function close(): void { if (!localCurrent() || saving.current) return; closed.current = true; owner.onClose(); }
-  const changed = fields.some(field => field.changed);
+  const changed = fields.some(field => field.changed) || mode === 'json' && !!json && json.text !== json.input.initial;
+  /** 两种界面只编译同一行本地输入；生成列保持原值，复制的新行继续省略生成列。 */
+  function inputValues(): (SqliteOriginalValue | undefined)[] {
+    if (mode === 'json') { if (!json) throw Error(jsonText.invalid); return readSqliteRecordJson(json.input, json.text); }
+    return owner.row.values.map((original, i) => {
+      const field = fields[i]; if (owner.duplicate && columns[i].generated) return undefined; if (columns[i].generated || !field.changed) return original;
+      if (!field.include && owner.row.index === undefined) return undefined;
+      return sqliteEditValueSchema.parse(field.kind === 'null' ? { kind: 'null' } : { kind: field.kind, value: field.kind === 'blob' ? sqliteBinaryInputHex(field.value) : field.value });
+    });
+  }
+  /** 切换先完整验证，非法JSON或字段输入原样保留；不静默丢弃另一种界面的缓冲。 */
+  function switchMode(next: 'form' | 'json'): void {
+    if (next === mode || owner.column !== undefined || !localCurrent() || saving.current || !duplicateCurrent() || !owner.current()) return;
+    try {
+      const values = inputValues();
+      if (next === 'json') { const input = beginSqliteRecordJson(columns, values, owner.row.index === undefined); const draft = { input, text: input.initial }; jsonRef.current = draft; setJson(draft); }
+      else { const nextFields = values.map((value, index) => ({ include: value !== undefined, kind: value?.kind ?? 'text' as const, value: value && value.kind !== 'null' ? value.value : '', changed: JSON.stringify(value) !== JSON.stringify(owner.row.values[index]) })); live.current = nextFields; setFields(nextFields); }
+      modeRef.current = next; setMode(next); setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 有界文本域与原输入票据共同核验；旧渲染、旧模式及卸载后的事件不能污染新缓冲。 */
+  function changeJson(value: string): void {
+    if (mode !== 'json' || !json || !localCurrent() || saving.current || !duplicateCurrent() || !owner.current()) return;
+    const next = { input: json.input, text: value }; jsonRef.current = next; setJson(next); setError('');
+  }
   /** 校验失败保留原表单；干净的导航不消耗草稿撤销步骤。 */
   function save(direction?: -1 | 1): void {
     if (!localCurrent() || saving.current || !duplicateCurrent() || !owner.current()) { if (committed.current === renderTicket) setError(text.stale); return; }
@@ -41,11 +70,7 @@ export function SqliteTableValueDialog({ ticket, page, row, column, duplicate = 
     if (direction !== undefined && (!move || !(direction === -1 ? move.previous : move.next))) return;
     saving.current = true;
     try {
-      const values = direction !== undefined && !changed ? undefined : owner.row.values.map((original, i) => {
-        const field = fields[i]; if (owner.duplicate && columns[i].generated) return undefined; if (columns[i].generated || !field.changed) return original;
-        if (!field.include && owner.row.index === undefined) return undefined;
-        return sqliteEditValueSchema.parse(field.kind === 'null' ? { kind: 'null' } : { kind: field.kind, value: field.kind === 'blob' ? sqliteBinaryInputHex(field.value) : field.value });
-      });
+      const values = direction !== undefined && !changed ? undefined : inputValues();
       if (!duplicateCurrent() || !owner.current() || !(direction !== undefined ? move?.move(direction, values) : values && owner.onSave(values))) { setError(text.stale); return; }
       closed.current = true;
       if (direction === undefined) owner.onClose();
@@ -55,7 +80,7 @@ export function SqliteTableValueDialog({ ticket, page, row, column, duplicate = 
   /** 显示只核准确字段来源；文件事件仍另核已提交渲染票据，不能在首次渲染时永久禁用入口。 */
   function binaryFieldAvailable(index: number): boolean { return !invalid.current && !closed.current && !saving.current && live.current[index] === fields[index] && duplicateCurrent() && owner.current(); }
   // 字段区独立滚动，让多列记录的导航与保存栏始终留在对话框可见范围内。
-  return <Modal title={owner.duplicate ? text.duplicateTitle : row.index === undefined ? text.add : column === undefined ? text.editRow : text.editCell} onClose={close} wide><div className="modal-content dialog-body" data-sqlite-duplicate-input={owner.duplicate ? owner.duplicateOwner : undefined} data-sqlite-record-input={owner.navigation?.ownerId}><p>{text.inputHint}</p>{owner.duplicate && <p>{text.duplicateHint}</p>}{owner.navigation && <p>{text.recordNavigation}</p>}{columns.map((item, index) => column !== undefined && index !== column ? null : <fieldset key={item.name}><legend>{item.name}{item.generated ? ' · ' + text.generated : ''}</legend>{row.index === undefined && <label><input type="checkbox" aria-label={text.include(item.name)} checked={fields[index].include} disabled={item.generated} onChange={event => change(index, { include: event.target.checked })}/>{text.include(item.name)}</label>}<select aria-label={text.type(item.name)} value={fields[index].kind} disabled={item.generated || !fields[index].include} onChange={event => change(index, { kind: event.target.value as FieldDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select>{fields[index].kind === 'blob' && fields[index].include ? <SqliteBinaryField value={fields[index].value} label={text.value(item.name)} readonlyReason={item.generated ? text.generated : ''} source={[owner.ticket, owner.page, owner.row, index, fields[index]]} current={() => localCurrent() && binaryFieldAvailable(index)} available={() => binaryFieldAvailable(index)} onChange={value => change(index, { value })}/> : <textarea aria-label={text.value(item.name)} value={fields[index].value} maxLength={65536} disabled={item.generated || !fields[index].include || fields[index].kind === 'null'} onChange={event => change(index, { value: event.target.value })}/>}</fieldset>)}</div><ErrorBox message={owner.duplicate && !duplicateSource.current ? text.stale : error}/><footer className="modal-footer">{owner.navigation && <>
+  return <Modal title={owner.duplicate ? text.duplicateTitle : row.index === undefined ? text.add : column === undefined ? text.editRow : text.editCell} onClose={close} wide><div className="modal-content dialog-body" data-sqlite-duplicate-input={owner.duplicate ? owner.duplicateOwner : undefined} data-sqlite-record-input={owner.navigation?.ownerId}><p>{text.inputHint}</p>{owner.duplicate && <p>{text.duplicateHint}</p>}{owner.navigation && <p>{text.recordNavigation}</p>}{owner.column === undefined && <div role="group" aria-label={jsonText.modes}><button type="button" aria-label={jsonText.form} aria-pressed={mode === 'form'} onClick={() => switchMode('form')}>{jsonText.form}</button><button type="button" aria-label={jsonText.json} aria-pressed={mode === 'json'} onClick={() => switchMode('json')}>{jsonText.json}</button></div>}{mode === 'json' && json ? <><p>{jsonText.hint}</p><BoundedRecordTextarea aria-label={jsonText.input} spellCheck={false} rows={18} style={{ width: '100%', fontFamily: 'monospace' }} value={json.text} inputIdentity={json.input} budget={sqliteRecordJsonBudget} onValueChange={changeJson}/></> : columns.map((item, index) => column !== undefined && index !== column ? null : <fieldset key={item.name}><legend>{item.name}{item.generated ? ' · ' + text.generated : ''}</legend>{row.index === undefined && <label><input type="checkbox" aria-label={text.include(item.name)} checked={fields[index].include} disabled={item.generated} onChange={event => change(index, { include: event.target.checked })}/>{text.include(item.name)}</label>}<select aria-label={text.type(item.name)} value={fields[index].kind} disabled={item.generated || !fields[index].include} onChange={event => change(index, { kind: event.target.value as FieldDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select>{fields[index].kind === 'blob' && fields[index].include ? <SqliteBinaryField value={fields[index].value} label={text.value(item.name)} readonlyReason={item.generated ? text.generated : ''} source={[owner.ticket, owner.page, owner.row, index, fields[index]]} current={() => localCurrent() && binaryFieldAvailable(index)} available={() => binaryFieldAvailable(index)} onChange={value => change(index, { value })}/> : <textarea aria-label={text.value(item.name)} value={fields[index].value} maxLength={65536} disabled={item.generated || !fields[index].include || fields[index].kind === 'null'} onChange={event => change(index, { value: event.target.value })}/>}</fieldset>)}</div><ErrorBox message={owner.duplicate && !duplicateSource.current ? text.stale : error}/><footer className="modal-footer">{owner.navigation && <>
     <button type="button" aria-label={owner.navigation.pagePrevious ? text.previousPageRecord : changed ? text.savePreviousRecord : text.previousRecord} disabled={!owner.navigation.previous} onClick={() => save(-1)}>{owner.navigation.pagePrevious ? text.previousPageRecord : changed ? text.savePreviousRecord : text.previousRecord}</button>
     <button type="button" aria-label={owner.navigation.pageNext ? text.nextPageRecord : changed ? text.saveNextRecord : text.nextRecord} disabled={!owner.navigation.next} onClick={() => save(1)}>{owner.navigation.pageNext ? text.nextPageRecord : changed ? text.saveNextRecord : text.nextRecord}</button>
   <span className="grow"/></>}<button aria-label={owner.duplicate ? text.duplicateCancel : text.cancelInput} onClick={close}>{owner.duplicate ? text.duplicateCancel : text.cancelInput}</button><button className="primary" aria-label={owner.duplicate ? text.duplicateSave : text.saveInput} disabled={owner.duplicate && !duplicateSource.current} onClick={() => save()}>{owner.duplicate ? text.duplicateSave : text.saveInput}</button></footer></Modal>;

@@ -1,5 +1,7 @@
 # 开发与测试
 
+2026-11-04 新增[SQLite整行JSON编辑](development/sqlite-record-json-20261104.md)：纯Renderer严格typed整行编译，现有词法预检识别重复成员、2MiB双预算及同步票据守卫；复用原字段窗口、Editor和集中提交。136项相关、严格类型／构建及Mac新JSON与原关联编辑两项窗口通过；离线入口node scripts/sqlite-workspace-ci.mjs record-json，保持原owner／期限／零自动重试，暂不发布。
+
 2026-11-04 新增[SQLite关联独立表页](development/sqlite-related-table-20261104.md)：严格relation合同及统一谓词编译，Main逐快照核双端元数据，固定关联贯穿派生读取与私有编辑快照；Renderer内存来源和reserved标签失效保护。15份相关文件319项通过，Mac关联表页及既有关系图整例通过；离线入口为node scripts/sqlite-workspace-ci.mjs related-tables，保持120秒、1worker、0重试及原owner退出账本，暂不发布。
 
 2026-11-04 已建立[Mac 完整单元回归基线](development/macos-unit-baseline-20261104.md)：Node 24.17.0、1,269 套件／26,525 项通过、10 项原 Windows 条件跳过，严格类型及构建通过。开发 Node 要求为 24.17.0 或更高的 24.x，新增 `pnpm check:runtime` 与测试前原生 API 预检；旧运行时失败、夹具修复及未验平台分别留证。
