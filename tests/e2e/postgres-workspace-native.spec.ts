@@ -1971,9 +1971,34 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(textRoutineNode).toBeVisible();
     await mark('原生重命名整数重载并重开定义，受限删除需勾选确认，树和列表刷新且保留文本重载');
 
-    await page.locator('.tab-strip .tab-close').click();
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(routineHistory);
     await mark('原生对象树和函数列表打开两个重载及过程，读取 DDL 和打开定义草稿没有执行历史');
+
+    await routineFilter.fill('窗口补全函数');
+    await routineRows.filter({ hasText: textSignature }).dblclick();
+    await routineDefinition.getByRole('button', { name: routineText.callDraft, exact: true }).click();
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('SELECT "回归"."窗口补全函数"($1::"pg_catalog"."text")');
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(routineHistory);
+    await button(postgresZh.parameters).click();
+    const boundRoutineValue = "调用原值'; -- 😀";
+    await parameters.getByLabel('参数值 p1', { exact: true }).fill(boundRoutineValue);
+    await parameters.getByRole('button', { name: parameterZh.execute, exact: true }).click();
+    await expect(tab().getByRole('grid')).toContainText(boundRoutineValue);
+    await discardTestTab(page, page.locator('.tab-strip .tab-close').last());
+
+    const callProcedureSignature = '"回归"."窗口调用过程"(integer)';
+    await routineFilter.fill('窗口调用过程');
+    await routineRows.filter({ hasText: callProcedureSignature }).dblclick();
+    await routineDefinition.getByRole('button', { name: routineText.callDraft, exact: true }).click();
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('CALL "回归"."窗口调用过程"($1::"pg_catalog"."int4", NULL::"pg_catalog"."int4")');
+    await button(postgresZh.parameters).click();
+    await parameters.getByLabel('参数值 p1', { exact: true }).fill('41');
+    await page.screenshot({ path: info.outputPath('PostgreSQL例程调用.png') });
+    await parameters.getByRole('button', { name: parameterZh.execute, exact: true }).click();
+    await expect(tab().getByRole('grid')).toContainText('43');
+    await discardTestTab(page, page.locator('.tab-strip .tab-close').last());
+    await page.locator('.tab-strip .tab-close').click();
+    await mark('原生重载定义生成调用草稿，打开草稿不执行，文本参数原值回读，过程返回 OUT 结果');
 
 
 

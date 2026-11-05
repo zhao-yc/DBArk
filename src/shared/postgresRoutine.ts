@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresCreateTableSchemasSchema, postgresDdlText, postgresNewIdentifier } from './postgresCreateTable';
-import { scanPostgresEditorTokens } from './postgresSql';
+import { postgresIdentifier, scanPostgresEditorTokens } from './postgresSql';
 
 export const postgresRoutineReadSchema = postgresStructureInputSchema.omit({ table: true }).extend({
   kind: z.enum(['function', 'procedure']),
@@ -33,13 +33,45 @@ export const postgresRoutineManageSchema = z.discriminatedUnion('action', [
 ]);
 export type PostgresRoutineManageInput = z.infer<typeof postgresRoutineManageSchema>;
 
+const routineCallParameter = z.object({
+  mode: z.enum(['i', 'o', 'b', 'v', 't']),
+  cast: z.object({ schema: z.string(), name: z.string() }).nullable(),
+});
+const routineCallMetadata = z.object({
+  schema: z.string(), name: z.string(), parameters: z.array(routineCallParameter), setReturning: z.boolean(),
+});
+
 export const postgresRoutineInfoSchema = routineProperties.extend({
   name: z.string().min(1), category: z.enum(['f', 'p', 'w']), arguments: z.string(), returns: z.string().nullable(),
   language: z.string(), owner: z.string(), definition: z.string().min(1),
   configuration: z.array(z.string()).nullable(),
+  invocation: routineCallMetadata.nullable(),
   canManage: z.boolean(), stamp: routineStamp, editableBody: z.string().nullable(),
 }).strict();
 export type PostgresRoutineInfo = z.infer<typeof postgresRoutineInfoSchema>;
+
+/** 调用草稿只使用目录返回的对象名和类型名。实际值在查询窗口绑定。 */
+export function buildPostgresRoutineCall(info: PostgresRoutineInfo): string | undefined {
+  const metadata = info.invocation;
+  if (!metadata) return;
+  const procedure = info.category === 'p';
+  const isInput = (parameter: typeof metadata.parameters[number]) => parameter.mode !== 'o' && parameter.mode !== 't';
+  const parameters = metadata.parameters.filter(parameter => isInput(parameter) || procedure && parameter.mode === 'o');
+  if (parameters.some((parameter, index) => !parameter.cast || parameter.mode === 'v' && index !== parameters.length - 1)) return;
+  if (metadata.setReturning && info.returns === 'SETOF record' &&
+      !metadata.parameters.some(parameter => ['o', 'b', 't'].includes(parameter.mode))) return;
+  let next = 1;
+  const args = parameters.map(parameter => {
+    const cast = parameter.cast!;
+    const value = isInput(parameter) ? '$' + next++ : 'NULL';
+    return (parameter.mode === 'v' ? 'VARIADIC ' : '') + value + '::' +
+      postgresIdentifier(cast.schema) + '.' + postgresIdentifier(cast.name);
+  });
+  const call = postgresIdentifier(metadata.schema) + '.' + postgresIdentifier(metadata.name) + '(' + args.join(', ') + ')';
+  if (procedure) return 'CALL ' + call + ';';
+  if (metadata.setReturning) return 'SELECT * FROM ' + call + ';';
+  return 'SELECT ' + call + (info.category === 'w' ? ' OVER ()' : '') + ' AS "结果";';
+}
 
 const utf8 = new TextEncoder();
 const typeName = z.string().trim().min(1).max(512).refine(value => {

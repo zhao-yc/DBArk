@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview } from '../../shared/postgresCreateTable';
-import { postgresRoutineManageSchema, type PostgresRoutineInfo, type PostgresRoutineManageInput, type PostgresRoutineProperties,
+import { buildPostgresRoutineCall, postgresRoutineManageSchema, type PostgresRoutineInfo, type PostgresRoutineManageInput, type PostgresRoutineProperties,
   type PostgresRoutineReadInput } from '../../shared/postgresRoutine';
 import { errorMessage, invoke } from '../lib';
 import { postgresRoutineZh as text } from '../locales/postgresRoutine.zh-CN';
@@ -38,14 +38,15 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
     return () => { active = false; };
   }, [connectionId, database, kind, name, key]);
 
-  function openDraft() {
+  function openDraft(sql: string, title: string) {
     const workspace = useWorkspace.getState();
-    if (!info || (workspace.connectionVersions[connectionId] ?? 0) !== version ||
+    if ((workspace.connectionVersions[connectionId] ?? 0) !== version ||
         workspace.connections.find(profile => profile.id === connectionId)?.dialect !== 'postgresql') return;
-    workspace.openTab({ kind: 'query', title: name, connectionId, database, sql: info.definition });
+    workspace.openTab({ kind: 'query', title, connectionId, database, sql });
     onClose();
   }
 
+  const call = info && buildPostgresRoutineCall(info);
   const fields = info && [[text.kind, text.categories[info.category]], [text.owner, info.owner], [text.language, info.language],
     [text.arguments, info.arguments || '—'], ...(info.category === 'p' ? [] : [
       [text.returns, info.returns ?? '—'], [text.volatility, text.volatilityValues[info.volatility]],
@@ -77,7 +78,9 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
         <SqlEditor value={info.definition} dialect="postgresql" readOnly height={300}/></>}
     </div>
     <footer className="modal-footer"><button disabled={!current} onClick={() => setAttempt(value => value + 1)}>{zh.common.refresh}</button>
-      <button disabled={!info} onClick={openDraft}>{text.draft}</button>
+      <button disabled={!info} onClick={() => { if (info) openDraft(info.definition, name); }}>{text.draft}</button>
+      {!readOnly && <button disabled={!call} title={info && !call ? text.callUnavailable : undefined}
+        onClick={() => { if (call) openDraft(call, text.callTitle + name); }}>{text.callDraft}</button>}
       {!readOnly && info?.canManage && <>
         <button disabled={info.editableBody === null} title={info.editableBody === null ? text.editUnavailable : undefined}
           onClick={() => setManage({ action: 'edit', stamp: info.stamp, version, originalBody: info.editableBody ?? undefined })}>{text.edit}</button>

@@ -41,6 +41,18 @@ export async function readPostgresRoutineFacts(connection: PostgresConnection, i
     'volatility', p.provolatile::text, 'securityDefiner', p.prosecdef, 'comment', pg_catalog.obj_description(p.oid, 'pg_proc'),
     'strict', p.proisstrict, 'parallel', p.proparallel::text, 'cost', p.procost::text,
     'rows', CASE WHEN p.proretset THEN p.prorows::text END, 'configuration', p.proconfig,
+    'invocation', CASE WHEN pg_catalog.has_function_privilege(p.oid, 'EXECUTE') THEN
+      pg_catalog.jsonb_build_object('schema', n.nspname, 'name', p.proname, 'setReturning', p.proretset,
+        'parameters', COALESCE((
+          SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+            'mode', COALESCE(p.proargmodes[a.position::integer]::text, 'i'),
+            'cast', CASE WHEN t.typtype <> 'p' AND pg_catalog.has_schema_privilege(t.typnamespace, 'USAGE')
+              THEN pg_catalog.jsonb_build_object('schema', tn.nspname, 'name', t.typname) END
+          ) ORDER BY a.position)
+          FROM pg_catalog.unnest(COALESCE(p.proallargtypes, p.proargtypes::oid[])) WITH ORDINALITY a(type_oid, position)
+          JOIN pg_catalog.pg_type t ON t.oid = a.type_oid JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace
+        ), '[]'::jsonb))
+    END,
     'definition', pg_catalog.pg_get_functiondef(p.oid),
     'editableBody', CASE WHEN l.lanname IN ('sql', 'plpgsql') AND p.probin IS NULL
       AND pg_catalog.to_jsonb(p)->>'prosqlbody' IS NULL AND pg_catalog.octet_length(p.prosrc) BETWEEN 1 AND 131072

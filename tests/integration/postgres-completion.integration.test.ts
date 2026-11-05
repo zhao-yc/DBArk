@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile, QueryOutcome } from '../../src/shared/contracts';
 import type { PostgresCompletionInput, PostgresCompletionResult, PostgresRoutineCompletionTarget } from '../../src/shared/postgresCompletion';
-import type { PostgresRoutineProperties } from '../../src/shared/postgresRoutine';
+import { buildPostgresRoutineCall, type PostgresRoutineProperties } from '../../src/shared/postgresRoutine';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
 const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
@@ -205,6 +205,48 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         body: 'SELECT cardinality("值")' });
       expect(await applyRoutine(variadic.token)).toMatchObject({ outcome: 'committed', table: '"补全.甲"."可变函数"(integer[])' });
       expect((await client.query('SELECT "补全.甲"."可变函数"(1, 2, 3) AS result')).rows).toEqual([{ result: 3 }]);
+
+      const { sessionId: callSession } = await engine.handle('sessions.open', target);
+      const prepareCall = async (name: string, kind: 'function' | 'procedure' = 'function') => {
+        const sql = buildPostgresRoutineCall(await readRoutine(name, kind));
+        if (!sql) throw Error('未生成 PostgreSQL 调用草稿');
+        return sql;
+      };
+      const executeCall = (sql: string, value: string): Promise<QueryOutcome> =>
+        engine.handle('query.executeParameterized', { sessionId: callSession, taskId: randomUUID(), sql, maxRows: 10,
+          parameters: [{ name: 'p1', type: 'text', value }] });
+      const integerCall = await prepareCall(integerRoutine), textCall = await prepareCall(textRoutine);
+      expect(integerCall).toBe('SELECT "补全.乙"."tabrelio_fold"($1::"pg_catalog"."int4") AS "结果";');
+      expect(textCall).toBe('SELECT "补全.乙"."tabrelio_fold"($1::"pg_catalog"."text") AS "结果";');
+      const originalValue = "带引号'; -- \\ 😀";
+      expect((await executeCall(integerCall, '41')).results[0]?.rows).toEqual([{ c0: '41' }]);
+      expect((await executeCall(textCall, originalValue)).results[0]?.rows).toEqual([{ c0: originalValue }]);
+      const customCall = await prepareCall(customIdentity);
+      expect(customCall).toContain('"图形""例程"($1::"补全.甲"."带.型")');
+      expect((await executeCall(customCall, 'x')).results[0]?.rows).toEqual([{ c0: 'x' }]);
+      const procedureCall = await prepareCall(procedureIdentity, 'procedure');
+      expect(procedureCall).toBe('CALL "补全.甲"."图形过程"($1::"pg_catalog"."int4", NULL::"pg_catalog"."int4");');
+      expect((await executeCall(procedureCall, '41')).results[0]?.rows).toEqual([{ c0: '42' }]);
+      const inoutCall = await prepareCall(modesRoutine, 'procedure');
+      expect(inoutCall).toContain('$1::"pg_catalog"."int4", NULL::"pg_catalog"."int4", $2::"pg_catalog"."int8"');
+      const inoutResult: QueryOutcome = await engine.handle('query.executeParameterized', { sessionId: callSession,
+        taskId: randomUUID(), sql: inoutCall, maxRows: 10, parameters: [
+          { name: 'p1', type: 'text', value: '9' }, { name: 'p2', type: 'text', value: '9007199254740993' },
+        ] });
+      expect(inoutResult.results[0]?.rows).toEqual([{ c0: '9', c1: '9007199254740993' }]);
+      const setCall = await prepareCall('"补全.甲"."表函数"(integer)');
+      expect(setCall).toMatch(/^SELECT \* FROM /);
+      expect((await executeCall(setCall, '7')).results[0]?.rows).toEqual([{ c0: '7', c1: '文本' }]);
+      const variadicCall = await prepareCall('"补全.甲"."可变函数"(integer[])');
+      expect(variadicCall).toContain('VARIADIC $1::"pg_catalog"."_int4"');
+      expect((await executeCall(variadicCall, '{1,2,3}')).results[0]?.rows).toEqual([{ c0: '3' }]);
+      expect(await prepareCall('"public"."tabrelio_write"()')).toBe('SELECT "public"."tabrelio_write"() AS "结果";');
+      expect((await client.query('SELECT count(*)::int AS count FROM public.routine_side_effects')).rows).toEqual([{ count: 0 }]);
+      await client.query(`CREATE FUNCTION "补全.甲"."多态调用"(value anyelement) RETURNS anyelement LANGUAGE sql AS 'SELECT value';
+        CREATE FUNCTION "补全.甲"."匿名记录"() RETURNS SETOF record LANGUAGE sql AS 'SELECT 1, 2'`);
+      expect(buildPostgresRoutineCall(await readRoutine('"补全.甲"."多态调用"(anyelement)'))).toBeUndefined();
+      expect(buildPostgresRoutineCall(await readRoutine('"补全.甲"."匿名记录"()'))).toBeUndefined();
+      await engine.handle('sessions.close', { sessionId: callSession });
 
       const rejectedBody = await createRoutine({ ...fixtureFunction, name: '无效正文', body: 'SELECT 不存在的列' });
       expect(await applyRoutine(rejectedBody.token)).toMatchObject({ outcome: 'rolledBack' });
@@ -410,7 +452,9 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         expect(limitedObjects).toContainEqual({ kind: 'function', name: integerRoutine });
         expect(limitedObjects).not.toContainEqual({ kind: 'function', name: textRoutine });
         await expect(readRoutine(textRoutine, 'function', limitedProfile)).rejects.toThrow('不可见');
-        expect(await readRoutine(integerRoutine, 'function', limitedProfile)).toMatchObject({ canManage: false });
+        const executable = await readRoutine(integerRoutine, 'function', limitedProfile);
+        expect(executable).toMatchObject({ canManage: false });
+        expect(buildPostgresRoutineCall(executable)).toBe(integerCall);
         await expect(manageRoutine(integerRoutine, 'drop', undefined, 'function', limitedProfile)).rejects.toThrow('没有例程管理权限');
         expect((await run('RESET ROLE')).failure).toBeUndefined();
         expect(await fields('public')).toEqual(['public_field']);
