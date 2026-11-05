@@ -21,7 +21,8 @@ import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterB
 import { captureQueryResultCellFilter, queryResultCellFilterNode, type CellFilterOperator } from '../queryResultCellFilter';
 import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
-import { prepareQueryResultOrganization } from '../queryResultHistory';
+import { prepareQueryResultOrganization, QueryResultHistory } from '../queryResultHistory';
+import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
@@ -122,6 +123,7 @@ export function PostgresQueryTab({
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
   const [resultSelection] = useState(() => new ResultExportSelection());
+  const [resultHistory] = useState(() => new QueryResultHistory());
   const [rowDetails] = useState(() => new QueryRowDetails());
   const [activeDetailRow, setActiveDetailRow] = useState<{ binding: QueryRowDetailsBinding; index: number }>();
   const [rowDetail, setRowDetail] = useState<QueryRowDetailsView>();
@@ -328,6 +330,7 @@ export function PostgresQueryTab({
       resultFilter.invalidate();
       resultSorter.invalidate();
       resultSelection.invalidate();
+      resultHistory.invalidate();
       setColumnLayout(undefined);
       setOutcome(undefined);
       setSelected(0);
@@ -616,6 +619,7 @@ export function PostgresQueryTab({
         if (changed) {
           organization.filter.invalidate();
           organization.sorter.invalidate();
+          resultHistory.invalidate();
           setColumnLayout(undefined);
         }
         if ((changed || left) && sortDraftRef.current) closeResultSort(sortDraftRef.current);
@@ -653,6 +657,8 @@ export function PostgresQueryTab({
   const filterView = resultFilter.view(filterBinding);
   const sortBinding = resultSorter.bind(filterView?.result ?? resultSource, resultContext, visibleColumns);
   const sortView = resultSorter.view(sortBinding);
+  const historyBinding = resultHistory.bind(resultSource, visibleColumns ?? [], resultContext,
+    filterView && sortView ? { expression: filterView.expression, sort: sortView.rules } : undefined, filterBinding);
   const displayResult = sortView?.result ?? filterView?.result ?? result;
   const dataResult = !busy && resultSource ? displayResult : undefined;
   const binding = resultSelection.bind(workspace.settings.activeTabId === tab.id ? dataResult : undefined,
@@ -806,17 +812,39 @@ export function PostgresQueryTab({
     try {
       const next = prepareQueryResultOrganization(resultSource, resultContext, visibleColumns,
         { expression, sort: sortView.rules }, 'postgresql');
-      resultFilter.invalidate();
-      resultSorter.invalidate();
-      organization.filter = next.filter;
-      organization.sorter = next.sorter;
-      resultSelection.invalidate();
+      if (historyBinding) resultHistory.record(historyBinding, {
+        expression: next.filter.view(next.filterBinding)!.expression,
+        sort: next.sorter.view(next.sortBinding)!.rules,
+      }, next.filterBinding);
+      publishResultOrganization(next);
       if (draft) closeResultFilter(draft);
-      refreshResult(value => value + 1);
     } catch (reason) {
       if (draft) setFilterError(errorMessage(reason));
       else setError(errorMessage(reason));
     }
+  }
+
+  /** 发布已验证的筛选和排序，原勾选、查找及行详情由新的网格绑定重置。 */
+  function publishResultOrganization(next: ReturnType<typeof prepareQueryResultOrganization>) {
+    resultFilter.invalidate();
+    resultSorter.invalidate();
+    organization.filter = next.filter;
+    organization.sorter = next.sorter;
+    resultSelection.invalidate();
+    setError('');
+    refreshResult(value => value + 1);
+  }
+
+  /** 验证历史目标能完整恢复后才移动游标，避免失败丢失重做。 */
+  function travelResultHistory(direction: -1 | 1) {
+    if (!resultSource || !visibleColumns || !resultCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const ticket = resultHistory.target(historyBinding, direction);
+    if (!ticket) return;
+    try {
+      const next = prepareQueryResultOrganization(resultSource, resultContext, visibleColumns, ticket.configuration, 'postgresql');
+      resultHistory.commit(ticket, next.filterBinding);
+      publishResultOrganization(next);
+    } catch (reason) { setError(errorMessage(reason)); }
   }
 
   /** 只关闭准确的草稿，旧面板不能关闭后来打开的排序。 */
@@ -830,7 +858,8 @@ export function PostgresQueryTab({
   function applyResultSort(rules: QueryResultSortRule[], draft?: SortDraft) {
     if (!sortBinding || !sortView || !sortCurrent(draft)) return false;
     try {
-      resultSorter.apply(sortBinding, sortView, rules);
+      const sorted = resultSorter.apply(sortBinding, sortView, rules);
+      if (historyBinding && filterView) resultHistory.record(historyBinding, { expression: filterView.expression, sort: sorted.rules });
       resultSelection.invalidate();
       if (draft) closeResultSort(draft);
       refreshResult(value => value + 1);
@@ -878,6 +907,7 @@ export function PostgresQueryTab({
       if ([...filterView.rules, ...sortView.rules].some(rule => !keys.has(rule.column))) throw Error(columnText.activeRule);
       const next = prepareQueryResultOrganization(resultSource, resultContext, projected,
         { expression: filterView.expression, sort: sortView.rules }, 'postgresql');
+      resultHistory.invalidate();
       resultFilter.invalidate();
       resultSorter.invalidate();
       organization.filter = next.filter;
@@ -1025,6 +1055,7 @@ export function PostgresQueryTab({
                 resultFilter.invalidate();
                 resultSorter.invalidate();
                 resultSelection.invalidate();
+                resultHistory.invalidate();
                 setColumnLayout(undefined);
                 setSelected(Number(event.target.value));
               }}>
@@ -1048,6 +1079,11 @@ export function PostgresQueryTab({
                   setSortDraft(draft);
                 }}>{sortText.panelTitle}</button>
               {!!sortView?.rules.length && <button disabled={locked} onClick={() => applyResultSort([])}>{sortText.clear}</button>}
+              <button disabled={locked || !binding || !resultHistory.target(historyBinding, -1)}
+                title={resultHistory.limited ? historyText.limited : historyText.postgresHint}
+                onClick={() => travelResultHistory(-1)}>{historyText.undo}</button>
+              <button disabled={locked || !binding || !resultHistory.target(historyBinding, 1)} title={historyText.postgresHint}
+                onClick={() => travelResultHistory(1)}>{historyText.redo}</button>
               <button disabled={locked || !binding} onClick={() => openResultExport(false)}>{zh.resultExport.title}</button>
               <button disabled={locked || !selectedCount} onClick={() => openResultExport(true)}>{zh.resultExport.selectedTitle}</button>
             </>}
@@ -1066,6 +1102,7 @@ export function PostgresQueryTab({
                   onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
                   onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
                   onStatistics={binding ? openResultStatistics : undefined}
+                  onHistoryTravel={binding && historyBinding ? travelResultHistory : undefined}
                   sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons}
                   onSortChange={sortView ? rules => applyResultSort(rules) : undefined} />
               </div>

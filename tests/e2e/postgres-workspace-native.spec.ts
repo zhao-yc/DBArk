@@ -24,6 +24,7 @@ import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryR
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
@@ -624,6 +625,36 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeSort);
     await mark('列统计按筛选和勾选范围计数，精确 NUMERIC 合计与平均保留末位，NaN 分布回填同一筛选草稿');
 
+    // 从同一整理历史恢复筛选和排序，随后用新排序分支替换原重做路径。
+    const undoResult = button(historyText.undo), redoResult = button(historyText.redo);
+    await undoResult.click();
+    await expect(amountGrid.getByRole('row')).toHaveCount(6);
+    await expect(redoResult).toBeEnabled();
+    await amountHeader.click();
+    await expect(amountGrid.getByRole('row').nth(1)).toContainText('a-次键');
+    await expect(redoResult).toBeDisabled();
+    const historyCell = amountGrid.getByRole('gridcell', { name: 'a-次键', exact: true });
+    await historyCell.click();
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.press(modifier + '+z');
+    await expect(amountGrid.getByRole('row').nth(1)).toContainText('不是数字');
+    await historyCell.click();
+    await page.keyboard.press(modifier + '+Shift+z');
+    await expect(amountGrid.getByRole('row').nth(1)).toContainText('a-次键');
+
+    await nanCell.click();
+    await button(filterText.cellEquals).click();
+    await applyShortcut.click();
+    await expect(tab().getByText(filterText.counts(5, 1), { exact: true })).toBeVisible();
+    await undoResult.click();
+    await expect(amountGrid.getByRole('row').nth(1)).toContainText('a-次键');
+    await expect(amountGrid.getByRole('row')).toHaveCount(6);
+    await page.screenshot({ path: info.outputPath('PostgreSQL查询结果整理历史.png') });
+    await redoResult.click();
+    await expect(tab().getByText(filterText.counts(5, 1), { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeSort);
+    await mark('整理历史可用网格快捷键撤销重做；撤销筛选保留原排序，新整理清除重做分支');
+
     // 查询带可观测的序列推进，导出三种文件后复核只执行了原查询一次。
     await button(postgresZh.begin).click();
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
@@ -643,6 +674,8 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     }).getByRole('checkbox').check();
     await resultSwitch.selectOption('1');
     await expect(resultGrid).toContainText(firstId);
+    await expect(undoResult).toBeDisabled();
+    await expect(redoResult).toBeDisabled();
     await selectResultRow(lastId);
     await expect(selectedExport).toBeEnabled();
     await resultSwitch.selectOption('2');
@@ -748,6 +781,8 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await page.screenshot({ path: info.outputPath('PostgreSQL查询结果列管理.png') });
       await applyColumns.click();
       await expect(columns).toHaveCount(0);
+      await expect(undoResult).toBeDisabled();
+      await expect(redoResult).toBeDisabled();
       await expect(resultGrid).toHaveClass(/grid-row-height-56/);
       await expect(resultGrid.getByRole('columnheader', { name: /raw/ })).toHaveCount(0);
       const reorderedHeader = resultGrid.getByRole('columnheader').filter({ hasText: '同名' }).first();
@@ -812,6 +847,8 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await mark('BIGINT 候选、错误草稿、排序保留、筛选后 JSON 和清除筛选通过原生窗口');
       await resultSwitch.selectOption('2');
       await resultSwitch.selectOption('1');
+      await expect(undoResult).toBeDisabled();
+      await expect(redoResult).toBeDisabled();
       await expect(resultGrid.getByRole('columnheader', { name: /raw/ })).toBeVisible();
       await expect(resultGrid).toHaveClass(/grid-row-height-32/);
       await expect(resultGrid.getByRole('row').nth(1)).toContainText(firstId);
