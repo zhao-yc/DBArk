@@ -1,3 +1,4 @@
+import { postgresForeignTargetsSchema, postgresForeignPreviewSchema, postgresForeignApplySchema } from './postgresForeignKeyEdit';
 import { postgresKeyPreviewSchema, postgresKeyApplySchema } from './postgresKeyEdit';
 import { postgresIndexPreviewSchema, postgresIndexApplySchema } from './postgresIndexEdit';
 import { postgresColumnPreviewSchema, postgresColumnApplySchema } from './postgresColumnEdit';
@@ -241,6 +242,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.columnEdit.preview': postgresColumnPreviewSchema, 'postgres.columnEdit.apply': postgresColumnApplySchema,
   'postgres.indexEdit.preview': postgresIndexPreviewSchema, 'postgres.indexEdit.apply': postgresIndexApplySchema,
   'postgres.keyEdit.preview': postgresKeyPreviewSchema, 'postgres.keyEdit.apply': postgresKeyApplySchema,
+  'postgres.foreignEdit.targets': postgresForeignTargetsSchema, 'postgres.foreignEdit.preview': postgresForeignPreviewSchema,
+  'postgres.foreignEdit.apply': postgresForeignApplySchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.preview': postgresTablePreviewSchema,
   'postgres.table.apply': postgresTableApplySchema,

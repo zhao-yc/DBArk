@@ -7,6 +7,10 @@ import type { PostgresStructureResult } from '../../src/shared/postgresStructure
 import type { PostgresColumnChange } from '../../src/shared/postgresColumnEdit';
 import type { PostgresIndexChange } from '../../src/shared/postgresIndexEdit';
 import type { PostgresKeyChange } from '../../src/shared/postgresKeyEdit';
+import type { PostgresForeignChange, PostgresForeignCreation, PostgresForeignTargets } from '../../src/shared/postgresForeignKeyEdit';
+import { postgresIdentifier } from '../../src/shared/postgresSql';
+import { PostgresConnection } from '../../src/engine/postgres/connection';
+import { readPostgresForeignTargets } from '../../src/engine/postgres/foreignKeyEdit';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
 const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
@@ -313,6 +317,118 @@ describe.skipIf(!enabled)('PostgreSQL 实库结构快照', () => {
       expect(afterDrop.constraints.some(key => key.name === '新唯一键')).toBe(false);
       expect(afterDrop.indexes.some(index => index.name === '新唯一键')).toBe(false);
       expect(afterDrop.indexes.find(index => index.name === 'replica_key')?.replicaIdentity).toBe(true);
+
+      // 外键从真实唯一索引读取有序列，验证跨 schema 绑定、NOT VALID 及引用动作。
+      const child = '"结构.甲"."foreign_child"';
+      const parent = '"引用.目标"."含""引用"';
+      await client.query(`CREATE SCHEMA "引用.目标";
+        CREATE TABLE ${parent} (a int, b int, extra text);
+        CREATE UNIQUE INDEX eligible_unique ON ${parent}(b, a) INCLUDE (extra);
+        CREATE UNIQUE INDEX ignore_partial ON ${parent}(extra) WHERE extra IS NOT NULL;
+        ALTER TABLE ${parent} ADD CONSTRAINT ignore_deferrable UNIQUE (a) DEFERRABLE;
+        CREATE TABLE ${child} (x int, y int);
+        INSERT INTO ${parent} VALUES (1, 2, '源'); INSERT INTO ${child} VALUES (7, 8), (1, 2);`);
+      const foreignScope = { ...scoped, table: child };
+      const targets = (): Promise<PostgresForeignTargets> => engine.handle('postgres.foreignEdit.targets', { ...foreignScope, search: '含"引用' });
+      const foreignPreview = async (changes: PostgresForeignChange[]) => engine.handle('postgres.foreignEdit.preview', {
+        ...foreignScope, editStamp: (await structure(child)).editStamp, changes,
+      });
+      const foreignApply = (token: string, owner = foreignScope.owner) => engine.handle('postgres.foreignEdit.apply', { ...foreignScope, token, owner });
+      const firstTargets = await targets();
+      expect(firstTargets).toMatchObject({ truncated: false, targets: [{ schema: '引用.目标', name: '含"引用', keys: [['b', 'a']] }] });
+      const limitedRole = process.env.DBARK_POSTGRES_COMPLETION_ROLE;
+      if (limitedRole) {
+        const role = postgresIdentifier(limitedRole);
+        const limited = new PostgresConnection(profile, database);
+        await client.query(`GRANT USAGE ON SCHEMA "引用.目标" TO ${role}; GRANT REFERENCES (a) ON ${parent} TO ${role}`);
+        try {
+          await limited.open();
+          await limited.query('SET ROLE ' + role, undefined, { rows: 1, bytes: 8192 });
+          expect(await readPostgresForeignTargets(limited, '含"引用')).toMatchObject({ targets: [] });
+          await client.query(`GRANT REFERENCES (b) ON ${parent} TO ${role}`);
+          expect(await readPostgresForeignTargets(limited, '含"引用')).toMatchObject({ targets: firstTargets.targets });
+          await expect(limited.query(`SELECT a FROM ${parent}`, undefined, { rows: 1, bytes: 8192 })).rejects.toThrow('permission denied');
+        } finally { await limited.close(); }
+      }
+      const { schema, name, stamp } = firstTargets.targets[0];
+      const addForeign: PostgresForeignCreation = { kind: 'create', name: '跨模式外键', reference: { schema, name, stamp },
+        pairs: [{ local: 'y', remote: 'b' }, { local: 'x', remote: 'a' }], match: 'f', onUpdate: 'c', onDelete: 'n',
+        timing: 'deferred', notValid: true };
+      const staleRef = await foreignPreview([addForeign]);
+      await client.query(`DROP INDEX "引用.目标".eligible_unique; CREATE UNIQUE INDEX eligible_unique ON ${parent}(b, a) INCLUDE (extra)`);
+      expect(await foreignApply(staleRef.token)).toMatchObject({ outcome: 'notSent', message: expect.stringContaining('被引用表') });
+      const fresh = (await targets()).targets[0];
+      expect(fresh.stamp).not.toBe(stamp);
+      const latest = { ...addForeign, reference: { schema, name, stamp: fresh.stamp } };
+      const racedTarget = await foreignPreview([latest]);
+      const parentOid = (await client.query('SELECT $1::regclass::oid::text AS id', [parent])).rows[0].id;
+      await client.query(`BEGIN; ALTER TABLE ${parent} RENAME TO moved_reference;
+        CREATE TABLE ${parent} (a int, b int, extra text); CREATE UNIQUE INDEX replacement_unique ON ${parent}(b, a);`);
+      const applyingReference = foreignApply(racedTarget.token);
+      try {
+        await expect.poll(async () => (await client.query(
+          'SELECT count(*)::int AS n FROM pg_catalog.pg_locks WHERE relation = $1::oid AND NOT granted', [parentOid],
+        )).rows[0].n, { timeout: 3000 }).toBe(1);
+        await client.query('COMMIT');
+      } catch (reason) {
+        await client.query('ROLLBACK');
+        await applyingReference;
+        throw reason;
+      }
+      expect((await applyingReference).outcome).toBe('rolledBack');
+      expect((await structure(child)).constraints).toEqual([]);
+      expect((await client.query(`SELECT '"引用.目标".moved_reference'::regclass::oid::text AS id`)).rows[0].id).toBe(parentOid);
+      await client.query(`DROP TABLE ${parent}; ALTER TABLE "引用.目标".moved_reference RENAME TO "含""引用"`);
+      const immediateValidation = await foreignPreview([{ ...latest, notValid: false }]);
+      expect((await foreignApply(immediateValidation.token)).outcome).toBe('rolledBack');
+      expect((await structure(child)).constraints).toEqual([]);
+      const deferredValidation = await foreignPreview([latest, { kind: 'rename', from: latest.name, name: '已命名外键' }]);
+      expect(deferredValidation.statements[0]).toContain('FOREIGN KEY ("y", "x") REFERENCES "引用.目标"."含""引用" ("b", "a") MATCH FULL ON UPDATE CASCADE ON DELETE SET NULL');
+      expect((await foreignApply(deferredValidation.token, '其他文档')).outcome).toBe('notSent');
+      expect((await foreignApply(deferredValidation.token)).outcome).toBe('committed');
+      expect((await foreignApply(deferredValidation.token)).outcome).toBe('notSent');
+      expect((await structure(child)).constraints).toEqual([expect.objectContaining({ name: '已命名外键', validated: false,
+        foreign: expect.objectContaining({ onUpdate: 'c', onDelete: 'n', match: 'f', pairs: latest.pairs }) })]);
+      await expect(client.query(`INSERT INTO ${child} VALUES (7, 8)`)).rejects.toMatchObject({ code: '23503' });
+      await expect(client.query(`INSERT INTO ${child} VALUES (1, NULL)`)).rejects.toMatchObject({ code: '23503' });
+      const invalidHistory = await foreignPreview([{ kind: 'rename', from: '已命名外键', name: '临时改名' }, { kind: 'validate', from: '临时改名' }]);
+      expect((await foreignApply(invalidHistory.token)).outcome).toBe('rolledBack');
+      expect((await structure(child)).constraints[0]).toMatchObject({ name: '已命名外键', validated: false });
+      await client.query(`DELETE FROM ${child} WHERE x = 7`);
+      const validating = await foreignPreview([{ kind: 'validate', from: '已命名外键' }]);
+      expect((await foreignApply(validating.token)).outcome).toBe('committed');
+      expect((await structure(child)).constraints[0]).toMatchObject({ name: '已命名外键', validated: true });
+      await client.query(`UPDATE ${parent} SET a=3, b=4 WHERE a=1`);
+      expect((await client.query(`SELECT x, y FROM ${child}`)).rows).toEqual([{ x: 3, y: 4 }]);
+      await client.query(`DELETE FROM ${parent} WHERE a=3`);
+      expect((await client.query(`SELECT x, y FROM ${child}`)).rows).toEqual([{ x: null, y: null }]);
+      const droppingForeign = await foreignPreview([{ kind: 'drop', from: '已命名外键' }]);
+      expect(droppingForeign.statements[0]).toContain('DROP CONSTRAINT "已命名外键" RESTRICT');
+      expect((await foreignApply(droppingForeign.token)).outcome).toBe('committed');
+      expect((await structure(child)).constraints).toEqual([]);
+      // 被引用表是分区父表时，验证只核对根外键，不把 PostgreSQL 的内部子约束当作独立草稿。
+      const partitionReference = '"引用.目标"."分区引用"';
+      await client.query(`CREATE TABLE ${partitionReference} (id int PRIMARY KEY) PARTITION BY RANGE (id);
+        CREATE TABLE "引用.目标".reference_part PARTITION OF ${partitionReference} FOR VALUES FROM (0) TO (100);
+        INSERT INTO ${partitionReference} VALUES (10); UPDATE ${child} SET x = 10;`);
+      const partitionTargets: PostgresForeignTargets = await engine.handle('postgres.foreignEdit.targets', { ...foreignScope, search: '分区引用' });
+      const partitionTarget = partitionTargets.targets[0];
+      expect(partitionTarget).toMatchObject({ name: '分区引用', keys: [['id']] });
+      const partitionKey: PostgresForeignCreation = { ...latest, name: '分区外键', notValid: false, match: 's',
+        reference: { schema: partitionTarget.schema, name: partitionTarget.name, stamp: partitionTarget.stamp },
+        pairs: [{ local: 'x', remote: 'id' }] };
+      expect((await foreignApply((await foreignPreview([partitionKey])).token)).outcome).toBe('committed');
+      const partitioned = await structure(child);
+      expect(partitioned.constraints).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: '分区外键', inherited: false, validated: true }),
+        expect.objectContaining({ kind: 'f', inherited: true }),
+      ]));
+      await client.query(`UPDATE ${partitionReference} SET id = 11 WHERE id = 10`);
+      expect((await client.query(`SELECT x FROM ${child}`)).rows).toEqual([{ x: 11 }]);
+      const editPartition = await foreignPreview([{ kind: 'rename', from: '分区外键', name: '已改名分区外键' },
+        { kind: 'drop', from: '已改名分区外键' }]);
+      expect((await foreignApply(editPartition.token)).outcome).toBe('committed');
+      expect((await structure(child)).constraints).toEqual([]);
     } finally {
       await engine.closeAll();
       await client.end();

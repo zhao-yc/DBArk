@@ -23,6 +23,8 @@ import { PostgresStructureEditWorkspace } from './structureEdit';
 import { matchesPostgresColumnPlan, postgresColumnPlan, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
 import { matchesCreatedPostgresIndex, postgresIndexPlan, type PostgresIndexPreviewInput } from '../../shared/postgresIndexEdit';
 import { matchesCreatedPostgresKey, postgresKeyPlan, type PostgresKeyPreviewInput } from '../../shared/postgresKeyEdit';
+import { preparePostgresForeignEdit, readPostgresForeignTargets } from './foreignKeyEdit';
+import type { PostgresForeignPreviewInput } from '../../shared/postgresForeignKeyEdit';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { explainLimits } from '../../shared/explain';
@@ -93,6 +95,7 @@ export class PostgresEngine {
         });
     } };
   });
+  private readonly foreignEdits = new PostgresStructureEditWorkspace<PostgresForeignPreviewInput>('外键', preparePostgresForeignEdit);
   private readonly tables = new PostgresTableWorkspace();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
@@ -112,7 +115,7 @@ export class PostgresEngine {
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
         (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) ||
-          this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || this.keyEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
+          this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || this.keyEdits.connectionIds().includes(id) || this.foreignEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
       this.ownsTask(input.taskId)
@@ -278,6 +281,7 @@ export class PostgresEngine {
       this.columnEdits.clear(id);
       this.indexEdits.clear(id);
       this.keyEdits.clear(id);
+      this.foreignEdits.clear(id);
       this.profiles.delete(id);
     } finally {
       this.closing.delete(id);
@@ -303,6 +307,7 @@ export class PostgresEngine {
       this.columnEdits.clear(input.id);
       this.indexEdits.clear(input.id);
       this.keyEdits.clear(input.id);
+      this.foreignEdits.clear(input.id);
       this.profiles.delete(input.id);
     }
   }
@@ -316,6 +321,7 @@ export class PostgresEngine {
         ...this.columnEdits.connectionIds(),
         ...this.indexEdits.connectionIds(),
         ...this.keyEdits.connectionIds(),
+        ...this.foreignEdits.connectionIds(),
         ...[...this.leases].map((l) => l.managed.profile.id),
         ...[...this.sessions.values()].map((s) => s.connectionId),
       ]))
@@ -528,12 +534,19 @@ export class PostgresEngine {
       case 'postgres.indexEdit.preview':
       case 'postgres.indexEdit.apply':
       case 'postgres.keyEdit.preview':
-      case 'postgres.keyEdit.apply': {
+      case 'postgres.keyEdit.apply':
+      case 'postgres.foreignEdit.targets':
+      case 'postgres.foreignEdit.preview':
+      case 'postgres.foreignEdit.apply': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 结构编辑来源');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.foreignEdit.targets')
+          return connect(connection => readPostgresForeignTargets(connection, input.search));
+        if (command === 'postgres.foreignEdit.preview')
+          return this.foreignEdits.preview(input as Parameters<PostgresStructureEditWorkspace<PostgresForeignPreviewInput>['preview']>[0], connect);
         if (command === 'postgres.columnEdit.preview')
           return this.columnEdits.preview(input as Parameters<PostgresStructureEditWorkspace<PostgresColumnPreviewInput>['preview']>[0], connect);
         if (command === 'postgres.indexEdit.preview')
@@ -541,7 +554,8 @@ export class PostgresEngine {
         if (command === 'postgres.keyEdit.preview')
           return this.keyEdits.preview(input as Parameters<PostgresStructureEditWorkspace<PostgresKeyPreviewInput>['preview']>[0], connect);
         const workspace = command === 'postgres.columnEdit.apply' ? this.columnEdits :
-          command === 'postgres.indexEdit.apply' ? this.indexEdits : this.keyEdits;
+          command === 'postgres.indexEdit.apply' ? this.indexEdits :
+          command === 'postgres.keyEdit.apply' ? this.keyEdits : this.foreignEdits;
         return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
       case 'postgres.table.page':

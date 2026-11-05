@@ -282,6 +282,9 @@ export interface CommandMap {
   'postgres.indexEdit.apply': { input: import('./postgresIndexEdit').PostgresIndexApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.keyEdit.preview': { input: import('./postgresKeyEdit').PostgresKeyPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.keyEdit.apply': { input: import('./postgresKeyEdit').PostgresKeyApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
+  'postgres.foreignEdit.targets': { input: import('./postgresForeignKeyEdit').PostgresForeignTargetsInput; output: import('./postgresForeignKeyEdit').PostgresForeignTargets };
+  'postgres.foreignEdit.preview': { input: import('./postgresForeignKeyEdit').PostgresForeignPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
+  'postgres.foreignEdit.apply': { input: import('./postgresForeignKeyEdit').PostgresForeignApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.table.page': { input: import('./postgresTable').PostgresTablePageInput; output: import('./postgresTable').PostgresTablePage };
   'postgres.table.preview': { input: import('./postgresTable').PostgresTablePreviewInput; output: import('./postgresTable').PostgresTablePreview };
   'postgres.table.apply': { input: import('./postgresTable').PostgresTableApplyInput; output: import('./postgresTable').PostgresTableOutcome };

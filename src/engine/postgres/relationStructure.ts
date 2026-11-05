@@ -64,9 +64,20 @@ SELECT pg_catalog.jsonb_build_object(
         SELECT pg_catalog.jsonb_agg(a.attname ORDER BY k.pos)
         FROM pg_catalog.unnest(c.conkey) WITH ORDINALITY AS k(attnum, pos)
         JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-      ) ELSE '[]'::jsonb END
+      ) ELSE '[]'::jsonb END,
+      'foreign', CASE WHEN c.contype = 'f' THEN pg_catalog.jsonb_build_object(
+        'schema', rns.nspname, 'table', ref.relname, 'match', c.confmatchtype,
+        'onUpdate', c.confupdtype, 'onDelete', c.confdeltype,
+        'enforced', COALESCE((pg_catalog.to_jsonb(c)->>'conenforced')::boolean, true),
+        'pairs', (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('local', a.attname, 'remote', b.attname) ORDER BY k.pos)
+          FROM pg_catalog.unnest(c.conkey) WITH ORDINALITY AS k(attnum, pos)
+          JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+          JOIN pg_catalog.pg_attribute b ON b.attrelid = c.confrelid AND b.attnum = c.confkey[k.pos::int])
+      ) END
     ) AS item
     FROM pg_catalog.pg_constraint c
+    LEFT JOIN pg_catalog.pg_class ref ON ref.oid = c.confrelid
+    LEFT JOIN pg_catalog.pg_namespace rns ON rns.oid = ref.relnamespace
     WHERE c.conrelid = t.oid AND c.contype IN ('p', 'f', 'u', 'c', 'x', 'n')
     ORDER BY c.conname, c.oid LIMIT 2001
   ) cn), '[]'::jsonb),
@@ -105,7 +116,12 @@ SELECT pg_catalog.jsonb_build_object(
     'keys', COALESCE((SELECT pg_catalog.jsonb_object_agg(key_name, key_oid) FROM (
       SELECT c.conname::text AS key_name, c.oid::text AS key_oid FROM pg_catalog.pg_constraint c
       WHERE c.conrelid = t.oid AND c.contype IN ('p', 'u') ORDER BY c.oid LIMIT 2001
-    ) key_ids), '{}'::jsonb))
+    ) key_ids), '{}'::jsonb),
+    'foreign', COALESCE((SELECT pg_catalog.jsonb_object_agg(conname::text,
+      pg_catalog.jsonb_build_object('oid', oid::text, 'reference', confrelid::text, 'index', conindid::text)) FROM (
+      SELECT c.conname, c.oid, c.confrelid, c.conindid FROM pg_catalog.pg_constraint c
+      WHERE c.conrelid = t.oid AND c.contype = 'f' ORDER BY c.oid LIMIT 2001
+    ) foreign_ids), '{}'::jsonb))
 FROM target t
 `;
 
@@ -139,9 +155,15 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
   const identity = JSON.parse(ids);
   const indexIds = catalogIds(identity.indexes, parsed.data.indexes);
   const keyIds = catalogIds(identity.keys, parsed.data.constraints.filter(key => key.kind === 'p' || key.kind === 'u'));
+  const foreignIds = new Map<string, { oid: string; reference: string; index: string }>(Object.entries(identity.foreign));
+  const foreign = parsed.data.constraints.filter(key => key.kind === 'f');
+  if (foreignIds.size !== foreign.length || foreign.some(key => {
+    const value = foreignIds.get(key.name);
+    return !value || ![value.oid, value.reference, value.index].every(oid => typeof oid === 'string' && /^\d+$/.test(oid));
+  })) throw Error('PostgreSQL 外键身份回包不完整');
   const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ?
     { editStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex') } : {}) };
-  return { output, oid, indexIds, keyIds };
+  return { output, oid, indexIds, keyIds, foreignIds };
 }
 
 /** 目录身份只接受与同一快照中的名称一一对应的 OID。 */

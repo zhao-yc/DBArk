@@ -13,6 +13,7 @@ interface Plan {
   table: string;
   statements: string[];
   checks?: Parameters<typeof validatePostgresDefaults>[1];
+  before?(connection: PostgresConnection): Promise<void>;
   verify(facts: Facts): boolean;
 }
 const budget = () => ({ rows: 1, bytes: 8192 });
@@ -28,7 +29,7 @@ export class PostgresStructureEditWorkspace<T extends Draft> {
   private readonly plans = new Map<string, Prepared>();
   private readonly pending = new Set<string>();
 
-  constructor(private readonly label: string, private readonly compile: (facts: Facts, draft: T) => Plan) {}
+  constructor(private readonly label: string, private readonly compile: (facts: Facts, draft: T, connection: PostgresConnection) => Plan | Promise<Plan>) {}
 
   /** 同窗口、同表只保留一个预览。 */
   private key(input: Scoped<PostgresStructureInput>) {
@@ -46,7 +47,7 @@ export class PostgresStructureEditWorkspace<T extends Draft> {
       const plan = await connect(async connection => {
         if (connection.database !== input.database) throw Error('PostgreSQL 原数据库已变化');
         await startPostgresDdl(connection, true);
-        const plan = this.compile(await readPostgresStructureFacts(connection, input.table), input);
+        const plan = await this.compile(await readPostgresStructureFacts(connection, input.table), input, connection);
         if (plan.checks) await validatePostgresDefaults(connection, plan.checks);
         if ((await connection.query('COMMIT', undefined, budget())).postgresCommand !== 'COMMIT') throw Error('原表预览读取未完成');
         return plan;
@@ -91,6 +92,7 @@ export class PostgresStructureEditWorkspace<T extends Draft> {
       const locked = await readPostgresStructureFacts(connection, input.table);
       if (locked.output.editStamp !== input.editStamp || locked.oid !== original.oid) throw Error('加锁后原表结构已变化，请重新读取');
       if (plan.checks) await validatePostgresDefaults(connection, plan.checks);
+      await plan.before?.(connection);
       for (const sql of plan.statements) {
         sent = true;
         const result = await connection.query(sql, undefined, budget());

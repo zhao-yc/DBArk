@@ -8,6 +8,8 @@ import { SqlEditor } from './SqlEditor';
 import { PostgresColumnEditPanel } from './PostgresColumnEditPanel';
 import { PostgresIndexEditPanel } from './PostgresIndexEditPanel';
 import { PostgresKeyEditPanel } from './PostgresKeyEditPanel';
+import { PostgresForeignEditPanel } from './PostgresForeignEditPanel';
+import { postgresForeignEditZh } from '../locales/postgresForeignEdit.zh-CN';
 import { postgresKeyEditZh } from '../locales/postgresKeyEdit.zh-CN';
 import { postgresIndexEditZh } from '../locales/postgresIndexEdit.zh-CN';
 import { postgresColumnEditZh } from '../locales/postgresColumnEdit.zh-CN';
@@ -19,6 +21,7 @@ const editors = {
   columns: { Panel: PostgresColumnEditPanel, label: postgresColumnEditZh.open },
   indexes: { Panel: PostgresIndexEditPanel, label: postgresIndexEditZh.open },
   constraints: { Panel: PostgresKeyEditPanel, label: postgresKeyEditZh.open },
+  foreign: { Panel: PostgresForeignEditPanel, label: postgresForeignEditZh.open },
 };
 
 /** 统一目录表格语义，空列表和数据库空值分别显示。 */
@@ -111,7 +114,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
           {output.constraints.map((constraint, index) => <tr key={index}>
             <th scope="row">{constraint.name}</th><td>{text.kindsOfConstraint[constraint.kind]}</td><td><code>{constraint.definition}</code></td>
             <td>{[constraint.deferrable && text.deferrable, constraint.initiallyDeferred && text.deferred,
-              !constraint.validated && text.unvalidated, constraint.inherited && text.inherited].filter(Boolean).join(' · ') || '—'}</td>
+              !constraint.validated && text.unvalidated, constraint.foreign?.enforced === false && postgresForeignEditZh.unenforced, constraint.inherited && text.inherited].filter(Boolean).join(' · ') || '—'}</td>
           </tr>)}
         </CatalogTable>}
         {section === 'indexes' && <CatalogTable empty={!output.indexes.length} headers={[text.name, text.method, text.definition, text.constraint, text.status]}>
@@ -132,6 +135,8 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
       {output?.editStamp && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
         {editors[section].label}
       </button>}
+      {output?.editStamp && !editing && section === 'constraints' &&
+        <button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>}
       {section === 'definition' && output?.viewDefinition && <button onClick={openDraft}>{text.openDraft}</button>}
       <span className="grow"/><button disabled={!!editing} onClick={onClose}>{text.close}</button>
     </footer>
