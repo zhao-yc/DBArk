@@ -228,7 +228,8 @@ export class PostgresTableWorkspace {
           if (relation.fingerprint !== snapshot.relation.fingerprint || !relation.canImport)
             throw Error('目标表结构或写入权限已变化，请刷新表页');
           await connection.query("SET LOCAL statement_timeout = '0'", undefined, small());
-          const command = 'COPY ' + relation.sql + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, HEADER true, ENCODING \'UTF8\', DELIMITER ' +
+          const command = 'COPY ' + relation.sql + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, HEADER ' +
+            (input.source.hasHeader ? 'true' : 'false') + ', ENCODING \'UTF8\', DELIMITER ' +
             postgresDdlLiteral(input.source.delimiter) + ')';
           const rows = await readPostgresCopySource(input.source, stream => {
             check(); sent = true;

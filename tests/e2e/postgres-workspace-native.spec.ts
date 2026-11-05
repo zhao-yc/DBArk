@@ -12,6 +12,7 @@ import { postgresCheckEditZh as checkText } from '../../src/renderer/locales/pos
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresTableExportZh as tableExportText } from '../../src/renderer/locales/postgresTableExport.zh-CN';
 import { postgresTableImportZh as tableImportText } from '../../src/renderer/locales/postgresTableImport.zh-CN';
+import { csvImportHeaderZh } from '../../src/renderer/locales/csvImportHeader.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
@@ -203,7 +204,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
 
     // 真实表页选择本机文件并手动映射不同名列，写入仅发生在显式确认后。
     const importFile = info.outputPath('PostgreSQL导入源.csv');
+    const noHeaderFile = info.outputPath('PostgreSQL无表头导入源.csv');
     await writeFile(importFile, '\uFEFF内容;编号\r\n"窗口;CSV";4\r\n', 'utf8');
+    await writeFile(noHeaderFile, '5;"首行;无表头"\r\n', 'utf8');
     await application.evaluate(({ BrowserWindow, dialog }, input) => {
       const original = dialog.showOpenDialog;
       let calls = 0;
@@ -213,10 +216,10 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
         if (!expected || args[0] !== expected || options.title !== input.title || options.filters?.[0].extensions[0] !== 'csv')
           throw Error('PostgreSQL CSV 文件选择来源或格式不符');
         calls++;
-        return { canceled: false, filePaths: [input.file] };
+        return { canceled: false, filePaths: [calls === 1 ? input.file : input.noHeaderFile] };
       }) as typeof original;
       Object.assign(globalThis, { finishPostgresTableImport: () => { dialog.showOpenDialog = original; return calls; } });
-    }, { sender: tableExportSender, title: '选择 PostgreSQL CSV 文件', file: importFile });
+    }, { sender: tableExportSender, title: '选择 PostgreSQL CSV 文件', file: importFile, noHeaderFile });
     let importCalls: number;
     try {
       await tableButton(tableImportText.open).click();
@@ -225,6 +228,8 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await csv.getByLabel(tableImportText.delimiter, { exact: true }).selectOption(';');
       await csv.getByRole('button', { name: tableImportText.choose, exact: true }).click();
       await expect(csv.getByText('1. 内容', { exact: false })).toBeVisible();
+      const sample = csv.getByRole('table', { name: tableImportText.sample, exact: true });
+      await expect(sample.getByRole('cell', { name: '窗口;CSV', exact: true })).toBeVisible();
       await expect(confirm).toBeDisabled();
       await csv.getByLabel(tableImportText.target(0), { exact: true }).selectOption({ label: 'note' });
       await csv.getByLabel(tableImportText.target(1), { exact: true }).selectOption({ label: 'id' });
@@ -234,14 +239,33 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await expect(csv).toHaveCount(0);
       await expect(grid).toContainText('窗口;CSV');
       await expect(gridTab).toContainText('PostgreSQL 已提交导入，共 1 行');
+
+      // 切换首行解释后清除原映射，再选择文件并确认，首条记录必须真实写入。
+      await tableButton(tableImportText.open).click();
+      await csv.getByLabel(tableImportText.delimiter, { exact: true }).selectOption(';');
+      const chooseImport = csv.getByRole('button', { name: tableImportText.choose, exact: true });
+      await chooseImport.click();
+      await expect(csv.getByText(tableImportText.sampleEmpty, { exact: true })).toBeVisible();
+      await csv.getByRole('checkbox', { name: csvImportHeaderZh.label, exact: true }).uncheck();
+      await expect(csv.getByText('PostgreSQL无表头导入源.csv', { exact: false })).toHaveCount(0);
+      await expect(confirm).toBeDisabled();
+      await chooseImport.click();
+      await expect(sample.getByRole('columnheader', { name: '第1列', exact: true })).toBeVisible();
+      await expect(sample.getByRole('cell', { name: '首行;无表头', exact: true })).toBeVisible();
+      await csv.getByRole('button', { name: tableImportText.position, exact: true }).click();
+      await expect(grid).not.toContainText('首行;无表头');
+      await page.screenshot({ path: info.outputPath('PostgreSQL无表头CSV导入预览.png') });
+      await confirm.click();
+      await expect(csv).toHaveCount(0);
+      await expect(grid).toContainText('首行;无表头');
     } finally {
       importCalls = await application.evaluate(() => (globalThis as unknown as { finishPostgresTableImport(): number }).finishPostgresTableImport());
     }
-    expect(importCalls).toBe(1);
-    await mark('表页选择 CSV 和手动映射，确认后实际提交并刷新原表页');
+    expect(importCalls).toBe(3);
+    await mark('有表头和无表头 CSV 均显示样本，切换首行模式清除旧映射，确认后实际写入并刷新原表页');
 
     await editRecord('原值', '原生整批更新');
-    for (const note of ['新增甲', '新增乙', '窗口;CSV']) {
+    for (const note of ['新增甲', '新增乙', '窗口;CSV', '首行;无表头']) {
       await grid.getByRole('gridcell', { name: note, exact: true }).click();
       await tableButton(postgresTableZh.remove).click();
     }

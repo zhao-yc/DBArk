@@ -3,9 +3,10 @@ import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { Readable } from 'node:stream';
 import { parse } from 'csv-parse/sync';
-import { csvExportDelimiter, type CsvExportDelimiter } from '../../shared/csvExport';
+import { csvImportColumnName, csvImportDelimiter, csvImportHasHeader, type CsvImportDelimiter } from '../../shared/csvImport';
 
 const headerLimit = 256 * 1024;
+const sampleRows = 5, sampleColumns = 12, sampleCellLength = 120;
 const fileLimit = 10n * 1024n ** 3n;
 const utf8Bom = Buffer.from([0xef, 0xbb, 0xbf]);
 const changed = 'CSV 文件已变化，请重新选择并核对列映射';
@@ -14,7 +15,8 @@ export interface PostgresCopySource {
   version: string;
   bytes: number;
   offset: number;
-  delimiter: CsvExportDelimiter;
+  delimiter: CsvImportDelimiter;
+  hasHeader: boolean;
   header: string[];
 }
 
@@ -36,16 +38,62 @@ function openRead(path: string) {
   return open(path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
 }
 
-/** 只解析第一条 CSV 记录，正文仍交给 PostgreSQL 按原生 CSV 语义处理。 */
-export async function inspectPostgresCopySource(path: string, delimiter: CsvExportDelimiter): Promise<PostgresCopySource> {
+/** 解析有界前缀，保留已读完整记录，正文仍交给 PostgreSQL 校验和导入。 */
+function readPreview(input: Buffer, delimiter: CsvImportDelimiter, hasHeader: boolean, more: boolean) {
+  const records: (Buffer | null)[][] = [];
+  const limit = sampleRows + Number(hasHeader);
+  let sampleLimited = false;
+  try {
+    parse(input, {
+      delimiter, encoding: null, to: limit,
+      // CSV 解析器在二进制模式下把 Buffer 传给 cast；引用状态区分 NULL 和空字符串。
+      cast(value, context) { return value.length || context.quoting ? value : null; },
+      on_record(record, info) {
+        const end = info.bytes;
+        // 只有从文件实际读完或确认遇到记录边界，才采用这条记录。
+        if (end <= headerLimit && (!more || [10, 13].includes(input[end - 1])))
+          records.push(record as unknown as (Buffer | null)[]);
+        else sampleLimited = true;
+        return null;
+      },
+    });
+  } catch { sampleLimited = true; }
+  const first = records[0];
+  const invalid = hasHeader ? 'CSV 表头无效或超过大小限制，请检查 UTF-8 文件和分隔符' :
+    '无法从文件前 256 KiB 读取完整首条 CSV 记录，请检查 UTF-8 文件和分隔符';
+  if (!first?.length || first.length > 1022) throw Error(invalid);
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  let header: string[];
+  try {
+    header = first.map((value, index) => {
+      const name = value === null ? '' : decoder.decode(value);
+      if (name.includes('\0') || hasHeader && name.length > 512) throw Error(invalid);
+      return hasHeader ? name : csvImportColumnName(index);
+    });
+  } catch { throw Error(invalid); }
+  const sample: (string | null)[][] = [];
+  for (const record of records.slice(Number(hasHeader))) {
+    try {
+      const row = record.map(value => value === null ? null : decoder.decode(value));
+      if (row.some(value => value?.includes('\0'))) throw Error();
+      sample.push(row.slice(0, sampleColumns).map(value => value && value.length > sampleCellLength
+        ? value.slice(0, sampleCellLength).replace(/[\uD800-\uDBFF]$/, '') + '…' : value));
+    } catch { sampleLimited = true; break; }
+  }
+  return { header, sample, sampleLimited: sampleLimited || more && records.length < limit };
+}
+
+/** 文件授权保存首行模式；供显示的样本单独返回，避免随提交请求流转。 */
+export async function inspectPostgresCopySource(path: string, delimiter: CsvImportDelimiter, csvHasHeader?: boolean) {
   if (!isAbsolute(path) || path.includes('\0')) throw Error('未取得授权 CSV 文件路径');
-  csvExportDelimiter('csv', delimiter);
+  csvImportDelimiter('csv', delimiter);
+  const hasHeader = csvImportHasHeader('csv', csvHasHeader);
   const stat = await lstat(path, { bigint: true });
   const expected = version(stat), bytes = Number(stat.size);
   const handle = await openRead(path);
   try {
     await assertVersion(path, handle, expected);
-    const prefix = Buffer.allocUnsafe(Math.min(bytes, headerLimit + 1));
+    const prefix = Buffer.allocUnsafe(Math.min(bytes, headerLimit + utf8Bom.length + 1));
     let length = 0;
     while (length < prefix.length) {
       const { bytesRead } = await handle.read(prefix, length, prefix.length - length, length);
@@ -53,19 +101,10 @@ export async function inspectPostgresCopySource(path: string, delimiter: CsvExpo
       length += bytesRead;
     }
     const offset = prefix.subarray(0, 3).equals(utf8Bom) ? 3 : 0;
-    let header: string[];
-    try {
-      const input = prefix.subarray(offset);
-      const [first] = parse(input, { delimiter, encoding: null, info: true, to: 1 }) as
-        unknown as { record: Buffer[]; info: { bytes: number } }[];
-      const end = first?.info.bytes ?? 0;
-      if (!end || end > headerLimit || bytes > length && ![10, 13].includes(input[end - 1])) throw Error();
-      const decode = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
-      header = first.record.map(field => decode.decode(field));
-      if (!header.length || header.length > 1022 || header.some(field => field.length > 512 || field.includes('\0'))) throw Error();
-    } catch { throw Error('CSV 表头无效、超过大小限制或与所选分隔符不符，请检查 UTF-8 文件'); }
+    const { header, sample, sampleLimited } = readPreview(prefix.subarray(offset), delimiter, hasHeader, bytes > length);
     await assertVersion(path, handle, expected);
-    return { path, version: expected, bytes, offset, delimiter, header };
+    const source: PostgresCopySource = { path, version: expected, bytes, offset, delimiter, hasHeader, header };
+    return { source, sample, sampleLimited };
   } finally { await handle.close(); }
 }
 

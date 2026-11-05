@@ -226,7 +226,7 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 要把数据交给 PostgreSQL 的 `COPY FROM`，在表页「导出数据」中选择「COPY CSV（PostgreSQL 原生）」。选择输出列及逗号、分号或 Tab，再指定 `.csv` 保存位置。文件含列名，固定 UTF-8，按 PostgreSQL 的 CSV 规则区分 NULL 和空字符串。导入时使用相同分隔符，并按文件列顺序指定目标列。详见[PostgreSQL 表页原生 COPY 导出](development/postgres-copy-export-20261105.md)。
 
-在有写入权限的 PostgreSQL 普通表或分区表打开「导入 CSV」，选择与源文件一致的分隔符，再选含列名的 UTF-8 文件。核对每一列的目标字段后，点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。详见[PostgreSQL 表页 CSV 导入](development/postgres-copy-import-20261105.md)。
+在有写入权限的 PostgreSQL 普通表或分区表打开「导入 CSV」。选择与源文件一致的分隔符和首行模式，再选 UTF-8 文件。核对数据样本和目标字段后，点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。详见[PostgreSQL CSV 导入及样本预览](development/postgres-copy-preview-20261105.md)。
 
 SSH 模式填写 SSH 主机、端口、用户名和密码或私钥文件，并填写从可信渠道获得的 `SHA256:…` 主机指纹。数据库主机填写从 SSH 服务器可达的地址，例如数据库监听在隧道服务器上的 `127.0.0.1`。私钥口令与数据库密码分别保存。
 

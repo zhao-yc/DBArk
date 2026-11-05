@@ -853,11 +853,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           properties: ['openFile'], filters: [{ name: 'CSV', extensions: ['csv', 'tsv'] }] });
         check();
         if (chosen.canceled || !chosen.filePaths[0]) return null;
-        const source = await inspectPostgresCopySource(chosen.filePaths[0], target.csvDelimiter);
+        const { source, sample, sampleLimited } = await inspectPostgresCopySource(chosen.filePaths[0], target.csvDelimiter, target.csvHasHeader);
         check();
         const token = randomUUID();
         postgresImportFiles.set(document, { token, target, source, revision, expires: Date.now() + 5 * 60 * 1000 });
-        return { token, name: basename(source.path), header: source.header, bytes: source.bytes };
+        return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited };
       } finally { postgresImportChoosing.delete(document); }
     });
   }

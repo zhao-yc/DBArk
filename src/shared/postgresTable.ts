@@ -81,7 +81,7 @@ export type PostgresTableExportChooseInput = z.infer<typeof postgresTableExportC
 export interface PostgresTableExportOutput { rows: number; fileCommitted: true }
 /** 预览绑定原表页，提交只认一次性来源和按 CSV 顺序排列的目标列。 */
 export const postgresTableImportChooseSchema = target.extend({
-  pageToken: token, csvDelimiter: z.enum(csvExportDelimiters),
+  pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional(),
 }).strict();
 export const postgresTableImportSchema = target.extend({
   pageToken: token, taskId: identity, fileToken: token,
@@ -89,7 +89,14 @@ export const postgresTableImportSchema = target.extend({
 }).strict();
 export type PostgresTableImportChooseInput = z.infer<typeof postgresTableImportChooseSchema>;
 export type PostgresTableImportInput = z.infer<typeof postgresTableImportSchema>;
-export interface PostgresTableImportChoice { token: string; name: string; header: string[]; bytes: number }
+export interface PostgresTableImportChoice {
+  token: string;
+  name: string;
+  header: string[];
+  bytes: number;
+  sample: (string | null)[][];
+  sampleLimited: boolean;
+}
 export type PostgresTableTarget = z.infer<typeof target>;
 export type PostgresTablePageInput = z.infer<typeof postgresTablePageSchema>;
 export type PostgresTableChange = z.infer<typeof change>;

@@ -363,17 +363,20 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         const importPath = join(directory, '待导入.csv');
         const exactAmount = '1234567890123456789012.123456789012345678';
         /** 每次文件与表页重新核准，回执只对应本次导入。 */
-        const prepareImport = async (csv: string, columns = ['c1', 'c0', 'c2', 'c3'], scope = importScope) => {
+        const prepareImport = async (csv: string, columns = ['c1', 'c0', 'c2', 'c3'], scope = importScope, hasHeader = true) => {
           await writeFile(importPath, csv);
           const page = await read(scope);
           expect(page.canImport).toBe(true);
+          const { source: copySource } = await inspectPostgresCopySource(importPath, ';', hasHeader);
           return { ...scope, profile, taskId: randomUUID(), fileToken: randomUUID(), pageToken: page.exportToken,
-            source: await inspectPostgresCopySource(importPath, ';'), columns };
+            source: copySource, columns };
         };
         const nativeData = '\uFEFF"含\n换行";编号;金额;字节\n;9007199254740994;' + exactAmount + ';\\x00ff\n' +
           '"";9007199254740995;2;\n' + '"多行;🙂\r\n""引号""\n\\.\n尾";9007199254740996;3;\\x0a\n';
         const csvImport = await prepareImport(nativeData);
         expect(csvImport.source.header).toEqual(['含\n换行', '编号', '金额', '字节']);
+        expect((await inspectPostgresCopySource(importPath, ';')).sample.map(row => row[0]))
+          .toEqual([null, '', '多行;🙂\r\n"引号"\n\\.\n尾']);
         expect(await engine.handle('postgres.table.import', csvImport)).toMatchObject({ outcome: 'committed', affected: 3 });
         const queryImported = `SELECT id::text, note, amount::text, encode(raw,'hex') AS raw, derived FROM ${importTarget} t ORDER BY t.id`;
         const imported = (await client.query(queryImported)).rows;
@@ -410,6 +413,14 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         const changedTable = await prepareImport('id;note\n44;目标变化\n', ['c0', 'c1']);
         await client.query(`ALTER TABLE ${importTarget} ADD COLUMN changed text`);
         expect(await engine.handle('postgres.table.import', changedTable)).toMatchObject({ outcome: 'notSent', affected: 0 });
+        const headerless = await prepareImport('\uFEFF"首条;🙂";9007199254741001\r\n;9007199254741002\r\n',
+          ['c1', 'c0'], importScope, false);
+        expect(headerless.source.header).toEqual(['第1列', '第2列']);
+        expect((await inspectPostgresCopySource(importPath, ';', false)).sample)
+          .toEqual([['首条;🙂', '9007199254741001'], [null, '9007199254741002']]);
+        expect(await engine.handle('postgres.table.import', headerless)).toMatchObject({ outcome: 'committed', affected: 2 });
+        expect((await client.query(queryImported)).rows.slice(3).map(row => [row.id, row.note]))
+          .toEqual([['9007199254741001', '首条;🙂'], ['9007199254741002', null]]);
         const partitionImport = await prepareImport('id;note\n2;复制甲\n12;复制乙\n', ['c0', 'c1'], partitionSource);
         expect(await engine.handle('postgres.table.import', partitionImport)).toMatchObject({ outcome: 'committed', affected: 2 });
         expect((await client.query(`SELECT p.id, c.relname FROM ${partitionTable} p
