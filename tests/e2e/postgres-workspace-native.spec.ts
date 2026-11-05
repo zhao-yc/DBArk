@@ -21,6 +21,8 @@ import { explainSnapshotZh as snapshotText } from '../../src/shared/explainSnaps
 import { decodePlanSnapshot } from '../../src/shared/explainSnapshot';
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultValueOptionsZh as valueText } from '../../src/renderer/locales/queryResultValueOptions.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { clickSidebarAction } from './sidebar-menu';
 import { discardTestTab } from './query-close-ui';
@@ -565,7 +567,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await selectResultRow(firstId);
     await selectResultRow(lastId);
     const resultPaths = { json: info.outputPath('PostgreSQL查询勾选.json'), csv: info.outputPath('PostgreSQL查询返回.csv'),
-      xlsx: info.outputPath('PostgreSQL查询返回.xlsx') };
+      xlsx: info.outputPath('PostgreSQL查询返回.xlsx'), filtered: info.outputPath('PostgreSQL查询筛选.json') };
     await application.evaluate(({ BrowserWindow, dialog }, input) => {
       const original = dialog.showSaveDialog, calls: string[] = [];
       dialog.showSaveDialog = (async (...args: unknown[]) => {
@@ -576,7 +578,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
             (extension !== 'json' && extension !== 'csv' && extension !== 'xlsx') || options.defaultPath !== '查询结果.' + extension)
           throw Error('PostgreSQL 查询结果保存的窗口或格式不符');
         calls.push(extension);
-        return { canceled: false, filePath: input.paths[extension] };
+        return { canceled: false, filePath: calls.length === 4 ? input.paths.filtered : input.paths[extension] };
       }) as typeof original;
       Object.assign(globalThis, { finishPostgresResultExport: () => { dialog.showSaveDialog = original; return calls; } });
     }, { sender: tableExportSender, paths: resultPaths });
@@ -600,10 +602,49 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
         await expect(saveResult).toHaveCount(0);
         await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
       }
+      // 筛选相邻 BIGINT，错误草稿保留现有排序和勾选，成功后按过滤后的实际显示顺序导出。
+      await button(filterText.open).click();
+      const filter = page.getByRole('dialog', { name: filterText.title, exact: true });
+      await filter.getByRole('button', { name: filterText.add, exact: true }).click();
+      await filter.getByRole('button', { name: valueText.openCondition(1), exact: true }).click();
+      const values = filter.getByRole('region', { name: valueText.title, exact: true });
+      await expect(values).toContainText(firstId);
+      await expect(values).toContainText(lastId);
+      await values.getByRole('button', { name: valueText.cancel, exact: true }).click();
+      await filter.getByLabel(filterText.operator + ' 1', { exact: true }).selectOption('gte');
+      const condition = filter.getByLabel(filterText.input + ' 1', { exact: true });
+      const applyFilter = filter.getByRole('button', { name: filterText.apply, exact: true });
+      const middleId = '9223372036854775806';
+      await condition.fill(middleId);
+      await page.screenshot({ path: info.outputPath('PostgreSQL查询结果条件筛选.png') });
+      await condition.fill('无效数值');
+      await applyFilter.click();
+      await expect(filter.getByRole('alert')).toContainText(filterText.value);
+      await expect(resultGrid).toContainText(firstId);
+      await condition.fill(middleId);
+      await applyFilter.click();
+      await expect(filter).toHaveCount(0);
+      await expect(tab().getByText(filterText.counts(3, 2), { exact: true })).toBeVisible();
+      await expect(resultGrid).not.toContainText(firstId);
+      await expect(resultGrid.getByRole('row').nth(1)).toContainText(lastId);
+      await expect(selectedExport).toBeDisabled();
+      await button(zh.resultExport.title).click();
+      const filteredExport = page.getByRole('dialog', { name: zh.resultExport.title, exact: true });
+      await filteredExport.getByLabel(zh.resultExport.format, { exact: true }).selectOption('json');
+      await filteredExport.locator('.file-picker').click();
+      await expect(filteredExport.locator('.file-picker')).toContainText('PostgreSQL查询筛选.json');
+      await filteredExport.getByRole('button', { name: zh.resultExport.start, exact: true }).click();
+      await expect(filteredExport.locator('.success-box')).toHaveText('已导出 2 行已返回结果。');
+      await filteredExport.getByRole('button', { name: zh.common.done, exact: true }).click();
+      expect(JSON.parse(await readFile(resultPaths.filtered, 'utf8')).map((row: { 同名: string }) => row.同名)).toEqual([lastId, middleId]);
+      await button(filterText.clear).click();
+      await expect(resultGrid.getByRole('row').nth(1)).toContainText(lastId);
+      await expect(resultGrid).toContainText(firstId);
+      await mark('BIGINT 候选、错误草稿、排序保留、筛选后 JSON 和清除筛选通过原生窗口');
     } finally {
       resultExportCalls = await application.evaluate(() => (globalThis as unknown as { finishPostgresResultExport(): string[] }).finishPostgresResultExport());
     }
-    expect(resultExportCalls).toEqual(['json', 'csv', 'xlsx']);
+    expect(resultExportCalls).toEqual(['json', 'csv', 'xlsx', 'json']);
     expect(JSON.parse(await readFile(resultPaths.json, 'utf8'))).toEqual([
       { 同名: lastId, '同名 [2]': '引;号', raw: { type: 'binary', base64: '' }, 调用序号: '3' },
       { 同名: firstId, '同名 [2]': null, raw: { type: 'binary', base64: 'AP8=' }, 调用序号: '1' },

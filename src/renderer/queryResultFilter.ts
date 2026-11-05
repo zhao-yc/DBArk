@@ -1,7 +1,7 @@
 import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultFilterOperator, QueryResultFilterMode, QueryResultFilterRule, QueryResultFilterGroup } from '../shared/queryResultPresets';
 export type { QueryResultFilterOperator, QueryResultFilterMode, QueryResultFilterRule, QueryResultFilterGroup } from '../shared/queryResultPresets';
-import { queryResultFilterKind, queryResultFilterKey, queryResultFilterLiteral, compareQueryResultFilterKeys, type QueryResultSortView } from './queryResultSort';
+import { queryResultFilterKind, queryResultFilterKey, queryResultFilterLiteral, compareQueryResultFilterKeys, type QueryResultSortView, type SortDialect } from './queryResultSort';
 import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
 import { compileQueryResultWildcard } from './queryResultWildcard';
 import { bindSqliteResultStorage, projectSqliteResultStorage, sqliteResultFilterTypes, type SqliteResultFilterType } from '../shared/sqliteResultStorage';
@@ -13,7 +13,7 @@ export interface QueryResultFilterView { readonly result:QueryResult;readonly so
 export interface QueryResultFilterBinding {
   readonly source:QueryResult;readonly rows:QueryResult['rows'];readonly columns:ResultColumn[];readonly rowRefs:readonly QueryResult['rows'][number][];readonly columnRefs:readonly ResultColumn[];
   readonly metadata:readonly ResultColumn[];readonly truncated:boolean;readonly context:readonly unknown[];readonly visible:ResultColumn[];readonly visibleRefs:readonly ResultColumn[];
-  readonly storageCurrent:()=>boolean;
+  readonly storageCurrent:()=>boolean;readonly dialect?:SortDialect;
 }
 type Snapshot = { column:ResultColumn;values:CellValue[];binary:readonly (readonly unknown[]|undefined)[] };
 type FilterKey = ReturnType<typeof queryResultFilterKey> | SqliteResultComparisonKey;
@@ -101,9 +101,9 @@ export function appendQueryResultFilterNode(expression:QueryResultFilterGroup,no
 /** 原单格追加入口继续走相同AND语义与最终树预算，不另建比较或组合逻辑。 */
 export function appendQueryResultFilterRule(expression:QueryResultFilterGroup,rule:QueryResultFilterRule):QueryResultFilterGroup{return appendQueryResultFilterNode(expression,rule);}
 /** 比较方式来自协议类型；未知/二进制元数据仍可做NULL判断，不按外观猜类型。 */
-export function queryResultFilterOperators(column:ResultColumn,sqliteType?:SqliteResultFilterType):readonly QueryResultFilterOperator[]{
+export function queryResultFilterOperators(column:ResultColumn,sqliteType?:SqliteResultFilterType,dialect?:SortDialect):readonly QueryResultFilterOperator[]{
   if(column.type==='SQLITE')return (sqliteType??'text')==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','empty','notEmpty','null','notNull','notType']:['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull','notType'];
-  const kind=queryResultFilterKind(column);
+  const kind=queryResultFilterKind(column,dialect);
   return kind==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','eq','ne','in','notIn','empty','notEmpty','null','notNull']:kind?['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull']:['null','notNull'];
 }
 /** NULL、空文本和列表条件不接受隐藏单值；面板与控制器共用同一输入要求。 */
@@ -113,12 +113,13 @@ export function queryResultFilterNeedsUpper(operator:QueryResultFilterOperator):
 /** 成员使用独立原文数组，逗号、换行、引号和NULL字样不承担分隔或SQL语义。 */
 export function queryResultFilterNeedsValues(operator:QueryResultFilterOperator):boolean{return operator==='in'||operator==='notIn';}
 /** 仅有实际文本原值比较时提供大小写选项，NULL和空文本判断不保留隐藏选项。 */
-export function queryResultFilterSupportsIgnoreCase(column:ResultColumn,operator:QueryResultFilterOperator,sqliteType?:SqliteResultFilterType):boolean{return (queryResultFilterKind(column)==='text'||column.type==='SQLITE'&&(sqliteType??'text')==='text')&&queryResultFilterOperators(column,sqliteType).includes(operator)&&!['null','notNull','empty','notEmpty','notType'].includes(operator);}
+export function queryResultFilterSupportsIgnoreCase(column:ResultColumn,operator:QueryResultFilterOperator,sqliteType?:SqliteResultFilterType,dialect?:SortDialect):boolean{return (queryResultFilterKind(column,dialect)==='text'||column.type==='SQLITE'&&(sqliteType??'text')==='text')&&queryResultFilterOperators(column,sqliteType,dialect).includes(operator)&&!['null','notNull','empty','notEmpty','notType'].includes(operator);}
 /** 只读取自有数据属性；访问器不执行，NULL判断也不解码二进制。 */
 function cell(row:QueryResult['rows'][number],column:ResultColumn):CellValue {const d=Object.getOwnPropertyDescriptor(row,column.key);if(!d||!('value'in d))throw Error(text.value);return d.value;}
 /** 当前完整源的单向租约；过滤保存原行引用，连被排除行的活动条件键也观察漂移。 */
 export class QueryResultFilter {
   private binding?:QueryResultFilterBinding;private projection?:QueryResultFilterView;private snapshots?:Snapshot[];
+  constructor(private readonly dialect?: SortDialect) {}
   /** 撤销不修改原结果；同对象恢复也不复活旧owner。 */
   invalidate():void{this.binding=undefined;this.projection=undefined;this.snapshots=undefined;}
   /** 单独限制筛选准入；拒绝不会扩大或代替旧选择/导出/详情的各自预算。 */
@@ -129,7 +130,7 @@ export class QueryResultFilter {
     if(keys.some(k=>typeof k!=='string'||!k||k.length>4096)||new Set(keys).size!==keys.length||new Set(source.rows).size!==source.rows.length||new Set(visible.map(c=>c.key)).size!==visible.length||visible.some(c=>!source.columns.includes(c)))return;
     let storageCurrent:()=>boolean;
     try{storageCurrent=bindSqliteResultStorage(source);}catch{return;}
-    const binding:QueryResultFilterBinding={source,rows:source.rows,columns:source.columns,rowRefs:source.rows.slice(),columnRefs:source.columns.slice(),metadata:source.columns.map(c=>({...c})),truncated:source.truncated,context:[...context],visible,visibleRefs:visible.slice(),storageCurrent};
+    const binding:QueryResultFilterBinding={source,rows:source.rows,columns:source.columns,rowRefs:source.rows.slice(),columnRefs:source.columns.slice(),metadata:source.columns.map(c=>({...c})),truncated:source.truncated,context:[...context],visible,visibleRefs:visible.slice(),storageCurrent,...(this.dialect?{dialect:this.dialect}:{})};
     this.binding=binding;this.projection=this.project(binding,[], 'AND',source.rows.map((_,i)=>i));return binding;
   }
   /** 源数组/原位置/元数据/活动条件值一旦漂移就永久撤销，旧owner不能撤销较新owner。 */
@@ -176,15 +177,15 @@ export class QueryResultFilter {
     function fold(value:string):string{const folded=value.toLowerCase();units+=folded.length;if(folded.length>queryResultFilterLimits.valueUnits||units>queryResultFilterLimits.units)throw Error(text.budget);return folded;}
     /** 原SQLite标记或明确条件类型决定比较键，不让动态键进入MySQL公共键类型。 */
     function makeKey(column:ResultColumn,value:CellValue,code?:string):FilterKey{
-      const key=column.type==='SQLITE'?sqliteResultComparisonKey(value,code??''):queryResultFilterKey(column,value);
+      const key=column.type==='SQLITE'?sqliteResultComparisonKey(value,code??''):queryResultFilterKey(column,value,binding.dialect);
       units+=keyUnits(key);if(units>queryResultFilterLimits.units)throw Error(text.budget);return key;
     }
     // 停用输入仍完整计费并核结构；仅生效条件解析字面值、通配模式及读取源单元格。
     const admitted=rules.map((rule,index)=>({...rule,...(memberSets[index]?{values:memberSets[index]}:{})}));
     const compiled=admitted.flatMap((rule,index)=>{
-      const column=binding.visible.find(c=>c.key===rule.column);if(!column||!queryResultFilterOperators(column,rule.sqliteType).includes(rule.operator)||typeof rule.value!=='string')throw Error(text.invalid);
+      const column=binding.visible.find(c=>c.key===rule.column);if(!column||!queryResultFilterOperators(column,rule.sqliteType,this.dialect).includes(rule.operator)||typeof rule.value!=='string')throw Error(text.invalid);
       if(rule.enabled!==undefined&&typeof rule.enabled!=='boolean')throw Error(text.invalid);
-      if(rule.ignoreCase!==undefined&&(typeof rule.ignoreCase!=='boolean'||!queryResultFilterSupportsIgnoreCase(column,rule.operator,rule.sqliteType)))throw Error(text.invalid);
+      if(rule.ignoreCase!==undefined&&(typeof rule.ignoreCase!=='boolean'||!queryResultFilterSupportsIgnoreCase(column,rule.operator,rule.sqliteType,this.dialect)))throw Error(text.invalid);
       const nullable=rule.operator==='null'||rule.operator==='notNull',range=queryResultFilterNeedsUpper(rule.operator);
       const sqlite=column.type==='SQLITE',typeOnly=rule.operator==='notType';
       if(sqlite?!nullable&&!sqliteResultFilterTypes.includes(rule.sqliteType as SqliteResultFilterType)||nullable&&rule.sqliteType!==undefined:rule.sqliteType!==undefined)throw Error(text.invalid);
@@ -196,7 +197,7 @@ export class QueryResultFilter {
       if(rule.enabled===false)return [];
       if(sqlite&&!nullable&&!binding.source.sqliteStorage)throw Error(text.sqliteUnknown);
       const code=sqlite&&!nullable?sqliteResultFilterCodes[rule.sqliteType!]:undefined;
-      const parse=(input:string)=>sqlite?sqliteResultFilterLiteral(rule.sqliteType!,input):queryResultFilterLiteral(column,input);
+      const parse=(input:string)=>sqlite?sqliteResultFilterLiteral(rule.sqliteType!,input):queryResultFilterLiteral(column,input,this.dialect);
       let literal:CellValue|null,upper:CellValue|null,key:FilterKey|null,upperKey:FilterKey|null;
       let members:{input:string;literal:CellValue;key:FilterKey}[]|undefined;
       try{

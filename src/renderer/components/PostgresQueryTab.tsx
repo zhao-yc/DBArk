@@ -11,10 +11,14 @@ import { zh } from '../locales/zh-CN';
 import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
+import { QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterView } from '../queryResultFilter';
+import { prepareQueryResultOrganization } from '../queryResultHistory';
+import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
+import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { ExplainPlanView } from './ExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
 import { QueryAnalyzeConfirmDialog } from './QueryAnalyzeConfirmDialog';
@@ -60,6 +64,7 @@ interface AnalyzeOwner {
   version: number;
 }
 interface SortDraft { binding: QueryResultSortBinding; view: QueryResultSortView; }
+interface FilterDraft { binding: QueryResultFilterBinding; view: QueryResultFilterView; sortView: QueryResultSortView; }
 /** PostgreSQL查询复用原编辑器、结果网格、文件来源及保存查询；驱动任务和事务明确独立。 */
 export function PostgresQueryTab({
   tab,
@@ -102,10 +107,14 @@ export function PostgresQueryTab({
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
   const [resultSelection] = useState(() => new ResultExportSelection());
-  const [resultSorter] = useState(() => new QueryResultSort('postgresql'));
+  const [organization] = useState(() => ({ filter: new QueryResultFilter('postgresql'), sorter: new QueryResultSort('postgresql') }));
+  const { filter: resultFilter, sorter: resultSorter } = organization;
   const [, refreshResult] = useState(0);
   const [sortDraft, setSortDraft] = useState<SortDraft>();
   const sortDraftRef = useRef<SortDraft | undefined>(undefined);
+  const [filterDraft, setFilterDraft] = useState<FilterDraft>();
+  const filterDraftRef = useRef<FilterDraft | undefined>(undefined);
+  const [filterError, setFilterError] = useState('');
   const [exportView, setExportView] = useState<{ result: QueryResult; selected: boolean }>();
   const exportOpen = useRef(false);
   const scope: Scope = {
@@ -141,6 +150,7 @@ export function PostgresQueryTab({
       !analyzeRef.current &&
       !exportOpen.current &&
       !sortDraftRef.current &&
+      !filterDraftRef.current &&
       !fileBusy &&
       !closeRef.current &&
       !document.querySelector('[role="dialog"], [role="alertdialog"]')
@@ -290,6 +300,7 @@ export function PostgresQueryTab({
     setBusy(true);
     setError('');
     if (mode !== 'analyzePreview') {
+      resultFilter.invalidate();
       resultSorter.invalidate();
       resultSelection.invalidate();
       setOutcome(undefined);
@@ -576,8 +587,12 @@ export function PostgresQueryTab({
         const left = next.settings.activeTabId !== tab.id;
         if (phase.current && (changed || (left && !phase.current.sent))) phase.current.valid = false;
         if (changed || left) resultSelection.invalidate();
-        if (changed) resultSorter.invalidate();
+        if (changed) {
+          organization.filter.invalidate();
+          organization.sorter.invalidate();
+        }
         if ((changed || left) && sortDraftRef.current) closeResultSort(sortDraftRef.current);
+        if ((changed || left) && filterDraftRef.current) closeResultFilter(filterDraftRef.current);
         const parameter = parameters.current;
         if (parameter && (changed || left)) {
           parameter.valid = false;
@@ -590,16 +605,20 @@ export function PostgresQueryTab({
   useEffect(() => {
     if (closeRequest && analyzeRef.current) clearAnalyze();
     if (closeRequest && sortDraftRef.current) closeResultSort(sortDraftRef.current);
+    if (closeRequest && filterDraftRef.current) closeResultFilter(filterDraftRef.current);
   }, [closeRequest]);
   const results = outcome?.results ?? [],
     result = results[selected],
     controlsLocked = busy || fileBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView,
-    locked = controlsLocked || !!sortDraft;
-  const sortSource = !outcome?.analysis && !outcome?.explain && result?.columns.length ? result : undefined;
-  const sortBinding = resultSorter.bind(sortSource, [outcome, selected, profile, version, scope.database]);
+    locked = controlsLocked || !!sortDraft || !!filterDraft;
+  const resultSource = !outcome?.analysis && !outcome?.explain && result?.columns.length ? result : undefined;
+  const resultContext = [outcome, selected, profile, version, scope.database];
+  const filterBinding = resultFilter.bind(resultSource, resultContext);
+  const filterView = resultFilter.view(filterBinding);
+  const sortBinding = resultSorter.bind(filterView?.result ?? resultSource, resultContext);
   const sortView = resultSorter.view(sortBinding);
-  const displayResult = sortView?.result ?? result;
-  const dataResult = !busy && sortSource ? displayResult : undefined;
+  const displayResult = sortView?.result ?? filterView?.result ?? result;
+  const dataResult = !busy && resultSource ? displayResult : undefined;
   const binding = resultSelection.bind(workspace.settings.activeTabId === tab.id ? dataResult : undefined,
     [outcome, selected, profile, version, scope.database]);
   const selectedCount = resultSelection.count(binding);
@@ -613,13 +632,48 @@ export function PostgresQueryTab({
 
   /** 选择归属于当前显示顺序及工作区代次，旧网格回调不能读取后来切换的行。 */
   function resultCurrent() {
-    return resultScopeCurrent() && !sortDraftRef.current && resultSelection.current(binding);
+    return resultScopeCurrent() && !sortDraftRef.current && !filterDraftRef.current && resultSelection.current(binding);
   }
 
   /** 排序草稿只消费所属结果与排序视图。 */
   function sortCurrent(draft?: SortDraft) {
-    return resultScopeCurrent() && sortDraftRef.current === draft && !!sortBinding && !!sortView &&
+    return resultScopeCurrent() && !filterDraftRef.current && sortDraftRef.current === draft && !!sortBinding && !!sortView &&
       (!draft || draft.binding === sortBinding && draft.view === sortView) && resultSorter.view(sortBinding) === sortView;
+  }
+
+  /** 筛选与排序原视图必须同时有效，迟到草稿不能覆盖另一结果集。 */
+  function filterCurrent(draft?: FilterDraft) {
+    return resultScopeCurrent() && !sortDraftRef.current && filterDraftRef.current === draft &&
+      !!filterBinding && !!filterView && !!sortView &&
+      (!draft || draft.binding === filterBinding && draft.view === filterView && draft.sortView === sortView) &&
+      resultFilter.view(filterBinding) === filterView && resultSorter.view(sortBinding) === sortView;
+  }
+
+  /** 只关闭自己打开的草稿。 */
+  function closeResultFilter(draft: FilterDraft) {
+    if (filterDraftRef.current !== draft) return;
+    filterDraftRef.current = undefined;
+    setFilterDraft(undefined);
+    setFilterError('');
+  }
+
+  /** 在独立控制器上完整试算筛选和原排序，任何失败都保留现有视图。 */
+  function applyResultFilter(expression: QueryResultFilterGroup, draft?: FilterDraft) {
+    if (!resultSource || !sortView || !filterCurrent(draft)) return;
+    try {
+      const next = prepareQueryResultOrganization(resultSource, resultContext, resultSource.columns,
+        { expression, sort: sortView.rules }, 'postgresql');
+      resultFilter.invalidate();
+      resultSorter.invalidate();
+      organization.filter = next.filter;
+      organization.sorter = next.sorter;
+      resultSelection.invalidate();
+      if (draft) closeResultFilter(draft);
+      refreshResult(value => value + 1);
+    } catch (reason) {
+      if (draft) setFilterError(errorMessage(reason));
+      else setError(errorMessage(reason));
+    }
   }
 
   /** 只关闭准确的草稿，旧面板不能关闭后来打开的排序。 */
@@ -738,7 +792,7 @@ export function PostgresQueryTab({
           postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
             connectionVersion: scope.version, sessionId: session.current?.id }}
           onCompletionStatus={setCompletionStatus}
-          readOnly={busy || fileBusy || !!analyze || !!exportView}
+          readOnly={busy || fileBusy || !!analyze || !!exportView || !!filterDraft}
           onReady={(instance) => {
             editor.current = instance;
           }}
@@ -760,7 +814,8 @@ export function PostgresQueryTab({
           <div className="postgres-result-actions">
             {results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
               onChange={event => {
-                if (exportOpen.current || sortDraftRef.current) return;
+                if (exportOpen.current || sortDraftRef.current || filterDraftRef.current) return;
+                resultFilter.invalidate();
                 resultSorter.invalidate();
                 resultSelection.invalidate();
                 setSelected(Number(event.target.value));
@@ -768,6 +823,18 @@ export function PostgresQueryTab({
               {results.map((r, i) => <option key={i} value={i}>{text.result(i, r.postgresCommand ?? '', r.rows.length)}</option>)}
             </select>}
             {dataResult && <>
+              <button disabled={locked || !filterBinding || !filterView || !sortView}
+                onClick={() => {
+                  if (!filterBinding || !filterView || !sortView || !filterCurrent() ||
+                      document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+                  const draft = { binding: filterBinding, view: filterView, sortView };
+                  filterDraftRef.current = draft;
+                  setFilterDraft(draft);
+                }}>{filterText.open}</button>
+              {!!filterView?.rules.length && <>
+                <button disabled={locked} onClick={() => applyResultFilter({ mode: 'AND', children: [] })}>{filterText.clear}</button>
+                <span role="status">{filterText.counts(resultSource!.rows.length, dataResult.rows.length)}</span>
+              </>}
               <button disabled={locked || !sortView || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
                 onClick={() => {
                   if (!sortBinding || !sortView || !sortCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
@@ -798,6 +865,16 @@ export function PostgresQueryTab({
         )}
         {result?.truncated && <p className="warning-text">{text.truncated}</p>}
       </div>
+      {filterDraft && <Modal title={filterText.title} wide onClose={() => closeResultFilter(filterDraft)} onEscape={event => {
+        // 先交给内层条件草稿或值选择处理，候选面板的 Esc 不关闭外层窗口。
+        if (event.target instanceof Element && event.target.closest('.query-result-filter-panel')) return;
+        event.stopPropagation();
+        closeResultFilter(filterDraft);
+      }}>
+        <div className="modal-content"><QueryResultFilterPanel binding={filterDraft.binding} initial={filterDraft.view}
+          isCurrent={() => filterCurrent(filterDraft)} onApply={expression => applyResultFilter(expression, filterDraft)}
+          onClose={() => closeResultFilter(filterDraft)} /><ErrorBox message={filterError} /></div>
+      </Modal>}
       {sortDraft && <Modal title={sortText.panelTitle} wide onClose={() => closeResultSort(sortDraft)}>
         <div className="modal-content"><QueryResultSortPanel binding={sortDraft.binding} initial={sortDraft.view}
           isCurrent={() => sortCurrent(sortDraft)} onApply={rules => applyResultSort(rules, sortDraft)}
@@ -854,7 +931,7 @@ export function PostgresQueryTab({
           }}
         />
       )}
-      {closeRequest && !save && !exportView && (
+      {closeRequest && !save && !exportView && !filterDraft && (
         <QueryCloseDialog
           title={tab.title}
           onCancel={() => finishClose(false)}

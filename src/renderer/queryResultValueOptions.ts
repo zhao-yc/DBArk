@@ -1,6 +1,6 @@
 import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultFilterGroup, QueryResultFilterRule } from '../shared/queryResultPresets';
-import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultFilterKind, queryResultFilterLiteral } from './queryResultSort';
+import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultFilterKind, queryResultFilterLiteral, type SortDialect } from './queryResultSort';
 import { queryResultValueOptionsZh as text } from './locales/queryResultValueOptions.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
 import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
@@ -45,7 +45,7 @@ export function queryResultValueOptionLabel(entry: QueryResultValueOption): stri
   return entry.sqliteType ? text.sqliteValue(entry.literal!, entry.sqliteType) : text.value(entry.literal);
 }
 /** 从完整已返回行捕获不同值；整份超限或坏值即拒绝，不产生前 N 项候选。 */
-export function captureQueryResultValueOptions(columns: readonly ResultColumn[], rows: Rows, column: ResultColumn, sqliteSource?: QueryResult): QueryResultValueOptions {
+export function captureQueryResultValueOptions(columns: readonly ResultColumn[], rows: Rows, column: ResultColumn, sqliteSource?: QueryResult, dialect?: SortDialect): QueryResultValueOptions {
   const columnCount = length(columns, queryResultValueOptionsLimits.columns), rowCount = length(rows, queryResultValueOptionsLimits.rows);
   if (!columnCount) throw Error(text.invalid);
   const columnRefs: ResultColumn[] = [], copied: ResultColumn[] = [], keys = new Set<string>();
@@ -60,7 +60,7 @@ export function captureQueryResultValueOptions(columns: readonly ResultColumn[],
   }
   if (!selected || !selectedMeta) throw Error(text.invalid);
   const sqlite = selectedMeta.type === 'SQLITE';
-  if (!sqlite && !queryResultFilterKind(selectedMeta) || sqlite && !sqliteSource) throw Error(text.unsupported);
+  if (!sqlite && !queryResultFilterKind(selectedMeta, dialect) || sqlite && !sqliteSource) throw Error(text.unsupported);
   const source = sqlite ? captureSqliteResultFilterSource(sqliteSource, columns, rows) : undefined;
   const selectedColumn = selectedMeta, rowRefs: QueryResult['rows'][number][] = [], cells: CellValue[] = [], seenRows = new Set<object>();
   const entries: { id: number; literal: string | null; count: number; sqliteType?: SqliteResultFilterType }[] = [], sorted: { key: Key; id: number }[] = [], typedSeen = new Map<string, number>(), typedLiterals: (string | null)[] = [];
@@ -98,8 +98,8 @@ export function captureQueryResultValueOptions(columns: readonly ResultColumn[],
     if (units > queryResultValueOptionsLimits.units) throw Error(text.budget);
     let key: Key;
     try {
-      key = queryResultFilterKey(selectedColumn, value);
-      if (literal !== null && compare(key, queryResultFilterKey(selectedColumn, queryResultFilterLiteral(selectedColumn, literal))) !== 0) throw Error(text.unsupported);
+      key = queryResultFilterKey(selectedColumn, value, dialect);
+      if (literal !== null && compare(key, queryResultFilterKey(selectedColumn, queryResultFilterLiteral(selectedColumn, literal, dialect), dialect)) !== 0) throw Error(text.unsupported);
     } catch (reason) {
       if (reason instanceof Error && reason.message === text.budget) throw reason;
       throw Error(text.unsupported);

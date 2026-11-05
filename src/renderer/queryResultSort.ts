@@ -8,7 +8,7 @@ import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultCo
 export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 2000000, valueUnits: 4096, units: 8 * 1024 * 1024 } as const;
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
 type SortKind = Kind | 'sqlite' | 'postgresNumeric' | 'postgresFloat' | 'postgresBoolean';
-type SortDialect = 'postgresql';
+export type SortDialect = 'postgresql';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
 type SortKey = Key | SqliteResultComparisonKey;
@@ -96,6 +96,8 @@ function key(value: CellValue, type: Kind, unsigned = false): Key {
 /** 无locale/Number转换的总序；相等键由调用方按原位置稳定打破。 */
 function compare(a: Key, b: Key): number {
   if (a === null || b === null) return a === b ? 0 : a === null ? -1 : 1;
+  const specialA = specialOrder(a), specialB = specialOrder(b);
+  if (specialA || specialB) return specialA - specialB;
   if (typeof a === 'number' && typeof b === 'number' || typeof a === 'string' && typeof b === 'string') return a === b ? 0 : a < b ? -1 : 1;
   if (typeof a !== 'object' || typeof b !== 'object') throw Error(text.value);
   if (a.negative !== b.negative) return a.negative ? -1 : 1;
@@ -105,25 +107,38 @@ function compare(a: Key, b: Key): number {
 }
 
 /** 筛选与排序共用原比较器；精确类型和时间不经Number/Date，未知类型不给比较资格。 */
-export function queryResultFilterKind(column: ResultColumn): 'text' | 'ordered' | undefined {
-  const type=kind(column.type);return type==='text'?'text':type?'ordered':undefined;
+export function queryResultFilterKind(column: ResultColumn, dialect?: SortDialect): 'text' | 'ordered' | undefined {
+  const type=dialect ? sortKind(column, dialect) : kind(column.type);
+  return type==='text'?'text':type?'ordered':undefined;
 }
 /** 条件输入只按声明类型准入；仅原本浮点类型允许转有限number，精确数值保留字符串。 */
-export function queryResultFilterLiteral(column: ResultColumn, value: string): CellValue {
-  const type=kind(column.type);if(!type)throw Error(text.type);
+export function queryResultFilterLiteral(column: ResultColumn, value: string, dialect?: SortDialect): CellValue {
+  const type=dialect ? sortKind(column, dialect) : kind(column.type);
+  if(!type)throw Error(text.type);
   let raw=type==='text'?value:value.trim();
   // 仅补条件输入省略的整数或小数部分，保留符号及全部精度；返回值解析仍使用原严格格式。
-  if(type==='decimal'||type==='float'){
-    const short=(type==='float'?/^([+-]?)(?:(\d+)\.(\d*)|\.(\d+))([eE][+-]?\d+)?$/:/^([+-]?)(?:(\d+)\.(\d*)|\.(\d+))$/).exec(raw);
+  if(type==='decimal'||type==='float'||type==='postgresNumeric'||type==='postgresFloat'){
+    const short=(type==='float'||type==='postgresFloat'?/^([+-]?)(?:(\d+)\.(\d*)|\.(\d+))([eE][+-]?\d+)?$/:/^([+-]?)(?:(\d+)\.(\d*)|\.(\d+))$/).exec(raw);
     if(short)raw=short[1]+(short[2]??'0')+'.'+(short[3]||short[4]||'0')+(short[5]??'');
   }
   let literal:CellValue=raw;
+  if(type==='postgresBoolean'){
+    if (/^(?:true|t)$/i.test(raw)) literal = 't';
+    if (/^(?:false|f)$/i.test(raw)) literal = 'f';
+  }
+  if (type === 'postgresNumeric' || type === 'postgresFloat') {
+    if (/^nan$/i.test(raw)) literal = 'NaN';
+    if (/^\+?inf(?:inity)?$/i.test(raw)) literal = 'Infinity';
+    if (/^-inf(?:inity)?$/i.test(raw)) literal = '-Infinity';
+  }
   if(type==='float'){if(!/^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw))throw Error(text.value);literal=Number(raw);}
-  key(literal,type,column.type.trim().toUpperCase().endsWith(' UNSIGNED'));return literal;
+  queryResultFilterKey(column,literal,dialect);return literal;
 }
 /** 返回筛选的已准入键；复用相同NULL、精确小数、原时间字段规则，不猜二进制。 */
-export function queryResultFilterKey(column: ResultColumn, value: CellValue): Key {
-  const type=kind(column.type);if(!type)throw Error(text.type);return key(value,type,column.type.trim().toUpperCase().endsWith(' UNSIGNED'));
+export function queryResultFilterKey(column: ResultColumn, value: CellValue, dialect?: SortDialect): Key {
+  const type=dialect ? sortKind(column,dialect) : kind(column.type);
+  if(!type || type === 'sqlite')throw Error(text.type);
+  return scalarKey(value,type,column);
 }
 export { compare as compareQueryResultFilterKeys };
 /** 统计只读复用原类型分类，不扩大排序或筛选的准入语义。 */
@@ -132,7 +147,7 @@ export { kind as queryResultSortKind };
 /** SQLite二进制按Base64原文计预算，比较键字节另计；普通结果保持既有计费。 */
 function valueUnits(value: CellValue, sqlite: boolean): number { return typeof value === 'string' ? value.length : sqlite && value && typeof value === 'object' ? value.base64.length : 1; }
 /** 原类型标记是唯一准入凭据；BLOB与文本键在分配前受单值上限约束。 */
-function sortingKey(value: CellValue, type: SortKind, column: ResultColumn, code?: string, ignoreCase = false): SortKey {
+function scalarKey(value: CellValue, type: Exclude<SortKind, 'sqlite'>, column: ResultColumn): Key {
   if (type === 'postgresBoolean') {
     if (value === null) return null;
     if (value === 'f') return 0;
@@ -146,10 +161,14 @@ function sortingKey(value: CellValue, type: SortKind, column: ResultColumn, code
     if (value === '-Infinity' || value === 'Infinity' || value === 'NaN') return Number(value);
     if (type === 'postgresNumeric') return key(value, 'decimal');
     const number = Number(value);
-    if (!/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(number)) throw Error(text.value);
+    if (!/^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(number)) throw Error(text.value);
     return number;
   }
-  if (type !== 'sqlite') return key(value, type, column.type.trim().toUpperCase().endsWith(' UNSIGNED'));
+  return key(value, type, column.type.trim().toUpperCase().endsWith(' UNSIGNED'));
+}
+/** SQLite 字节键使用原存储类型，普通列使用同一标量键。 */
+function sortingKey(value: CellValue, type: SortKind, column: ResultColumn, code?: string, ignoreCase = false): SortKey {
+  if (type !== 'sqlite') return scalarKey(value, type, column);
   if (code === undefined) throw Error(text.sqliteUnknown);
   if (valueUnits(value, true) > queryResultSortLimits.valueUnits) throw Error(text.budget);
   return sqliteResultComparisonKey(value, code, ignoreCase);
@@ -169,8 +188,6 @@ function compareSortingKeys(left: SortKey, right: SortKey): number {
     throw Error(text.value);
   }
   if (typeof right === 'object' && 'sqlite' in right) throw Error(text.value);
-  const a = specialOrder(left), b = specialOrder(right);
-  if (a || b) return a - b;
   return compare(left, right);
 }
 /** 不调用二进制访问器，记录原包装的自有值以发现原地字节漂移。 */

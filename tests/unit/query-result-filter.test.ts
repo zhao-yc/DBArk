@@ -3,12 +3,39 @@ import type { CellValue, QueryResult } from '../../src/shared/contracts';
 import { QueryResultFilter, queryResultFilterLimits, queryResultFilterOperators, queryResultFilteredSortView, type QueryResultFilterRule } from '../../src/renderer/queryResultFilter';
 import { QueryResultSort } from '../../src/renderer/queryResultSort';
 import { queryResultFilterZh as text } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { captureQueryResultValueOptions } from '../../src/renderer/queryResultValueOptions';
 /** 仅RAM协议对象，不打开DB、文件、窗口或系统剪贴板。 */
-function fixture(type='TEXT',values:CellValue[]=['a','',null,'b']){
-  const source:QueryResult={columns:[{key:'k',name:'同名',type},{key:'group',name:'同名',type:'TEXT'}],rows:values.map((k,i)=>({k,group:i%2?'B':'A'})),truncated:true,statement:'原SQL',elapsedMs:1},filter=new QueryResultFilter(),binding=filter.bind(source,['current'])!;
+function fixture(type='TEXT',values:CellValue[]=['a','',null,'b'],dialect?:'postgresql'){
+  const source:QueryResult={columns:[{key:'k',name:'同名',type},{key:'group',name:'同名',type:'TEXT'}],rows:values.map((k,i)=>({k,group:i%2?'B':'A'})),truncated:true,statement:'原SQL',elapsedMs:1},filter=new QueryResultFilter(dialect),binding=filter.bind(source,['current'])!;
   return{source,filter,binding,apply:(rules:QueryResultFilterRule[],mode:'AND'|'OR'='AND')=>filter.apply(binding,filter.view(binding)!,rules,mode)};
 }
 const rule=(operator:QueryResultFilterRule['operator'],value='',column='k'):QueryResultFilterRule=>({column,operator,value});
+describe('PostgreSQL 结果筛选', () => {
+  it('区分相邻大整数，在条件分组中保留 NULL 独立语义', () => {
+    const f=fixture('BIGINT',['9223372036854775805','9223372036854775806',null,'9223372036854775807'],'postgresql');
+    const view=f.filter.applyExpression(f.binding,f.filter.view(f.binding)!,{mode:'AND',children:[
+      {mode:'OR',children:[rule('gte','9223372036854775806'),rule('null')]},rule('eq','B','group'),
+    ]});
+    expect(view.sourceIndices).toEqual([1,3]);
+    expect(view.result.rows[0]).toBe(f.source.rows[1]);
+    expect(()=>f.apply([rule('eq','坏值')])).toThrow(text.value);
+    expect(f.filter.view(f.binding)).toBe(view);
+  });
+  it('精确小数区间和数值特殊值共用排序等值语义', () => {
+    const f=fixture('NUMERIC',['0.00000000000000000001','0.00000000000000000002','-Infinity','Infinity','NaN','NaN',null],'postgresql');
+    expect(f.apply([{...rule('between','.00000000000000000002'),upper:'+inf'}]).sourceIndices).toEqual([1,3]);
+    expect(f.apply([rule('eq','nan')]).sourceIndices).toEqual([4,5]);
+    const choices=captureQueryResultValueOptions(f.source.columns,f.source.rows,f.source.columns[0],undefined,'postgresql');
+    expect(choices.entries.find(entry=>entry.literal==='NaN')?.count).toBe(2);
+  });
+  it('布尔、浮点原文和未知类型分别使用准确条件', () => {
+    expect(fixture('BOOLEAN',['t','f',null],'postgresql').apply([rule('eq','TRUE')]).sourceIndices).toEqual([0]);
+    expect(fixture('DOUBLE PRECISION',['1e-300','-Infinity',null],'postgresql').apply([rule('gt','-inf')]).sourceIndices).toEqual([0]);
+    const unknown=fixture('TIMESTAMPTZ',['2026-11-05 10:00:00+00',null],'postgresql');
+    expect(unknown.apply([rule('null')]).sourceIndices).toEqual([1]);
+    expect(()=>unknown.apply([rule('gt','2026-11-05')])).toThrow(text.invalid);
+  });
+});
 describe('已返回结果本地条件语义与原行身份',()=>{
   it('文本包含/等于/不等于保持原文、空串、NULL独立，不执行正则或转换JSON',()=>{
     const f=fixture('TEXT',['A.*','A','',null,'null','a']);expect(f.apply([rule('contains','.*')]).sourceIndices).toEqual([0]);expect(f.apply([rule('eq','')]).sourceIndices).toEqual([2]);expect(f.apply([rule('ne','')]).sourceIndices).toEqual([0,1,4,5]);expect(f.apply([rule('contains','')]).sourceIndices).toEqual([0,1,2,4,5]);expect(f.apply([rule('eq','null')]).sourceIndices).toEqual([4]);

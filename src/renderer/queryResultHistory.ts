@@ -2,7 +2,7 @@ import type { QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultOrganization } from '../shared/queryResultPresets';
 export type { QueryResultOrganization } from '../shared/queryResultPresets';
 import { QueryResultFilter } from './queryResultFilter';
-import { QueryResultSort } from './queryResultSort';
+import { QueryResultSort, type SortDialect } from './queryResultSort';
 import { queryResultHistoryZh as text } from './locales/queryResultHistory.zh-CN';
 
 interface Snapshot { readonly configuration: QueryResultOrganization; readonly key: string; }
@@ -62,8 +62,8 @@ export class QueryResultHistory {
 }
 
 /** 新控制器完整验证筛选再排序；原控制器在全部成功前保持原样，空结果也不回退全集。 */
-export function prepareQueryResultOrganization(source: QueryResult, context: readonly unknown[], visible: ResultColumn[], configuration: QueryResultOrganization) {
-  const filter = new QueryResultFilter(), sorter = new QueryResultSort(), binding = filter.bind(source, context, visible);
+export function prepareQueryResultOrganization(source: QueryResult, context: readonly unknown[], visible: ResultColumn[], configuration: QueryResultOrganization, dialect?: SortDialect) {
+  const filter = new QueryResultFilter(dialect), sorter = new QueryResultSort(dialect), binding = filter.bind(source, context, visible);
   if (!binding) throw Error(text.stale);
   const view = filter.applyExpression(binding, filter.view(binding)!, configuration.expression), sorted = sorter.bind(view.result, context, visible);
   if (!sorted) throw Error(text.stale);
