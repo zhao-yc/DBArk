@@ -27,6 +27,7 @@ import { preparePostgresForeignEdit, readPostgresForeignTargets } from './foreig
 import type { PostgresForeignPreviewInput } from '../../shared/postgresForeignKeyEdit';
 import { preparePostgresCheckEdit } from './checkEdit';
 import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
+import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { explainLimits } from '../../shared/explain';
@@ -53,6 +54,13 @@ interface Lease {
   finish(): void;
   failed: boolean;
   protectedFromAbort: boolean;
+}
+interface ExportTask {
+  connectionId: string;
+  cancelled: boolean;
+  publishing: boolean;
+  connection?: PostgresConnection;
+  done?: Promise<unknown>;
 }
 type Input = Record<string, any>;
 /** PostgreSQL独立网络执行账本，共用utility隔离进程及TaskEvent，不进入mysql2或其SQL生成器。 */
@@ -103,13 +111,14 @@ export class PostgresEngine {
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, Task>();
+  private readonly exports = new Map<string, ExportTask>();
   private readonly completedTasks = new Set<string>();
   private readonly leases = new Set<Lease>();
   private readonly closing = new Set<string>();
   private stopping = false;
   constructor(private readonly emit: (event: TaskEvent) => void) {}
   ownsTask(id: string) {
-    return this.tasks.has(id) || this.completedTasks.has(id);
+    return this.tasks.has(id) || this.exports.has(id) || this.completedTasks.has(id);
   }
   /** 只按Main注入的方言或已登记准确身份路由，不根据SQL文本猜驱动。 */
   accepts(input: Input): boolean {
@@ -117,7 +126,7 @@ export class PostgresEngine {
       input.dialect === 'postgresql' ||
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
-        (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) ||
+        (id) => [...this.exports.values()].some(task => task.connectionId === id) || this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) ||
           this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || this.keyEdits.connectionIds().includes(id) || this.foreignEdits.connectionIds().includes(id) || this.checkEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
@@ -265,11 +274,57 @@ export class PostgresEngine {
     })();
     return task.cancel;
   }
+  /** 文件发布前才接受取消，原读取连接随任务准确终止。 */
+  private cancelExport(task: ExportTask) {
+    if (task.publishing || task.cancelled) return;
+    task.cancelled = true;
+    task.connection?.abort();
+  }
+
+  /** 只保留终态任务编号，避免迟到的取消被分发给其他驱动。 */
+  private rememberCompleted(taskId: string) {
+    this.completedTasks.add(taskId);
+    if (this.completedTasks.size > 8192) {
+      const oldest = this.completedTasks.values().next().value;
+      if (oldest !== undefined) this.completedTasks.delete(oldest);
+    }
+  }
+
+  /** 在第一个等待之前登记文件任务，只有原子替换成功才报告已保存。 */
+  private async exportTable(input: PostgresTableExportRequest, profile: PostgresConnectionProfile) {
+    if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.exports.size >= 32)
+      throw Error('PostgreSQL 导出任务已存在、连接关闭中或已达并发上限');
+    const task: ExportTask = { connectionId: profile.id, cancelled: false, publishing: false };
+    const check = () => { if (task.cancelled) throw Error('PostgreSQL 导出已取消'); };
+    this.exports.set(input.taskId, task);
+    const done = task.done = exportPostgresTable(this.tables, input,
+      action => this.use(profile, input.database, async managed => {
+        task.connection = managed;
+        check();
+        return action(managed);
+      }), check, () => { task.publishing = true; },
+      rows => this.emit({ taskId: input.taskId, status: 'running', progress: 50, message: 'PostgreSQL 导出已读取 ' + rows + ' 行' }));
+    try {
+      const result = await done;
+      this.emit({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 导出文件已保存，共 ' + result.rows + ' 行' });
+      return result;
+    } catch (reason) {
+      this.emit({ taskId: input.taskId, status: task.cancelled ? 'cancelled' : 'failed', progress: 0,
+        message: task.cancelled ? 'PostgreSQL 导出已取消' : 'PostgreSQL 导出未正常完成，请核对所选文件' });
+      throw reason;
+    } finally {
+      this.exports.delete(input.taskId);
+      this.rememberCompleted(input.taskId);
+    }
+  }
+
   /** 显式断开先等准确在途终态，再正常关闭全部会话；失败保留原对象供核对或重试。 */
   private async closeConnection(id: string): Promise<void> {
     if (this.closing.has(id)) throw Error('PostgreSQL连接正在关闭');
     this.closing.add(id);
     try {
+      const exports = [...this.exports.values()].filter(task => task.connectionId === id);
+      for (const task of exports) this.cancelExport(task);
       const leases = [...this.leases].filter((l) => l.managed.profile.id === id);
       for (const lease of leases) if (!lease.failed && !lease.protectedFromAbort) lease.managed.abort();
       const sessions = [...this.sessions.values()].filter(session => session.connectionId === id);
@@ -279,6 +334,7 @@ export class PostgresEngine {
         await lease.managed.close();
         this.leases.delete(lease);
       }
+      await Promise.allSettled(exports.map(task => task.done));
       this.tables.clear(id);
       this.creations.clear(id);
       this.columnEdits.clear(id);
@@ -302,7 +358,8 @@ export class PostgresEngine {
     if (
       changed &&
       ([...this.sessions.values()].some((s) => s.connectionId === input.id) ||
-        [...this.leases].some((l) => l.managed.profile.id === input.id))
+        [...this.leases].some((l) => l.managed.profile.id === input.id) ||
+        [...this.exports.values()].some(task => task.connectionId === input.id))
     )
       throw Error('该PostgreSQL连接仍有会话或未确认资源，请先关闭标签并显式断开');
     if (changed) {
@@ -321,6 +378,7 @@ export class PostgresEngine {
     try {
       for (const id of new Set([
         ...this.profiles.keys(),
+        ...[...this.exports.values()].map(task => task.connectionId),
         ...this.tables.connectionIds(),
         ...this.creations.connectionIds(),
         ...this.columnEdits.connectionIds(),
@@ -478,11 +536,7 @@ export class PostgresEngine {
       } finally {
         // 终态只保留有限的编号，已关闭会话的认证信息不被任务历史持有。
         this.tasks.delete(task.id);
-        this.completedTasks.add(task.id);
-        if (this.completedTasks.size > 8192) {
-          const oldest = this.completedTasks.values().next().value;
-          if (oldest !== undefined) this.completedTasks.delete(oldest);
-        }
+        this.rememberCompleted(task.id);
       }
     }
     this.emit({
@@ -570,12 +624,14 @@ export class PostgresEngine {
         return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
       case 'postgres.table.page':
-      case 'postgres.table.apply': {
+      case 'postgres.table.apply':
+      case 'postgres.table.export': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的PostgreSQL表页连接及原文档');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.table.export') return this.exportTable(input as PostgresTableExportRequest, profile);
         return command === 'postgres.table.page' ? this.tables.page(input as Parameters<PostgresTableWorkspace['page']>[0], connect) : this.tables.apply(input as Parameters<PostgresTableWorkspace['apply']>[0], connect);
       }
       case 'postgres.table.preview':
@@ -617,6 +673,8 @@ export class PostgresEngine {
         return;
       }
       case 'query.cancel': {
+        const exporting = this.exports.get(input.taskId);
+        if (exporting) { this.cancelExport(exporting); return; }
         const task = this.tasks.get(input.taskId);
         if (task) await this.cancel(task);
         return;

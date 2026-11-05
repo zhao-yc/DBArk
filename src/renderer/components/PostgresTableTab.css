@@ -28,3 +28,7 @@
 .pg-record-inputs { display: flex; align-items: start; gap: 8px; }
 .pg-record-inputs textarea { flex: 1; }
 .pg-table-preview dd, .pg-table-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.pg-table-export fieldset { margin: 10px 0; border: 1px solid var(--line); }
+.pg-table-export fieldset > button { margin-right: 6px; }
+.pg-table-export-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 6px; max-height: 160px; overflow: auto; padding: 8px 0; }

@@ -1,9 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
-import type { PostgresTableChange, PostgresTablePage, PostgresTablePreview } from '../../src/shared/postgresTable';
+import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview } from '../../src/shared/postgresTable';
+import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 
 const active = process.env.DBARK_POSTGRES_WORKSPACE_TEST === '1';
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
@@ -128,6 +132,97 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(await writing).toMatchObject({ outcome: 'committed', affected: 1 });
       await disconnecting;
       expect((await client.query(`SELECT note FROM ${table} WHERE id=1`)).rows).toEqual([{ note: '断开前提交' }]);
+
+      // 完整导出以原页筛选为准，独立游标跨过分页和多个 FETCH 批次。
+      const directory = await mkdtemp(join(tmpdir(), 'tabrelio-postgres-export-'));
+      try {
+        const exportTable = '"浏览"."导出表"';
+        await client.query(`CREATE TABLE ${exportTable} (id bigint PRIMARY KEY, note text, amount numeric(40,18), raw bytea, marker text);
+          INSERT INTO ${exportTable} SELECT 9007199254740993+i, CASE WHEN i=1 THEN NULL WHEN i=2 THEN '' ELSE '引;号' END,
+            1234567890123456789012.123456789012345678, decode('00ff','hex'), CASE WHEN i<=130 THEN '保留%' ELSE '其它' END
+            FROM generate_series(1, 140) AS i`);
+        const source = { ...target, table: exportTable, tabId: randomUUID() };
+        const exportPage = await read({ ...source, offset: 4, filter: { column: 'marker', text: '保留%' }, sort: { column: 'id', direction: 'desc' } });
+        expect(exportPage.rows[0].c0).toBe('9007199254741119');
+        const exportRequest = (format: PostgresTableExportInput['format'], name: string, extra: Record<string, unknown> = {}) => ({
+          ...source, profile, taskId: randomUUID(), fileToken: randomUUID(), filePath: join(directory, name),
+          format, encoding: 'utf8', columns: ['c0', 'c1', 'c2', 'c3'], exportToken: exportPage.exportToken, ...extra,
+        });
+        const wrong = exportRequest('json', '拒绝.json', { owner: '其他文档' });
+        await expect(engine.handle('postgres.table.export', wrong)).rejects.toThrow('快照');
+        const csv = exportRequest('csv', '实际.csv', { csvDelimiter: ';' });
+        expect(await engine.handle('postgres.table.export', csv)).toEqual({ rows: 130, fileCommitted: true });
+        const csvText = await readFile(csv.filePath, 'utf8');
+        expect(csvText).toContain('id;note;amount;raw\r\n9007199254741123;"引;号";1234567890123456789012.123456789012345678;base64:AP8=\r\n');
+        expect(csvText).toContain('9007199254740995;"";');
+        expect(csvText).toContain('9007199254740994;\\N;');
+        const json = exportRequest('json', '实际.json', { encoding: 'utf16le' });
+        expect(await engine.handle('postgres.table.export', json)).toEqual({ rows: 130, fileCommitted: true });
+        const bytes = await readFile(json.filePath);
+        expect(bytes.subarray(0, 2)).toEqual(Buffer.from([255, 254]));
+        const records = JSON.parse(bytes.toString('utf16le').slice(1));
+        expect(records).toHaveLength(130);
+        expect(records[0]).toEqual({ id: '9007199254741123', note: '引;号', amount: '1234567890123456789012.123456789012345678', raw: { type: 'binary', base64: 'AP8=' } });
+        expect(records.at(-1)).toMatchObject({ id: '9007199254740994', note: null });
+        const xlsx = exportRequest('xlsx', '实际.xlsx');
+        expect(await engine.handle('postgres.table.export', xlsx)).toEqual({ rows: 130, fileCommitted: true });
+        const [sheet] = await listExcelSheets({ filePath: xlsx.filePath });
+        const excelRows = [];
+        for await (const row of readExcelRows({ filePath: xlsx.filePath, sheetId: sheet.id, protocol: 'dbark-v1' })) excelRows.push(row);
+        expect(excelRows).toHaveLength(130);
+        expect(excelRows[0]).toEqual(records[0]);
+        await client.query(`ALTER TABLE ${exportTable} ADD COLUMN changed text`);
+        const changed = exportRequest('json', '已有.json');
+        await writeFile(changed.filePath, '原文件');
+        await expect(engine.handle('postgres.table.export', changed)).rejects.toThrow('结构已变化');
+        expect(await readFile(changed.filePath, 'utf8')).toBe('原文件');
+
+        // 第二批读取阻塞时已写入暂存，取消只能清理该暂存，保留原文件。
+        const waiting = '"浏览"."等待视图"';
+        await client.query(`CREATE FUNCTION "浏览".wait_export(id bigint, note text) RETURNS text LANGUAGE plpgsql VOLATILE AS $body$
+          BEGIN IF id >= 9007199254741058 THEN PERFORM pg_advisory_xact_lock(75693); END IF; RETURN note; END; $body$;
+          CREATE VIEW ${waiting} AS SELECT id, "浏览".wait_export(id, note) AS note FROM ${exportTable} ORDER BY id;`);
+        const viewSource = { ...source, table: waiting, tabId: randomUUID() };
+        const viewPage = await read(viewSource);
+        expect(viewPage.pageToken).toBeUndefined();
+        expect(viewPage.exportToken).toBeTruthy();
+        await expect(preview({ ...viewPage, pageToken: viewPage.exportToken }, [{ kind: 'delete', row: 0 }], viewSource)).rejects.toThrow('没有记录修改能力');
+        const stopped = exportRequest('json', '已有.json', { ...viewSource, columns: ['c0', 'c1'], exportToken: viewPage.exportToken });
+        await client.query('SELECT pg_advisory_lock(75693)');
+        const exporting = engine.handle('postgres.table.export', stopped);
+        void exporting.catch(() => {});
+        try {
+          await expect.poll(async () => (await client.query(`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE application_name='tabrelio' AND wait_event='advisory' AND query LIKE 'FETCH FORWARD%'`)).rows[0].n,
+          { timeout: 5000 }).toBe(1);
+          expect((await readdir(directory)).some(name => name.endsWith('.partial'))).toBe(true);
+          await engine.handle('query.cancel', { taskId: stopped.taskId });
+          await expect(exporting).rejects.toThrow();
+          expect(await readFile(stopped.filePath, 'utf8')).toBe('原文件');
+          expect((await readdir(directory)).some(name => name.endsWith('.partial'))).toBe(false);
+        } finally { await client.query('SELECT pg_advisory_unlock(75693)'); await Promise.allSettled([exporting]); }
+        // 在第二批被阻塞时改写一条尚未返回的行，验证跨批仍沿游标声明时的快照。
+        const stable = exportRequest('json', '游标快照.json', { ...viewSource, columns: ['c0', 'c1'], exportToken: viewPage.exportToken });
+        await client.query('SELECT pg_advisory_lock(75693)');
+        const reading = engine.handle('postgres.table.export', stable);
+        void reading.catch(() => {});
+        try {
+          await expect.poll(async () => (await client.query(`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE application_name='tabrelio' AND wait_event='advisory' AND query LIKE 'FETCH FORWARD%'`)).rows[0].n,
+          { timeout: 5000 }).toBe(1);
+          await client.query(`UPDATE ${exportTable} SET note = '并发新值' WHERE id = 9007199254741060`);
+        } finally { await client.query('SELECT pg_advisory_unlock(75693)'); await Promise.allSettled([reading]); }
+        expect(await reading).toEqual({ rows: 140, fileCommitted: true });
+        expect(JSON.parse(await readFile(stable.filePath, 'utf8')).find((row: { id: string }) => row.id === '9007199254741060'))
+          .toEqual({ id: '9007199254741060', note: '引;号' });
+        expect((await client.query(`SELECT note FROM ${exportTable} WHERE id = 9007199254741060`)).rows).toEqual([{ note: '并发新值' }]);
+
+        const finished = exportRequest('json', '视图.json', { ...viewSource, columns: ['c0'], exportToken: viewPage.exportToken });
+        expect(await engine.handle('postgres.table.export', finished)).toEqual({ rows: 140, fileCommitted: true });
+        await client.query(`CREATE OR REPLACE VIEW ${waiting} AS SELECT id, note FROM ${exportTable} WHERE id > 9007199254741058 ORDER BY id`);
+        await expect(engine.handle('postgres.table.export', { ...finished, taskId: randomUUID() })).rejects.toThrow('结构已变化');
+        expect(JSON.parse(await readFile(finished.filePath, 'utf8'))).toHaveLength(140);
+      } finally { await rm(directory, { recursive: true, force: true }); }
     } finally {
       await engine.closeAll();
       await client.end();

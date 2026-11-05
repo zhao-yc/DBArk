@@ -749,6 +749,8 @@ async function runTableFilteredDelete(command: 'table.filteredDelete.preview' | 
 }
 
 const postgresTableOwners = new WeakMap<object, string>();
+const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
+const postgresExportChoosing = new WeakSet<object>();
 
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
@@ -803,6 +805,25 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     check();
     return result;
   }
+  if (command === 'postgres.table.exportChoose') {
+    columnsMain.assertCapturedOwner(columns);
+    const document = columns!.owner.document;
+    if (shuttingDown || postgresExportChoosing.has(document)) throw Error('客户端正在退出或原文件选择仍在进行');
+    postgresExportChoosing.add(document);
+    postgresExportFiles.delete(document);
+    return queryFileOperation(async () => {
+      try {
+        const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: '导出 PostgreSQL 表数据',
+          defaultPath: input.suggestedName, filters: [{ name: input.format.toUpperCase(), extensions: [input.format] }] });
+        columnsMain.assertCapturedOwner(columns);
+        if (shuttingDown) throw Error('客户端正在退出，文件选择已失效');
+        if (chosen.canceled || !chosen.filePath) return null;
+        const token = randomUUID();
+        postgresExportFiles.set(document, { token, format: input.format, path: chosen.filePath, expires: Date.now() + 5 * 60 * 1000 });
+        return { token, name: basename(chosen.filePath) };
+      } finally { postgresExportChoosing.delete(document); }
+    });
+  }
   if (command === 'postgres.table.page' || command === 'postgres.table.preview' ||
       command === 'postgres.table.apply' || command === 'postgres.table.release') {
     columnsMain.assertCapturedOwner(columns);
@@ -823,7 +844,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         connectionConfig.assertAvailable(input.connectionId);
         if (shuttingDown || request.connectionRevision !== store.connectionRevision()) throw Error('PostgreSQL表页来源已变化');
       } catch (error) {
-        const pageToken = command === 'postgres.table.page' ? result?.pageToken : input.pageToken;
+        const pageToken = command === 'postgres.table.page' ? result?.exportToken ?? result?.pageToken : input.pageToken;
         if (pageToken) {
           const { connectionId, database, table, tabId, connectionRevision } = request;
           await broker.request('postgres.table.release', { connectionId, database, table, tabId, connectionRevision, owner, pageToken }).catch(() => {});
@@ -1592,6 +1613,18 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'files.createSqlite': return createSqliteFile(columns, input.connectionId);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
+    case 'postgres.table.export': {
+      columnsMain.assertCapturedOwner(columns);
+      const document = columns!.owner.document;
+      const file = postgresExportFiles.get(document), owner = postgresTableOwners.get(document);
+      if (shuttingDown || !owner || !file || file.token !== input.fileToken || file.format !== input.format || file.expires <= Date.now())
+        throw Error('PostgreSQL 导出的原表页或文件选择已失效');
+      const profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect !== 'postgresql') throw Error('导出需要已保存的 PostgreSQL 连接');
+      postgresExportFiles.delete(document);
+      input = { ...input, profile, owner, filePath: file.path, connectionRevision: store.connectionRevision() };
+      break;
+    }
     case 'table.exportFiltered':
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', input.format), profile: store.resolveConnection(input.connectionId), connectionRevision: tableFilteredExportRevision }; break;
     case 'files.writeQuery': return queryFileOperation(() => writeSelectedQuery(input));
@@ -1647,7 +1680,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     if (tableFilteredExport) filteredExportLease = tableFilteredExports.begin(taskId!, columns!, assertTableFilteredExportCurrent);
     if(command==='query.exportStream'&&input.format==='sql')input={...input,filePath:queryInsertExports.begin(input,columns)};
-    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
+    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || command === 'postgres.table.export' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
+    if (command === 'postgres.table.export') {
+      await assertSqliteExportDestination(input.filePath, store.connections());
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown || tableValueOptionsClosing.has(requestConnectionId) || input.connectionRevision !== store.connectionRevision())
+        throw Error('PostgreSQL 导出的原连接已变化，请重新选择');
+    }
     if (preparing.failure) throw new Error(preparing.failure);
     // 文件路径归一化期间的取消在主进程捕获，不能丢失后继续发送用户 SQL。
     if (preparing.cancelled) throw new Error('任务在准备阶段已取消，尚未发送用户 SQL；原目标文件保持不变');
@@ -1789,7 +1828,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       taskEvent({ taskId, status: 'completed', progress: 100, message: '服务器已确认目标事务提交，后续收尾异常；请查看提交记录' });
       return { affectedRows: confirmed.evidence.serverReportedRows, cleanupWarning: true, ...tableApplyReceipts.finish(taskId) };
     }
-    const message = error instanceof Error ? error.message : '操作失败';
+    const message = command === 'postgres.table.export' ? (preparing.cancelled ? 'PostgreSQL 导出已取消' : 'PostgreSQL 导出未正常完成，请核对所选文件') :
+      error instanceof Error ? error.message : '操作失败';
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableChecks' ? 'tableChecks' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId), ...(structurePurpose === 'tableChecks' ? tableChecksFailureProgress(sentToEngine && command === structurePrefix + 'apply', structureProgress.get(taskId)) : {}) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;

@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { DataRow } from '../../shared/contracts';
+import type { CellValue, DataRow } from '../../shared/contracts';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import {
-  type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableField, type PostgresTableOutcome,
+  type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
 } from '../../shared/postgresTable';
@@ -27,6 +27,8 @@ interface Snapshot {
   expires: number;
   relation: Relation;
   rows: Original[];
+  options: Pick<PostgresTablePageInput, 'filter' | 'sort'>;
+  writeEligible: boolean;
   preview?: { token: string; expires: number; writes: Write[] };
 }
 const noWrites: Capabilities = { insert: false, update: false, delete: false };
@@ -41,7 +43,8 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
     SELECT c.oid, pg_catalog.pg_relation_filenode(c.oid), c.relkind, c.relispartition, c.relhasrules,
            pg_catalog.has_table_privilege(c.oid, 'INSERT'), pg_catalog.has_table_privilege(c.oid, 'UPDATE'),
            pg_catalog.has_table_privilege(c.oid, 'DELETE'),
-           (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND i.indisvalid)
+           (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND i.indisvalid),
+           CASE WHEN c.relkind IN ('v','m') THEN pg_catalog.pg_get_viewdef(c.oid, false) END
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname::text = $1 AND c.relname::text = $2 AND c.relkind IN ('r','p','v','m','f')
       AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
@@ -84,26 +87,27 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
 }
 
 /** 使用已核对的列号生成安全排序与条件，文字筛选按 PostgreSQL 显示文本匹配。 */
-function readSql(relation: Relation, input: PostgresTablePageInput) {
+function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter' | 'sort'>,
+  page?: Pick<PostgresTablePageInput, 'limit' | 'offset'>, columns = relation.columns) {
   const key = (id: string) => {
     const column = relation.columns.find(column => column.name === id);
     if (!column) throw Error('PostgreSQL排序或筛选列已变化');
     return postgresIdentifier(column.name);
   };
-  const projection = relation.columns.map(column => postgresIdentifier(column.name)).join(', ');
+  const projection = columns.map(column => postgresIdentifier(column.name)).join(', ');
   const ordered = input.sort ? key(input.sort.column) : undefined;
   const tie = relation.keys.length ? relation.keys : relation.kind === 'r' ? ['ctid'] : relation.kind === 'p' ? ['tableoid', 'ctid'] : [];
   const ordering = [...(ordered && input.sort ? [ordered + (input.sort.direction === 'desc' ? ' DESC' : ' ASC')] : []), ...tie.filter(item => item !== ordered)];
-  const args: unknown[] = [input.limit + 1, input.offset];
+  const args: unknown[] = page ? [page.limit + 1, page.offset] : [];
   let where = '';
   if (input.filter?.text) {
-    where = ' WHERE pg_catalog.strpos(' + key(input.filter.column) + '::text, $3) > 0';
     args.push(input.filter.text);
+    where = ' WHERE pg_catalog.strpos(' + key(input.filter.column) + '::text, $' + args.length + ') > 0';
   }
-  const withOriginal = relation.capabilities.update || relation.capabilities.delete;
+  const withOriginal = !!page && (relation.capabilities.update || relation.capabilities.delete);
   const markers = withOriginal ? ', ctid::text, xmin::text' : '';
   return { sql: 'SELECT ' + projection + markers + ' FROM ' + only(relation) + where +
-    (ordering.length ? ' ORDER BY ' + ordering.join(', ') : '') + ' LIMIT $1 OFFSET $2', args, withOriginal };
+    (ordering.length ? ' ORDER BY ' + ordering.join(', ') : '') + (page ? ' LIMIT $1 OFFSET $2' : ''), args, withOriginal };
 }
 
 /** 在服务端原样绑定值；DEFAULT为固定关键字，二进制输入按十六进制还原。 */
@@ -126,8 +130,9 @@ function rowPredicate(values: unknown[], row: Original): string {
 }
 
 /** 控制表页事务锁及每条语句的数据库端等待上限。 */
-async function begin(connection: PostgresConnection, readOnly = false): Promise<void> {
-  await connection.query(readOnly ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN', undefined, small());
+async function begin(connection: PostgresConnection, mode: 'page' | 'export' | 'write' = 'write'): Promise<void> {
+  await connection.query(mode === 'page' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' :
+    mode === 'export' ? 'BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY' : 'BEGIN', undefined, small());
   for (const sql of ["SET LOCAL statement_timeout = '15s'", "SET LOCAL lock_timeout = '5s'", "SET LOCAL idle_in_transaction_session_timeout = '20s'"]) {
     await connection.query(sql, undefined, small());
   }
@@ -147,9 +152,9 @@ export class PostgresTableWorkspace {
     this.active.add(key);
     try {
       const result = await connect(async connection => {
-        await begin(connection, true);
+        await begin(connection, 'page');
         const relation = await readRelation(connection, input.table);
-        const { sql, args, withOriginal } = readSql(relation, input);
+        const { sql, args, withOriginal } = readSql(relation, input, input);
         const records = await connection.query(sql, args, { rows: input.limit + 1, bytes: 8 * 1024 * 1024 });
         const completed = await connection.query('COMMIT', undefined, small());
         if (completed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL表页读取事务未完成');
@@ -167,39 +172,70 @@ export class PostgresTableWorkspace {
       });
       this.snapshots.delete(key);
       const capabilities = result.truncated ? noWrites : result.relation.capabilities;
-      let pageToken: string | undefined;
-      if (Object.values(capabilities).some(Boolean)) {
-        const now = Date.now();
-        for (const [id, value] of this.snapshots) if (value.expires <= now) this.snapshots.delete(id);
-        if (this.snapshots.size >= 128) throw Error('PostgreSQL表页快照已满，请关闭空闲表标签');
-        pageToken = randomUUID();
-        const { owner, tabId, connectionRevision, connectionId, database, table } = input;
-        this.snapshots.set(key, {
-          token: pageToken, scope: { owner, tabId, connectionRevision, connectionId, database, table },
-          expires: now + 30 * 60 * 1000, relation: result.relation, rows: result.originals,
-        });
-      }
+      const now = Date.now();
+      for (const [id, value] of this.snapshots) if (value.expires <= now) this.snapshots.delete(id);
+      if (this.snapshots.size >= 128) throw Error('PostgreSQL表页快照已满，请关闭空闲表标签');
+      const exportToken = randomUUID();
+      const writeEligible = Object.values(capabilities).some(Boolean);
+      const { owner, tabId, connectionRevision, connectionId, database, table, filter, sort } = input;
+      this.snapshots.set(key, {
+        token: exportToken, scope: { owner, tabId, connectionRevision, connectionId, database, table },
+        expires: now + 30 * 60 * 1000, relation: result.relation, rows: result.originals, options: { filter, sort }, writeEligible,
+      });
       return {
         columns: result.relation.columns, rows: result.rows, hasNext: result.hasNext, truncated: result.truncated,
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
-        relationKind: result.relation.kind, capabilities, ...(pageToken ? { pageToken } : {}),
+        relationKind: result.relation.kind, capabilities, exportToken, ...(writeEligible ? { pageToken: exportToken } : {}),
       };
     } finally { this.active.delete(key); }
   }
 
   /** 令牌不能跨标签、库、连接修订或文档使用。 */
-  private snapshot(input: Scoped<PostgresTableReleaseInput>): Snapshot {
+  private snapshot(input: Scoped<PostgresTableReleaseInput>, writing = false): Snapshot {
     const snapshot = this.snapshots.get(this.key(input)), scope = snapshot?.scope;
     if (!snapshot || !scope || snapshot.token !== input.pageToken || snapshot.expires <= Date.now() ||
         scope.connectionId !== input.connectionId || scope.connectionRevision !== input.connectionRevision ||
         scope.database !== input.database || scope.table !== input.table) throw Error('PostgreSQL表页快照已过期或来源变化，请刷新');
+    if (writing && !snapshot.writeEligible) throw Error('原表页没有记录修改能力，请刷新');
     return snapshot;
+  }
+
+  /** 游标持有同一读取快照，声明后再用当前目录复核被锁住的关系身份。 */
+  async exportRows(input: Scoped<PostgresTableExportInput>, connect: Connect, check: () => void,
+    consume: (columns: PostgresTableColumn[], rows: AsyncIterable<CellValue[]>) => Promise<void>) {
+    const key = this.key(input);
+    if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
+    const snapshot = this.snapshot({ ...input, pageToken: input.exportToken });
+    this.active.add(key);
+    try {
+      await connect(async connection => {
+        check();
+        await begin(connection, 'export');
+        const relation = await readRelation(connection, input.table);
+        if (relation.fingerprint !== snapshot.relation.fingerprint) throw Error('导出关系结构已变化，请刷新表页');
+        const columns = input.columns.map(key => relation.columns.find(column => column.key === key));
+        if (columns.some(column => !column)) throw Error('导出列已变化，请刷新表页');
+        const selected = columns as PostgresTableColumn[];
+        const { sql, args } = readSql(relation, snapshot.options, undefined, selected);
+        const declared = await connection.query('DECLARE dbark_table_export NO SCROLL CURSOR FOR ' + sql, args, small(), undefined, 'extended');
+        if (declared.postgresCommand !== 'DECLARE') throw Error('PostgreSQL 导出游标未确认');
+        const locked = await readRelation(connection, input.table);
+        if (locked.fingerprint !== relation.fingerprint) throw Error('游标声明后关系已变化，请刷新表页');
+        await consume(selected, readExportCursor(connection, selected, check));
+        check();
+        const closed = await connection.query('CLOSE dbark_table_export', undefined, small());
+        if (closed.postgresCommand !== 'CLOSE') throw Error('PostgreSQL 导出游标未关闭');
+        const completed = await connection.query('COMMIT', undefined, small());
+        if (completed.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen)
+          throw Error('PostgreSQL 导出读取未完成');
+      });
+    } finally { this.active.delete(key); }
   }
 
   /** 预览只签发服务端构建的语句，不执行写入或读取渲染器提供的SQL。 */
   preview(input: Scoped<PostgresTablePreviewInput>): PostgresTablePreview {
     if (this.active.has(this.key(input))) throw Error('当前PostgreSQL表页仍有在途操作');
-    const snapshot = this.snapshot(input), relation = snapshot.relation;
+    const snapshot = this.snapshot(input, true), relation = snapshot.relation;
     const counts = { insert: 0, update: 0, delete: 0 };
     const writes: Write[] = input.changes.map(change => {
       if (!relation.capabilities[change.kind]) throw Error('此PostgreSQL关系不支持该记录操作');
@@ -229,7 +265,7 @@ export class PostgresTableWorkspace {
   async apply(input: Scoped<PostgresTableApplyInput>, connect: Connect): Promise<PostgresTableOutcome> {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
-    const snapshot = this.snapshot(input), preview = snapshot.preview;
+    const snapshot = this.snapshot(input, true), preview = snapshot.preview;
     if (!preview || preview.token !== input.previewToken || preview.expires <= Date.now()) throw Error('PostgreSQL提交预览已失效');
     this.snapshots.delete(key);
     this.active.add(key);
@@ -309,5 +345,21 @@ export class PostgresTableWorkspace {
   /** 断开或修改传输配置后撤销该连接的全部待提交预览。 */
   clear(connectionId: string): void {
     for (const [key, snapshot] of this.snapshots) if (snapshot.scope.connectionId === connectionId) this.snapshots.delete(key);
+  }
+}
+
+/** 每次读取有界行批，消费完才取下一批，任何截断都使整份文件失败。 */
+async function* readExportCursor(connection: PostgresConnection, columns: PostgresTableColumn[], check: () => void) {
+  for (;;) {
+    check();
+    const batch = await connection.query('FETCH FORWARD 64 FROM dbark_table_export', undefined, { rows: 64, bytes: 64 * 1024 * 1024 });
+    if (batch.postgresCommand !== 'FETCH' || batch.truncated || batch.affectedRows !== batch.rows.length ||
+        batch.columns.length !== columns.length || batch.columns.some((column, i) => column.name !== columns[i].name))
+      throw Error('PostgreSQL 导出批次不完整或超过大小预算');
+    for (const row of batch.rows) {
+      check();
+      yield batch.columns.map(column => row[column.key]);
+    }
+    if (batch.rows.length < 64) return;
   }
 }

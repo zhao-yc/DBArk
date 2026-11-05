@@ -10,6 +10,8 @@ import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
 import { ResultsGrid } from './ResultsGrid';
+import { PostgresTableExportDialog } from './PostgresTableExportDialog';
+import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -82,6 +84,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const limit = useWorkspace(state => state.settings.pageSize);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
+  const [exportPage, setExportPage] = useState<PostgresTablePage>();
   const [row, setRow] = useState<number | null>(null);
   const [draft, setDraft] = useState<PostgresTableChange[]>([]);
   const [form, setForm] = useState<{ row: number | null }>();
@@ -121,10 +124,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   async function read(next: PageOptions, isCurrent: () => boolean) {
     const result = await invoke('postgres.table.page', { ...target, ...next });
     if (!isCurrent()) {
-      if (result.pageToken) await invoke('postgres.table.release', { ...target, pageToken: result.pageToken }).catch(() => {});
+      const token = result.exportToken ?? result.pageToken;
+      if (token) await invoke('postgres.table.release', { ...target, pageToken: token }).catch(() => {});
       return;
     }
-    issued.current = result.pageToken;
+    issued.current = result.exportToken ?? result.pageToken;
     setPage(result);
     setOptions(next);
     setPageSize(next.limit);
@@ -205,7 +209,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     });
   }
 
-  const blocked = busy || !!form || !!preview;
+  const blocked = busy || !!form || !!preview || !!exportPage;
   const frozenPage = blocked || draft.length > 0;
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
   const firstPage = { ...options, offset: 0, limit: pageSize };
@@ -216,6 +220,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     <div className="query-toolbar pg-table-toolbar">
       <button disabled={frozenPage} onClick={() => navigate({ ...options, limit: pageSize })}>{text.refresh}</button>
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
+      <button disabled={frozenPage || requiresRefresh || !page?.exportToken}
+        onClick={() => setExportPage(page)}>{postgresTableExportZh.open}</button>
       <button disabled={busy} onClick={() => useWorkspace.getState().openTab({
         kind: 'query', title: tab.title, connectionId: target.connectionId, database: target.database, sql: postgresRelationSelect(target.table),
       })}>{text.query}</button>
@@ -269,6 +275,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         <button disabled={blocked} onClick={() => setChanges(draft.filter((_, other) => index !== other))}>{text.undo}</button>
       </li>)}</ol>
     </div>}
+    {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={!!options.filter?.text}
+      isCurrent={() => !!lifetime.current && !!exportPage.exportToken && issued.current === exportPage.exportToken &&
+        !useWorkspace.getState().dirtyTabs[tab.id]} onClose={() => setExportPage(undefined)}/>}
     {form && page && <RecordForm page={page} row={form.row}
       initial={draft.find((change): change is Editable => change.kind === 'update' && change.row === form.row)}
       onSave={stage} onClose={() => setForm(undefined)}/>}

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { DataRow, ResultColumn } from './contracts';
+import { csvExportDelimiters } from './csvExport';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -53,6 +54,23 @@ export const postgresTablePreviewSchema = target.extend({
 });
 export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
+const exportFormat = z.enum(['csv', 'json', 'xlsx']);
+/** 文件能力只由主进程签发，筛选和排序只从原服务端表页读取。 */
+export const postgresTableExportChooseSchema = z.object({
+  format: exportFormat, suggestedName: z.string().min(1).max(240).refine(value => !/[\/\\\u0000-\u001f]/.test(value)),
+}).strict();
+export const postgresTableExportSchema = target.extend({
+  exportToken: token, taskId: identity, fileToken: token, format: exportFormat,
+  encoding: z.enum(['utf8', 'utf16le', 'gb18030']),
+  columns: z.array(column).min(1).max(1022), csvDelimiter: z.enum(csvExportDelimiters).optional(),
+}).strict().superRefine((input, context) => {
+  if (new Set(input.columns).size !== input.columns.length) context.addIssue({ code: 'custom', message: '导出列不能重复' });
+  if (input.csvDelimiter !== undefined && input.format !== 'csv') context.addIssue({ code: 'custom', message: '只有 CSV 可指定分隔符' });
+  if (input.format === 'xlsx' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'XLSX 使用固定内部编码' });
+});
+export type PostgresTableExportInput = z.infer<typeof postgresTableExportSchema>;
+export type PostgresTableExportChooseInput = z.infer<typeof postgresTableExportChooseSchema>;
+export interface PostgresTableExportOutput { rows: number; fileCommitted: true }
 export type PostgresTableTarget = z.infer<typeof target>;
 export type PostgresTablePageInput = z.infer<typeof postgresTablePageSchema>;
 export type PostgresTableChange = z.infer<typeof change>;
@@ -69,6 +87,7 @@ export interface PostgresTableColumn extends ResultColumn {
 }
 export interface PostgresTablePage {
   pageToken?: string;
+  exportToken?: string;
   columns: PostgresTableColumn[];
   rows: DataRow[];
   capabilities: { insert: boolean; update: boolean; delete: boolean };
