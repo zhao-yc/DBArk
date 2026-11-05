@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { DataRow } from '../../shared/contracts';
 import type { ColumnWidths } from 'react-data-grid';
 import type { TablePreferences } from '../../shared/tablePreferences';
 import { exactTableLayoutProjection, postgresLayoutSchemas, type PostgresLayoutTarget } from '../../shared/sqliteTableLayout';
@@ -21,6 +20,9 @@ import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
 import { PostgresTableCellFilterMenu } from './PostgresTableCellFilterMenu';
 import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
 import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
+import { PostgresRecordForm } from './PostgresRecordFields';
+import { PostgresTableRecordView, type PostgresRecordMove } from './PostgresTableRecordView';
+import { postgresRecordViewZh as recordText } from '../locales/postgresRecordView.zh-CN';
 import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import { PostgresTableFindPanel, type PostgresFindRequest } from './PostgresTableFindPanel';
@@ -46,72 +48,10 @@ import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
 type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 'sort'>;
-type Editable = Extract<PostgresTableChange, { kind: 'insert' | 'update' }>;
 type DraftEntry = { change: PostgresTableChange & { pageToken: string }; rowKey?: string; offset: number };
-type Mode = PostgresTableField['value']['mode'] | 'unchanged';
 interface InlineEdit {
   scope: object; cell: QueryResultCopyCell; column: PostgresTableColumn; rowKey: string;
   anchor: HTMLElement; originalText: string; initial: PostgresInlineCellValue; typed?: string;
-}
-
-/** 表单只产生字段和值，明确区分保留原值、空串、NULL及DEFAULT。 */
-function RecordForm({ page, row, initial, onSave, onClose }: {
-  page: PostgresTablePage; row: number | null; initial?: Editable; onSave(change: Editable): void; onClose(): void;
-}) {
-  const [fields, setFields] = useState(() => new Map(initial?.fields.map(field => [field.column, field.value])));
-  const [error, setError] = useState('');
-  const original: DataRow | undefined = row === null ? undefined : page.rows[row];
-
-  /** 切换模式时从原值初始化，数据库生成列没有可编辑入口。 */
-  function changeMode(key: string, mode: Mode) {
-    setFields(previous => {
-      const result = new Map(previous);
-      if (mode === 'unchanged') result.delete(key);
-      else if (mode === 'null' || mode === 'default') result.set(key, { mode });
-      else {
-        const old = original?.[key];
-        const initial = old === null || old === undefined ? '' : cellText(old);
-        result.set(key, { mode, value: mode === 'binary' ? (initial.startsWith('0x') ? initial.slice(2) : '') : initial });
-      }
-      return result;
-    });
-  }
-
-  /** 表单保存只更新内存草稿。 */
-  function submit() {
-    const list = Array.from(fields, ([column, value]) => ({ column, value }));
-    if (row !== null && !list.length) { setError(text.noChange); return; }
-    try { onSave(row === null ? { kind: 'insert', fields: list } : { kind: 'update', row, fields: list }); }
-    catch (reason) { setError(errorMessage(reason)); }
-  }
-
-  return <Modal title={row === null ? text.add : text.edit} onClose={onClose} wide>
-    <div className="modal-content pg-record-form">
-      {page.columns.map(column => {
-        const value = fields.get(column.key);
-        return <div className="pg-record-field" key={column.key}>
-          <strong>{column.name} <small className="muted">{column.type}</small></strong>
-          {original && <div className="muted">{text.original}　{cellPreview(original[column.key])}</div>}
-          {column.generated ? <span className="muted">{text.generated}</span> : <div className="pg-record-inputs">
-            <select aria-label={column.name + ' ' + text.valueMode} value={value?.mode ?? 'unchanged'} onChange={event => changeMode(column.key, event.target.value as Mode)}>
-              <option value="unchanged">{row === null ? text.default : text.unchanged}</option>
-              <option value="text">{text.text}</option>
-              {column.binary && <option value="binary">{text.hex}</option>}
-              {column.nullable && <option value="null">{text.null}</option>}
-              {row !== null && <option value="default">{text.default}</option>}
-            </select>
-            {value && 'value' in value && <textarea aria-label={column.name + ' ' + text.value} value={value.value}
-              maxLength={postgresTableLimits.value} rows={2} onChange={event => {
-                const next = event.target.value;
-                setFields(previous => new Map(previous).set(column.key, { ...value, value: next }));
-              }}/>}
-          </div>}
-        </div>;
-      })}
-      <ErrorBox message={error}/>
-    </div>
-    <footer className="modal-footer"><button onClick={onClose}>{text.cancel}</button><button className="primary" onClick={submit}>{text.stage}</button></footer>
-  </Modal>;
 }
 
 /** 浏览、选择、草稿及回执归属于同一标签及原页，隐藏标签保留本地工作。 */
@@ -124,6 +64,10 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [exportPage, setExportPage] = useState<PostgresTablePage>();
   const [importPage, setImportPage] = useState<PostgresTablePage>();
   const [row, setRow] = useState<number | null>(null);
+  const [recordView, setRecordView] = useState(false);
+  const [recordInputDirty, setRecordInputDirty] = useState(false);
+  const recordInput = useRef<{ page: PostgresTablePage; row: number }>(undefined);
+  const [gridReturn, setGridReturn] = useState<{ page: PostgresTablePage; position: GridFindTarget }>();
   const [draft, setDraft] = useState<DraftEntry[]>([]);
   const draftRef = useRef(draft);
   const [pasteScope, setPasteScope] = useState<object>();
@@ -175,7 +119,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     reset: input => invoke('postgres.table.layout.reset', input), acquire: () => acquireWorkspaceBusy(tab.id),
     changed: view => {
       setLayoutView(view);
-      const state = useWorkspace.getState(), dirty = recordDirty.current || !!inlineOwner.current || view.dirty;
+      const state = useWorkspace.getState(), dirty = recordDirty.current || !!inlineOwner.current || !!recordInput.current || view.dirty;
       if (!!state.dirtyTabs[tab.id] !== dirty) state.setDirty(tab.id, dirty);
     },
   }, postgresLayoutSchemas, layoutText));
@@ -199,13 +143,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   /** 只发布完整回包，旧组件迟到的原页能力显式释放。 */
-  async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = [], checkFilterColumns = false, presetLayout?: TablePreferences) {
+  async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = [], checkFilterColumns = false, presetLayout?: TablePreferences, recordEdge?: 'last') {
     const result = await invoke('postgres.table.page', { ...target, ...next,
       ...(retainPageTokens.length ? { retainPageTokens } : {}), ...(checkFilterColumns ? { checkFilterColumns: true } : {}) });
-    return publishPage(result, next, isCurrent, presetLayout);
+    return publishPage(result, next, isCurrent, presetLayout, recordEdge);
   }
 
-  async function publishPage(result: PostgresTablePage, next: PageOptions, isCurrent: () => boolean, presetLayout?: TablePreferences) {
+  async function publishPage(result: PostgresTablePage, next: PageOptions, isCurrent: () => boolean, presetLayout?: TablePreferences, recordEdge?: 'last') {
     if (!isCurrent()) {
       const token = result.exportToken ?? result.pageToken;
       if (token) await invoke('postgres.table.release', { ...target, pageToken: token }).catch(() => {});
@@ -217,7 +161,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     setPageConnectionVersion(connectionVersion);
     setOptions(next);
     setPageSize(next.limit);
-    setRow(null);
+    // 表单翻页使用明确的首末位置；同页刷新优先复选仍在该页的主键。
+    const selectedKey = row !== null && next.offset === options.offset ? page?.rowKeys?.[row] : undefined;
+    const retainedRow = selectedKey ? result.rowKeys?.indexOf(selectedKey) ?? -1 : -1;
+    setRow(recordView && result.rows.length ? recordEdge === 'last' ? result.rows.length - 1 : Math.max(0, retainedRow) : null);
+    setGridReturn(undefined);
     setRequiresRefresh(false);
     if (!result.columns.some(column => column.name === filterColumn)) setFilterColumn(result.columns[0]?.name ?? '');
     return true;
@@ -256,10 +204,10 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   useEffect(() => { layout.sync(); });
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
-  function navigate(next: PageOptions, keepDraft = false) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || inlineOwner.current || pasteOwner.current || lease.current) return;
+  function navigate(next: PageOptions, keepDraft = false, recordEdge?: 'last') {
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
-    void run(isCurrent => read(next, isCurrent, [...new Set(draft.map(entry => entry.change.pageToken))]));
+    void run(isCurrent => read(next, isCurrent, [...new Set(draft.map(entry => entry.change.pageToken))], false, undefined, recordEdge));
   }
 
   /** 更新草稿及标签退出保护。 */
@@ -267,7 +215,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     draftRef.current = next;
     setDraft(next);
     recordDirty.current = next.length > 0;
-    useWorkspace.getState().setDirty(tab.id, recordDirty.current || !!inlineOwner.current || layout.view.dirty);
+    useWorkspace.getState().setDirty(tab.id, recordDirty.current || !!inlineOwner.current || !!recordInput.current || layout.view.dirty);
   }
 
   /** 单格和矩形共用一次整批校验，重编同一主键时继续使用首次暂存的原行版本。 */
@@ -296,7 +244,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh || inlineOwner.current || pasteOwner.current) return;
+    if (!pageToken || !draft.length || requiresRefresh || inlineOwner.current || pasteOwner.current || recordInput.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -328,7 +276,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   const layoutOpen = layoutDialog === layoutKey;
-  const blocked = busy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
+  const modalBlocked = busy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
+  const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
@@ -402,8 +351,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     } catch { /* 原值失效时保留当前条件。 */ }
   }
 
-  const canEditGrid = active && writable && !!page?.capabilities.update && pageConnectionVersion === connectionVersion;
-  const canFind = active && !!page?.exportToken && !blocked && !requiresRefresh && pageConnectionVersion === connectionVersion;
+  const canEditGrid = !recordView && active && writable && !!page?.capabilities.update && pageConnectionVersion === connectionVersion;
+  const canFind = !recordView && active && !!page?.exportToken && !blocked && !requiresRefresh && pageConnectionVersion === connectionVersion;
   const findScope = useMemo(() => ({}), [cellScope, draft]);
   const latestFindScope = useRef(findScope);
   latestFindScope.current = findScope;
@@ -555,6 +504,72 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
   const formKey = form?.row == null ? undefined : page?.rowKeys?.[form.row];
   const stagedChange = formKey ? draft.find(entry => entry.rowKey === formKey)?.change : undefined;
+  const viewKey = row === null ? undefined : page?.rowKeys?.[row];
+  const viewDraft = viewKey ? draft.find(entry => entry.rowKey === viewKey)?.change : undefined;
+
+  function recordViewCurrent(): boolean {
+    return !!(recordView && page?.exportToken && issued.current === page.exportToken && !modalBlocked && !requiresRefresh &&
+      layoutScope.current.current() && !lease.current && !inlineOwner.current && !pasteOwner.current &&
+      !document.querySelector('[role="dialog"], [role="alertdialog"]'));
+  }
+
+  const recordEditable = active && recordView && !modalBlocked && !requiresRefresh && pageConnectionVersion === connectionVersion &&
+    !!page?.capabilities.update && !!page.pageToken && !!viewKey && viewDraft?.kind !== 'delete';
+  const recordIndex = row ?? -1, recordCount = page?.rows.length ?? 0;
+  const canMoveRecord = active && recordView && !pagingBlocked && !requiresRefresh && recordIndex >= 0 && recordIndex < recordCount;
+  const moves: Record<PostgresRecordMove, boolean> = {
+    first: canMoveRecord && recordIndex > 0,
+    last: canMoveRecord && recordIndex < recordCount - 1,
+    previous: canMoveRecord && (recordIndex > 0 || options.offset > 0),
+    next: canMoveRecord && (recordIndex < recordCount - 1 || !!page?.hasNext && options.offset + options.limit <= postgresTableLimits.offset),
+  };
+
+  /** 跨页延用当前筛选、排序和原草稿页；到达相邻页时选中对应边界记录。 */
+  function moveRecord(move: PostgresRecordMove) {
+    if (!moves[move] || !recordViewCurrent() || recordInput.current || !page || row === null) return;
+    const last = page.rows.length - 1;
+    if (move === 'first' || move === 'last') { setRow(move === 'first' ? 0 : last); return; }
+    if (move === 'next' && row === last) navigate({ ...options, offset: options.offset + options.limit }, true);
+    else if (move === 'previous' && row === 0) navigate({ ...options, offset: Math.max(0, options.offset - options.limit) }, true, 'last');
+    else setRow(row + (move === 'next' ? 1 : -1));
+  }
+
+  /** 未暂存输入属于准确页和行，保持标签退出确认及所有写操作的同步屏障。 */
+  function changeRecordInput(index: number, dirty: boolean) {
+    if (dirty) {
+      if (!recordEditable || !recordViewCurrent() || !page || row !== index || !page.rows[index]) throw Error(recordText.expired);
+      recordInput.current = { page, row: index };
+    } else {
+      if (recordInput.current && (recordInput.current.page !== page || recordInput.current.row !== index)) return;
+      recordInput.current = undefined;
+    }
+    setRecordInputDirty(dirty);
+    useWorkspace.getState().setDirty(tab.id, dirty || recordDirty.current || layout.view.dirty);
+  }
+
+  function stageRecordView(index: number, fields: PostgresTableField[]) {
+    const owner = recordInput.current;
+    if (!recordEditable || !recordViewCurrent() || !owner || owner.page !== page || owner.row !== index || row !== index ||
+      !viewKey || draftRef.current !== draft) throw Error(recordText.expired);
+    if (fields.length) {
+      if (!stageChanges([{ kind: 'update', row: index, fields }])) throw Error(recordText.expired);
+    } else setChanges(draft.filter(entry => entry.rowKey !== viewKey));
+    setMessage('');
+    setError('');
+  }
+
+  function switchRecordView(next: boolean) {
+    if (!active || blocked || recordInput.current || lease.current || !page || next === recordView) return;
+    closeCellMenu(cellMenuOwner.current, false);
+    setFindRequest(undefined);
+    if (next) setRow(row !== null && page.rows[row] ? row : page.rows.length ? 0 : null);
+    else if (row !== null && gridLayout.columns.length) {
+      const previous = findAnchor.current?.scope === cellScope ? findAnchor.current.value?.key : undefined;
+      setGridReturn({ page, position: { row, key: previous ?? gridLayout.columns[0].key } });
+    }
+    setRecordView(next);
+  }
+
   return <div className="workspace-tab postgres-table-tab" aria-label={text.relation}>
     <div className="context-bar"><strong>{tab.title}</strong><span>PostgreSQL / {target.database}</span></div>
     <div className="query-toolbar pg-table-toolbar">
@@ -577,7 +592,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         pasteOwner.current = cellScope;
         setPasteScope(cellScope);
       }}>{pasteText.append}</button>
-      <button disabled={!writable || !page?.capabilities.update || row === null} onClick={() => setForm({ row })}>{text.edit}</button>
+      {!recordView && <button disabled={!writable || !page?.capabilities.update || row === null} onClick={() => setForm({ row })}>{text.edit}</button>}
       <button disabled={!writable || !page?.capabilities.delete || row === null} onClick={() => {
         if (row === null) return;
         try { stage({ kind: 'delete', row }); } catch (reason) { setError(errorMessage(reason)); }
@@ -614,6 +629,10 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <button disabled={blocked || !layoutView.ready || layoutView.pending || !layoutScope.current.current()} onClick={() => {
         setLayoutError(''); setLayoutDialog(layoutKey);
       }}>{layoutText.entry}</button>
+      <div className="pg-view-switch" role="group" aria-label={recordText.title}>
+        <button type="button" disabled={!page || blocked} aria-pressed={!recordView} onClick={() => switchRecordView(false)}>{recordText.grid}</button>
+        <button type="button" disabled={!page || blocked} aria-pressed={recordView} onClick={() => switchRecordView(true)}>{recordText.view}</button>
+      </div>
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
       initial={appliedAdvanced} seed={cellFilterSeed} onSeedAdded={() => setCellFilterSeed(undefined)}
@@ -633,7 +652,10 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
     <div className="pg-table-grid" inert={!!inlineEdit}>
-      {page ? <PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
+      {page && recordView && <PostgresTableRecordView page={page} row={row} offset={options.offset} visible={gridLayout.columns}
+        draft={viewDraft?.kind === 'update' || viewDraft?.kind === 'delete' ? viewDraft : undefined}
+        editable={recordEditable} moves={moves} onMove={moveRecord} onDirty={changeRecordInput} onStage={stageRecordView}/>}
+      {page ? <div className="pg-record-grid-host" hidden={recordView}><PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
         rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent}
         anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
         onOpen={openFind} onClose={() => setFindRequest(undefined)} onStage={stageFind}
@@ -642,8 +664,10 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
           return postgresFindPlan(page, findRows, gridLayout.columns, hits, replacement,
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
-        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
-        findTarget={findTarget} findMarks={findMarks} onGridAnchor={value => { findAnchor.current = { scope: cellScope, value }; }}
+        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump
+        onActiveRowIndexChange={recordView ? undefined : setRow}
+        findTarget={findTarget} findMarks={findMarks} navigateTo={gridReturn?.page === page ? gridReturn.position : undefined}
+        onGridAnchor={value => { findAnchor.current = { scope: cellScope, value }; if (gridReturn) setGridReturn(undefined); }}
         onCellFilterMenu={cellMenuEnabled ? openCellMenu : undefined}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
         onCellPaste={(cell, data) => {
@@ -659,7 +683,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
             }));
             navigate({ ...firstPage, sort: validateTableSort(rules, columnNames) });
           } catch (reason) { setError(errorMessage(reason)); }
-        }}/>}/> : <Empty title={text.empty}/>}
+        }}/>}/></div> : <Empty title={text.empty}/>}
     </div>
     {cellMenu && cellMenuEnabled && cellMenu.scope === cellScope &&
       <PostgresTableCellFilterMenu anchor={cellMenu.anchor} column={cellMenu.seed.column}
@@ -719,7 +743,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         setImportPage(undefined); setRequiresRefresh(true); setMessage(outcome);
         if (committed) void run(isCurrent => read(options, isCurrent));
       }}/>}
-    {form && page && <RecordForm page={page} row={form.row}
+    {form && page && <PostgresRecordForm page={page} row={form.row}
       initial={stagedChange?.kind === 'update' ? stagedChange : undefined}
       onSave={stage} onClose={() => setForm(undefined)}/>}
     {preview && <Modal title={text.preview} onClose={() => { if (!busy) setPreview(undefined); }} wide>

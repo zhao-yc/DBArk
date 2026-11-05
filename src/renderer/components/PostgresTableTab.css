@@ -34,6 +34,20 @@
 .postgres-table-tab .table-preferences-display-controls input[type="search"] { width: min(200px, 55vw); }
 .pg-table-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pg-table-grid .results-grid { flex: 1; }
+.pg-view-switch { display: inline-flex; gap: 4px; }
+.pg-view-switch button[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent); }
+.pg-record-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pg-record-grid-host { display: contents; }
+.pg-record-grid-host[hidden] { display: none; }
+.pg-record-nav input[type="search"] { width: min(160px, 45vw); }
+.pg-record-body { display: flex; flex: 1; min-height: 0; }
+.pg-record-body > nav { width: min(200px, 30%); flex-shrink: 0; overflow: auto; padding: 8px; border-right: 1px solid var(--line-soft); }
+.pg-record-body > nav button { display: block; width: 100%; text-align: left; overflow-wrap: anywhere; margin-bottom: 4px; }
+.pg-record-content { flex: 1; min-width: 0; overflow: auto; padding: 0 12px 12px; }
+.pg-record-view .pg-record-inputs select { width: min(170px, 45%); }
+.pg-record-original { overflow-wrap: anywhere; }
+.pg-record-original button { margin-left: 8px; }
+.pg-record-pending { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; background: var(--surface); }
 .pg-find-host { display: contents; }
 .pg-table-find { flex: none; max-height: 50%; overflow: auto; border-bottom: 1px solid var(--line-soft); }
 .pg-table-find:has(.pg-find-review) { max-height: min(65%, 420px); }

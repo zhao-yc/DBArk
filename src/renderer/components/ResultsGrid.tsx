@@ -33,7 +33,7 @@ export interface GridCellMenuAnchor { x: number; y: number; element: HTMLElement
 export interface GridFindTarget { row: number; key: string; }
 
 /** 任意查询结果只读；支持单格或勾选记录复制，始终保留原始值用于剪贴板。 */
-export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, onCellFilterMenu, onCellEdit, onCellPaste, findTarget, findMarks, onGridAnchor }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; onCellFilterMenu?(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer): void; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; onGridAnchor?(anchor: GridFindTarget | undefined): void }) {
+export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, onCellFilterMenu, onCellEdit, onCellPaste, findTarget, findMarks, navigateTo, onGridAnchor }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; onCellFilterMenu?(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean; onCellPaste?(cell: QueryResultCopyCell, data: DataTransfer): void; findTarget?: GridFindTarget; findMarks?: ReadonlySet<string>; navigateTo?: GridFindTarget; onGridAnchor?(anchor: GridFindTarget | undefined): void }) {
   const height = readGridRowHeight(rowHeight);
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
@@ -66,13 +66,14 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   }
   const gridRef = useRef<DataGridHandle | null>(null);
   useLayoutEffect(() => {
-    if (!findTarget || !gridRef.current?.element?.isConnected || !actionCurrent()) return;
-    const column = columns.findIndex(item => item.key === findTarget.key);
-    if (column < 0 || findTarget.row < -1 || findTarget.row >= rows.length) return;
-    const position = { rowIdx: findTarget.row, idx: column + (onActiveRowChange ? 0 : 1) };
-    gridRef.current.scrollToCell(findTarget.row < 0 ? { idx: position.idx } : position);
+    const target = findTarget ?? navigateTo;
+    if (!target || !gridRef.current?.element?.isConnected || !actionCurrent()) return;
+    const column = columns.findIndex(item => item.key === target.key);
+    if (column < 0 || target.row < -1 || target.row >= rows.length) return;
+    const position = { rowIdx: target.row, idx: column + (onActiveRowChange ? 0 : 1) };
+    gridRef.current.scrollToCell(target.row < 0 ? { idx: position.idx } : position);
     gridRef.current.setActivePosition(position, { enableEditor: false, shouldFocus: false });
-  }, [findTarget, columns, rows]);
+  }, [findTarget, navigateTo, columns, rows]);
   const [findHit, setFindHit] = useState<{ scope: typeof scope; hit: QueryResultFindHit }>();
   const activeHit = findHit?.scope === scope && findHit.hit.scan.current() && actionCurrent() ? findHit.hit.match : undefined;
   const [selection, setSelection] = useState<{ scope: typeof scope; indices: ReadonlySet<number> }>();
