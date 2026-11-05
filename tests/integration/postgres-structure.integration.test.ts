@@ -129,6 +129,39 @@ describe.skipIf(!enabled)('PostgreSQL 实库结构快照', () => {
       expect(altered.columns.find(column => column.name === '扩"展')?.comment).toBe('附加字段');
       expect((await client.query(`SELECT "现注记", "扩""展" FROM ${target}`)).rows).toEqual([{ 现注记: '原注记', '扩"展': "原值'; --" }]);
       expect(altered.indexes.find(index => index.name === 'partial_note')?.definition).toContain('现注记');
+      // 外部依赖阻止删除，先前已经执行的类型、默认值和注释改动也全部回滚。
+      await client.query(`CREATE VIEW "结构.甲".dependent_field AS SELECT "扩""展" FROM ${target}`);
+      await client.query(`CREATE INDEX removable_idx ON ${target} ("扩""展")`);
+      const beforeChanges = await structure(target);
+      const modify: PostgresColumnChange[] = [
+        { kind: 'type', from: '现注记', dataType: { type: 'varchar', length: 40 } },
+        { kind: 'nullable', from: '现注记', nullable: false },
+        { kind: 'default', from: '现注记', value: "新'默认" },
+        { kind: 'comment', from: '现注记', value: '新注释' },
+        { kind: 'drop', from: '扩"展' },
+      ];
+      const blocked = await preview(modify, beforeChanges.editStamp);
+      expect(blocked.statements[0]).toContain('TYPE varchar(40) COLLATE pg_catalog."C"');
+      expect(blocked.statements.at(-1)).toContain('DROP COLUMN "扩""展" RESTRICT');
+      expect(await apply(blocked.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('depend') });
+      expect((await structure(target)).editStamp).toBe(beforeChanges.editStamp);
+      expect((await client.query('SELECT * FROM "结构.甲".dependent_field')).rows).toEqual([{ '扩"展': "原值'; --" }]);
+      await client.query('DROP VIEW "结构.甲".dependent_field');
+      expect((await apply((await preview(modify, (await structure(target)).editStamp)).token)).outcome).toBe('committed');
+      const modified = await structure(target);
+      expect(modified.columns.find(column => column.name === '现注记')).toMatchObject({ position: 3, nullable: false,
+        type: 'character varying(40)', collation: 'pg_catalog."C"', comment: '新注释' });
+      expect(modified.columns.some(column => column.name === '扩"展')).toBe(false);
+      expect(modified.indexes.map(index => index.name)).toContain('partial_note');
+      expect(modified.indexes.map(index => index.name)).not.toContain('removable_idx');
+      expect((await client.query(`SELECT "现注记" FROM ${target}`)).rows).toEqual([{ 现注记: '原注记' }]);
+      expect((await client.query(`INSERT INTO ${target} (amount) VALUES (2) RETURNING "现注记"`)).rows).toEqual([{ 现注记: "新'默认" }]);
+      const clear = await preview([{ kind: 'default', from: '现注记', value: null },
+        { kind: 'nullable', from: '现注记', nullable: true }, { kind: 'comment', from: '现注记', value: null }], modified.editStamp);
+      expect((await apply(clear.token)).outcome).toBe('committed');
+      expect((await structure(target)).columns.find(column => column.name === '现注记')).toMatchObject({
+        nullable: true, defaultExpression: null, comment: null });
+      expect((await client.query(`INSERT INTO ${target} (amount) VALUES (3) RETURNING "现注记"`)).rows).toEqual([{ 现注记: null }]);
       const replacement = '"结构.甲"."同名替换"';
       await client.query(`CREATE TABLE ${replacement} (id int)`);
       const beforeReplacement = await structure(replacement);

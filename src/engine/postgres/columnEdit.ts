@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { postgresColumnPlan, type PostgresColumnApplyInput, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
+import { matchesPostgresColumnPlan, postgresColumnPlan, type PostgresColumnApplyInput, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
 import type { PostgresCreateTableOutcome, PostgresCreateTablePreview } from '../../shared/postgresCreateTable';
 import type { PostgresStructureInput } from '../../shared/postgresStructure';
 import { startPostgresDdl, validatePostgresDefaults } from './createTable';
@@ -91,8 +91,7 @@ export class PostgresColumnWorkspace {
         if (result.postgresCommand !== (sql.startsWith('ALTER ') ? 'ALTER' : 'COMMENT')) throw Error('字段结构回执不符');
       }
       const final = await readPostgresStructureFacts(connection, input.table);
-      if (final.oid !== original.oid || final.output.columns.length !== plan.columns.length || final.output.columns.some((field, i) =>
-        field.name !== plan.columns[i].name || plan.columns[i].position !== undefined && field.position !== plan.columns[i].position))
+      if (final.oid !== original.oid || !matchesPostgresColumnPlan(final.output.columns, plan.columns))
         throw Error('实际字段与预览不一致');
       committing = true;
       const result = await connection.query('COMMIT', undefined, budget());

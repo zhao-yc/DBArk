@@ -31,4 +31,21 @@ describe('PostgreSQL 已有表字段修改', () => {
     expect(() => postgresColumnPlan(source, { ...target, changes: [{ kind: 'rename', from: 'other', name: 'new' }] })).toThrow('原字段不存在');
     expect(() => postgresColumnPlan(source, { ...target, changes: [{ kind: 'rename', from: 'old', name: 'old' }] })).toThrow('名称已存在');
   });
+
+  it('按当前名称和类型编译修改，删除后仍核对原列的序号', () => {
+    const plan = postgresColumnPlan({ ...source, columns: [...source.columns, { ...source.columns[0], name: 'other', position: 8 }] },
+      { ...target, changes: [{ kind: 'rename', from: 'other', name: 'other"name' },
+        { kind: 'type', from: 'other"name', dataType: { type: 'varchar', length: 2 } },
+        { kind: 'default', from: 'other"name', value: "字'" }, { kind: 'drop', from: 'old' }] });
+    expect(plan.statements[2]).toContain(`"other""name" SET DEFAULT E'字'''`);
+    expect(plan.statements[3]).toContain('DROP COLUMN "old" RESTRICT');
+    expect(plan.columns).toEqual([{ name: 'other"name', position: 8, expected: { type: 'character varying(2)', hasDefault: true } }]);
+    expect(() => postgresColumnPlan(source, { ...target, changes: [
+      { kind: 'type', from: 'old', dataType: { type: 'varchar', length: 1 } },
+      { kind: 'default', from: 'old', value: '两字' },
+    ] })).toThrow('默认值超过字段长度');
+    expect(() => postgresColumnPlan(source, { ...target, changes: [
+      { kind: 'drop', from: 'old' }, { kind: 'comment', from: 'old', value: null },
+    ] })).toThrow('原字段不存在');
+  });
 });

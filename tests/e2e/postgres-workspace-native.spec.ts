@@ -456,6 +456,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await fieldEdit.getByLabel(postgresColumnEditZh.from, { exact: true }).selectOption('字段草稿');
     await fieldEdit.getByLabel(postgresColumnEditZh.name, { exact: true }).fill('字段确认');
     await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
+    await fieldEdit.getByLabel(postgresColumnEditZh.operation, { exact: true }).selectOption('add');
+    await fieldEdit.getByLabel(postgresColumnEditZh.name, { exact: true }).fill('可删除');
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
     await fieldEdit.getByRole('button', { name: postgresColumnEditZh.preview, exact: true }).click();
     await expect(fieldEdit.getByLabel(postgresColumnEditZh.previewTitle)).toContainText('RENAME COLUMN "字段草稿" TO "字段确认"');
     await expect(gridTab.getByRole('columnheader', { name: '字段确认', exact: true })).toHaveCount(0);
@@ -465,7 +468,38 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(structure.getByRole('table')).toContainText('结构编辑确认');
     await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
     await expect(gridTab.getByRole('columnheader').filter({ hasText: '字段确认' })).toBeVisible();
+    await expect(gridTab.getByRole('columnheader', { name: '可删除 text', exact: true })).toBeVisible();
     await mark('字段新增与重命名按同批 SQL 确认，实际结构和原表页刷新到新字段');
+    // 已有字段修改与删除再次使用同一入口，删除须独立确认。
+    await tableButton(postgresStructureZh.open).click();
+    await structure.getByRole('button', { name: postgresColumnEditZh.open, exact: true }).click();
+    await fieldEdit.getByLabel(postgresColumnEditZh.operation, { exact: true }).selectOption('type');
+    await fieldEdit.getByLabel(postgresColumnEditZh.from, { exact: true }).selectOption('字段确认');
+    await fieldEdit.getByLabel(postgresColumnEditZh.type, { exact: true }).selectOption('varchar');
+    await fieldEdit.getByLabel(postgresColumnEditZh.length, { exact: true }).fill('16');
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
+    await fieldEdit.getByLabel(postgresColumnEditZh.operation, { exact: true }).selectOption('default');
+    await fieldEdit.getByLabel(postgresColumnEditZh.useDefault, { exact: true }).check();
+    await fieldEdit.getByLabel(postgresColumnEditZh.defaultValue, { exact: true }).fill('新默认值');
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
+    await fieldEdit.getByLabel(postgresColumnEditZh.operation, { exact: true }).selectOption('drop');
+    await fieldEdit.getByLabel(postgresColumnEditZh.from, { exact: true }).selectOption('可删除');
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.preview, exact: true }).click();
+    await expect(fieldEdit.getByLabel(postgresColumnEditZh.previewTitle)).toContainText('DROP COLUMN "可删除" RESTRICT');
+    const confirmColumnChanges = fieldEdit.getByRole('button', { name: postgresColumnEditZh.apply, exact: true });
+    await expect(confirmColumnChanges).toBeDisabled();
+    await fieldEdit.getByLabel(postgresColumnEditZh.confirmDrop, { exact: true }).check();
+    await expect(confirmColumnChanges).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('PostgreSQL已有字段修改与删除预览.png') });
+    await confirmColumnChanges.click();
+    await expect(structure.getByRole('table')).toContainText('character varying(16)');
+    await expect(structure.getByRole('table')).toContainText('新默认值');
+    await expect(structure.getByRole('table')).not.toContainText('可删除');
+    await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
+    await expect(gridTab.getByRole('columnheader', { name: '字段确认 character varying(16)', exact: true })).toBeVisible();
+    await expect(gridTab.getByRole('columnheader', { name: /^可删除(?:\s|$)/ })).toHaveCount(0);
+    await mark('已有字段类型和默认值更新后回读，删除独立确认，原表页已去除被删字段');
     await page.locator('.tab-strip .tab-close').click();
     await mark('数据库右键建表经过真实 SQL 预览和确认，新表目录自动刷新，实际结构可读');
     const offlineBefore = await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}),
