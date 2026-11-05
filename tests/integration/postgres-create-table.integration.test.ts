@@ -3,6 +3,7 @@ import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
+import type { PostgresIndexChange } from '../../src/shared/postgresIndexEdit';
 import { postgresStructureResultSchema } from '../../src/shared/postgresStructure';
 import type { PostgresCreateTableInput } from '../../src/shared/postgresCreateTable';
 
@@ -261,7 +262,39 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         await locking;
       }
 
-      await client.query(`CREATE UNIQUE INDEX 缓存唯一 ON ${snapshot} ("编号")`);
+      // 物化视图沿独立索引能力，创建、改名、删除与并发刷新资格必须一致。
+      const indexPreview = async (changes: PostgresIndexChange[], table = snapshot) => {
+        const original = await engine.handle('postgres.structure.read', { ...target, table });
+        expect(original.editStamp).toBeUndefined();
+        return engine.handle('postgres.indexEdit.preview', { ...target, table, changes, editStamp: original.indexEditStamp });
+      };
+      const indexApply = (token: string, table = snapshot) => engine.handle('postgres.indexEdit.apply', { ...target, table, token });
+      const uniqueKey: PostgresIndexChange = { kind: 'create', name: '缓存唯一', method: 'btree', unique: true,
+        keys: [{ column: '编号', direction: 'asc', nulls: 'default' }], include: [] };
+      const createKey = await indexPreview([uniqueKey]);
+      expect(createKey.statements[0]).toBe('ALTER MATERIALIZED VIEW ' + snapshot + ' SET SCHEMA "生成.甲"');
+      expect(createKey.statements[1]).toContain('CREATE UNIQUE INDEX "缓存唯一"');
+      expect((await readSnapshot()).materialized?.uniqueIndex).toBe(false);
+      expect(await indexApply(createKey.token)).toMatchObject({ outcome: 'committed' });
+      expect(await indexApply(createKey.token)).toMatchObject({ outcome: 'notSent' });
+      expect((await readSnapshot()).materialized?.uniqueIndex).toBe(true);
+      const indexOid = async (name: string) => (await client.query('SELECT to_regclass($1)::oid::text AS oid', [name])).rows[0].oid;
+      const createdOid = await indexOid('"生成.甲"."缓存唯一"');
+      expect(createdOid).toEqual(expect.any(String));
+      const staleIndex = await indexPreview([{ kind: 'rename', from: '缓存唯一', name: '已过期名称' }]);
+      await client.query('ALTER INDEX "生成.甲"."缓存唯一" RENAME TO "外部改名"');
+      expect(await indexApply(staleIndex.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('索引结构已变化') });
+      const renameIndex = await indexPreview([{ kind: 'rename', from: '外部改名', name: '窗口可刷新唯一' }]);
+      expect(await indexApply(renameIndex.token)).toMatchObject({ outcome: 'committed' });
+      expect(await indexOid('"生成.甲"."窗口可刷新唯一"')).toBe(createdOid);
+
+      const duplicate = '"生成.甲"."重复物化"';
+      await client.query(`CREATE MATERIALIZED VIEW ${duplicate} AS SELECT * FROM (VALUES (1), (1)) AS v("编号")`);
+      const rejectedBatch = await indexPreview([{ ...uniqueKey, name: '先创建', unique: false }, { ...uniqueKey, name: '后冲突' }], duplicate);
+      expect(await indexApply(rejectedBatch.token, duplicate)).toMatchObject({ outcome: 'rolledBack' });
+      expect(await indexOid('"生成.甲"."先创建"')).toBeNull();
+      expect(await indexOid('"生成.甲"."后冲突"')).toBeNull();
+
       await client.query(`UPDATE ${qualified} SET "代码" = '刷新后的值'`);
       const concurrent = await refresh('concurrent');
       expect(concurrent.statements.at(-1)).toBe('REFRESH MATERIALIZED VIEW CONCURRENTLY ' + snapshot + ' WITH DATA');
@@ -283,6 +316,10 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         const delegated = { ...target, connectionId: delegateId, profile: { ...profile, id: delegateId, user: maintainer }, table: snapshot };
         const delegateState = await engine.handle('postgres.structure.read', delegated);
         expect(delegateState.materialized?.stamp).toEqual(expect.any(String));
+        expect(delegateState.indexEditStamp).toBeUndefined();
+        await expect(engine.handle('postgres.indexEdit.preview', {
+          ...delegated, editStamp: (await readSnapshot()).indexEditStamp, changes: [uniqueKey],
+        })).rejects.toThrow('原结构已变化');
         const delegatedPreview = await engine.handle('postgres.materializedRefresh.preview',
           { ...delegated, stamp: delegateState.materialized.stamp, mode: 'data' });
         expect(await engine.handle('postgres.materializedRefresh.apply', { ...delegated, token: delegatedPreview.token }))
@@ -291,6 +328,12 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         await expect(engine.handle('postgres.structure.read', delegated)).rejects.toThrow('没有读取结构的权限');
       }
 
+      const dropIndex = await indexPreview([{ kind: 'drop', from: '窗口可刷新唯一' }]);
+      expect(dropIndex.statements.at(-1)).toBe('DROP INDEX "生成.甲"."窗口可刷新唯一" RESTRICT');
+      expect(await indexApply(dropIndex.token)).toMatchObject({ outcome: 'committed' });
+      expect(await indexOid('"生成.甲"."窗口可刷新唯一"')).toBeNull();
+      expect((await readSnapshot()).materialized?.uniqueIndex).toBe(false);
+      await expect(refresh('concurrent')).rejects.toThrow('并发刷新要求');
       const clear = await refresh('empty');
       expect(clear.statements.at(-1)).toBe('REFRESH MATERIALIZED VIEW ' + snapshot + ' WITH NO DATA');
       expect(await applyRefresh(clear.token)).toMatchObject({ outcome: 'committed' });

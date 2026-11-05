@@ -1515,13 +1515,22 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(structure).toContainText(refreshText.empty);
     await expect(structure.locator('.pg-structure-comment')).toContainText('窗口创建的物化视图');
     await expect(structure.getByRole('button', { name: refreshText.title, exact: true })).toBeEnabled();
-    await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
-    await page.locator('.tab-strip .tab-close').click();
     await mark('窗口创建未填充物化视图，实际结构、原注释、记录页提示和刷新入口一致');
-
-    await page.locator('.object-row .tree-label').filter({ hasText: '物化快照' }).click();
+    await structure.getByRole('button', { name: postgresStructureZh.sections.indexes, exact: true }).click();
+    await structure.getByRole('button', { name: indexText.open, exact: true }).click();
+    await indexEdit.getByLabel(indexText.name, { exact: true }).fill('窗口物化唯一');
+    await indexEdit.getByLabel(indexText.key(1), { exact: true }).selectOption('id');
+    await indexEdit.getByRole('checkbox', { name: indexText.unique, exact: true }).check();
+    await indexStage.click();
+    await indexPreview.click();
+    await expect(indexEdit.locator('pre')).toContainText('ALTER MATERIALIZED VIEW "回归"."窗口待填充物化" SET SCHEMA "回归"');
+    await expect(indexEdit.locator('pre')).toContainText('CREATE UNIQUE INDEX "窗口物化唯一"');
+    await page.screenshot({ path: info.outputPath('PostgreSQL物化视图索引.png') });
+    await indexApply.click();
+    await expect(structure.getByRole('table')).toContainText('窗口物化唯一');
     await expect(gridTab).toContainText(refreshText.empty);
-    await tableButton(postgresStructureZh.open).click();
+    await mark('在新建且未填充的物化视图中图形化创建真实唯一索引，目录回读成功');
+
     const closeMaterializedStructure = () => structure.locator('.modal-footer')
       .getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
     const openMaterializedRefresh = async () => {
@@ -1535,7 +1544,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     const firstRefresh = await openMaterializedRefresh();
     await expect(refreshMode(firstRefresh).locator('option[value="concurrent"]')).toHaveJSProperty('disabled', true);
     await prepareRefresh(firstRefresh);
-    await expect(firstRefresh.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW "回归"."物化快照" WITH DATA');
+    await expect(firstRefresh.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW "回归"."窗口待填充物化" WITH DATA');
     await confirmRefresh(firstRefresh);
     await expect(structure).toContainText(refreshText.populated);
     await closeMaterializedStructure();
@@ -1546,7 +1555,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     const concurrentRefresh = await openMaterializedRefresh();
     await refreshMode(concurrentRefresh).selectOption('concurrent');
     await prepareRefresh(concurrentRefresh);
-    await expect(concurrentRefresh.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW CONCURRENTLY "回归"."物化快照" WITH DATA');
+    await expect(concurrentRefresh.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW CONCURRENTLY "回归"."窗口待填充物化" WITH DATA');
     await page.screenshot({ path: info.outputPath('PostgreSQL刷新物化视图.png') });
     await confirmRefresh(concurrentRefresh);
     await expect(structure).toContainText(refreshText.populated);
@@ -1557,7 +1566,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     const clearMaterialized = await openMaterializedRefresh();
     await refreshMode(clearMaterialized).selectOption('empty');
     await prepareRefresh(clearMaterialized);
-    await expect(clearMaterialized.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW "回归"."物化快照" WITH NO DATA');
+    await expect(clearMaterialized.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW "回归"."窗口待填充物化" WITH NO DATA');
     const confirmEmpty = clearMaterialized.getByRole('button', { name: refreshText.confirmEmpty, exact: true });
     await expect(confirmEmpty).toBeDisabled();
     await clearMaterialized.getByRole('checkbox', { name: refreshText.acknowledge, exact: true }).check();

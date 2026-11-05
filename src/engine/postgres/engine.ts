@@ -76,7 +76,10 @@ export class PostgresEngine {
     const { connectionId, database, table, editStamp, changes } = input;
     const plan = postgresIndexPlan(output, { connectionId, database, table, editStamp, changes });
     const originals = new Set(indexIds.values());
-    return { ...plan, verify: final => final.output.indexes.length === plan.indexes.size && final.output.indexes.every(index => {
+    return { ...plan, ...(output.kind === 'm' ? {
+      // 同 schema DDL 只锁原物化视图及其结构，支持目录核对后的整批索引提交。
+      materializedGuard: 'ALTER MATERIALIZED VIEW ' + plan.table + ' SET SCHEMA ' + postgresIdentifier(output.schema),
+    } : {}), verify: final => final.output.indexes.length === plan.indexes.size && final.output.indexes.every(index => {
       const expected = plan.indexes.get(index.name);
       const oid = final.indexIds.get(index.name)!;
       // 同名替换和锁内名称重用都不能通过原索引身份核对。

@@ -43,10 +43,15 @@ export function canEditPostgresIndex(index: ObservedIndex) {
   return !index.primary && index.constraint === null && !index.replicaIdentity;
 }
 
+/** 物化视图只开放索引，独立摘要不能作为字段或约束编辑能力。 */
+export function postgresIndexEditStamp(source: PostgresStructureResult) {
+  return source.kind === 'm' ? source.indexEditStamp : source.editStamp;
+}
+
 /** 编译列索引和限定名，记录保留的原索引及新增索引的预期目录定义。 */
 export function postgresIndexPlan(source: PostgresStructureResult, raw: PostgresIndexPreviewInput) {
   const { editStamp, changes } = postgresIndexPreviewSchema.parse(raw);
-  if (!source.editStamp || source.editStamp !== editStamp) throw Error('原表结构已变化，请重新读取后预览');
+  if (postgresIndexEditStamp(source) !== editStamp) throw Error('原结构已变化，请重新读取后预览');
   const schema = postgresIdentifier(source.schema);
   const table = schema + '.' + postgresIdentifier(source.name);
   const columns = new Set(source.columns.map(column => column.name));

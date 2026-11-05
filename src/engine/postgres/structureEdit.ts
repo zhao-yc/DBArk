@@ -14,6 +14,7 @@ interface Plan {
   statements: string[];
   checks?: Parameters<typeof validatePostgresDefaults>[1];
   protocol?: 'extended';
+  materializedGuard?: string;
   before?(connection: PostgresConnection): Promise<void>;
   verify(facts: Facts): boolean;
 }
@@ -58,7 +59,7 @@ export class PostgresStructureEditWorkspace<T extends Draft> {
       if (this.plans.size >= 128) throw Error('PostgreSQL ' + this.label + '预览已满');
       const token = randomUUID();
       this.plans.set(key, { input: { connectionId, database, table, editStamp, owner, connectionRevision }, plan, token, expires: now + 300_000 });
-      return { token, statements: plan.statements };
+      return { token, statements: plan.materializedGuard ? [plan.materializedGuard, ...plan.statements] : plan.statements };
     } finally { this.pending.delete(key); }
   }
 
@@ -86,12 +87,25 @@ export class PostgresStructureEditWorkspace<T extends Draft> {
     try {
       if (connection.database !== input.database) throw Error('PostgreSQL 原数据库已变化');
       await startPostgresDdl(connection, false);
+      if (plan.materializedGuard) {
+        await connection.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED', undefined, budget());
+        // LOCK TABLE 不支持物化视图；先持有原对象锁，再读取最新的目录快照。
+        sent = true;
+        const lock = await connection.query(plan.materializedGuard, undefined, budget(), undefined, 'extended');
+        if (lock.postgresCommand !== 'ALTER') throw Error('原物化视图锁未确认');
+      }
       const original = await readPostgresStructureFacts(connection, input.table);
-      if (original.output.editStamp !== input.editStamp) throw Error('原表结构已变化，请重新读取');
-      const lock = await connection.query('LOCK TABLE ONLY ' + plan.table + ' IN ACCESS EXCLUSIVE MODE', undefined, budget());
-      if (lock.postgresCommand !== 'LOCK') throw Error('原表锁未确认');
-      const locked = await readPostgresStructureFacts(connection, input.table);
-      if (locked.output.editStamp !== input.editStamp || locked.oid !== original.oid) throw Error('加锁后原表结构已变化，请重新读取');
+      if (plan.materializedGuard) {
+        if (original.output.kind !== 'm' || original.output.indexEditStamp !== input.editStamp)
+          throw Error('原物化视图或索引结构已变化，请重新读取');
+        await connection.query("SET LOCAL statement_timeout = '120s'", undefined, budget());
+      } else {
+        if (original.output.editStamp !== input.editStamp) throw Error('原表结构已变化，请重新读取');
+        const lock = await connection.query('LOCK TABLE ONLY ' + plan.table + ' IN ACCESS EXCLUSIVE MODE', undefined, budget());
+        if (lock.postgresCommand !== 'LOCK') throw Error('原表锁未确认');
+        const locked = await readPostgresStructureFacts(connection, input.table);
+        if (locked.output.editStamp !== input.editStamp || locked.oid !== original.oid) throw Error('加锁后原表结构已变化，请重新读取');
+      }
       if (plan.checks) await validatePostgresDefaults(connection, plan.checks);
       await plan.before?.(connection);
       for (const sql of plan.statements) {
@@ -100,7 +114,7 @@ export class PostgresStructureEditWorkspace<T extends Draft> {
         if (result.postgresCommand !== sql.split(' ', 1)[0]) throw Error(this.label + '结构回执不符');
       }
       const final = await readPostgresStructureFacts(connection, input.table);
-      if (final.oid !== original.oid || !plan.verify(final))
+      if (final.oid !== original.oid || final.output.kind !== original.output.kind || !plan.verify(final))
         throw Error('实际' + this.label + '与预览不一致');
       committing = true;
       const result = await connection.query('COMMIT', undefined, budget());

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { postgresIndexEditStamp } from '../../shared/postgresIndexEdit';
 import type { PostgresStructureInput, PostgresStructureResult } from '../../shared/postgresStructure';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import { errorMessage, invoke } from '../lib';
@@ -95,7 +96,8 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
 
   const sections: Section[] = output?.viewDefinition ? ['columns', 'constraints', 'indexes', 'definition'] : ['columns', 'constraints', 'indexes'];
   const EditPanel = editing && editors[editing].Panel;
-  const editStamp = editing === 'materialized' ? output?.materialized?.stamp :
+  const indexStamp = output && postgresIndexEditStamp(output);
+  const editStamp = editing === 'indexes' ? indexStamp : editing === 'materialized' ? output?.materialized?.stamp :
     editing === 'definition' || editing === 'manage' ? output?.viewEditStamp : output?.editStamp;
   return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
@@ -156,7 +158,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
     </div>
     <footer className="modal-footer">
       <button disabled={!!editing || busy || dialect !== 'postgresql'} onClick={() => { owner.current = undefined; setAttempt(value => value + 1); }}>{text.refresh}</button>
-      {output?.editStamp && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
+      {(section === 'indexes' ? indexStamp : output?.editStamp) && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
         {editors[section].label}
       </button>}
       {output?.editStamp && !editing && section === 'constraints' &&

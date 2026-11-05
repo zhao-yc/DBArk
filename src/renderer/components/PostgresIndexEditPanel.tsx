@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  canEditPostgresIndex, postgresIndexCapabilities, postgresIndexMethods, postgresIndexPlan,
+  canEditPostgresIndex, postgresIndexCapabilities, postgresIndexMethods, postgresIndexEditStamp, postgresIndexPlan,
   type PostgresIndexChange, type PostgresIndexMethod,
 } from '../../shared/postgresIndexEdit';
 import { postgresIndexEditZh as text } from '../locales/postgresIndexEdit.zh-CN';
@@ -14,15 +14,16 @@ const emptyKey: Key = { column: '', direction: 'asc', nulls: 'default' };
 /** 在索引目录中编辑有序键列，草稿仅使用真实列名和内置索引方法。 */
 export function PostgresIndexEditPanel(props: PostgresStructureEditProps) {
   const { target, original, onClose } = props;
+  const editStamp = postgresIndexEditStamp(original)!;
   const [kind, setKind] = useState<PostgresIndexChange['kind']>('create');
   const [changes, setChanges] = useState<PostgresIndexChange[]>([]);
   const [name, setName] = useState(''), [from, setFrom] = useState('');
   const [method, setMethod] = useState<PostgresIndexMethod>('btree'), [unique, setUnique] = useState(false);
   const [keys, setKeys] = useState<Key[]>([emptyKey]), [included, setIncluded] = useState<string[]>([]);
   const editableNames = useMemo(() => changes.length
-    ? [...postgresIndexPlan(original, { ...target, editStamp: original.editStamp!, changes }).indexes]
+    ? [...postgresIndexPlan(original, { ...target, editStamp, changes }).indexes]
       .filter(([, index]) => !index.original || canEditPostgresIndex(index.original)).map(([name]) => name)
-    : original.indexes.filter(canEditPostgresIndex).map(index => index.name), [target, original, changes]);
+    : original.indexes.filter(canEditPostgresIndex).map(index => index.name), [target, original, editStamp, changes]);
   const existing = editableNames.includes(from) ? from : editableNames[0] ?? '';
   const columns = original.columns.map(column => column.name);
   const selected = [...keys.map(key => key.column), ...included];
@@ -32,7 +33,7 @@ export function PostgresIndexEditPanel(props: PostgresStructureEditProps) {
   const canStage = kind === 'create' ? !!name && selected.every(Boolean) : !!existing && (kind === 'drop' || !!name);
   const { preview, setPreview, acceptDrop, setAcceptDrop, busy, unknown, error, setError, operation, submit } =
     usePostgresStructureEdit(props, !!changes.length || !!name, dropping,
-      () => invoke('postgres.indexEdit.preview', { ...target, editStamp: original.editStamp!, changes }),
+      () => invoke('postgres.indexEdit.preview', { ...target, editStamp, changes }),
       token => invoke('postgres.indexEdit.apply', { ...target, token }));
 
   /** 方法切换时清理不支持的选项，已暂存的独立草稿保持原值。 */
@@ -52,7 +53,7 @@ export function PostgresIndexEditPanel(props: PostgresStructureEditProps) {
       const change: PostgresIndexChange = kind === 'create' ? { kind, name, method, unique, keys, include: included }
         : kind === 'rename' ? { kind, name, from: existing } : { kind, from: existing };
       const next = [...changes, change];
-      postgresIndexPlan(original, { ...target, editStamp: original.editStamp!, changes: next });
+      postgresIndexPlan(original, { ...target, editStamp, changes: next });
       setChanges(next);
       setName('');
       setPreview(undefined);
@@ -127,7 +128,7 @@ export function PostgresIndexEditPanel(props: PostgresStructureEditProps) {
       {change.kind === 'create' ? change.name : change.kind === 'drop' ? change.from : text.summaryRename(change.from, change.name)}
     </li>)}</ol>}
     {preview && <>
-      <p>{text.lockNote}</p><pre aria-label={text.previewTitle} tabIndex={0}>{preview.statements.join(';\n') + ';'}</pre>
+      <p>{original.kind === 'm' ? text.materializedLockNote : text.lockNote}</p><pre aria-label={text.previewTitle} tabIndex={0}>{preview.statements.join(';\n') + ';'}</pre>
       {dropping && <label className="pg-column-edit-drop">
         <input type="checkbox" checked={acceptDrop} onChange={event => setAcceptDrop(event.target.checked)}/> {text.confirmDrop}
       </label>}

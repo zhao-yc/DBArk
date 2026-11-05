@@ -11,6 +11,7 @@ export const postgresIndexEditZh = {
   stage: '加入索引改动', undo: '撤回最后一项', preview: '预览索引 SQL', apply: '确认提交索引修改',
   close: '退出索引编辑', draft: '待提交索引改动', previewTitle: '实际提交索引 SQL',
   confirmDrop: '确认删除预览中的索引。相关查询的执行计划可能改变。',
+  materializedLockNote: '确认后会独占锁定原物化视图，其他会话读取可能等待。若索引构建失败或超时，整个批次回滚。',
   lockNote: '确认后会短暂独占锁定原表。索引构建较慢时可能超时，届时整个批次会回滚。',
   unknown: '提交结果待核对，请退出索引编辑后刷新实际结构。',
   summaryRename: (from: string, name: string) => from + ' → ' + name,
