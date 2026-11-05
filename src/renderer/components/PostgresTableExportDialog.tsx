@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
-import type { PostgresTableExportInput, PostgresTablePage, PostgresTableTarget } from '../../shared/postgresTable';
+import { isPostgresSqlExportColumn, isPostgresSqlExportRelation,
+  type PostgresTableExportInput, type PostgresTablePage, type PostgresTableTarget } from '../../shared/postgresTable';
 import { postgresRelationName } from '../../shared/postgresSql';
 import { errorMessage, invoke } from '../lib';
 import { postgresTableExportZh as text } from '../locales/postgresTableExport.zh-CN';
@@ -9,7 +10,7 @@ import { acquireWorkspaceBusy } from '../store';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
 
-const formats = ['csv', 'json', 'xlsx'] as const;
+const formats = ['csv', 'json', 'xlsx', 'sql'] as const;
 const encodings = [['utf8', 'UTF-8'], ['utf16le', 'UTF-16 LE'], ['gb18030', 'GB18030']] as const;
 
 /** 文件选择、列和任务只对应打开时的原服务端表页。 */
@@ -24,6 +25,9 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
   const [busy, setBusy] = useState(false), [taskId, setTaskId] = useState<string>();
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const occupied = useRef(false), cancelRequested = useRef(false);
+  const available = format === 'sql' ? page.columns.filter(isPostgresSqlExportColumn) : page.columns;
+  const output = available.filter(column => selected.has(column.key));
+  const textEncoding = format === 'csv' || format === 'json';
 
   /** 原生选择器只返回当前窗口一次性文件能力。 */
   async function choose() {
@@ -42,7 +46,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
 
   /** 仅文件原子发布回执显示成功，取消请求等待原任务自己的终态。 */
   async function start() {
-    if (occupied.current || !file || !page.exportToken || !selected.size) return;
+    if (occupied.current || !file || !page.exportToken || !output.length) return;
     if (!isCurrent()) { setError(text.stale); return; }
     occupied.current = true;
     cancelRequested.current = false;
@@ -54,7 +58,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
     setMessage('');
     try {
       const result = await invoke('postgres.table.export', { ...target, taskId, exportToken: page.exportToken, fileToken: file.token,
-        format, encoding: format === 'xlsx' ? 'utf8' : encoding, columns: page.columns.filter(column => selected.has(column.key)).map(column => column.key),
+        format, encoding: textEncoding ? encoding : 'utf8', columns: output.map(column => column.key),
         ...(format === 'csv' ? { csvDelimiter: delimiter } : {}),
       });
       if (!result.fileCommitted) throw Error(text.cancelled);
@@ -85,25 +89,30 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
       <div className="pg-table-controls">
         <Field label={text.format}><select aria-label={text.format} value={format} disabled={locked}
           onChange={event => { setFormat(event.target.value as typeof format); setFile(null); setMessage(''); }}>
-          {formats.map(value => <option key={value} value={value}>{value.toUpperCase()}</option>)}
+          {formats.map(value => <option key={value} value={value} disabled={value === 'sql' && !isPostgresSqlExportRelation(page.relationKind)}>
+            {value.toUpperCase()}
+          </option>)}
         </select></Field>
-        {format !== 'xlsx' && <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
+        {textEncoding && <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
           onChange={event => setEncoding(event.target.value as typeof encoding)}>
           {encodings.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></Field>}
         {format === 'csv' && <CsvExportDelimiterField value={delimiter} disabled={locked} onChange={setDelimiter}/>}
       </div>
+      {format === 'sql' && <p>{text.sqlHint}</p>}
       <fieldset disabled={locked}>
         <legend>{text.columns}</legend>
-        <button onClick={() => setSelected(new Set(page.columns.map(column => column.key)))}>{text.allColumns}</button>
+        <button onClick={() => setSelected(new Set(available.map(column => column.key)))}>{text.allColumns}</button>
         <button onClick={() => setSelected(new Set())}>{text.noColumns}</button>
-        <div className="pg-table-export-columns">{page.columns.map(column => <label key={column.key}>
-          <input type="checkbox" checked={selected.has(column.key)} onChange={event => {
+        <div className="pg-table-export-columns">{page.columns.map(column => {
+          const eligible = format !== 'sql' || isPostgresSqlExportColumn(column);
+          return <label key={column.key}>
+          <input type="checkbox" disabled={!eligible} checked={eligible && selected.has(column.key)} onChange={event => {
             const next = new Set(selected);
             if (event.target.checked) next.add(column.key); else next.delete(column.key);
             setSelected(next);
-          }}/> {column.name}
-        </label>)}</div>
+          }}/> {column.name}{!eligible && ' · ' + text.generated}
+        </label>; })}</div>
       </fieldset>
       <button disabled={locked} onClick={() => void choose()}>{text.choose}</button>
       {file && <p>{text.file} · {file.name}</p>}
@@ -114,7 +123,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
     <footer className="modal-footer">
       <button disabled={locked} onClick={onClose}>{text.close}</button>
       {taskId ? <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button> :
-        <button className="primary" disabled={locked || !file || !selected.size} onClick={() => void start()}>{text.start}</button>}
+        <button className="primary" disabled={locked || !file || !output.length} onClick={() => void start()}>{text.start}</button>}
     </footer>
   </Modal>;
 }

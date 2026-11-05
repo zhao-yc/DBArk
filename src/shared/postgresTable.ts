@@ -54,7 +54,7 @@ export const postgresTablePreviewSchema = target.extend({
 });
 export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
-const exportFormat = z.enum(['csv', 'json', 'xlsx']);
+const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql']);
 /** 文件能力只由主进程签发，筛选和排序只从原服务端表页读取。 */
 export const postgresTableExportChooseSchema = z.object({
   format: exportFormat, suggestedName: z.string().min(1).max(240).refine(value => !/[\/\\\u0000-\u001f]/.test(value)),
@@ -67,6 +67,7 @@ export const postgresTableExportSchema = target.extend({
   if (new Set(input.columns).size !== input.columns.length) context.addIssue({ code: 'custom', message: '导出列不能重复' });
   if (input.csvDelimiter !== undefined && input.format !== 'csv') context.addIssue({ code: 'custom', message: '只有 CSV 可指定分隔符' });
   if (input.format === 'xlsx' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'XLSX 使用固定内部编码' });
+  if (input.format === 'sql' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL SQL 脚本使用 UTF-8' });
 });
 export type PostgresTableExportInput = z.infer<typeof postgresTableExportSchema>;
 export type PostgresTableExportChooseInput = z.infer<typeof postgresTableExportChooseSchema>;
@@ -82,6 +83,7 @@ export interface PostgresTableColumn extends ResultColumn {
   nullable: boolean;
   defaultValue: boolean;
   generated: boolean;
+  identityAlways?: boolean;
   primary: boolean;
   binary: boolean;
 }
@@ -105,4 +107,14 @@ export interface PostgresTableOutcome {
   outcome: 'committed' | 'rolledBack' | 'notSent' | 'unknown';
   affected: number;
   message: string;
+}
+
+/** 标识列可以显式保留原值，计算生成列由恢复目标重新计算。 */
+export function isPostgresSqlExportColumn(column: PostgresTableColumn) {
+  return !column.generated || column.identityAlways === true;
+}
+
+/** SQL 数据脚本写入同名普通表或分区表。 */
+export function isPostgresSqlExportRelation(kind: PostgresTablePage['relationKind']) {
+  return kind === 'r' || kind === 'p';
 }

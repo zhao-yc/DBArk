@@ -219,9 +219,86 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
 
         const finished = exportRequest('json', '视图.json', { ...viewSource, columns: ['c0'], exportToken: viewPage.exportToken });
         expect(await engine.handle('postgres.table.export', finished)).toEqual({ rows: 140, fileCommitted: true });
+        await expect(engine.handle('postgres.table.export', exportRequest('sql', '视图.sql',
+          { ...viewSource, columns: ['c0'], exportToken: viewPage.exportToken }))).rejects.toThrow('只支持表的可插入列');
         await client.query(`CREATE OR REPLACE VIEW ${waiting} AS SELECT id, note FROM ${exportTable} WHERE id > 9007199254741058 ORDER BY id`);
         await expect(engine.handle('postgres.table.export', { ...finished, taskId: randomUUID() })).rejects.toThrow('结构已变化');
         expect(JSON.parse(await readFile(finished.filePath, 'utf8'))).toHaveLength(140);
+
+        // 在另一套同名结构上实际执行 SQL 文件，核对精度、时区、类型文本及原子回放。
+        const sqlTable = '"浏览"."SQL""原表"';
+        const payload = "值'); DROP TABLE 不能执行; --\n\\字";
+        await client.query(`CREATE TABLE ${sqlTable} (
+          id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, note text, amount numeric(40,18), raw bytea,
+          stamp timestamptz, day date, elapsed interval, vals text[], data jsonb, f double precision, cash money,
+          rel regclass, marker text, computed text GENERATED ALWAYS AS (coalesce(note, '空') || ':生成') STORED);
+          INSERT INTO ${sqlTable} (id, note, amount, raw, stamp, day, elapsed, vals, data, f, cash, rel, marker)
+          OVERRIDING SYSTEM VALUE SELECT i, CASE WHEN i=1 THEN NULL WHEN i=2 THEN '' ELSE '普通' END,
+            1234567890123456789012.123456789012345678, decode('00ff','hex'), '2026-03-03 09:12:34.654321+05:30',
+            '2026-02-03', '1 mon 2 days 00:00:00.123456', ARRAY['a;b', 'NULL', NULL, E'反\\\\斜杠'],
+            '{"number":90071992547409931234}', CASE WHEN i=1 THEN '-0'::float8 WHEN i=2 THEN 'NaN'::float8 ELSE 1.0000000000000002::float8 END,
+            1234.56::numeric::money, '"浏览"."导出表"'::regclass, CASE WHEN i<=67 THEN '保留%' ELSE '其它' END
+            FROM generate_series(1, 68) AS i;`);
+        await client.query(`UPDATE ${sqlTable} SET note = $1 WHERE id=3`, [payload]);
+        const sqlSource = { ...source, table: sqlTable, tabId: randomUUID() };
+        const selectExact = `SELECT id::text, note, amount::text, encode(raw,'hex') raw, stamp::text, day::text, elapsed::text,
+          vals::text, data::text, encode(float8send(f),'hex') f, cash::numeric::text, rel::oid::text, marker, computed FROM ${sqlTable} src ORDER BY src.id`;
+        const expectedSqlRows = (await client.query(selectExact)).rows.filter(row => row.marker.includes('保留%'));
+        await client.query(`ALTER ROLE CURRENT_USER SET DateStyle TO 'SQL, DMY'; ALTER ROLE CURRENT_USER SET IntervalStyle TO 'iso_8601';
+          ALTER ROLE CURRENT_USER SET TimeZone TO 'America/St_Johns'; ALTER ROLE CURRENT_USER SET search_path TO "浏览", pg_catalog;
+          ALTER ROLE CURRENT_USER SET extra_float_digits TO 3;`);
+        const outputSql = join(directory, '可还原.sql');
+        try {
+          const pageForSql = await read({ ...sqlSource, offset: 5, filter: { column: 'marker', text: '保留%' } });
+          expect(pageForSql.columns[0]).toMatchObject({ name: 'id', identityAlways: true });
+          const sqlExport = exportRequest('sql', '可还原.sql', { ...sqlSource, exportToken: pageForSql.exportToken,
+            columns: pageForSql.columns.filter(column => column.name !== 'computed').map(column => column.key) });
+          const computed = pageForSql.columns.find(column => column.name === 'computed')!;
+          await expect(engine.handle('postgres.table.export', { ...sqlExport, taskId: randomUUID(), columns: [computed.key] })).rejects.toThrow('计算生成列');
+          expect(await engine.handle('postgres.table.export', sqlExport)).toEqual({ rows: 67, fileCommitted: true });
+          await client.query('ALTER ROLE CURRENT_USER SET extra_float_digits TO 0');
+          await expect(engine.handle('postgres.table.export', { ...sqlExport, taskId: randomUUID() })).rejects.toThrow('extra_float_digits');
+        } finally {
+          await client.query(`ALTER ROLE CURRENT_USER RESET DateStyle; ALTER ROLE CURRENT_USER RESET IntervalStyle;
+            ALTER ROLE CURRENT_USER RESET TimeZone; ALTER ROLE CURRENT_USER RESET search_path; ALTER ROLE CURRENT_USER RESET extra_float_digits;`);
+        }
+        const script = await readFile(outputSql, 'utf8');
+        expect(script).toContain('OVERRIDING SYSTEM VALUE');
+        expect(script).toContain("E'SQL, DMY'");
+        expect(script).not.toContain('"computed"');
+        expect(script.match(/INSERT INTO "浏览"\."SQL""原表"/g)).toHaveLength(2);
+        const restoreSettings = (await client.query(`SELECT current_setting('DateStyle') AS date, current_setting('TimeZone') AS tz`)).rows[0];
+        await client.query(`ALTER TABLE ${sqlTable} RENAME TO sql_source_backup;
+          CREATE TABLE ${sqlTable} (LIKE "浏览".sql_source_backup INCLUDING ALL);
+          ALTER TABLE ${sqlTable} ADD CONSTRAINT late_restore_failure CHECK (id < 67);`);
+        await expect(client.query(script)).rejects.toMatchObject({ code: '23514' });
+        await client.query('ROLLBACK');
+        expect((await client.query(`SELECT count(*)::int n FROM ${sqlTable}`)).rows).toEqual([{ n: 0 }]);
+        await client.query(`ALTER TABLE ${sqlTable} DROP CONSTRAINT late_restore_failure`);
+        await client.query(script);
+        expect((await client.query(`SELECT current_setting('DateStyle') AS date, current_setting('TimeZone') AS tz`)).rows[0]).toEqual(restoreSettings);
+        const restored = (await client.query(selectExact)).rows;
+        expect(restored).toHaveLength(expectedSqlRows.length);
+        const mismatch = restored.flatMap((row, i) => Object.keys(row).filter(key => !Object.is(row[key], expectedSqlRows[i][key]))
+          .map(key => ({ id: row.id, key, expected: expectedSqlRows[i][key], actual: row[key] })));
+        if (mismatch.length) throw Error('SQL 回放值不一致：' + JSON.stringify(mismatch.slice(0, 4)));
+
+        const partitionTable = '"浏览"."SQL分区"';
+        await client.query(`CREATE TABLE ${partitionTable} (id int PRIMARY KEY, note text) PARTITION BY RANGE (id);
+          CREATE TABLE "浏览".sql_leaf_a PARTITION OF ${partitionTable} FOR VALUES FROM (0) TO (10);
+          CREATE TABLE "浏览".sql_leaf_b PARTITION OF ${partitionTable} FOR VALUES FROM (10) TO (20);
+          INSERT INTO ${partitionTable} VALUES (1, '第一分区'), (11, '第二分区');`);
+        const partitionSource = { ...source, table: partitionTable, tabId: randomUUID() };
+        const partitionPage = await read(partitionSource);
+        expect(partitionPage.relationKind).toBe('p');
+        const partitionExport = exportRequest('sql', '分区.sql', { ...partitionSource, columns: ['c0', 'c1'], exportToken: partitionPage.exportToken });
+        expect(await engine.handle('postgres.table.export', partitionExport)).toEqual({ rows: 2, fileCommitted: true });
+        await client.query(`TRUNCATE TABLE ${partitionTable}`);
+        await client.query(await readFile(partitionExport.filePath, 'utf8'));
+        expect((await client.query(`SELECT p.id, p.note, c.relname FROM ${partitionTable} p
+          JOIN pg_catalog.pg_class c ON c.oid = p.tableoid ORDER BY p.id`)).rows).toEqual([
+          { id: 1, note: '第一分区', relname: 'sql_leaf_a' }, { id: 11, note: '第二分区', relname: 'sql_leaf_b' },
+        ]);
       } finally { await rm(directory, { recursive: true, force: true }); }
     } finally {
       await engine.closeAll();

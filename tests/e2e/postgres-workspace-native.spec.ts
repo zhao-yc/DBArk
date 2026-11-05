@@ -134,22 +134,24 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(grid).toContainText('新增乙');
     // 从第二页导出全部筛选记录，真实文件写入仍由原 Main 和 Engine 处理。
     const tableFile = info.outputPath('PostgreSQL原生导出.json');
+    const tableSqlFile = info.outputPath('PostgreSQL原生数据.sql');
     const tableExportOwner = await application.browserWindow(page);
     const tableExportSender = await tableExportOwner.evaluate(window => window.webContents.id);
     await tableExportOwner.dispose();
     await application.evaluate(({ BrowserWindow, dialog }, input) => {
       const original = dialog.showSaveDialog;
-      let calls = 0;
+      const calls: string[] = [];
       dialog.showSaveDialog = (async (...args: unknown[]) => {
         const expected = BrowserWindow.getAllWindows().find(window => window.webContents.id === input.sender);
         const options = args[1] as { title?: string; filters?: { extensions: string[] }[] };
-        if (!expected || args[0] !== expected || options.title !== input.title || options.filters?.[0].extensions[0] !== 'json')
+        const extension = options.filters?.[0].extensions[0];
+        if (!expected || args[0] !== expected || options.title !== input.title || (extension !== 'json' && extension !== 'sql'))
           throw Error('PostgreSQL 导出文件选择来源或格式不符');
-        calls++;
-        return { canceled: false, filePath: input.file };
+        calls.push(extension);
+        return { canceled: false, filePath: extension === 'sql' ? input.sqlFile : input.file };
       }) as typeof original;
       Object.assign(globalThis, { finishPostgresTableExport: () => { dialog.showSaveDialog = original; return calls; } });
-    }, { sender: tableExportSender, title: tableExportText.title, file: tableFile });
+    }, { sender: tableExportSender, title: tableExportText.title, file: tableFile, sqlFile: tableSqlFile });
     try {
       await tableButton(tableExportText.open).click();
       const tableExport = page.getByRole('dialog', { name: tableExportText.title, exact: true });
@@ -162,12 +164,24 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await tableExport.getByRole('button', { name: tableExportText.start, exact: true }).click();
       await expect(tableExport.getByRole('status')).toHaveText(tableExportText.saved(2));
       expect(JSON.parse(await readFile(tableFile, 'utf8'))).toEqual([{ note: '新增甲' }, { note: '新增乙' }]);
+      await tableExport.getByLabel(tableExportText.format, { exact: true }).selectOption('sql');
+      await expect(tableExport.getByLabel(tableExportText.encoding, { exact: true })).toHaveCount(0);
+      await tableExport.getByRole('checkbox', { name: 'id', exact: true }).check();
+      await tableExport.getByRole('button', { name: tableExportText.choose, exact: true }).click();
+      await expect(tableExport).toContainText('PostgreSQL原生数据.sql');
+      await page.screenshot({ path: info.outputPath('PostgreSQL表数据SQL导出确认.png') });
+      await tableExport.getByRole('button', { name: tableExportText.start, exact: true }).click();
+      await expect(tableExport.getByRole('status')).toHaveText(tableExportText.saved(2));
+      const script = await readFile(tableSqlFile, 'utf8');
+      expect(script).toContain('INSERT INTO "回归"."带""引号" ("id", "note") VALUES');
+      expect(script).toContain("(E'2', E'新增甲'),\n(E'3', E'新增乙');");
+      expect(script.endsWith('COMMIT;\n')).toBe(true);
       await tableExport.locator('.modal-footer').getByRole('button', { name: tableExportText.close, exact: true }).click();
     } finally {
-      const calls = await application.evaluate(() => (globalThis as unknown as { finishPostgresTableExport(): number }).finishPostgresTableExport());
-      expect(calls).toBe(1);
+      const calls = await application.evaluate(() => (globalThis as unknown as { finishPostgresTableExport(): string[] }).finishPostgresTableExport());
+      expect(calls).toEqual(['json', 'sql']);
     }
-    await mark('原生窗口从筛选第二页导出全范围 JSON，实际文件仅含所选列及两个匹配记录');
+    await mark('原生窗口从筛选第二页导出全范围 JSON 和 SQL，实际文件各含两个匹配记录');
     await tableButton(postgresTableZh.clearFilter).click();
     await expect(grid).toContainText('原值');
     await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('20');

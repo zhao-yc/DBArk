@@ -2,11 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { CellValue, DataRow } from '../../shared/contracts';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import {
-  type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableOutcome,
+  isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
+import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -68,7 +69,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
   const columns = fields.rows.map((field, index): PostgresTableColumn => ({
     key: 'c' + index, name: String(field.c0), type: String(field.c1), nullable: field.c2 !== 't',
     defaultValue: field.c3 === 't' || field.c5 !== '', generated: field.c4 !== '' || field.c5 === 'a',
-    primary: Number(field.c7) > 0, binary: field.c6 === '17',
+    primary: Number(field.c7) > 0, binary: field.c6 === '17', ...(field.c5 === 'a' ? { identityAlways: true } : {}),
   }));
   const keys = fields.rows.map((field, index) => ({ index, position: Number(field.c7) }))
     .filter(item => item.position > 0).sort((a, b) => a.position - b.position)
@@ -202,7 +203,8 @@ export class PostgresTableWorkspace {
 
   /** 游标持有同一读取快照，声明后再用当前目录复核被锁住的关系身份。 */
   async exportRows(input: Scoped<PostgresTableExportInput>, connect: Connect, check: () => void,
-    consume: (columns: PostgresTableColumn[], rows: AsyncIterable<CellValue[]>) => Promise<void>) {
+    consume: (columns: PostgresTableColumn[], rows: AsyncIterable<CellValue[]>,
+      sql?: { table: string; settings: PostgresSqlExportSettings }) => Promise<void>) {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot({ ...input, pageToken: input.exportToken });
@@ -216,12 +218,15 @@ export class PostgresTableWorkspace {
         const columns = input.columns.map(key => relation.columns.find(column => column.key === key));
         if (columns.some(column => !column)) throw Error('导出列已变化，请刷新表页');
         const selected = columns as PostgresTableColumn[];
+        if (input.format === 'sql' && (!isPostgresSqlExportRelation(relation.kind) || !selected.every(isPostgresSqlExportColumn)))
+          throw Error('SQL 数据脚本只支持表的可插入列，计算生成列由目标表恢复');
         const { sql, args } = readSql(relation, snapshot.options, undefined, selected);
         const declared = await connection.query('DECLARE dbark_table_export NO SCROLL CURSOR FOR ' + sql, args, small(), undefined, 'extended');
         if (declared.postgresCommand !== 'DECLARE') throw Error('PostgreSQL 导出游标未确认');
         const locked = await readRelation(connection, input.table);
         if (locked.fingerprint !== relation.fingerprint) throw Error('游标声明后关系已变化，请刷新表页');
-        await consume(selected, readExportCursor(connection, selected, check));
+        const replay = input.format === 'sql' ? { table: relation.sql, settings: await readPostgresSqlExportSettings(connection) } : undefined;
+        await consume(selected, readExportCursor(connection, selected, check), replay);
         check();
         const closed = await connection.query('CLOSE dbark_table_export', undefined, small());
         if (closed.postgresCommand !== 'CLOSE') throw Error('PostgreSQL 导出游标未关闭');

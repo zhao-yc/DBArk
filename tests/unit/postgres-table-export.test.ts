@@ -19,6 +19,8 @@ describe('PostgreSQL 表页导出协议', () => {
     expect(postgresTableExportSchema.safeParse({ ...request, columns: ['c0', 'c0'] }).success).toBe(false);
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'json' }).success).toBe(false);
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'xlsx', csvDelimiter: undefined, encoding: 'utf16le' }).success).toBe(false);
+    expect(postgresTableExportSchema.safeParse({ ...request, format: 'sql', csvDelimiter: undefined }).success).toBe(true);
+    expect(postgresTableExportSchema.safeParse({ ...request, format: 'sql', csvDelimiter: undefined, encoding: 'gb18030' }).success).toBe(false);
   });
 
   it('保存对话框只接收建议文件名，路径由系统选择', () => {
