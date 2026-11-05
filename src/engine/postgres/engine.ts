@@ -15,6 +15,7 @@ import {
   postgresIdentifier,
 } from '../../shared/postgresSql';
 import { PostgresConnection } from './connection';
+import { PostgresTableWorkspace } from './tableWorkspace';
 interface Session {
   id: string;
   connectionId: string;
@@ -34,11 +35,12 @@ interface Lease {
   done: Promise<void>;
   finish(): void;
   failed: boolean;
-  control: boolean;
+  protectedFromAbort: boolean;
 }
 type Input = Record<string, any>;
 /** PostgreSQL独立网络执行账本，共用utility隔离进程及TaskEvent，不进入mysql2或其SQL生成器。 */
 export class PostgresEngine {
+  private readonly tables = new PostgresTableWorkspace();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, Task>();
@@ -56,7 +58,7 @@ export class PostgresEngine {
       input.dialect === 'postgresql' ||
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
-        (id) => this.profiles.has(id) || [...this.leases].some((l) => l.managed.profile.id === id),
+        (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
       this.ownsTask(input.taskId)
@@ -74,6 +76,7 @@ export class PostgresEngine {
     action: (managed: PostgresConnection) => Promise<T>,
     retain = false,
     control = false,
+    writing = false,
   ): Promise<T> {
     if (
       !control &&
@@ -91,7 +94,7 @@ export class PostgresEngine {
       }),
       finish: () => finish(),
       failed: false,
-      control,
+      protectedFromAbort: control || writing,
     };
     this.leases.add(lease);
     let kept = false;
@@ -180,7 +183,7 @@ export class PostgresEngine {
     this.closing.add(id);
     try {
       const leases = [...this.leases].filter((l) => l.managed.profile.id === id);
-      for (const lease of leases) if (!lease.failed && !lease.control) lease.managed.abort();
+      for (const lease of leases) if (!lease.failed && !lease.protectedFromAbort) lease.managed.abort();
       const sessions = [...this.sessions.values()].filter(session => session.connectionId === id);
       await Promise.all(sessions.map(session => this.closeSession(session)));
       await Promise.all(leases.map(lease => lease.done));
@@ -188,6 +191,7 @@ export class PostgresEngine {
         await lease.managed.close();
         this.leases.delete(lease);
       }
+      this.tables.clear(id);
       this.profiles.delete(id);
     } finally {
       this.closing.delete(id);
@@ -207,13 +211,17 @@ export class PostgresEngine {
         [...this.leases].some((l) => l.managed.profile.id === input.id))
     )
       throw Error('该PostgreSQL连接仍有会话或未确认资源，请先关闭标签并显式断开');
-    if (changed) this.profiles.delete(input.id);
+    if (changed) {
+      this.tables.clear(input.id);
+      this.profiles.delete(input.id);
+    }
   }
   async closeAll(): Promise<void> {
     this.stopping = true;
     try {
       for (const id of new Set([
         ...this.profiles.keys(),
+        ...this.tables.connectionIds(),
         ...[...this.leases].map((l) => l.managed.profile.id),
         ...[...this.sessions.values()].map((s) => s.connectionId),
       ]))
@@ -330,6 +338,20 @@ export class PostgresEngine {
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
   async handle(command: string, input: Input): Promise<any> {
     switch (command) {
+      case 'postgres.table.page':
+      case 'postgres.table.apply': {
+        const profile = input.profile as PostgresConnectionProfile | undefined;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
+            !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的PostgreSQL表页连接及原文档');
+        const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
+          this.use(profile, input.database, action, false, false, writing);
+        return command === 'postgres.table.page' ? this.tables.page(input as Parameters<PostgresTableWorkspace['page']>[0], connect) : this.tables.apply(input as Parameters<PostgresTableWorkspace['apply']>[0], connect);
+      }
+      case 'postgres.table.preview':
+        if (this.stopping || this.closing.has(input.connectionId)) throw Error('PostgreSQL连接正在关闭');
+        return this.tables.preview(input as Parameters<PostgresTableWorkspace['preview']>[0]);
+      case 'postgres.table.release':
+        return this.tables.release(input as Parameters<PostgresTableWorkspace['release']>[0]);
       case 'connections.test':
         return this.use(input as PostgresConnectionProfile, undefined, async (m) => ({
           version: m.version,

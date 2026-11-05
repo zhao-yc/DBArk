@@ -215,8 +215,8 @@ export class Engine {
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
     if (command === '__connections.prepareSave') this.postgres.prepareSave(input);
-    else if (this.postgres.accepts(input)) {
-      if (this.closing && !['connections.close', 'sessions.close', 'query.cancel', 'query.sessionState'].includes(command)) {
+    else if (command.startsWith('postgres.table.') || this.postgres.accepts(input)) {
+      if (this.closing && !['connections.close', 'sessions.close', 'query.cancel', 'query.sessionState', 'postgres.table.release'].includes(command)) {
         throw Error('数据库引擎正在关闭，不能开始新操作');
       }
       // 各驱动共用任务事件和取消入口，必须在分流前保证编号唯一。

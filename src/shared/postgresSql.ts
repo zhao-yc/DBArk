@@ -132,11 +132,22 @@ export function firstPostgresStatement(source: string, standardStrings = true): 
   return splitPostgresSql(source, standardStrings, true)[0];
 }
 
-/** 目录双引号复合名逐段重建，其他来源作为单一标识符。 */
+/** 目录复合名逐段还原；每段的成对双引号仅解码一次。 */
+function parseQualifiedRelation(value: string): { schema: string; name: string } | undefined {
+  const parts = /^"((?:""|[^"])*)"\."((?:""|[^"])*)"$/.exec(value);
+  if (parts) return { schema: parts[1].replaceAll('""', '"'), name: parts[2].replaceAll('""', '"') };
+}
+
+/** 表工作台将旧式未限定关系名明确解释为 public 下的单个标识符。 */
+export function postgresRelationName(value: string): { schema: string; name: string } {
+  return parseQualifiedRelation(value) ?? { schema: 'public', name: value };
+}
+
+/** 草稿保留现有单标识符行为，目录复合名逐段重建。 */
 export function postgresRelationSelect(name: string): string {
-  const parts = /^"((?:""|[^"])*)"\."((?:""|[^"])*)"$/.exec(name);
-  const target = parts
-    ? postgresIdentifier(parts[1].replaceAll('""', '"')) + '.' + postgresIdentifier(parts[2].replaceAll('""', '"'))
+  const relation = parseQualifiedRelation(name);
+  const target = relation
+    ? postgresIdentifier(relation.schema) + '.' + postgresIdentifier(relation.name)
     : postgresIdentifier(name);
   return 'SELECT * FROM ' + target + ' LIMIT 1000;';
 }

@@ -1,0 +1,30 @@
+.postgres-table-tab {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pg-table-toolbar,
+.pg-table-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.pg-table-controls .field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pg-table-controls input[type="number"] { width: 68px; }
+.pg-table-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pg-table-grid .results-grid { flex: 1; }
+.pg-table-draft { max-height: 26%; overflow: auto; padding: 8px 12px; border-top: 1px solid var(--border); }
+.pg-table-draft button { margin-left: 10px; }
+.pg-record-form, .pg-table-preview { overflow: auto; max-height: min(60vh, 640px); }
+.pg-record-field { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.pg-record-inputs { display: flex; align-items: start; gap: 8px; }
+.pg-record-inputs textarea { flex: 1; }
+.pg-table-preview dd, .pg-table-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -267,6 +267,10 @@ export interface CommandMap {
   'sqlite.tablePresets.save': { input: import('./sqliteTablePresets').SqliteTablePresetSave; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.delete': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetQuery };
+  'postgres.table.page': { input: import('./postgresTable').PostgresTablePageInput; output: import('./postgresTable').PostgresTablePage };
+  'postgres.table.preview': { input: import('./postgresTable').PostgresTablePreviewInput; output: import('./postgresTable').PostgresTablePreview };
+  'postgres.table.apply': { input: import('./postgresTable').PostgresTableApplyInput; output: import('./postgresTable').PostgresTableOutcome };
+  'postgres.table.release': { input: import('./postgresTable').PostgresTableReleaseInput; output: void };
   'sqlite.tablePage': { input: import('./sqliteTableBrowse').SqliteTablePageInput; output: import('./sqliteTableBrowse').SqliteTablePage };
   'sqlite.valueOptions': { input: import('./sqliteValueOptions').SqliteValueOptionsInput; output: import('./sqliteValueOptions').SqliteValueOptionsOutput };
   'sqlite.statistics': { input: import('./sqliteStatistics').SqliteStatisticsInput; output: import('./sqliteStatistics').SqliteStatisticsOutput };

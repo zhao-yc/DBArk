@@ -748,7 +748,40 @@ async function runTableFilteredDelete(command: 'table.filteredDelete.preview' | 
   }
 }
 
+const postgresTableOwners = new WeakMap<object, string>();
+
+/** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  if (command === 'postgres.table.page' || command === 'postgres.table.preview' ||
+      command === 'postgres.table.apply' || command === 'postgres.table.release') {
+    columnsMain.assertCapturedOwner(columns);
+    const document = columns!.owner.document;
+    let owner = postgresTableOwners.get(document);
+    if (!owner) { owner = randomUUID(); postgresTableOwners.set(document, owner); }
+    const request = { ...input, owner, connectionRevision: store.connectionRevision() };
+    if (command === 'postgres.table.release') return broker.request(command, request);
+    if (shuttingDown) throw Error('客户端正在退出，不能开始PostgreSQL表页操作');
+    connectionConfig.assertAvailable(input.connectionId);
+    const connection = store.connections().find(profile => profile.id === input.connectionId);
+    if (connection?.dialect !== 'postgresql') throw Error('表页需要已保存的PostgreSQL连接');
+    const credentials = command === 'postgres.table.preview' ? {} : { profile: store.resolveConnection(input.connectionId) };
+    const result = await broker.request(command, { ...request, ...credentials });
+    if (command !== 'postgres.table.apply') {
+      try {
+        columnsMain.assertCapturedOwner(columns);
+        connectionConfig.assertAvailable(input.connectionId);
+        if (shuttingDown || request.connectionRevision !== store.connectionRevision()) throw Error('PostgreSQL表页来源已变化');
+      } catch (error) {
+        const pageToken = command === 'postgres.table.page' ? result?.pageToken : input.pageToken;
+        if (pageToken) {
+          const { connectionId, database, table, tabId, connectionRevision } = request;
+          await broker.request('postgres.table.release', { connectionId, database, table, tabId, connectionRevision, owner, pageToken }).catch(() => {});
+        }
+        throw error;
+      }
+    }
+    return result;
+  }
   if (command.startsWith('sqlite.objects.')) {
     const id = input.taskId;
     if (id && (tasks.has(id) || completionTasks.has(id) || savedQueryPages?.owns(id) || historyPages?.owns(id) || historyDelete?.owns(id))) throw Error('任务编号已使用，请重新发起操作');
@@ -1979,6 +2012,7 @@ else {
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
+        if (payload.command.startsWith('postgres.table.')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);

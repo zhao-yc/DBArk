@@ -2,6 +2,7 @@ import { test as base, expect } from '@playwright/test';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
@@ -16,7 +17,7 @@ test.use({ trace: 'off', video: 'off', screenshot: 'off', ...(enabled ? { preser
 test.describe.configure({ timeout: 120000, retries: 0 });
 
 /** 仅由可核对的独占测试目标驱动真实表单、目录、编辑器与正常退出。 */
-test('PostgreSQL窗口连接、目录草稿、查询、参数、事务、取消和保存关闭', async ({}, info) => {
+test('PostgreSQL窗口表页、记录事务、查询、参数和正常退出', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Runtime;
   const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '', user = process.env.DBARK_POSTGRES_TEST_USER;
   const password = process.env.DBARK_POSTGRES_TEST_PASSWORD ?? '', port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
@@ -72,7 +73,77 @@ test('PostgreSQL窗口连接、目录草稿、查询、参数、事务、取消�
     await databaseRow.click();
     const table = page.locator('.object-row .tree-label').filter({ hasText: '引号' });
     await table.click();
+    const gridTab = page.locator('.postgres-table-tab:visible'), grid = gridTab.getByRole('grid');
+    const tableButton = (name: string) => gridTab.getByRole('button', { name, exact: true });
+    await expect(grid).toContainText('原值');
+
+    /** 真实表单按字段设值，阶段操作不产生DML。 */
+    const enter = async (dialog: ReturnType<typeof page.getByRole>, column: string, value: string) => {
+      await dialog.getByLabel(column + ' ' + postgresTableZh.valueMode, { exact: true }).selectOption('text');
+      await dialog.getByLabel(column + ' ' + postgresTableZh.value, { exact: true }).fill(value);
+    };
+    const add = async (id: string, note: string) => {
+      await tableButton(postgresTableZh.add).click();
+      const record = page.getByRole('dialog', { name: postgresTableZh.add, exact: true });
+      await enter(record, 'id', id);
+      await enter(record, 'note', note);
+      await record.getByRole('button', { name: postgresTableZh.stage, exact: true }).click();
+    };
+    const editRecord = async (old: string, note: string) => {
+      await grid.getByRole('gridcell', { name: old, exact: true }).click();
+      await tableButton(postgresTableZh.edit).click();
+      const record = page.getByRole('dialog', { name: postgresTableZh.edit, exact: true });
+      await enter(record, 'note', note);
+      await record.getByRole('button', { name: postgresTableZh.stage, exact: true }).click();
+    };
+    const commit = async () => {
+      check();
+      await tableButton(postgresTableZh.preview).click();
+      const review = page.getByRole('dialog', { name: postgresTableZh.preview, exact: true });
+      await expect(review).toContainText(postgresTableZh.previewHint);
+      await review.getByRole('button', { name: postgresTableZh.apply, exact: true }).click();
+      await expect(gridTab.getByRole('status')).toContainText('已确认整批提交');
+      await expect(tableButton(postgresTableZh.refresh)).toBeEnabled();
+      check();
+    };
+    await add('2', '新增甲');
+    await add('3', '新增乙');
+    await expect(grid).not.toContainText('新增甲');
+    await commit();
+    await expect(grid).toContainText('新增乙');
+
+    await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('1');
+    await gridTab.getByLabel(postgresTableZh.filterColumn, { exact: true }).selectOption('note');
+    await gridTab.getByLabel(postgresTableZh.filterText, { exact: true }).fill('新增');
+    await tableButton(postgresTableZh.filter).click();
+    await expect(grid).toContainText('新增甲');
+    await expect(grid).not.toContainText('新增乙');
+    await tableButton(postgresTableZh.next).click();
+    await expect(grid).toContainText('新增乙');
+    await tableButton(postgresTableZh.clearFilter).click();
+    await expect(grid).toContainText('原值');
+    await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('20');
+    await tableButton(postgresTableZh.refresh).click();
+    await expect(grid).toContainText('新增乙');
+
+    await editRecord('原值', '原生整批更新');
+    for (const note of ['新增甲', '新增乙']) {
+      await grid.getByRole('gridcell', { name: note, exact: true }).click();
+      await tableButton(postgresTableZh.remove).click();
+    }
+    await expect(grid).toContainText('新增甲');
+    await page.screenshot({ path: info.outputPath('PostgreSQL表记录草稿.png') });
+    await commit();
+    await expect(grid).toContainText('原生整批更新');
+    await expect(grid).not.toContainText('新增甲');
+    await expect(grid).not.toContainText('新增乙');
+    await editRecord('原生整批更新', '原值');
+    await commit();
+    await expect(grid).toContainText('原值');
+    await mark('表页真实分页与筛选，预览前未写入，真实新增和整批更新删除，最终恢复原值');
+    await tableButton(postgresTableZh.query).click();
     await expect(tab().locator('.monaco-editor')).toBeVisible();
+    await page.locator('.tab-strip .tab-close').first().click();
     await expect(tab().locator('.monaco-editor .view-lines')).toContainText('SELECT * FROM "回归"."带""引号" LIMIT 1000;');
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     await execute();

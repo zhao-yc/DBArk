@@ -1,0 +1,18 @@
+export const postgresTableZh = {
+  relation: 'PostgreSQL 记录', refresh: '刷新记录', query: '打开查询草稿', first: '首页', previous: '上一页', next: '下一页',
+  pageSize: '每页行数', filterColumn: '筛选列', filterText: '包含文字', filter: '筛选', clearFilter: '清除筛选',
+  add: '新增记录', edit: '编辑所选记录', remove: '删除所选记录', stage: '加入草稿',
+  unchanged: '保持原值', text: '输入文本', hex: '输入十六进制', null: '写入 NULL', default: '使用 DEFAULT',
+  valueMode: '写入方式', value: '字段值', original: '原值', draft: '记录草稿', undo: '撤销此项',
+  discard: '放弃草稿', preview: '预览记录修改', apply: '确认提交整批修改', cancel: '取消',
+  empty: '尚未读取记录', waiting: '正在等待数据库结果', selected: (n: number) => '已选择本页第 ' + n + ' 行',
+  page: (offset: number, rows: number) => rows ? '第 ' + (offset + 1) + ' 至 ' + (offset + rows) + ' 行' : '当前页无记录',
+  noSelection: '请选择一行记录', noChange: '请选择至少一个要修改的字段',
+  generated: '数据库生成', noWrite: '此关系以只读方式打开', noKey: '当前关系没有可用的行编辑权限或主键',
+  unstable: '此关系没有稳定分页键，刷新后行顺序可能变化。',
+  truncated: '结果达到显示上限，请减少每页行数后刷新。', changes: (n: number) => '待提交 ' + n + ' 项',
+  previewHint: '确认前请核对原行和草稿。提交时先复核原记录，任何一项失败会结束整批事务。',
+  unknown: '提交结果待核对。请检查数据库中的实际记录，再刷新表页。',
+  refreshAfterFailure: '原预览已消费。请核对结果并刷新后重新编辑。',
+  change: { insert: '新增', update: '更新', delete: '删除' },
+} as const;

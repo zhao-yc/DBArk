@@ -83,7 +83,7 @@ export class EngineBroker {
   /** 网络消息保持原通道与冷引擎屏障；SQLite路径在上层终结，不能降级成mysql2请求。 */
   private networkRequest(command: string, input: unknown): Promise<any> {
     // 冷网络进程不可能持有任务；SQLite建会话前的取消不能为了空编号启动mysql2。
-    if (command === 'query.cancel' && !this.child) return Promise.resolve();
+    if ((command === 'query.cancel' || command === 'postgres.table.release') && !this.child) return Promise.resolve();
     // 冷引擎没有可失效的会话、缓存或任务；保存本地配置不应为检查空状态加载驱动进程。
     // 仅认可主进程提供的同一连接身份；已有进程、退出中或仍有等待请求时继续走真实引擎屏障。
     if (command === '__connections.prepareSave' && !this.child && !this.stopping && !this.closePending && !this.pending.size) {

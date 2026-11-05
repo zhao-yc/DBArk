@@ -11,6 +11,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.completion': true,
   'sqlite.tableLayout.get': true, 'sqlite.tableLayout.save': true, 'sqlite.tableLayout.reset': true,
   'sqlite.tablePresets.list': true, 'sqlite.tablePresets.save': true, 'sqlite.tablePresets.delete': true, 'sqlite.tablePresets.read': true,
+  'postgres.table.page': true, 'postgres.table.preview': true, 'postgres.table.apply': true, 'postgres.table.release': true,
   'sqlite.tablePage': true,
   'sqlite.relationships': true,
   'sqlite.referencePage': true,
