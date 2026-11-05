@@ -219,6 +219,71 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       await client.query('CREATE FUNCTION "补全.甲"."抢先签名"(integer) RETURNS integer LANGUAGE sql AS \'SELECT 2\'');
       expect(await applyRoutine(occupied.token)).toMatchObject({ outcome: 'notSent', message: expect.stringContaining('相同输入签名') });
       expect((await client.query('SELECT "补全.甲"."抢先签名"(0) AS result')).rows).toEqual([{ result: 2 }]);
+
+      const manageRoutine = async (name: string, action: 'rename' | 'drop', newName?: string,
+        kind: 'function' | 'procedure' = 'function', selected = profile) => {
+        const { stamp } = await readRoutine(name, kind, selected);
+        const base = { database, connectionId: selected.id, profile: selected, owner: routineTarget.owner,
+          connectionRevision: routineTarget.connectionRevision, name, kind, stamp };
+        return engine.handle('postgres.routine.manage.preview', action === 'rename'
+          ? { ...base, action, newName: newName! } : { ...base, action });
+      };
+      const applyManage = (token: string) => engine.handle('postgres.routine.manage.apply', { ...target, profile,
+        owner: routineTarget.owner, connectionRevision: routineTarget.connectionRevision, token });
+      const routineOid = async (name: string) => (await client.query<{ oid: string | null }>(
+        'SELECT pg_catalog.to_regprocedure($1)::oid::text AS oid', [name])).rows[0].oid;
+      const renamedIdentity = '"补全.甲"."改""名.函数"(integer)';
+      const fixtureOid = await routineOid(fixtureIdentity);
+      expect(fixtureOid).toBeTruthy();
+      await client.query(`REVOKE EXECUTE ON FUNCTION ${fixtureIdentity} FROM PUBLIC;
+        CREATE VIEW "补全.甲"."例程依赖" AS SELECT "补全.甲"."图形""例程"(42) AS value`);
+      await expect(manageRoutine(fixtureIdentity, 'rename', '抢先签名')).rejects.toThrow('相同输入签名');
+      const rename = await manageRoutine(fixtureIdentity, 'rename', '改"名.函数');
+      expect(rename.statements.at(-1)).toBe(`ALTER FUNCTION ${fixtureIdentity} RENAME TO "改""名.函数"`);
+      expect(await routineOid(fixtureIdentity)).toBe(fixtureOid);
+      expect(await routineOid(renamedIdentity)).toBeNull();
+      await expect(applyRoutine(rename.token)).rejects.toThrow('预览已失效');
+      expect(await applyManage(rename.token)).toMatchObject({ outcome: 'committed', table: renamedIdentity });
+      await expect(applyManage(rename.token)).rejects.toThrow('预览已失效');
+      expect(await routineOid(fixtureIdentity)).toBeNull();
+      expect(await routineOid(renamedIdentity)).toBe(fixtureOid);
+      expect(await readRoutine(renamedIdentity)).toMatchObject({ canManage: true, comment: fixtureFunction.comment,
+        definition: expect.stringContaining('INSERT INTO public.routine_side_effects') });
+      expect(await readRoutine(customIdentity)).toMatchObject({ securityDefiner: true, volatility: 's' });
+      expect((await client.query(`SELECT NOT EXISTS (SELECT FROM pg_catalog.aclexplode(p.proacl) a
+        WHERE a.grantee = 0) AS private FROM pg_catalog.pg_proc p WHERE p.oid = $1::oid`, [fixtureOid])).rows)
+        .toEqual([{ private: true }]);
+      const restricted = await manageRoutine(renamedIdentity, 'drop');
+      expect(restricted.statements.at(-1)).toBe(`DROP FUNCTION ${renamedIdentity} RESTRICT`);
+      expect(await applyManage(restricted.token)).toMatchObject({ outcome: 'rolledBack' });
+      expect(await routineOid(renamedIdentity)).toBe(fixtureOid);
+      await client.query('DROP VIEW "补全.甲"."例程依赖"');
+      const staleDrop = await manageRoutine(renamedIdentity, 'drop');
+      await client.query(`COMMENT ON FUNCTION ${renamedIdentity} IS '预览后已修改'`);
+      expect(await applyManage(staleDrop.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('已变化') });
+      const replacedDrop = await manageRoutine(renamedIdentity, 'drop');
+      await client.query(`DROP FUNCTION ${renamedIdentity};
+        CREATE FUNCTION ${renamedIdentity} RETURNS integer LANGUAGE sql AS 'SELECT 99'`);
+      expect(await applyManage(replacedDrop.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('已变化') });
+      expect((await client.query('SELECT "补全.甲"."改""名.函数"(0) AS result')).rows).toEqual([{ result: 99 }]);
+      const drop = await manageRoutine(renamedIdentity, 'drop');
+      expect(await applyManage(drop.token)).toMatchObject({ outcome: 'committed', table: renamedIdentity });
+      expect(await routineOid(renamedIdentity)).toBeNull();
+      expect(await routineOid(customIdentity)).toBeTruthy();
+
+      const renamedProcedure = '"补全.甲"."改名过程"(integer)';
+      const procedureOid = await routineOid(procedureIdentity);
+      const renameProcedure = await manageRoutine(procedureIdentity, 'rename', '改名过程', 'procedure');
+      expect(renameProcedure.statements.at(-1)).toBe(`ALTER PROCEDURE ${procedureIdentity} RENAME TO "改名过程"`);
+      expect(await applyManage(renameProcedure.token)).toMatchObject({ outcome: 'committed', table: renamedProcedure });
+      expect(await routineOid(renamedProcedure)).toBe(procedureOid);
+      expect((await client.query('CALL "补全.甲"."改名过程"(41, NULL)')).rows).toEqual([{ 结果: 42 }]);
+      const dropProcedure = await manageRoutine(renamedProcedure, 'drop', undefined, 'procedure');
+      expect(dropProcedure.statements.at(-1)).toBe(`DROP PROCEDURE ${renamedProcedure} RESTRICT`);
+      expect(await applyManage(dropProcedure.token)).toMatchObject({ outcome: 'committed', table: renamedProcedure });
+      expect(await routineOid(renamedProcedure)).toBeNull();
+      expect((await client.query('SELECT count(*)::int AS count FROM public.routine_side_effects')).rows).toEqual([{ count: 0 }]);
+
       const { sessionId } = await engine.handle('sessions.open', target);
       const { sessionId: other } = await engine.handle('sessions.open', target);
       const run = (sql: string, taskId = randomUUID()): Promise<QueryOutcome> =>
@@ -272,6 +337,8 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         expect(limitedObjects).toContainEqual({ kind: 'function', name: integerRoutine });
         expect(limitedObjects).not.toContainEqual({ kind: 'function', name: textRoutine });
         await expect(readRoutine(textRoutine, 'function', limitedProfile)).rejects.toThrow('不可见');
+        expect(await readRoutine(integerRoutine, 'function', limitedProfile)).toMatchObject({ canManage: false });
+        await expect(manageRoutine(integerRoutine, 'drop', undefined, 'function', limitedProfile)).rejects.toThrow('没有例程管理权限');
         expect((await run('RESET ROLE')).failure).toBeUndefined();
         expect(await fields('public')).toEqual(['public_field']);
       }

@@ -14,11 +14,13 @@ import { postgresMaterializedRefreshSchema, type PostgresMaterializedRefreshInpu
 import { readPostgresMaterializedFacts } from './materializedView';
 import { postgresViewOptionsSql, readPostgresViewFacts } from './viewDefinition';
 import { compilePostgresRoutine } from './createRoutine';
-import { postgresRoutineCreateSchema, type PostgresRoutineCreateInput } from '../../shared/postgresRoutine';
+import { postgresRoutineCreateSchema, postgresRoutineManageSchema, type PostgresRoutineCreateInput,
+  type PostgresRoutineManageInput } from '../../shared/postgresRoutine';
+import { compilePostgresRoutineManage } from './routine';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate';
+type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
 interface Plan {
   table: string;
   statements: string[];
@@ -272,6 +274,15 @@ export class PostgresCreateTableWorkspace {
       const { owner: _owner, connectionRevision: _revision, ...raw } = input;
       const draft = postgresRoutineCreateSchema.parse(raw);
       return connection => compilePostgresRoutine(connection, draft);
+    });
+  }
+
+  /** 维护令牌和创建令牌分别绑定，确认只能消费原动作预览。 */
+  async prepareRoutineManage(input: Scoped<PostgresRoutineManageInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    return this.prepareRelation(input, 'routineManage', connect, () => {
+      const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+      const draft = postgresRoutineManageSchema.parse(raw);
+      return connection => compilePostgresRoutineManage(connection, draft);
     });
   }
 

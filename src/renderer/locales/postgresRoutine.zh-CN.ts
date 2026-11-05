@@ -13,4 +13,10 @@ export const postgresRoutineZh = {
   preview: '预览例程 SQL', confirm: '确认创建例程', back: '返回编辑', wait: '正在读取可创建对象的 schema…',
   empty: '当前连接没有可创建例程的 schema。', working: '正在处理 PostgreSQL 例程…',
   unknown: '创建结果未确认，请在原数据库核对该例程。', discard: '放弃当前例程草稿？',
+  rename: '重命名例程', drop: '删除例程', newName: '新名称',
+  renameHint: '仅修改当前输入签名对应的例程名称。请核对预览中的 schema 和参数类型。',
+  dropHint: '仅删除当前输入签名对应的例程。存在依赖对象时，PostgreSQL 会拒绝删除。',
+  acknowledgeDrop: '确认删除此完整签名对应的例程', confirmDrop: '确认删除例程', confirmRename: '确认重命名例程',
+  returnFromPreview: '返回操作', stale: '连接已变化，请关闭后重新打开例程。',
+  manageUnknown: '操作结果未确认，请在原数据库核对该例程。', discardManage: '放弃当前重命名草稿？',
 } as const;

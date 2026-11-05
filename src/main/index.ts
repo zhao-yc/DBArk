@@ -766,7 +766,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         !columnsMain.sharesDocumentOwner(session.postgres.owner, columns))
       throw Error('PostgreSQL执行计划的原窗口或会话已变化');
   }
-  if (command.startsWith('postgres.routine.create.') || command === 'postgres.sequence.preview' || command === 'postgres.sequence.apply' || command.startsWith('postgres.sequence.manage.') || command.startsWith('postgres.createTable.') || command.startsWith('postgres.createView.') || command.startsWith('postgres.editView.') || command.startsWith('postgres.viewManage.') || command.startsWith('postgres.materializedRefresh.') || command.startsWith('postgres.columnEdit.') || command.startsWith('postgres.indexEdit.') || command.startsWith('postgres.keyEdit.') || command.startsWith('postgres.foreignEdit.') || command.startsWith('postgres.checkEdit.')) {
+  if (command.startsWith('postgres.routine.create.') || command.startsWith('postgres.routine.manage.') || command === 'postgres.sequence.preview' || command === 'postgres.sequence.apply' || command.startsWith('postgres.sequence.manage.') || command.startsWith('postgres.createTable.') || command.startsWith('postgres.createView.') || command.startsWith('postgres.editView.') || command.startsWith('postgres.viewManage.') || command.startsWith('postgres.materializedRefresh.') || command.startsWith('postgres.columnEdit.') || command.startsWith('postgres.indexEdit.') || command.startsWith('postgres.keyEdit.') || command.startsWith('postgres.foreignEdit.') || command.startsWith('postgres.checkEdit.')) {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document, connectionRevision = store.connectionRevision();
     let owner = postgresTableOwners.get(document);

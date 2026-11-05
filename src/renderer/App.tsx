@@ -1065,6 +1065,14 @@ function WorkspaceApp() {
       onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : !schema.table && connections.find(profile => profile.id === schema.connectionId)?.dialect === 'postgresql' ? <PostgresCreateTableDialog key={JSON.stringify([schema.connectionId, schema.database])} target={{ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }} onDirtyChange={setTableCreateEdits} onCreated={(table, version, message) => finishPostgresTableCreate({ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }, table, version, message)} onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : <SchemaDialog {...schema} onDirtyChange={setTableCreateEdits} onCreated={finishTableCreate} onSqliteCreated={finishSqliteTableCreate} onClose={() => { setSchema(null); setTableCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {ddl && (ddl.object && connections.find(profile => profile.id === ddl.connectionId)?.dialect === 'postgresql' ? ddl.object.kind === 'function' || ddl.object.kind === 'procedure' ? <PostgresRoutineDialog
       key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.kind, ddl.object.name])}
       target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', kind: ddl.object.kind, name: ddl.object.name }}
+      readOnly={ddl.readOnly} onDirtyChange={setColumnEdits}
+      onManaged={(action, name, version, message) => {
+        const current = useWorkspace.getState();
+        current.notify(message);
+        if ((current.connectionVersions[ddl.connectionId] ?? 0) !== version) return;
+        refreshRenameDatabase({ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: name });
+        setDdl(action === 'rename' && ddl.object ? { ...ddl, object: { ...ddl.object, name } } : null);
+      }}
       onClose={() => setDdl(null)}/> : ddl.object.kind === 'sequence' ? <PostgresSequenceDialog
       key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])}
       target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: ddl.object.name }}
