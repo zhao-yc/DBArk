@@ -18,6 +18,8 @@ import { postgresKeyEditZh as keyText } from '../../src/renderer/locales/postgre
 import { postgresForeignEditZh as fkText } from '../../src/renderer/locales/postgresForeignEdit.zh-CN';
 import { postgresCheckEditZh as checkText } from '../../src/renderer/locales/postgresCheckEdit.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
+import { postgresTableLayoutZh as tableLayoutText } from '../../src/renderer/locales/postgresTableLayout.zh-CN';
+import { tableGridZh as tableGridText } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableSortZh as tableSortText } from '../../src/renderer/locales/tableSort.zh-CN';
 import { tablePresetsZh as tablePresetText } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { postgresTableExportZh as tableExportText } from '../../src/renderer/locales/postgresTableExport.zh-CN';
@@ -269,6 +271,45 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(grid).toContainText('新增乙');
     await mark('PostgreSQL 表页命名方案保存已应用的筛选与排序，恢复筛选原文和首页顺序，删除方案后仍按当前条件翻页');
 
+    // 隐藏仍参与排序和定位的主键，后续完整导出与真实跨页记录操作沿用原列映射。
+    const layoutDialog = page.getByRole('dialog', { name: tableLayoutText.title, exact: true });
+    const layoutButton = (name: string) => layoutDialog.getByRole('button', { name, exact: true });
+    await tableButton(tableLayoutText.entry).click();
+    await layoutButton(tableGridText.up + ' note').click();
+    await expect(grid.getByRole('columnheader').filter({ hasText: /^(id|note)/ }).first()).toContainText('note');
+    await layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true }).fill('245');
+    await layoutDialog.getByLabel(heightText.label, { exact: true }).selectOption('56');
+    await layoutButton(tableGridText.freezeThrough('note')).click();
+    await layoutDialog.getByRole('checkbox', { name: tableGridText.visible + ' id', exact: true }).uncheck();
+    await layoutButton(tableGridText.save).click();
+    await expect(layoutDialog.getByText(tableGridText.saved, { exact: true })).toBeVisible();
+    await expect(layoutDialog.getByLabel(heightText.label, { exact: true })).toHaveCSS('width', '210px');
+    await page.screenshot({ path: info.outputPath('PostgreSQL表格列布局.png') });
+    await layoutButton(zh.common.close).click();
+    await expect(grid.getByRole('columnheader').filter({ hasText: /^id/ })).toHaveCount(0);
+    const noteHeader = grid.getByRole('columnheader').filter({ hasText: /^note/ });
+    await expect(noteHeader).toHaveClass(/rdg-cell-frozen/);
+    await expect(noteHeader).toHaveCSS('width', '245px');
+    const layoutHandle = await noteHeader.locator('.rdg-resize-handle').boundingBox();
+    if (!layoutHandle) throw Error('缺少 PostgreSQL 列宽拖动手柄');
+    const resizeX = layoutHandle.x + layoutHandle.width / 2, resizeY = layoutHandle.y + layoutHandle.height / 2;
+    await page.mouse.move(resizeX, resizeY);
+    await page.mouse.down();
+    try { await page.mouse.move(resizeX + 55, resizeY, { steps: 5 }); }
+    finally { await page.mouse.up(); }
+    await expect(noteHeader).toHaveCSS('width', '300px');
+    await expect(gridTab.locator('.tab-status')).toContainText(tableGridText.unsaved);
+    await tableButton(tableLayoutText.entry).click();
+    await expect(layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true })).toHaveValue('300');
+    await layoutButton(tableLayoutText.reload).click();
+    await layoutButton(tableGridText.confirmLayout).click();
+    await expect(layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true })).toHaveValue('245');
+    await layoutButton(zh.common.close).click();
+    await expect(noteHeader).toHaveCSS('width', '245px');
+    await expect(grid).toHaveClass(/grid-row-height-56/);
+    await expect(gridTab.locator('.tab-status')).toContainText(postgresTableZh.activeSort(1));
+    await expect(grid).toContainText('新增乙');
+
     // 从第二页导出全部筛选记录，真实文件写入仍由原 Main 和 Engine 处理。
     const tableFile = info.outputPath('PostgreSQL原生导出.json');
     const tableSqlFile = info.outputPath('PostgreSQL原生数据.sql');
@@ -427,6 +468,18 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('20');
     await tableButton(postgresTableZh.refresh).click();
     await mark('表页真实筛选和跨五页草稿，回到首页重编同一记录，统一提交更新与删除并恢复原值');
+    await expect(grid.getByRole('columnheader').filter({ hasText: /^id/ })).toHaveCount(0);
+    await tableButton(tableLayoutText.entry).click();
+    await layoutButton(tableGridText.reset).click();
+    await layoutButton(zh.common.cancel).click();
+    await expect(layoutDialog.getByRole('checkbox', { name: tableGridText.visible + ' id', exact: true })).not.toBeChecked();
+    await layoutButton(tableGridText.reset).click();
+    await layoutButton(tableGridText.confirmLayout).click();
+    await expect(layoutDialog.getByRole('checkbox', { name: tableGridText.visible + ' id', exact: true })).toBeChecked();
+    await layoutButton(zh.common.close).click();
+    await expect(grid.getByRole('columnheader').filter({ hasText: /^id/ })).toBeVisible();
+    await expect(grid).toHaveClass(/grid-row-height-32/);
+    await mark('PostgreSQL 表页列布局显示顺序、隐藏主键、冻结和尺寸持久化及重置，真实排序、导出和跨页写入保持原键');
     // 同一表页查看原目录字段、约束和部分索引，并验证刷新。
     await tableButton(postgresStructureZh.open).click();
     const structure = page.getByRole('dialog', { name: postgresStructureZh.title, exact: true });

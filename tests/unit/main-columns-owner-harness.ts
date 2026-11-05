@@ -11,7 +11,8 @@ import { extractMainProductionBinding } from './main-production-function';
 import { TablePresetSources } from '../../src/main/tablePresets';
 import { QueryResultPresetSources } from '../../src/main/queryResultPresetSources';
 import { SqliteTablePresetMain } from '../../src/main/sqliteTablePresetMain';
-import { SqliteTableLayoutMain } from '../../src/main/sqliteTableLayoutMain';
+import { SqliteTableLayoutMain, TableLayoutMain } from '../../src/main/sqliteTableLayoutMain';
+import { postgresLayoutSchemas } from '../../src/shared/sqliteTableLayout';
 import { validateCommand } from '../../src/shared/validation';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { QueryFileSources } from '../../src/main/queryFileSources';
@@ -122,6 +123,10 @@ export function mainColumnsHarness() {
   // 同一真实来源实现撤销SQLite本机方案；未登记存储时不能凭夹具领取读写能力。
   context.sqliteTablePresets = new SqliteTablePresetMain({ get store() { return context.store; }, assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right), available: id => context.connectionConfig.assertAvailable(id), shuttingDown: () => context.shuttingDown });
   context.sqliteTableLayouts = new SqliteTableLayoutMain({ get store() { return context.store; }, assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right), available: id => context.connectionConfig.assertAvailable(id), shuttingDown: () => context.shuttingDown });
+  context.postgresTableLayouts = new TableLayoutMain({
+    assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right),
+    available: id => context.connectionConfig.assertAvailable(id), shuttingDown: () => context.shuttingDown,
+  }, { get: target => context.store.postgresTableLayout(target), save: (input, reset, check) => context.store.savePostgresTableLayout(input, reset, check) }, postgresLayoutSchemas, 'PostgreSQL');
   context.resultPresetSources = new QueryResultPresetSources({ assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right) });
   runInContext(ts.transpileModule(productionParts(), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   // createWindow在首个await前同步建立窗口及真实owner监听，RAM loadURL不操作GUI。

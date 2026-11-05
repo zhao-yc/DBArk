@@ -6,7 +6,8 @@ import { SqliteTableDraftFiles, bindSqliteTableDraft, assertSqliteTableDraftBind
 import { tableDraftEndpointKey } from './tableDraftBinding';
 import { objectDefinitionInputSchema, assertObjectDefinitionOutput } from '../shared/objectDefinition';
 import { SqliteTablePresetMain, type SqlitePresetCommand } from './sqliteTablePresetMain';
-import { SqliteTableLayoutMain } from './sqliteTableLayoutMain';
+import { SqliteTableLayoutMain, TableLayoutMain } from './sqliteTableLayoutMain';
+import { postgresLayoutSchemas } from '../shared/sqliteTableLayout';
 import { SqliteObjectsMain } from './sqliteObjectsMain';
 import { sqliteObjectsFactMessage } from '../shared/sqliteObjectsFact';
 import { SqliteTableMaintenanceMain } from './sqliteTableMaintenanceMain';
@@ -205,6 +206,11 @@ const queryInsertExports=new QueryInsertExports(files,{assert:value=>columnsMain
 const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const sqliteTablePresets = new SqliteTablePresetMain({ get store() { return store; }, assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown });
 const sqliteTableLayouts = new SqliteTableLayoutMain({ get store() { return store; }, assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown });
+const postgresTableLayouts = new TableLayoutMain({
+  assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
+  available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown,
+}, { get: target => store.postgresTableLayout(target), save: (input, reset, check) => store.savePostgresTableLayout(input, reset, check) },
+  postgresLayoutSchemas, 'PostgreSQL');
 const recordTemplates = new RecordTemplateMain({ get store() { return store; }, assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), available: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown });
 const resultPresetSources=new QueryResultPresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
@@ -290,7 +296,7 @@ const sqliteTableImports = new SqliteTableImportMain({
   save: task => store.saveTask(task), event: event => taskEvent(event),
 });
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
-type MainInvocation = ColumnsInvocation & { recordTemplatePublication?: () => void; sqliteValueOptionsPublication?: () => void; sqliteReadPublication?: () => void; objectDefinitionPublication?: (output?: unknown) => void; sqliteRelationshipsPublication?: () => void; sqlitePresetPublication?: () => void; postgresPresetPublication?: () => void; tableChecksRequest?: TableChecksInvocation; databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
+type MainInvocation = ColumnsInvocation & { recordTemplatePublication?: () => void; sqliteValueOptionsPublication?: () => void; sqliteReadPublication?: () => void; objectDefinitionPublication?: (output?: unknown) => void; sqliteRelationshipsPublication?: () => void; sqlitePresetPublication?: () => void; postgresPresetPublication?: () => void; postgresLayoutPublication?: () => void; tableChecksRequest?: TableChecksInvocation; databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 数据库属性能力也绑定真实文档；连接修订只由Main捕获，不接受渲染进程注入。 */
 const databaseEncodingOwners = new DatabaseDefaultEncodingOwners({
   assert: owner => { columnsMain.assertCapturedOwner(owner); if ((owner as MainInvocation).databaseEncodingRevision !== store.connectionRevision()) throw Error('连接配置已变化，请重新读取数据库属性'); },
@@ -487,7 +493,7 @@ function cancelTablePresetRead(taskId:string):Promise<unknown> {
 }
 /** 来源销毁不依赖旧渲染进程继续发IPC；收尾失败由仍在等待的原请求保留。 */
 function invalidateTablePresetSources():void {
-  sqliteTableLayouts.invalidate();
+  sqliteTableLayouts.invalidate(); postgresTableLayouts.invalidate();
   resultPresetSources.invalidate();
   sqliteTablePresets.invalidate(); tablePresetSources.invalidate();for(const taskId of tablePresetReads.keys())void cancelTablePresetRead(taskId).catch(()=>undefined);
 }
@@ -1331,6 +1337,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'table.presets.list':
       if(shuttingDown)throw Error('客户端正在退出，不能读取方案');
       return tablePresetSources.issue(columns,input,store.tablePresets(input));
+    case 'postgres.table.layout.get':
+    case 'postgres.table.layout.save':
+    case 'postgres.table.layout.reset': {
+      const kind = command === 'postgres.table.layout.get' ? 'get' : command === 'postgres.table.layout.save' ? 'save' : 'reset';
+      const result = postgresTableLayouts.execute(kind, input, columns);
+      columns!.postgresLayoutPublication = result.publish;
+      return result.value;
+    }
     case 'postgres.table.presets.list':
     case 'postgres.table.presets.save':
     case 'postgres.table.presets.delete':
@@ -2221,6 +2235,7 @@ else {
           if (payload.command === 'query.objectDefinition') { if (!columns?.objectDefinitionPublication) throw Error('对象结构缺少原窗口发布门'); columns.objectDefinitionPublication(result); }
           if (payload.command.startsWith('sqlite.tablePresets.') || payload.command.startsWith('sqlite.tableLayout.')) { if (!columns?.sqlitePresetPublication) throw Error('SQLite方案缺少原请求发布门'); columns.sqlitePresetPublication(); }
           if (payload.command.startsWith('postgres.table.presets.')) { if (!columns?.postgresPresetPublication) throw Error('PostgreSQL 方案缺少原请求发布门'); columns.postgresPresetPublication(); }
+          if (payload.command.startsWith('postgres.table.layout.')) { if (!columns?.postgresLayoutPublication) throw Error('PostgreSQL 列布局缺少原请求发布门'); columns.postgresLayoutPublication(); }
           if (payload.command === 'sqlite.relationships') { if (!columns?.sqliteRelationshipsPublication) throw Error('SQLite关系图缺少原窗口发布门'); columns.sqliteRelationshipsPublication(); }
           if (payload.command === 'sqlite.valueOptions') { if (!columns?.sqliteValueOptionsPublication) throw Error('SQLite不同值缺少原窗口发布门'); columns.sqliteValueOptionsPublication(); }
           if (payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage' || payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }

@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DataRow } from '../../shared/contracts';
+import type { ColumnWidths } from 'react-data-grid';
+import type { TablePreferences } from '../../shared/tablePreferences';
+import { exactTableLayoutProjection, postgresLayoutSchemas, type PostgresLayoutTarget } from '../../shared/sqliteTableLayout';
 import { postgresRelationSelect } from '../../shared/postgresSql';
 import {
   isPostgresTableFiltered, postgresTableLimits, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableField,
@@ -16,8 +19,13 @@ import { PostgresTableImportDialog } from './PostgresTableImportDialog';
 import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
 import { TableSortPanel } from './TableSortPanel';
 import { TablePresetPanel } from './TablePresetPanel';
+import { TablePreferencesDialog } from './TablePreferencesDialog';
 import { tableSortZh } from '../locales/tableSort.zh-CN';
 import { tablePresetsZh } from '../locales/tablePresets.zh-CN';
+import { tableGridZh } from '../locales/tableGrid.zh-CN';
+import { postgresTableLayoutZh as layoutText } from '../locales/postgresTableLayout.zh-CN';
+import { TableLayoutController, type SqliteLayoutView, type TableLayoutScope } from '../sqliteTableLayout';
+import { setTableColumnWidths } from '../tableColumnPreferences';
 import { postgresTablePresetConfiguration, postgresTablePresetOptions, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { validateTableSort } from '../tableSort';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
@@ -95,6 +103,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
+  const [pageConnectionVersion, setPageConnectionVersion] = useState<number>();
   const [exportPage, setExportPage] = useState<PostgresTablePage>();
   const [importPage, setImportPage] = useState<PostgresTablePage>();
   const [row, setRow] = useState<number | null>(null);
@@ -110,12 +119,35 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [advancedFilters, setAdvancedFilters] = useState(false);
   const [sortPageToken, setSortPageToken] = useState<string>();
   const [presetPage, setPresetPage] = useState<{ token: string; connectionVersion: number }>();
+  const [layoutDialog, setLayoutDialog] = useState<object>();
+  const [layoutView, setLayoutView] = useState<SqliteLayoutView>({ preferences: { version: 1, columns: [] }, ready: false, pending: false, dirty: false, error: '' });
+  const [layoutError, setLayoutError] = useState('');
   const [pageSize, setPageSize] = useState(options.limit);
   const lease = useRef<object | undefined>(undefined);
   const issued = useRef<string | undefined>(undefined);
   const lifetime = useRef<object | undefined>(undefined);
+  const recordDirty = useRef(false);
   const started = useRef(false);
   const target: PostgresTableTarget = { connectionId: tab.connectionId, database: tab.database ?? 'postgres', table: tab.table ?? '', tabId: tab.id };
+  const layoutTarget = useMemo(() => ({ connectionId: target.connectionId, database: target.database, table: target.table }), [target.connectionId, target.database, target.table]);
+  const layoutKey = useMemo(() => ({}), [layoutTarget, connectionVersion]);
+  const columnNames = useMemo(() => page?.columns.map(column => column.name) ?? [], [page?.columns]);
+  const layoutScope = useRef<TableLayoutScope<PostgresLayoutTarget>>(null!);
+  layoutScope.current = { key: layoutKey, target: layoutTarget, names: columnNames, current: () => {
+    const state = useWorkspace.getState();
+    return !!lifetime.current && active && state.settings.activeTabId === tab.id && pageConnectionVersion === connectionVersion &&
+      (state.connectionVersions[tab.connectionId] ?? 0) === connectionVersion;
+  } };
+  const [layout] = useState(() => new TableLayoutController<PostgresLayoutTarget>({
+    scope: () => layoutScope.current,
+    get: input => invoke('postgres.table.layout.get', input), save: input => invoke('postgres.table.layout.save', input),
+    reset: input => invoke('postgres.table.layout.reset', input), acquire: () => acquireWorkspaceBusy(tab.id),
+    changed: view => {
+      setLayoutView(view);
+      const state = useWorkspace.getState(), dirty = recordDirty.current || view.dirty;
+      if (!!state.dirtyTabs[tab.id] !== dirty) state.setDirty(tab.id, dirty);
+    },
+  }, postgresLayoutSchemas, layoutText));
 
   /** 操作回包只能发布到原组件代次，加载或应用进行时由全局标签忙碌屏障保护。 */
   async function run(action: (isCurrent: () => boolean) => Promise<unknown>, onError?: (reason: unknown) => void) {
@@ -146,6 +178,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     }
     issued.current = result.exportToken ?? result.pageToken;
     setPage(result);
+    setPageConnectionVersion(connectionVersion);
     setOptions(next);
     setPageSize(next.limit);
     setRow(null);
@@ -168,6 +201,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     started.current = true;
     void run(isCurrent => read(options, isCurrent));
   }, [active]);
+  useEffect(() => { layout.activate(); return () => layout.dispose(); }, [layout]);
+  useEffect(() => { layout.sync(); });
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false) {
@@ -179,7 +214,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 更新草稿及标签退出保护。 */
   function setChanges(next: DraftEntry[]) {
     setDraft(next);
-    useWorkspace.getState().setDirty(tab.id, next.length > 0);
+    recordDirty.current = next.length > 0;
+    useWorkspace.getState().setDirty(tab.id, recordDirty.current || layout.view.dirty);
   }
 
   /** 每项保留原页和主键身份，重新编辑同一记录只更新这一个动作。 */
@@ -233,26 +269,56 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     });
   }
 
-  const blocked = busy || !!form || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage;
+  const layoutOpen = layoutDialog === layoutKey;
+  const blocked = busy || !!form || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
   const frozenPage = blocked || draft.length > 0;
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
   const firstPage = { ...options, offset: 0, limit: pageSize };
   const appliedAdvanced = options.filter && 'rules' in options.filter ? options.filter : undefined;
-  const columnNames = page?.columns.map(column => column.name) ?? [];
   const sortRules = postgresTableSortRules(options.sort);
   const sorted = sortRules.flatMap(rule => {
     const column = page?.columns.find(column => column.name === rule.column);
     return column ? [{ ...rule, column: column.key }] : [];
   });
   const sortIsCurrent = () => !!lifetime.current && active && !!sortPageToken && issued.current === sortPageToken &&
-    !lease.current && !useWorkspace.getState().dirtyTabs[tab.id];
+    !lease.current && !recordDirty.current;
   const presetIsCurrent = () => {
     const state = useWorkspace.getState();
     return !!lifetime.current && active && !!presetPage && issued.current === presetPage.token && !lease.current &&
-      state.settings.activeTabId === tab.id && !state.dirtyTabs[tab.id] &&
+      state.settings.activeTabId === tab.id && !recordDirty.current &&
       (state.connectionVersions[tab.connectionId] ?? 0) === presetPage.connectionVersion;
   };
+
+  /** 布局只投影列定义；网格中的行索引和内部键继续对应原页，记录和导出都使用完整列。 */
+  const gridLayout = useMemo(() => {
+    const columns = page?.columns ?? [], projection = exactTableLayoutProjection(columnNames, layoutView.preferences);
+    return {
+      columns: projection.map(item => columns[item.index]),
+      frozenKeys: projection.filter(item => item.frozen).map(item => columns[item.index].key),
+      widths: new Map(projection.flatMap(item => item.width === undefined ? [] : [[columns[item.index].key, item.width] as const])),
+    };
+  }, [page?.columns, columnNames, layoutView.preferences]);
+
+  /** 仅保存明确调整后的宽度，跳过虚拟网格的自动测量和无变化事件。 */
+  function resizeLayout(widths: ColumnWidths) {
+    if (!layoutScope.current.current() || blocked || !layoutView.ready || layoutView.pending) return;
+    const changed = new Map<string, number>();
+    for (const column of gridLayout.columns) {
+      const width = widths.get(column.key);
+      if (width?.type === 'resized' && width.width !== gridLayout.widths.get(column.key)) changed.set(column.name, Math.round(width.width));
+    }
+    if (!changed.size) return;
+    try { layout.set(setTableColumnWidths(layout.view.preferences, changed)); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  function changeLayout(preferences: TablePreferences) { layout.set(preferences); }
+
+  function persistLayout(reset = false) {
+    setLayoutError('');
+    void layout.persist(reset).catch(reason => setLayoutError(errorMessage(reason)));
+  }
 
   /** 用正常分页执行方案，直到服务器成功回包才替换页、条件和排序。 */
   async function applyPreset(configuration: TablePresetConfiguration): Promise<boolean> {
@@ -317,6 +383,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <button disabled={frozenPage || !page?.exportToken} onClick={() => {
         if (page?.exportToken) setPresetPage({ token: page.exportToken, connectionVersion });
       }}>{text.presets}</button>
+      <button disabled={blocked || !layoutView.ready || layoutView.pending || !layoutScope.current.current()} onClick={() => {
+        setLayoutError(''); setLayoutDialog(layoutKey);
+      }}>{layoutText.entry}</button>
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
       initial={appliedAdvanced} disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
@@ -327,11 +396,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     {page && <div className="tab-status"><span>{text.page(options.offset, page.rows.length)}</span><span>{row === null ? text.noSelection : text.selected(row + 1)}</span>
       {appliedAdvanced && <span>{text.activeAdvancedFilter(appliedAdvanced.rules.filter(rule => rule.enabled !== false).length)}</span>}
       {sortRules.length > 0 && <span>{text.activeSort(sortRules.length)}</span>}
+      {layoutView.dirty && <span>{tableGridZh.unsaved}</span>}
       {!page.pageToken && <span>{text.noWrite}</span>}
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
     <div className="pg-table-grid">
-      {page ? <ResultsGrid key={page.exportToken} columns={page.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
+      {page ? <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
+        frozenKeys={gridLayout.frozenKeys} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onColumnWidthsChange={resizeLayout}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           try {
             const rules = sort.map(({ column, direction, nulls }) => ({
@@ -355,7 +426,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     </div>}
     {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
       isCurrent={() => !!lifetime.current && !!exportPage.exportToken && issued.current === exportPage.exportToken &&
-        !useWorkspace.getState().dirtyTabs[tab.id]} onClose={() => setExportPage(undefined)}/>}
+        !recordDirty.current} onClose={() => setExportPage(undefined)}/>}
+    {layoutOpen && page && <TablePreferencesDialog title={layoutText.title} hint={layoutText.hint} defaultWidth={170}
+      preferences={layoutView.preferences} pending={layoutView.pending} dirty={layoutView.dirty} error={layoutError || layoutView.error}
+      onChange={changeLayout} onSave={() => persistLayout()} onReset={() => persistLayout(true)} resetPrompt={layoutText.reset}
+      onReload={() => { setLayoutError(''); void layout.reload(); }} reloadPrompt={layoutText.discard} reloadLabel={layoutText.reload}
+      fitSource={() => ({ columns: gridLayout.columns.map(column => ({ ...column, key: column.name })), rowCount: page.rows.length,
+        cell: (index, name) => cellPreview(page.rows[index][gridLayout.columns.find(column => column.name === name)!.key]) })}
+      onClose={() => setLayoutDialog(undefined)}/>}
     {sortPageToken && <Modal title={tableSortZh.entry} onClose={() => setSortPageToken(undefined)} wide>
       <div className="modal-content pg-table-sort-dialog">
         <TableSortPanel columns={columnNames} initial={sortRules} hint={text.sortHint} isCurrent={sortIsCurrent}
@@ -377,7 +455,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     </Modal>}
     {importPage && <PostgresTableImportDialog target={target} page={importPage}
       isCurrent={() => !!lifetime.current && !!importPage.exportToken && issued.current === importPage.exportToken &&
-        !useWorkspace.getState().dirtyTabs[tab.id]} onClose={() => setImportPage(undefined)}
+        !recordDirty.current} onClose={() => setImportPage(undefined)}
       onOutcome={(outcome, committed) => {
         if (!lifetime.current || issued.current !== importPage.exportToken) return;
         setImportPage(undefined); setRequiresRefresh(true); setMessage(outcome);

@@ -9,7 +9,7 @@ import { LocalStore } from '../../src/main/storage';
 import { SqliteTableLayoutMain } from '../../src/main/sqliteTableLayoutMain';
 import { mainColumnsHarness } from './main-columns-owner-harness';
 import type { SqliteConnectionProfile } from '../../src/shared/contracts';
-import type { SqliteLayoutStoredSnapshot } from '../../src/shared/sqliteTableLayout';
+import { exactTableLayoutProjection, type PostgresLayoutStoredSnapshot } from '../../src/shared/sqliteTableLayout';
 const wasm = createRequire(import.meta.url).resolve('sql.js/dist/sql-wasm.wasm'), target = { connectionId: 'sqlite', database: 'main' as const, table: '表.__proto__' };
 const profile: SqliteConnectionProfile = { id: target.connectionId, name: '离线文件', group: '', color: '#123456', dialect: 'sqlite', sqlite: { filePath: '不得读取的不存在文件.sqlite', readOnly: true, busyTimeoutMs: 1000 } };
 const preferences = { version: 1 as const, columns: [{ name: '__proto__', hidden: false, width: 64 }, { name: '长列' + '字'.repeat(510), hidden: true }, { name: 'A', hidden: false, width: 2000 }], frozenThrough: '__proto__' };
@@ -18,7 +18,46 @@ let directory: string, file: string, store: LocalStore;
 beforeEach(async () => { directory = mkdtempSync(join(tmpdir(), 'dbark-sqlite-layout-')); file = join(directory, 'config.sqlite'); store = await LocalStore.open(file, wasm, protector); store.saveConnection(profile); vi.clearAllMocks(); });
 /** 只清理成功用例的精确独占目录，失败保留原文件；拒绝链接或越界路径。 */
 afterEach(context => { store?.close(); if (context.task.result?.state === 'fail') { console.error('列布局失败目录保留：' + directory); return; } const path = resolve(directory); if (dirname(path) !== resolve(tmpdir()) || !/^dbark-sqlite-layout-[\w-]+$/.test(basename(path)) || lstatSync(path).isSymbolicLink() || dirname(realpathSync(path)) !== realpathSync(tmpdir())) throw Error('拒绝越界清理'); rmSync(path, { recursive: true }); });
-const packet = (s: SqliteLayoutStoredSnapshot) => ({ ...s.target, source: s.source, expectedRevision: s.revision, bindingToken: randomUUID() });
+const packet = (s: PostgresLayoutStoredSnapshot) => ({ ...s.target, source: s.source, expectedRevision: s.revision, bindingToken: randomUUID() });
+it('PostgreSQL 布局按准确 schema 对象持久化，CAS 与 SQLite 隔离且不读取凭据', async () => {
+  const pg = { connectionId: 'pg', database: '数据库', table: '项目"清单' };
+  const connection = { id: pg.connectionId, name: '合成 PostgreSQL', group: '', color: '#123456', dialect: 'postgresql' as const,
+    host: 'never-open.invalid', port: 5432, user: 'offline', rememberPassword: false };
+  store.saveConnection(connection);
+  const layout = { version: 1 as const, columns: [{ name: 'a', hidden: true }, { name: 'A', hidden: false, width: 235 }], frozenThrough: 'A', rowHeight: 56 as const };
+  const empty = store.postgresTableLayout(pg), saved = store.savePostgresTableLayout({ ...packet(empty), preferences: layout });
+  expect(saved).toMatchObject({ target: pg, revision: 1, preferences: layout });
+  const alias = { ...pg, table: '"public"."项目""清单"' };
+  expect(() => store.savePostgresTableLayout({ ...packet(empty), ...alias }, true)).toThrow('变化');
+  expect(store.postgresTableLayout({ ...pg, table: '"另一 schema"."项目""清单"' }).preferences).toBeNull();
+  expect(store.postgresTableLayout({ ...pg, database: '另库' }).preferences).toBeNull();
+  expect(() => store.postgresTableLayout(target)).toThrow('PostgreSQL');
+  expect(exactTableLayoutProjection(['A', 'a', '新增'], layout)).toEqual([{ index: 0, width: 235, frozen: true }, { index: 2, frozen: false }]);
+  expect(exactTableLayoutProjection(['a', '新增'], layout)).toEqual([{ index: 1, frozen: false }]);
+  store.close(); store = await LocalStore.open(file, wasm, protector);
+  const current = store.postgresTableLayout(alias);
+  expect(current).toMatchObject({ target: alias, preferences: layout, revision: 1 });
+  expect(store.savePostgresTableLayout(packet(current), true)).toMatchObject({ target: alias, preferences: null, revision: 2 });
+  expect(store.postgresTableLayout(pg).revision).toBe(2);
+  store.deleteConnection(pg.connectionId); store.saveConnection(connection);
+  expect(store.postgresTableLayout(pg).revision).toBe(0);
+  expect(protector.decrypt).not.toHaveBeenCalled();
+});
+
+it('PostgreSQL 真实 Main 布局 IPC 不发数据库请求，导航和其它驱动令牌均拒绝写入', async () => {
+  const pg = { connectionId: 'pg', database: '数据库', table: '"schema"."关系"' };
+  store.saveConnection({ id: pg.connectionId, name: '隔离连接', group: '', color: '#123456', dialect: 'postgresql',
+    host: 'never-open.invalid', port: 5432, user: 'offline', rememberPassword: false });
+  const f = mainColumnsHarness(); f.context.store = store; f.setRevision(store.connectionRevision());
+  const sqlite = await f.run('sqlite.tableLayout.get', target), initial = await f.run('postgres.table.layout.get', pg);
+  const input = { ...packet(initial), bindingToken: initial.bindingToken, preferences: { version: 1, columns: [{ name: 'id', hidden: false }] } };
+  await expect(f.run('postgres.table.layout.save', { ...input, bindingToken: sqlite.bindingToken })).rejects.toThrow('来源');
+  const saved = await f.run('postgres.table.layout.save', input);
+  expect(saved).toMatchObject({ target: pg, revision: 1, preferences: input.preferences });
+  f.context.window.webContents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+  await expect(f.run('postgres.table.layout.reset', { ...packet(saved), bindingToken: saved.bindingToken })).rejects.toThrow('来源');
+  expect(f.request).not.toHaveBeenCalled();
+});
 it('真实SQLite配置保存、重开、准确目标隔离和重置CAS墓碑，零解密或目标文件IO', async () => {
   const empty = store.sqliteTableLayout(target), saved = store.saveSqliteTableLayout({ ...packet(empty), preferences });
   expect(saved.preferences).toEqual(preferences); expect(store.sqliteTableLayout({ ...target, table: '另表' }).preferences).toBeNull();

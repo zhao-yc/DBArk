@@ -1,4 +1,5 @@
 export const tableGridZh = {
+  confirmLayout: '确认更改列布局',
   grid: '当前页数据网格',
   find: '当前页查找替换', preferences: '表列偏好', scope: '只查找当前已加载页的可见列，包含未提交草稿，排除待删除行；不会查询其他页。',
   kind: '查找值类型', text: '文字', null: 'SQL NULL', default: '未填写 DEFAULT', query: '查找文字', column: '查找列范围', all: '全部可见列', case: '区分大小写', whole: '整格匹配', previous: '上一处', next: '下一处', matches: '当前页匹配 {0} 格；位置 {1} / {2} 处',

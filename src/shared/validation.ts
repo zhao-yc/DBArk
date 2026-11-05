@@ -15,7 +15,7 @@ import { postgresTableExportChooseSchema, postgresTableExportSchema, postgresTab
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
 import { sqliteIncomingInputSchema } from './sqliteIncoming';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema } from './sqliteTablePresets';
-import { sqliteLayoutTargetSchema, sqliteLayoutSaveSchema, sqliteLayoutResetSchema } from './sqliteTableLayout';
+import { postgresLayoutSchemas, sqliteLayoutTargetSchema, sqliteLayoutSaveSchema, sqliteLayoutResetSchema } from './sqliteTableLayout';
 import { sqliteObjectsInspectSchema, sqliteObjectsPreviewSchema, sqliteObjectsApplySchema, sqliteObjectsReleaseSchema } from './sqliteObjects';
 import { sqliteTableMaintenanceInspectSchema, sqliteTableMaintenancePreviewSchema, sqliteTableMaintenanceApplySchema, sqliteTableMaintenanceReleaseSchema } from './sqliteTableMaintenance';
 import { sqliteTableRenameInspectSchema, sqliteTableRenamePreviewSchema, sqliteTableRenameApplySchema, sqliteTableRenameReleaseSchema } from './sqliteTableRename';
@@ -276,6 +276,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': postgresTableExportSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
+  'postgres.table.layout.get': postgresLayoutSchemas.target,
+  'postgres.table.layout.save': postgresLayoutSchemas.save,
+  'postgres.table.layout.reset': postgresLayoutSchemas.reset,
   'postgres.table.presets.list': postgresTablePresetListSchema,
   'postgres.table.presets.save': postgresTablePresetSaveSchema,
   'postgres.table.presets.delete': postgresTablePresetSelectSchema,
