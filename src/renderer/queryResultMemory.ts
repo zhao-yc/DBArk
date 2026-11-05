@@ -2,6 +2,7 @@ import type { QueryResult, ResultColumn } from '../shared/contracts';
 import { prepareQueryResultOrganization, type QueryResultOrganization } from './queryResultHistory';
 import { queryResultMemoryZh as text } from './locales/queryResultMemory.zh-CN';
 import { setQueryResultFrozenThrough } from './queryResultColumns';
+import type { SortDialect } from './queryResultSort';
 
 /** 仅保留字段身份、可见列和完整配置；不保留行、SQL、选择或数据库执行来源。 */
 export interface QueryResultMemory {
@@ -13,8 +14,8 @@ export interface QueryResultMemory {
 export const queryResultMemoryLimits = { units: 128 * 1024 } as const;
 
 /** 只接受正式控制器可以完整应用的配置，容量不足时不截断或替换旧暂存。 */
-export function captureQueryResultMemory(source: QueryResult, visible: ResultColumn[], configuration: QueryResultOrganization, frozenThrough?: string): QueryResultMemory {
-  const prepared = prepareQueryResultOrganization(source, [], visible, configuration);
+export function captureQueryResultMemory(source: QueryResult, visible: ResultColumn[], configuration: QueryResultOrganization, frozenThrough?: string, dialect?: SortDialect): QueryResultMemory {
+  const prepared = prepareQueryResultOrganization(source, [], visible, configuration, dialect);
   // 暂存只保存精确可见列键；不缓存网格节点、像素宽度、行数据或SQL。
   const frozen = setQueryResultFrozenThrough({ order: source.columns.map(column => column.key), visible: visible.map(column => column.key) }, frozenThrough);
   const sort = prepared.sorter.view(prepared.sortBinding)!.rules.map(({ column, direction, nulls, ignoreCase }) => ({ column, direction, ...(nulls === undefined ? {} : { nulls }), ...(ignoreCase === undefined ? {} : { ignoreCase }) }));

@@ -25,6 +25,7 @@ import { queryResultFilterZh as filterText } from '../../src/renderer/locales/qu
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
+import { queryResultPresetsZh as presetsText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
@@ -510,10 +511,11 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(tab().getByRole('grid')).toContainText('含;号');
 
     // NUMERIC 使用 PostgreSQL 原值，精确小数相差末位；面板设置同值次键与显式 NULL 位置。
-    await edit(`SELECT amount AS "金额", note AS "次键" FROM (VALUES
+    const amountSql = `SELECT amount AS "金额", note AS "次键" FROM (VALUES
       (1, 'NaN'::numeric, '不是数字'), (2, 1.00000000000000000002::numeric, '高精度较大'),
       (3, NULL::numeric, '空值'), (4, 1.00000000000000000001::numeric, 'a-次键'),
-      (5, 1.00000000000000000001::numeric, 'z-次键')) AS v(id, amount, note) ORDER BY id;`);
+      (5, 1.00000000000000000001::numeric, 'z-次键')) AS v(id, amount, note) ORDER BY id;`;
+    await edit(amountSql);
     await execute();
     const amountGrid = tab().getByRole('grid');
     await expect(amountGrid.getByRole('row').nth(1)).toContainText('不是数字');
@@ -654,6 +656,65 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(tab().getByText(filterText.counts(5, 1), { exact: true })).toBeVisible();
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeSort);
     await mark('整理历史可用网格快捷键撤销重做；撤销筛选保留原排序，新整理清除重做分支');
+
+    // 通过真实本机方案 IPC 保存、改名、读取及删除，拒绝把原列配置套到名称不同的结果。
+    await button(columnText.open).click();
+    const presetColumns = page.getByRole('dialog', { name: columnText.title, exact: true });
+    await presetColumns.getByRole('button', { name: columnText.freezeThrough(1), exact: true }).click();
+    await presetColumns.getByRole('button', { name: columnText.apply, exact: true }).click();
+    await button(presetsText.open).click();
+    const presets = page.getByRole('dialog', { name: presetsText.title, exact: true });
+    const presetName = presets.getByRole('textbox', { name: presetsText.name, exact: true });
+    const presetChoice = presets.getByRole('combobox', { name: presetsText.choose, exact: true });
+    const presetPreview = presets.getByRole('region', { name: presetsText.preview, exact: true });
+    const presetApply = presets.getByRole('button', { name: presetsText.apply, exact: true });
+    const closePresets = presets.getByRole('button', { name: zh.common.close, exact: true });
+    const namedPreset = '金额筛选与排序方案', renamedPreset = '金额筛选与排序方案复用';
+    await expect(presets.getByText(presetsText.empty, { exact: true })).toBeVisible();
+    await presetName.fill(namedPreset);
+    await presets.getByRole('button', { name: presetsText.create, exact: true }).click();
+    await expect(presetChoice.locator('option:checked')).toHaveText(namedPreset);
+    await expect(presetPreview).toContainText('NaN');
+    await expect(presetPreview).toContainText(presetsText.asc);
+    await expect(presetPreview.getByLabel(presetsText.savedFrozen)).toHaveText(presetsText.frozenThrough(1, '金额'));
+    await presetName.fill(renamedPreset);
+    await presets.getByRole('button', { name: presetsText.rename, exact: true }).click();
+    await expect(presetChoice.locator('option:checked')).toHaveText(renamedPreset);
+    await closePresets.click();
+
+    await edit('SELECT 0::numeric AS "金额", \'别名变化\' AS changed;');
+    await execute();
+    await button(presetsText.open).click();
+    await presetChoice.selectOption({ label: renamedPreset });
+    await expect(presets.getByRole('alert')).toHaveText(presetsText.mismatch);
+    await expect(presetApply).toBeDisabled();
+    await closePresets.click();
+    await edit(amountSql);
+    await execute();
+    await expect(amountGrid.getByRole('row')).toHaveCount(6);
+    const historyBeforePreset = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await button(presetsText.open).click();
+    await presetChoice.selectOption({ label: renamedPreset });
+    await page.screenshot({ path: info.outputPath('PostgreSQL查询结果整理方案.png') });
+    await presetApply.click();
+    await expect(presets).toHaveCount(0);
+    await expect(tab().getByText(filterText.counts(5, 1), { exact: true })).toBeVisible();
+    await expect(amountHeader.getByLabel(sortText.ascending)).toBeVisible();
+    await expect(amountHeader).toHaveClass(/rdg-cell-frozen-start/);
+    await undoResult.click();
+    await expect(amountGrid.getByRole('row')).toHaveCount(6);
+    await expect(amountHeader.getByLabel(sortText.ascending)).toHaveCount(0);
+    await expect(amountHeader).toHaveClass(/rdg-cell-frozen-start/);
+    await button(presetsText.open).click();
+    await presetChoice.selectOption({ label: renamedPreset });
+    await presets.getByRole('button', { name: presetsText.overwrite, exact: true }).click();
+    await expect(presetPreview).toContainText(presetsText.noFilters);
+    await expect(presetPreview).toContainText(presetsText.noSort);
+    await presets.getByRole('button', { name: presetsText.remove, exact: true }).click();
+    await expect(presets.getByText(presetsText.empty, { exact: true })).toBeVisible();
+    await closePresets.click();
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforePreset);
+    await mark('命名整理方案实际保存改名、拒绝列不匹配、跨查询恢复筛选排序和冻结，并完成撤销、覆盖和删除');
 
     // 查询带可观测的序列推进，导出三种文件后复核只执行了原查询一次。
     await button(postgresZh.begin).click();
