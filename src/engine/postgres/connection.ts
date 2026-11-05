@@ -1,4 +1,5 @@
 import { Client, Query, types, type FieldDef, type QueryConfig, type ClientConfig } from 'pg';
+import { to as copyTo } from 'pg-copy-streams';
 import type { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { Client as SshClient, type ClientChannel } from 'ssh2';
@@ -386,6 +387,48 @@ export class PostgresConnection {
         finish();
       }
     });
+  }
+  /** 在独占读取连接中消费 COPY 字节，等待实际命令标签、事务状态及文件写入。 */
+  async copyOut(sql: string, write: (chunk: Buffer) => Promise<void>): Promise<number> {
+    this.check();
+    const client = this.client;
+    if (!client || this.broken || client.getTransactionStatus() !== 'T')
+      throw Error('PostgreSQL COPY 需要独占读取事务');
+    const wire = (client as unknown as { connection: PgWire }).connection;
+    const stream = copyTo(sql);
+    let tag = '', cleanup = () => {};
+    const terminal = new Promise<number | undefined>(resolve => {
+      const command = (message: { text: string }) => { tag = message.text; };
+      const ended = () => resolve(undefined);
+      const ready = () => {
+        const match = /^COPY (\d+)$/.exec(tag);
+        const count = match ? Number(match[1]) : NaN;
+        resolve(!this.broken && client.getTransactionStatus() === 'T' && Number.isSafeInteger(count) ? count : undefined);
+      };
+      cleanup = () => {
+        wire.removeListener('commandComplete', command);
+        wire.removeListener('readyForQuery', ready);
+        client.removeListener('end', ended);
+      };
+      wire.once('commandComplete', command);
+      wire.once('readyForQuery', ready);
+      client.once('end', ended);
+    });
+    // 每次文件写入结束才读取下一块，读写失败时也先退出当前写入。
+    const drain = (async () => {
+      for await (const chunk of stream) await write(chunk);
+    })();
+    try {
+      try { client.query(stream); }
+      catch (reason) { stream.destroy(this.error(reason)); }
+      await drain;
+      const rows = await terminal;
+      if (rows === undefined) throw Error('PostgreSQL 未确认 COPY 行数及事务状态');
+      return rows;
+    } catch (reason) {
+      this.abort();
+      throw this.error(reason);
+    } finally { cleanup(); }
   }
   /** 正常结束原物理会话及SSH资源；观察超时保留资源，不能当作关闭成功。 */
   close(): Promise<void> {

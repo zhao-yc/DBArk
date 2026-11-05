@@ -1,4 +1,5 @@
 import { sameConnectionFamily } from '../shared/connectionDialect';
+import { postgresTableExportExtension } from '../shared/postgresTable';
 import type { SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import { SqliteTableDraftFiles, bindSqliteTableDraft, assertSqliteTableDraftBinding } from './sqliteTableDraftFiles';
 import { tableDraftEndpointKey } from './tableDraftBinding';
@@ -813,8 +814,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     postgresExportFiles.delete(document);
     return queryFileOperation(async () => {
       try {
+        const extension = postgresTableExportExtension(input.format);
         const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: '导出 PostgreSQL 表数据',
-          defaultPath: input.suggestedName, filters: [{ name: input.format.toUpperCase(), extensions: [input.format] }] });
+          defaultPath: input.suggestedName, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
         columnsMain.assertCapturedOwner(columns);
         if (shuttingDown) throw Error('客户端正在退出，文件选择已失效');
         if (chosen.canceled || !chosen.filePath) return null;

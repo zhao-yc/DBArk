@@ -54,7 +54,12 @@ export const postgresTablePreviewSchema = target.extend({
 });
 export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
-const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql']);
+const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy']);
+
+/** 原生 COPY 使用 CSV 扩展名，文件能力仍按具体导出格式绑定。 */
+export function postgresTableExportExtension(format: PostgresTableExportInput['format']) {
+  return format === 'copy' ? 'csv' : format;
+}
 /** 文件能力只由主进程签发，筛选和排序只从原服务端表页读取。 */
 export const postgresTableExportChooseSchema = z.object({
   format: exportFormat, suggestedName: z.string().min(1).max(240).refine(value => !/[\/\\\u0000-\u001f]/.test(value)),
@@ -65,9 +70,11 @@ export const postgresTableExportSchema = target.extend({
   columns: z.array(column).min(1).max(1022), csvDelimiter: z.enum(csvExportDelimiters).optional(),
 }).strict().superRefine((input, context) => {
   if (new Set(input.columns).size !== input.columns.length) context.addIssue({ code: 'custom', message: '导出列不能重复' });
-  if (input.csvDelimiter !== undefined && input.format !== 'csv') context.addIssue({ code: 'custom', message: '只有 CSV 可指定分隔符' });
+  if (input.csvDelimiter !== undefined && postgresTableExportExtension(input.format) !== 'csv')
+    context.addIssue({ code: 'custom', message: '只有 CSV 可指定分隔符' });
   if (input.format === 'xlsx' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'XLSX 使用固定内部编码' });
   if (input.format === 'sql' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL SQL 脚本使用 UTF-8' });
+  if (input.format === 'copy' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL COPY CSV 使用 UTF-8' });
 });
 export type PostgresTableExportInput = z.infer<typeof postgresTableExportSchema>;
 export type PostgresTableExportChooseInput = z.infer<typeof postgresTableExportChooseSchema>;

@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { CellValue, DataRow } from '../../shared/contracts';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
+import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
+import type { CsvExportDelimiter } from '../../shared/csvExport';
 import {
   isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
@@ -22,6 +24,9 @@ interface Relation {
 }
 interface Original { tid: string; version: string; digest: string; }
 interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; }
+type ExportSource = { kind: 'copy'; write: (sink: (chunk: Buffer) => Promise<void>) => Promise<number> } |
+  { kind: 'cursor'; columns: PostgresTableColumn[]; rows: AsyncIterable<CellValue[]>;
+    replay?: { table: string; settings: PostgresSqlExportSettings } };
 interface Snapshot {
   scope: Scoped<PostgresTableTarget>;
   token: string;
@@ -89,7 +94,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
 
 /** 使用已核对的列号生成安全排序与条件，文字筛选按 PostgreSQL 显示文本匹配。 */
 function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter' | 'sort'>,
-  page?: Pick<PostgresTablePageInput, 'limit' | 'offset'>, columns = relation.columns) {
+  page?: Pick<PostgresTablePageInput, 'limit' | 'offset'>, columns = relation.columns, copy = false) {
   const key = (id: string) => {
     const column = relation.columns.find(column => column.name === id);
     if (!column) throw Error('PostgreSQL排序或筛选列已变化');
@@ -102,8 +107,9 @@ function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter
   const args: unknown[] = page ? [page.limit + 1, page.offset] : [];
   let where = '';
   if (input.filter?.text) {
-    args.push(input.filter.text);
-    where = ' WHERE pg_catalog.strpos(' + key(input.filter.column) + '::text, $' + args.length + ') > 0';
+    // COPY 流使用简单协议，其筛选值使用与会话转义设置无关的显式字面量。
+    const value = copy ? postgresDdlLiteral(input.filter.text) : '$' + args.push(input.filter.text);
+    where = ' WHERE pg_catalog.strpos(' + key(input.filter.column) + '::text, ' + value + ') > 0';
   }
   const withOriginal = !!page && (relation.capabilities.update || relation.capabilities.delete);
   const markers = withOriginal ? ', ctid::text, xmin::text' : '';
@@ -201,10 +207,9 @@ export class PostgresTableWorkspace {
     return snapshot;
   }
 
-  /** 游标持有同一读取快照，声明后再用当前目录复核被锁住的关系身份。 */
-  async exportRows(input: Scoped<PostgresTableExportInput>, connect: Connect, check: () => void,
-    consume: (columns: PostgresTableColumn[], rows: AsyncIterable<CellValue[]>,
-      sql?: { table: string; settings: PostgresSqlExportSettings }) => Promise<void>) {
+  /** 先声明游标锁住并复核关系。原生 COPY 使用同一事务中的单条 SELECT 快照。 */
+  async exportData(input: Scoped<PostgresTableExportInput>, connect: Connect, check: () => void,
+    delimiter: CsvExportDelimiter, consume: (source: ExportSource) => Promise<void>) {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot({ ...input, pageToken: input.exportToken });
@@ -225,8 +230,17 @@ export class PostgresTableWorkspace {
         if (declared.postgresCommand !== 'DECLARE') throw Error('PostgreSQL 导出游标未确认');
         const locked = await readRelation(connection, input.table);
         if (locked.fingerprint !== relation.fingerprint) throw Error('游标声明后关系已变化，请刷新表页');
-        const replay = input.format === 'sql' ? { table: relation.sql, settings: await readPostgresSqlExportSettings(connection) } : undefined;
-        await consume(selected, readExportCursor(connection, selected, check), replay);
+        if (input.format === 'copy') {
+          // 大文件可持续读取超过普通表页时限，连接仍可由导出任务取消。
+          await connection.query("SET LOCAL statement_timeout = '0'", undefined, small());
+          const query = readSql(relation, snapshot.options, undefined, selected, true).sql;
+          const command = 'COPY (' + query + ') TO STDOUT WITH (FORMAT CSV, HEADER true, ENCODING \'UTF8\', DELIMITER ' +
+            postgresDdlLiteral(delimiter) + ')';
+          await consume({ kind: 'copy', write: sink => connection.copyOut(command, sink) });
+        } else {
+          const replay = input.format === 'sql' ? { table: relation.sql, settings: await readPostgresSqlExportSettings(connection) } : undefined;
+          await consume({ kind: 'cursor', columns: selected, rows: readExportCursor(connection, selected, check), replay });
+        }
         check();
         const closed = await connection.query('CLOSE dbark_table_export', undefined, small());
         if (closed.postgresCommand !== 'CLOSE') throw Error('PostgreSQL 导出游标未关闭');

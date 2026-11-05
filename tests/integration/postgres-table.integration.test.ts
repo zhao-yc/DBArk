@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { Client } from 'pg';
+import { from as copyFrom } from 'pg-copy-streams';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
@@ -171,6 +174,30 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         for await (const row of readExcelRows({ filePath: xlsx.filePath, sheetId: sheet.id, protocol: 'dbark-v1' })) excelRows.push(row);
         expect(excelRows).toHaveLength(130);
         expect(excelRows[0]).toEqual(records[0]);
+
+        // 真实 COPY FROM 复核原生 CSV 的精度、NULL、空字符串、换行和跨协议块字段。
+        const marker = "保留%'\\; SELECT 1; --";
+        const longNote = '跨块;🙂\r\n"引号"'.repeat(25_000);
+        await client.query(`UPDATE ${exportTable} SET marker=$1, note=CASE WHEN id=9007199254741123 THEN $2 ELSE note END WHERE marker='保留%'`, [marker, longNote]);
+        const copySource = { ...source, tabId: randomUUID() };
+        const copyPage = await read({ ...copySource, offset: 4, filter: { column: 'marker', text: marker }, sort: { column: 'id', direction: 'desc' } });
+        const copy = exportRequest('copy', '原生.csv', { ...copySource, csvDelimiter: ';', columns: ['c1', 'c0', 'c2', 'c3'], exportToken: copyPage.exportToken });
+        expect(await engine.handle('postgres.table.export', copy)).toEqual({ rows: 130, fileCommitted: true });
+        const copyText = await readFile(copy.filePath, 'utf8');
+        expect(copyText.startsWith('note;id;amount;raw\n"跨块;🙂\r\n""引号""')).toBe(true);
+        expect(copyText).toContain('\n"";9007199254740995;1234567890123456789012.123456789012345678;\\x00ff\n;9007199254740994;');
+        await client.query('CREATE TEMP TABLE copy_roundtrip (position bigint GENERATED ALWAYS AS IDENTITY, note text, id bigint, amount numeric(40,18), raw bytea)');
+        await pipeline(createReadStream(copy.filePath), client.query(copyFrom(
+          "COPY copy_roundtrip (note, id, amount, raw) FROM STDIN WITH (FORMAT CSV, HEADER true, DELIMITER ';', ENCODING 'UTF8')")));
+        const copied = (await client.query('SELECT id::text, note, amount::text, encode(raw, \'hex\') AS raw FROM copy_roundtrip ORDER BY position')).rows;
+        const expectedCopy = (await client.query(`SELECT id::text, note, amount::text, encode(raw, 'hex') AS raw FROM ${exportTable} AS t WHERE marker=$1 ORDER BY t.id DESC`, [marker])).rows;
+        expect(copied).toEqual(expectedCopy);
+        await client.query(`UPDATE ${exportTable} SET marker='保留%', note=CASE WHEN id=9007199254741123 THEN '引;号' ELSE note END WHERE marker=$1`, [marker]);
+        const emptyPage = await read({ ...copySource, filter: { column: 'marker', text: '无匹配' } });
+        const empty = exportRequest('copy', '无匹配.csv', { ...copySource, csvDelimiter: '\t', columns: ['c0', 'c1'], exportToken: emptyPage.exportToken });
+        expect(await engine.handle('postgres.table.export', empty)).toEqual({ rows: 0, fileCommitted: true });
+        expect(await readFile(empty.filePath, 'utf8')).toBe('id\tnote\n');
+
         await client.query(`ALTER TABLE ${exportTable} ADD COLUMN changed text`);
         const changed = exportRequest('json', '已有.json');
         await writeFile(changed.filePath, '原文件');
@@ -201,6 +228,32 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
           expect(await readFile(stopped.filePath, 'utf8')).toBe('原文件');
           expect((await readdir(directory)).some(name => name.endsWith('.partial'))).toBe(false);
         } finally { await client.query('SELECT pg_advisory_unlock(75693)'); await Promise.allSettled([exporting]); }
+        const stoppedCopy = { ...stopped, format: 'copy', taskId: randomUUID() };
+        await client.query('SELECT pg_advisory_lock(75693)');
+        const copying = engine.handle('postgres.table.export', stoppedCopy);
+        void copying.catch(() => {});
+        try {
+          await expect.poll(async () => (await client.query(`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE application_name='tabrelio' AND wait_event='advisory' AND query LIKE 'COPY (%'`)).rows[0].n,
+          { timeout: 5000 }).toBe(1);
+          expect((await readdir(directory)).some(name => name.endsWith('.partial'))).toBe(true);
+          await engine.handle('query.cancel', { taskId: stoppedCopy.taskId });
+          await expect(copying).rejects.toThrow();
+          expect(await readFile(stoppedCopy.filePath, 'utf8')).toBe('原文件');
+          expect((await readdir(directory)).some(name => name.endsWith('.partial'))).toBe(false);
+        } finally { await client.query('SELECT pg_advisory_unlock(75693)'); await Promise.allSettled([copying]); }
+        // 服务端已送出一部分 COPY 后报错，只有完整终态才允许发布文件。
+        const failingView = '"浏览"."导出异常视图"';
+        await client.query(`CREATE FUNCTION "浏览".fail_copy(id bigint) RETURNS text LANGUAGE plpgsql VOLATILE AS $body$
+          BEGIN IF id >= 9007199254741058 THEN RAISE EXCEPTION '实库 COPY 中断验证'; END IF;
+          RETURN repeat('已发送', 4096); END; $body$;
+          CREATE VIEW ${failingView} AS SELECT id, "浏览".fail_copy(id) AS note FROM ${exportTable} ORDER BY id;`);
+        const failingSource = { ...source, table: failingView, tabId: randomUUID() };
+        const failingPage = await read({ ...failingSource, limit: 1 });
+        const failedCopy = exportRequest('copy', '已有.json', { ...failingSource, columns: ['c1'], exportToken: failingPage.exportToken });
+        await expect(engine.handle('postgres.table.export', failedCopy)).rejects.toThrow('实库 COPY 中断验证');
+        expect(await readFile(failedCopy.filePath, 'utf8')).toBe('原文件');
+        expect((await readdir(directory)).some(name => name.endsWith('.partial'))).toBe(false);
         // 在第二批被阻塞时改写一条尚未返回的行，验证跨批仍沿游标声明时的快照。
         const stable = exportRequest('json', '游标快照.json', { ...viewSource, columns: ['c0', 'c1'], exportToken: viewPage.exportToken });
         await client.query('SELECT pg_advisory_lock(75693)');

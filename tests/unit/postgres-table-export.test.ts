@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { postgresTableExportChooseSchema, postgresTableExportSchema } from '../../src/shared/postgresTable';
+import { postgresTableExportChooseSchema, postgresTableExportExtension, postgresTableExportSchema } from '../../src/shared/postgresTable';
 
 const request = {
   connectionId: '连接', database: '库', table: '"模式"."表"', tabId: '标签', taskId: randomUUID(), fileToken: randomUUID(),
@@ -21,10 +21,14 @@ describe('PostgreSQL 表页导出协议', () => {
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'xlsx', csvDelimiter: undefined, encoding: 'utf16le' }).success).toBe(false);
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'sql', csvDelimiter: undefined }).success).toBe(true);
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'sql', csvDelimiter: undefined, encoding: 'gb18030' }).success).toBe(false);
+    expect(postgresTableExportSchema.safeParse({ ...request, format: 'copy', csvDelimiter: '\t' }).success).toBe(true);
+    expect(postgresTableExportSchema.safeParse({ ...request, format: 'copy', encoding: 'utf16le' }).success).toBe(false);
+    expect(postgresTableExportSchema.safeParse({ ...request, format: 'copy', csvDelimiter: '|' }).success).toBe(false);
   });
 
   it('保存对话框只接收建议文件名，路径由系统选择', () => {
     expect(postgresTableExportChooseSchema.safeParse({ format: 'json', suggestedName: '表.json' }).success).toBe(true);
+    expect(postgresTableExportExtension(postgresTableExportChooseSchema.parse({ format: 'copy', suggestedName: '表.csv' }).format)).toBe('csv');
     for (const suggestedName of ['../表.json', 'C:\\表.json', '/表.json']) {
       expect(postgresTableExportChooseSchema.safeParse({ format: 'json', suggestedName }).success).toBe(false);
     }

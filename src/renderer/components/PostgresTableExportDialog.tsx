@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
-import { isPostgresSqlExportColumn, isPostgresSqlExportRelation,
+import { isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresTableExportExtension,
   type PostgresTableExportInput, type PostgresTablePage, type PostgresTableTarget } from '../../shared/postgresTable';
 import { postgresRelationName } from '../../shared/postgresSql';
 import { errorMessage, invoke } from '../lib';
@@ -10,7 +10,7 @@ import { acquireWorkspaceBusy } from '../store';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
 
-const formats = ['csv', 'json', 'xlsx', 'sql'] as const;
+const formats = ['csv', 'json', 'xlsx', 'sql', 'copy'] as const;
 const encodings = [['utf8', 'UTF-8'], ['utf16le', 'UTF-16 LE'], ['gb18030', 'GB18030']] as const;
 
 /** 文件选择、列和任务只对应打开时的原服务端表页。 */
@@ -28,6 +28,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
   const available = format === 'sql' ? page.columns.filter(isPostgresSqlExportColumn) : page.columns;
   const output = available.filter(column => selected.has(column.key));
   const textEncoding = format === 'csv' || format === 'json';
+  const extension = postgresTableExportExtension(format);
 
   /** 原生选择器只返回当前窗口一次性文件能力。 */
   async function choose() {
@@ -39,7 +40,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
     try {
       if (!isCurrent()) throw Error(text.stale);
       const name = postgresRelationName(target.table).name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 160) || 'postgresql';
-      setFile(await invoke('postgres.table.exportChoose', { format, suggestedName: name + '.' + format }));
+      setFile(await invoke('postgres.table.exportChoose', { format, suggestedName: name + '.' + extension }));
     } catch (reason) { setError(errorMessage(reason)); }
     finally { occupied.current = false; setBusy(false); }
   }
@@ -59,7 +60,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
     try {
       const result = await invoke('postgres.table.export', { ...target, taskId, exportToken: page.exportToken, fileToken: file.token,
         format, encoding: textEncoding ? encoding : 'utf8', columns: output.map(column => column.key),
-        ...(format === 'csv' ? { csvDelimiter: delimiter } : {}),
+        ...(extension === 'csv' ? { csvDelimiter: delimiter } : {}),
       });
       if (!result.fileCommitted) throw Error(text.cancelled);
       setMessage(text.saved(result.rows));
@@ -90,16 +91,17 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
         <Field label={text.format}><select aria-label={text.format} value={format} disabled={locked}
           onChange={event => { setFormat(event.target.value as typeof format); setFile(null); setMessage(''); }}>
           {formats.map(value => <option key={value} value={value} disabled={value === 'sql' && !isPostgresSqlExportRelation(page.relationKind)}>
-            {value.toUpperCase()}
+            {value === 'copy' ? text.copyFormat : value.toUpperCase()}
           </option>)}
         </select></Field>
         {textEncoding && <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
           onChange={event => setEncoding(event.target.value as typeof encoding)}>
           {encodings.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></Field>}
-        {format === 'csv' && <CsvExportDelimiterField value={delimiter} disabled={locked} onChange={setDelimiter}/>}
+        {extension === 'csv' && <CsvExportDelimiterField value={delimiter} disabled={locked} onChange={setDelimiter}/>}
       </div>
       {format === 'sql' && <p>{text.sqlHint}</p>}
+      {format === 'copy' && <p>{text.copyHint}</p>}
       <fieldset disabled={locked}>
         <legend>{text.columns}</legend>
         <button onClick={() => setSelected(new Set(available.map(column => column.key)))}>{text.allColumns}</button>

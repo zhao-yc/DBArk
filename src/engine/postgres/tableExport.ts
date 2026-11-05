@@ -2,14 +2,14 @@ import { isAbsolute } from 'node:path';
 import type { CellValue } from '../../shared/contracts';
 import { csvExportDelimiter } from '../../shared/csvExport';
 import { EXCEL_LIMITS } from '../../shared/excelTransfer';
-import type { PostgresTableExportInput, PostgresTableExportOutput } from '../../shared/postgresTable';
+import { postgresTableExportExtension, type PostgresTableExportOutput } from '../../shared/postgresTable';
 import { AtomicFile, nativeAtomicFileIO } from '../atomicFile';
 import { exportExcelFile } from '../excelFiles';
 import { csvCell, csvHeader } from '../files';
 import type { PostgresTableWorkspace } from './tableWorkspace';
 import { writePostgresSqlData } from './sqlExport';
 
-type Source = Parameters<PostgresTableWorkspace['exportRows']>;
+type Source = Parameters<PostgresTableWorkspace['exportData']>;
 export type PostgresTableExportRequest = Source[0] & { filePath: string };
 
 /** PostgreSQL 驱动保留精确文本和字节值，字段超过预算则终止整份文件。 */
@@ -27,16 +27,23 @@ export async function exportPostgresTable(workspace: PostgresTableWorkspace, inp
   connect: Source[1], check: () => void, commitStart: () => void, progress: (rows: number) => void): Promise<PostgresTableExportOutput> {
   if (!isAbsolute(input.filePath) || input.filePath.includes('\0')) throw Error('主进程未提供授权的导出路径');
   if (input.format === 'sql' && input.encoding !== 'utf8') throw Error('PostgreSQL SQL 脚本使用 UTF-8');
-  const delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
+  if (input.format === 'copy' && input.encoding !== 'utf8') throw Error('PostgreSQL COPY CSV 使用 UTF-8');
+  const delimiter = csvExportDelimiter(postgresTableExportExtension(input.format), input.csvDelimiter);
   let file: AtomicFile | undefined, rows = 0;
   try {
-    await workspace.exportRows(input, connect, check, async (columns, source, replay) => {
+    await workspace.exportData(input, connect, check, delimiter, async source => {
       const staged = file = await AtomicFile.create(input.filePath, input.encoding, check, commitStart,
         nativeAtomicFileIO, input.format === 'xlsx' ? EXCEL_LIMITS.maxCompressedBytes : undefined, undefined, true);
+      if (source.kind === 'copy') {
+        rows = await source.write(chunk => staged.writeBytes(chunk));
+        await staged.prepare(true);
+        return;
+      }
+      const { columns, replay } = source, cursor = source.rows;
       const names = columns.map(column => column.name);
       /** 各格式共享真实游标值校验及原消费背压。 */
       async function* validatedRows() {
-        for await (const row of source) {
+        for await (const row of cursor) {
           validateExportRow(row);
           yield row;
         }
