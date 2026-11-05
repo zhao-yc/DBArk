@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { explainNodeDetail } from '../../src/shared/explain';
-import { parsePostgresExplain, postgresExplainSql } from '../../src/shared/postgresExplain';
+import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../src/shared/postgresExplain';
 import { validateCommand } from '../../src/shared/validation';
 
 const options = { standardStrings: true, version: '18.1', format: 'auto' } as const;
@@ -38,5 +38,26 @@ describe('PostgreSQL估算计划', () => {
       .toMatchObject([{ path: '/0/Plan', depth: 0 }, { path: '/1/Plan', depth: 0 }]);
     expect(parsePostgresExplain('[{}]', '18.1', 'json', false)).toMatchObject({ nodes: [], raw: '[{}]', warnings: [expect.stringContaining('根节点')] });
     expect(parsePostgresExplain('', '18.1', 'json', true)).toMatchObject({ nodes: [], rawTruncated: true, warnings: [expect.stringContaining('上限')] });
+  });
+
+  it('实际分析只接受完整确认令牌及单条无占位符语句，并分开保留实测和估算指标', () => {
+    const input = { sessionId: '原会话', taskId: '分析任务', token: '原令牌', acknowledged: true };
+    expect(validateCommand('postgres.analyze', input)).toEqual(input);
+    expect(() => validateCommand('postgres.analyze', { ...input, sql: 'SELECT 2' })).toThrow();
+    expect(() => validateCommand('postgres.analyze', { ...input, acknowledged: false })).toThrow();
+    expect(postgresAnalyzeSql('SELECT 7; SELECT 8', true, 3)).toMatchObject({
+      source: 'SELECT 7', sql: 'EXPLAIN (ANALYZE TRUE, VERBOSE TRUE, BUFFERS TRUE, FORMAT JSON)\nSELECT 7',
+    });
+    expect(() => postgresAnalyzeSql('SELECT $1', true)).toThrow('参数值');
+    const raw = '[{"Plan":{"Node Type":"Sort","Actual Total Time":0.1200,"Actual Loops":2,"Plan Rows":9007199254740993,"Shared Hit Blocks":3,"Plans":[{"Node Type":"Seq Scan","Actual Loops":0}]},"Execution Time":1.500}]';
+    const plan = parsePostgresAnalyze(raw, '18', false);
+    expect(plan.nodes[0].metrics).toMatchObject([
+      { source: 'Actual Total Time', value: '0.1200', kind: 'actual', unit: 'ms' },
+      { source: 'Actual Loops', value: '2', kind: 'actual' },
+      { source: 'Shared Hit Blocks', value: '3', kind: 'actual', unit: 'blocks' },
+      { source: 'Execution Time', value: '1.500', kind: 'actual' },
+      { source: 'Plan Rows', value: '9007199254740993', kind: 'estimate' },
+    ]);
+    expect(plan.nodes[1]).toMatchObject({ parent: '0', neverExecuted: true });
   });
 });

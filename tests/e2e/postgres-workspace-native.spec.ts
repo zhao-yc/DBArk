@@ -203,6 +203,41 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeExplain);
     await mark('真实窗口估算光标语句和明确选区，查看树形成本与原始 JSON，原行及执行历史保持');
 
+    // 验收真实执行路径，使用显式事务并核对写入与回滚。
+    await button(postgresZh.begin).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    await expect(button(postgresZh.execute)).toBeEnabled();
+    const analyzeSql = 'UPDATE "回归"."带""引号" SET note = note || \'-实测\' WHERE id = 1;';
+    const analyzeDialog = page.getByRole('dialog', { name: '实际执行分析', exact: true });
+    const beforeAnalyze = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await edit(analyzeSql);
+    await button('实际执行分析').click();
+    await expect(analyzeDialog).toBeVisible();
+    await expect(analyzeDialog.getByLabel('本次冻结的 SQL')).toContainText('note ||');
+    await expect(analyzeDialog.getByRole('button', { name: '确认并实际执行' })).toBeDisabled();
+    await analyzeDialog.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(analyzeDialog).toBeHidden();
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeAnalyze);
+    await button('实际执行分析').click();
+    await expect(analyzeDialog).toBeVisible();
+    await analyzeDialog.getByRole('checkbox').check();
+    await analyzeDialog.getByRole('button', { name: '确认并实际执行' }).click();
+    const actualPlan = tab().getByRole('region', { name: '实际执行计划' });
+    await expect(actualPlan.getByRole('treeitem').first()).toContainText('ModifyTable');
+    await expect(actualPlan.getByLabel('分析节点详情')).toContainText('实测指标');
+    await expect(actualPlan.getByLabel('分析节点详情')).toContainText('估算指标');
+    await page.screenshot({ path: info.outputPath('PostgreSQL实际执行分析.png') });
+    await actualPlan.getByRole('button', { name: '分析原始输出' }).click();
+    await expect(actualPlan.getByLabel('分析原始输出')).toContainText('Actual Rows');
+    const analysisHistory = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    expect(analysisHistory.filter(entry => entry.sql.startsWith('EXPLAIN (ANALYZE TRUE') && entry.success)).toHaveLength(1);
+    await edit('SELECT note FROM "回归"."带""引号" WHERE id = 1;');
+    await execute();
+    await expect(tab().getByRole('grid')).toContainText('原值-实测');
+    await button(postgresZh.rollback).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+    await mark('实际分析确认前无执行，确认后只写入一次并显示实测与估算指标，原事务可回滚');
+
     // 通过真实按键接纳 schema、关系和别名字段，不从 Monaco 注入候选。
     const widget = tab().locator('.suggest-widget.visible');
     const beforeCompletion = await page.evaluate(() => window.dbark.invoke('history.list', {}));

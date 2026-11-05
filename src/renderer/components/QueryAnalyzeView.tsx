@@ -29,6 +29,7 @@ export function QueryAnalyzeView(props: QueryAnalyzeViewProps) {
 
 /** 这里只阅读已经返回的分析结果；展开、选择及切换原文都不会执行 SQL 或调用 IPC。 */
 function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = false, busy = false, saveAs = false, onFileBusyChange }: QueryAnalyzeViewProps) {
+  const postgres = plan.dialect === 'postgresql';
   const [view, setView] = useState<'tree' | 'raw'>(plan.nodes.length ? 'tree' : 'raw');
   const [selected, setSelected] = useState(plan.nodes[0]?.id ?? '');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -76,10 +77,10 @@ function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = fals
   return <section className="query-analyze-view" aria-label={t.view}>
     <div className="query-analyze-toolbar" role="group" aria-label={t.view}>
       <button aria-pressed={view === 'tree'} onClick={() => { if (alive.current) setView('tree'); }}>{t.tree}</button><button aria-pressed={view === 'raw'} onClick={() => { if (alive.current) setView('raw'); }}>{t.raw}</button>
-      {fileActions && (outcome && outcome.analysis === plan ? <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/> : <span className="explain-snapshot-save"><button disabled title={snapshotText.unavailable}>{saveAs ? snapshotText.saveAs : snapshotText.save}</button></span>)}
-      <span className="muted">{t.source}：{plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {plan.format === 'tree' ? 'EXPLAIN ANALYZE' : 'ANALYZE FORMAT=JSON'}</span>
+      {fileActions && !postgres && (outcome && outcome.analysis === plan ? <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/> : <span className="explain-snapshot-save"><button disabled title={snapshotText.unavailable}>{saveAs ? snapshotText.saveAs : snapshotText.save}</button></span>)}
+      <span className="muted">{t.source}：{postgres ? 'PostgreSQL' : plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {postgres ? 'EXPLAIN (ANALYZE, FORMAT JSON)' : plan.format === 'tree' ? 'EXPLAIN ANALYZE' : 'ANALYZE FORMAT=JSON'}</span>
     </div>
-    <div className="query-analyze-hints"><UsageHelp><p>{plan.dialect === 'mysql' ? t.mysqlHint : t.mariaHint}</p><p>{t.estimateHint}</p><p>{t.relationHint}</p><p>{t.keyboard}</p></UsageHelp>{plan.rawTruncated && <p className="query-analyze-warning" role="alert">{t.truncated}</p>}{plan.warnings.map((warning, index) => <p className="query-analyze-warning" role="status" key={index}>{warning}</p>)}</div>
+    <div className="query-analyze-hints"><UsageHelp><p>{postgres ? t.postgresHint : plan.dialect === 'mysql' ? t.mysqlHint : t.mariaHint}</p><p>{t.estimateHint}</p><p>{postgres ? t.postgresRelation : t.relationHint}</p><p>{t.keyboard}</p></UsageHelp>{plan.rawTruncated && <p className="query-analyze-warning" role="alert">{t.truncated}</p>}{plan.warnings.map((warning, index) => <p className="query-analyze-warning" role="status" key={index}>{warning}</p>)}</div>
     <div className="query-analyze-content">
       {view === 'raw' ? <pre className="query-analyze-raw" aria-label={t.raw} tabIndex={0}>{plan.raw || t.rawMissing}</pre> : !plan.nodes.length ? <p className="query-analyze-empty">{t.empty}</p> : <div className="query-analyze-layout">
         <div className="query-analyze-tree-pane"><div className="query-analyze-actions"><button onClick={() => { if (alive.current) setCollapsed(new Set()); }}>{t.expand}</button><button onClick={() => { if (alive.current) { setCollapsed(new Set(children)); focus(plan.nodes[0].id); } }}>{t.collapse}</button></div>

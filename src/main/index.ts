@@ -752,7 +752,7 @@ const postgresTableOwners = new WeakMap<object, string>();
 
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
-  if (command === 'postgres.explain') {
+  if (command === 'postgres.explain' || command.startsWith('postgres.analyze')) {
     const session = sessions.get(input.sessionId);
     // 计划可以访问原会话的临时对象，只允许创建该会话的真实文档发起。
     if (shuttingDown || !session?.postgres || session.postgres.closing || !columns ||
@@ -1628,8 +1628,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const postgresSessionOwner = command === 'sessions.open' ? columns : undefined;
   const postgresSessionRevision = postgresSessionOwner ? store.connectionRevision() : undefined;
   // 实际分析与当前语句均等待Engine报告真正发送的SQL；历史不能把ANALYZE误记成裸DML。
-  const currentStatement = command === 'query.analyze' || command === 'query.execute' && input.currentStatement !== undefined;
-  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream' || command === 'query.analyze') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
+  const currentStatement = command === 'query.analyze' || command === 'postgres.analyze' || command === 'query.execute' && input.currentStatement !== undefined;
+  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream' || command === 'query.analyze' || command === 'postgres.analyze') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
   const pendingHistory = history ? { entry: history, currentStatement, executionSqlReceived: !currentStatement } : undefined;
   if(pendingHistory&&taskId)pendingQueryHistory.set(taskId,pendingHistory);
   const preparing: { cancelled: boolean; failure?: string; connectionIds?: string[] } = { cancelled: false, connectionIds: command === 'schema.compare' ? [input.source.connectionId, input.target.connectionId] : requestConnectionId ? [requestConnectionId] : [] }; if (taskId) preparingTasks.set(taskId, preparing);
@@ -1760,7 +1760,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'sessions.close') sessions.delete(input.sessionId);
     if (command === 'table.apply' && !tableApplyReceipts.confirmed(taskId!)) throw Error('未收到可信提交确认，结果未知；请查看提交记录，不要重复执行原批次');
     // 查询可带首错停止前的完整结果返回；响应成功不代表整份脚本执行成功。
-    const queryFailure = command === 'query.execute' || command === 'query.executeParameterized' ? result?.failure : undefined;
+    const queryFailure = command === 'query.execute' || command === 'query.executeParameterized' || command === 'postgres.analyze' ? result?.failure : undefined;
     const terminalStatus = taskId ? tasks.get(taskId)?.status : undefined;
     if (tableFilteredExport && taskId && result.fileCommitted === true) taskEvent({ taskId, status: 'completed', progress: 100, rows: result.rows, message: command === 'sqlite.tableExport' ? sqliteTableExportMessages.completed : tableFilteredExportText.summaryCompleted });
     else if (taskId && queryFailure && (terminalStatus === 'running' || terminalStatus === 'completed')) taskEvent({ taskId, status: 'failed', progress: 100, message: queryFailure.message });
@@ -2083,7 +2083,8 @@ else {
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
-        if (payload.command === 'postgres.explain' || payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.table.') ||
+        if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
+            payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.table.') ||
             payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);

@@ -10,6 +10,9 @@ import { postgresZh as text } from '../locales/postgres.zh-CN';
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
 import { ExplainPlanView } from './ExplainPlanView';
+import { QueryAnalyzeView } from './QueryAnalyzeView';
+import { QueryAnalyzeConfirmDialog } from './QueryAnalyzeConfirmDialog';
+import { queryAnalyzeZh } from '../locales/queryAnalyze.zh-CN';
 import { ErrorBox, Spinner, Empty } from './ui';
 import { QueryCloseDialog } from './QueryCloseDialog';
 import { QueryBindingDialog } from './QueryBindingDialog';
@@ -40,6 +43,14 @@ interface ParameterOwner {
   version: number;
   valid: boolean;
   session?: string;
+}
+interface AnalyzeOwner {
+  token: string;
+  source: string;
+  sessionId: string;
+  scope: Scope;
+  model: monaco.editor.ITextModel;
+  version: number;
 }
 /** PostgreSQL查询复用原编辑器、结果网格、文件来源及保存查询；驱动任务和事务明确独立。 */
 export function PostgresQueryTab({
@@ -80,6 +91,8 @@ export function PostgresQueryTab({
     parameters = useRef<ParameterOwner | undefined>(undefined);
   parameters.current = parameterOwner;
   const [completionStatus, setCompletionStatus] = useState<SqlCompletionStatus>('idle');
+  const [analyze, setAnalyze] = useState<AnalyzeOwner>();
+  const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
   const scope: Scope = {
     profile,
     version,
@@ -110,11 +123,20 @@ export function PostgresQueryTab({
       !!editor.current?.getModel() &&
       !now.activeJobs[tab.id] &&
       !phase.current &&
+      !analyzeRef.current &&
       !fileBusy &&
       !closeRef.current &&
       !document.querySelector('[role="dialog"], [role="alertdialog"]')
     );
   }
+  /** 撤销确认来源，后续事件不能使用已经关闭或换代的弹窗。 */
+  function clearAnalyze(discard = true) {
+    const current = analyzeRef.current;
+    analyzeRef.current = undefined;
+    setAnalyze(undefined);
+    if (discard && current) void invoke('postgres.analyzeDiscard', { sessionId: current.sessionId, token: current.token }).catch(() => {});
+  }
+
   /** 参数弹窗绑定准确的模型和活动标签，选区正文无需与整份脚本相等。 */
   function parameterCurrent(owner: ParameterOwner) {
     const current = useWorkspace.getState();
@@ -189,14 +211,26 @@ export function PostgresQueryTab({
           if (alive.current) setError(errorMessage(reason));
         });
   }
-  /** 查询和估算计划都捕获原模型版本，计划默认取选区或光标所在语句。 */
+  /** 查询和计划都捕获原模型版本，实际分析只接受已经确认的原令牌。 */
   function run(
-    mode: 'normal' | 'current' | 'explain' = 'normal',
+    mode: 'normal' | 'current' | 'explain' | 'analyzePreview' = 'normal',
     values?: QueryParameter[],
     parameter?: ParameterOwner,
     sqlOverride?: string,
+    confirmed?: AnalyzeOwner,
   ) {
-    if (values) {
+    if (confirmed) {
+      const current = useWorkspace.getState();
+      if (analyzeRef.current !== confirmed || phase.current || closeRef.current || !same(confirmed.scope) ||
+          current.settings.activeTabId !== tab.id || current.activeJobs[tab.id] ||
+          session.current?.id !== confirmed.sessionId || editor.current?.getModel() !== confirmed.model ||
+          confirmed.model.isDisposed() || confirmed.model.getVersionId() !== confirmed.version) {
+        clearAnalyze();
+        setError(queryAnalyzeZh.changed);
+        return;
+      }
+      clearAnalyze(false);
+    } else if (values) {
       if (
         !parameter ||
         !parameterCurrent(parameter) ||
@@ -214,10 +248,10 @@ export function PostgresQueryTab({
     const model = editor.current?.getModel(),
       selection = editor.current?.getSelection(),
       original = model?.getValue() ?? source();
-    let sql = sqlOverride ?? original,
+    let sql = confirmed?.source ?? sqlOverride ?? original,
       offset: number | undefined;
-    if (!sqlOverride && !values && selection) {
-      if (mode === 'current' || mode === 'explain' && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
+    if (!confirmed && !sqlOverride && !values && selection) {
+      if (mode === 'current' || (mode === 'explain' || mode === 'analyzePreview') && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
       else if (!selection.isEmpty()) sql = model!.getValueInRange(selection);
     }
     if (values) sql = parameter!.source;
@@ -229,7 +263,7 @@ export function PostgresQueryTab({
       job = acquireWorkspaceBusy(tab.id),
       owner: Phase = {
         life: life.current,
-        scope: parameter?.scope ?? scope,
+        scope: confirmed?.scope ?? parameter?.scope ?? scope,
         valid: true,
         cancelled: false,
         taskId: uid(),
@@ -238,8 +272,10 @@ export function PostgresQueryTab({
     phase.current = owner;
     setBusy(true);
     setError('');
-    setOutcome(undefined);
-    setSelected(0);
+    if (mode !== 'analyzePreview') {
+      setOutcome(undefined);
+      setSelected(0);
+    }
     owner.work = (async () => {
       try {
         const id = await ensure(owner);
@@ -249,12 +285,27 @@ export function PostgresQueryTab({
           !same(owner.scope) ||
           editor.current?.getModel() !== model ||
           model?.getVersionId() !== modelVersion ||
+          (confirmed && confirmed.sessionId !== id) ||
           (parameter && (!parameterCurrent(parameter) || parameter.session !== id))
         )
           throw Error(text.changed);
+        if (mode === 'analyzePreview') {
+          const preview = await invoke('postgres.analyzePreview', { sessionId: id, sql,
+            ...(offset === undefined ? {} : { currentStatement: { offset } }) });
+          if (model && modelVersion !== undefined && !model.isDisposed() && model.getVersionId() === modelVersion &&
+              owner.valid && !owner.cancelled && same(owner.scope) && !closeRef.current &&
+              editor.current?.getModel() === model && useWorkspace.getState().settings.activeTabId === tab.id) {
+            const intent = { ...preview, sessionId: id, scope: owner.scope, model, version: modelVersion };
+            analyzeRef.current = intent;
+            setAnalyze(intent);
+          } else void invoke('postgres.analyzeDiscard', { sessionId: id, token: preview.token }).catch(() => {});
+          return;
+        }
         owner.sent = true;
         if (parameter) setParameterOwner(undefined);
-        const result = values
+        const result = confirmed
+          ? await invoke('postgres.analyze', { sessionId: id, taskId: owner.taskId, token: confirmed.token, acknowledged: true })
+          : values
           ? await invoke('query.executeParameterized', {
               sessionId: id,
               taskId: owner.taskId,
@@ -510,12 +561,16 @@ export function PostgresQueryTab({
           parameter.valid = false;
           setParameterOwner((current) => (current === parameter ? undefined : current));
         }
+        if (analyzeRef.current && (changed || left || beforeTab?.sql !== afterTab?.sql)) clearAnalyze();
       }),
     [tab.id, tab.connectionId],
   );
+  useEffect(() => {
+    if (closeRequest && analyzeRef.current) clearAnalyze();
+  }, [closeRequest]);
   const results = outcome?.results ?? [],
     result = results[selected],
-    locked = busy || fileBusy || !!save || !!parameterOwner || !!closeRequest;
+    locked = busy || fileBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest;
   return (
     <div className="workspace-tab query-tab postgres-query">
       <div className="context-bar">
@@ -538,6 +593,9 @@ export function PostgresQueryTab({
             </button>
             <button disabled={locked || !state.transactionKnown || state.transactionFailed} onClick={() => run('explain')}>
               {text.explain}
+            </button>
+            <button disabled={locked || !state.transactionKnown || state.transactionFailed} onClick={() => run('analyzePreview')}>
+              {queryAnalyzeZh.open}
             </button>
             <button disabled={locked || !state.transactionKnown} onClick={openParameters}>
               {text.parameters}
@@ -583,11 +641,12 @@ export function PostgresQueryTab({
           postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
             connectionVersion: scope.version, sessionId: session.current?.id }}
           onCompletionStatus={setCompletionStatus}
-          readOnly={busy || fileBusy}
+          readOnly={busy || fileBusy || !!analyze}
           onReady={(instance) => {
             editor.current = instance;
           }}
           onChange={(sql) => {
+            if (analyzeRef.current) clearAnalyze();
             if (!phase.current) useWorkspace.getState().updateTab(tab.id, { sql });
           }}
           onExecute={() => run()}
@@ -613,7 +672,8 @@ export function PostgresQueryTab({
             ))}
           </select>
         )}
-        {outcome?.explain ? <ExplainPlanView outcome={outcome} busy={busy} /> : result ? (
+        {outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} busy={busy} /> :
+          outcome?.explain ? <ExplainPlanView outcome={outcome} busy={busy} /> : result ? (
           result.columns.length ? (
             <ResultsGrid columns={result.columns} rows={result.rows} rowJump />
           ) : (
@@ -656,6 +716,11 @@ export function PostgresQueryTab({
           {text.rollback}
         </button>
       </div>
+      {analyze && !busy && !closeRequest && (
+        <QueryAnalyzeConfirmDialog key={analyze.token} source={analyze.source} dialect="postgresql"
+          connectionName={profile?.name ?? ''} databaseLabel={analyze.scope.database}
+          onConfirm={() => run('normal', undefined, undefined, undefined, analyze)} onClose={clearAnalyze} />
+      )}
       {save && (
         <QueryBindingDialog
           initialName={tab.title}

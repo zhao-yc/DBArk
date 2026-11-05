@@ -5,14 +5,14 @@ export const queryAnalyzeLimits = { rawBytes: 192 * 1024, nodes: 300, depth: 64,
 export type QueryAnalyzeDialect = 'mysql' | 'mariadb';
 export type QueryAnalyzeFormat = 'tree' | 'json';
 export interface QueryAnalyzeMetric {
-  source: string; value: string; kind: 'actual' | 'estimate'; unit?: 'ms' | 'rows' | 'loops' | 'percent' | 'cost';
+  source: string; value: string; kind: 'actual' | 'estimate'; unit?: 'ms' | 'rows' | 'loops' | 'percent' | 'cost' | 'blocks';
 }
 export interface QueryAnalyzeNode {
   id: string; parent?: string; depth: number; label: string; path?: string; pathTruncated?: boolean;
   metrics: QueryAnalyzeMetric[]; neverExecuted?: boolean;
 }
 export interface QueryAnalyzePlan {
-  dialect: QueryAnalyzeDialect; version: string; format: QueryAnalyzeFormat;
+  dialect: QueryAnalyzeDialect | 'postgresql'; version: string; format: QueryAnalyzeFormat;
   raw: string; rawTruncated: boolean; nodes: QueryAnalyzeNode[]; warnings: string[];
 }
 export interface QueryAnalyzeCapability {

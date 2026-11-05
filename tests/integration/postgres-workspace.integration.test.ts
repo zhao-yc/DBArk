@@ -84,6 +84,41 @@ describe.skipIf(!enabled)('PostgreSQL真实连接、查询、事务及取消', (
     expect((await estimate('SELECT * FROM plan_temp')).explain?.nodes[0].name).toBe('plan_temp');
     expect(await state()).toMatchObject({ transactionKnown: true, transactionOpen: true, transactionFailed: false });
     await call('query.transaction', { sessionId, action: 'rollback' });
+    // 确认前没有实际任务，确认后同一事务内能读到真实写入，令牌不能重放。
+    const previewAnalyze = (sql: string, extra = {}) => call('postgres.analyzePreview', { sessionId, sql, ...extra });
+    const applyAnalyze = (token: string, taskId = randomUUID()): Promise<QueryOutcome> =>
+      call('postgres.analyze', { sessionId, token, taskId, acknowledged: true });
+    const analysisSource = 'SELECT 5; UPDATE "回归"."带""引号" SET note = note || \'-实际分析\' WHERE id = 1; SELECT 7;';
+    const analysisOffset = { currentStatement: { offset: analysisSource.indexOf('UPDATE') } };
+    await expect(previewAnalyze(analysisSource)).rejects.toThrow('只接受一条语句');
+    await expect(previewAnalyze('EXPLAIN ANALYZE SELECT 1')).rejects.toThrow('不支持实际执行分析');
+    const staleAnalysis = await previewAnalyze(analysisSource, analysisOffset);
+    expect((await execute('SELECT note FROM "回归"."带""引号"')).results[0].rows).toEqual([{ c0: '原值' }]);
+    await expect(applyAnalyze(staleAnalysis.token)).rejects.toThrow('确认已失效');
+    const dismissed = await previewAnalyze('SELECT 10');
+    await call('postgres.analyzeDiscard', { sessionId, token: dismissed.token });
+    await expect(applyAnalyze(dismissed.token)).rejects.toThrow('确认已失效');
+    await call('query.transaction', { sessionId, action: 'begin' });
+    const confirmedAnalysis = await previewAnalyze(analysisSource, analysisOffset);
+    expect(confirmedAnalysis.source.trim()).toBe('UPDATE "回归"."带""引号" SET note = note || \'-实际分析\' WHERE id = 1');
+    const actual = await applyAnalyze(confirmedAnalysis.token);
+    expect(actual.failure).toBeUndefined();
+    expect(actual.analysis?.raw).toContain('Actual Rows');
+    expect(actual.analysis?.nodes[0].metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'Actual Loops', kind: 'actual', value: '1' }),
+      expect.objectContaining({ source: 'Plan Rows', kind: 'estimate' }),
+    ]));
+    await expect(applyAnalyze(confirmedAnalysis.token)).rejects.toThrow('确认已失效');
+    expect((await execute('SELECT note FROM "回归"."带""引号"')).results[0].rows).toEqual([{ c0: '原值-实际分析' }]);
+    expect(await state()).toMatchObject({ transactionOpen: true, transactionFailed: false });
+    await call('query.transaction', { sessionId, action: 'rollback' });
+    const waitingAnalysis = await previewAnalyze('SELECT pg_sleep(30)');
+    const analyzeTaskId = randomUUID(), reading = applyAnalyze(waitingAnalysis.token, analyzeTaskId);
+    await expect.poll(() => events.some(event => event.taskId === analyzeTaskId && event.executionSql?.includes('ANALYZE TRUE')), { timeout: 3000 }).toBe(true);
+    await call('query.cancel', { taskId: analyzeTaskId });
+    expect((await reading).failure?.statementOrdinal).toBe(1);
+    expect(events.filter(event => event.taskId === analyzeTaskId).at(-1)?.status).toBe('cancelled');
+    expect(await state()).toMatchObject({ transactionKnown: true, transactionOpen: false, transactionFailed: false });
     const failure = await execute('BEGIN; UPDATE "回归"."带""引号" SET note = \'事务内\' WHERE id = 1; SELECT 1/0; SELECT 7;');
     expect(failure.failure).toMatchObject({ statementOrdinal: 3, statementsCompleted: 2 });
     expect(await state()).toMatchObject({ transactionKnown: true, transactionOpen: true, transactionFailed: true });

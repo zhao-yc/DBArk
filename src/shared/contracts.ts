@@ -238,6 +238,9 @@ export interface CommandMap {
   'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; continueOnError?: boolean; /** 仅true插入SHOW诊断，false或省略保持既有查询行为。 */ collectWarnings?: boolean; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
   'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text' }; output: QueryOutcome };
   'postgres.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text'; currentStatement?: { offset: number } }; output: QueryOutcome };
+  'postgres.analyzePreview': { input: { sessionId: string; sql: string; currentStatement?: { offset: number } }; output: { token: string; source: string } };
+  'postgres.analyze': { input: { sessionId: string; token: string; taskId: string; acknowledged: true }; output: QueryOutcome };
+  'postgres.analyzeDiscard': { input: { sessionId: string; token: string }; output: void };
   'query.analyze': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; acknowledged: true; expectedDatabase: string | null }; output: QueryOutcome };
   'query.analyzeContext': { input: { sessionId: string; taskId: string }; output: CompletionSessionState };
   'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };

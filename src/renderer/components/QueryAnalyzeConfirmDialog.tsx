@@ -6,11 +6,12 @@ import '../queryAnalyze.css';
 
 export interface QueryAnalyzeConfirmDialogProps {
   source: string; connectionName: string; databaseLabel: string; invalidReason?: string;
+  dialect?: 'postgresql';
   onConfirm(): void; onClose(): void;
 }
 
 /** 确认只授权本次冻结正文；失效、关闭及已经提交的旧回调均不能再次执行。 */
-export function QueryAnalyzeConfirmDialog({ source, connectionName, databaseLabel, invalidReason, onConfirm, onClose }: QueryAnalyzeConfirmDialogProps) {
+export function QueryAnalyzeConfirmDialog({ source, connectionName, databaseLabel, invalidReason, dialect, onConfirm, onClose }: QueryAnalyzeConfirmDialogProps) {
   const original = useRef({ source, connectionName, databaseLabel }).current;
   const [acknowledged, setAcknowledged] = useState(false), ack = useRef(false);
   const alive = useRef(true), invalid = useRef(false), finished = useRef(false);
@@ -33,7 +34,7 @@ export function QueryAnalyzeConfirmDialog({ source, connectionName, databaseLabe
     <div className="modal-content query-analyze-confirm">
       <dl className="query-analyze-target"><div><dt>{t.connection}</dt><dd>{original.connectionName}</dd></div><div><dt>{t.database}</dt><dd>{original.databaseLabel}</dd></div></dl>
       <p className="warning-text">{t.risk}</p>
-      <strong>{t.sql}</strong><div className="query-analyze-confirm-source" aria-label={t.sql}><SqlEditor value={original.source} readOnly height="100%"/></div>
+      <strong>{t.sql}</strong><div className="query-analyze-confirm-source" aria-label={t.sql}><SqlEditor value={original.source} dialect={dialect} readOnly height="100%"/></div>
       <p className="muted small">{t.once}</p>
       {reason && <p className="error-box" role="alert">{reason}</p>}
       <label className="query-analyze-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={!!reason} onChange={event => { if (!alive.current || finished.current || invalid.current) return; ack.current = event.currentTarget.checked; setAcknowledged(event.currentTarget.checked); }}/><span>{t.acknowledge}</span></label>

@@ -20,7 +20,7 @@ import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTab
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
-import { parsePostgresExplain, postgresExplainSql } from '../../shared/postgresExplain';
+import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { explainLimits } from '../../shared/explain';
 interface Session {
   id: string;
@@ -28,6 +28,7 @@ interface Session {
   managed: PostgresConnection;
   pending?: Promise<unknown>;
   completion?: Promise<PostgresCompletionResult>;
+  analysis?: { token: string; sql: string; expiresAt: number };
   closing?: Promise<void>;
 }
 interface Task {
@@ -128,12 +129,13 @@ export class PostgresEngine {
       }
     }
   }
-  private async session<T>(id: string, action: (session: Session) => Promise<T>, managesCompletion = false): Promise<T> {
+  private async session<T>(id: string, action: (session: Session) => Promise<T>, managesCompletion = false, claimAnalysis = false): Promise<T> {
     const session = this.sessions.get(id);
     if (!session || session.managed.broken) throw Error('PostgreSQL会话已失效，请核对写入结果后重新连接');
     if (this.stopping || this.closing.has(session.connectionId) || session.pending || session.closing) {
       throw Error('PostgreSQL会话仍有在途操作或正在关闭');
     }
+    if (!claimAnalysis) session.analysis = undefined;
     const pending = Promise.resolve().then(async () => {
       // 用户操作先占位，原目录读取真实收尾后才允许新的用户 SQL 上线。
       if (!managesCompletion && session.completion) await session.completion.catch(() => {});
@@ -289,17 +291,22 @@ export class PostgresEngine {
       { rows: format === 'json' ? 1 : Math.min(input.maxRows, explainLimits.textRows), bytes: explainLimits.jsonBytes },
       undefined, generic ? undefined : 'extended');
     if (task.cancelled) throw Error('PostgreSQL执行计划已取消');
-    if (result.postgresCommand !== 'EXPLAIN' || result.columns.length !== 1 ||
-        !result.rows.length && !result.truncated || result.rows.some(row => typeof row.c0 !== 'string'))
-      throw Error('PostgreSQL未返回完整的执行计划');
-    const raw = result.rows.map(row => row.c0).join('\n');
+    const raw = this.planOutput(result);
     const plan = parsePostgresExplain(raw, connection.version, format, result.truncated);
     if (generic) plan.warnings.unshift('使用通用估算计划，位置参数未绑定具体值');
     return { result, plan };
   }
 
+  /** 只接受服务端确认的单列计划；超限时保留实际命令回执与截断标记。 */
+  private planOutput(result: QueryResult): string {
+    if (result.postgresCommand !== 'EXPLAIN' || result.columns.length !== 1 ||
+        !result.rows.length && !result.truncated || result.rows.some(row => typeof row.c0 !== 'string'))
+      throw Error('PostgreSQL未返回完整的执行计划');
+    return result.rows.map(row => row.c0).join('\n');
+  }
+
   /** 计划和脚本共用原会话排队、取消及终态，用户脚本仍按原文逐句执行。 */
-  private async execute(session: Session, input: Input, estimate = false): Promise<QueryOutcome> {
+  private async execute(session: Session, input: Input, estimate = false, analysisSql?: string): Promise<QueryOutcome> {
     if (!input.taskId || this.ownsTask(input.taskId) || this.tasks.size >= 8192)
       throw Error('PostgreSQL任务编号已使用或登记已满');
     if (input.continueOnError || input.collectWarnings)
@@ -312,8 +319,10 @@ export class PostgresEngine {
     let offset = 0,
       count = 0,
       failure: QueryOutcome['failure'],
-      explain: QueryOutcome['explain'];
-    this.emit({ taskId: task.id, status: 'running', progress: 0, message: estimate ? '正在读取PostgreSQL估算计划' : '正在执行PostgreSQL脚本' });
+      explain: QueryOutcome['explain'],
+      analysis: QueryOutcome['analysis'];
+    this.emit({ taskId: task.id, status: 'running', progress: 0, message: analysisSql ? '正在实际执行分析'
+      : estimate ? '正在读取PostgreSQL估算计划' : '正在执行PostgreSQL脚本' });
     try {
       // 先登记可取消任务，再等待已占用原会话的目录读取。
       if (session.completion) await session.completion.catch(() => {});
@@ -329,7 +338,17 @@ export class PostgresEngine {
         results.push(result);
         explain = plan;
       }
-      while (!estimate) {
+      if (analysisSql) {
+        if (session.managed.state().transactionFailed) throw Error('PostgreSQL事务已失败，请先明确回滚');
+        task.sent = true;
+        this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已投递PostgreSQL实际执行分析',
+          executionSql: analysisSql, executionDatabase: { state: 'known', database: session.managed.database } });
+        const result = await session.managed.query(analysisSql, undefined, { rows: 1, bytes: explainLimits.jsonBytes }, undefined, 'extended');
+        // 即使取消与回包交叉，也保留服务器已确认的实际执行结果。
+        results.push(result);
+        analysis = parsePostgresAnalyze(this.planOutput(result), session.managed.version, result.truncated);
+      }
+      while (!estimate && !analysisSql) {
         if (task.cancelled) throw Error('PostgreSQL任务已取消，已执行语句未重放');
         const part =
           selected ?? firstPostgresStatement(source.slice(offset), session.managed.standardStrings);
@@ -413,6 +432,7 @@ export class PostgresEngine {
       elapsedMs: performance.now() - started,
       transactionOpen: session.managed.state().transactionOpen,
       ...(explain ? { explain } : {}),
+      ...(analysis ? { analysis } : {}),
       ...(failure ? { failure } : {}),
     };
   }
@@ -530,6 +550,28 @@ export class PostgresEngine {
       case 'query.executeParameterized':
       case 'postgres.explain':
         return this.session(input.sessionId, (s) => this.execute(s, input, command === 'postgres.explain'), true);
+      case 'postgres.analyzePreview':
+        return this.session(input.sessionId, async s => {
+          if (s.managed.state().transactionFailed) throw Error('PostgreSQL事务已失败，请先明确回滚');
+          const { source, sql } = postgresAnalyzeSql(input.sql, s.managed.standardStrings, input.currentStatement?.offset);
+          const token = randomUUID();
+          s.analysis = { token, sql, expiresAt: Date.now() + 120000 };
+          return { source, token };
+        });
+      case 'postgres.analyze':
+        return this.session(input.sessionId, s => {
+          const permit = s.analysis;
+          if (!permit || permit.token !== input.token || input.acknowledged !== true || permit.expiresAt <= Date.now())
+            throw Error('PostgreSQL实际分析确认已失效，请重新预览');
+          s.analysis = undefined;
+          return this.execute(s, input, false, permit.sql);
+        }, true, true);
+      case 'postgres.analyzeDiscard': {
+        const s = this.sessions.get(input.sessionId);
+        // 取消仅撤销原令牌，不影响同会话较新的预览或在途 SQL。
+        if (s?.analysis && s.analysis.token === input.token) s.analysis = undefined;
+        return;
+      }
       case 'query.transaction':
         return this.session(input.sessionId, async (s) => {
           if (input.action === 'commit' && s.managed.state().transactionFailed)
