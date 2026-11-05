@@ -21,6 +21,8 @@ import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN'
 import { postgresTableLayoutZh as tableLayoutText } from '../../src/renderer/locales/postgresTableLayout.zh-CN';
 import { tableGridZh as tableGridText } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { tableSortZh as tableSortText } from '../../src/renderer/locales/tableSort.zh-CN';
+import { tableCellFilterZh as tableCellFilterText } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { tableFilterGroupsZh as tableFilterGroupsText } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
 import { tablePresetsZh as tablePresetText } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { postgresTableExportZh as tableExportText } from '../../src/renderer/locales/postgresTableExport.zh-CN';
 import { postgresTableImportZh as tableImportText } from '../../src/renderer/locales/postgresTableImport.zh-CN';
@@ -151,9 +153,65 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await add('3', '新增乙');
     await expect(tableButton(tableSortText.entry)).toBeDisabled();
     await expect(tableButton(postgresTableZh.presets)).toBeDisabled();
+    const cellFilterMenu = page.getByRole('menu', { name: tableCellFilterText.context, exact: true });
+    const tableCell = (name: string) => grid.getByRole('gridcell', { name, exact: true });
+    await tableCell('原值').press('Shift+F10');
+    await expect(cellFilterMenu).toHaveCount(0);
     await expect(grid).not.toContainText('新增甲');
     await commit();
     await expect(grid).toContainText('新增乙');
+
+    const advanced = gridTab.getByRole('region', { name: postgresTableZh.advancedFilter, exact: true });
+    const addCondition = advanced.getByRole('button', { name: zh.table.text013, exact: true });
+    const applyAdvanced = advanced.getByRole('button', { name: postgresTableZh.applyAdvancedFilter, exact: true });
+    const includeCell = cellFilterMenu.getByRole('menuitem', { name: tableCellFilterText.equal, exact: true });
+    const excludeCell = cellFilterMenu.getByRole('menuitem', { name: tableCellFilterText.exclude, exact: true });
+    await tableCell('新增甲').click({ button: 'right' });
+    await expect(includeCell).toBeFocused();
+    await page.screenshot({ path: info.outputPath('PostgreSQL单元格筛选.png') });
+    await includeCell.click();
+    await expect(advanced.getByLabel(zh.table.text011, { exact: true })).toHaveValue('新增甲');
+    await expect(advanced.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('=');
+    await expect(grid).toContainText('原值');
+    await addCondition.click();
+    await expect(grid).toContainText('新增乙');
+    await applyAdvanced.click();
+    await expect(tableCell('新增甲')).toBeVisible();
+    await expect(tableCell('新增乙')).toHaveCount(0);
+    await expect(tableCell('原值')).toHaveCount(0);
+    await tableButton(postgresTableZh.clearFilter).click();
+    await expect(tableCell('原值')).toBeVisible();
+
+    await tableButton(postgresTableZh.advancedFilter).click();
+    await advanced.getByLabel(zh.table.text009, { exact: true }).selectOption('id');
+    await advanced.getByLabel(zh.table.filterOperatorLabel, { exact: true }).selectOption('>=');
+    await advanced.getByLabel(zh.table.text011, { exact: true }).fill('1');
+    await addCondition.click();
+    await advanced.getByRole('button', { name: postgresTableZh.filterGroups, exact: true }).click();
+    const cellFilterGroups = advanced.getByRole('region', { name: tableFilterGroupsText.title, exact: true });
+    await cellFilterGroups.getByRole('button', { name: tableFilterGroupsText.apply, exact: true }).click();
+    await expect(advanced.getByText(postgresTableZh.filterGrouped, { exact: true })).toBeVisible();
+
+    await tableCell('新增甲').click();
+    await tableCell('新增甲').press('Shift+F10');
+    await expect(includeCell).toBeFocused();
+    await includeCell.press('Escape');
+    await expect(cellFilterMenu).toHaveCount(0);
+    await expect(tableCell('新增甲')).toBeFocused();
+    await tableCell('新增甲').press('Shift+F10');
+    await includeCell.press('ArrowDown');
+    await expect(excludeCell).toBeFocused();
+    await excludeCell.press('Enter');
+    await expect(advanced.getByLabel(zh.table.filterOperatorLabel, { exact: true })).toHaveValue('!=');
+    await addCondition.click();
+    await expect(advanced.getByText(postgresTableZh.filterGrouped, { exact: true })).toBeVisible();
+    await applyAdvanced.click();
+    await expect(tableCell('新增甲')).toHaveCount(0);
+    await expect(tableCell('原值')).toBeVisible();
+    await expect(tableCell('新增乙')).toBeVisible();
+    await tableButton(postgresTableZh.clearFilter).click();
+    await expect(tableCell('新增甲')).toBeVisible();
+    await mark('PostgreSQL 表页单元格菜单鼠标和键盘取值、取消、草稿锁定、等值与排除实测');
 
     await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('1');
     await grid.getByRole('columnheader').filter({ hasText: /^id/ }).press('Enter');
@@ -190,7 +248,6 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await mark('PostgreSQL 表页列头键盘多列排序、调整优先级和 NULL 位置、跨页、取消与清空实测，草稿锁定排序');
 
     await tableButton(postgresTableZh.advancedFilter).click();
-    const advanced = gridTab.getByRole('region', { name: postgresTableZh.advancedFilter, exact: true });
     const addFilter = async (column: string, operator: string, value: string) => {
       await advanced.getByLabel(zh.table.text009, { exact: true }).selectOption(column);
       await advanced.getByLabel(zh.table.filterOperatorLabel, { exact: true }).selectOption(operator);
@@ -220,6 +277,11 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await tableButton(postgresTableZh.filter).click();
     await expect(grid).toContainText('新增甲');
     await expect(grid).not.toContainText('新增乙');
+    await tableCell('新增甲').click({ button: 'right' });
+    await includeCell.click();
+    await expect(advanced.getByText(tableCellFilterText.postgresReplacesQuick, { exact: true })).toBeVisible();
+    await expect(grid).not.toContainText('原值');
+    await tableButton(postgresTableZh.advancedFilter).click();
     const tableIdHeader = grid.getByRole('columnheader').filter({ hasText: /^id/ });
     await tableIdHeader.press('Enter');
     await expect(gridTab.locator('.tab-status')).toContainText(postgresTableZh.activeSort(1));

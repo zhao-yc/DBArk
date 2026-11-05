@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DataRow } from '../../shared/contracts';
 import type { ColumnWidths } from 'react-data-grid';
 import type { TablePreferences } from '../../shared/tablePreferences';
@@ -13,11 +13,15 @@ import { cellPreview, cellText, errorMessage, invoke } from '../lib';
 import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
-import { ResultsGrid } from './ResultsGrid';
+import { ResultsGrid, type GridCellMenuAnchor } from './ResultsGrid';
 import { PostgresTableExportDialog } from './PostgresTableExportDialog';
 import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { PostgresTableImportDialog } from './PostgresTableImportDialog';
 import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
+import { PostgresTableCellFilterMenu } from './PostgresTableCellFilterMenu';
+import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
+import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
+import type { FilterDraft } from '../tableFilters';
 import { TableSortPanel } from './TableSortPanel';
 import { TablePresetPanel } from './TablePresetPanel';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
@@ -118,6 +122,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [filterColumn, setFilterColumn] = useState('');
   const [filterText, setFilterText] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState(false);
+  const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
+  const [cellMenu, setCellMenu] = useState<{
+    scope: object; cell: QueryResultCopyCell; anchor: GridCellMenuAnchor; seed: FilterDraft;
+  }>();
+  const cellMenuOwner = useRef<typeof cellMenu>(undefined);
   const [sortPageToken, setSortPageToken] = useState<string>();
   const [presetPage, setPresetPage] = useState<{ token: string; connectionVersion: number }>();
   const [layoutDialog, setLayoutDialog] = useState<object>();
@@ -322,6 +331,55 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     };
   }, [page?.columns, columnNames, layoutView.preferences]);
 
+  const cellMenuScope = useMemo(() => ({}), [page, gridLayout.columns, connectionVersion]);
+  const cellMenuEnabled = active && !frozenPage && !requiresRefresh && pageConnectionVersion === connectionVersion && !!page?.exportToken;
+
+  function closeCellMenu(menu: typeof cellMenu, restoreFocus: boolean) {
+    if (!menu || cellMenuOwner.current !== menu) return;
+    cellMenuOwner.current = undefined;
+    setCellMenu(undefined);
+    if (restoreFocus && menu.anchor.element.isConnected) menu.anchor.element.focus({ preventScroll: true });
+  }
+
+  useLayoutEffect(() => {
+    const owner = cellMenuOwner.current;
+    if (owner && (!cellMenuEnabled || owner.scope !== cellMenuScope)) closeCellMenu(owner, false);
+  }, [cellMenuEnabled, cellMenuScope]);
+
+  /** 在打开及选中菜单项时都校验原页及活动标签，避免用旧格或其他连接的值。 */
+  function canFilterCell(): boolean {
+    return cellMenuEnabled && !!lifetime.current && issued.current === page?.exportToken && layoutScope.current.current() &&
+      !lease.current && !recordDirty.current && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+  }
+
+  function openCellMenu(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean {
+    if (!page || !canFilterCell()) return false;
+    try {
+      const seed = postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows);
+      const menu = { scope: cellMenuScope, cell, anchor, seed };
+      cellMenuOwner.current = menu;
+      setCellMenu(menu);
+      return true;
+    } catch { return false; }
+  }
+
+  function chooseCellFilter(menu: NonNullable<typeof cellMenu>, exclude: boolean) {
+    if (cellMenuOwner.current !== menu) return;
+    closeCellMenu(menu, true);
+    if (!page || !canFilterCell() || menu.scope !== cellMenuScope || !menu.anchor.element.isConnected) return;
+    try {
+      const current = postgresTableCellFilterDraft(menu.cell, gridLayout.columns, page.rows);
+      if (current.value !== menu.seed.value || current.operator !== menu.seed.operator || current.column !== menu.seed.column) return;
+      setCellFilterSeed(exclude ? postgresTableCellFilterDraft(menu.cell, gridLayout.columns, page.rows, true) : current);
+      setAdvancedFilters(true);
+    } catch { /* 原值失效时保留当前条件。 */ }
+  }
+
+  function closeAdvancedFilters() {
+    setAdvancedFilters(false);
+    setCellFilterSeed(undefined);
+  }
+
   /** 仅保存明确调整后的宽度，跳过虚拟网格的自动测量和无变化事件。 */
   function resizeLayout(widths: ColumnWidths) {
     if (!layoutScope.current.current() || blocked || !layoutView.ready || layoutView.pending) return;
@@ -350,7 +408,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     await run(async isCurrent => {
       applied = await read({ ...options, ...conditions, offset: 0 }, isCurrent, [], true, configuration.layout);
       if (!applied) return;
-      setAdvancedFilters(false);
+      closeAdvancedFilters();
       setFilterText(configuration.quickFilter?.text ?? '');
       if (configuration.quickFilter) setFilterColumn(configuration.quickFilter.column);
       setMessage(configuration.layout ? tablePresetsZh.appliedWithLayout : tablePresetsZh.applied);
@@ -397,11 +455,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         onChange={event => setFilterColumn(event.target.value)}>{page?.columns.map(column => <option key={column.key} value={column.name}>{column.name}</option>)}</select></Field>
       <Field label={text.filterText}><input value={filterText} maxLength={4096} disabled={frozenPage} onChange={event => setFilterText(event.target.value)}/></Field>
       <button disabled={frozenPage || !filterColumn} onClick={() => {
-        setAdvancedFilters(false); navigate({ ...firstPage, filter: { column: filterColumn, text: filterText } });
+        closeAdvancedFilters(); navigate({ ...firstPage, filter: { column: filterColumn, text: filterText } });
       }}>{text.filter}</button>
-      <button disabled={frozenPage} aria-expanded={advancedFilters} onClick={() => setAdvancedFilters(value => !value)}>{text.advancedFilter}</button>
+      <button disabled={frozenPage} aria-expanded={advancedFilters}
+        onClick={() => advancedFilters ? closeAdvancedFilters() : setAdvancedFilters(true)}>{text.advancedFilter}</button>
       <button disabled={frozenPage || !options.filter} onClick={() => {
-        setAdvancedFilters(false); setFilterText(''); navigate({ ...firstPage, filter: undefined });
+        closeAdvancedFilters(); setFilterText(''); navigate({ ...firstPage, filter: undefined });
       }}>{text.clearFilter}</button>
       <button disabled={frozenPage || !page?.exportToken || !columnNames.length} onClick={() => setSortPageToken(page?.exportToken)}>{tableSortZh.entry}</button>
       <button disabled={frozenPage || !page?.exportToken || !layoutView.ready || layoutView.pending} onClick={() => {
@@ -412,7 +471,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       }}>{layoutText.entry}</button>
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
-      initial={appliedAdvanced} disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
+      initial={appliedAdvanced} seed={cellFilterSeed} onSeedAdded={() => setCellFilterSeed(undefined)}
+      replacesQuick={!!(options.filter && 'text' in options.filter && options.filter.text)}
+      disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
     {message && <div className="info-strip" role="status">{message}</div>}
     <ErrorBox message={error}/>
     {page?.truncated && <div className="warning-text">{text.truncated}</div>}
@@ -427,6 +488,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     </div>}
     <div className="pg-table-grid">
       {page ? <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
+        onCellFilterMenu={cellMenuEnabled ? openCellMenu : undefined}
         frozenKeys={gridLayout.frozenKeys} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onColumnWidthsChange={resizeLayout}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           try {
@@ -437,6 +499,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
           } catch (reason) { setError(errorMessage(reason)); }
         }}/> : <Empty title={text.empty}/>}
     </div>
+    {cellMenu && cellMenuEnabled && cellMenu.scope === cellMenuScope &&
+      <PostgresTableCellFilterMenu anchor={cellMenu.anchor} column={cellMenu.seed.column}
+        onClose={restoreFocus => closeCellMenu(cellMenu, restoreFocus)} onChoose={exclude => chooseCellFilter(cellMenu, exclude)}/>}
     {draft.length > 0 && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong><button disabled={blocked} onClick={() => setChanges([])}>{text.discard}</button>
       <ol>{draft.map(({ change, offset }, index) => <li key={index}>

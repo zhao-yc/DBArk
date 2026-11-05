@@ -11,6 +11,8 @@ import { tableFilterEnabledZh as enabledText } from '../locales/tableFilterEnabl
 interface Props {
   children?:ReactNode;
   seed?: FilterDraft;
+  seedNotice?: string;
+  multilineScalar?: boolean;
   pause?: { active: boolean; available: boolean; onToggle(): boolean };
   columns: string[]; filters: FilterRule[]; mode: FilterMode; disabled: boolean;
   onFiltersChange: (filters: FilterRule[]) => boolean;
@@ -18,7 +20,7 @@ interface Props {
 }
 
 /** 编辑区只维护待应用条件；父组件确认草稿处理后，才替换已应用规则并重新读取服务器。 */
-export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed, pause }: Props) {
+export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed, seedNotice, multilineScalar, pause }: Props) {
   const [draft, setDraft] = useState(() => seed ? { ...seed } : emptyFilterDraft(columns[0] ?? ''));
   const [editing, setEditing] = useState<number | null>(null); const [error, setError] = useState('');
   const live = useRef<object | null>(null), ticket = {};
@@ -65,11 +67,13 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
   }
   return <div className="filter-panel expanded-filter-panel">
     {children}
-    {seed && <p className="filter-value-hint">{cellText.staged}</p>}
+    {seed && <p className="filter-value-hint">{seedNotice ?? cellText.staged}</p>}
     <div className="filter-mode-row" style={pause ? { flexWrap: 'wrap' } : undefined}><label>{zh.table.filterModeLabel}<select aria-label={zh.table.filterModeLabel} value={mode} disabled={disabled} onChange={event => { if (current()) onModeChange(event.target.value as FilterMode); }}><option value="all">{zh.table.filterModeAll}</option><option value="any">{zh.table.filterModeAny}</option></select></label><button disabled={disabled || !filters.length} onClick={() => { if (current() && onFiltersChange([])) cancelEdit(); }}>{zh.common.clearAll}</button><button aria-label={enabledText.enableAll} title={enabledText.hint} disabled={disabled || enabledCount === filters.length} onClick={() => changeEnabled(null, true)}>{enabledText.enableAllLabel}</button><button aria-label={enabledText.disableAll} title={enabledText.hint} disabled={disabled || enabledCount === 0} onClick={() => changeEnabled(null, false)}>{enabledText.disableAllLabel}</button>{pause && <button type="button" title={enabledText.pauseHint} disabled={disabled || !pause.available || !pause.active && !enabledCount} onClick={togglePause}>{pause.active ? enabledText.resume : enabledText.pause}</button>}<span className="muted small" role="status">{enabledText.status(enabledCount, filters.length)}</span></div>
     <form className="filter-rule-form" onSubmit={event => { event.preventDefault(); applyCondition(); }}>
       <div className="filter-inputs"><select aria-label={zh.table.text009} value={draft.column} disabled={disabled} onChange={event => changeDraft({ column: event.target.value })}>{columns.map(column => <option key={column}>{column}</option>)}</select><select aria-label={zh.table.filterOperatorLabel} value={draft.operator} disabled={disabled} onChange={event => changeDraft({ operator: event.target.value as FilterRule['operator'] })}>{Object.entries(filterOperatorLabels).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
-        {!isSet && !isRange && !isNull && <input aria-label={zh.table.text011} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })} placeholder={zh.table.text012}/>}
+        {!isSet && !isRange && !isNull && (multilineScalar && /[\r\n]/.test(draft.value)
+          ? <textarea rows={2} aria-label={zh.table.text011} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })}/>
+          : <input aria-label={zh.table.text011} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })} placeholder={zh.table.text012}/>)}
         {isRange && <><input aria-label={zh.table.filterRangeStart} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })} placeholder={zh.table.filterRangeStart}/><input aria-label={zh.table.filterRangeEnd} value={draft.upperValue} disabled={disabled} onChange={event => changeDraft({ upperValue: event.target.value })} placeholder={zh.table.filterRangeEnd}/></>}
         <button type="submit" disabled={disabled || !columns.length}>{editing === null ? zh.table.text013 : zh.table.filterSaveCondition}</button>{editing !== null && <button type="button" disabled={disabled} onClick={cancelEdit}>{zh.table.filterCancelEdit}</button>}
       </div>
