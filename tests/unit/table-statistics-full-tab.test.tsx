@@ -316,19 +316,23 @@ it('自定义页大小先编辑后应用，保留筛选排序，拒绝丢稿时�
   expect(f.all('option').some(element => element.props.value === 37)).toBe(true);
 });
 
-it('首页从末页读取一次并退出末页模式，确认期间切走标签时保留原草稿', async () => {
+it('首页复用原缓存保留末页草稿，改页长确认期间切走标签不丢整组', async () => {
   const f = await fixture();
   f.replyToLastPage(page => ({ ...page, page: 3, hasMore: false, matchingRows: '101' }));
   await f.click(zh.table.lastPage); await f.change('末页草稿');
   const before = f.invoke.mock.calls.length;
+  await f.click(zh.table.firstPage); expect(f.confirm).not.toHaveBeenCalled(); expect(f.invoke.mock.calls).toHaveLength(before);
+  expect(f.grid().rows[0].data.note).toBe('原值'); expect(f.all('TableEditWorkspaceBar')[0].props.pages.find((page: any) => page.index === 3).rows[0].data.note).toBe('末页草稿');
+  const selector = () => f.all('select').find(element => element.props['aria-label'] === zh.table.text021)!.props;
+  selector().onChange({ target: { value: 'custom' } }); await f.render();
+  f.all('input').find(element => element.props['aria-label'] === zh.table.customPageSizeLabel)!.props.onChange({ target: { value: '37' } }); await f.render();
+  const form = () => f.all('form').find(element => element.props.className === 'page-jump' && element.props.onKeyDown)!.props;
   f.confirm.mockImplementationOnce(() => { f.workspace.settings.activeTabId = '其它标签'; return true; });
-  await f.click(zh.table.firstPage);
-  expect(f.invoke.mock.calls).toHaveLength(before); expect(f.grid().rows[0].data.note).toBe('末页草稿');
-  f.workspace.settings.activeTabId = f.props.tab.id; await f.render();
-  await f.click(zh.table.firstPage);
-  const read = f.invoke.mock.calls.slice(before).filter(([command]) => command === 'table.page');
-  expect(read).toHaveLength(1); expect(read[0][1]).toMatchObject({ page: 1, pageSize: 50 }); expect(read[0][1]).not.toHaveProperty('lastPage');
-  expect(f.button(zh.table.firstPage).props.disabled).toBe(true);
+  form().onSubmit({ preventDefault() {} }); await f.render(); expect(f.invoke.mock.calls).toHaveLength(before);
+  expect(f.all('TableEditWorkspaceBar')[0].props.changes).toBe(1); expect(f.all('TableEditWorkspaceBar')[0].props.pages.find((page: any) => page.index === 3).rows[0].data.note).toBe('末页草稿');
+  f.workspace.settings.activeTabId = f.props.tab.id; await f.render(); form().onSubmit({ preventDefault() {} }); await f.render();
+  const reads = f.invoke.mock.calls.slice(before).filter(([command]) => command === 'table.page'); expect(reads).toHaveLength(1); expect(reads[0][1]).toMatchObject({ page: 1, pageSize: 37 }); expect(reads[0][1]).not.toHaveProperty('lastPage');
+  expect(f.all('TableEditWorkspaceBar')[0].props.changes).toBe(0); expect(f.button(zh.table.firstPage).props.disabled).toBe(true);
 });
 
 it('关系图正式表页入口不读库，自己的忙碌计数不撤销来源且父草稿保持', async () => {

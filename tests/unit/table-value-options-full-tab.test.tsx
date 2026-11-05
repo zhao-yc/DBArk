@@ -1,3 +1,4 @@
+import { tableEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/tableEditWorkspace.zh-CN';
 import { navigationMenuVmPort, navigationToolbarVmChildren } from '../helpers/sidebarMenuRamPort';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -195,19 +196,19 @@ describe('服务器不同值的完整TableTab→正式Dialog产品集成（RAM�
   it('有草稿时拒绝同一丢弃提示保留原rows、条件、弹窗及勾选，不偷偷重读', async () => {
     const f = await fixture(); await f.change('必须保留草稿'); const row = f.grid().rows[0], data = row.data, original = row.original;
     const element = await openDialog(f), before = pageReads(f).length; await dialogClick(text.read); await selectValue('原值'); f.confirm.mockReturnValue(false); await dialogClick(text.apply); await f.render();
-    expect(f.confirm).toHaveBeenCalledExactlyOnceWith(recordViewZh.discardPage); expect(pageReads(f)).toHaveLength(before); expect(f.grid().rows[0]).toBe(row); expect(row.data).toBe(data); expect(row.original).toBe(original); expect(row.data.note).toBe('必须保留草稿');
+    expect(f.confirm).toHaveBeenCalledExactlyOnceWith(workspaceText.confirmAll); expect(pageReads(f)).toHaveLength(before); expect(f.grid().rows[0]).toBe(row); expect(row.data).toBe(data); expect(row.original).toBe(original); expect(row.data.note).toBe('必须保留草稿');
     expect(f.all('TableValueOptionsDialog')[0].props.conditions).toBe(element.props.conditions); expect(memory.body.querySelectorAll('input').find(node => node.getAttribute('aria-label') === text.value('原值'))?.checked).toBe(true); expect(memory.body.textContent).toContain(text.rejected);
   });
   it('同一丢弃提示确认后确实接纳筛选，清草稿并通过正式page读取更新页面', async () => {
     const f = await fixture(); await f.change('明确丢弃的草稿'); await openDialog(f); const before = pageReads(f).length;
     await dialogClick(text.read); await selectValue('原值'); await dialogClick(text.apply); await f.render();
-    expect(f.confirm).toHaveBeenCalledExactlyOnceWith(recordViewZh.discardPage); expect(pageReads(f)).toHaveLength(before + 1); expect(pageReads(f).at(-1)![1]).toMatchObject({ page: 1, filters: [{ column: 'id', operator: 'IN', values: ['原值'] }] }); expect(f.grid().rows[0].data.note).toBe('原值'); expect(f.all('TableValueOptionsDialog')).toHaveLength(0);
+    expect(f.confirm).toHaveBeenCalledExactlyOnceWith(workspaceText.confirmAll); expect(pageReads(f)).toHaveLength(before + 1); expect(pageReads(f).at(-1)![1]).toMatchObject({ page: 1, filters: [{ column: 'id', operator: 'IN', values: ['原值'] }] }); expect(f.grid().rows[0].data.note).toBe('原值'); expect(f.all('TableValueOptionsDialog')).toHaveLength(0);
   });
   it('真实DOM出现另一模态时父owner门零丢稿，移除后才接受同一正式勾选', async () => {
     const f = await fixture(); await f.change('必须先保留'); await openDialog(f); await dialogClick(text.read); await selectValue('原值'); const row = f.grid().rows[0], before = pageReads(f).length;
     const foreign = memory.createElement('section'); foreign.setAttribute('role', 'dialog'); memory.body.appendChild(foreign); await dialogClick(text.apply); await f.render();
     expect(f.confirm).not.toHaveBeenCalled(); expect(f.grid().rows[0]).toBe(row); expect(row.data.note).toBe('必须先保留'); expect(pageReads(f)).toHaveLength(before);
-    memory.body.removeChild(foreign); await dialogClick(text.apply); await f.render(); expect(f.confirm).toHaveBeenCalledExactlyOnceWith(recordViewZh.discardPage); expect(pageReads(f)).toHaveLength(before + 1); expect(f.all('TableValueOptionsDialog')).toHaveLength(0);
+    memory.body.removeChild(foreign); await dialogClick(text.apply); await f.render(); expect(f.confirm).toHaveBeenCalledExactlyOnceWith(workspaceText.confirmAll); expect(pageReads(f)).toHaveLength(before + 1); expect(f.all('TableValueOptionsDialog')).toHaveLength(0);
   });
   it.each(['tab', 'profile', 'version', 'source'])('丢弃确认中的%s变化不允许先reset草稿后发现失效', async cause => {
     const f = await fixture(); await f.change('确认期间必须保留'); const row = f.grid().rows[0], data = row.data, element = await openDialog(f); await dialogClick(text.read); await selectValue('原值'); const before = pageReads(f).length;

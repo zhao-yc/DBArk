@@ -1,3 +1,5 @@
+import { TableEditWorkspace } from '../../src/renderer/tableEditWorkspace';
+import { tableEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/tableEditWorkspace.zh-CN';
 import { TableApplyRecovery } from '../../src/renderer/tableApplyRecovery';
 import { tableApplyRecoveryZh } from '../../src/renderer/locales/tableApplyRecovery.zh-CN';
 import { readFileSync } from 'node:fs';
@@ -36,7 +38,7 @@ function fixture(filterGroup: FilterGroup | undefined = undefined) {
   const original = { id: 7, note: '载入值' }, row = { id: 'old', original, data: { ...original, note: '旧草稿' }, inserted: false, deleted: false };
   const workspace = { settings: { activeTabId: 'tab', tabs: [{ ...tab }] }, connections: [{ id: 'connection' }], connectionVersions: { connection: 1 }, setBusy: vi.fn() };
   const setRows = vi.fn(), invoke = vi.fn(async (_command: string, _input: { changes: unknown[] }) => ({ sql: '合成集中预览', warnings: [] })); let id = 0;
-  const port = createContext({ applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh, Error, structuredClone, pasteInsertZh, PasteInsertIntent, recordReadonlyReason, recordTargetKey, tableCopyMetadataKey, errorMessage, recordViewZh, recordDuplicateZh, captureRecordPagePreview, assertCopiedRecordKeys,
+  const port = createContext({ tableEdits: new TableEditWorkspace(), workspaceText, connection: {}, workspaceSkipLoad: { current: undefined }, selectedRowsRef: { current: new Set() }, applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh, Error, structuredClone, pasteInsertZh, PasteInsertIntent, recordReadonlyReason, recordTargetKey, tableCopyMetadataKey, errorMessage, recordViewZh, recordDuplicateZh, captureRecordPagePreview, assertCopiedRecordKeys,
     tab, base: target, connectionVersion: 1, refreshVersion: 0, info, page: {}, layoutRevision: { current: 0 }, externalStale: false, pageIndex: 1, pageSize: 50, filters: [], filterMode: 'all', sort: [],
     record: { hasInput: () => false, dirty: false, request: vi.fn() }, mounted: { current: true }, rootElement: { current: { querySelector: () => null } }, document: { querySelector: () => null }, getRecordContext: () => current,
     useWorkspace: { getState: () => workspace }, rowsRef: { current: [row] }, visibleKeys: ['id', 'note'], pasteInsertIntent: { current: null }, pasteInsertEnvironment: { current: [] }, copiedDraftIds: { current: new Set() },

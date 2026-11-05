@@ -1,3 +1,4 @@
+import { tableEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/tableEditWorkspace.zh-CN';
 import { randomUUID } from 'node:crypto';
 import { emptyTableApplyEvidence } from '../../src/shared/tableApplyReceipt';
 import { tableApplyRecoveryZh as recoveryText } from '../../src/renderer/locales/tableApplyRecovery.zh-CN';
@@ -26,7 +27,7 @@ import { createStore } from 'zustand/vanilla';
 type Element = { type: unknown; props: Record<string, any> };
 const renderer = fileURLToPath(new URL('../../src/renderer', import.meta.url)), compiled = new Map<string, string>();
 /** 执行完整生产TableTab与真实useRecordViews/helper，React调度、DOM和IPC仅替换成RAM端口。 */
-async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: boolean } = {}) {
+async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: boolean; pages?: boolean } = {}) {
   const slots: any[] = []; let cursor = 0, dirty = false, tree: Element, dialog = false, editor = false, counter = 0;
   const effects: (() => void)[] = [];
   const equal = (a: any[], b: any[]) => !!a && !!b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
@@ -60,13 +61,13 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   });
   const source = { id: '18446744073709551615', note: '原值', bytes: { type: 'binary', base64: 'AAH/' }, doc: '{"x":1,"x":-0,"n":9007199254740993}' };
   if (options.plainKey) info.columns[0].extra = '';
-  const sourceRows = options.batch ? [source, { ...source, id: '18446744073709551614', note: '' }] : [source];
+  const sourceRows = options.batch || options.pages ? [source, { ...source, id: '18446744073709551614', note: '' }] : [source];
   const pageSource = { status: 'ready', pageRef: 'RAM页引用', rowRefs: ['RAM行1', 'RAM行2'], expiresAt: Date.now() + 60_000, metadataKey: tableCopyMetadataKey(info), missingColumns: [] as string[] };
   let failApply = false;
   // IPC端口按command返回异构合同，异常场景可独立注入真实回执或读取失败。
   const invoke = vi.fn(async (command: string, input: any): Promise<any> => {
     if (command === 'metadata.table') return info;
-    if (command === 'table.page') return { page: input.page, pageSize: input.pageSize, hasMore: true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: structuredClone(sourceRows), copyMetadataKey: tableCopyMetadataKey(info), ...(options.batch && options.lease ? { copySource: pageSource } : {}) };
+    if (command === 'table.page') return { page: input.page, pageSize: input.pageSize, hasMore: options.pages ? input.page < 2 : true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: structuredClone(options.pages && input.page !== 1 ? input.page === 2 ? [{ ...source, id: '18446744073709551613', note: '第三行' }] : [] : sourceRows), copyMetadataKey: tableCopyMetadataKey(info), ...(options.batch && options.lease ? { copySource: pageSource } : {}) };
     if (command === 'table.preview') return { sql: '仅RAM模拟预览', previewId: 'c64d7916-1111-4111-8111-111111111111', statements: input.changes.map(() => ({ sql: 'RAM', params: [] })), warnings: [] };
     if (command === 'table.applyReceipt.list') return { items: [], total: 0, page: 0 };
     if (command === 'table.apply') { if (failApply) throw Error('合成执行结果未知'); return { affectedRows: 1 }; }
@@ -121,7 +122,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     const event = { key, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, nativeEvent: {}, target: new Node(kind), preventGridDefault: vi.fn(), preventDefault: vi.fn(), ...patch };
     grid().onCellKeyDown({ mode, row: grid().rows[0], column: { key: 'note' } }, event); await render(); return event;
   }
-  await render(); expect(grid().rows).toHaveLength(options.batch ? 2 : 1);
+  await render(); expect(grid().rows).toHaveLength(options.batch || options.pages ? 2 : 1);
   return { confirm, emitTask: (event: any) => taskListener?.(event), render, click, change, press, grid, record, button, all, props, workspace, store, invoke, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
 }
 
@@ -129,11 +130,73 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
 function recoveryReceipt(input: any, outcome: 'committed' | 'rolled-back' | 'not-sent') {
   return { version: 1, operationId: randomUUID(), taskId: input.taskId, previewId: input.previewId,
     target: { connectionId: input.connectionId, database: input.database, table: input.table, connectionRevision: 99 },
-    intent: { insert: 0, update: 1, delete: 0, statementCount: 1 }, startedAt: '2026-11-05T00:00:00.000Z', finishedAt: '2026-11-05T00:00:01.000Z',
-    phase: 'terminal', outcome, reason: outcome === 'committed' ? 'none' : 'validation', sequence: 3, scope: 'target-transaction-only', committedReportedRows: outcome === 'committed' ? 1 : 0,
-    evidence: { ...emptyTableApplyEvidence(), ...(outcome === 'not-sent' ? {} : { dmlMayHaveBeenSent: true, dmlAcknowledged: 1, serverReportedRows: 1, transactionProtected: true, transactionKnown: true }),
+    intent: { insert: 0, update: input.changes.length, delete: 0, statementCount: input.changes.length }, startedAt: '2026-11-05T00:00:00.000Z', finishedAt: '2026-11-05T00:00:01.000Z',
+    phase: 'terminal', outcome, reason: outcome === 'committed' ? 'none' : 'validation', sequence: 3, scope: 'target-transaction-only', committedReportedRows: outcome === 'committed' ? input.changes.length : 0,
+    evidence: { ...emptyTableApplyEvidence(), ...(outcome === 'not-sent' ? {} : { dmlMayHaveBeenSent: true, dmlAcknowledged: input.changes.length, serverReportedRows: input.changes.length, transactionProtected: true, transactionKnown: true }),
       ...(outcome === 'committed' ? { commitMayHaveBeenSent: true, commitAcknowledged: true } : outcome === 'rolled-back' ? { rollbackAcknowledged: true } : {}) } };
 }
+
+describe('完整TableTab多页草稿工作区', () => {
+  it('切走标签后的旧表单跨页回调不暂存隐藏输入，不消费原输入或读取新页', async () => {
+    const f = await fixture({ pages: true }), row = f.grid().rows[1]; f.grid().onCellClick({ row, column: { key: 'note' } }); f.record().openForm(row.id); await f.render();
+    f.record().expand('note'); await f.render(); f.record().change('note', { mode: 'text', text: '尚未暂存' }); await f.render(); expect(f.record().hasInput()).toBe(true);
+    const oldNavigate = f.all('RecordFormPanel')[0].props.pageNavigation.onNavigate, before = f.grid().rows, calls = f.invoke.mock.calls.length;
+    f.workspace.settings.activeTabId = '其它'; oldNavigate(1); await f.render(); expect(f.grid().rows).toBe(before); expect(f.record().hasInput()).toBe(true); expect(f.invoke).toHaveBeenCalledTimes(calls);
+  });
+
+  it('返回缓存页恢复原记录选择，已打开表单重新绑定原UUID及新显示代次', async () => {
+    const f = await fixture({ pages: true }), first = f.grid().rows[0]; f.grid().onCellClick({ row: first, column: { key: 'note' } }); f.record().openForm(first.id); await f.render();
+    await f.click(zh.common.pageNext); const second = f.grid().rows[0]; f.grid().onCellClick({ row: second, column: { key: 'note' } }); await f.render();
+    await f.click(zh.common.pagePrevious); expect(f.record().formOpen).toBe(true); expect(f.record().draft.rowId).toBe(first.id); expect(f.record().draft.data).toBe(f.grid().rows[0].data);
+    await f.click(zh.common.pageNext); expect(f.record().draft.rowId).toBe(second.id); expect(f.record().draft.data).toBe(f.grid().rows[0].data);
+  });
+
+  it('普通切页保留两页不同草稿及独立历史，返回缓存无页读取和丢稿确认', async () => {
+    const f = await fixture({ pages: true }); await f.change('第一页修改'); const first = f.grid().rows;
+    await f.click(zh.common.pageNext); expect(f.grid().rows[0].data.note).toBe('第三行'); expect(f.workspace.setDirty).toHaveBeenLastCalledWith(f.props.tab.id, true);
+    await f.change('第二页修改'); const second = f.grid().rows, reads = f.invoke.mock.calls.filter(call => call[0] === 'table.page').length;
+    await f.click(zh.common.pagePrevious); expect(f.grid().rows).toBe(first); await f.click(text.undo); expect(f.grid().rows[0].data.note).toBe('原值');
+    await f.click(zh.common.pageNext); expect(f.grid().rows).toBe(second); expect(f.button(text.undo).props.children).toContain(1);
+    await f.click(text.undo); expect(f.grid().rows[0].data.note).toBe('第三行'); await f.click(text.redo); expect(f.grid().rows[0].data.note).toBe('第二页修改');
+    expect(f.invoke.mock.calls.filter(call => call[0] === 'table.page')).toHaveLength(reads); expect(f.confirm).not.toHaveBeenCalled(); expect(f.all('TableEditWorkspaceBar')[0].props.pages).toHaveLength(2);
+  });
+  it('当前干净页也统一预览后台修改，取消保留整组；已确认提交重读后清除全部旧页', async () => {
+    const f = await fixture({ pages: true }); await f.change('后台草稿'); await f.click(zh.common.pageNext);
+    f.button(zh.table.text019).props.onClick(); await f.render();
+    const request = f.invoke.mock.calls.find(call => call[0] === 'table.preview')![1]; expect(request.changes).toHaveLength(1); expect(request.changes[0]).toMatchObject({ kind: 'update', before: { note: '原值' }, values: { note: '后台草稿' } });
+    f.all('Modal')[0].props.onClose(); await f.render(); expect(f.all('TableEditWorkspaceBar')[0].props.changes).toBe(1);
+    f.button(zh.table.text019).props.onClick(); await f.render(); f.button(zh.common.confirmApply).props.onClick(); await f.render();
+    expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(1); expect(f.all('TableEditWorkspaceBar')[0].props.pages).toHaveLength(1); expect(f.all('TableEditWorkspaceBar')[0].props.changes).toBe(0); expect(f.grid().rows[0].data.note).toBe('第三行');
+  });
+  it('次页读取失败原数组／历史保持，页码回到原页且不再隐式重读', async () => {
+    const f = await fixture({ pages: true }); await f.change('不丢稿'); const rows = f.grid().rows, original = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation(async (command, input) => { if (command === 'table.page' && input.page === 2) throw Error('受控次页失败'); return original(command, input); });
+    const before = f.invoke.mock.calls.filter(call => call[0] === 'table.page').length; await f.click(zh.common.pageNext);
+    expect(f.grid().rows).toBe(rows); expect(f.button(zh.common.pagePrevious).props.disabled).toBe(true); expect(f.button(text.undo).props.disabled).toBe(false); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.page')).toHaveLength(before + 1);
+    expect(f.all('ErrorBox').some(element => String(element.props.message).includes('受控次页失败'))).toBe(true); await f.click(text.undo); expect(f.grid().rows[0].data.note).toBe('原值');
+  });
+  it('两页未知结果关闭旧预览后仍锁全组，旧切页和逐页放弃回调不读库或丢页', async () => {
+    const f = await fixture({ pages: true }); await f.change('第一页'); await f.click(zh.common.pageNext); await f.change('第二页');
+    const bar = f.all('TableEditWorkspaceBar')[0].props; f.button(zh.table.text019).props.onClick(); await f.render(); f.failApply(); f.button(zh.common.confirmApply).props.onClick(); await f.render(); f.all('Modal')[0].props.onClose(); await f.render();
+    const before = f.invoke.mock.calls.length; bar.onSelect(bar.pages[0]); bar.onDiscard(bar.pages[0]); await f.render();
+    expect(f.invoke).toHaveBeenCalledTimes(before); expect(f.all('TableEditWorkspaceBar')[0].props.pages).toHaveLength(2); expect(f.all('TableEditWorkspaceBar')[0].props.disabled).toBe(true); expect(f.all('TableEditWorkspaceBar')[0].props.changes).toBe(2); expect(f.all('TableApplyRecoveryBanner')[0].props.view.outcome).toBe('unknown');
+  });
+  it('两页严格回滚保留全部草稿，当前干净页／脏页都不能靠旧历史重放提交', async () => {
+    const f = await fixture({ pages: true }); await f.change('第一页'); await f.click(zh.common.pageNext); await f.change('第二页'); const original = f.invoke.getMockImplementation()!; let receipt: any;
+    f.invoke.mockImplementation(async (command, input) => { if (command === 'table.apply') { receipt = recoveryReceipt(input, 'rolled-back'); throw Error('受控整批回滚'); } if (command === 'table.applyReceipt.list') return { items: [receipt], total: 1, page: 0 }; return original(command, input); });
+    f.button(zh.table.text019).props.onClick(); await f.render(); f.button(zh.common.confirmApply).props.onClick(); await f.render(); f.all('Modal')[0].props.onClose(); await f.render();
+    expect(f.all('TableApplyRecoveryBanner')[0].props.view.outcome).toBe('rolled-back'); expect(f.button(text.undo).props.disabled).toBe(true); expect(f.all('TableEditWorkspaceBar')[0].props.changes).toBe(2);
+    await f.click(zh.common.pagePrevious); expect(f.grid().rows[0].data.note).toBe('第一页'); expect(f.button(text.undo).props.disabled).toBe(true); f.button(zh.table.text019).props.onClick(); await f.render();
+    expect(f.invoke.mock.calls.filter(call => call[0] === 'table.preview')).toHaveLength(2); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(1);
+  });
+  it('明确放弃后台页不读库，放弃当前页返回另一准确缓存，刷新取消保持整组', async () => {
+    const f = await fixture({ pages: true }); await f.change('第一页'); await f.click(zh.common.pageNext); await f.change('第二页');
+    const before = f.invoke.mock.calls.length; let bar = f.all('TableEditWorkspaceBar')[0].props;
+    f.confirm.mockReturnValueOnce(false); await f.click(zh.common.refresh); expect(f.confirm).toHaveBeenLastCalledWith(workspaceText.confirmAll); expect(f.invoke).toHaveBeenCalledTimes(before); expect(f.all('TableEditWorkspaceBar')[0].props.pages).toHaveLength(2);
+    bar.onDiscard(bar.current); await f.render(); expect(f.all('TableEditWorkspaceBar')[0].props.pages).toHaveLength(2); bar = f.all('TableEditWorkspaceBar')[0].props; bar.onDiscard(bar.current); await f.render(); expect(f.grid().rows[0].data.note).toBe('第一页'); expect(f.invoke).toHaveBeenCalledTimes(before); bar = f.all('TableEditWorkspaceBar')[0].props; expect(bar.pages).toHaveLength(1); expect(bar.changes).toBe(1);
+    await f.click(zh.common.pageNext); await f.change('新第二页'); bar = f.all('TableEditWorkspaceBar')[0].props; const reads = f.invoke.mock.calls.length; bar.onDiscard(bar.pages[0]); await f.render(); expect(f.invoke).toHaveBeenCalledTimes(reads); expect(f.grid().rows[0].data.note).toBe('新第二页'); expect(f.all('TableEditWorkspaceBar')[0].props.changes).toBe(1);
+  });
+});
 
 describe('完整TableTab提交后核对与防重复投递', () => {
   it('确认后的读取尚未结束时连接修订改变，旧回包不能替换草稿或解除保护', async () => {

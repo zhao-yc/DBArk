@@ -6,8 +6,8 @@ import { maxTablePage } from './tableFilters';
 
 export interface RecordPageScope { target: RecordTarget; connectionVersion: number; refreshVersion: number; pageSize: number; filters: FilterRule[]; filterMode: string; filterGroup?: FilterGroup; sort: SortRule[]; }
 export interface RecordPageContext { scope: string; page: number; generation: number; active: boolean; formOpen: boolean; stale: boolean; }
-export interface RecordPageTicket { readonly action: number; readonly scope: string; readonly fromPage: number; readonly page: number; readonly fromGeneration: number; readonly key: string; readonly direction: -1 | 1; generation?: number; rows?: DraftRow[]; }
-export interface RecordPageNavigationView { previous: boolean; next: boolean; message: string; onNavigate(direction: -1 | 1): void; }
+export interface RecordPageTicket { readonly action: number; readonly scope: string; readonly fromPage: number; readonly page: number; readonly fromGeneration: number; readonly key: string; readonly direction: -1 | 1; readonly keepDrafts?: boolean; generation?: number; rows?: DraftRow[]; }
+export interface RecordPageNavigationView { previous: boolean; next: boolean; message: string; previousLabel?: string; nextLabel?: string; onNavigate(direction: -1 | 1): void; }
 export type RecordPageBegin = { kind: 'ready'; ticket: RecordPageTicket } | { kind: 'busy' | 'dirty' | 'boundary' | 'unavailable' };
 
 /** 条件只用于内存身份比较，不持久化或记录筛选值；页码独立绑定目标页。 */
@@ -33,14 +33,14 @@ export class RecordPageNavigation {
   }
 
   /** 不暂存、不确认放弃、不发送请求；忙态连点保留原意图，不重复读取。 */
-  begin(context: RecordPageContext, input: { rows: DraftRow[]; rowId?: string; key: string; direction: -1 | 1; hasMore: boolean; busy: boolean; inputDirty: boolean }): RecordPageBegin {
+  begin(context: RecordPageContext, input: { rows: DraftRow[]; rowId?: string; key: string; direction: -1 | 1; hasMore: boolean; busy: boolean; inputDirty: boolean; keepDrafts?: boolean }): RecordPageBegin {
     if (this.ticket || input.busy) return { kind: 'busy' };
-    if (recordPageHasDrafts(input.rows, input.inputDirty)) return { kind: 'dirty' };
+    if (input.inputDirty || !input.keepDrafts && recordPageHasDrafts(input.rows, false)) return { kind: 'dirty' };
     if (!context.active || !context.formOpen || context.stale || !input.key) return { kind: 'unavailable' };
     const index = input.rows.findIndex(row => row.id === input.rowId);
     if (input.rows.length && (index < 0 || index !== (input.direction === 1 ? input.rows.length - 1 : 0))) return { kind: 'unavailable' };
     if (input.direction === -1 ? context.page <= 1 : !input.hasMore || context.page >= maxTablePage || !input.rows.length) return { kind: 'boundary' };
-    const ticket: RecordPageTicket = { action: ++this.action, scope: context.scope, fromPage: context.page, page: context.page + input.direction, fromGeneration: context.generation, key: input.key, direction: input.direction };
+    const ticket: RecordPageTicket = { action: ++this.action, scope: context.scope, fromPage: context.page, page: context.page + input.direction, fromGeneration: context.generation, key: input.key, direction: input.direction, ...(input.keepDrafts ? { keepDrafts: true } : {}) };
     this.ticket = ticket; return { kind: 'ready', ticket };
   }
 
@@ -70,7 +70,7 @@ export class RecordPageNavigation {
   /** React 提交真实新页后才兑换 UUID；草稿、快照变化或新动作均不能沿用旧选择。 */
   consume(context: RecordPageContext, rows: DraftRow[], inputDirty: boolean, busy: boolean): { rowId: string; key: string } | undefined {
     const ticket = this.ticket; if (!ticket?.rows || busy) return;
-    if (!this.current(ticket, context) || ticket.rows !== rows || recordPageHasDrafts(rows, inputDirty)) { this.cancel(); return; }
+    if (!this.current(ticket, context) || ticket.rows !== rows || (inputDirty || !ticket.keepDrafts && recordPageHasDrafts(rows, false))) { this.cancel(); return; }
     this.ticket = undefined;
     const row = ticket.direction === 1 ? rows[0] : rows.at(-1);
     return row ? { rowId: row.id, key: ticket.key } : undefined;

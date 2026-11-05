@@ -1,3 +1,5 @@
+import { TableEditWorkspace } from '../../src/renderer/tableEditWorkspace';
+import { tableEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/tableEditWorkspace.zh-CN';
 import { TableApplyRecovery } from '../../src/renderer/tableApplyRecovery';
 import { tableApplyRecoveryZh } from '../../src/renderer/locales/tableApplyRecovery.zh-CN';
 import { readFileSync } from 'node:fs';
@@ -48,7 +50,7 @@ function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraft
   const workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { [base.connectionId]: 4 }, setBusy: vi.fn() };
   const gate = new RecordPageNavigation(), reset = vi.fn(), select = vi.fn((_: string, activate: () => void) => { activate(); return true; });
   let sequence = 0;
-  const context = createContext({ applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh,
+  const context = createContext({ tableEdits: new TableEditWorkspace(), workspaceText, connection: {}, workspaceSkipLoad: { current: undefined }, selectedRowsRef: { current: new Set() }, applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh,
     // 勾选转入用途在本组未打开；保留原blocked/load/reloadBlocked的真实可空初值。
     rowTransferDialog: null, rowTransferIntent: { current: null }, rowTransferSource: { current: null },
     // JOIN对话框是新增的真实blocked依赖；旧跨页场景保持未打开的生产初值。
@@ -70,8 +72,9 @@ function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraft
     recordCopyMetadataReason, recordCopySourceReady, recordDuplicateReadonlyReason, recordTargetKey, recordCopySourceZh, setCopyPending: vi.fn(),
     grid: { current: { scrollToCell: vi.fn(), setActivePosition: vi.fn() } }, handleGridKeyDown: vi.fn(), restoreGridFocus: vi.fn(),
     uid: () => `新页本地UUID-${++sequence}`, errorMessage: String, formatText: (text: string, page: number) => text.replace('{0}', String(page)),
-    invoke: vi.fn(async (command: string, input: { page?: number }) => command === 'metadata.table' ? { objectKind: 'table', columns: [] } : command === 'table.page' ? { page: input.page, pageSize: 50, hasMore: input.page === 1, rows: [{ id: input.page === 2 ? '51' : '49', text: '新值一' }, ...(input.page === 1 ? [{ id: '50', text: '新值末' }] : [])] } : undefined),
-    assertGridWritable: vi.fn(), getRecordContext: () => ({ info: {} }), recordReadonlyReason: () => undefined, pageFindGeneration: () => 1,
+    invoke: vi.fn(async (command: string, input: { page?: number }) => command === 'metadata.table' ? { objectKind: 'view', columns: [] } : command === 'table.page' ? { page: input.page, pageSize: 50, hasMore: input.page === 1, rows: [{ id: input.page === 2 ? '51' : '49', text: '新值一' }, ...(input.page === 1 ? [{ id: '50', text: '新值末' }] : [])] } : undefined),
+    assertGridWritable: vi.fn(), getRecordContext: () => ({ info: {} }), // 本组保留旧无草稿只读跨页链路；可写多页由完整TableTab夹具独立覆盖。
+    recordReadonlyReason: (context: { info?: { objectKind?: string } }) => context.info?.objectKind === 'view' ? '视图只读' : undefined, pageFindGeneration: () => 1,
     applyPageReplacement: vi.fn(), collectChanges: vi.fn(() => []),
     setError: vi.fn(), setInfo: vi.fn(), setExternalStale: vi.fn(), setRecordPageMessage: vi.fn(), restoredDraftView, setRestoredDraftView: vi.fn(),
   });
@@ -221,7 +224,7 @@ describe('D04与现有TableTab工具的混合正负向接线', () => {
     const f = fixture(), c = f.context;
     c.invoke.mockImplementation(async (command: string) => {
       if (command === 'table.page') { if (kind === '读取失败') throw Error('固定读取失败'); return { page: kind === '错误页码' ? 3 : 2, pageSize: 50, rows: [] }; }
-      return command === 'metadata.table' ? { columns: [] } : undefined;
+      return command === 'metadata.table' ? { objectKind: 'view', columns: [] } : undefined;
     });
     f.navigate(); await f.load(); f.consume();
     expect(c.rowsRef.current).toHaveLength(0); expect(c.selectionRef.current).toBeUndefined(); expect(f.select).not.toHaveBeenCalled(); expect(f.gate.pending).toBe(false); expect(c.invoke).toHaveBeenCalledTimes(3);

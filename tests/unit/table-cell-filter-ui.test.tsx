@@ -1,3 +1,4 @@
+import { tableEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/tableEditWorkspace.zh-CN';
 import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -133,7 +134,7 @@ describe('表页嵌套筛选的实际父组件接线（RAM分页端口）', () =
     await mount(); await prepareGroupRules(); const originalConfirm = window.confirm, confirm = vi.fn(() => false); window.confirm = confirm;
     try {
       const first = grid.rows[0]; await act(async () => grid.props.onRowsChange([{ ...first, data: { ...first.data, note: '原数据草稿' } }, ...grid.rows.slice(1)]));
-      const count = pages.length; await stageNestedGroup(); await click(groupText.apply); expect(confirm).toHaveBeenCalledWith(recordViewZh.discardPage); expect(pages).toHaveLength(count); expect(grid.rows[0].data.note).toBe('原数据草稿'); expect(document.body.textContent).toContain(groupText.declined);
+      const count = pages.length; await stageNestedGroup(); await click(groupText.apply); expect(confirm).toHaveBeenCalledWith(workspaceText.confirmAll); expect(pages).toHaveLength(count); expect(grid.rows[0].data.note).toBe('原数据草稿'); expect(document.body.textContent).toContain(groupText.declined);
       confirm.mockReturnValue(true); await click(groupText.apply); expect(pages).toHaveLength(count + 1); expect(pages.at(-1).filterGroup).toBeDefined(); expect(grid.rows[0].data.note).toBe('原1');
     } finally { window.confirm = originalConfirm; }
   });
@@ -145,7 +146,10 @@ describe('表页嵌套筛选的实际父组件接线（RAM分页端口）', () =
       if (kind === 'job') { store.getState().setBusy('表页', true); store.getState().setBusy('表页', false); }
       if (kind === 'modal') { const modal = document.createElement('div'); modal.setAttribute('role', 'dialog'); document.body.appendChild(modal); old(); modal.parentNode!.removeChild(modal); }
     });
-    await act(async () => old()); expect(pages).toHaveLength(count); await click(groupText.cancel); await stageNestedGroup(); await act(async () => old()); expect(pages).toHaveLength(count); await click(groupText.apply); expect(pages).toHaveLength(count + 1);
+    await act(async () => old()); expect(pages).toHaveLength(count); await click(groupText.cancel);
+    let currentCount = count;
+    if (kind === 'connection') { await click(zh.common.refresh); currentCount++; expect(pages).toHaveLength(currentCount); }
+    await stageNestedGroup(); await act(async () => old()); expect(pages).toHaveLength(currentCount); await click(groupText.apply); expect(pages).toHaveLength(currentCount + 1);
   });
 });
 
@@ -189,7 +193,7 @@ describe('真实React表页多列服务器排序RAM', () => {
     const originalConfirm = window.confirm, confirm = vi.fn(() => false); window.confirm = confirm;
     try {
       const count = pages.length; await click(sortText.entry); await click(sortText.add); await click(sortText.cancel); expect(pages).toHaveLength(count); expect(grid.rows[0].data.note).toBe('尚未提交'); expect(confirm).not.toHaveBeenCalled();
-      await click(sortText.entry); await click(sortText.add); await chooseSort(sortText.direction(1), 'DESC'); await click(sortText.apply); expect(confirm).toHaveBeenCalledWith(recordViewZh.discardPage); expect(pages).toHaveLength(count); expect(grid.rows[0].data.note).toBe('尚未提交'); expect(document.body.textContent).toContain(sortText.declined);
+      await click(sortText.entry); await click(sortText.add); await chooseSort(sortText.direction(1), 'DESC'); await click(sortText.apply); expect(confirm).toHaveBeenCalledWith(workspaceText.confirmAll); expect(pages).toHaveLength(count); expect(grid.rows[0].data.note).toBe('尚未提交'); expect(document.body.textContent).toContain(sortText.declined);
       confirm.mockReturnValue(true); await click(sortText.apply); expect(pages).toHaveLength(count + 1); expect(grid.rows[0].data.note).toBe('原1'); expect(pages.at(-1).sort).toEqual([{ column: 'id', direction: 'DESC' }]);
       await click(sortText.entry); await click(sortText.clear); expect(pages).toHaveLength(count + 1); await click(sortText.apply); expect(pages).toHaveLength(count + 2); expect(pages.at(-1).sort).toEqual([]); expect(buildPageSql(info, 1, 50, [], []).sql).toContain('ORDER BY `id` ASC');
     } finally { window.confirm = originalConfirm; }
@@ -225,7 +229,7 @@ describe('真实TableTab服务器筛选启停RAM', () => {
     await mount(); await selectCell(0, 'num'); await click(text.equal); await applyCondition(); await act(async () => grid.props.onRowsChange(grid.rows.map((row, index) => index ? row : { ...row, data: { ...row.data, note: '保留原草稿' } })));
     const originalConfirm = window.confirm, confirm = vi.fn(() => false); window.confirm = confirm;
     try {
-      const count = pages.length; await enableRule(1, false); expect(confirm).toHaveBeenCalledWith(recordViewZh.discardPage); expect(pages).toHaveLength(count); expect(field(enabledText.enabled(1)).checked).toBe(true); expect(grid.rows[0].data.note).toBe('保留原草稿'); expect(document.body.textContent).toContain(enabledText.declined);
+      const count = pages.length; await enableRule(1, false); expect(confirm).toHaveBeenCalledWith(workspaceText.confirmAll); expect(pages).toHaveLength(count); expect(field(enabledText.enabled(1)).checked).toBe(true); expect(grid.rows[0].data.note).toBe('保留原草稿'); expect(document.body.textContent).toContain(enabledText.declined);
       confirm.mockReturnValue(true); await enableRule(1, false); expect(pages).toHaveLength(count + 1); expect(pages.at(-1).filters[0].enabled).toBe(false); expect(grid.rows[0].data.note).toBe('原1'); expect(previews).toEqual([]); expect(commands.includes('table.apply')).toBe(false);
     } finally { window.confirm = originalConfirm; }
   });

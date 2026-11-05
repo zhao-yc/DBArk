@@ -1,3 +1,5 @@
+import { TableEditWorkspace } from '../../src/renderer/tableEditWorkspace';
+import { tableEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/tableEditWorkspace.zh-CN';
 import { TableApplyRecovery } from '../../src/renderer/tableApplyRecovery';
 import { tableApplyRecoveryZh } from '../../src/renderer/locales/tableApplyRecovery.zh-CN';
 import { readFileSync } from 'node:fs';
@@ -25,7 +27,7 @@ const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx'
 let load = '', disabled = '', copyValues = '', environment = '', resize = '', activePosition = '', cellClick = '', selectionSync = '';
 /** 取生产原文并替换外界端口，按钮守卫与实际处理器不能各测一套实现。 */
 function visit(node: ts.Node) {
-  if (ts.isFunctionDeclaration(node) && node.name && ['setRows', 'getRecordContext', 'getRecordPageContext', 'navigateRecordPage', 'selectCurrentCell', 'assertGridWritable', 'invalidateCopyRead', 'releaseCopySources', 'duplicateCurrentRow', 'readCompleteCopySource'].includes(node.name.text)) functions.push(node.getText(tree));
+  if (ts.isFunctionDeclaration(node) && node.name && ['setRows', 'getRecordContext', 'getRecordPageContext', 'pageNavigationCurrent', 'reloadBlocked', 'navigateRecordPage', 'selectCurrentCell', 'assertGridWritable', 'invalidateCopyRead', 'releaseCopySources', 'duplicateCurrentRow', 'readCompleteCopySource'].includes(node.name.text)) functions.push(node.getText(tree));
   if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'load') load = node.initializer!.getText(tree);
   if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'copyValues') copyValues = node.initializer!.getText(tree);
   if (ts.isIfStatement(node) && node.expression.getText(tree).startsWith('copyValues.some')) environment = node.getText(tree);
@@ -58,9 +60,9 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
   const invoke = vi.fn(async (command: string, _input?: unknown) => { if (command === 'metadata.table') return metadata; if (command === 'table.page') return page; if (command === 'table.copySourceRead') return pending; if (['connections.open', 'table.copySourceRelease', 'query.cancel'].includes(command)) return undefined; throw Error('不应调用:' + command); });
   const uid = vi.fn(randomUUID), record = { hasInput: () => false, dirty: false };
   // 组合后的load保留D04真实导航门；本组为普通读取，不建立跨页票据。
-  const tab = { id: 'tab', ...base }, workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { conn: 1 }, setBusy: vi.fn(), setDirty: vi.fn() };
+  const tab = { id: 'tab', ...base }, workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { conn: 1 }, connections: [{ id: 'conn' }], setBusy: vi.fn(), setDirty: vi.fn() };
   // 原setRows/load新增的意图和已载入页ref按未打开初值提供，不替换真实失效或来源登记语句。
-  const port = createContext({ applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh, selectedFilterRef: { current: null }, filteredDeleteDialog: null, filteredUpdateDialog: null, filteredDeleteIntent: { current: null }, filteredUpdateIntent: { current: null }, filteredSelectDialog: null, filteredSelectIntent: { current: null }, filteredSelectPage: { current: null }, filteredExportDialog: null, filteredExportIntent: { current: null }, tableValueOptionsDialog: null, tableValueOptionsIntent: { current: null }, tableStatisticsIntent: { current: null }, childReferenceIntent: { current: null }, batchFillIntent: { current: null }, recordBatchIntent: { current: null }, history: new DraftHistory(), structuredClone, Error, useCallback: (action: unknown) => action, useWorkspace: { getState: () => workspace }, invoke, uid, base, tab, connectionVersion: 1, refreshVersion: 0, pageIndex: 1, pageSize: 50, filters: [], filterMode: 'all', sort: [],
+  const port = createContext({ tableEdits: new TableEditWorkspace(), workspaceText, connection: {}, workspaceSkipLoad: { current: undefined }, selectedRowsRef: { current: new Set() }, applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh, selectedFilterRef: { current: null }, filteredDeleteDialog: null, filteredUpdateDialog: null, filteredDeleteIntent: { current: null }, filteredUpdateIntent: { current: null }, filteredSelectDialog: null, filteredSelectIntent: { current: null }, filteredSelectPage: { current: null }, filteredExportDialog: null, filteredExportIntent: { current: null }, tableValueOptionsDialog: null, tableValueOptionsIntent: { current: null }, tableStatisticsIntent: { current: null }, childReferenceIntent: { current: null }, batchFillIntent: { current: null }, recordBatchIntent: { current: null }, history: new DraftHistory(), structuredClone, Error, useCallback: (action: unknown) => action, useWorkspace: { getState: () => workspace }, invoke, uid, base, tab, connectionVersion: 1, refreshVersion: 0, pageIndex: 1, pageSize: 50, filters: [], filterMode: 'all', sort: [],
     recordPages: new RecordPageNavigation(), recordPageScope, recordPageScopeRef: { current: { value: { target: base, connectionVersion: 1, refreshVersion: 0, pageSize: 50, filters: [], filterMode: 'all', sort: [] }, page: 1 } }, setRecordPageMessage: vi.fn(), setPageIndex: vi.fn(), showPreferences: false, maxTablePage,
     visibleKeys: ['id', 'note'], updatePreferences: vi.fn(), setPreferencesError: vi.fn(),
     loadGeneration: { current: 0 }, blockedRef: { current: false }, loadingCount: { current: 0 }, referenceCount: { current: 0 }, applyingRef: { current: false }, preferencesLock: { current: false }, copyPendingRef: { current: false }, mounted: { current: true }, copyPageTask: { current: undefined }, copyPage: { current: null }, copySources: { current: null }, copyRowRefs: { current: new Map() }, copyReadIntent: { current: null }, copyEnvironment: { current: { values: [] } }, rowsRef: { current: [] }, selectionRef: { current: undefined }, copiedDraftIds: { current: new Set() }, inputDirtyRef: { current: false }, recordControllerRef: { current: { ...record, reset: vi.fn() } }, previewingRef: { current: false }, preview: null,
@@ -68,6 +70,9 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
     setRowsState, setError: vi.fn(), setCopyPending: vi.fn(), setDuplicateNotice: vi.fn(), setSelectedRows: vi.fn(), setSelection: vi.fn(), setExternalStale: vi.fn(), setBusy: vi.fn(), setInfo: vi.fn(), setPage: vi.fn(), restoredDraftView, setRestoredDraftView: vi.fn(),
     recordReadonlyReason, recordTargetKey, tableCopyMetadataKey, recordCopyMetadataReason, recordCopySourceReady, recordDuplicateReadonlyReason, duplicateRecordDraft, beginRecordCopyRead, consumeRecordCopyRead, collectChanges, errorMessage, formatText, recordDuplicateZh, recordCopySourceZh, recordViewZh,
   });
+  // 原页导航前置门仍执行生产原文，绑定同一活动渲染和连接，补取busy由真实ref拒绝。
+  const readRender = {}; port.tableReadAction = { current: readRender }; port.tableReadRender = readRender;
+  port.connection = workspace.connections[0]; port.rowTransferSource = { current: null }; port.referenceDialog = null; port.activeGridEditor = { current: null };
   // 本组不打开勾选转入窗口，仅补齐原setRows/load读取的可空来源意图。
   port.rowTransferIntent = { current: null };
   // 普通读取沿生产的页码初值，不建立末页请求；真实load仍自行更新状态和回收来源。
