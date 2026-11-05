@@ -1,5 +1,5 @@
 export const queryResultFrequencyLimits = Object.freeze({ entries: 10, previewPoints: 80 });
-export type QueryResultFrequencyKind = 'number' | 'text' | 'temporal' | 'blob';
+export type QueryResultFrequencyKind = 'number' | 'text' | 'temporal' | 'blob' | 'boolean';
 export interface QueryResultFrequencyEntry {
   readonly label: string;
   readonly kind: QueryResultFrequencyKind;

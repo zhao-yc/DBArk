@@ -3,6 +3,7 @@ import type { DataRow, QueryResult, ResultColumn } from '../../shared/contracts'
 import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, QueryResultStatisticsScan, type QueryResultStatisticsCapture, type QueryResultStatisticsResult } from '../queryResultStatistics';
 import type { QueryResultFrequencyEntry } from '../queryResultFrequency';
 import type { QueryResultFilterGroup, QueryResultFilterRule } from '../queryResultFilter';
+import type { SortDialect } from '../queryResultSort';
 import { queryResultStatisticsZh as text } from '../locales/queryResultStatistics.zh-CN';
 import { errorMessage } from '../lib';
 import { UsageHelp, ErrorBox, Modal  } from './ui';
@@ -12,6 +13,7 @@ interface Props {
   columns: ResultColumn[]; rows: DataRow[]; initialColumn: ResultColumn;
   selectedIndices: ReadonlySet<number>; truncated: boolean; owner: string;
   sqliteSource?: QueryResult;
+  dialect?: SortDialect;
   isCurrent(): boolean; onClose(): void;
   onFrequencyFilter?(node: QueryResultFilterRule | QueryResultFilterGroup): void;
 }
@@ -20,13 +22,13 @@ type Operation = { request: Request; capture: QueryResultStatisticsCapture; scan
 type View = { request: Request; processed: number; total: number; result?: QueryResultStatisticsResult; error?: string };
 
 /** 仅统计当前已返回快照；分批让出界面线程，切列、取消和来源变化永久撤销旧计算。 */
-export function QueryResultStatisticsDialog({ columns, rows, initialColumn, selectedIndices, truncated, owner, sqliteSource, isCurrent, onClose, onFrequencyFilter }: Props) {
-  const origin = useRef({ columns, rows, initialColumn, owner, sqliteSource }).current;
-  const latest = useRef({ columns, rows, initialColumn, owner, sqliteSource, isCurrent }); latest.current = { columns, rows, initialColumn, owner, sqliteSource, isCurrent };
+export function QueryResultStatisticsDialog({ columns, rows, initialColumn, selectedIndices, truncated, owner, sqliteSource, dialect, isCurrent, onClose, onFrequencyFilter }: Props) {
+  const origin = useRef({ columns, rows, initialColumn, owner, sqliteSource, dialect }).current;
+  const latest = useRef({ columns, rows, initialColumn, owner, sqliteSource, dialect, isCurrent }); latest.current = { columns, rows, initialColumn, owner, sqliteSource, dialect, isCurrent };
   const [prepared] = useState(() => {
     try {
       const indices: ReadonlySet<number> = new Set<number>(Set.prototype.values.call(selectedIndices));
-      const capture = captureQueryResultStatistics(columns, rows, initialColumn, indices.size ? indices : undefined, sqliteSource);
+      const capture = captureQueryResultStatistics(columns, rows, initialColumn, indices.size ? indices : undefined, sqliteSource, dialect);
       // 捕获已经核过全部元数据；仍只读自有数据描述符，不执行列字段访问器。
       const options = columns.map(column => ({ key: Object.getOwnPropertyDescriptor(column, 'key')!.value as string, name: Object.getOwnPropertyDescriptor(column, 'name')!.value as string }));
       return { indices, capture, options, error: '' };
@@ -44,7 +46,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     if (!alive.current || invalid.current || closed.current) return false;
     const current = latest.current;
     let valid = false;
-    try { valid = current.columns === origin.columns && current.rows === origin.rows && current.initialColumn === origin.initialColumn && current.owner === origin.owner && current.sqliteSource === origin.sqliteSource && current.isCurrent() === true; } catch {}
+    try { valid = current.columns === origin.columns && current.rows === origin.rows && current.initialColumn === origin.initialColumn && current.owner === origin.owner && current.sqliteSource === origin.sqliteSource && current.dialect === origin.dialect && current.isCurrent() === true; } catch {}
     if (!valid) invalid.current = true;
     return valid;
   }
@@ -63,7 +65,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
     try {
       const column = origin.columns.find(value => Object.getOwnPropertyDescriptor(value, 'key')?.value === request.column);
       if (!column) throw Error(text.stale);
-      const capture = request === firstRequest ? prepared.capture : captureQueryResultStatistics(origin.columns, origin.rows, column, request.scope === 'selected' ? prepared.indices : undefined, origin.sqliteSource);
+      const capture = request === firstRequest ? prepared.capture : captureQueryResultStatistics(origin.columns, origin.rows, column, request.scope === 'selected' ? prepared.indices : undefined, origin.sqliteSource, origin.dialect);
       lastCapture.current = capture;
       active = { request, capture, scan: new QueryResultStatisticsScan(capture, request.mode === 'frequency') }; operation.current = active;
       setView({ request, processed: 0, total: capture.rowCount });
@@ -119,7 +121,7 @@ export function QueryResultStatisticsDialog({ columns, rows, initialColumn, sele
   }
   const labels = ['count', 'nonNull', 'nulls', 'distinct', 'min', 'max', 'sum', 'average'] as const;
   return <div data-query-result-statistics-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
-    <p>{text.notice}</p><UsageHelp><p>{request.mode === 'frequency' ? text.frequencyHint : sqliteSource ? text.sqliteHint : text.hint}</p>{request.mode === 'frequency' && onFrequencyFilter && <p>{text.frequencyFilterHint}</p>}</UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
+    <p>{text.notice}</p><UsageHelp><p>{request.mode === 'frequency' ? text.frequencyHint : sqliteSource ? text.sqliteHint : dialect === 'postgresql' ? text.postgresHint : text.hint}</p>{request.mode === 'frequency' && onFrequencyFilter && <p>{text.frequencyFilterHint}</p>}</UsageHelp>{truncated && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs"><label>{text.column}<select aria-label={text.column} value={request.column} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...request, column: event.target.value }); }}>{prepared.options.map(column => <option key={column.key} value={column.key}>{column.name || column.key} · {column.key}</option>)}</select></label>
       <label>{text.scope}<select aria-label={text.scope} value={request.scope} disabled={!valid || !prepared.capture} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && (event.target.value === 'all' || event.target.value === 'selected')) change({ ...request, scope: event.target.value }); }}><option value="all">{text.all}</option><option value="selected" disabled={!prepared.indices.size}>{text.selected}</option></select></label></div>
     <div className="query-result-frequency-modes" role="group" aria-label={text.mode}>{(['summary', 'frequency'] as const).map(mode => <button key={mode} type="button" aria-pressed={mode === request.mode} className={mode === request.mode ? 'selected' : ''} disabled={!valid || !prepared.capture} onClick={() => change({ ...request, mode })}>{text[mode]}</button>)}</div>

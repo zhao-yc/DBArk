@@ -23,6 +23,7 @@ import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
+import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
@@ -585,6 +586,43 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(amountGrid).not.toContainText('空值');
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeSort);
     await mark('快捷筛选保留 NUMERIC 原值，取消草稿不改结果，NaN 与 NULL 勾选和后续 AND 追加均通过原生窗口');
+
+    // 先统计已筛选行，再用两条有限原值核对勾选范围的精确合计和平均值。
+    const statistics = page.getByRole('dialog', { name: statisticsText.title, exact: true });
+    const metric = (name: string) => statistics.getByLabel(name, { exact: true });
+    await button(statisticsText.open).click();
+    await expect(metric(statisticsText.count)).toHaveText('1');
+    await expect(metric(statisticsText.max)).toHaveText('NaN');
+    await statistics.getByRole('button', { name: statisticsText.close, exact: true }).click();
+    await button(filterText.clear).click();
+    for (const label of ['高精度较大', 'z-次键']) {
+      await amountGrid.getByRole('row').filter({
+        has: page.getByRole('gridcell', { name: label, exact: true }),
+      }).getByRole('checkbox').check();
+    }
+    await exactCell.click();
+    await button(statisticsText.open).click();
+    const statisticsScope = statistics.getByLabel(statisticsText.scope, { exact: true });
+    await expect(statisticsScope).toHaveValue('selected');
+    await expect(metric(statisticsText.count)).toHaveText('2');
+    await expect(metric(statisticsText.sum)).toHaveText('2.00000000000000000003');
+    await expect(metric(statisticsText.average)).toHaveText('1.000000000000000000015');
+    await statisticsScope.selectOption('all');
+    await expect(metric(statisticsText.nulls)).toHaveText('1');
+    await expect(metric(statisticsText.distinct)).toHaveText('3');
+    await expect(metric(statisticsText.sum)).toHaveText(statisticsText.unavailable);
+    await expect(statistics.getByText(statisticsText.postgresNonFinite, { exact: false })).toBeVisible();
+    await statistics.getByRole('button', { name: statisticsText.frequency, exact: true }).click();
+    const chart = statistics.getByRole('region', { name: statisticsText.frequencyTitle, exact: true });
+    await expect(chart.getByText(statisticsText.frequencyCount(5), { exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('PostgreSQL查询结果列统计.png') });
+    await chart.getByRole('row').filter({ hasText: 'NaN' }).getByRole('button', { name: statisticsText.frequencyFilter, exact: true }).click();
+    await expect(statistics).toHaveCount(0);
+    await expect(shortcut.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue('NaN');
+    await applyShortcut.click();
+    await expect(tab().getByText(filterText.counts(5, 1), { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeSort);
+    await mark('列统计按筛选和勾选范围计数，精确 NUMERIC 合计与平均保留末位，NaN 分布回填同一筛选草稿');
 
     // 查询带可观测的序列推进，导出三种文件后复核只执行了原查询一次。
     await button(postgresZh.begin).click();

@@ -2,12 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DataRow, ResultColumn } from '../../src/shared/contracts';
 import { captureQueryResultStatistics, currentQueryResultStatistics, queryResultFrequencyFilter, QueryResultStatisticsScan, type QueryResultStatisticsCapture } from '../../src/renderer/queryResultStatistics';
 import { queryResultStatisticsZh as text } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
+import type { SortDialect } from '../../src/renderer/queryResultSort';
 
 /** 所有统计均运行真实捕获器和分批扫描器，不模拟成功结果或数据库。 */
-function fixture(type: string, values: readonly unknown[], indices?: ReadonlySet<number>) {
+function fixture(type: string, values: readonly unknown[], indices?: ReadonlySet<number>, dialect?: SortDialect) {
   const columns: ResultColumn[] = [{ key: 'k', name: '同名', type }, { key: 'other', name: '同名', type: 'TEXT' }];
   const rows = values.map((k, index) => ({ k, other: String(index) })) as DataRow[];
-  const capture = captureQueryResultStatistics(columns, rows, columns[0], indices);
+  const capture = captureQueryResultStatistics(columns, rows, columns[0], indices, undefined, dialect);
   return { columns, rows, capture, scan: new QueryResultStatisticsScan(capture) };
 }
 /** 持续调用正式step至完成；任何未完成批次都不得读取部分结果。 */
@@ -21,6 +22,39 @@ function finish(scan: QueryResultStatisticsScan, initialProcessed = 0) {
     expect(scan.result()).toBeUndefined();
   }
 }
+
+describe('PostgreSQL 当前结果列统计', () => {
+  it('仅对勾选的有限 NUMERIC 原值计算精确合计与平均值', () => {
+    const f = fixture('NUMERIC', ['1.00000000000000000001', '1.00000000000000000002', 'NaN'], new Set([0, 1]), 'postgresql');
+    expect(finish(f.scan)).toMatchObject({
+      count: 2, distinct: 2, min: '1.00000000000000000001', max: '1.00000000000000000002',
+      sum: '2.00000000000000000003', average: '1.000000000000000000015', approximate: false,
+    });
+  });
+
+  it.each(['NUMERIC', 'DOUBLE PRECISION'])('%s 特殊数值保留极值和分布，并可回填原值', type => {
+    const f = fixture(type, ['1', 'Infinity', '-Infinity', 'NaN', 'NaN', null], undefined, 'postgresql');
+    const result = finish(new QueryResultStatisticsScan(f.capture, true));
+    expect(result).toMatchObject({ count: 6, nulls: 1, distinct: 4, min: '-Infinity', max: 'NaN', reason: text.postgresNonFinite });
+    expect(result.sum).toBeUndefined();
+    expect(result.average).toBeUndefined();
+    const frequency = result.frequency!;
+    expect(frequency.entries[0]).toMatchObject({ label: 'NaN', count: 2 });
+    expect(queryResultFrequencyFilter(frequency, frequency.entries[0])).toMatchObject({ operator: 'eq', value: 'NaN' });
+  });
+
+  it('浮点使用有界有限比较值，布尔值可以分布但不做数值合计', () => {
+    const numbers = fixture('REAL', ['0e+999999999', '1.25e+2'], undefined, 'postgresql');
+    expect(finish(numbers.scan)).toMatchObject({ sum: '125', average: '62.5', floatInput: true, approximate: true });
+    const booleans = fixture('BOOLEAN', ['t', 'f', 'f', null], undefined, 'postgresql');
+    const result = finish(new QueryResultStatisticsScan(booleans.capture, true));
+    expect(result).toMatchObject({ min: 'f', max: 't', distinct: 2, nulls: 1, frequency: { entries: [
+      { label: 'f', kind: 'boolean', count: 2 }, { label: 't', kind: 'boolean', count: 1 },
+    ] } });
+    expect(result.sum).toBeUndefined();
+    expect(queryResultFrequencyFilter(result.frequency!, result.frequency!.entries[0])).toMatchObject({ operator: 'eq', value: 'f' });
+  });
+});
 
 describe('当前已返回行的常见值分布', () => {
   it('同预览的长值转为不同的完整原值条件，原格失效后拒绝再次交接', () => {

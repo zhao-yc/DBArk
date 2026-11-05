@@ -1,5 +1,5 @@
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
-import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultSortKind, queryResultSortLimits } from './queryResultSort';
+import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultSortKind, queryResultSortLimits, type SortDialect } from './queryResultSort';
 import { queryResultStatisticsZh as text } from './locales/queryResultStatistics.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
 import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultComparisonKey } from './sqliteResultCompare';
@@ -27,6 +27,7 @@ interface Binding {
   columns: readonly ResultColumn[]; rows: readonly DataRow[]; columnRefs: readonly ResultColumn[]; metadata: readonly ResultColumn[];
   rowRefs: readonly DataRow[]; indices: readonly number[]; selection?: ReadonlySet<number>; values: readonly ValueStamp[]; invalid: boolean;
   sqlite?: SqliteResultFilterSource;
+  dialect?: SortDialect;
 }
 const bindings = new WeakMap<QueryResultStatisticsCapture, Binding>();
 const frequencyOwners = new WeakMap<QueryResultFrequency, { capture: QueryResultStatisticsCapture; hasNull: boolean }>();
@@ -95,7 +96,7 @@ function sameValue(value: unknown, before: ValueStamp): boolean {
 }
 
 /** 捕获原行列与当前范围；只冻结自有快照，不克隆或冻结来源。 */
-export function captureQueryResultStatistics(columns: readonly ResultColumn[], rows: readonly DataRow[], column: ResultColumn, indices?: ReadonlySet<number>, sqliteSource?: QueryResult): QueryResultStatisticsCapture {
+export function captureQueryResultStatistics(columns: readonly ResultColumn[], rows: readonly DataRow[], column: ResultColumn, indices?: ReadonlySet<number>, sqliteSource?: QueryResult, dialect?: SortDialect): QueryResultStatisticsCapture {
   const columnRefs = array(columns, queryResultSortLimits.columns, 1), rowRefs = array(rows, queryResultSortLimits.rows);
   const descriptions = columnRefs.map(metadata), columnIndex = columnRefs.indexOf(column);
   if (columnIndex < 0 || new Set(descriptions.map(item => item.key)).size !== columnRefs.length || new Set(rowRefs).size !== rowRefs.length || rowRefs.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw Error(text.invalid);
@@ -105,7 +106,7 @@ export function captureQueryResultStatistics(columns: readonly ResultColumn[], r
   const values = positionsInScope.map(index => stamp(own(rowRefs[index], admitted.key), charge));
   const sqlite = sqliteSource ? captureSqliteResultFilterSource(sqliteSource, columns, rows) : undefined;
   const capture = Object.freeze({ column: admitted, rowCount: positionsInScope.length, selected: indices !== undefined });
-  bindings.set(capture, { columns, rows, columnRefs, metadata: descriptions, rowRefs, indices: positionsInScope, selection: indices, values, invalid: false, sqlite });
+  bindings.set(capture, { columns, rows, columnRefs, metadata: descriptions, rowRefs, indices: positionsInScope, selection: indices, values, invalid: false, sqlite, dialect });
   if (!currentQueryResultStatistics(capture, columns, rows)) throw Error(text.stale);
   return capture;
 }
@@ -201,7 +202,7 @@ export function queryResultFrequencyFilter(frequency: QueryResultFrequency, entr
   if (index === undefined) throw Error(text.stale);
 
   if (!binding.sqlite) {
-    const cell = captureQueryResultCellFilter(binding.columns, binding.rows, { index, row: binding.rows[index], column });
+    const cell = captureQueryResultCellFilter(binding.columns, binding.rows, { index, row: binding.rows[index], column }, undefined, binding.dialect);
     return queryResultCellFilterRule(cell, 'eq');
   }
 
@@ -238,11 +239,15 @@ export class QueryResultStatisticsScan {
   private numericOnly = true;
   private finiteNumbers = true;
   private readonly kind: ReturnType<typeof queryResultSortKind>;
+  private readonly numericColumn: boolean;
+  private readonly floatingColumn: boolean;
   /** 私有WeakMap拒绝伪造capture；声明为字节的列即使返回字符串也不参加值聚合。 */
   constructor(capture: QueryResultStatisticsCapture, includeFrequency = false) {
     const binding = bindings.get(capture);
     if (!binding || !currentQueryResultStatistics(capture, binding.columns, binding.rows)) throw Error(text.stale);
-    this.binding = binding; this.capture = capture; this.total = capture.rowCount; this.kind = queryResultSortKind(capture.column.type);
+    this.binding = binding; this.capture = capture; this.total = capture.rowCount; this.kind = queryResultSortKind(capture.column.type, binding.dialect);
+    this.floatingColumn = this.kind === 'float' || this.kind === 'postgresFloat';
+    this.numericColumn = this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'postgresNumeric' || this.floatingColumn;
     if (includeFrequency) this.frequency = new QueryResultFrequencyCounter();
     if (binding.sqlite) this.sqliteTypes = { integer: 0, real: 0, text: 0, blob: 0, null: 0 };
     else if (!this.kind || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(capture.column.type.trim())) this.reason = text.unsupported;
@@ -303,14 +308,18 @@ export class QueryResultStatisticsScan {
             this.numericOnly &&= numeric;
             if (type === 'real' && !Number.isFinite(Number(value))) { this.finiteNumbers = false; numeric = false; }
           } else {
-            key = queryResultFilterKey(capture.column, value as CellValue); literal = String(value);
-            numeric = this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'float';
-            this.observeValue(identity(key), literal, numeric ? 'number' : this.kind === 'text' ? 'text' : 'temporal', index);
+            key = queryResultFilterKey(capture.column, value as CellValue, binding.dialect); literal = String(value);
+            numeric = this.numericColumn;
+            this.observeValue(identity(key), literal, numeric ? 'number' : this.kind === 'text' ? 'text' : this.kind === 'postgresBoolean' ? 'boolean' : 'temporal', index);
+            // PostgreSQL 特殊数值仍参与不同值、分布与极值，合计和平均只用于全有限的数值集合。
+            if (numeric && typeof key === 'number' && !Number.isFinite(key)) { this.finiteNumbers = false; numeric = false; }
           }
           if (!this.minimum || compareKeys(key, this.minimum.key) < 0) this.minimum = { key, literal };
           if (!this.maximum || compareKeys(key, this.maximum.key) > 0) this.maximum = { key, literal };
           if (numeric) {
-            const next = decimal(value as string | number), scale = Math.max(next.scale, this.sum.scale);
+            // 浮点聚合使用已验证的有限比较值，避免展开原文中任意长度的科学计数指数。
+            const next = decimal(this.kind === 'postgresFloat' ? key as number : value as string | number);
+            const scale = Math.max(next.scale, this.sum.scale);
             this.sum = { coefficient: this.sum.coefficient * 10n ** BigInt(scale - this.sum.scale) + next.coefficient * 10n ** BigInt(scale - next.scale), scale };
           }
         } catch { this.rejectValues(text.value); }
@@ -331,12 +340,12 @@ export class QueryResultStatisticsScan {
   }
   /** 有限AVG先约分精确扩展；仅循环小数按最大原尺度或18位，用BigInt商余数实现half-away。 */
   private finish(): void {
-    const count = this.total, nonNull = count - this.nulls, floatInput = this.sqliteTypes ? this.sqliteTypes.real > 0 : this.kind === 'float' && nonNull > 0;
+    const count = this.total, nonNull = count - this.nulls, floatInput = this.sqliteTypes ? this.sqliteTypes.real > 0 : this.floatingColumn && nonNull > 0;
     const types = this.sqliteTypes && !this.reason ? { sqliteTypes: Object.freeze({ ...this.sqliteTypes }) } : {};
     if (!nonNull && (!this.sqliteTypes || !this.reason)) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: 0, approximate: false, floatInput: false, averageRounded: false, ...types, ...this.finishFrequency(0) }); return; }
     if (this.reason) { this.published = Object.freeze({ count, nonNull, nulls: this.nulls, approximate: false, floatInput: false, averageRounded: false, reason: this.reason }); return; }
     let sum: string | undefined, average: string | undefined, averageRounded = false;
-    if (this.sqliteTypes ? this.numericOnly && this.finiteNumbers : this.kind === 'integer' || this.kind === 'decimal' || this.kind === 'float') {
+    if (this.finiteNumbers && (this.sqliteTypes ? this.numericOnly : this.numericColumn)) {
       sum = display(this.sum.coefficient, this.sum.scale);
       const finite = exactAverage(this.sum, nonNull);
       if (finite) average = display(finite.coefficient, finite.scale);
@@ -349,7 +358,8 @@ export class QueryResultStatisticsScan {
         average = display(quotient, scale);
       }
     }
-    const reason = this.sqliteTypes && (!this.numericOnly || !this.finiteNumbers) ? text.sqliteNumericOnly : undefined;
+    const reason = this.sqliteTypes && (!this.numericOnly || !this.finiteNumbers) ? text.sqliteNumericOnly :
+      !this.finiteNumbers ? text.postgresNonFinite : undefined;
     this.published = Object.freeze({ count, nonNull, nulls: this.nulls, distinct: this.frequency?.distinct ?? this.distinct.size, min: this.minimum?.literal, max: this.maximum?.literal, sum, average, approximate: floatInput || averageRounded, floatInput, averageRounded, ...types, ...(reason ? { reason } : {}), ...this.finishFrequency(nonNull) });
     this.distinct.clear(); this.frequency?.clear(); this.minimum = undefined; this.maximum = undefined;
   }

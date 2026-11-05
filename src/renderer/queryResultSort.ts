@@ -40,7 +40,7 @@ function kind(type: string): Kind | undefined {
 /** 仅明确文本类型可选择大小写比较；不从单元格外观或列名猜测。 */
 export function queryResultSortSupportsIgnoreCase(column: ResultColumn): boolean { return kind(column.type) === 'text' || column.type === 'SQLITE'; }
 /** PostgreSQL 数值与布尔值按原协议类型准入，现有筛选与统计继续用原类型合同。 */
-function sortKind(column: ResultColumn, dialect?: SortDialect): SortKind | undefined {
+function sortKind(column: Pick<ResultColumn, 'type'>, dialect?: SortDialect): SortKind | undefined {
   if (dialect !== 'postgresql') return column.type === 'SQLITE' ? 'sqlite' : kind(column.type);
   switch (column.type) {
     case 'SMALLINT': case 'INTEGER': case 'BIGINT': return 'integer';
@@ -141,8 +141,10 @@ export function queryResultFilterKey(column: ResultColumn, value: CellValue, dia
   return scalarKey(value,type,column);
 }
 export { compare as compareQueryResultFilterKeys };
-/** 统计只读复用原类型分类，不扩大排序或筛选的准入语义。 */
-export { kind as queryResultSortKind };
+/** 统计与比较复用协议类型分类；未指定方言时维持原类型合同。 */
+export function queryResultSortKind(type: string, dialect?: SortDialect) {
+  return dialect ? sortKind({ type }, dialect) : kind(type);
+}
 
 /** SQLite二进制按Base64原文计预算，比较键字节另计；普通结果保持既有计费。 */
 function valueUnits(value: CellValue, sqlite: boolean): number { return typeof value === 'string' ? value.length : sqlite && value && typeof value === 'object' ? value.base64.length : 1; }
