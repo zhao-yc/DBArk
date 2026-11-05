@@ -1,3 +1,5 @@
+import { TableApplyRecovery } from '../../src/renderer/tableApplyRecovery';
+import { tableApplyRecoveryZh } from '../../src/renderer/locales/tableApplyRecovery.zh-CN';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -46,7 +48,7 @@ function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraft
   const workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { [base.connectionId]: 4 }, setBusy: vi.fn() };
   const gate = new RecordPageNavigation(), reset = vi.fn(), select = vi.fn((_: string, activate: () => void) => { activate(); return true; });
   let sequence = 0;
-  const context = createContext({
+  const context = createContext({ applyRecovery: new TableApplyRecovery(), publishApplyRecovery: vi.fn(), tableApplyRecoveryZh,
     // 勾选转入用途在本组未打开；保留原blocked/load/reloadBlocked的真实可空初值。
     rowTransferDialog: null, rowTransferIntent: { current: null }, rowTransferSource: { current: null },
     // JOIN对话框是新增的真实blocked依赖；旧跨页场景保持未打开的生产初值。

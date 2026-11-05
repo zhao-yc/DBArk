@@ -103,7 +103,7 @@ describe('目标代次、本地竞争与只读边界', () => {
     expect(() => stageRecordDraft([a], draft, { ...ctx, info: { ...ctx.info!, columns: [column('id', { type: 'binary(8)' })] } })).toThrow();
   });
   it.each([
-    [{ loaded: false }, '加载'], [{ stale: true }, '变化'], [{ busy: true }, '结束'],
+    [{ loaded: false }, '加载'], [{ stale: true }, '需要核对'], [{ busy: true }, '结束'],
     [{ info: { objectKind: 'view' } }, '视图'], [{ info: { objectKind: undefined } }, '基本表'],
     [{ info: { engine: 'MyISAM' } }, 'InnoDB'], [{ info: { editableKey: [] } }, '可靠'],
   ])('统一表级只读原因 %j', (patch, expected) => {

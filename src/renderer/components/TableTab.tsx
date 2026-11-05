@@ -1,3 +1,6 @@
+import { TableApplyRecovery, type TableApplyRecoveryTicket, type TableApplyRecoveryRead } from '../tableApplyRecovery';
+import { tableApplyRecoveryZh } from '../locales/tableApplyRecovery.zh-CN';
+import { TableApplyRecoveryBanner } from './TableApplyRecoveryBanner';
 import { RecordBatchEditIntent } from '../recordBatchEdit';
 import { recordBatchEditZh } from '../locales/recordBatchEdit.zh-CN';
 import { TableRecordBatchDialog } from './TableRecordBatchDialog';
@@ -265,11 +268,14 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const [applyTaskId, setApplyTaskId] = useState('');
   const [lastReceiptId, setLastReceiptId] = useState(''), [showReceipt, setShowReceipt] = useState(false), [commitLocked, setCommitLocked] = useState(false);
   const receiptTaskRef = useRef('');
+  const applyRecovery = useRef(new TableApplyRecovery()).current;
+  const [recoveryView, setRecoveryView] = useState(applyRecovery.view);
   // 主进程关联编号用于展示；提交事实仍只来自受校验的独立回执。
   useEffect(() => window.dbark?.onTask(event => {
-    if (event.taskId !== receiptTaskRef.current || !event.tableApply) return;
+    if (event.taskId !== receiptTaskRef.current || !event.tableApply || !applyRecovery.observe(event.taskId, event.tableApply)) return;
     setLastReceiptId(event.tableApply.operationId);
     if (event.tableApply.evidence.commitMayHaveBeenSent) setCommitLocked(true);
+    publishApplyRecovery();
   }), []);
   const [referenceDialog, setReferenceDialogState] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse' } | null>(null);
   const [childReferenceDialog, setChildReferenceDialog] = useState<ChildReferenceIntent | null>(null), childReferenceIntent = useRef<ChildReferenceIntent | null>(null);
@@ -329,7 +335,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   const loadGeneration = useRef(0);
   const recordPages = useRef(new RecordPageNavigation()).current;
   const [recordPageMessage, setRecordPageMessage] = useState({ revision: -1, text: '' });
-  const loadingCount = useRef(0); const observedRefresh = useRef(refreshVersion); const [externalStale, setExternalStale] = useState(false);
+  const loadingCount = useRef(0); const observedRefresh = useRef(refreshVersion); const [externalStaleState, setExternalStaleState] = useState(false), externalStaleRef = useRef(false);
+  const externalStale = externalStaleState || applyRecovery.locked;
+  /** 外部结构失效独立于提交保护，不能在已回滚时误清真正的结构墓碑。 */
+  function setExternalStale(value: boolean): void { externalStaleRef.current = value; setExternalStaleState(value); }
   const base = useMemo(() => ({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! }), [tab.connectionId, tab.database, tab.table]);
   const savedDraftValues = [base, connection, connectionVersion, refreshVersion, info, page, rows, loadGeneration.current, pageIndex, pageSize, filters, filterMode, filterGroup, sort, externalStale, settings.activeTabId];
   const foreignKeyJoinValues = [...savedDraftValues, tab, settings.resultLimit]; foreignKeyJoinIntent.current?.observe(foreignKeyJoinValues);
@@ -363,6 +372,11 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   recordContextRef.current = { target: base, connectionVersion, generation: loadGeneration.current, info, loaded: !!page, stale: externalStale, busy: blocked };
   /** 代次与忙碌读取同步引用，不等待下一次渲染才能阻止旧字段输入写入新页。 */
   function getRecordContext(): RecordContext { return { ...recordContextRef.current, generation: loadGeneration.current, busy: blockedRef.current }; }
+  /** 先同步撤销编辑资格，再发布展示；同轮旧按钮不等待React渲染才看见提交保护。 */
+  function publishApplyRecovery(): void {
+    recordContextRef.current.stale = externalStaleRef.current || applyRecovery.locked;
+    setRecoveryView(applyRecovery.view);
+  }
   /** 取消只请求一次并保留占门，直到实际读取收尾；已消费结果不再向完成任务发送KILL。 */
   function invalidateCopyRead() {
     const intent = copyReadIntent.current; if (!intent || intent.consumed) return;
@@ -528,6 +542,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   /** 每次加载分配代次，旧请求迟到时不能覆盖新页面或当前编辑状态。 */
   const load = useCallback(async () => {
+    let recoveryRead: TableApplyRecoveryRead | undefined;
+    try { recoveryRead = applyRecovery.beginRead({ target: base, connectionVersion }); }
+    catch (reason) { setError(errorMessage(reason)); return; }
+    publishApplyRecovery();
     rowTransferIntent.current?.invalidate();
     history.clear();
     const last = typeof pageRequest !== 'number', requestedIndex = last ? 1 : pageRequest;
@@ -567,17 +585,27 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
         const expected = tableLastPageBounds(data.matchingRows, pageSize);
         if (data.page !== expected.page || data.pageSize !== pageSize || data.hasMore || data.rows.length !== expected.rows || data.copyMetadataKey !== tableCopyMetadataKey(metadata)) throw Error(zh.table.lastPageMismatch);
       } else if (navigation && (data.page !== requestedIndex || data.pageSize !== pageSize)) throw new Error(recordViewZh.pageChanged);
+      if (recoveryRead) {
+        const current = getRecordContext(), workspace = useWorkspace.getState(), currentTab = workspace.settings.tabs.find(item => item.id === tab.id);
+        // 重新读取的回包不能清除后来目标或连接修订上的保护。
+        if (recordTargetKey(current.target) !== recordTargetKey(base) || current.connectionVersion !== connectionVersion || (workspace.connectionVersions[tab.connectionId] ?? 0) !== connectionVersion || !currentTab || currentTab.connectionId !== base.connectionId || currentTab.database !== base.database || currentTab.table !== base.table) throw Error(tableApplyRecoveryZh.blocked);
+      }
       const nextRows = data.rows.map(data => ({ id: uid(), data: structuredClone(data), original: structuredClone(data), inserted: false, deleted: false }));
       if (last) retiringSource = releaseCopySources();
       copySources.current = pendingSource; copyPage.current = { page: data, target: recordTargetKey(base), connectionVersion, generation }; pendingSource = null; copyRowRefs.current.clear();
       if (data.copySource?.status === 'ready') { const refs = data.copySource.rowRefs; nextRows.forEach((row, index) => { if (refs[index]) copyRowRefs.current.set(row.id, refs[index]!); }); }
       filteredSelectPage.current = { info: metadata, page: data, scope: selectScope, generation, index: last ? data.page : requestedIndex };
       setInfo(metadata); setPage(data); setRows(nextRows, 'replace'); setRestoredDraftView(false); setSelectedRows(new Set()); setSelection(undefined); selectionRef.current = undefined; copiedDraftIds.current.clear(); setDuplicateNotice(''); recordControllerRef.current?.reset(); setExternalStale(false);
+      if (recoveryRead && !applyRecovery.completeRead(recoveryRead, { target: base, connectionVersion })) throw Error(tableApplyRecoveryZh.blocked);
+      publishApplyRecovery();
       if (navigation && recordPages.complete(navigation, getRecordPageContext(), nextRows)) setRecordPageMessage({ revision: navigation.action, text: formatText(nextRows.length ? recordViewZh.pageArrived : recordViewZh.pageEmpty, requestedIndex) });
     } catch (reason) {
       if (generation === loadGeneration.current && mounted.current) {
         setError(errorMessage(reason));
-        if (previousPage?.scope === selectScope && recordPageSource.current === previousPage.page && getRecordPageContext().scope === selectScope) {
+        if (recoveryRead) {
+          // 核对读取失败保持提交前的完整草稿，不用空页伪装读取成功。
+          applyRecovery.failRead(recoveryRead); publishApplyRecovery();
+        } else if (previousPage?.scope === selectScope && recordPageSource.current === previousPage.page && getRecordPageContext().scope === selectScope) {
           // 显式末页读取失败或取消时，原页、原行和复制来源均保持。
           filteredSelectPage.current = { ...previousPage, generation };
           if (copyPage.current?.page === previousPage.page) copyPage.current = { ...copyPage.current, generation };
@@ -589,6 +617,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
       }
     }
     finally {
+      if (recoveryRead) { applyRecovery.failRead(recoveryRead); publishApplyRecovery(); }
       if (pendingSource) await releaseCopySources(pendingSource);
       if (retiringSource) await retiringSource;
       if (lastRead?.stop) await lastRead.stop;
@@ -656,9 +685,13 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   /** 同一个丢稿确认入口在确认前后核原来源；confirm期间的导航或ABA不能授权后继页。 */
   function confirmPageReload(guard: () => boolean = () => !reloadBlocked()): boolean {
     if (!guard()) return false;
-    if ((collectChanges(rowsRef.current).length || record.hasInput()) && !window.confirm(recordViewZh.discardPage)) return false;
-    return guard();
+    const recovery = applyRecovery.view;
+    const prompt = recovery.locked ? recovery.outcome === 'committed' ? tableApplyRecoveryZh.confirmCommitted : tableApplyRecoveryZh.confirmUnknown : recordViewZh.discardPage;
+    if ((recovery.locked || collectChanges(rowsRef.current).length || record.hasInput()) && !window.confirm(prompt)) return false;
+    if (!guard()) return false;
+    return !recovery.locked || applyRecovery.authorizeRead(recovery, { target: getRecordContext().target, connectionVersion: getRecordContext().connectionVersion });
   }
+
   function canReload(selectedFilterOwner?: TableSelectedFilterLease, guard?: () => boolean) {
     if (!confirmPageReload(guard)) return false;
     // 普通翻页／排序／条件操作在排队渲染前撤销旧提案；仅本提案自身留给确认后二次核验。
@@ -1532,6 +1565,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   function editCell() { if (selection && !blockedRef.current) record.openCell(selection.rowId, selection.key); }
   /** 固定预览草稿与代次；先处理输入，且在第一个 await 前阻止重复读取和后续编辑。 */
   async function makePreview(afterInputConfirmation = false) {
+    if (applyRecovery.locked) { setError(tableApplyRecoveryZh.blocked); return; }
     if (previewingRef.current || applyingRef.current || preview || referenceCount.current > 0 || (!afterInputConfirmation && document.querySelector('[role="dialog"]'))) return;
     if (record.hasInput()) { record.request(() => void makePreview(true)); return; }
     let snapshot: RecordPagePreview;
@@ -1545,23 +1579,38 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     } catch (reason) { setError(errorMessage(reason)); }
     finally { previewingRef.current = false; setPreviewing(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || applyingRef.current || preferencesLock.current || copyPendingRef.current); }
   }
-  /** 最终确认同步消耗一次投递机会，异常、取消及未知提交结果都不自动重放。 */
+  /** 最终确认只投递一次；异常后以独立回执核终态，未知或已提交的旧草稿不能再次预览。 */
   async function apply() {
-    if (!preview || applyingRef.current || previewingRef.current) return;
-    let fixedChanges;
-    try { fixedChanges = consumeRecordPagePreview(preview.snapshot, rowsRef.current, getRecordContext()); }
+    if (!preview || applyingRef.current || previewingRef.current || applyRecovery.locked) return;
+    let fixedChanges, attempt: TableApplyRecoveryTicket;
+    const scope = { target: getRecordContext().target, connectionVersion: getRecordContext().connectionVersion }, originalRows = rowsRef.current, generation = loadGeneration.current;
+    const ownerCurrent = () => (useWorkspace.getState().connectionVersions[tab.connectionId] ?? 0) === scope.connectionVersion && useWorkspace.getState().settings.tabs.find(item => item.id === tab.id) === tab && mounted.current && rowsRef.current === originalRows && loadGeneration.current === generation && recordTargetKey(recordContextRef.current.target) === recordTargetKey(scope.target) && recordContextRef.current.connectionVersion === scope.connectionVersion;
+    const taskId = uid();
+    try { fixedChanges = consumeRecordPagePreview(preview.snapshot, rowsRef.current, getRecordContext()); attempt = applyRecovery.begin(scope, taskId, preview.view.previewId, fixedChanges, preview.view.statements.length); }
     catch (reason) { setError(errorMessage(reason)); return; }
-    // 投递机会一旦消耗便不再信任执行前历史；失败、取消或未知结果也不能靠重做重放。
-    history.clear();
+    history.clear(); publishApplyRecovery();
     applyingRef.current = true; blockedRef.current = true; setApplying(true); setError(''); useWorkspace.getState().setBusy(tab.id, true);
-    const taskId = uid(); setApplyTaskId(taskId); receiptTaskRef.current = taskId; setLastReceiptId(''); setCommitLocked(false);
-    try { const result = await invoke('table.apply', { ...base, changes: fixedChanges, taskId, previewId: preview.view.previewId }); setLastReceiptId(result.receiptId ?? ''); setPreview(null); useWorkspace.getState().notify(result.receiptSaved === false ? tableApplyReceiptZh.committedRecordFailed : result.cleanupWarning ? tableApplyReceiptZh.committedCleanupWarning : formatText(zh.table.text003, result.affectedRows), result.receiptSaved === false || result.cleanupWarning === true); await load(); }
-    catch (reason) {
+    setApplyTaskId(taskId); receiptTaskRef.current = taskId; setLastReceiptId(''); setCommitLocked(false);
+    try {
+      const result = await invoke('table.apply', { ...base, changes: fixedChanges, taskId, previewId: preview.view.previewId });
+      const confirmed = applyRecovery.succeeded(attempt, result); publishApplyRecovery();
+      if (!confirmed) { setError(tableApplyRecoveryZh.receiptUnavailable); return; }
+      setLastReceiptId(result.receiptId ?? applyRecovery.view.operationId ?? ''); setPreview(null);
+      useWorkspace.getState().notify(result.receiptSaved === false ? tableApplyReceiptZh.committedRecordFailed : result.cleanupWarning ? tableApplyReceiptZh.committedCleanupWarning : formatText(zh.table.text003, result.affectedRows), result.receiptSaved === false || result.cleanupWarning === true);
+      if (ownerCurrent() && applyRecovery.view.outcome === 'committed') await load();
+    } catch (reason) {
       setError(errorMessage(reason));
-      // 查询本地记录，不连接数据库、不重放失败或未知批次。
-      try { const records = await invoke('table.applyReceipt.list', { taskId }); if (records.items[0]) setLastReceiptId(records.items[0].operationId); } catch { /* 原数据操作错误保持；任务中心仍可手动查看。 */ }
+      let receipt: unknown;
+      try { const records = await invoke('table.applyReceipt.list', { taskId }); if (records.items[0]) receipt = records.items[0]; } catch { /* 缺少回执仍保持未知，不按错误文字猜测回滚。 */ }
+      const outcome = applyRecovery.failed(attempt, receipt); publishApplyRecovery(); setLastReceiptId(applyRecovery.view.operationId ?? '');
+      if (outcome === 'committed' && ownerCurrent()) { setPreview(null); useWorkspace.getState().notify(tableApplyRecoveryZh.recoveredCommitted); await load(); }
     }
-    finally { applyingRef.current = false; setApplying(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || preferencesLock.current || copyPendingRef.current); }
+    finally { applyingRef.current = false; setApplying(false); publishApplyRecovery(); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || preferencesLock.current || copyPendingRef.current); }
+  }
+  /** 核对后的读取仍绑定本render／原活动标签；确认不能授权后来目标或自动重放。 */
+  function reloadAfterApply(): void {
+    const current = () => mounted.current && tableReadAction.current === tableReadRender && useWorkspace.getState().settings.activeTabId === tab.id && useWorkspace.getState().settings.tabs.find(item => item.id === tab.id) === tab && !reloadBlocked() && applyRecovery.view.epoch === recoveryView.epoch;
+    if (canReload(undefined, current)) void load();
   }
   insertCopyBlockedRef.current = observedRefresh.current !== refreshVersion || blocked || gridEditing || record.dirty || record.pending || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || !!record.documentInput || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || !!recordBatchDialog || settings.activeTabId !== tab.id || !page;
   const historyBlocked = !!templateDialog || blocked || !editable || record.dirty || record.pending || gridEditing || showPreferences || !!referenceDialog || !!pasteInsertDialog || !!batchFillDialog || !!recordBatchDialog || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || settings.activeTabId !== tab.id;
@@ -1649,7 +1698,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
 <button title={pageExportText.hint} disabled={!pageExportAvailable || !selectedRows.size} onClick={() => exportTablePage(true)}>{pageExportText.selected}</button><button aria-label={rowTransferText.entry} title={rowTransferText.hint} disabled={!rowTransferAvailable} onClick={openRowTransfer}>{rowTransferText.entry}</button></ActionMenuSection>
     <ActionMenuSection label={tableToolbarZh.danger}>{onTableDrop && <button title={tableDropZh.title} aria-label={tableDropZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableDrop(); }}>{tableDropZh.title}</button>}
 {onTableTruncate && <button title={tableTruncateZh.title} aria-label={tableTruncateZh.title} disabled={info?.objectKind !== 'table' || blocked || gridEditing || record.dirty || record.pending || changes.length > 0 || showPreferences || !!referenceDialog || !!pasteInsertDialog} onClick={() => { if (!rootElement.current?.querySelector('.grid-input')) onTableTruncate(); }}>{tableTruncateZh.title}</button>}</ActionMenuSection>
-  </>}/>{preferencesDirty && <span className="muted small">{tableGridZh.unsaved}</span>}{showFilter && <TableFilterPanel seed={cellFilterSeed} columns={info?.columns.map(column => column.name) ?? []} filters={filters} mode={filterMode} disabled={blocked || !!filterGroups} onFiltersChange={changeFilters} onModeChange={changeFilterMode} pause={{ active: !!resumableFilters, available: filterPauseAvailable, onToggle: toggleFilterPause }}><TablePresetPanel target={base} connectionVersion={connectionVersion} refreshVersion={refreshVersion} columns={info?.columns.map(column=>column.name)??[]} configuration={{filters,filterMode,...(filterGroup?{filterGroup}:{}),sort}} disabled={blocked||externalStale||!info||!!activeGridEditor.current||!!filterGroups} beforeApply={preparePresetApply} onApply={applyNamedPreset}/></TableFilterPanel>}{filterGroup && <p className="filter-value-hint" aria-label={groupText.structure}>{tableFilterGroupSummary(filterGroup)}</p>}{selectedFilter && <TableSelectedFilterPanel proposal={selectedFilter.proposal} isCurrent={() => selectedFilterCurrent(selectedFilter)} onApply={() => applySelectedFilter(selectedFilter)} onClose={() => closeSelectedFilter(selectedFilter)}/>}{filterGroups && <TableFilterGroupsDialog filters={filterGroups.filters} mode={filterGroups.mode} initial={filterGroups.initial} isCurrent={() => filterGroupsCurrent(filterGroups)} onApply={next => applyFilterGroups(filterGroups, next)} onClose={() => closeFilterGroups(filterGroups)}/ >}{sortPanel && <TableSortPanel columns={sortPanel.columns} initial={sortPanel.sort} isCurrent={() => sortPanelCurrent(sortPanel)} onApply={next => applySortPanel(sortPanel, next)} onClose={() => closeSortPanel(sortPanel)}/>}{showFind && <PageFindPanel focusRequest={findFocus} rows={rows} keys={visibleKeys} info={info} generation={pageFindGeneration()} disabled={blocked || record.dirty || externalStale} replaceDisabled={!editable} onJump={jumpToMatch} getSelectionToken={() => selectionRef.current} onApply={applyPagePlan} onFilter={() => setShowFilter(true)}/>}{externalStale && <div className="info-strip">{columnPatchZh.staleTable}</div>}<ErrorBox message={error || references.error || preferencesError}/>{history.notice && <div className="info-strip" role="status">{history.notice}</div>}{duplicateNotice && <div className="info-strip" role="status">{duplicateNotice}{copyPending && <button onClick={() => { invalidateCopyRead(); setDuplicateNotice(recordCopySourceZh.cancelling); }}>{recordCopySourceZh.cancel}</button>}</div>}{info && !editable && <div className="info-strip">{recordReadonlyReason({ ...getRecordContext(), busy: false })}</div>}<div className="table-record-layout"><div className="table-grid-wrap">{busy && <div className="loading-overlay"><Spinner/></div>}<DataGrid<DraftRow, unknown, string> ref={grid} aria-label={tableGridZh.grid} onColumnResize={(column, width) => { if (!blocked && visibleKeys.includes(column.key)) { try { updatePreferences(changeTablePreference(preferencesRef.current, column.key, { width })); } catch (reason) { setPreferencesError(errorMessage(reason)); } } }} onColumnsReorder={(source, target) => { if (!blocked) updatePreferences(moveTableColumn(preferencesRef.current, source, target)); }} className={`results-grid rdg-${settings.theme} grid-row-height-${readGridRowHeight(preferences.rowHeight)}`} columns={columns} rows={rows} rowHeight={readGridRowHeight(preferences.rowHeight)} headerRowHeight={42} rowKeyGetter={row => row.id} rowClass={row => row.deleted ? 'row-deleted' : row.inserted ? 'row-inserted' : !rowEqual(row.original!, row.data) ? 'row-modified' : undefined} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onRowsChange={changeRows} onActivePositionChange={({ row, column }) => selectCurrentCell(row, column?.key)} onCellClick={({ row, column }) => { recordPages.cancel(); selectCurrentCell(row, column.key); }} onCellDoubleClick={({ row, column }, event) => { if (!blocked && isBinaryCell(ownCell(row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)) { event.preventGridDefault(); record.openCell(row.id, column.key); } }} sortColumns={sort.map(item => ({ columnKey: item.column, direction: item.direction }))} onSortColumnsChange={next => { if (tableReadAction.current !== tableReadRender) return; try { const checked = tableSortFromGrid(next, sort, info?.columns.map(column => column.name) ?? []); if (canReload()) { setSort(checked); setPageIndex(1); } } catch (reason) { setError(errorMessage(reason)); } }} onCellCopy={copyCells} onCellPaste={pasteClipboard} onCellKeyDown={(args, event) => { recordPages.cancel(); handleGridKeyDown(args, event); }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} pageNavigation={{ previous: !restoredDraftView && pageIndex > 1 && (rows.length === 0 || !!record.draft), next: !restoredDraftView && !!page?.hasMore && pageIndex < maxTablePage && !!record.draft, message: recordPageMessage.revision === recordPages.revision ? recordPageMessage.text : '', onNavigate: navigateRecordPage }} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div><div className="table-action-bar mysql-table-page-status"><span className={changes.length ? 'warning-text' : 'muted'}>{changes.length ? formatText(zh.table.text015, changes.length) : formatText(zh.table.text016, page?.rows.length ?? 0)}</span>{record.dirty && <span className="warning-text">{recordViewZh.inputDirty}</span>}{(changes.length > 0 || record.dirty) && <><button disabled={blocked} onClick={() => { if (canReload()) void load(); }}><Undo2 size={13}/>{zh.table.text018}</button><button className="primary" disabled={blocked} onClick={() => void makePreview()}><Save size={13}/>{zh.table.text019}</button></>}<span className="grow"/><label className="inline-field">{zh.table.text020}<select ref={pageSizeSelect} aria-label={zh.table.text021} value={pageSizeDraft === null ? pageSize : 'custom'} disabled={blocked || restoredDraftView || gridEditing} onChange={event => changePageSize(event.target.value)}>{!tablePageSizePresets.includes(pageSize) && <option value={pageSize}>{pageSize}</option>}{tablePageSizePresets.map(size => <option key={size} value={size}>{size}</option>)}<option value="custom">{zh.table.customPageSize}</option></select>{zh.table.text022}</label>
+  </>}/>{preferencesDirty && <span className="muted small">{tableGridZh.unsaved}</span>}{showFilter && <TableFilterPanel seed={cellFilterSeed} columns={info?.columns.map(column => column.name) ?? []} filters={filters} mode={filterMode} disabled={blocked || !!filterGroups} onFiltersChange={changeFilters} onModeChange={changeFilterMode} pause={{ active: !!resumableFilters, available: filterPauseAvailable, onToggle: toggleFilterPause }}><TablePresetPanel target={base} connectionVersion={connectionVersion} refreshVersion={refreshVersion} columns={info?.columns.map(column=>column.name)??[]} configuration={{filters,filterMode,...(filterGroup?{filterGroup}:{}),sort}} disabled={blocked||externalStale||!info||!!activeGridEditor.current||!!filterGroups} beforeApply={preparePresetApply} onApply={applyNamedPreset}/></TableFilterPanel>}{filterGroup && <p className="filter-value-hint" aria-label={groupText.structure}>{tableFilterGroupSummary(filterGroup)}</p>}{selectedFilter && <TableSelectedFilterPanel proposal={selectedFilter.proposal} isCurrent={() => selectedFilterCurrent(selectedFilter)} onApply={() => applySelectedFilter(selectedFilter)} onClose={() => closeSelectedFilter(selectedFilter)}/>}{filterGroups && <TableFilterGroupsDialog filters={filterGroups.filters} mode={filterGroups.mode} initial={filterGroups.initial} isCurrent={() => filterGroupsCurrent(filterGroups)} onApply={next => applyFilterGroups(filterGroups, next)} onClose={() => closeFilterGroups(filterGroups)}/ >}{sortPanel && <TableSortPanel columns={sortPanel.columns} initial={sortPanel.sort} isCurrent={() => sortPanelCurrent(sortPanel)} onApply={next => applySortPanel(sortPanel, next)} onClose={() => closeSortPanel(sortPanel)}/>}{showFind && <PageFindPanel focusRequest={findFocus} rows={rows} keys={visibleKeys} info={info} generation={pageFindGeneration()} disabled={blocked || record.dirty || externalStale} replaceDisabled={!editable} onJump={jumpToMatch} getSelectionToken={() => selectionRef.current} onApply={applyPagePlan} onFilter={() => setShowFilter(true)}/>}{externalStaleState && <div className="info-strip">{columnPatchZh.staleTable}</div>}<TableApplyRecoveryBanner view={recoveryView} busy={blocked || !!preview || showReceipt} onRead={reloadAfterApply} onView={() => setShowReceipt(true)}/><ErrorBox message={error || references.error || preferencesError}/>{history.notice && <div className="info-strip" role="status">{history.notice}</div>}{duplicateNotice && <div className="info-strip" role="status">{duplicateNotice}{copyPending && <button onClick={() => { invalidateCopyRead(); setDuplicateNotice(recordCopySourceZh.cancelling); }}>{recordCopySourceZh.cancel}</button>}</div>}{info && !editable && <div className="info-strip">{recordReadonlyReason({ ...getRecordContext(), busy: false })}</div>}<div className="table-record-layout"><div className="table-grid-wrap">{busy && <div className="loading-overlay"><Spinner/></div>}<DataGrid<DraftRow, unknown, string> ref={grid} aria-label={tableGridZh.grid} onColumnResize={(column, width) => { if (!blocked && visibleKeys.includes(column.key)) { try { updatePreferences(changeTablePreference(preferencesRef.current, column.key, { width })); } catch (reason) { setPreferencesError(errorMessage(reason)); } } }} onColumnsReorder={(source, target) => { if (!blocked) updatePreferences(moveTableColumn(preferencesRef.current, source, target)); }} className={`results-grid rdg-${settings.theme} grid-row-height-${readGridRowHeight(preferences.rowHeight)}`} columns={columns} rows={rows} rowHeight={readGridRowHeight(preferences.rowHeight)} headerRowHeight={42} rowKeyGetter={row => row.id} rowClass={row => row.deleted ? 'row-deleted' : row.inserted ? 'row-inserted' : !rowEqual(row.original!, row.data) ? 'row-modified' : undefined} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onRowsChange={changeRows} onActivePositionChange={({ row, column }) => selectCurrentCell(row, column?.key)} onCellClick={({ row, column }) => { recordPages.cancel(); selectCurrentCell(row, column.key); }} onCellDoubleClick={({ row, column }, event) => { if (!blocked && isBinaryCell(ownCell(row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)) { event.preventGridDefault(); record.openCell(row.id, column.key); } }} sortColumns={sort.map(item => ({ columnKey: item.column, direction: item.direction }))} onSortColumnsChange={next => { if (tableReadAction.current !== tableReadRender) return; try { const checked = tableSortFromGrid(next, sort, info?.columns.map(column => column.name) ?? []); if (canReload()) { setSort(checked); setPageIndex(1); } } catch (reason) { setError(errorMessage(reason)); } }} onCellCopy={copyCells} onCellPaste={pasteClipboard} onCellKeyDown={(args, event) => { recordPages.cancel(); handleGridKeyDown(args, event); }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} pageNavigation={{ previous: !restoredDraftView && pageIndex > 1 && (rows.length === 0 || !!record.draft), next: !restoredDraftView && !!page?.hasMore && pageIndex < maxTablePage && !!record.draft, message: recordPageMessage.revision === recordPages.revision ? recordPageMessage.text : '', onNavigate: navigateRecordPage }} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div><div className="table-action-bar mysql-table-page-status"><span className={changes.length ? 'warning-text' : 'muted'}>{changes.length ? formatText(zh.table.text015, changes.length) : formatText(zh.table.text016, page?.rows.length ?? 0)}</span>{record.dirty && <span className="warning-text">{recordViewZh.inputDirty}</span>}{(changes.length > 0 || record.dirty) && <><button disabled={blocked} onClick={() => { if (canReload()) void load(); }}><Undo2 size={13}/>{zh.table.text018}</button><button className="primary" disabled={blocked || applyRecovery.locked} onClick={() => void makePreview()}><Save size={13}/>{zh.table.text019}</button></>}<span className="grow"/><label className="inline-field">{zh.table.text020}<select ref={pageSizeSelect} aria-label={zh.table.text021} value={pageSizeDraft === null ? pageSize : 'custom'} disabled={blocked || restoredDraftView || gridEditing} onChange={event => changePageSize(event.target.value)}>{!tablePageSizePresets.includes(pageSize) && <option value={pageSize}>{pageSize}</option>}{tablePageSizePresets.map(size => <option key={size} value={size}>{size}</option>)}<option value="custom">{zh.table.customPageSize}</option></select>{zh.table.text022}</label>
       {pageSizeDraft !== null && <form className="page-jump" onSubmit={event => { event.preventDefault(); changePageSize(pageSizeDraft); }} onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); closePageSizeDraft(); } }}>
         <input autoFocus aria-label={zh.table.customPageSizeLabel} inputMode="numeric" maxLength={16} value={pageSizeDraft} disabled={blocked || restoredDraftView || gridEditing} onChange={event => { if (pageNavigationCurrent()) setPageSizeDraft(event.target.value); }}/>
         <button type="submit" disabled={blocked || restoredDraftView || gridEditing}>{zh.table.applyPageSize}</button>

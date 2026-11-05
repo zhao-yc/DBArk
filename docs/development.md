@@ -1,5 +1,7 @@
 # 开发与测试
 
+2026-11-05 新增[MySQL／MariaDB提交结果核对](development/table-apply-recovery-20261105.md)：投递前占用一次机会，异常只按严格同批独立回执恢复终态，未知或已提交的旧草稿须实际重读才恢复编辑。父组件覆盖旧回调／连接修订／迟到ACK，实库窗口验证四类异常，完整证据和平台限制见专项报告，暂不发布。
+
 2026-11-05 新增[MySQL／MariaDB勾选逐条批量表单](development/record-batch-edit-20261105.md)：独立窗口RAM、准确完整页／勾选来源、原RecordFormPanel和useRecordViews复用、一次发布及原DraftHistory。最终相关22文件757项、严格类型／构建及Mac原五兼容基线真实窗口通过；最终完整1304文件27157项通过／10既有平台条件跳过，完整范围见报告，暂不发布。
 
 2026-11-05 新增[SQLite勾选记录逐条批量表单](development/sqlite-record-batch-20261105.md)：原完整记录编辑器复用、纯内存逐行缓冲、来源与旧回调保护、差异整批验证后一次发布。相关7文件222项通过，离线窗口入口 node scripts/sqlite-workspace-ci.mjs record-batch；最终完整27060项通过／10既有平台跳过，严格类型／构建及Mac新批量表单与原统一填充两项原生通过，详见报告。Windows／安装另验，暂不发布。

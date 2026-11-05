@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { emptyTableApplyEvidence } from '../../src/shared/tableApplyReceipt';
+import { tableApplyRecoveryZh as recoveryText } from '../../src/renderer/locales/tableApplyRecovery.zh-CN';
 import { navigationMenuVmPort, navigationToolbarVmChildren } from '../helpers/sidebarMenuRamPort';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -60,17 +63,20 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   const sourceRows = options.batch ? [source, { ...source, id: '18446744073709551614', note: '' }] : [source];
   const pageSource = { status: 'ready', pageRef: 'RAM页引用', rowRefs: ['RAM行1', 'RAM行2'], expiresAt: Date.now() + 60_000, metadataKey: tableCopyMetadataKey(info), missingColumns: [] as string[] };
   let failApply = false;
-  const invoke = vi.fn(async (command: string, input: any) => {
+  // IPC端口按command返回异构合同，异常场景可独立注入真实回执或读取失败。
+  const invoke = vi.fn(async (command: string, input: any): Promise<any> => {
     if (command === 'metadata.table') return info;
     if (command === 'table.page') return { page: input.page, pageSize: input.pageSize, hasMore: true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: structuredClone(sourceRows), copyMetadataKey: tableCopyMetadataKey(info), ...(options.batch && options.lease ? { copySource: pageSource } : {}) };
-    if (command === 'table.preview') return { sql: '仅RAM模拟预览', warnings: [] };
+    if (command === 'table.preview') return { sql: '仅RAM模拟预览', previewId: 'c64d7916-1111-4111-8111-111111111111', statements: input.changes.map(() => ({ sql: 'RAM', params: [] })), warnings: [] };
+    if (command === 'table.applyReceipt.list') return { items: [], total: 0, page: 0 };
     if (command === 'table.apply') { if (failApply) throw Error('合成执行结果未知'); return { affectedRows: 1 }; }
     if (command === 'table.preferences.get' || command === 'connections.open') return null;
     throw Error('未授权的RAM端口：' + command);
   });
   const store = Object.assign((selector: (value: any) => any) => selector(stateApi.getState()), stateApi);
   const documentPort = { querySelector: () => dialog ? {} : null, querySelectorAll: () => [] }; vi.stubGlobal('document', documentPort);
-  const context = createContext({ Error, Object, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: documentPort, window: { confirm: () => true } });
+  const confirm = vi.fn(() => true); let taskListener: ((event: any) => void) | undefined;
+  const context = createContext({ Error, Object, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: documentPort, window: { confirm, dbark: { onTask: (listener: (event: any) => void) => { taskListener = listener; return () => { taskListener = undefined; }; } } } });
   const modules = new Map<string, { exports: any }>();
   function load(file: string): any {
     file = path.resolve(file); if (modules.has(file)) return modules.get(file)!.exports;
@@ -116,8 +122,75 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     grid().onCellKeyDown({ mode, row: grid().rows[0], column: { key: 'note' } }, event); await render(); return event;
   }
   await render(); expect(grid().rows).toHaveLength(options.batch ? 2 : 1);
-  return { render, click, change, press, grid, record, button, all, props, workspace, store, invoke, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
+  return { confirm, emitTask: (event: any) => taskListener?.(event), render, click, change, press, grid, record, button, all, props, workspace, store, invoke, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
 }
+
+/** 使用真实回执合同，只将Main/数据库I/O替换为RAM端口。 */
+function recoveryReceipt(input: any, outcome: 'committed' | 'rolled-back' | 'not-sent') {
+  return { version: 1, operationId: randomUUID(), taskId: input.taskId, previewId: input.previewId,
+    target: { connectionId: input.connectionId, database: input.database, table: input.table, connectionRevision: 99 },
+    intent: { insert: 0, update: 1, delete: 0, statementCount: 1 }, startedAt: '2026-11-05T00:00:00.000Z', finishedAt: '2026-11-05T00:00:01.000Z',
+    phase: 'terminal', outcome, reason: outcome === 'committed' ? 'none' : 'validation', sequence: 3, scope: 'target-transaction-only', committedReportedRows: outcome === 'committed' ? 1 : 0,
+    evidence: { ...emptyTableApplyEvidence(), ...(outcome === 'not-sent' ? {} : { dmlMayHaveBeenSent: true, dmlAcknowledged: 1, serverReportedRows: 1, transactionProtected: true, transactionKnown: true }),
+      ...(outcome === 'committed' ? { commitMayHaveBeenSent: true, commitAcknowledged: true } : outcome === 'rolled-back' ? { rollbackAcknowledged: true } : {}) } };
+}
+
+describe('完整TableTab提交后核对与防重复投递', () => {
+  it('确认后的读取尚未结束时连接修订改变，旧回包不能替换草稿或解除保护', async () => {
+    const f = await fixture(); await f.change('待核对'); f.button(zh.table.text019).props.onClick(); await f.render(); f.failApply(); f.button(zh.common.confirmApply).props.onClick(); await f.render(); f.all('Modal')[0].props.onClose(); await f.render();
+    const rows = f.grid().rows, original = f.invoke.getMockImplementation()!; let finish!: (value: any) => void;
+    const pending = new Promise(resolve => { finish = resolve; }); let requested: any;
+    f.invoke.mockImplementation(async (command, input) => { if (command === 'table.page') { requested = input; return pending; } return original(command, input); });
+    f.all('TableApplyRecoveryBanner')[0].props.onRead(); await f.render(); expect(f.all('TableApplyRecoveryBanner')[0].props.view.reading).toBe(true); expect(requested).toBeDefined();
+    f.workspace.connectionVersions.连接++; await f.render(); finish(await original('table.page', requested)); await f.render();
+    expect(f.grid().rows).toBe(rows); expect(f.all('TableApplyRecoveryBanner')[0].props.view).toMatchObject({ locked: true, reading: false, outcome: 'unknown' }); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(1);
+  });
+  it('未知结果关闭旧预览后仍拒绝旧按钮、网格编辑及新预览；取消或失败读取均保留只读草稿', async () => {
+    const f = await fixture(); await f.change('待核对');
+    const oldPreview = f.button(zh.table.text019).props.onClick, oldAdd = f.button(zh.common.add).props.onClick;
+    oldPreview(); await f.render(); f.failApply(); f.button(zh.common.confirmApply).props.onClick(); await f.render();
+    f.all('Modal')[0].props.onClose(); await f.render();
+    const rows = f.grid().rows, pages = () => f.invoke.mock.calls.filter(call => call[0] === 'table.page').length;
+    expect(f.all('TableApplyRecoveryBanner')[0].props.view.outcome).toBe('unknown'); expect(f.button(zh.table.text019).props.disabled).toBe(true);
+    oldPreview(); oldAdd(); await f.change('不应覆盖'); await f.render(); expect(f.grid().rows).toBe(rows);
+    expect(f.invoke.mock.calls.filter(call => call[0] === 'table.preview')).toHaveLength(1); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(1);
+    const before = pages(); f.confirm.mockReturnValueOnce(false); f.all('TableApplyRecoveryBanner')[0].props.onRead(); await f.render(); expect(pages()).toBe(before); expect(f.grid().rows).toBe(rows);
+    const original = f.invoke.getMockImplementation()!; let failRead = true;
+    f.invoke.mockImplementation(async (command, input) => { if (command === 'table.page' && failRead) throw Error('受控读取失败'); return original(command, input); });
+    f.all('TableApplyRecoveryBanner')[0].props.onRead(); await f.render(); expect(pages()).toBe(before + 1); expect(f.grid().rows).toBe(rows); expect(f.all('TableApplyRecoveryBanner')[0].props.view).toMatchObject({ outcome: 'unknown', locked: true, reading: false });
+    expect(f.confirm).toHaveBeenLastCalledWith(recoveryText.confirmUnknown); expect(f.button(text.undo).props.disabled).toBe(true); expect(f.button(text.redo).props.disabled).toBe(true);
+    failRead = false; f.all('TableApplyRecoveryBanner')[0].props.onRead(); await f.render(); expect(f.all('TableApplyRecoveryBanner')[0].props.view.locked).toBe(false); expect(f.grid().rows[0].data.note).toBe('原值'); expect(f.grid().rows).not.toBe(rows); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(1);
+  });
+  it.each(['正常成功', '响应丢失'] as const)('%s已确认提交但自动重读失败时保留草稿，只在明确成功重读后恢复编辑', async mode => {
+    const f = await fixture(); await f.change('已提交草稿'); const original = f.invoke.getMockImplementation()!; let applied = false, failRead = true, receipt: any;
+    f.invoke.mockImplementation(async (command, input) => {
+      if (command === 'table.apply') { applied = true; receipt = recoveryReceipt(input, 'committed'); if (mode === '响应丢失') throw Error('受控响应丢失'); return { affectedRows: 1, receiptId: receipt.operationId }; }
+      if (command === 'table.applyReceipt.list') return { items: [receipt], total: 1, page: 0 };
+      if (command === 'table.page' && applied) { if (failRead) throw Error('受控刷新失败'); const result = await original(command, input); return { ...result, rows: [{ ...result.rows[0], note: '服务器新值' }] }; }
+      return original(command, input);
+    });
+    f.button(zh.table.text019).props.onClick(); await f.render(); const rows = f.grid().rows; f.button(zh.common.confirmApply).props.onClick(); await f.render();
+    expect(f.all('Modal')).toHaveLength(0); expect(f.grid().rows).toBe(rows); expect(f.all('TableApplyRecoveryBanner')[0].props.view).toMatchObject({ outcome: 'committed', locked: true, reading: false });
+    expect(f.button(zh.table.text019).props.disabled).toBe(true); failRead = false; f.all('TableApplyRecoveryBanner')[0].props.onRead(); await f.render();
+    expect(f.confirm).toHaveBeenCalledWith(recoveryText.confirmCommitted); expect(f.grid().rows[0].data.note).toBe('服务器新值'); expect(f.all('TableApplyRecoveryBanner')[0].props.view.locked).toBe(false); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(1);
+  });
+  it.each(['rolled-back', 'not-sent'] as const)('同批严格%s回执允许修正并新预览，仍不恢复执行前历史或自动重投', async outcome => {
+    const f = await fixture(); await f.change('保留草稿'); const original = f.invoke.getMockImplementation()!; let receipt: any;
+    f.invoke.mockImplementation(async (command, input) => { if (command === 'table.apply') { receipt = recoveryReceipt(input, outcome); throw Error('受控已终态异常'); } if (command === 'table.applyReceipt.list') return { items: [receipt], total: 1, page: 0 }; return original(command, input); });
+    f.button(zh.table.text019).props.onClick(); await f.render(); f.button(zh.common.confirmApply).props.onClick(); await f.render(); f.all('Modal')[0].props.onClose(); await f.render();
+    expect(f.all('TableApplyRecoveryBanner')[0].props.view).toMatchObject({ outcome, locked: false }); expect(f.grid().rows[0].data.note).toBe('保留草稿'); expect(f.button(text.undo).props.disabled).toBe(true);
+    await f.change('修正草稿'); f.button(zh.table.text019).props.onClick(); await f.render(); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.preview')).toHaveLength(2); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(1);
+  });
+  it('未知后迟到ACK更新同批展示但不自动读取或重放；旧render核对回调不能领取新目标', async () => {
+    const f = await fixture(); await f.change('待核对'); let input: any; const original = f.invoke.getMockImplementation()!;
+    f.invoke.mockImplementation(async (command, value) => { if (command === 'table.apply') { input = value; throw Error('受控丢失'); } return original(command, value); });
+    f.button(zh.table.text019).props.onClick(); await f.render(); f.button(zh.common.confirmApply).props.onClick(); await f.render(); f.all('Modal')[0].props.onClose(); await f.render();
+    const oldRead = f.all('TableApplyRecoveryBanner')[0].props.onRead, receipt = recoveryReceipt(input, 'committed'), before = f.invoke.mock.calls.length;
+    f.emitTask({ taskId: input.taskId, tableApply: { operationId: receipt.operationId, sequence: receipt.sequence, phase: receipt.phase, reason: receipt.reason, evidence: receipt.evidence } }); await f.render();
+    expect(f.all('TableApplyRecoveryBanner')[0].props.view).toMatchObject({ outcome: 'committed', locked: true }); expect(f.invoke).toHaveBeenCalledTimes(before);
+    oldRead(); await f.render(); expect(f.invoke).toHaveBeenCalledTimes(before); f.workspace.connectionVersions.连接++; await f.render(); const afterVersion = f.invoke.mock.calls.length; oldRead(); await f.render(); expect(f.invoke).toHaveBeenCalledTimes(afterVersion); expect(f.invoke.mock.calls.slice(before).map(call => call[0])).toEqual(['table.preferences.get']); expect(f.all('TableApplyRecoveryBanner')[0].props.view.locked).toBe(true);
+  });
+});
 
 describe('完整TableTab及记录控制器的RAM编辑历史', () => {
   it('RAM订阅在render前同步交付独立前后态及ABA，取消订阅后停止交付', async () => {
