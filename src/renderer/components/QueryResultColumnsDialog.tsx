@@ -7,7 +7,7 @@ import { UsageHelp, Modal, ErrorBox  } from './ui';
 import { GridColumnWidthBatch } from './GridColumnWidthBatch';
 import { GridRowHeightField } from './GridRowHeightField';
 import { fitGridColumnWidths } from '../gridColumnFit';
-import { cellPreview, ownCell } from '../lib';
+import { cellPreview, errorMessage, ownCell } from '../lib';
 import { gridColumnWidthBatchZh as widthText } from '../locales/gridColumnWidthBatch.zh-CN';
 import '../queryResultColumns.css';
 
@@ -16,6 +16,7 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
   const [layout,setLayout]=useState<QueryResultColumnLayout>(()=>({order:[...initial.order],visible:[...initial.visible],...(initial.frozenThrough===undefined?{}:{frozenThrough:initial.frozenThrough}),...(initial.rowHeight===undefined?{}:{rowHeight:initial.rowHeight})})),[search,setSearch]=useState('');
   const [widthDraft, setWidthDraft] = useState(() => new Map(Array.from(initial.widths ?? [], ([key, width]) => [key, String(width)])));
   const [fitError, setFitError] = useState('');
+  const [applyError, setApplyError] = useState('');
   const invalid=useRef(false), live=useRef(layout);live.current=layout;
   /** 首次失效永久停止；旧行闭包还必须匹配当前列草稿，不能按旧位置更改另一列。 */
   function current(expected=live.current):boolean { if(invalid.current)return false;let valid=false;try{valid=isCurrent()===true;}catch{}if(!valid)invalid.current=true;return valid&&live.current===expected; }
@@ -23,7 +24,7 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
   const needle=search.trim().toLocaleLowerCase(), visible=new Set(layout.visible), valid=current();
   const matches=layout.order.filter(key=>{const item=original.get(key)!;return `${item.column.name} ${item.column.type} ${item.position}`.toLocaleLowerCase().includes(needle);});
   /** 同步更新草稿身份，快速连续触发旧按钮也不能越过当前排列。 */
-  function replace(expected:QueryResultColumnLayout,next:QueryResultColumnLayout){if(!current(expected)||!next.visible.length)return;live.current=next;setLayout(next);}
+  function replace(expected:QueryResultColumnLayout,next:QueryResultColumnLayout){if(!current(expected)||!next.visible.length)return;live.current=next;setLayout(next);setApplyError('');}
   /** 冻结只改当前有界草稿，边界使用唯一列键，不按重名别名或筛选后的序号猜测。 */
   function freeze(expected:QueryResultColumnLayout,key?:string){if(current(expected))replace(expected,setQueryResultFrozenThrough(expected,key));}
   /** 隐藏边界列时先清除边界；隐藏其它列只改变实际可见前缀长度。 */
@@ -53,7 +54,8 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
       const width = parseQueryResultColumnWidth(value);
       if (width !== undefined) widths.set(key, width);
     }
-    onApply({ ...layout, widths });
+    try { onApply({ ...layout, widths }); }
+    catch (reason) { setApplyError(errorMessage(reason)); }
   }
   return <div data-query-columns-owner={owner}><Modal title={text.title} onClose={onClose} wide>
     <div className="modal-content query-result-columns"><UsageHelp><p>{text.hint}</p><p>{text.freezeHint}</p><p>{text.widthHint}</p></UsageHelp>
@@ -67,7 +69,7 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
         <button disabled={!valid || !visible.has(key)} aria-label={widthText.fitColumn(item.position)} title={widthText.fitHint} onClick={() => applyVisibleWidths(undefined, key)}>{widthText.fitOne}</button>
         <button disabled={!valid||!visible.has(key)} aria-label={text.freezeThrough(item.position)} aria-pressed={layout.frozenThrough===key} onClick={()=>freeze(layout,key)}>{text.freezeButton}</button>
         <button disabled={!valid||index===0} aria-label={text.up(item.position)} onClick={()=>replace(layout,moveQueryResultColumn(layout,key,-1))}>↑</button><button disabled={!valid||index===layout.order.length-1} aria-label={text.down(item.position)} onClick={()=>replace(layout,moveQueryResultColumn(layout,key,1))}>↓</button>
-      </div>;})}{!matches.length&&<p>{text.empty}</p>}</div>{!valid&&<ErrorBox message={text.stale}/>}{invalidWidth && <ErrorBox message={text.widthInvalid}/>}<ErrorBox message={fitError}/></div>
+      </div>;})}{!matches.length&&<p>{text.empty}</p>}</div>{!valid&&<ErrorBox message={text.stale}/>}{invalidWidth && <ErrorBox message={text.widthInvalid}/>}<ErrorBox message={fitError}/><ErrorBox message={applyError}/></div>
     <footer className="modal-footer"><button disabled={!valid} title={text.restoreHint} onClick={()=>replace(layout,{...layout,order:binding.columns.map(column=>column.key)})}>{text.restore}</button><button disabled={!valid||layout.frozenThrough===undefined} onClick={()=>freeze(layout)}>{text.unfreeze}</button><button disabled={!valid || !widthDraft.size} onClick={() => { if (current(layout)) setWidthDraft(new Map()); }}>{text.resetWidths}</button><span className="grow"/><button onClick={onClose}>{zh.common.cancel}</button><button className="primary" disabled={!valid||!layout.visible.length||invalidWidth} onClick={apply}>{text.apply}</button></footer>
   </Modal></div>;
 }

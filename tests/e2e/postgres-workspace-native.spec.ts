@@ -22,6 +22,8 @@ import { decodePlanSnapshot } from '../../src/shared/explainSnapshot';
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
+import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryResultValueOptionsZh as valueText } from '../../src/renderer/locales/queryResultValueOptions.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { clickSidebarAction } from './sidebar-menu';
@@ -567,7 +569,8 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await selectResultRow(firstId);
     await selectResultRow(lastId);
     const resultPaths = { json: info.outputPath('PostgreSQL查询勾选.json'), csv: info.outputPath('PostgreSQL查询返回.csv'),
-      xlsx: info.outputPath('PostgreSQL查询返回.xlsx'), filtered: info.outputPath('PostgreSQL查询筛选.json') };
+      xlsx: info.outputPath('PostgreSQL查询返回.xlsx'), filtered: info.outputPath('PostgreSQL查询筛选.json'),
+      layout: info.outputPath('PostgreSQL查询列布局.json') };
     await application.evaluate(({ BrowserWindow, dialog }, input) => {
       const original = dialog.showSaveDialog, calls: string[] = [];
       dialog.showSaveDialog = (async (...args: unknown[]) => {
@@ -578,7 +581,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
             (extension !== 'json' && extension !== 'csv' && extension !== 'xlsx') || options.defaultPath !== '查询结果.' + extension)
           throw Error('PostgreSQL 查询结果保存的窗口或格式不符');
         calls.push(extension);
-        return { canceled: false, filePath: calls.length === 4 ? input.paths.filtered : input.paths[extension] };
+        return { canceled: false, filePath: calls.length === 5 ? input.paths.layout : calls.length === 4 ? input.paths.filtered : input.paths[extension] };
       }) as typeof original;
       Object.assign(globalThis, { finishPostgresResultExport: () => { dialog.showSaveDialog = original; return calls; } });
     }, { sender: tableExportSender, paths: resultPaths });
@@ -637,14 +640,63 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await expect(filteredExport.locator('.success-box')).toHaveText('已导出 2 行已返回结果。');
       await filteredExport.getByRole('button', { name: zh.common.done, exact: true }).click();
       expect(JSON.parse(await readFile(resultPaths.filtered, 'utf8')).map((row: { 同名: string }) => row.同名)).toEqual([lastId, middleId]);
+
+      // 重名列按原列序号定位，拒绝隐藏活动规则列，成功后勾选导出使用可见列和当前顺序。
+      await button(columnText.open).click();
+      const columns = page.getByRole('dialog', { name: columnText.title, exact: true });
+      const applyColumns = columns.getByRole('button', { name: columnText.apply, exact: true });
+      await columns.getByLabel(columnText.visible(1), { exact: true }).uncheck();
+      await applyColumns.click();
+      await expect(columns.getByRole('alert')).toHaveText(columnText.activeRule);
+      await expect(resultGrid.getByRole('row').nth(1)).toContainText(lastId);
+      await columns.getByLabel(columnText.visible(1), { exact: true }).check();
+      await columns.getByLabel(columnText.visible(3), { exact: true }).uncheck();
+      await columns.getByRole('button', { name: columnText.up(2), exact: true }).click();
+      await columns.getByRole('button', { name: columnText.freezeThrough(2), exact: true }).click();
+      await columns.getByLabel(columnText.width(2), { exact: true }).fill('240');
+      await columns.getByLabel(heightText.label, { exact: true }).selectOption('56');
+      await page.screenshot({ path: info.outputPath('PostgreSQL查询结果列管理.png') });
+      await applyColumns.click();
+      await expect(columns).toHaveCount(0);
+      await expect(resultGrid).toHaveClass(/grid-row-height-56/);
+      await expect(resultGrid.getByRole('columnheader', { name: /raw/ })).toHaveCount(0);
+      const reorderedHeader = resultGrid.getByRole('columnheader').filter({ hasText: '同名' }).first();
+      await expect(reorderedHeader.locator('.column-type')).toHaveText('TEXT');
+      await expect(reorderedHeader).toHaveClass(/rdg-cell-frozen-start/);
+      await expect(reorderedHeader).toHaveCSS('width', '240px');
+      await expect(tab().getByText(filterText.counts(3, 2), { exact: true })).toBeVisible();
+      await expect(resultGrid.getByRole('row').nth(1)).toContainText(lastId);
+      await expect(resultGrid).not.toContainText(firstId);
+      await selectResultRow(middleId);
+      await selectResultRow(lastId);
+      await selectedExport.click();
+      const layoutExport = page.getByRole('dialog', { name: zh.resultExport.selectedTitle, exact: true });
+      await layoutExport.getByLabel(zh.resultExport.format, { exact: true }).selectOption('json');
+      await layoutExport.locator('.file-picker').click();
+      await expect(layoutExport.locator('.file-picker')).toContainText('PostgreSQL查询列布局.json');
+      await layoutExport.getByRole('button', { name: zh.resultExport.start, exact: true }).click();
+      await expect(layoutExport.locator('.success-box')).toHaveText('已导出 2 行已返回结果。');
+      await layoutExport.getByRole('button', { name: zh.common.done, exact: true }).click();
+      const layoutRows = JSON.parse(await readFile(resultPaths.layout, 'utf8'));
+      expect(Object.keys(layoutRows[0])).toEqual(['同名', '同名 [2]', '调用序号']);
+      expect(layoutRows).toEqual([
+        { 同名: '引;号', '同名 [2]': lastId, 调用序号: '3' },
+        { 同名: '', '同名 [2]': middleId, 调用序号: '2' },
+      ]);
       await button(filterText.clear).click();
       await expect(resultGrid.getByRole('row').nth(1)).toContainText(lastId);
       await expect(resultGrid).toContainText(firstId);
       await mark('BIGINT 候选、错误草稿、排序保留、筛选后 JSON 和清除筛选通过原生窗口');
+      await resultSwitch.selectOption('2');
+      await resultSwitch.selectOption('1');
+      await expect(resultGrid.getByRole('columnheader', { name: /raw/ })).toBeVisible();
+      await expect(resultGrid).toHaveClass(/grid-row-height-32/);
+      await expect(resultGrid.getByRole('row').nth(1)).toContainText(firstId);
+      await mark('列布局保护活动条件和排序，隐藏与重排联动勾选导出，切换结果恢复原布局');
     } finally {
       resultExportCalls = await application.evaluate(() => (globalThis as unknown as { finishPostgresResultExport(): string[] }).finishPostgresResultExport());
     }
-    expect(resultExportCalls).toEqual(['json', 'csv', 'xlsx', 'json']);
+    expect(resultExportCalls).toEqual(['json', 'csv', 'xlsx', 'json', 'json']);
     expect(JSON.parse(await readFile(resultPaths.json, 'utf8'))).toEqual([
       { 同名: lastId, '同名 [2]': '引;号', raw: { type: 'binary', base64: '' }, 调用序号: '3' },
       { 同名: firstId, '同名 [2]': null, raw: { type: 'binary', base64: 'AP8=' }, 调用序号: '1' },

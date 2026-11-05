@@ -11,5 +11,6 @@ export const queryResultColumnsZh = {
   width:(position:number)=>`原第${position}列宽度（像素）`, resetWidths:'恢复默认列宽',
   widthHint:'列宽可填写 64 到 2000 的整数像素，留空恢复默认。只调整当前结果的显示。',
   widthInvalid:'列宽须留空，或填写 64 到 2000 的整数像素。',
+  activeRule:'要隐藏正在筛选或排序的列，请先移除该列的条件或排序。',
   up:(position:number)=>`上移原第${position}列`,down:(position:number)=>`下移原第${position}列`,
 };
