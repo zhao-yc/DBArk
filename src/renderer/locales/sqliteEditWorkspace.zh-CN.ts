@@ -3,6 +3,7 @@ export const sqliteEditWorkspaceZh = {
   region: 'SQLite 多页草稿', summary: (pages: number, changes: number) => `保留 ${pages} 页 · 共 ${changes} 条本地修改`,
   hint: '切页保留各页草稿与撤销记录；统一预览后再明确提交。可手动保存草稿文件，关闭或重启不会自动恢复。',
   page: (offset: number, limit: number) => `返回保留页 ${Math.floor(offset / limit) + 1}`,
+  restoredHint: '已按原页号恢复变更分组。切换分组不读数据库，各组可独立撤销或放弃；全部变化统一预览并明确提交。原页号不是当前服务器分页。',
   active: '当前页', stalePage: '来源已失效', stale: '保留页的原来源、条件或结构已变化。草稿保持，请核对后放弃全部并重新读取。',
   discardPage: (offset: number, limit: number) => `放弃保留页 ${Math.floor(offset / limit) + 1}`,
   discardPageShort: '放弃此页',

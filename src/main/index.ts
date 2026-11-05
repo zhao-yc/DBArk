@@ -964,7 +964,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     return queryFileOperation(async () => {
       owner.assertCurrent();
       if (command === 'sqliteDraftFiles.open') { const result = await sqliteDraftFiles.open(owner); if (result) assertSqliteTableDraftBinding(result.document, target, profile); owner.assertCurrent(); return result; }
-      const document = await broker.request('sqlite.tableDraft.capture', { source: input.source, endpointKey: tableDraftEndpointKey(profile) }); owner.assertCurrent();
+      const document = await broker.request('sqlite.tableDraft.capture', { source: input.source, endpointKey: tableDraftEndpointKey(profile), ...(input.activeSnapshotId ? { activeSnapshotId: input.activeSnapshotId } : {}) }); owner.assertCurrent();
       const result = await sqliteDraftFiles.save(bindSqliteTableDraft(document, profile), owner); if (result) columns!.snapshotSaved = true; return result;
     });
   }
@@ -1596,8 +1596,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!(result);
-    if (command === 'sqliteDraftFiles.restore') try { sqliteEditLease!.check(); } catch (reason) { if (result?.page?.edit?.kind === 'editable') await broker.request('sqlite.tableEdit.release', { snapshotId: result.page.edit.snapshotId }).catch(() => {}); throw reason; }
-    if (sqlitePage) result = command === 'sqliteDraftFiles.restore' ? { ...result, page: await sqlitePage.accept(result.page) } : await sqlitePage.accept(result);
+    if (command === 'sqliteDraftFiles.restore') try { sqliteEditLease!.check(); } catch (reason) { await sqliteEdits.rejectRestored(result).catch(() => {}); throw reason; }
+    if (sqlitePage) result = command === 'sqliteDraftFiles.restore' ? await sqlitePage.acceptRestored(result) : await sqlitePage.accept(result);
     if (sqlitePreview) result = await sqlitePreview.accept(result);
     if (sqliteClaim) {
       result = sqliteWrites.outcome(taskId!, result);
@@ -2024,7 +2024,7 @@ else {
           if (payload.command.startsWith('queryFileSources.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.') || payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
             const restored = payload.command === 'sqliteDraftFiles.restore' ? result as SqliteDraftRestored : undefined;
-            if (restored?.page?.edit?.kind === 'editable') { sqliteEdits.observe(); await broker.request('sqlite.tableEdit.release', { snapshotId: restored.page.edit.snapshotId }).catch(() => {}); }
+            if (restored) { sqliteEdits.observe(); await sqliteEdits.rejectRestored(restored).catch(() => {}); }
             // 文件已提交后的最后发布门失效时，不能诱导用户自动重试覆盖文件。
             if (columns?.snapshotSaved) throw Error(payload.command.startsWith('resultSnapshotFiles.') ? queryResultSnapshotFileMessages.unknownWrite : payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('sqliteDraftFiles.') ? tableDraftFileMessages.unknownWrite : explainSnapshotZh.unknownWrite);
             throw error;

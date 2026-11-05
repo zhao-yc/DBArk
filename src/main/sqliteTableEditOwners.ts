@@ -1,3 +1,4 @@
+import type { SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import type { ColumnsInvocation } from './columnsMainCapabilities';
 import type { SqliteTablePage, SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import type { SqliteEditTarget, SqliteTableEditPreview, SqliteTableEditReleaseInput } from '../shared/sqliteTableEdit';
@@ -45,23 +46,36 @@ export class SqliteTableEditOwners {
     for (const [id, operation] of this.operations) try { this.ports.assert(operation.owner); operation.check(); } catch { this.invalidate(id, operation); }
   }
   /** 页请求在首个await前捕获来源；回包只签原目标，不向新文档泄露可写快照。 */
-  page(owner: ColumnsInvocation, input: SqliteTablePageInput): { check(): void; accept(value: SqliteTablePage): Promise<SqliteTablePage> } {
+  page(owner: ColumnsInvocation, input: SqliteTablePageInput): { check(): void; accept(value: SqliteTablePage): Promise<SqliteTablePage>; acceptRestored(value: SqliteDraftRestored): Promise<SqliteDraftRestored> } {
     this.ports.assert(owner); this.watch(owner); this.observe();
     const binding: Binding = { owner, revision: this.ports.revision(), epoch: this.ports.epoch(input.connectionId), target: { connectionId: input.connectionId, database: 'main', table: input.table }, expires: Date.now() + limits.snapshotLifetimeMs };
     this.valid(binding);
-    return { check: () => this.valid(binding), accept: async value => {
-      const edit = value?.edit;
+    /** 全部新页先校验，任何后页失败都不登记前页；释放准确本批能力后才拒绝。 */
+    const accept = async (pages: SqliteTablePage[]): Promise<void> => {
       try {
         this.valid(binding);
-        if (value.target.connectionId !== binding.target.connectionId || value.target.database !== 'main' || value.target.table !== binding.target.table) throw Error(text.stale);
-        if (edit?.kind === 'editable') {
-          const expires = Date.parse(edit.expiresAt);
-          if (!edit.snapshotId || !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + limits.snapshotLifetimeMs + 5000 || this.snapshots.has(edit.snapshotId) || this.snapshots.size >= limits.snapshots) throw Error(text.stale);
-          this.snapshots.set(edit.snapshotId, { ...binding, id: edit.snapshotId, schemaKey: value.schemaKey, expires });
+        if (!pages.length || pages.length > limits.pages) throw Error(text.stale);
+        const prepared: Snapshot[] = [], ids = new Set<string>();
+        for (const value of pages) {
+          if (value.target.connectionId !== binding.target.connectionId || value.target.database !== 'main' || value.target.table !== binding.target.table || value.schemaKey !== pages[0].schemaKey) throw Error(text.stale);
+          const edit = value.edit;
+          if (edit?.kind === 'editable') {
+            const expires = Date.parse(edit.expiresAt);
+            if (!edit.snapshotId || !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + limits.snapshotLifetimeMs + 5000 || this.snapshots.has(edit.snapshotId) || ids.has(edit.snapshotId) || this.snapshots.size + prepared.length >= limits.snapshots) throw Error(text.stale);
+            ids.add(edit.snapshotId); prepared.push({ ...binding, id: edit.snapshotId, schemaKey: value.schemaKey, expires });
+          }
         }
-        return value;
-      } catch (reason) { if (edit?.kind === 'editable') await this.ports.release({ snapshotId: edit.snapshotId }); throw reason; }
-    } };
+        for (const item of prepared) this.snapshots.set(item.id, item);
+      } catch (reason) { const fresh = pages.filter(page => page?.edit?.kind === 'editable' && !this.snapshots.has(page.edit.snapshotId)); await this.rejectRestored({ page: fresh[0], changes: [], additionalPages: fresh.slice(1).map(page => ({ page, changes: [] })) }); throw reason; }
+    };
+    return { check: () => this.valid(binding), accept: async value => { await accept([value]); return value; }, acceptRestored: async value => { await accept([value, ...(value.additionalPages ?? [])].map(item => item.page)); return value; } };
+  }
+  /** 仅Main未发布回包收尾调用；原窗口失效时也撤销本批所有分组，不能漏留后台能力。 */
+  async rejectRestored(value: SqliteDraftRestored): Promise<void> {
+    const ids = new Set([value, ...(value.additionalPages ?? [])].flatMap(item => item.page?.edit?.kind === 'editable' ? [item.page.edit.snapshotId] : []));
+    for (const id of ids) { this.snapshots.delete(id); for (const [key, preview] of this.previews) if (preview.sources.some(source => source.id === id)) this.previews.delete(key); }
+    const results = await Promise.allSettled([...ids].map(snapshotId => this.ports.release({ snapshotId })));
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []); if (failures.length) throw new AggregateError(failures, 'SQLite恢复分组能力释放未确认');
   }
   /** 只有原主文档可解析对应snapshot；目标完全来自Main签发的页。 */
   snapshot(owner: ColumnsInvocation, id: string): Snapshot {

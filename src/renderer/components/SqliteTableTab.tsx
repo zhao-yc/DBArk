@@ -157,7 +157,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   const [fullExport, setFullExport] = useState<FullExportOwner | null>(null), fullExportRef = useRef<FullExportOwner | null>(null);
   const [tableImport, setTableImport] = useState<ImportOwner | null>(null), importRef = useRef<ImportOwner | null>(null);
   const editorRef = useRef<SqliteTableEditor | null>(null), [editView, setEditView] = useState<SqliteEditView | null>(null);
-  type DraftFileTicket = { id: string; mode: 'save' | 'restore'; target: SqliteTableDraftDocument['target']; source?: SqliteTableEditPreviewInput; valid: boolean; acquiring: boolean; lease?: WorkspaceBusyLease; check(): void; };
+  type DraftFileTicket = { id: string; mode: 'save' | 'restore'; target: SqliteTableDraftDocument['target']; source?: SqliteTableEditPreviewInput; activeSnapshotId?: string; valid: boolean; acquiring: boolean; lease?: WorkspaceBusyLease; check(): void; };
   const [draftFile, setDraftFile] = useState<DraftFileTicket>(), draftFileRef = useRef<DraftFileTicket | undefined>(undefined), restoredDraftRef = useRef(false), [restoredDraftView, setRestoredDraftView] = useState(false), pendingRestored = useRef<SqliteDraftRestored | undefined>(undefined);
   const [, updateDrafts] = useState(0);
   const [drafts] = useState(() => new SqliteEditWorkspace({ now: Date.now, changed: () => updateDrafts(value => value + 1), forgotten: page => controller.forget(page) }));
@@ -257,6 +257,20 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   }, [refreshVersion]);
   useLayoutEffect(() => { controller.observe(); drafts.observe(); fullExportRef.current?.intent.observe([view.page, applied.current, tab, profile, version, active]); importRef.current?.source.observe([view.page, applied.current, tab, profile, version, active]); });
   useEffect(() => { const stop = useWorkspace.subscribe(() => { fullExportRef.current?.intent.current(); importRef.current?.source.current(); }); return () => { stop(); fullExportRef.current?.intent.invalidate(); importRef.current?.source.invalidate(); }; }, []);
+  /** 普通读取与文件恢复共用准确Editor端口；构造只处理本地值，登记后才可编辑。 */
+  function makeEditor(received: SqliteTablePage, restored?: readonly import('../../shared/sqliteTableEdit').SqliteTableChange[]): SqliteTableEditor {
+    const captured = { tab, profile, version, schemaRevision: refreshVersion };
+    const editor: SqliteTableEditor = new SqliteTableEditor(received, {
+        current: () => { const now = useWorkspace.getState(); return drafts.has(editor) && drafts.current(applied.current) && !drafts.unknown && (!related || related.current()) && now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && now.connections.find(item => item.id === captured.tab.connectionId) === captured.profile && captured.profile?.dialect === 'sqlite' && !captured.profile.sqlite.readOnly && (now.connectionVersions[captured.tab.connectionId] ?? 0) === captured.version && latest.current.refreshVersion === captured.schemaRevision; },
+        active: () => drafts.isActive(editor) && editorRef.current === editor && latest.current.active && useWorkspace.getState().settings.activeTabId === captured.tab.id,
+        available: () => !useWorkspace.getState().activeJobs[captured.tab.id], acquire: () => acquireWorkspaceBusy(captured.tab.id), id: uid, now: Date.now,
+        changed: next => { if (editorRef.current === editor) setEditView(next); updateDrafts(value => value + 1); }, dirty: () => syncDraftDirty(),
+        batch: () => drafts.batch(editor), settled: outcome => drafts.settled(editor, outcome),
+        preview: input => invoke('sqlite.tableEdit.preview', input), apply: input => invoke('sqlite.tableEdit.apply', input), release: input => invoke('sqlite.tableEdit.release', input), cancel: taskId => invoke('query.cancel', { taskId }),
+        committed: () => { useWorkspace.getState().notify(editor.view.message); if (editorRef.current === editor) { const offset = editor.page.offset; dropEditor(); if (latest.current.active) void controller.load(applied.current, offset); } },
+      }, restored);
+    return editor;
+  }
   /** 页面编辑能力只从后端签发的准确快照创建；同步订阅守住真实来源 ABA。 */
   useEffect(() => {
     const received = view.page;
@@ -278,18 +292,9 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         if (row) { setSelectedRow(row.id); openInput(previous, row); } return;
       }
     } catch (reason) { controller.releaseUnadopted(received); setValidation(errorMessage(reason)); if (editorRef.current) controller.restore(editorRef.current.page); return; }
-    const captured = { tab, profile, version, schemaRevision: refreshVersion };
     let adoptedEditor: SqliteTableEditor | undefined;
     try {
-      const editor: SqliteTableEditor = new SqliteTableEditor(received, {
-        current: () => { const now = useWorkspace.getState(); return drafts.has(editor) && drafts.current(applied.current) && !drafts.unknown && (!related || related.current()) && now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && now.connections.find(item => item.id === captured.tab.connectionId) === captured.profile && captured.profile?.dialect === 'sqlite' && !captured.profile.sqlite.readOnly && (now.connectionVersions[captured.tab.connectionId] ?? 0) === captured.version && latest.current.refreshVersion === captured.schemaRevision; },
-        active: () => drafts.isActive(editor) && editorRef.current === editor && latest.current.active && useWorkspace.getState().settings.activeTabId === captured.tab.id,
-        available: () => !useWorkspace.getState().activeJobs[captured.tab.id], acquire: () => acquireWorkspaceBusy(captured.tab.id), id: uid, now: Date.now,
-        changed: next => { if (editorRef.current === editor) setEditView(next); updateDrafts(value => value + 1); }, dirty: () => syncDraftDirty(),
-        batch: () => drafts.batch(editor), settled: outcome => drafts.settled(editor, outcome),
-        preview: input => invoke('sqlite.tableEdit.preview', input), apply: input => invoke('sqlite.tableEdit.apply', input), release: input => invoke('sqlite.tableEdit.release', input), cancel: taskId => invoke('query.cancel', { taskId }),
-        committed: () => { useWorkspace.getState().notify(editor.view.message); if (editorRef.current === editor) { const offset = editor.page.offset; dropEditor(); if (latest.current.active) void controller.load(applied.current, offset); } },
-      }, pendingRestored.current?.page === received ? pendingRestored.current.changes : undefined);
+      const editor = makeEditor(received, pendingRestored.current?.page === received ? pendingRestored.current.changes : undefined);
       if (pendingRestored.current?.page === received) pendingRestored.current = undefined;
       // 构造阶段仅复制本地值；准确页交接成功后才把编辑器登记为快照拥有者。
       if (!controller.adopt(received)) { continuation?.invalidate(); if (recordPageRef.current === continuation) recordPageRef.current = undefined; controller.releaseUnadopted(received); return; }
@@ -1020,7 +1025,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       const editor = renderedEditor!, batch = mode === 'save' ? drafts.batch(editor) : undefined;
       if (mode === 'save' && !batch) return;
       const query = applied.current, members = drafts.pages.map(item => ({ editor: item, rows: item.view.rows, generation: item.generation }));
-      const owner: DraftFileTicket = { id: uid(), mode, target: { connectionId: tab.connectionId, database: 'main', table: tab.table! }, ...(batch ? { source: { ...batch.input, taskId: uid() } } : {}), valid: true, acquiring: false,
+      const owner: DraftFileTicket = { id: uid(), mode, target: { connectionId: tab.connectionId, database: 'main', table: tab.table! }, ...(batch ? { source: { ...batch.input, taskId: uid() }, activeSnapshotId: editor.page.edit?.kind === 'editable' ? editor.page.edit.snapshotId : undefined } : {}), valid: true, acquiring: false,
         check: () => {
           const now = useWorkspace.getState();
           if (!owner.valid || draftFileRef.current !== owner || !latest.current.active || latest.current.refreshVersion !== refreshVersion || now.settings.activeTabId !== tab.id || now.settings.tabs.find(item => item.id === tab.id) !== tab || now.connections.find(item => item.id === tab.connectionId) !== profile || (now.connectionVersions[tab.connectionId] ?? 0) !== version || editorRef.current !== editor || applied.current !== query || !drafts.current(query) || drafts.unknown || (!owner.acquiring && (owner.lease ? !owner.lease.owns() : !!now.activeJobs[tab.id])) || members.length !== drafts.pages.length || members.some(item => !drafts.has(item.editor) || item.editor.view.rows !== item.rows || item.editor.generation !== item.generation) || batch && !batch.current()) { owner.valid = false; throw Error(draftFileText.stale); }
@@ -1036,8 +1041,25 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
   /** 完整核验结果作为独立恢复页采用，不按原分页offset覆盖或合并任何用户输入。 */
   function acceptDraftFile(owner: DraftFileTicket, value: SqliteDraftRestored): void {
     owner.check(); if (owner.mode !== 'restore' || drafts.protected || JSON.stringify(value.page.relation) !== JSON.stringify(related?.relation)) throw Error(draftFileText.existing);
+    if (value.additionalPages) {
+      const groups = [value, ...value.additionalPages], editors: SqliteTableEditor[] = [];
+      try {
+        for (const group of groups) editors.push(makeEditor(group.page, group.changes));
+        const query = { ...applied.current, limit: value.page.limit };
+        drafts.checkRestored(editors, query);
+        if (!controller.publishRestoredBatch(groups.map(group => group.page))) throw Error(draftFileText.stale);
+        dropEditor(); applied.current = query; setLimit(value.page.limit); drafts.restore(editors, query);
+        editorRef.current = editors[0]; restoredDraftRef.current = true; setRestoredDraftView(true); setEditView(editors[0].view); setSelectedRow(editors[0].view.rows[0]?.id); syncDraftDirty(); return;
+      } catch (reason) { for (const editor of editors) editor.dispose(); throw reason; }
+    }
     dropEditor(); pendingRestored.current = value; restoredDraftRef.current = true; setRestoredDraftView(true);
     if (!controller.publishRestored(value.page)) { pendingRestored.current = undefined; restoredDraftRef.current = false; setRestoredDraftView(false); throw Error(draftFileText.stale); }
+  }
+  /** 恢复分组只返回本地准确缓存；原输入、旧渲染、未知提交或来源变化不能借切组继续。 */
+  function selectRestoredPage(editor: SqliteTableEditor): void {
+    if (!drafts.restored || !restoredDraftRef.current || !editActionCurrent() || !available() || view.busy || drafts.busy || drafts.unknown || inputRef.current || previewRef.current || !drafts.has(editor) || !drafts.current(applied.current)) return;
+    try { editor.observe(); if (!editor.view.valid || editor.view.unknown || editor.busy || editor.hasInput || !controller.restore(editor.page)) throw Error(workspaceText.stale); editorRef.current = editor; drafts.select(editor); setEditView(editor.view); setSelectedRow(editor.view.rows[0]?.id); setValidation(''); }
+    catch (reason) { setValidation(errorMessage(reason)); }
   }
   function closeDraftFile(owner: DraftFileTicket): void { if (draftFileRef.current === owner) { owner.valid = false; draftFileRef.current = undefined; setDraftFile(undefined); } }
   useEffect(() => useWorkspace.subscribe(() => { const owner = draftFileRef.current; if (owner) try { owner.check(); } catch { /* 保留原窗口，迟到操作只清理自己的结果。 */ } }), []);
@@ -1056,8 +1078,12 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     try {
       const state = editor.view;
       if (!window.confirm(workspaceText.confirmPageDiscard(editor.page.offset, editor.page.limit, editor.changes.length, state.undo || state.redo, editor === currentEditor)) || !current()) return;
-      const activePage = editor === currentEditor;
+      const activePage = editor === currentEditor, restoring = drafts.restored;
       if (!drafts.discardPage(editor)) return;
+      if (activePage && restoring && drafts.pages.length) {
+        const next = drafts.pages[0]; if (!controller.restore(next.page)) throw Error(workspaceText.stale);
+        editorRef.current = next; drafts.select(next); setEditView(next.view); setSelectedRow(next.view.rows[0]?.id); syncDraftDirty(); setValidation(''); return;
+      }
       if (activePage) {
         restoredDraftRef.current = false; setRestoredDraftView(false);
         dropEditor(undefined, false, true); editorRef.current = null; setEditView(null); structureDisplay.current = undefined;
@@ -1275,7 +1301,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
     {recordPageNotice && <p role="status" className="sqlite-browse-hint">{recordPageNotice}</p>}
     {templateNotice && <p role="status" className="sqlite-browse-hint">{templateNotice}</p>}
     {editView?.message && <p role="status" className="sqlite-browse-hint">{editView.message}</p>}
-    {drafts.pages.length > 0 && <section className="query-row-details-actions" aria-label={workspaceText.region}><strong>{workspaceText.summary(drafts.pages.length, drafts.changes)}</strong><small>{workspaceText.hint}</small>{drafts.pages.map(editor => <span className="query-row-details-actions" key={editor.page.edit?.kind === 'editable' ? editor.page.edit.snapshotId : editor.page.offset}><button disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} aria-label={workspaceText.page(editor.page.offset, editor.page.limit)} aria-pressed={drafts.isActive(editor)} title={editor.view.valid ? undefined : workspaceText.stalePage} onClick={() => navigatePage(editor.page.offset)}>{workspaceText.page(editor.page.offset, editor.page.limit)} · {editor.changes.length}{drafts.isActive(editor) ? ' · ' + workspaceText.active : ''}</button><button aria-label={workspaceText.discardPage(editor.page.offset, editor.page.limit)} disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} onClick={() => discardRetainedPage(editor)}>{workspaceText.discardPageShort}</button></span>)}</section>}
+    {drafts.pages.length > 0 && <section className="query-row-details-actions" aria-label={workspaceText.region}><strong>{workspaceText.summary(drafts.pages.length, drafts.changes)}</strong><small>{drafts.restored ? workspaceText.restoredHint : workspaceText.hint}</small>{drafts.pages.map(editor => <span className="query-row-details-actions" key={editor.page.edit?.kind === 'editable' ? editor.page.edit.snapshotId : editor.page.offset}><button disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} aria-label={workspaceText.page(editor.page.offset, editor.page.limit)} aria-pressed={drafts.isActive(editor)} title={editor.view.valid ? undefined : workspaceText.stalePage} onClick={() => drafts.restored ? selectRestoredPage(editor) : navigatePage(editor.page.offset)}>{workspaceText.page(editor.page.offset, editor.page.limit)} · {editor.changes.length}{drafts.isActive(editor) ? ' · ' + workspaceText.active : ''}</button><button aria-label={workspaceText.discardPage(editor.page.offset, editor.page.limit)} disabled={view.busy || externalBusy || !!cellInput || !!previewOpen || drafts.busy || drafts.unknown || !active} onClick={() => discardRetainedPage(editor)}>{workspaceText.discardPageShort}</button></span>)}</section>}
     <div className="tab-status"><button aria-label={text.first} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(0)}>{text.first}</button><button aria-label={text.previous} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page || page.offset === 0 || externalBusy} onClick={() => navigatePage(Math.max(0, page!.offset - page!.limit))}>{text.previous}</button><button aria-label={text.next} disabled={restoredDraftView || drafts.unknown || drafts.busy || view.busy || !page?.hasMore || externalBusy || page.offset + page.limit > sqliteTableBrowseLimits.offset} onClick={() => navigatePage(page!.offset + page!.limit)}>{text.next}</button>
       <button aria-label={text.last} title={text.lastHint} disabled={restoredDraftView || drafts.unknown || drafts.busy || !page || !active || invalidTarget || view.busy || externalBusy} onClick={() => navigatePage('last')}>{text.last}</button>
       <form className="page-jump" title={text.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}>
@@ -1290,7 +1316,7 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
       <small title={recentCount !== undefined ? statisticsText.hint : page?.matchingRows !== undefined ? text.lastHint : text.noCount}>
         {recentCount !== undefined ? statisticsText.recentCount(recentCount) : page?.matchingRows !== undefined ? text.lastCount(page.matchingRows) : text.noCount}
       </small></div>
-    {draftFile && <SqliteTableDraftDialog key={draftFile.id} ticket={draftFile} mode={draftFile.mode} target={draftFile.target} source={draftFile.source} assertCurrent={draftFile.check} onBusy={busy => draftFileBusy(draftFile, busy)} onRestore={value => acceptDraftFile(draftFile, value)} onClose={() => closeDraftFile(draftFile)}/>}
+    {draftFile && <SqliteTableDraftDialog key={draftFile.id} ticket={draftFile} mode={draftFile.mode} target={draftFile.target} source={draftFile.source} activeSnapshotId={draftFile.activeSnapshotId} assertCurrent={draftFile.check} onBusy={busy => draftFileBusy(draftFile, busy)} onRestore={value => acceptDraftFile(draftFile, value)} onClose={() => closeDraftFile(draftFile)}/>}
     {referenceOpen && !referenceOpen.incoming && !referenceOpen.navigation && <SqliteReferenceDialog key={referenceOpen.id} source={referenceOpen.page} values={referenceOpen.values} current={referenceOpen.current} onActivity={referenceOpen.activity} onStage={referenceOpen.stage} onClose={() => { if (referenceRef.current === referenceOpen) { referenceOpen.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } }}/>}
     {referenceOpen?.incoming && <SqliteIncomingDialog key={referenceOpen.id} source={referenceOpen.page} values={referenceOpen.values} current={referenceOpen.current} onActivity={referenceOpen.activity} onOpen={referenceOpen.open} onClose={() => { if (referenceRef.current === referenceOpen) { referenceOpen.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } }}/>}
     {referenceOpen?.navigation && <SqliteRelationDialog key={referenceOpen.id} source={referenceOpen.page} values={referenceOpen.values} current={referenceOpen.current} onActivity={referenceOpen.activity} onOpen={referenceOpen.open} onClose={() => { if (referenceRef.current === referenceOpen) { referenceOpen.valid = false; referenceRef.current = undefined; setReferenceOpen(undefined); } }}/>}

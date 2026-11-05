@@ -323,11 +323,13 @@ function restoreDraft(app: SqliteRuntime, profile: SqliteConnectionProfile, docu
   return app.request('sqlite.tableDraft.restore', { connectionId: profile.id, taskId: '恢复草稿' + ++serial, draft: document, assertCurrent });
 }
 describe('SQLite草稿持久恢复真实worker', () => {
-  it('两个原页的row0及新增保存后跨Runtime重启，先零写核验，再以新单一来源预览混合事务', async () => {
+  it('第一版扁平文件兼容：跨Runtime重启后以新单一来源预览混合事务', async () => {
     const profile = fixture(), { app } = runtime(profile);
     const a = await app.request('sqlite.tablePage', {connectionId:profile.id,database:'main',table:'subject',taskId:'原第一页'+ ++serial,offset:0,limit:1,mode:'and',filters:[],sort:[{column:'id',direction:'asc'}],editing:true}) as SqliteTablePage;
     const b = await app.request('sqlite.tablePage', {connectionId:profile.id,database:'main',table:'subject',taskId:'原第二页'+ ++serial,offset:1,limit:1,mode:'and',filters:[],sort:[{column:'id',direction:'asc'}],editing:true}) as SqliteTablePage;
     const count = processes.length, document:SqliteTableDraftDocument = await app.request('sqlite.tableDraft.capture',{source:{snapshotId:snapshot(a),taskId:'捕获双页'+ ++serial,changes:[update(0,'跨重启修改'),{kind:'insert',values:[{column:'note',value:{kind:'text',value:'新增候选'}}]}],additionalPages:[{snapshotId:snapshot(b),changes:[{kind:'delete',row:0}]}]},endpointKey:'a'.repeat(64)});
+    // 明确构造旧第一版文档，独立保留旧客户端文件兼容路径。
+    document.version=1;delete document.workspace;
     expect(processes).toHaveLength(count);expect(document.changes).toHaveLength(3);const raw=encodeSqliteTableDraft(document);expect(raw).not.toContain(profile.sqlite.filePath!);expect(raw).not.toContain(snapshot(a));expect(raw).not.toContain(snapshot(b));await app.forceClose();
     const next=runtime(profile),baseline=notes(profile),restored=await restoreDraft(next.app,profile,decodeSqliteTableDraft(raw));expect(notes(profile)).toEqual(baseline);expect(restored.page.result.rows).toHaveLength(2);expect(restored.page.result.statement).toBe('');expect(snapshot(restored.page)).not.toBe(snapshot(a));expect(restored.changes).toMatchObject([{kind:'update',row:0},{kind:'insert'},{kind:'delete',row:1}]);
     const reads=processes.slice(count).flatMap(p=>p.sent);expect(reads.filter(m=>m.kind==='open').every(m=>m.kind==='open'&&m.options.readOnly)).toBe(true);expect(reads.filter(m=>m.kind==='execute').every(m=>m.kind==='execute'&&!/^(INSERT|UPDATE|DELETE|COMMIT)/i.test(m.sql))).toBe(true);
@@ -356,5 +358,43 @@ describe('SQLite草稿持久恢复真实worker', () => {
   it.each(['schema','locator','readonly','main-owner'] as const)('%s变化整份拒绝，不发布旧预览或更换原值',async kind=>{
     const profile=fixture(),{app}=runtime(profile),document=await captureDraft(app,profile,[update(0,'候选')]);if(kind==='schema')disk(profile,db=>db.exec('CREATE INDEX another ON subject(note)'));if(kind==='locator')document.locator.rowid='_rowid_';if(kind==='readonly')profile.sqlite.readOnly=true;
     await expect(restoreDraft(app,profile,document,()=>{if(kind==='main-owner')throw Error('原Main文档已失效');})).rejects.toThrow();expect(notes(profile)).toEqual([{id:1,note:'原甲'},{id:2,note:'原乙'}]);
+  });
+});
+
+/** 同一文件的两个真实原页保存为版本2，活动组和原行编号都按新独立能力恢复。 */
+async function groupedDraft(app: SqliteRuntime, profile: SqliteConnectionProfile) {
+  const pages = await twoPages(app, profile);
+  const document: SqliteTableDraftDocument = await app.request('sqlite.tableDraft.capture', { source: { snapshotId: snapshot(pages[1]), taskId: '分组保存'+ ++serial, changes: [update(0, '第二组修改')], additionalPages: [{ snapshotId: snapshot(pages[0]), changes: [update(0, '第一组修改'), { kind: 'insert', values: [] }] }] }, endpointKey: 'a'.repeat(64), activeSnapshotId: snapshot(pages[1]) });
+  return { document, pages };
+}
+describe('SQLite第二版原页分组真实worker', () => {
+  it('Main从私有原页取归属、排序并保存活动组，跨Runtime恢复每组新能力，统一一次事务', async () => {
+    const profile=fixture(), first=runtime(profile), {document,pages}=await groupedDraft(first.app,profile);
+    expect(document.version).toBe(2); expect(document.workspace).toEqual({activeOffset:1,pages:[{offset:0,limit:1,changes:2},{offset:1,limit:1,changes:1}]});
+    const raw=encodeSqliteTableDraft(document); for(const source of pages)expect(raw).not.toContain(snapshot(source)); await first.app.forceClose();
+    const next=runtime(profile), baseline=notes(profile), restored=await restoreDraft(next.app,profile,decodeSqliteTableDraft(raw));
+    expect(notes(profile)).toEqual(baseline); expect(restored.page.offset).toBe(1); expect(restored.page.limit).toBe(1); expect(restored.page.result.rows).toHaveLength(1); expect(restored.changes).toEqual([update(0,'第二组修改')]);
+    const other=restored.additionalPages![0]; expect(other.page.offset).toBe(0); expect(other.changes).toEqual([update(0,'第一组修改'),{kind:'insert',values:[]}]); expect(snapshot(other.page)).not.toBe(snapshot(restored.page));
+    const saved:SqliteTableDraftDocument=await next.app.request('sqlite.tableDraft.capture',{source:{snapshotId:snapshot(restored.page),taskId:'再次保存'+ ++serial,changes:restored.changes,additionalPages:[{snapshotId:snapshot(other.page),changes:other.changes}]},endpointKey:document.endpointKey,activeSnapshotId:snapshot(other.page)});
+    expect(saved.workspace).toEqual({...document.workspace,activeOffset:0}); expect(saved.changes).toEqual(document.changes);
+    const plan:SqliteTableEditPreview=await next.app.request('sqlite.tableEdit.preview',{snapshotId:snapshot(restored.page),taskId:'恢复组预览'+ ++serial,changes:restored.changes,additionalPages:[{snapshotId:snapshot(other.page),changes:other.changes}]});
+    expect(plan.snapshotIds).toEqual([snapshot(restored.page),snapshot(other.page)]); expect(plan.counts).toEqual({insert:1,update:2,delete:0});
+    expect((await apply(next.app,plan).result).outcome).toBe('committed');expect(notes(profile)).toEqual([{id:1,note:'第一组修改'},{id:2,note:'第二组修改'},{id:3,note:'默认'}]);
+    const sql=processes.at(-1)!.sent.filter(message=>message.kind==='execute').map(message=>message.sql); expect(sql.filter(sql=>sql==='BEGIN IMMEDIATE')).toHaveLength(1);expect(sql.filter(sql=>sql==='COMMIT')).toHaveLength(1);
+  });
+  it('后组原行冲突整次恢复拒绝，数据库保持且核验worker零DML',async()=>{
+    const profile=fixture(),{app}=runtime(profile),{document}=await groupedDraft(app,profile);disk(profile,db=>db.exec("UPDATE subject SET note='外部后组' WHERE id=2"));const baseline=notes(profile),count=processes.length;
+    await expect(restoreDraft(app,profile,document)).rejects.toThrow('原行已变化');expect(notes(profile)).toEqual(baseline);expect(processes.slice(count).flatMap(p=>p.sent).filter(m=>m.kind==='execute').every(m=>m.kind==='execute'&&!/^(INSERT|UPDATE|DELETE|COMMIT)/i.test(m.sql))).toBe(true);
+  });
+  it('明确只保留一个恢复分组后再次保存仍保留原页号和第二版，不降为扁平列表',async()=>{
+    const profile=fixture(),{app}=runtime(profile),{document}=await groupedDraft(app,profile),restored=await restoreDraft(app,profile,document);
+    const single:SqliteTableDraftDocument=await app.request('sqlite.tableDraft.capture',{source:{snapshotId:snapshot(restored.page),taskId:'保存单组'+ ++serial,changes:restored.changes},endpointKey:document.endpointKey,activeSnapshotId:snapshot(restored.page)});
+    expect(single.workspace).toEqual({activeOffset:1,pages:[{offset:1,limit:1,changes:1}]});expect(single.version).toBe(2);
+    const again=await restoreDraft(app,profile,single);expect(again.page.offset).toBe(1);expect(again.additionalPages).toEqual([]);
+  });
+  it('恢复组重新预览后后条原值冲突整批回滚，原先第一条成功修改不能残留',async()=>{
+    const profile=fixture(),{app}=runtime(profile),{document}=await groupedDraft(app,profile),restored=await restoreDraft(app,profile,document),other=restored.additionalPages![0];
+    const plan:SqliteTableEditPreview=await app.request('sqlite.tableEdit.preview',{snapshotId:snapshot(other.page),taskId:'冲突分组预览'+ ++serial,changes:other.changes,additionalPages:[{snapshotId:snapshot(restored.page),changes:restored.changes}]});
+    disk(profile,db=>db.exec("UPDATE subject SET note='后条冲突' WHERE id=2"));const baseline=notes(profile);expect((await apply(app,plan).result).outcome).toBe('rolled-back');expect(notes(profile)).toEqual(baseline);
   });
 });

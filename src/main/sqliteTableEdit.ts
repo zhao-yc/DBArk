@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { parseSqliteTableDraft, sqliteDraftChanges, sqliteTableDraftMessages, type SqliteTableDraftDocument } from '../shared/sqliteTableDraft';
+import { parseSqliteTableDraft, sqliteDraftChanges, sqliteDraftGroups, sqliteTableDraftMessages, type SqliteTableDraftDocument, type SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import type { BigIntStats } from 'node:fs';
@@ -26,7 +26,7 @@ function sqliteDraftParameter(value: SqliteOriginalValue): SqliteValue {
 interface Locator { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[]; collations: string[]; rowid?: string; }
 interface Snapshot {
   relation?: SqliteTableRelation;
-  id: string; target: SqliteEditTarget; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
+  id: string; pageOffset: number; pageLimit: number; restoredGroup?: boolean; target: SqliteEditTarget; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
   catalogue: SqliteTableCatalogue; columns: SqliteEditColumn[]; schemaVersion: string; locator: Locator;
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
 }
@@ -149,7 +149,7 @@ export class SqliteTableEdits {
         const rows = values.map(row => structuredClone(chosen.rowid ? row.slice(1) : row));
         const locators = values.map((row, index) => chosen.rowid ? [structuredClone(row[0])] : chosen.columns.map(name => structuredClone(rows[index][columns.findIndex(column => column.name === name)])));
         if (rows.some(row => row.length !== columns.length) || locators.some(row => row.some(value => value === null)) || chosen.rowid && locators.some(row => !row[0] || typeof row[0] !== 'object' || row[0].type !== 'integer')) return { kind: 'readonly', reason: text.readonly };
-        const data = { ...(input.relation ? { relation: structuredClone(input.relation) } : {}), target: { connectionId: profile.id, database: 'main' as const, table: input.table }, profile: structuredClone(profile), identity, catalogue: structuredClone(catalogue), columns, schemaVersion, locator: chosen, rows, locators };
+        const data = { pageOffset: input.offset, pageLimit: input.limit, ...(input.relation ? { relation: structuredClone(input.relation) } : {}), target: { connectionId: profile.id, database: 'main' as const, table: input.table }, profile: structuredClone(profile), identity, catalogue: structuredClone(catalogue), columns, schemaVersion, locator: chosen, rows, locators };
         const size = Buffer.byteLength(JSON.stringify(data));
         if (this.snapshots.size >= limits.snapshots || this.bytes + size > limits.snapshotBytes) return { kind: 'readonly', reason: 'SQLite编辑快照预算已满，请关闭旧编辑来源后重新读取' };
         const snapshot: Snapshot = { ...data, id: randomUUID(), expires: Date.now() + limits.snapshotLifetimeMs, bytes: size, active: 0, revoked: false };
@@ -159,23 +159,28 @@ export class SqliteTableEdits {
     };
   }
   /** 从准确私有原页捕获可移植草稿；复用原整组验证及重复定位门，不信任客户端旧值。 */
-  captureDraft(source: SqliteTableEditPreviewInput, endpointKey: string): SqliteTableDraftDocument {
+  captureDraft(source: SqliteTableEditPreviewInput, endpointKey: string, activeSnapshotId?: string): SqliteTableDraftDocument {
     const input = sqliteTableEditPreviewSchema.parse(source), preview = this.preview(input);
     try {
       const claim = this.previews.get(preview.previewId)!, snapshot = claim.snapshot, pages = claim.sources ?? [snapshot];
-      const changes = [input, ...(input.additionalPages ?? [])].flatMap((group, index) => group.changes.map(change => {
+      const groups = [input, ...(input.additionalPages ?? [])].map((group, index) => ({ group, snapshot: pages[index] })).sort((a, b) => a.snapshot.pageOffset - b.snapshot.pageOffset);
+      const changes = groups.flatMap(({ group, snapshot: page }) => group.changes.map(change => {
         if (change.kind === 'insert') return { kind: change.kind, values: change.values };
-        const page = pages[index]; return { kind: change.kind, before: page.rows[change.row].map(original), key: page.locators[change.row].map(original), ...(change.kind === 'update' ? { values: change.values } : {}) };
+        return { kind: change.kind, before: page.rows[change.row].map(original), key: page.locators[change.row].map(original), ...(change.kind === 'update' ? { values: change.values } : {}) };
       }));
-      return parseSqliteTableDraft({ kind: 'tabrelio.sqlite-table-draft', version: 1, endpointKey, target: { ...snapshot.target }, fileKey: sqliteDraftFileKey(snapshot.identity), schemaKey: snapshot.catalogue.schemaKey, schemaVersion: snapshot.schemaVersion, columns: snapshot.columns, locator: snapshot.locator, ...(snapshot.relation ? { relation: snapshot.relation } : {}), changes });
+      const grouped = groups.length > 1 || groups.some(item => item.snapshot.restoredGroup);
+      const active = groups.find(item => item.snapshot.id === activeSnapshotId) ?? groups[0];
+      return parseSqliteTableDraft({ kind: 'tabrelio.sqlite-table-draft', version: grouped ? 2 : 1, endpointKey, target: { ...snapshot.target }, fileKey: sqliteDraftFileKey(snapshot.identity), schemaKey: snapshot.catalogue.schemaKey, schemaVersion: snapshot.schemaVersion, columns: snapshot.columns, locator: snapshot.locator, ...(snapshot.relation ? { relation: snapshot.relation } : {}), changes,
+        ...(grouped ? { workspace: { activeOffset: active.snapshot.pageOffset, pages: groups.map(item => ({ offset: item.snapshot.pageOffset, limit: item.snapshot.pageLimit, changes: item.group.changes.length })) } } : {}) });
     } finally { this.dropPreview(preview.previewId); }
   }
   /** 在独立物理只读快照中逐行核完整旧值和隐藏定位；全部通过及回滚后才签一份新编辑能力。 */
-  async restoreDraft(driver: SqliteDriverSession, source: SqliteTableDraftDocument, profile: SqliteConnectionProfile, control: SqliteTableBrowseControl): Promise<{ page: SqliteTablePage; changes: SqliteTableChange[] }> {
+  async restoreDraft(driver: SqliteDriverSession, source: SqliteTableDraftDocument, profile: SqliteConnectionProfile, control: SqliteTableBrowseControl): Promise<SqliteDraftRestored> {
     const document = parseSqliteTableDraft(source), started = performance.now(), identity = driver.identity;
     if (!driver.readOnly || profile.sqlite.readOnly || !identity || profile.id !== document.target.connectionId) throw Error(sqliteTableDraftMessages.readonly);
     if (sqliteDraftFileKey(identity) !== document.fileKey) throw Error(sqliteTableDraftMessages.changed);
     const originalChanges = document.changes.filter(change => change.kind !== 'insert'), input: SqliteTablePageInput = { ...document.target, taskId: 'sqlite-draft-restore', mode: 'and', filters: [], sort: [], offset: 0, limit: Math.max(1, originalChanges.length), editing: true, ...(document.relation ? { relation: document.relation } : {}) };
+    const groups = sqliteDraftGroups(document), plans: SqliteEditReadPlan[] = [];
     let plan: SqliteEditReadPlan | undefined, catalogue: SqliteTableCatalogue | undefined;
     const values = await withSqliteReadSnapshot(driver, control, async () => {
       await assertSnapshotFile({ profile, identity } as Snapshot, control);
@@ -184,7 +189,8 @@ export class SqliteTableEdits {
       if (catalogue.kind !== 'table' || catalogue.schemaKey !== document.schemaKey || integer(schema[0]?.[0]) !== document.schemaVersion) throw Error(sqliteTableDraftMessages.changed);
       await verifySqliteTableScope(driver, input, control);
       let chosen: Locator | undefined;
-      plan = await this.preparePage(driver, input, profile, catalogue, control, value => { chosen = value; });
+      for (const group of groups) plans.push(await this.preparePage(driver, { ...input, offset: group.offset, limit: group.limit }, profile, catalogue, control, value => { chosen = value; }));
+      plan = plans[0];
       const signature = (value: Locator) => JSON.stringify([value.kind, value.columns, value.collations, value.rowid ?? null]);
       if (!chosen || signature(chosen) !== signature(document.locator)) throw Error(sqliteTableDraftMessages.changed);
       const projectionSql = catalogue.columns.map(column => projection('"__dbark_source".' + quote(column.name))).join(','), savedKeys = originalChanges.map(change => change.key.map(sqliteDraftParameter)), rows: SqliteValue[][] = [];
@@ -199,16 +205,27 @@ export class SqliteTableEdits {
       await assertSnapshotFile({ profile, identity } as Snapshot, control); return rows;
     });
     control.check(); await assertSnapshotFile({ profile, identity } as Snapshot, control);
-    const edit = plan!.capture(values); if (edit.kind !== 'editable') throw Error(edit.reason);
+    const restored: SqliteDraftRestored[] = [];
+    let originalOffset = 0;
     try {
-      if (!equal(edit.columns, document.columns)) throw Error(sqliteTableDraftMessages.changed);
-      const rows = values.map(row => row.slice(plan!.extraColumn ? 1 : 0));
-      const page: SqliteTablePage = { target: { ...document.target, kind: 'table' }, schemaKey: document.schemaKey, columns: catalogue!.columns, offset: 0, limit: input.limit, hasMore: false, ...(document.relation ? { relation: document.relation } : {}), edit,
-        storageTypes: rows.map(row => row.map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join('')),
-        result: { columns: catalogue!.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' })), rows: rows.map(row => Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)]))), elapsedMs: performance.now() - started, truncated: false, statement: '' } };
-      return { page, changes: sqliteDraftChanges(document) };
-    } catch (reason) { this.release({ snapshotId: edit.snapshotId }); throw reason; }
+      for (let index = 0; index < groups.length; index++) {
+        const group = groups[index], count = group.changes.filter(change => change.kind !== 'insert').length;
+        const sourceRows = values.slice(originalOffset, originalOffset += count), edit = plans[index].capture(sourceRows);
+        if (edit.kind !== 'editable') throw Error(edit.reason);
+        // 先登记准确新能力，后续任一分组失败会释放已签发的全部能力。
+        const rows = sourceRows.map(row => row.slice(plans[index].extraColumn ? 1 : 0));
+        const page: SqliteTablePage = { target: { ...document.target, kind: 'table' }, schemaKey: document.schemaKey, columns: catalogue!.columns, offset: group.offset, limit: group.limit, hasMore: false, ...(document.relation ? { relation: document.relation } : {}), edit,
+          storageTypes: rows.map(row => row.map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join('')),
+          result: { columns: catalogue!.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' })), rows: rows.map(row => Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)]))), elapsedMs: performance.now() - started, truncated: false, statement: '' } };
+        restored.push({ page, changes: sqliteDraftChanges({ ...document, changes: group.changes }) });
+        if (!equal(edit.columns, document.columns)) throw Error(sqliteTableDraftMessages.changed);
+        if (document.workspace) this.snapshots.get(edit.snapshotId)!.restoredGroup = true;
+      }
+      const primary = restored.find(item => item.page.offset === document.workspace?.activeOffset) ?? restored[0], others = restored.filter(item => item !== primary);
+      return { ...primary, ...(document.workspace ? { additionalPages: others } : {}) };
+    } catch (reason) { for (const item of restored) if (item.page.edit?.kind === 'editable') this.release({ snapshotId: item.page.edit.snapshotId }); throw reason; }
   }
+
   /** 预览只编译参数化DML，没有driver或SQL投递能力。 */
   preview(source: SqliteTableEditPreviewInput): SqliteTableEditPreview {
     const input = sqliteTableEditPreviewSchema.parse(source); this.prune(); const snapshot = this.snapshots.get(input.snapshotId);

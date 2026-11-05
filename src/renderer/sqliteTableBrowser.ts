@@ -65,6 +65,21 @@ export class SqliteTableBrowser {
     assertSqliteTablePage(page, { connectionId: scope.connectionId, database: 'main', table: scope.table, taskId: 'sqlite-draft-restored', offset: 0, limit: page.limit, filters: [], sort: [], mode: 'and', editing: true, ...(scope.relation ? { relation: scope.relation } : {}) });
     this.releaseUnadopted(); this.unadopted = page; this.pageScope = scope; this.emit({ page, columns: page.columns, error: '' }); return true;
   }
+  /** 完整恢复组先全量核验再一次交接；各组快照都属于本浏览器，原页号只作本地分组。 */
+  publishRestoredBatch(pages: readonly SqliteTablePage[]): boolean {
+    const scope = this.ports.scope();
+    if (!scope.table || !this.same(scope) || this.view.busy || !pages.length || pages.length > 16) return false;
+    const ids = new Set<string>(), offsets = new Set<number>();
+    for (const page of pages) {
+      if (page.edit?.kind !== 'editable' || this.adopted.has(page) || this.released.has(page) || ids.has(page.edit.snapshotId) || offsets.has(page.offset)) return false;
+      assertSqliteTablePage(page, { connectionId: scope.connectionId, database: 'main', table: scope.table, taskId: 'sqlite-draft-restored', offset: page.offset, limit: page.limit, filters: [], sort: [], mode: 'and', editing: true, ...(scope.relation ? { relation: scope.relation } : {}) });
+      if (page.limit !== pages[0].limit || page.schemaKey !== pages[0].schemaKey) return false;
+      ids.add(page.edit.snapshotId); offsets.add(page.offset);
+    }
+    this.releaseUnadopted();
+    for (const page of pages) { this.adopted.add(page); this.retained.set(page, { scope, valid: true }); }
+    this.pageScope = scope; this.emit({ page: pages[0], columns: pages[0].columns, error: '' }); return true;
+  }
   /** 只恢复由本浏览器交接过且仍属原目标的页；不重新读取，也不重新签发快照。 */
   restore(page: SqliteTablePage, preserveError = false): boolean {
     this.observe(); const retained = this.retained.get(page);

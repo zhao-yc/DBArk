@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { sqliteTableEditPreviewSchema, sqliteTableChangeSchema, type SqliteOriginalValue, type SqliteTableChange } from './sqliteTableEdit';
 import type { SqliteTablePage } from './sqliteTableBrowse';
-import { sqliteTablePageSchema } from './sqliteTableBrowse';
+import { sqliteTablePageSchema, sqliteTableBrowseLimits } from './sqliteTableBrowse';
 
 /** 文件只保存已暂存修改、完整旧行及可靠定位；不保存SQL、配置路径、凭据或旧能力令牌。 */
 export const sqliteTableDraftLimits = { bytes: 8 * 1024 * 1024, cells: 200000, nodes: 700000, depth: 12 } as const;
@@ -32,16 +32,25 @@ const savedChange = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('update'), before, key, values }).strict(),
   z.object({ kind: z.literal('delete'), before, key }).strict(),
 ]);
+/** 原页归属仅组织变更，不携带旧快照令牌，也不代表当前数据库分页。 */
+const workspace = z.object({ activeOffset: z.number().int().min(0).max(sqliteTableBrowseLimits.offset), pages: z.array(z.object({ offset: z.number().int().min(0).max(sqliteTableBrowseLimits.offset), limit: z.number().int().min(1).max(sqliteTableBrowseLimits.pageSize), changes: z.number().int().min(1).max(500) }).strict()).min(1).max(16) }).strict();
 const shape = z.object({
-  kind: z.literal('tabrelio.sqlite-table-draft'), version: z.literal(1), endpointKey: hash,
+  kind: z.literal('tabrelio.sqlite-table-draft'), version: z.union([z.literal(1), z.literal(2)]), endpointKey: hash,
   target: z.object({ connectionId: z.string().min(1).max(200), database: z.literal('main'), table: name }).strict(),
   fileKey: hash, schemaKey: hash, schemaVersion: integer, columns: z.array(column).min(1).max(1024), locator,
   relation: sqliteTablePageSchema.shape.relation,
   changes: z.array(savedChange).min(1).max(500),
+  workspace: workspace.optional(),
 }).strict();
 export type SqliteTableDraftDocument = z.infer<typeof shape>;
 /** 只有完整核验及准确只读进程退出后才发布；调用方仍须明确暂存及预览提交。 */
-export interface SqliteDraftRestored { page: SqliteTablePage; changes: SqliteTableChange[]; }
+export interface SqliteDraftRestoredPage { page: SqliteTablePage; changes: SqliteTableChange[]; }
+export interface SqliteDraftRestored extends SqliteDraftRestoredPage { additionalPages?: SqliteDraftRestoredPage[]; }
+/** 每个分组重新从零编号原行；新增不占原行编号，组间不能共用 row 索引。 */
+export function sqliteDraftGroups(document: SqliteTableDraftDocument): { offset: number; limit: number; changes: SqliteTableDraftDocument['changes'] }[] {
+  let offset = 0;
+  return document.workspace ? document.workspace.pages.map(group => ({ offset: group.offset, limit: group.limit, changes: document.changes.slice(offset, offset += group.changes) })) : [{ offset: 0, limit: Math.max(1, document.changes.filter(change => change.kind !== 'insert').length), changes: document.changes }];
+}
 /** 恢复视图的原行连续编号只属于新快照，不能沿用保存时任意一页的row编号。 */
 export function sqliteDraftChanges(document: SqliteTableDraftDocument): SqliteTableChange[] {
   let row = 0;
@@ -80,6 +89,12 @@ function boundedCopy(input: unknown): unknown {
 /** 字段、旧行和可靠键的完整性一起验证；任何后字段失败整份拒绝，不返回部分文件。 */
 export function parseSqliteTableDraft(input: unknown): SqliteTableDraftDocument {
   const parsed = shape.safeParse(boundedCopy(input)); if (!parsed.success) throw Error(text.invalid); const document = parsed.data;
+  if (document.version !== (document.workspace ? 2 : 1)) throw Error(text.invalid);
+  if (document.workspace) {
+    const groups = document.workspace.pages;
+    if (!groups.some(group => group.offset === document.workspace!.activeOffset) || groups.reduce((n, group) => n + group.changes, 0) !== document.changes.length || groups.some((group, index) => group.limit !== groups[0].limit || index > 0 && group.offset <= groups[index - 1].offset)) throw Error(text.invalid);
+    if (sqliteDraftGroups(document).some(group => group.changes.filter(change => change.kind !== 'insert').length > group.limit)) throw Error(text.invalid);
+  }
   const names = document.columns.map(column => column.name), editable = new Set(document.columns.filter(column => !column.generated).map(column => column.name));
   if (new Set(names).size !== names.length || document.locator.columns.some(column => !names.includes(column))) throw Error(text.invalid);
   let cells = 0; const touched = new Set<string>();
@@ -108,6 +123,6 @@ export function decodeSqliteTableDraft(source: string): SqliteTableDraftDocument
 /** 只用于Main内部转换；完整原值仍按正式driver类型保存，不由Renderer提供定位。 */
 export type SqliteDraftOriginal = SqliteOriginalValue;
 /** 公开文件IPC只给原窗口原目标；路径、端点和恢复时的存活回调均由Main补入。 */
-export const sqliteDraftSaveSchema = z.object({ source: sqliteTableEditPreviewSchema }).strict();
+export const sqliteDraftSaveSchema = z.object({ source: sqliteTableEditPreviewSchema, activeSnapshotId: z.string().min(1).max(200).optional() }).strict();
 export const sqliteDraftOpenSchema = z.object({ target: shape.shape.target }).strict();
 export const sqliteDraftRestoreSchema = shape.shape.target.extend({ taskId: z.string().min(1).max(200), document: z.unknown().transform(value => parseSqliteTableDraft(value)) }).strict();

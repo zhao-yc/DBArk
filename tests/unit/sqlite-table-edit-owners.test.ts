@@ -72,3 +72,14 @@ describe('SQLite多页预览准确Main能力',()=>{
   const f=fixture();await f.admit();await f.admit('第二页');await f.owners.preview(f.owner,'snapshot',['第二页']).accept({...f.preview('多页'),snapshotIds:['snapshot','第二页']});const claim=f.owners.claim(f.owner,'多页'),lease=f.owners.begin('多页操作',f.owner,claim.check);await f.owners.release(f.owner,{snapshotId:'第二页'});expect(()=>lease.beforeSend()).toThrow();expect(f.stop).not.toHaveBeenCalled();await lease.release();
  });
 });
+
+it('恢复多组先完整验证再一次登记，后组坏目标不留下前组Main能力', async () => {
+  const f=fixture(), gate=f.owners.page(f.owner,input), a=f.page('恢复甲'), b=f.page('恢复乙'); b.target.table='其它';
+  await expect(gate.acceptRestored({page:a,changes:[],additionalPages:[{page:b,changes:[]}]})).rejects.toThrow();
+  expect(()=>f.owners.snapshot(f.owner,'恢复甲')).toThrow(); expect(f.release).toHaveBeenCalledWith({snapshotId:'恢复甲'}); expect(f.release).toHaveBeenCalledWith({snapshotId:'恢复乙'});
+});
+it('完整恢复各组归同一原文档，发布失效时准确撤销全部组且不影响其它旧来源',async()=>{
+  const f=fixture();await f.admit('其它来源');const value={page:f.page('恢复甲'),changes:[],additionalPages:[{page:f.page('恢复乙'),changes:[]}]};
+  await f.owners.page(f.owner,input).acceptRestored(value);expect(f.owners.preview(f.owner,'恢复甲',['恢复乙']).target.table).toBe('subject');
+  await f.owners.rejectRestored(value);expect(()=>f.owners.snapshot(f.owner,'恢复甲')).toThrow();expect(()=>f.owners.snapshot(f.owner,'恢复乙')).toThrow();expect(()=>f.owners.snapshot(f.owner,'其它来源')).not.toThrow();
+});

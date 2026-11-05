@@ -12,6 +12,7 @@ export class SqliteEditWorkspace {
   private query?: SqliteTableQuery; private queryKey = ''; private scopeKey = ''; private dead = false;
   private selected?: SqliteTableEditor;
   unknown = false;
+  restored = false;
   constructor(private readonly ports: Ports) {}
   private key(page: Pick<SqliteTablePage, 'offset' | 'limit'>): string { return page.offset + ':' + page.limit; }
   /** 只比目标和编辑元数据；原行大值仍由各准确Editor持有，不为切页序列化大BLOB。 */
@@ -32,7 +33,7 @@ export class SqliteEditWorkspace {
   get changes(): number { return this.pages.reduce((sum,editor)=>sum+editor.changes.length,0); }
   /** 只淘汰离开后无需保留的干净页，不丢输入、修改或撤销／重做历史，不静默丢弃用户历史。 */
   private disposable(entry: Entry): boolean { const view=entry.editor.view;return !entry.editor.dirty&&!entry.editor.busy&&!view.undo&&!view.redo; }
-  capacity(query: SqliteTableQuery, leaving?: SqliteTableEditor): void { if(!this.current(query)||this.unknown)throw Error(this.unknown?text.unknown:text.stale);if(this.entries.size>=sqliteTableEditLimits.pages&&![...this.entries.values()].some(entry=>this.disposable(entry)||entry.editor===leaving&&!entry.editor.changes.length&&!entry.editor.busy&&!entry.editor.view.undo&&!entry.editor.view.redo&&!entry.editor.view.unknown))throw Error(text.limit); }
+  capacity(query: SqliteTableQuery, leaving?: SqliteTableEditor): void { if(this.restored||!this.current(query)||this.unknown)throw Error(this.unknown?text.unknown:text.stale);if(this.entries.size>=sqliteTableEditLimits.pages&&![...this.entries.values()].some(entry=>this.disposable(entry)||entry.editor===leaving&&!entry.editor.changes.length&&!entry.editor.busy&&!entry.editor.view.undo&&!entry.editor.view.redo&&!entry.editor.view.unknown))throw Error(text.limit); }
   /** 已采用页只在元数据相容时登记；后端保有真实文件与schema_version的最终裁决。 */
   add(editor: SqliteTableEditor,query: SqliteTableQuery): void {
     const page=editor.page;if(page.edit?.kind!=='editable'||!this.current(this.query?query:undefined)||this.unknown||this.entries.has(this.key(page)))throw Error(text.stale);
@@ -40,6 +41,19 @@ export class SqliteEditWorkspace {
     if(this.entries.size>=sqliteTableEditLimits.pages){const unused=[...this.entries.values()].find(entry=>this.disposable(entry));if(!unused)throw Error(text.limit);this.entries.delete(unused.key);unused.editor.dispose();this.ports.forgotten(unused.page);}
     if(!this.query){this.query=query;this.queryKey=JSON.stringify(query);this.scopeKey=scope;}
     this.entries.set(this.key(page),{editor,page,key:this.key(page),signature:this.signature(page)});this.select(editor);
+  }
+  /** 恢复编辑器全部构造成功后原子替换；同组每页独享新能力和历史，不进行服务器读取。 */
+  checkRestored(editors: readonly SqliteTableEditor[], query: SqliteTableQuery): void {
+    if (this.protected || this.busy || !editors.length || editors.length > sqliteTableEditLimits.pages) throw Error(text.stale);
+    const keys = new Set<string>(), scope = this.scope(editors[0].page);
+    for (const editor of editors) { const page = editor.page, key = this.key(page); if (page.edit?.kind !== 'editable' || keys.has(key) || this.scope(page) !== scope || page.limit !== query.limit) throw Error(text.stale); keys.add(key); }
+  }
+  /** 校验与发布之间无异步边界，旧缓存仅在完整组准备完成后释放。 */
+  restore(editors: readonly SqliteTableEditor[], query: SqliteTableQuery): void {
+    this.checkRestored(editors, query); const scope = this.scope(editors[0].page);
+    this.clear(false); this.query = query; this.queryKey = JSON.stringify(query); this.scopeKey = scope; this.restored = true;
+    for (const editor of [...editors].sort((a,b) => a.page.offset-b.page.offset)) { const page = editor.page, key = this.key(page); this.entries.set(key, { editor, page, key, signature: this.signature(page) }); }
+    this.selected = editors[0]; this.ports.changed();
   }
   /** 返回准确缓存页，不按相同offset重新生成Editor或原值；失效页明确拒绝重新编辑。 */
   cached(offset:number,query:SqliteTableQuery):SqliteTableEditor|undefined {if(!this.current(query)||this.unknown)throw Error(this.unknown?text.unknown:text.stale);const editor=this.entries.get(offset+':'+query.limit)?.editor;if(editor){editor.observe();if(!editor.view.valid||editor.view.unknown)throw Error(text.stale);}return editor;}
@@ -64,9 +78,9 @@ export class SqliteEditWorkspace {
     if (this.selected === editor) this.selected = undefined;
     editor.dispose(); this.ports.forgotten(entry.page);
     // 最后一页明确放弃后允许建立全新来源；有剩余页时保持旧账本及失效墓碑。
-    if (!this.entries.size) { this.query = undefined; this.queryKey = ''; this.scopeKey = ''; this.dead = false; }
+    if (!this.entries.size) { this.query = undefined; this.queryKey = ''; this.scopeKey = ''; this.dead = false; this.restored = false; }
     this.ports.changed(); return true;
   }
   /** 明确放弃／成功提交／卸载才释放所有已采用页，各Editor自行等待准确在途终态。 */
-  clear(notify=true):void{const entries=[...this.entries.values()];this.entries.clear();this.selected=undefined;this.query=undefined;this.queryKey='';this.scopeKey='';this.dead=false;this.unknown=false;for(const entry of entries){entry.editor.dispose();this.ports.forgotten(entry.page);}if(notify)this.ports.changed();}
+  clear(notify=true):void{const entries=[...this.entries.values()];this.entries.clear();this.selected=undefined;this.query=undefined;this.queryKey='';this.scopeKey='';this.dead=false;this.unknown=false;this.restored=false;for(const entry of entries){entry.editor.dispose();this.ports.forgotten(entry.page);}if(notify)this.ports.changed();}
 }

@@ -493,8 +493,8 @@ export class SqliteRuntime {
       failure = failed ? new AggregateError([failure, reason], 'SQLite表浏览未完成且原资源退出未确认', { cause: failure }) : reason; failed = true;
     }
     if (failed) {
-      const draftPage = value && 'changes' in value ? value.page : undefined;
-      if (draftPage?.edit?.kind === 'editable') this.edits.release({ snapshotId: draftPage.edit.snapshotId });
+      const draftPages = value && 'changes' in value ? [value, ...(value.additionalPages ?? [])] : [];
+      for (const item of draftPages) if (item.page.edit?.kind === 'editable') this.edits.release({ snapshotId: item.page.edit.snapshotId });
       if (value && 'edit' in value && value.edit?.kind === 'editable') this.edits.release({ snapshotId: value.edit.snapshotId });
       const nativeCancelled = failure instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(failure.code);
       const openingCancelled = task.cancelled && failure instanceof SqliteDriverError && failure.sessionClosed && failure.code === 'SQLITE_PROCESS_EXIT';
@@ -1210,7 +1210,7 @@ export class SqliteRuntime {
       // 私有命令不在公开CommandMap或IPC校验表中，只供Main草稿文件服务调用。
       case 'sqlite.tableDraft.capture': {
         if (this.stopping) throw Error('SQLite正在退出，不能保存草稿');
-        return this.edits.captureDraft(input.source, input.endpointKey);
+        return this.edits.captureDraft(input.source, input.endpointKey, input.activeSnapshotId);
       }
       case 'sqlite.tableDraft.restore': return this.tableDraftRestore(input);
       case 'sqlite.tableEdit.preview': {
