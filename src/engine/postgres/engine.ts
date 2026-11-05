@@ -613,6 +613,8 @@ export class PostgresEngine {
       case 'postgres.materializedRefresh.preview':
       case 'postgres.materializedRefresh.apply':
       case 'postgres.sequence.preview':
+      case 'postgres.sequence.manage.preview':
+      case 'postgres.sequence.manage.apply':
       case 'postgres.sequence.apply': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
@@ -626,8 +628,12 @@ export class PostgresEngine {
         if (command === 'postgres.viewManage.preview') return this.creations.prepareViewManage(input as Parameters<PostgresCreateTableWorkspace['prepareViewManage']>[0], connect);
         if (command === 'postgres.materializedRefresh.preview') return this.creations.prepareMaterializedRefresh(input as Parameters<PostgresCreateTableWorkspace['prepareMaterializedRefresh']>[0], connect);
         if (command === 'postgres.sequence.preview') return this.creations.prepareSequence(input as Parameters<PostgresCreateTableWorkspace['prepareSequence']>[0], connect);
+        if (command === 'postgres.sequence.manage.preview') {
+          const { profile: _profile, ...draft } = input;
+          return this.creations.prepareSequenceManage(draft as Parameters<PostgresCreateTableWorkspace['prepareSequenceManage']>[0], connect);
+        }
         return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect,
-          command === 'postgres.sequence.apply' ? 'sequence' : command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
+          command === 'postgres.sequence.manage.apply' ? 'sequenceManage' : command === 'postgres.sequence.apply' ? 'sequence' : command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
       }
       case 'postgres.sequence.read':
       case 'postgres.structure.read': {

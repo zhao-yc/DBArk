@@ -391,6 +391,9 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         start: '9223372036854775806', minimum: '', maximum: '', increment: '', cache: '', cycle: true, comment: value };
       const readSequence = (table = sequenceName) => engine.handle('postgres.sequence.read', { ...target, table });
       const applySequence = (token: string) => engine.handle('postgres.sequence.apply', { ...target, token });
+      const applySequenceManage = (token: string) => engine.handle('postgres.sequence.manage.apply', { ...target, token });
+      const manageSequence = async (table: string, operation: Record<string, unknown>) => engine.handle('postgres.sequence.manage.preview',
+        { ...target, table, stamp: (await readSequence(table)).stamp, ...operation });
       await expect(engine.handle('postgres.sequence.preview', { ...sequenceDraft, increment: '0' })).rejects.toThrow('非零');
       await expect(engine.handle('postgres.sequence.preview', { ...sequenceDraft, maximum: '9223372036854775808' })).rejects.toThrow('上下限');
       const newSequence = await engine.handle('postgres.sequence.preview', sequenceDraft);
@@ -416,13 +419,75 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         expect(await engine.handle('postgres.sequence.read', delegated)).toMatchObject({ lastValue: null });
         expect(await list()).toContainEqual({ name: sequenceName, kind: 'sequence' });
         await client.query(`GRANT USAGE ON SEQUENCE ${sequenceName} TO ${maintainer}`);
-        expect(await engine.handle('postgres.sequence.read', delegated)).toMatchObject({ lastValue: sequenceDraft.start });
+        const visible = await engine.handle('postgres.sequence.read', delegated);
+        expect(visible).toMatchObject({ lastValue: sequenceDraft.start, canManage: false });
+        await expect(engine.handle('postgres.sequence.manage.preview', { ...delegated, action: 'drop', stamp: visible.stamp }))
+          .rejects.toThrow('没有序列管理权限');
       }
       const identitySequence = (await client.query("SELECT pg_get_serial_sequence($1, '编号') AS name", [qualified])).rows[0].name;
       const identityTarget = (await client.query(`SELECT pg_catalog.format('"%s"."%s"', replace(n.nspname::text,'"','""'),
         replace(c.relname::text,'"','""')) AS name FROM pg_catalog.pg_class c
         JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=$1::regclass`, [identitySequence])).rows[0].name;
-      expect((await readSequence(identityTarget)).ownedBy).toEqual({ schema: draft.schema, relation: draft.table, column: '编号', identity: true });
+      const identityInfo = await readSequence(identityTarget);
+      const identityOwner = { schema: draft.schema, relation: draft.table, column: '编号', identity: true };
+      expect(identityInfo.ownedBy).toEqual(identityOwner);
+      await expect(manageSequence(identityTarget, { action: 'drop' })).rejects.toThrow('标识列序列');
+      const { dataType, start, increment, minimum, maximum, cycle } = identityInfo;
+      const identityEdit = await manageSequence(identityTarget, { action: 'edit', dataType, start, increment, minimum, maximum, cycle,
+        cache: '2', restart: '' });
+      expect(await applySequenceManage(identityEdit.token)).toMatchObject({ outcome: 'committed' });
+      expect(await readSequence(identityTarget)).toMatchObject({ cache: '2', ownedBy: identityOwner });
+
+      const sequenceEdit = { action: 'edit', dataType: 'bigint', start: '9223372036854775804', minimum: '1',
+        maximum: '9223372036854775807', increment: '1', cache: '1', cycle: false, restart: '', comment: '' };
+      await expect(manageSequence(sequenceName, { ...sequenceEdit, restart: '0' })).rejects.toThrow('重启值');
+      const editPlan = await manageSequence(sequenceName, sequenceEdit);
+      expect(editPlan.statements).toHaveLength(3);
+      expect(editPlan.statements[1]).toContain('START WITH 9223372036854775804');
+      expect(editPlan.statements[1]).not.toContain('RESTART');
+      expect(editPlan.statements[2]).toContain('IS NULL');
+      expect(await readSequence()).toMatchObject({ start: sequenceDraft.start, comment: value, canManage: true });
+      // 业务在预览期间取号，不应使配置预览失效，也不应被参数变更重设。
+      expect((await client.query('SELECT nextval($1::regclass)::text AS value', [sequenceName])).rows[0].value).toBe(sequenceEdit.maximum);
+      await expect(applySequence(editPlan.token)).rejects.toThrow('预览已失效');
+      expect(await applySequenceManage(editPlan.token)).toMatchObject({ outcome: 'committed' });
+      expect(await readSequence()).toMatchObject({ start: sequenceEdit.start, lastValue: sequenceEdit.maximum, comment: null, cycle: false });
+
+      const restart = await manageSequence(sequenceName, { ...sequenceEdit, restart: sequenceEdit.start });
+      expect(restart.statements[1]).toContain('RESTART WITH 9223372036854775804');
+      expect(await applySequenceManage(restart.token)).toMatchObject({ outcome: 'committed' });
+      await expect(applySequenceManage(restart.token)).rejects.toThrow('预览已失效');
+      expect((await client.query(`SELECT last_value::text, is_called FROM ${sequenceName}`)).rows)
+        .toEqual([{ last_value: sequenceEdit.start, is_called: false }]);
+      expect((await client.query('SELECT nextval($1::regclass)::text AS value', [sequenceName])).rows[0].value).toBe(sequenceEdit.start);
+
+      const sequenceRename = { action: 'rename', name: '改名"序列' };
+      await expect(manageSequence(sequenceName, { ...sequenceRename, name: draft.table })).rejects.toThrow('同名关系');
+      const staleSequence = await manageSequence(sequenceName, sequenceRename);
+      await client.query(`COMMENT ON SEQUENCE ${sequenceName} IS '外部注释'`);
+      expect(await applySequenceManage(staleSequence.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('原序列已变化') });
+      const originalSequenceOid = await indexOid(sequenceName);
+      const renamedSequence = '"生成.甲"."改名""序列"';
+      const renameSequence = await manageSequence(sequenceName, sequenceRename);
+      expect(await applySequenceManage(renameSequence.token)).toMatchObject({ outcome: 'committed', table: renamedSequence });
+      expect(await indexOid(sequenceName)).toBeNull();
+      expect(await indexOid(renamedSequence)).toBe(originalSequenceOid);
+      expect(await readSequence(renamedSequence)).toMatchObject({ lastValue: sequenceEdit.start, comment: '外部注释' });
+
+      await client.query(`CREATE VIEW "生成.甲"."取号依赖" AS SELECT nextval('${renamedSequence}'::regclass) AS value`);
+      const blockedSequenceDrop = await manageSequence(renamedSequence, { action: 'drop' });
+      expect(blockedSequenceDrop.statements[1]).toContain(' RESTRICT');
+      expect(await applySequenceManage(blockedSequenceDrop.token)).toMatchObject({ outcome: 'rolledBack' });
+      expect(await indexOid(renamedSequence)).toBe(originalSequenceOid);
+      expect(await indexOid('"生成.甲"."取号依赖"')).not.toBeNull();
+      await client.query('DROP VIEW "生成.甲"."取号依赖"');
+      const replacedSequence = await manageSequence(renamedSequence, { action: 'drop' });
+      await client.query(`DROP SEQUENCE ${renamedSequence}; CREATE SEQUENCE ${renamedSequence}`);
+      expect(await applySequenceManage(replacedSequence.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('原序列已变化') });
+      expect(await indexOid(renamedSequence)).not.toBeNull();
+      expect(await applySequenceManage((await manageSequence(renamedSequence, { action: 'drop' })).token)).toMatchObject({ outcome: 'committed' });
+      expect(await indexOid(renamedSequence)).toBeNull();
+
       const descending = await engine.handle('postgres.sequence.preview', { ...sequenceDraft, name: '倒序', dataType: 'smallint',
         start: '', increment: '-3', comment: '' });
       expect(await applySequence(descending.token)).toMatchObject({ outcome: 'committed' });

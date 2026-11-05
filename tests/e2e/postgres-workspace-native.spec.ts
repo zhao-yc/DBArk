@@ -1638,9 +1638,56 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(browserSequence).toBeVisible();
     await browserSequence.dblclick();
     await expect(sequenceInfo.getByRole('table')).toContainText('9223372036854775806');
-    await sequenceInfo.getByRole('button', { name: zh.common.close, exact: true }).click();
-    await page.locator('.tab-strip .tab-close').click();
     await mark('原生创建 PostgreSQL 序列并从树和序列目录重新打开，64 位起始值与未分配状态保持');
+
+    await sequenceInfo.getByRole('button', { name: sequenceText.edit, exact: true }).click();
+    const editSequence = page.getByRole('dialog', { name: sequenceText.edit, exact: true });
+    await editSequence.getByLabel(sequenceText.start, { exact: true }).fill('9223372036854775803');
+    await editSequence.getByLabel(sequenceText.restart, { exact: true }).fill('9223372036854775804');
+    await editSequence.getByLabel(sequenceText.comment, { exact: true }).fill('窗口改后注释');
+    await editSequence.getByRole('button', { name: sequenceText.preview, exact: true }).click();
+    await expect(editSequence.locator('pre')).toContainText('START WITH 9223372036854775803');
+    await expect(editSequence.locator('pre')).toContainText('RESTART WITH 9223372036854775804');
+    const commitSequenceEdit = editSequence.getByRole('button', { name: sequenceText.applyEdit, exact: true });
+    await expect(commitSequenceEdit).toBeDisabled();
+    await editSequence.getByRole('checkbox', { name: sequenceText.acknowledgeRestart, exact: true }).check();
+    await page.screenshot({ path: info.outputPath('PostgreSQL序列管理预览.png') });
+    await commitSequenceEdit.click();
+    await expect(sequenceInfo.getByRole('table')).toContainText('9223372036854775803');
+    await expect(sequenceInfo.getByRole('table')).toContainText('窗口改后注释');
+    await expect(sequenceInfo.getByRole('table')).toContainText(sequenceText.noValue);
+    await mark('原生窗口以不同精确值更新记录起始值和下次取号，重启需要单独确认');
+
+    await sequenceInfo.getByRole('button', { name: sequenceText.rename, exact: true }).click();
+    const renameSequence = page.getByRole('dialog', { name: sequenceText.rename, exact: true });
+    await renameSequence.getByLabel(sequenceText.name, { exact: true }).fill('窗口改名序列');
+    await renameSequence.getByRole('button', { name: sequenceText.preview, exact: true }).click();
+    await expect(renameSequence.locator('pre')).toContainText('RENAME TO "窗口改名序列"');
+    await renameSequence.getByRole('button', { name: sequenceText.applyRename, exact: true }).click();
+    await expect(sequenceInfo.getByText(/窗口改名序列/)).toBeVisible();
+    await expect(sequenceInfo.getByRole('table')).toContainText('窗口改后注释');
+    await sequenceInfo.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await expect(sequenceRow).toHaveCount(0);
+    await expect(page.locator('.object-row').filter({ hasText: '窗口改名序列' })).toBeVisible();
+    await expect(browserSequence).toHaveCount(0);
+    await expect(page.locator('.object-list-row .tree-label').filter({ hasText: '窗口改名序列' })).toBeVisible();
+    await mark('原生窗口重命名序列后回到新名称详情，对象树及序列列表同步刷新');
+
+    const disposableSequence = page.locator('.object-list-row .tree-label').filter({ hasText: '窗口删除序列' });
+    await disposableSequence.dblclick();
+    await sequenceInfo.getByRole('button', { name: sequenceText.drop, exact: true }).click();
+    const dropSequence = page.getByRole('dialog', { name: sequenceText.drop, exact: true });
+    await dropSequence.getByRole('button', { name: sequenceText.preview, exact: true }).click();
+    await expect(dropSequence.locator('pre')).toContainText('DROP SEQUENCE "回归"."窗口删除序列" RESTRICT');
+    const commitSequenceDrop = dropSequence.getByRole('button', { name: sequenceText.applyDrop, exact: true });
+    await expect(commitSequenceDrop).toBeDisabled();
+    await dropSequence.getByRole('checkbox', { name: sequenceText.acknowledge, exact: true }).check();
+    await commitSequenceDrop.click();
+    await expect(dropSequence).toHaveCount(0);
+    await expect(disposableSequence).toHaveCount(0);
+    await expect(page.locator('.object-row').filter({ hasText: '窗口删除序列' })).toHaveCount(0);
+    await mark('原生窗口独立确认受限删除序列，刷新对象树和序列列表');
+    await page.locator('.tab-strip .tab-close').click();
 
 
 

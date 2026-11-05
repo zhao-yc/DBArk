@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview, PostgresCreateTableTarget } from '../../shared/postgresCreateTable';
 import { postgresIdentifier } from '../../shared/postgresSql';
-import { postgresSequenceCreateSchema, postgresSequencePlan, type PostgresSequenceInfo, type PostgresSequenceReadInput } from '../../shared/postgresSequence';
+import { postgresSequenceCreateSchema, postgresSequenceManageSchema, postgresSequencePlan, type PostgresSequenceInfo,
+  type PostgresSequenceManageInput, type PostgresSequenceReadInput } from '../../shared/postgresSequence';
 import { errorMessage, invoke } from '../lib';
 import { postgresSequenceZh as text } from '../locales/postgresSequence.zh-CN';
 import { zh } from '../locales/zh-CN';
@@ -10,14 +11,19 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresCreateTableDialog.css';
 
 const numericFields = ['start', 'increment', 'minimum', 'maximum', 'cache'] as const;
+type SequenceAction = PostgresSequenceManageInput['action'];
 
-/** 仅展示原数据库目录；连接版本变化后废弃旧的回包。 */
-export function PostgresSequenceDialog({ target, onClose }: { target: PostgresSequenceReadInput; onClose(): void }) {
+/** 详情绑定原数据库目录；连接版本变化后废弃旧的读取回包。 */
+export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManaged }: {
+  target: PostgresSequenceReadInput; onClose(): void; onDirtyChange(value: boolean): void;
+  onManaged(action: SequenceAction, name: string, version: number, message: string): void;
+}) {
   const { connectionId, database, table } = target;
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const [attempt, setAttempt] = useState(0);
   const key = JSON.stringify([connectionId, database, table, version, attempt]);
   const [result, setResult] = useState<{ key: string; info?: PostgresSequenceInfo; error?: string }>();
+  const [manage, setManage] = useState<{ action: SequenceAction; info: PostgresSequenceInfo; version: number }>();
   useEffect(() => {
     let active = true;
     queueMicrotask(() => {
@@ -39,6 +45,15 @@ export function PostgresSequenceDialog({ target, onClose }: { target: PostgresSe
       .map(postgresIdentifier).join('.') + (info.ownedBy.identity ? ' · ' + text.identity : '') : '—'],
     [text.comment, info.comment ?? '—'],
   ];
+  if (manage) return <PostgresManageSequenceDialog target={target} {...manage} onDirtyChange={onDirtyChange}
+    onClose={unknown => {
+      if (unknown) onClose();
+      else setManage(undefined);
+    }} onManaged={(name, message) => {
+      setManage(undefined);
+      setAttempt(value => value + 1);
+      onManaged(manage.action, name, manage.version, message);
+    }}/>;
   return <Modal title={text.title} wide onClose={onClose}>
     <div className="modal-content pg-structure-content">
       <strong>{database} / {table}</strong>
@@ -48,7 +63,117 @@ export function PostgresSequenceDialog({ target, onClose }: { target: PostgresSe
         <tr key={label}><th scope="row">{label}</th><td><code>{value}</code></td></tr>)}</tbody></table></>}
     </div>
     <footer className="modal-footer"><button disabled={!current} onClick={() => setAttempt(value => value + 1)}>{zh.common.refresh}</button>
+      {info?.canManage && <>
+        <button onClick={() => setManage({ action: 'edit', info, version })}>{text.edit}</button>
+        <button onClick={() => setManage({ action: 'rename', info, version })}>{text.rename}</button>
+        {!info.ownedBy?.identity && <button onClick={() => setManage({ action: 'drop', info, version })}>{text.drop}</button>}
+      </>}
       <span className="grow"/><button onClick={onClose}>{zh.common.close}</button></footer>
+  </Modal>;
+}
+
+/** 详情版本和一次性预览共同绑定本次编辑，重启或删除须再次明确确认。 */
+function PostgresManageSequenceDialog({ target, action, info, version, onClose, onManaged, onDirtyChange }: {
+  target: PostgresSequenceReadInput; action: SequenceAction; info: PostgresSequenceInfo; version: number;
+  onClose(unknown: boolean): void; onManaged(name: string, message: string): void; onDirtyChange(value: boolean): void;
+}) {
+  const currentVersion = useWorkspace(state => state.connectionVersions[target.connectionId] ?? 0);
+  const [draft, setDraft] = useState({ dataType: info.dataType, start: info.start, increment: info.increment,
+    minimum: info.minimum, maximum: info.maximum, cache: info.cache, cycle: info.cycle, comment: info.comment ?? '', restart: '' });
+  const [name, setName] = useState(info.name);
+  const [dirty, setDirty] = useState(false), [busy, setBusy] = useState(false), [unknown, setUnknown] = useState(false);
+  const [preview, setPreview] = useState<PostgresCreateTablePreview>(), [acknowledged, setAcknowledged] = useState(false);
+  const [error, setError] = useState('');
+  const locked = useRef(false);
+  const stale = version !== currentVersion;
+  const needsAcknowledgement = action === 'drop' || (action === 'edit' && !!draft.restart);
+  useEffect(() => { onDirtyChange(dirty || busy || !!preview); }, [dirty, busy, preview, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+
+  /** 取消预览后清除上一次的确认。 */
+  function back() {
+    setPreview(undefined);
+    setAcknowledged(false);
+    setError('');
+  }
+
+  /** 一旦发出确认，依据原事务回执报告成功、回滚或未知。 */
+  async function submit() {
+    if (locked.current || unknown || (useWorkspace.getState().connectionVersions[target.connectionId] ?? 0) !== version ||
+        (preview && needsAcknowledgement && !acknowledged)) return;
+    locked.current = true;
+    setBusy(true);
+    back();
+    try {
+      if (!preview) {
+        const base = { ...target, action, stamp: info.stamp };
+        const input = postgresSequenceManageSchema.parse(action === 'edit' ? { ...base, ...draft,
+          comment: draft.comment === (info.comment ?? '') ? undefined : draft.comment } : action === 'rename' ? { ...base, name } : base);
+        const next = await invoke('postgres.sequence.manage.preview', input);
+        if ((useWorkspace.getState().connectionVersions[target.connectionId] ?? 0) === version) setPreview(next);
+      } else {
+        const result = await invoke('postgres.sequence.manage.apply', { connectionId: target.connectionId,
+          database: target.database, token: preview.token });
+        if (result.outcome === 'committed' && result.table) onManaged(result.table, result.message);
+        else {
+          setUnknown(result.outcome === 'unknown');
+          setError(result.message);
+        }
+      }
+    } catch (reason) {
+      if (preview) setUnknown(true);
+      setError(errorMessage(reason));
+    } finally {
+      locked.current = false;
+      setBusy(false);
+    }
+  }
+
+  function close() {
+    if (!locked.current && (!dirty || stale || unknown || window.confirm(text.discard))) onClose(unknown);
+  }
+
+  function edit<K extends keyof typeof draft>(field: K, value: typeof draft[K]) {
+    setDraft(previous => ({ ...previous, [field]: value }));
+    setDirty(true);
+    setError('');
+  }
+
+  const hint = action === 'edit' ? text.editHint : action === 'rename' ? text.renameHint : text.dropHint;
+  const confirm = action === 'edit' ? text.applyEdit : action === 'rename' ? text.applyRename : text.applyDrop;
+  return <Modal title={text[action]} wide onClose={close}>
+    <div className="modal-content pg-create-content">
+      <strong>{target.database} / {target.table}</strong><p>{hint}</p>
+      <ErrorBox message={[stale && text.stale, unknown && text.unknownManage, error].filter(Boolean).join(' ')}/>
+      {busy && <Spinner text={text.working}/>}
+      {preview ? <>
+        <pre className="pg-create-sql">{preview.statements.join(';\n') + ';'}</pre>
+        {needsAcknowledgement && <label><input type="checkbox" checked={acknowledged} disabled={stale}
+          onChange={event => setAcknowledged(event.target.checked)}/> {action === 'drop' ? text.acknowledge : text.acknowledgeRestart}</label>}
+      </> : <fieldset disabled={busy || unknown || stale}>
+        {action === 'rename' && <Field label={text.name}><input value={name} maxLength={63}
+          onChange={event => { setName(event.target.value); setDirty(true); setError(''); }}/></Field>}
+        {action === 'edit' && <>
+          <div className="pg-create-target">
+            <Field label={text.dataType}><select value={draft.dataType} onChange={event => edit('dataType', event.target.value as typeof draft.dataType)}>
+              {['smallint', 'integer', 'bigint'].map(type => <option key={type}>{type}</option>)}</select></Field>
+            {numericFields.map(field => <Field key={field} label={text[field]}><input value={draft[field]}
+              maxLength={20} onChange={event => edit(field, event.target.value)}/></Field>)}
+            <Field label={text.restart}><input value={draft.restart} maxLength={20} placeholder={text.restartPlaceholder}
+              onChange={event => edit('restart', event.target.value)}/></Field>
+            <Field label={text.comment}><textarea aria-label={text.comment} value={draft.comment}
+              maxLength={4096} onChange={event => edit('comment', event.target.value)}/></Field>
+          </div>
+          <label><input type="checkbox" checked={draft.cycle} onChange={event => edit('cycle', event.target.checked)}/> {text.cycle}</label>
+        </>}
+      </fieldset>}
+    </div>
+    <footer className="modal-footer">
+      {preview && <button disabled={busy} onClick={back}>{text.back}</button>}
+      <span className="grow"/><button disabled={busy} onClick={close}>{zh.common.close}</button>
+      <button className="primary" disabled={busy || stale || unknown || (preview && needsAcknowledgement && !acknowledged) ||
+        (action === 'rename' && (!name.trim() || name === info.name))} onClick={() => void submit()}>{preview ? confirm : text.preview}</button>
+    </footer>
   </Modal>;
 }
 

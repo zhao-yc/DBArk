@@ -1,5 +1,6 @@
-import { postgresSequencePlan, type PostgresSequenceCreateInput } from '../../shared/postgresSequence';
-import { readPostgresSequence } from './sequence';
+import { postgresSequenceEditPlan, postgresSequenceManageSchema, postgresSequencePlan, type PostgresSequenceCreateInput,
+  type PostgresSequenceManageInput } from '../../shared/postgresSequence';
+import { readPostgresSequence, readPostgresSequenceAllocation } from './sequence';
 import { randomUUID } from 'node:crypto';
 import {
   postgresCreateTablePlan, type PostgresCreateTableApply, type PostgresCreateTableInput,
@@ -15,7 +16,7 @@ import { postgresViewOptionsSql, readPostgresViewFacts } from './viewDefinition'
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence';
+type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage';
 interface Plan {
   table: string;
   statements: string[];
@@ -162,6 +163,72 @@ export class PostgresCreateTableWorkspace {
               Object.entries(expected).some(([key, value]) => info[key as keyof typeof expected] !== value))
             throw Error('实际序列参数与预览不同，未提交');
         },
+      };
+    });
+  }
+
+  /** 确认时先取得序列写锁，再复核原 OID、权限及参数，防止同名替换或覆盖外部修改。 */
+  async prepareSequenceManage(input: Scoped<PostgresSequenceManageInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    return this.prepareRelation(input, 'sequenceManage', connect, () => {
+      const { owner: _owner, connectionRevision: _revision, ...draft } = input;
+      const action = postgresSequenceManageSchema.parse(draft);
+      const { schema, name } = postgresRelationName(action.table);
+      const prefix = postgresIdentifier(schema) + '.';
+      const table = prefix + postgresIdentifier(name);
+      return async connection => {
+        const original = await readPostgresSequence(connection, table);
+        if (!original.info.canManage) throw Error('当前角色没有序列管理权限');
+        if (original.info.stamp !== action.stamp) throw Error('原序列已变化，请刷新详情后继续');
+        const guard: Pick<Plan, 'guard' | 'preflight' | 'protocol'> = {
+          // PostgreSQL 对同一所有者取得排他锁且不改目录，实际改写会被 xmin 复核拦截。
+          guard: { sql: 'ALTER SEQUENCE ' + table + ' OWNER TO ' + postgresIdentifier(original.ownerName), stamp: original.info.stamp },
+          protocol: 'extended',
+          async preflight(current) {
+            const actual = await readPostgresSequence(current, table);
+            if (actual.info.stamp !== original.info.stamp) throw Error('原序列已变化，请刷新详情后继续');
+            if (action.action === 'rename') await preflight(current, { ...action, schema }, action.name, [], '序列');
+            return actual.info.stamp;
+          },
+        };
+        if (action.action === 'rename') {
+          if (action.name === name) throw Error('请输入不同的序列名称');
+          await preflight(connection, { ...action, schema }, action.name, [], '序列');
+          const identifier = postgresIdentifier(action.name);
+          return { ...guard, table: prefix + identifier, success: 'PostgreSQL 序列已确认重命名',
+            statements: ['ALTER SEQUENCE ' + table + ' RENAME TO ' + identifier],
+            async verify(current) {
+              const actual = await readPostgresSequence(current, prefix + identifier);
+              const { lastValue: _value, stamp: _stamp, ...expected } = original.info;
+              if (actual.preserved !== original.preserved || Object.entries({ ...expected, name: action.name })
+                .some(([key, value]) => key !== 'ownedBy' && actual.info[key as keyof typeof expected] !== value))
+                throw Error('重命名后的序列身份或参数与原序列不同，未提交');
+            },
+          };
+        }
+        if (action.action === 'drop') {
+          if (original.info.ownedBy?.identity) throw Error('标识列序列须随所属字段管理');
+          return { ...guard, table, success: 'PostgreSQL 序列已确认删除', statements: ['DROP SEQUENCE ' + table + ' RESTRICT'],
+            async verify(current) {
+              const result = await current.query('SELECT EXISTS (SELECT FROM pg_catalog.pg_class c WHERE c.oid = $1::oid OR ' +
+                '(c.relnamespace = $2::oid AND c.relname::text = $3))', [original.oid, original.schemaOid, name], budget());
+              if (result.truncated || result.rows.length !== 1 || result.rows[0].c0 !== 'f')
+                throw Error('未确认原序列已从目录删除');
+            },
+          };
+        }
+        const { statements, expected, restart } = postgresSequenceEditPlan(action, original.info, table);
+        return { ...guard, table, success: 'PostgreSQL 序列参数已确认更新', statements,
+          async verify(current) {
+            const actual = await readPostgresSequence(current, table);
+            if (actual.preserved !== original.preserved || Object.entries(expected)
+              .some(([key, value]) => actual.info[key as keyof typeof expected] !== value))
+              throw Error('实际序列身份或参数与预览不同，未提交');
+            if (restart !== undefined) {
+              const allocation = await readPostgresSequenceAllocation(current, table);
+              if (allocation.called || allocation.value !== restart) throw Error('实际序列重启状态与预览不同，未提交');
+            }
+          },
+        };
       };
     });
   }
@@ -353,7 +420,7 @@ export class PostgresCreateTableWorkspace {
         } else {
           sent = true;
           if ((await connection.query(plan.guard.sql, undefined, budget(), undefined, 'extended')).postgresCommand !== 'ALTER')
-            throw Error('服务器未确认锁定原视图');
+            throw Error('服务器未确认锁定原关系');
         }
       }
       if (await plan.preflight(connection) !== targetStamp)

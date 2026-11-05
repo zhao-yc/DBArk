@@ -11,4 +11,12 @@ export const postgresSequenceZh = {
   none: '当前连接没有可新建序列的 schema。',
   unknown: '创建结果未确认，请在原数据库核对序列。',
   discard: '放弃当前序列草稿？', stale: '原 PostgreSQL 连接已变化。',
+  edit: '编辑序列参数', rename: '重命名序列', drop: '删除序列',
+  restart: '下次取号值', restartPlaceholder: '留空时保留当前取号状态',
+  editHint: '起始值用于以后的重启。填写下次取号值会重启序列，可能重新发出已有编号。',
+  renameHint: '重命名保留原序列及其所属字段。',
+  dropHint: '删除后无法通过此窗口恢复。PostgreSQL 会拒绝删除仍被其他对象引用的序列。',
+  applyEdit: '确认更新序列', applyRename: '确认重命名序列', applyDrop: '确认删除序列',
+  acknowledge: '我确认删除此序列', acknowledgeRestart: '我确认重设下次取号值',
+  unknownManage: '操作结果未确认，请关闭窗口后在原数据库核对。',
 } as const;

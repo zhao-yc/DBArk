@@ -1,4 +1,4 @@
-import { postgresSequenceCreateSchema, postgresSequenceReadSchema } from './postgresSequence';
+import { postgresSequenceCreateSchema, postgresSequenceManageSchema, postgresSequenceReadSchema } from './postgresSequence';
 import { postgresCheckPreviewSchema, postgresCheckApplySchema } from './postgresCheckEdit';
 import { postgresForeignTargetsSchema, postgresForeignPreviewSchema, postgresForeignApplySchema } from './postgresForeignKeyEdit';
 import { postgresKeyPreviewSchema, postgresKeyApplySchema } from './postgresKeyEdit';
@@ -253,6 +253,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.sequence.read': postgresSequenceReadSchema,
   'postgres.sequence.preview': postgresSequenceCreateSchema,
   'postgres.sequence.apply': postgresCreateTableApplySchema,
+  'postgres.sequence.manage.preview': postgresSequenceManageSchema,
+  'postgres.sequence.manage.apply': postgresCreateTableApplySchema,
   'postgres.structure.read': postgresStructureInputSchema,
   'postgres.columnEdit.preview': postgresColumnPreviewSchema, 'postgres.columnEdit.apply': postgresColumnApplySchema,
   'postgres.indexEdit.preview': postgresIndexPreviewSchema, 'postgres.indexEdit.apply': postgresIndexApplySchema,
