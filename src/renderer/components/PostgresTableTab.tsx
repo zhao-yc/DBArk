@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { DataRow } from '../../shared/contracts';
 import { postgresRelationSelect } from '../../shared/postgresSql';
 import {
-  postgresTableLimits, postgresTablePreviewSchema, type PostgresTableChange, type PostgresTableField,
+  isPostgresTableFiltered, postgresTableLimits, postgresTablePreviewSchema, type PostgresTableChange, type PostgresTableField,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTableTarget,
 } from '../../shared/postgresTable';
 import { cellPreview, cellText, errorMessage, invoke } from '../lib';
@@ -13,6 +13,7 @@ import { ResultsGrid } from './ResultsGrid';
 import { PostgresTableExportDialog } from './PostgresTableExportDialog';
 import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { PostgresTableImportDialog } from './PostgresTableImportDialog';
+import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
@@ -99,6 +100,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [requiresRefresh, setRequiresRefresh] = useState(false);
   const [filterColumn, setFilterColumn] = useState('');
   const [filterText, setFilterText] = useState('');
+  const [advancedFilters, setAdvancedFilters] = useState(false);
   const [pageSize, setPageSize] = useState(options.limit);
   const lease = useRef<object | undefined>(undefined);
   const issued = useRef<string | undefined>(undefined);
@@ -226,6 +228,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
   const firstPage = { ...options, offset: 0, limit: pageSize };
+  const appliedAdvanced = options.filter && 'rules' in options.filter ? options.filter : undefined;
   const sortedColumn = page?.columns.find(column => column.name === options.sort?.column);
   const sorted = sortedColumn ? [{ column: sortedColumn.key, direction: options.sort?.direction === 'asc' ? 'ASC' as const : 'DESC' as const }] : [];
   const formKey = form?.row == null ? undefined : page?.rowKeys?.[form.row];
@@ -263,14 +266,22 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <Field label={text.filterColumn}><select aria-label={text.filterColumn} value={filterColumn} disabled={frozenPage}
         onChange={event => setFilterColumn(event.target.value)}>{page?.columns.map(column => <option key={column.key} value={column.name}>{column.name}</option>)}</select></Field>
       <Field label={text.filterText}><input value={filterText} maxLength={4096} disabled={frozenPage} onChange={event => setFilterText(event.target.value)}/></Field>
-      <button disabled={frozenPage || !filterColumn} onClick={() => navigate({ ...firstPage, filter: { column: filterColumn, text: filterText } })}>{text.filter}</button>
-      <button disabled={frozenPage || !options.filter} onClick={() => { setFilterText(''); navigate({ ...firstPage, filter: undefined }); }}>{text.clearFilter}</button>
+      <button disabled={frozenPage || !filterColumn} onClick={() => {
+        setAdvancedFilters(false); navigate({ ...firstPage, filter: { column: filterColumn, text: filterText } });
+      }}>{text.filter}</button>
+      <button disabled={frozenPage} aria-expanded={advancedFilters} onClick={() => setAdvancedFilters(value => !value)}>{text.advancedFilter}</button>
+      <button disabled={frozenPage || !options.filter} onClick={() => {
+        setAdvancedFilters(false); setFilterText(''); navigate({ ...firstPage, filter: undefined });
+      }}>{text.clearFilter}</button>
     </div>
+    {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
+      initial={appliedAdvanced} disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
     {message && <div className="info-strip" role="status">{message}</div>}
     <ErrorBox message={error}/>
     {page?.truncated && <div className="warning-text">{text.truncated}</div>}
     {page?.order === 'unstable' && <div className="info-strip">{text.unstable}</div>}
     {page && <div className="tab-status"><span>{text.page(options.offset, page.rows.length)}</span><span>{row === null ? text.noSelection : text.selected(row + 1)}</span>
+      {appliedAdvanced && <span>{text.activeAdvancedFilter(appliedAdvanced.rules.filter(rule => rule.enabled !== false).length)}</span>}
       {!page.pageToken && <span>{text.noWrite}</span>}
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
@@ -294,7 +305,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         <button disabled={blocked} onClick={() => setChanges(draft.filter((_, other) => index !== other))}>{text.undo}</button>
       </li>)}</ol>
     </div>}
-    {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={!!options.filter?.text}
+    {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
       isCurrent={() => !!lifetime.current && !!exportPage.exportToken && issued.current === exportPage.exportToken &&
         !useWorkspace.getState().dirtyTabs[tab.id]} onClose={() => setExportPage(undefined)}/>}
     {importPage && <PostgresTableImportDialog target={target} page={importPage}

@@ -61,6 +61,20 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect((await read({ sort: { column: 'id', direction: 'desc' } })).rows.map(row => row.c0)).toEqual(['3', '2']);
       expect((await read({ filter: { column: 'note', text: "原三';--" } })).rows).toEqual([]);
       expect((await read({ filter: { column: 'note', text: '原三' } })).rows.map(row => row.c0)).toEqual(['3']);
+      const advancedFilter = { mode: 'all', rules: [
+        { column: 'amount', operator: '>', value: '2.000000000000000001' },
+        { column: 'id', operator: 'IN', values: ['1', '2'] },
+        { column: 'raw', operator: 'IS NULL' },
+        { column: 'note', operator: 'LIKE', value: '绝不会匹配', enabled: false },
+      ], group: { mode: 'all', children: [0, { mode: 'any', children: [1, 2, 3] }] } } as const;
+      const advancedFirst = await read({ limit: 1, filter: advancedFilter });
+      expect(advancedFirst.rows.map(row => row.c0)).toEqual(['1']);
+      const advancedSecond = await read({ limit: 1, offset: 1, filter: advancedFilter, retainPageTokens: [advancedFirst.pageToken] });
+      expect(advancedSecond.rows.map(row => row.c0)).toEqual(['3']);
+      await expect(read({ limit: 1, offset: 1, retainPageTokens: [advancedFirst.pageToken],
+        filter: { ...advancedFilter, rules: advancedFilter.rules.map(rule => ({ ...rule, enabled: false })) } })).rejects.toThrow('筛选或排序');
+      await expect(read({ filter: { mode: 'all', rules: [{ column: '不存在', operator: '=', value: '1' }] } })).rejects.toThrow('排序或筛选列');
+      await expect(read({ filter: { mode: 'all', rules: [{ column: 'id', operator: '1=1; DROP TABLE t', value: '1' }] } })).rejects.toThrow('操作符');
       const view = await read({ table: '"浏览"."只读"', tabId: randomUUID() });
       expect(view).toMatchObject({ relationKind: 'v', capabilities: { insert: false, update: false, delete: false } });
       expect(view.pageToken).toBeUndefined();
@@ -209,6 +223,24 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         for await (const row of readExcelRows({ filePath: xlsx.filePath, sheetId: sheet.id, protocol: 'dbark-v1' })) excelRows.push(row);
         expect(excelRows).toHaveLength(130);
         expect(excelRows[0]).toEqual(records[0]);
+
+        const typedSource = { ...source, tabId: randomUUID() };
+        const typedPage = await read({ ...typedSource, limit: 1, sort: { column: 'id', direction: 'asc' }, filter: {
+          mode: 'all', rules: [{ column: 'id', operator: 'BETWEEN', values: ['9007199254740994', '9007199254740996'] },
+            { column: 'note', operator: 'IS NULL' },
+            { column: 'note', operator: 'IN', values: ['', '引;号', "x'\\; DROP TABLE t; --"] }],
+          group: { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] },
+        } });
+        expect(typedPage.rows.map(row => row.c0)).toEqual(['9007199254740994']);
+        const typedRequest = (format: 'json' | 'copy') => exportRequest(format, '高级筛选.' + (format === 'copy' ? 'csv' : 'json'),
+          { ...typedSource, encoding: 'utf8', columns: ['c0', 'c1'], exportToken: typedPage.exportToken, csvDelimiter: undefined });
+        const typedJson = typedRequest('json'), typedCopy = typedRequest('copy');
+        expect(await engine.handle('postgres.table.export', typedJson)).toEqual({ rows: 3, fileCommitted: true });
+        expect(JSON.parse(await readFile(typedJson.filePath, 'utf8'))).toEqual([
+          { id: '9007199254740994', note: null }, { id: '9007199254740995', note: '' }, { id: '9007199254740996', note: '引;号' },
+        ]);
+        expect(await engine.handle('postgres.table.export', typedCopy)).toEqual({ rows: 3, fileCommitted: true });
+        expect(await readFile(typedCopy.filePath, 'utf8')).toBe('id,note\n9007199254740994,\n9007199254740995,""\n9007199254740996,引;号\n');
 
         // 真实 COPY FROM 复核原生 CSV 的精度、NULL、空字符串、换行和跨协议块字段。
         const marker = "保留%'\\; SELECT 1; --";

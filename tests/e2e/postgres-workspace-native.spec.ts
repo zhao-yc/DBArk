@@ -150,6 +150,32 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(grid).toContainText('新增乙');
 
     await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('1');
+    await tableButton(postgresTableZh.advancedFilter).click();
+    const advanced = gridTab.getByRole('region', { name: postgresTableZh.advancedFilter, exact: true });
+    const addFilter = async (column: string, operator: string, value: string) => {
+      await advanced.getByLabel(zh.table.text009, { exact: true }).selectOption(column);
+      await advanced.getByLabel(zh.table.filterOperatorLabel, { exact: true }).selectOption(operator);
+      await advanced.getByLabel(zh.table.text011, { exact: true }).fill(value);
+      await advanced.getByRole('button', { name: zh.table.text013, exact: true }).click();
+    };
+    await addFilter('id', '>=', '2');
+    await addFilter('note', 'LIKE', '新增%');
+    await expect(grid).toContainText('原值');
+    await advanced.getByRole('button', { name: postgresTableZh.applyAdvancedFilter, exact: true }).click();
+    await expect(grid).toContainText('新增甲');
+    await expect(grid).not.toContainText('原值');
+    await expect(gridTab.locator('.tab-status')).toContainText(postgresTableZh.activeAdvancedFilter(2));
+    const filterChips = advanced.locator('.editable-filter-chips .filter-chip');
+    await expect(filterChips).toHaveCount(2);
+    await expect(filterChips.first()).toBeInViewport();
+    await expect(filterChips.last()).toBeInViewport();
+    await page.screenshot({ path: info.outputPath('PostgreSQL高级筛选.png') });
+    await tableButton(postgresTableZh.next).click();
+    await expect(grid).toContainText('新增乙');
+    await tableButton(postgresTableZh.clearFilter).click();
+    await expect(grid).toContainText('原值');
+    await expect(advanced).toHaveCount(0);
+    await mark('PostgreSQL 表页高级筛选本地编辑后显式应用，两条服务器条件贯穿翻页，清除后恢复记录');
     await gridTab.getByLabel(postgresTableZh.filterColumn, { exact: true }).selectOption('note');
     await gridTab.getByLabel(postgresTableZh.filterText, { exact: true }).fill('新增');
     await tableButton(postgresTableZh.filter).click();

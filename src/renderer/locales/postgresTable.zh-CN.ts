@@ -1,6 +1,8 @@
 export const postgresTableZh = {
   relation: 'PostgreSQL 记录', refresh: '刷新记录', query: '打开查询草稿', first: '首页', previous: '上一页', next: '下一页',
   pageSize: '每页行数', filterColumn: '筛选列', filterText: '包含文字', filter: '筛选', clearFilter: '清除筛选',
+  advancedFilter: '高级筛选', applyAdvancedFilter: '应用高级筛选', filterGroups: '编辑条件分组', filterGrouped: '已编排条件分组',
+  invalidFilter: '筛选条件无效', activeAdvancedFilter: (count: number) => '已应用高级条件 ' + count + ' 项',
   add: '新增记录', edit: '编辑所选记录', remove: '删除所选记录', stage: '加入草稿',
   unchanged: '保持原值', text: '输入文本', hex: '输入十六进制', null: '写入 NULL', default: '使用 DEFAULT',
   valueMode: '写入方式', value: '字段值', original: '原值', draft: '记录草稿', undo: '撤销此项',

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { DataRow, ResultColumn } from './contracts';
 import { csvExportDelimiters } from './csvExport';
+import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, validateFilterGroup } from './filtering';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -8,13 +9,33 @@ const relation = z.string().min(1).max(512).refine(value => !value.includes('\0'
 const token = z.uuid();
 const column = z.string().regex(/^c[0-9]{1,4}$/);
 const target = z.object({ connectionId: identity, database: identity, table: relation, tabId: identity }).strict();
+const quickFilter = z.object({ column: relation, text: z.string().max(4096).refine(value => !value.includes('\0')) }).strict();
+export const postgresAdvancedTableFilterSchema = z.object({
+  rules: z.array(filterRuleSchema).min(1).max(FILTER_LIMITS.conditions),
+  mode: z.enum(['all', 'any']),
+  group: filterGroupSchema.optional(),
+}).strict().superRefine(({ rules, mode, group }, context) => {
+  try {
+    validateFilterGroup(rules, mode, group);
+    if (rules.some(rule => [rule.column, rule.value ?? '', ...(rule.values ?? [])].some(value => /[\u0000\uD800-\uDFFF]/u.test(value))))
+      throw Error('筛选字段和值须为有效文本且不能包含 NUL');
+  } catch (reason) {
+    context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '筛选条件无效' });
+  }
+});
+export type PostgresAdvancedTableFilter = z.infer<typeof postgresAdvancedTableFilterSchema>;
+export type PostgresTableFilter = z.infer<typeof quickFilter> | PostgresAdvancedTableFilter;
+
+export function isPostgresTableFiltered(filter: PostgresTableFilter | undefined): boolean {
+  return !!filter && ('rules' in filter ? filter.rules.some(rule => rule.enabled !== false) : !!filter.text);
+}
 
 /** 筛选值与排序方向使用独立结构，标识符只从已读的列目录解析。 */
 export const postgresTablePageSchema = target.extend({
   offset: z.number().int().min(0).max(postgresTableLimits.offset),
   limit: z.number().int().min(1).max(postgresTableLimits.page),
   sort: z.object({ column: relation, direction: z.enum(['asc', 'desc']) }).strict().optional(),
-  filter: z.object({ column: relation, text: z.string().max(4096).refine(value => !value.includes('\0')) }).strict().optional(),
+  filter: z.union([quickFilter, postgresAdvancedTableFilterSchema]).optional(),
   retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
     .refine(value => new Set(value).size === value.length, '保留的草稿原页不能重复').optional(),
 }).strict();

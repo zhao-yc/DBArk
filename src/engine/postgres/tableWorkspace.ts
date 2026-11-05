@@ -11,6 +11,7 @@ import {
 import type { PostgresConnection } from './connection';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
 import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
+import { postgresTableCondition } from './tableFilter';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -46,7 +47,7 @@ const small = () => ({ rows: 1024, bytes: 2 * 1024 * 1024 });
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const only = (relation: Relation) => (relation.kind === 'r' ? 'ONLY ' : '') + relation.sql;
 const pageScope = ({ filter, sort }: Snapshot['options']) =>
-  JSON.stringify([filter?.column, filter?.text, sort?.column, sort?.direction]);
+  JSON.stringify([filter, sort]);
 
 /** 每次从实际库读取关系、主键顺序、列权限与结构；标识符及类型显示均来自目录。 */
 async function readRelation(connection: PostgresConnection, table: string): Promise<Relation> {
@@ -114,15 +115,11 @@ function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter
   const tie = relation.keys.length ? relation.keys : relation.kind === 'r' ? ['ctid'] : relation.kind === 'p' ? ['tableoid', 'ctid'] : [];
   const ordering = [...(ordered && input.sort ? [ordered + (input.sort.direction === 'desc' ? ' DESC' : ' ASC')] : []), ...tie.filter(item => item !== ordered)];
   const args: unknown[] = page ? [page.limit + 1, page.offset] : [];
-  let where = '';
-  if (input.filter?.text) {
-    // COPY 流使用简单协议，其筛选值使用与会话转义设置无关的显式字面量。
-    const value = copy ? postgresDdlLiteral(input.filter.text) : '$' + args.push(input.filter.text);
-    where = ' WHERE pg_catalog.strpos(' + key(input.filter.column) + '::text, ' + value + ') > 0';
-  }
+  // COPY 流使用简单协议，其筛选值使用与会话转义设置无关的显式字面量。
+  const condition = postgresTableCondition(input.filter, key, value => copy ? postgresDdlLiteral(value) : '$' + args.push(value));
   const withOriginal = !!page && (relation.capabilities.update || relation.capabilities.delete);
   const markers = withOriginal ? ', ctid::text, xmin::text' : '';
-  return { sql: 'SELECT ' + projection + markers + ' FROM ' + only(relation) + where +
+  return { sql: 'SELECT ' + projection + markers + ' FROM ' + only(relation) + (condition ? ' WHERE ' + condition : '') +
     (ordering.length ? ' ORDER BY ' + ordering.join(', ') : '') + (page ? ' LIMIT $1 OFFSET $2' : ''), args, withOriginal };
 }
 
