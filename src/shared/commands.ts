@@ -24,6 +24,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.sequence.targets': true,
   'postgres.structure.read': true,
   'postgres.structure.dependencies': true,
+  'postgres.routine.read': true,
   'postgres.columnEdit.preview': true, 'postgres.columnEdit.apply': true,
   'postgres.indexEdit.preview': true, 'postgres.indexEdit.apply': true,
   'postgres.keyEdit.preview': true, 'postgres.keyEdit.apply': true,

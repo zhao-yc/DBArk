@@ -63,6 +63,10 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         CREATE FUNCTION "补全.乙".tabrelio_out(seed integer, OUT answer bigint) LANGUAGE sql AS 'SELECT seed::bigint';
         CREATE PROCEDURE "补全.乙".tabrelio_modes(IN first integer, OUT second integer, INOUT third bigint)
           LANGUAGE plpgsql AS 'BEGIN second := first; END';
+        CREATE TYPE "补全.甲"."带.型" AS ENUM ('x');
+        CREATE FUNCTION "补全.甲"."定""义.函数"(param "补全.甲"."带.型") RETURNS text
+          LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO pg_catalog AS 'SELECT param::text';
+        COMMENT ON FUNCTION "补全.甲"."定""义.函数"("补全.甲"."带.型") IS '中文定义注释';
         REVOKE EXECUTE ON FUNCTION "补全.乙"."TabrelioSig"(text, text[]) FROM PUBLIC;
         CREATE TABLE public.routine_side_effects (id integer);
         CREATE FUNCTION public.tabrelio_write() RETURNS integer LANGUAGE plpgsql AS
@@ -131,6 +135,30 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       await client.query('ROLLBACK');
 
       await engine.handle('connections.open', { id: connectionId, profile });
+      const readRoutine = (name: string, kind: 'function' | 'procedure' = 'function', selected = profile) =>
+        engine.handle('postgres.routine.read', { connectionId: selected.id, database, profile: selected, name, kind });
+      const routineCatalog = (id = connectionId) => engine.handle('metadata.objects', { connectionId: id, database });
+      const integerRoutine = '"补全.乙"."tabrelio_fold"(integer)', textRoutine = '"补全.乙"."tabrelio_fold"(text)';
+      const modesRoutine = '"补全.乙"."tabrelio_modes"(integer, bigint)';
+      const quotedRoutine = '"补全.甲"."定""义.函数"("补全.甲"."带.型")';
+      const hiddenRoutine = '"隐藏"."tabrelio_hidden"()';
+      const objects = await routineCatalog();
+      expect(objects).toEqual(expect.arrayContaining([
+        { kind: 'table', name: '"补全.甲"."订""单"' }, { kind: 'function', name: integerRoutine }, { kind: 'function', name: textRoutine },
+        { kind: 'function', name: quotedRoutine }, { kind: 'procedure', name: modesRoutine },
+      ]));
+      expect(objects).not.toContainEqual({ kind: 'function', name: hiddenRoutine });
+      expect(objects).not.toContainEqual({ kind: 'function', name: '"pg_catalog"."count"()' });
+      expect(await readRoutine(integerRoutine)).toMatchObject({ category: 'f', returns: 'numeric', definition: expect.stringContaining('SELECT value::numeric') });
+      expect(await readRoutine(textRoutine)).toMatchObject({ category: 'f', returns: 'text', arguments: 'value text' });
+      expect(await readRoutine(modesRoutine, 'procedure')).toMatchObject({ category: 'p', returns: null,
+        arguments: 'IN first integer, OUT second integer, INOUT third bigint', definition: expect.stringContaining('CREATE OR REPLACE PROCEDURE') });
+      expect(await readRoutine(quotedRoutine)).toMatchObject({ name: quotedRoutine, language: 'sql', owner: database,
+        securityDefiner: true, volatility: 's', comment: '中文定义注释', definition: expect.stringContaining('SECURITY DEFINER') });
+      await expect(readRoutine(modesRoutine)).rejects.toThrow('不可见');
+      await expect(readRoutine(hiddenRoutine)).rejects.toThrow('不可见');
+      expect(await readRoutine('"public"."tabrelio_write"()')).toMatchObject({ definition: expect.stringContaining('routine_side_effects') });
+      expect((await client.query('SELECT count(*)::int AS count FROM public.routine_side_effects')).rows).toEqual([{ count: 0 }]);
       const { sessionId } = await engine.handle('sessions.open', target);
       const { sessionId: other } = await engine.handle('sessions.open', target);
       const run = (sql: string, taskId = randomUUID()): Promise<QueryOutcome> =>
@@ -178,6 +206,12 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
           expect.objectContaining({ schema: '补全.乙', parameters: [expect.objectContaining({ name: 'seed', type: 'integer' }),
             expect.objectContaining({ name: 'label', optional: true })] }),
         ]);
+        const limitedProfile = { ...profile, id: randomUUID(), user: limited };
+        await engine.handle('connections.open', { id: limitedProfile.id, profile: limitedProfile });
+        const limitedObjects = await routineCatalog(limitedProfile.id);
+        expect(limitedObjects).toContainEqual({ kind: 'function', name: integerRoutine });
+        expect(limitedObjects).not.toContainEqual({ kind: 'function', name: textRoutine });
+        await expect(readRoutine(textRoutine, 'function', limitedProfile)).rejects.toThrow('不可见');
         expect((await run('RESET ROLE')).failure).toBeUndefined();
         expect(await fields('public')).toEqual(['public_field']);
       }

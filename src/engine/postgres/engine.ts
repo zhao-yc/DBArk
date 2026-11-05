@@ -2,6 +2,7 @@ import { postgresSequenceTargets, postgresSequenceVisibleSql, readPostgresSequen
 import { randomUUID } from 'node:crypto';
 import type {
   ConnectionProfile,
+  DatabaseObject,
   PostgresConnectionProfile,
   QueryOutcome,
   QueryResult,
@@ -20,6 +21,7 @@ import { PostgresTableWorkspace, type PostgresTableImportRequest } from './table
 import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
+import { readPostgresRoutine, readPostgresRoutineCatalog } from './routine';
 import { readPostgresDependencies } from './dependencies';
 import { PostgresStructureEditWorkspace } from './structureEdit';
 import { matchesPostgresColumnPlan, postgresColumnPlan, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
@@ -638,6 +640,7 @@ export class PostgresEngine {
       }
       case 'postgres.sequence.read':
       case 'postgres.sequence.targets':
+      case 'postgres.routine.read':
       case 'postgres.structure.dependencies':
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
@@ -651,6 +654,10 @@ export class PostgresEngine {
         });
         if (command === 'postgres.structure.dependencies')
           return this.use(profile, input.database, connection => readPostgresDependencies(connection, input.table));
+        if (command === 'postgres.routine.read')
+          return this.use(profile, input.database, connection => readPostgresRoutine(connection, {
+            connectionId: input.connectionId, database: input.database, kind: input.kind, name: input.name,
+          }));
         return this.use(profile, input.database, connection => readPostgresStructure(connection, input.table));
       }
       case 'postgres.columnEdit.preview':
@@ -815,9 +822,8 @@ export class PostgresEngine {
           ).rows.map((r) => r.c0),
         );
       case 'metadata.objects':
-        return this.use(this.profile(input.connectionId), input.database, async (m) =>
-          (
-            await m.query(
+        return this.use(this.profile(input.connectionId), input.database, async m => {
+          const result = await m.query(
               `SELECT n.nspname,c.relname,c.relkind FROM pg_catalog.pg_class c
                JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
                WHERE (CASE WHEN c.relkind = 'S' THEN c.relpersistence IN ('p','u') AND n.nspname !~ '^pg_'
@@ -826,12 +832,13 @@ export class PostgresEngine {
                  AND has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname`,
               undefined,
               { rows: 10000, bytes: 4 * 1024 * 1024 },
-            )
-          ).rows.map((r) => ({
+          );
+          const relations: DatabaseObject[] = result.rows.map(r => ({
             name: postgresIdentifier(String(r.c0)) + '.' + postgresIdentifier(String(r.c1)),
             kind: r.c2 === 'S' ? 'sequence' : ['v', 'm'].includes(String(r.c2)) ? 'view' : 'table',
-          })),
-        );
+          }));
+          return [...relations, ...await readPostgresRoutineCatalog(m)];
+        });
       default:
         throw Error('PostgreSQL此项能力尚未实现：' + command + '；未向MySQL驱动发送请求');
     }

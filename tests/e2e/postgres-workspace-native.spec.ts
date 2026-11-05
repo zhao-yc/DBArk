@@ -1,5 +1,7 @@
 import { postgresSequenceZh as sequenceText } from '../../src/renderer/locales/postgresSequence.zh-CN';
 import { postgresDependenciesZh as dependenciesText } from '../../src/renderer/locales/postgresDependencies.zh-CN';
+import { postgresRoutineZh as routineText } from '../../src/renderer/locales/postgresRoutine.zh-CN';
+import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { test as base, expect } from '@playwright/test';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1804,6 +1806,38 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await mark('原生转移序列角色后确认提交，原角色失去查看权限时两个目录同步移除');
     }
     await page.locator('.tab-strip .tab-close').click();
+
+    const routineHistory = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const textSignature = '"回归"."窗口补全函数"(text)', integerSignature = '"回归"."窗口补全函数"(integer)';
+    const routineDefinition = page.getByRole('dialog', { name: routineText.title, exact: true });
+    const textRoutineNode = page.locator('.object-row').filter({ hasText: '窗口补全函数"(text)' });
+    await clickSidebarAction(textRoutineNode, { name: routineText.open + ' ' + textSignature, exact: true }, undefined, check);
+    await expect(routineDefinition.getByRole('row').filter({ hasText: routineText.returns })).toContainText('text');
+    await expect(routineDefinition.locator('.monaco-editor .view-lines')).toContainText('CREATE OR REPLACE FUNCTION');
+    await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
+
+    await page.locator('.navigation-toolbar').getByRole('button', { name: navigationZh.routine, exact: true }).click();
+    const routineFilter = page.getByRole('textbox', { name: navigationZh.search, exact: true });
+    await routineFilter.fill('窗口补全函数');
+    const routineRows = page.locator('.object-list-row .tree-label');
+    await expect(routineRows).toHaveCount(2);
+    await routineRows.filter({ hasText: integerSignature }).dblclick();
+    await expect(routineDefinition.getByRole('row').filter({ hasText: routineText.returns })).toContainText('integer');
+    await expect(routineDefinition.getByRole('table')).toContainText('整数重载定义');
+    await expect(routineDefinition.getByRole('table')).toContainText(routineText.volatilityValues.s);
+    await page.screenshot({ path: info.outputPath('PostgreSQL函数定义.png') });
+    await routineDefinition.getByRole('button', { name: routineText.draft, exact: true }).click();
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('RETURNS integer');
+    await discardTestTab(page, page.locator('.tab-strip .tab-close').last());
+
+    await routineFilter.fill('窗口补全过程');
+    await routineRows.filter({ hasText: '窗口补全过程' }).dblclick();
+    await expect(routineDefinition.getByRole('table')).toContainText(routineText.categories.p);
+    await expect(routineDefinition.locator('.monaco-editor .view-lines')).toContainText('CREATE OR REPLACE PROCEDURE');
+    await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await page.locator('.tab-strip .tab-close').click();
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(routineHistory);
+    await mark('原生对象树和函数列表打开两个重载及过程，读取 DDL 和打开定义草稿没有执行历史');
 
 
 

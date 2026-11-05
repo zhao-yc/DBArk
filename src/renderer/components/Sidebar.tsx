@@ -1,3 +1,4 @@
+import { postgresRoutineZh } from '../locales/postgresRoutine.zh-CN';
 import { postgresSequenceZh } from '../locales/postgresSequence.zh-CN';
 import type { PostgresCreateViewKind } from '../../shared/postgresCreateView';
 import { postgresCreateViewZh } from '../locales/postgresCreateView.zh-CN';
@@ -65,8 +66,9 @@ export interface SidebarObjectActionProps {
 export function sidebarObjectActions({ connectionId, database, object, onOpen, onDesign, onDdl, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onSqliteObjects, onSqliteTableRebuild, onTableMaintenance, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onRoutineInvocation, onRefresh }: SidebarObjectActionProps) {
   const dialect = useWorkspace.getState().connections.find(profile => profile.id === connectionId)?.dialect;
   if (dialect === 'postgresql') return <>
-    <button data-menu-group="open" aria-label={(object.kind === 'sequence' ? postgresSequenceZh.open + ' ' : '打开记录 ') + object.name} onClick={onOpen}><FileCode2 size={12}/></button>
-    {object.kind !== 'sequence' && <button data-menu-group="structure" aria-label={postgresStructureZh.open + ' ' + object.name} onClick={() => onDdl(object)}><ListChecks size={12}/></button>}
+    <button data-menu-group="open" aria-label={(object.kind === 'sequence' ? postgresSequenceZh.open :
+      object.kind === 'function' || object.kind === 'procedure' ? postgresRoutineZh.open : '打开记录') + ' ' + object.name} onClick={onOpen}><FileCode2 size={12}/></button>
+    {(object.kind === 'table' || object.kind === 'view') && <button data-menu-group="structure" aria-label={postgresStructureZh.open + ' ' + object.name} onClick={() => onDdl(object)}><ListChecks size={12}/></button>}
     <FavoriteButton menu target={{ connectionId, database, kind: object.kind, name: object.name }}/>
     {onRefresh && <button data-menu-group="refresh" aria-label={sidebarContextMenuZh.refreshObject(object.name)} onClick={onRefresh}><RefreshCw size={12}/></button>}
   </>;
