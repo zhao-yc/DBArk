@@ -20,6 +20,7 @@ import { PostgresTableWorkspace, type PostgresTableImportRequest } from './table
 import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
+import { readPostgresDependencies } from './dependencies';
 import { PostgresStructureEditWorkspace } from './structureEdit';
 import { matchesPostgresColumnPlan, postgresColumnPlan, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
 import { matchesCreatedPostgresIndex, postgresIndexPlan, type PostgresIndexPreviewInput } from '../../shared/postgresIndexEdit';
@@ -637,6 +638,7 @@ export class PostgresEngine {
       }
       case 'postgres.sequence.read':
       case 'postgres.sequence.targets':
+      case 'postgres.structure.dependencies':
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的PostgreSQL结构连接');
@@ -647,6 +649,8 @@ export class PostgresEngine {
           if (original.info.stamp !== input.stamp) throw Error('原序列已变化，请刷新详情后继续');
           return postgresSequenceTargets(connection, original, input.kind, input.search);
         });
+        if (command === 'postgres.structure.dependencies')
+          return this.use(profile, input.database, connection => readPostgresDependencies(connection, input.table));
         return this.use(profile, input.database, connection => readPostgresStructure(connection, input.table));
       }
       case 'postgres.columnEdit.preview':

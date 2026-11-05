@@ -8,6 +8,8 @@ import { postgresSequenceZh as text } from '../locales/postgresSequence.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { PostgresDependenciesDialog } from './PostgresDependenciesDialog';
+import { postgresDependenciesZh } from '../locales/postgresDependencies.zh-CN';
 import './PostgresCreateTableDialog.css';
 
 const numericFields = ['start', 'increment', 'minimum', 'maximum', 'cache'] as const;
@@ -26,6 +28,7 @@ export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManag
   const key = JSON.stringify([connectionId, database, table, version, attempt]);
   const [result, setResult] = useState<{ key: string; info?: PostgresSequenceInfo; error?: string }>();
   const [manage, setManage] = useState<{ action: SequenceAction; info: PostgresSequenceInfo; version: number }>();
+  const [dependencies, setDependencies] = useState(false);
   useEffect(() => {
     let active = true;
     queueMicrotask(() => {
@@ -47,6 +50,7 @@ export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManag
       .map(postgresIdentifier).join('.') + (info.ownedBy.identity ? ' · ' + text.identity : '') : '—'],
     [text.comment, info.comment ?? '—'],
   ];
+  if (dependencies) return <PostgresDependenciesDialog target={target} onBack={() => setDependencies(false)}/>;
   if (manage) return <PostgresManageSequenceDialog target={target} {...manage} onDirtyChange={onDirtyChange}
     onClose={unknown => {
       if (unknown) onClose();
@@ -65,6 +69,7 @@ export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManag
         <tr key={label}><th scope="row">{label}</th><td><code>{value}</code></td></tr>)}</tbody></table></>}
     </div>
     <footer className="modal-footer"><button disabled={!current} onClick={() => setAttempt(value => value + 1)}>{zh.common.refresh}</button>
+      {info && <button onClick={() => setDependencies(true)}>{postgresDependenciesZh.open}</button>}
       {info?.canManage && <>
         <button onClick={() => setManage({ action: 'edit', info, version })}>{text.edit}</button>
         <button onClick={() => setManage({ action: 'rename', info, version })}>{text.rename}</button>
@@ -91,6 +96,7 @@ function PostgresManageSequenceDialog({ target, action, info, version, onClose, 
   const [dirty, setDirty] = useState(false), [busy, setBusy] = useState(false), [unknown, setUnknown] = useState(false);
   const [preview, setPreview] = useState<PostgresCreateTablePreview>(), [acknowledged, setAcknowledged] = useState(false);
   const [error, setError] = useState('');
+  const [dependencies, setDependencies] = useState(false);
   const locked = useRef(false);
   const stale = version !== currentVersion;
   const operation = action === 'ownership' ? ownership : action;
@@ -171,6 +177,7 @@ function PostgresManageSequenceDialog({ target, action, info, version, onClose, 
   const hint = { edit: text.editHint, rename: text.renameHint, drop: text.dropHint, bind: text.bindHint,
     detach: text.detachHint, owner: text.transferHint }[operation];
   const confirm = { edit: text.applyEdit, rename: text.applyRename, drop: text.applyDrop, ownership: text.applyOwnership }[action];
+  if (dependencies) return <PostgresDependenciesDialog target={target} onBack={() => setDependencies(false)}/>;
   return <Modal title={text[action]} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>{target.database} / {target.table}</strong><p>{hint}</p>
@@ -223,6 +230,7 @@ function PostgresManageSequenceDialog({ target, action, info, version, onClose, 
     </div>
     <footer className="modal-footer">
       {preview && <button disabled={busy} onClick={back}>{text.back}</button>}
+      {action === 'drop' && <button disabled={busy || stale} onClick={() => setDependencies(true)}>{postgresDependenciesZh.open}</button>}
       <span className="grow"/><button disabled={busy} onClick={close}>{zh.common.close}</button>
       <button className="primary" disabled={busy || stale || unknown || (preview && needsAcknowledgement && !acknowledged) ||
         (action === 'rename' && (!name.trim() || name === info.name)) || (choosingTarget && !choice)}

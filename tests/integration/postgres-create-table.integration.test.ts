@@ -525,6 +525,52 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       await client.query(`DROP TABLE ${dependencyTable}`);
       expect(await indexOid(dependencySequence)).toBeNull();
 
+      const catalogSequence = '"生成.甲"."目录依赖序列"', catalogTable = '"生成.甲"."依赖引用表"';
+      const catalogView = '"生成.甲"."依赖引用视图"', hiddenView = '"隐藏引用"."不可见视图"';
+      await client.query(`CREATE SEQUENCE ${catalogSequence}; CREATE TABLE ${catalogTable} (
+        "自动编号" bigint DEFAULT nextval('${catalogSequence}'::regclass), "说明" text);
+        CREATE VIEW ${catalogView} AS SELECT "自动编号", "说明" FROM ${catalogTable};
+        CREATE SCHEMA "隐藏引用"; CREATE VIEW ${hiddenView} AS SELECT nextval('${catalogSequence}'::regclass);
+        CREATE TABLE "隐藏引用"."私有触发表" (id bigint);
+        CREATE FUNCTION "隐藏引用"."触发函数"() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';
+        CREATE TRIGGER "不可见触发器" BEFORE INSERT ON "隐藏引用"."私有触发表"
+          FOR EACH ROW WHEN (nextval('${catalogSequence}'::regclass) > 0) EXECUTE FUNCTION "隐藏引用"."触发函数"()`);
+      const readDependencies = (table: string) => engine.handle('postgres.structure.dependencies', { ...target, table });
+      const sequenceDependencies = await readDependencies(catalogSequence);
+      expect(sequenceDependencies).toMatchObject({ limited: false, entries: expect.arrayContaining([
+        { direction: 'referencedBy', kind: 'column default', identity: catalogTable + '."自动编号"', type: 'n' },
+        { direction: 'referencedBy', kind: 'view', identity: hiddenView, type: 'n' },
+      ]) });
+      expect(sequenceDependencies.entries.some((entry: { kind: string; identity: string }) =>
+        entry.kind === 'trigger' && entry.identity.includes('不可见触发器'))).toBe(true);
+      const tableDependencies = await readDependencies(catalogTable);
+      expect(tableDependencies.entries).toContainEqual({ direction: 'references', kind: 'sequence', identity: catalogSequence, type: 'n' });
+      expect(tableDependencies.entries.filter((entry: { identity: string }) => entry.identity === catalogView))
+        .toEqual([{ direction: 'referencedBy', kind: 'view', identity: catalogView, type: 'n' }]);
+      expect((await readDependencies(catalogView)).entries).toContainEqual({ direction: 'references', kind: 'table column',
+        identity: catalogTable + '."说明"', type: 'n' });
+      expect((await client.query(`SELECT is_called FROM ${catalogSequence}`)).rows).toEqual([{ is_called: false }]);
+
+      if (maintainer === database + '_limited') {
+        await client.query(`GRANT USAGE ON SEQUENCE ${catalogSequence} TO ${maintainer}`);
+        const delegate = randomUUID(), limitedProfile = { ...profile, id: delegate, user: maintainer };
+        const readAsLimited = (table: string) => engine.handle('postgres.structure.dependencies', { ...target,
+          profile: limitedProfile, connectionId: delegate, table });
+        const visible = await readAsLimited(catalogSequence);
+        expect(visible.entries).toContainEqual({ direction: 'referencedBy', kind: null, identity: null, type: 'n' });
+        expect(JSON.stringify(visible)).not.toContain('不可见视图');
+        expect(JSON.stringify(visible)).not.toContain('不可见触发器');
+        expect(JSON.stringify(visible)).not.toContain('私有触发表');
+        await expect(readAsLimited(hiddenView)).rejects.toThrow('没有读取依赖的权限');
+      }
+
+      const manyDependencies = '"生成.甲"."依赖数量预算"';
+      await client.query(`CREATE SEQUENCE ${manyDependencies}; ` + Array.from({ length: 201 }, (_, i) =>
+        `CREATE VIEW "生成.甲"."批量依赖${i}" AS SELECT nextval('${manyDependencies}'::regclass)`).join('; '));
+      const limitedDependencies = await readDependencies(manyDependencies);
+      expect(limitedDependencies.limited).toBe(true);
+      expect(limitedDependencies.entries).toHaveLength(200);
+
       const transferUser = process.env.DBARK_POSTGRES_SEQUENCE_OWNER;
       if (transferUser === database + '_sequence_owner') {
         const sequenceToTransfer = '"生成.甲"."转移序列"';

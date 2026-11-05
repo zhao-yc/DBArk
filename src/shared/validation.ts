@@ -257,6 +257,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.sequence.manage.apply': postgresCreateTableApplySchema,
   'postgres.sequence.targets': postgresSequenceTargetsSchema,
   'postgres.structure.read': postgresStructureInputSchema,
+  'postgres.structure.dependencies': postgresStructureInputSchema,
   'postgres.columnEdit.preview': postgresColumnPreviewSchema, 'postgres.columnEdit.apply': postgresColumnApplySchema,
   'postgres.indexEdit.preview': postgresIndexPreviewSchema, 'postgres.indexEdit.apply': postgresIndexApplySchema,
   'postgres.keyEdit.preview': postgresKeyPreviewSchema, 'postgres.keyEdit.apply': postgresKeyApplySchema,

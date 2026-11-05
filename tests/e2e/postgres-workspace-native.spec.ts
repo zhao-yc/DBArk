@@ -1,4 +1,5 @@
 import { postgresSequenceZh as sequenceText } from '../../src/renderer/locales/postgresSequence.zh-CN';
+import { postgresDependenciesZh as dependenciesText } from '../../src/renderer/locales/postgresDependencies.zh-CN';
 import { test as base, expect } from '@playwright/test';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -311,10 +312,21 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await structure.getByRole('button', { name: postgresStructureZh.refresh, exact: true }).click();
     await expect(structure.getByRole('table')).toContainText('note_partial');
     await page.screenshot({ path: info.outputPath('PostgreSQL实际索引结构.png') });
+    await structure.getByRole('button', { name: dependenciesText.open, exact: true }).click();
+    const dependencyDialog = page.getByRole('dialog', { name: dependenciesText.title, exact: true });
+    const referencedBy = dependencyDialog.getByRole('region', { name: dependenciesText.referencedBy });
+    const references = dependencyDialog.getByRole('region', { name: dependenciesText.references });
+    await expect(referencedBy.getByRole('row').filter({ hasText: '结构视图' })).toHaveCount(1);
+    await dependencyDialog.getByRole('button', { name: dependenciesText.back, exact: true }).click();
+    await expect(structure.getByRole('table')).toContainText('note_partial');
     await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
 
     const viewRow = page.locator('.object-row').filter({ hasText: '结构视图' });
     await clickSidebarAction(viewRow, { name: postgresStructureZh.open + ' "回归"."结构视图"', exact: true }, undefined, check);
+    await structure.getByRole('button', { name: dependenciesText.open, exact: true }).click();
+    await expect(references.getByRole('table')).toContainText('带""引号');
+    await dependencyDialog.getByRole('button', { name: dependenciesText.back, exact: true }).click();
+    await mark('原生表结构和视图结构能互查双向直接依赖，回到原结构标签');
     await structure.getByRole('button', { name: postgresStructureZh.sections.definition, exact: true }).click();
     await expect(structure.locator('.monaco-editor .view-lines')).toContainText('"回归"."带""引号"');
     await structure.getByRole('button', { name: postgresStructureZh.openDraft, exact: true }).click();
@@ -1698,11 +1710,26 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(page.locator('.object-list-row .tree-label').filter({ hasText: '窗口改名序列' })).toBeVisible();
     await mark('原生窗口重命名序列后回到新名称详情，对象树及序列列表同步刷新');
 
+    await page.locator('.object-list-row .tree-label').filter({ hasText: '窗口依赖序列' }).dblclick();
+    await sequenceInfo.getByRole('button', { name: dependenciesText.open, exact: true }).click();
+    await expect(referencedBy.getByRole('row').filter({ hasText: '窗口依赖表' })).toContainText('字段默认值');
+    await expect(referencedBy.getByRole('row').filter({ hasText: '窗口依赖视图' })).toContainText('视图');
+    await dependencyDialog.getByRole('button', { name: zh.common.refresh, exact: true }).click();
+    await expect(referencedBy.getByRole('row').filter({ hasText: '窗口依赖视图' })).toContainText('普通依赖');
+    await page.screenshot({ path: info.outputPath('PostgreSQL对象依赖.png') });
+    await dependencyDialog.getByRole('button', { name: dependenciesText.back, exact: true }).click();
+    await sequenceInfo.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await mark('原生序列依赖区分字段默认值和引用视图，刷新后仍保留真实目录结果');
+
     const disposableSequence = page.locator('.object-list-row .tree-label').filter({ hasText: '窗口删除序列' });
     await disposableSequence.dblclick();
     await sequenceInfo.getByRole('button', { name: sequenceText.drop, exact: true }).click();
     const dropSequence = page.getByRole('dialog', { name: sequenceText.drop, exact: true });
     await dropSequence.getByRole('button', { name: sequenceText.preview, exact: true }).click();
+    await expect(dropSequence.locator('pre')).toContainText('DROP SEQUENCE "回归"."窗口删除序列" RESTRICT');
+    await dropSequence.getByRole('button', { name: dependenciesText.open, exact: true }).click();
+    await expect(referencedBy).toContainText(dependenciesText.empty);
+    await dependencyDialog.getByRole('button', { name: dependenciesText.back, exact: true }).click();
     await expect(dropSequence.locator('pre')).toContainText('DROP SEQUENCE "回归"."窗口删除序列" RESTRICT');
     const commitSequenceDrop = dropSequence.getByRole('button', { name: sequenceText.applyDrop, exact: true });
     await expect(commitSequenceDrop).toBeDisabled();

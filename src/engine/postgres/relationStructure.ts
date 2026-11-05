@@ -6,6 +6,10 @@ import { postgresEditableViewSql, postgresManageableMaterializedSql, postgresVie
 import { parsePostgresMaterializedFacts, postgresMaterializedCanRefreshSql, postgresMaterializedFactsSql } from './materializedView';
 import { startPostgresDdl } from './createTable';
 
+// 依赖与结构使用相同的关系可见性；物化视图维护者也可核对依赖。
+export const postgresStructureVisibleSql = `(pg_catalog.has_table_privilege(c.oid, 'SELECT') OR pg_catalog.pg_has_role(c.relowner, 'USAGE')
+  OR (c.relkind = 'm' AND ${postgresMaterializedCanRefreshSql}))`;
+
 // 单条目录查询提供一致的关系、字段、约束和索引快照；绝不读取目标关系的数据行。
 const structureSql = `
 WITH target AS MATERIALIZED (
@@ -23,8 +27,7 @@ WITH target AS MATERIALIZED (
     AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
     AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
     AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
-    AND (pg_catalog.has_table_privilege(c.oid, 'SELECT') OR pg_catalog.pg_has_role(c.relowner, 'USAGE')
-      OR (c.relkind = 'm' AND ${postgresMaterializedCanRefreshSql}))
+    AND ${postgresStructureVisibleSql}
 )
 SELECT pg_catalog.jsonb_build_object(
   'database', pg_catalog.current_database(),

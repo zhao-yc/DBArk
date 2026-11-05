@@ -17,6 +17,8 @@ import { PostgresIndexEditPanel } from './PostgresIndexEditPanel';
 import { PostgresKeyEditPanel } from './PostgresKeyEditPanel';
 import { PostgresForeignEditPanel } from './PostgresForeignEditPanel';
 import { PostgresCheckEditPanel } from './PostgresCheckEditPanel';
+import { PostgresDependenciesDialog } from './PostgresDependenciesDialog';
+import { postgresDependenciesZh } from '../locales/postgresDependencies.zh-CN';
 import { postgresCheckEditZh } from '../locales/postgresCheckEdit.zh-CN';
 import { postgresForeignEditZh } from '../locales/postgresForeignEdit.zh-CN';
 import { postgresKeyEditZh } from '../locales/postgresKeyEdit.zh-CN';
@@ -56,6 +58,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
   const [section, setSection] = useState<Section>('columns');
   const [attempt, setAttempt] = useState(0);
   const [editing, setEditing] = useState<keyof typeof editors>();
+  const [dependencies, setDependencies] = useState(false);
   const [view, setView] = useState<{ key: string; output?: PostgresStructureResult; error?: string }>();
   const owner = useRef<object | undefined>(undefined);
   const { connectionId, database, table } = target;
@@ -100,6 +103,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
   const manageStamp = output?.materializedManageStamp ?? output?.viewEditStamp;
   const editStamp = editing === 'indexes' ? indexStamp : editing === 'materialized' ? output?.materialized?.stamp :
     editing === 'manage' ? manageStamp : editing === 'definition' ? output?.viewEditStamp : output?.editStamp;
+  if (dependencies) return <PostgresDependenciesDialog target={target} onBack={() => setDependencies(false)}/>;
   return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
       <div className="pg-structure-caption"><strong>{table}</strong><span>{database}</span>{output && <span>{text.kinds[output.kind]}</span>}</div>
@@ -159,6 +163,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
     </div>
     <footer className="modal-footer">
       <button disabled={!!editing || busy || dialect !== 'postgresql'} onClick={() => { owner.current = undefined; setAttempt(value => value + 1); }}>{text.refresh}</button>
+      {output && !editing && <button onClick={() => setDependencies(true)}>{postgresDependenciesZh.open}</button>}
       {(section === 'indexes' ? indexStamp : output?.editStamp) && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
         {editors[section].label}
       </button>}
