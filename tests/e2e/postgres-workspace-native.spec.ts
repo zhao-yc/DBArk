@@ -3,6 +3,7 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { postgresCreateTableZh } from '../../src/renderer/locales/postgresCreateTable.zh-CN';
+import { postgresCreateViewZh as createViewText } from '../../src/renderer/locales/postgresCreateView.zh-CN';
 import { postgresStructureZh } from '../../src/renderer/locales/postgresStructure.zh-CN';
 import { postgresColumnEditZh } from '../../src/renderer/locales/postgresColumnEdit.zh-CN';
 import { postgresIndexEditZh as indexText } from '../../src/renderer/locales/postgresIndexEdit.zh-CN';
@@ -1406,6 +1407,25 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await mark('CHECK 暂缓验证、单独验证和预填原表达式的原子替换经原生窗口与真实目录核对');
     await page.locator('.tab-strip .tab-close').click();
     await mark('数据库右键建表经过真实 SQL 预览和确认，新表目录自动刷新，实际结构可读');
+
+    await clickSidebarAction(databaseNode, { name: createViewText.title, exact: true }, undefined, check);
+    const viewCreate = page.getByRole('dialog', { name: createViewText.title, exact: true });
+    await viewCreate.getByLabel(createViewText.schema, { exact: true }).selectOption('回归');
+    await viewCreate.getByLabel(createViewText.name, { exact: true }).fill('窗口新视图');
+    await viewCreate.getByLabel(createViewText.comment, { exact: true }).fill('窗口创建的视图');
+    await viewCreate.getByLabel(createViewText.definition, { exact: true }).fill('SELECT id, note FROM "回归"."带""引号" WHERE id = 1;');
+    await viewCreate.getByRole('button', { name: createViewText.preview, exact: true }).click();
+    await expect(viewCreate.locator('.pg-create-sql')).toContainText('CREATE VIEW "回归"."窗口新视图"');
+    await expect(viewCreate.locator('.pg-create-sql')).toContainText('COMMENT ON VIEW "回归"."窗口新视图"');
+    await expect(page.locator('.object-row').filter({ hasText: '窗口新视图' })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('PostgreSQL图形化创建视图.png') });
+    await viewCreate.getByRole('button', { name: createViewText.apply, exact: true }).click();
+    await expect(viewCreate).toHaveCount(0);
+    await expect(page.locator('.object-row').filter({ hasText: '窗口新视图' })).toBeVisible();
+    await expect(gridTab.locator('.context-bar')).toContainText('"回归"."窗口新视图"');
+    await expect(gridTab.getByRole('grid')).toContainText('原值');
+    await page.locator('.tab-strip .tab-close').click();
+    await mark('PostgreSQL 侧栏创建普通视图，预览确认后目录刷新并读取真实视图记录');
     const offlineBefore = await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}),
       history: await window.dbark.invoke('history.list', {}) }));
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: snapshotText.entry, exact: true }, check)).click();

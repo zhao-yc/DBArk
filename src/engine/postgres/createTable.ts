@@ -4,12 +4,22 @@ import {
   type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget,
 } from '../../shared/postgresCreateTable';
 import type { PostgresConnection } from './connection';
+import { postgresCreateViewPlan, type PostgresCreateViewInput } from '../../shared/postgresCreateView';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type Plan = ReturnType<typeof postgresCreateTablePlan>;
+type RelationKind = 'table' | 'view';
+interface Plan {
+  table: string;
+  statements: string[];
+  preflight(connection: PostgresConnection): Promise<string>;
+  validate?(connection: PostgresConnection): Promise<void>;
+  verify(connection: PostgresConnection, schemaOid: string): Promise<void>;
+  protocol?: 'extended';
+  label: string;
+}
 interface Prepared {
-  input: Scoped<PostgresCreateTableInput>;
+  input: Scoped<PostgresCreateTableTarget>;
   token: string;
   expires: number;
   schemaOid: string;
@@ -44,7 +54,8 @@ export async function startPostgresDdl(connection: PostgresConnection, readOnly:
 }
 
 /** 通过服务器真实目录验证 schema、权限及名称，保留 OID 识别同名替换。 */
-async function preflight(connection: PostgresConnection, input: PostgresCreateTableInput): Promise<string> {
+async function preflight(connection: PostgresConnection, input: PostgresCreateTableTarget & { schema: string }, name: string,
+  fields: string[], label: string): Promise<string> {
   if (connection.database !== input.database) throw Error('PostgreSQL 原数据库已变化');
   const result = await connection.query(`
     SELECT n.oid,
@@ -53,13 +64,13 @@ async function preflight(connection: PostgresConnection, input: PostgresCreateTa
     FROM pg_catalog.pg_namespace n
     WHERE n.nspname::text = $1 AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
       AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND pg_catalog.has_schema_privilege(n.oid, 'CREATE')
-  `, [input.schema, input.table], budget());
+  `, [input.schema, name], budget());
   const schema = result.rows[0];
-  if (typeof schema?.c0 !== 'string') throw Error('PostgreSQL schema 不存在或缺少建表权限');
+  if (typeof schema?.c0 !== 'string') throw Error('PostgreSQL schema 不存在或缺少建' + label + '权限');
   if (schema.c1 === 't') throw Error('目标 schema 已存在同名关系');
   const max = Number(schema.c2);
-  if (!Number.isInteger(max) || [input.table, ...input.columns.map(field => field.name)].some(name => Buffer.byteLength(name) > max)) {
-    throw Error('表名或字段名超过目标服务器标识符长度');
+  if (!Number.isInteger(max) || [name, ...fields].some(identifier => Buffer.byteLength(identifier) > max)) {
+    throw Error(label + '名或字段名超过目标服务器标识符长度');
   }
   return schema.c0;
 }
@@ -91,50 +102,85 @@ async function verify(connection: PostgresConnection, input: PostgresCreateTable
   }
 }
 
-/** 原文档、目标数据库及连接修订共同约束一次性建表预览。 */
+/** 原文档、目标数据库、关系类别及连接修订共同约束一次性创建预览。 */
 export class PostgresCreateTableWorkspace {
   private readonly plans = new Map<string, Prepared>();
   private readonly pending = new Set<string>();
 
   /** 同文档与目标库只保留最新预览，避免关闭弹窗后积累能力。 */
-  private key(input: Scoped<PostgresCreateTableTarget>): string {
-    return JSON.stringify([input.owner, input.connectionId, input.database]);
+  private key(input: Scoped<PostgresCreateTableTarget>, kind: RelationKind): string {
+    return JSON.stringify([input.owner, input.connectionId, input.database, kind]);
   }
 
   /** 预览只进行目录和内置类型校验，返回与实际执行相同的 SQL。 */
   async prepare(input: Scoped<PostgresCreateTableInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
-    const key = this.key(input);
-    if (this.pending.has(key)) throw Error('目标已有建表操作');
+    return this.prepareRelation(input, 'table', connect, () => {
+      const draft = { connectionId: input.connectionId, database: input.database, schema: input.schema,
+        table: input.table, columns: input.columns, comment: input.comment };
+      const plan = postgresCreateTablePlan(draft);
+      return { ...plan, label: '表',
+        preflight: connection => preflight(connection, draft, draft.table, draft.columns.map(column => column.name), '表'),
+        validate: connection => validatePostgresDefaults(connection, plan.checks.map(check => ({
+          ...check, length: draft.columns.find(column => column.name === check.name)?.length,
+        }))),
+        verify: (connection, oid) => verify(connection, draft, oid),
+      };
+    });
+  }
+
+  /** 预览仅读取目标目录；视图定义由服务器在确认后的扩展协议 DDL 中校验。 */
+  async prepareView(input: Scoped<PostgresCreateViewInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    return this.prepareRelation(input, 'view', connect, () => {
+      const draft = { connectionId: input.connectionId, database: input.database, schema: input.schema,
+        view: input.view, definition: input.definition, comment: input.comment };
+      const plan = postgresCreateViewPlan(draft);
+      return { ...plan, label: '视图', protocol: 'extended',
+        preflight: connection => preflight(connection, draft, draft.view, [], '视图'),
+        async verify(connection, oid) {
+          const result = await connection.query(`
+            SELECT pg_catalog.obj_description(c.oid, 'pg_class')
+            FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.oid = $1::oid AND n.nspname::text = $2 AND c.relname::text = $3
+              AND c.relkind = 'v' AND c.relpersistence = 'p'
+          `, [oid, draft.schema, draft.view], budget());
+          if (result.truncated || result.rows.length !== 1 || result.rows[0].c0 !== (draft.comment || null))
+            throw Error('新视图的实际 schema、类别或注释与预览不同，未提交');
+        },
+      };
+    });
+  }
+
+  /** 两类创建共享目录预检、令牌、预算和事务回执。 */
+  private async prepareRelation(input: Scoped<PostgresCreateTableTarget>, kind: RelationKind, connect: Connect, compile: () => Plan) {
+    const key = this.key(input, kind);
+    if (this.pending.has(key)) throw Error('目标已有关系创建操作');
     this.pending.add(key);
     this.plans.delete(key);
     try {
-      const { owner, connectionRevision, connectionId, database, schema, table, columns, comment } = input;
-      const draft = { connectionId, database, schema, table, columns, comment };
-      const plan = postgresCreateTablePlan(draft);
+      const { owner, connectionRevision, connectionId, database } = input;
+      const plan = compile();
       const schemaOid = await connect(async connection => {
         await startPostgresDdl(connection, true);
-        const oid = await preflight(connection, draft);
-        await validatePostgresDefaults(connection, plan.checks.map(check => ({
-          ...check, length: draft.columns.find(column => column.name === check.name)?.length,
-        })));
+        const oid = await plan.preflight(connection);
+        await plan.validate?.(connection);
         if ((await connection.query('COMMIT', undefined, budget())).postgresCommand !== 'COMMIT') throw Error('预览读取未完成');
         return oid;
       });
       const now = Date.now();
       for (const [id, old] of this.plans) if (old.expires <= now) this.plans.delete(id);
-      if (this.plans.size >= 128) throw Error('PostgreSQL 建表预览已满，请稍后重试');
+      if (this.plans.size >= 128) throw Error('PostgreSQL 关系创建预览已满，请稍后重试');
       const token = randomUUID();
-      this.plans.set(key, { input: { ...draft, owner, connectionRevision }, token, schemaOid, plan, expires: now + 300_000 });
+      this.plans.set(key, { input: { connectionId, database, owner, connectionRevision }, token, schemaOid, plan, expires: now + 300_000 });
       return { token, statements: plan.statements };
     } finally { this.pending.delete(key); }
   }
 
   /** 只消费一次原预览，真实提交结果优先于后续连接关闭。 */
-  async apply(input: Scoped<PostgresCreateTableApply>, connect: Connect): Promise<PostgresCreateTableOutcome> {
-    const key = this.key(input), prepared = this.plans.get(key);
-    if (this.pending.has(key)) throw Error('目标已有建表操作');
+  async apply(input: Scoped<PostgresCreateTableApply>, connect: Connect, kind: RelationKind = 'table'): Promise<PostgresCreateTableOutcome> {
+    const key = this.key(input, kind), prepared = this.plans.get(key);
+    if (this.pending.has(key)) throw Error('目标已有关系创建操作');
     if (!prepared || prepared.token !== input.token || prepared.expires <= Date.now() ||
-        input.connectionRevision !== prepared.input.connectionRevision) throw Error('PostgreSQL 建表预览已失效，请重新预览');
+        input.connectionRevision !== prepared.input.connectionRevision) throw Error('PostgreSQL 创建预览已失效，请重新预览');
     this.plans.delete(key);
     this.pending.add(key);
     let receipt: PostgresCreateTableOutcome | undefined;
@@ -149,23 +195,25 @@ export class PostgresCreateTableWorkspace {
 
   /** 创建、注释和核对属于同一事务，断线且终态无法确认时保留未知。 */
   private async execute(connection: PostgresConnection, prepared: Prepared): Promise<PostgresCreateTableOutcome> {
-    let sent = false;
+    let sent = false, committing = false;
     try {
       await startPostgresDdl(connection, false);
-      if (await preflight(connection, prepared.input) !== prepared.schemaOid) throw Error('原 schema 已被替换，请重新预览');
+      if (await prepared.plan.preflight(connection) !== prepared.schemaOid) throw Error('原 schema 已被替换，请重新预览');
       for (const statement of prepared.plan.statements) {
         sent = true;
-        const result = await connection.query(statement, undefined, budget());
+        const result = await connection.query(statement, undefined, budget(), undefined, prepared.plan.protocol);
         if (result.postgresCommand !== (statement.startsWith('CREATE ') ? 'CREATE' : 'COMMENT')) {
           throw Error('PostgreSQL 未返回预期的结构回执');
         }
       }
-      await verify(connection, prepared.input, prepared.schemaOid);
+      await prepared.plan.verify(connection, prepared.schemaOid);
+      committing = true;
       const result = await connection.query('COMMIT', undefined, budget());
+      if (result.postgresCommand === 'ROLLBACK') return { outcome: 'rolledBack', message: '服务器已回滚创建操作' };
       if (result.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen) {
-        throw Error('PostgreSQL 建表提交未确认');
+        throw Error('PostgreSQL 创建提交未确认');
       }
-      return { outcome: 'committed', table: prepared.plan.table, message: 'PostgreSQL 新表已确认创建' };
+      return { outcome: 'committed', table: prepared.plan.table, message: 'PostgreSQL 新' + prepared.plan.label + '已确认创建' };
     } catch (reason) {
       const message = connection.error(reason).message;
       if (!sent) return { outcome: 'notSent', message };
@@ -173,9 +221,10 @@ export class PostgresCreateTableWorkspace {
       try {
         if (connection.state().transactionOpen) {
           const rollback = await connection.query('ROLLBACK', undefined, budget());
-          if (rollback.postgresCommand !== 'ROLLBACK') throw Error('未确认回滚');
+          if (rollback.postgresCommand === 'ROLLBACK' && connection.state().transactionKnown && !connection.state().transactionOpen)
+            return { outcome: 'rolledBack', message };
         }
-        if (connection.state().transactionKnown && !connection.state().transactionOpen) return { outcome: 'rolledBack', message };
+        if (!committing && connection.state().transactionKnown && !connection.state().transactionOpen) return { outcome: 'rolledBack', message };
       } catch { /* 连接异常由原回执保留，禁止重放。 */ }
       return { outcome: 'unknown', message };
     }

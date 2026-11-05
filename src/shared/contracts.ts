@@ -275,6 +275,8 @@ export interface CommandMap {
   'postgres.createTable.schemas': { input: import('./postgresCreateTable').PostgresCreateTableTarget; output: string[] };
   'postgres.createTable.preview': { input: import('./postgresCreateTable').PostgresCreateTableInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.createTable.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
+  'postgres.createView.preview': { input: import('./postgresCreateView').PostgresCreateViewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
+  'postgres.createView.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.structure.read': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresStructure').PostgresStructureResult };
   'postgres.columnEdit.preview': { input: import('./postgresColumnEdit').PostgresColumnPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.columnEdit.apply': { input: import('./postgresColumnEdit').PostgresColumnApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };

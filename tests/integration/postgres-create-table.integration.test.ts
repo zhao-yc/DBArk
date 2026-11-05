@@ -79,6 +79,27 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       expect(await apply(rejected.token)).toMatchObject({ outcome: 'rolledBack' });
       expect((await client.query('SELECT to_regclass($1)::text value', ['"生成.甲"."回滚"'])).rows[0].value).toBeNull();
 
+      // 同一创建服务的视图令牌隔离，服务器确认后再从独立会话回读数据及目录。
+      const viewName = '"生成.甲"."新""视图"';
+      const viewInput = { ...target, schema: draft.schema, view: '新"视图', comment: value,
+        definition: `WITH x AS (SELECT "编号", "代码" FROM ${qualified}) SELECT * FROM x -- 末尾注释` };
+      const previewView = () => engine.handle('postgres.createView.preview', viewInput);
+      const applyView = (token: string) => engine.handle('postgres.createView.apply', { ...target, token });
+      await expect(engine.handle('postgres.createView.preview', { ...viewInput,
+        definition: 'SELECT 1; DROP TABLE "生成.甲".原表' })).rejects.toThrow('单条');
+      const view = await previewView();
+      expect(view.statements[0]).toContain('CREATE VIEW ' + viewName);
+      expect((await client.query('SELECT to_regclass($1)::text AS name', [viewName])).rows[0].name).toBeNull();
+      await expect(apply(view.token)).rejects.toThrow('预览已失效');
+      expect(await applyView(view.token)).toMatchObject({ outcome: 'committed', table: viewName });
+      await expect(applyView(view.token)).rejects.toThrow('预览已失效');
+      expect((await client.query(`SELECT "编号"::text AS id, "代码" AS note FROM ${viewName}`)).rows).toEqual([{ id: '1', note: value }]);
+      expect((await client.query('SELECT pg_catalog.obj_description($1::regclass) AS comment', [viewName])).rows[0].comment).toBe(value);
+      await expect(previewView()).rejects.toThrow('同名关系');
+      const badView = await engine.handle('postgres.createView.preview', { ...viewInput, view: '无效定义', definition: 'SELECT missing FROM pg_catalog.pg_class' });
+      expect(await applyView(badView.token)).toMatchObject({ outcome: 'rolledBack' });
+      expect((await client.query('SELECT to_regclass($1)::text AS name', ['"生成.甲"."无效定义"'])).rows[0].name).toBeNull();
+
       const closed = await prepare({ table: '关闭' });
       await engine.handle('connections.close', { id });
       await expect(apply(closed.token)).rejects.toThrow('预览已失效');

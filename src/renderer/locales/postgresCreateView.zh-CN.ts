@@ -1,0 +1,18 @@
+export const postgresCreateViewZh = {
+  title: '新建 PostgreSQL 视图',
+  schema: '目标 schema',
+  name: '视图名',
+  definition: '视图查询',
+  comment: '视图注释',
+  hint: '填写单条查询。请使用带 schema 的对象名，例如 public.orders。预览检查目标 schema 和重名，确认后由 PostgreSQL 校验并创建视图。',
+  empty: '当前连接没有可创建视图的 schema。',
+  wait: '正在读取 PostgreSQL 目录…',
+  working: '正在处理 PostgreSQL 视图…',
+  preview: '预览视图 SQL',
+  review: '请核对目标数据库与完整 SQL。',
+  edit: '返回编辑',
+  apply: '确认创建视图',
+  changed: '原 PostgreSQL 连接已变化，请重新预览。',
+  unknown: '创建结果未确认，请在原数据库核对视图。',
+  discard: '放弃当前视图草稿？',
+} as const;
