@@ -1811,7 +1811,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     const textSignature = '"回归"."窗口补全函数"(text)', integerSignature = '"回归"."窗口补全函数"(integer)';
     const routineDefinition = page.getByRole('dialog', { name: routineText.title, exact: true });
     const textRoutineNode = page.locator('.object-row').filter({ hasText: '窗口补全函数"(text)' });
-    await clickSidebarAction(textRoutineNode, { name: routineText.open + ' ' + textSignature, exact: true }, undefined, check);
+    check();
+    await textRoutineNode.locator('.tree-label').click();
+    check();
     await expect(routineDefinition.getByRole('row').filter({ hasText: routineText.returns })).toContainText('text');
     await expect(routineDefinition.locator('.monaco-editor .view-lines')).toContainText('CREATE OR REPLACE FUNCTION');
     await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
@@ -1961,6 +1963,11 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(dropRoutine.locator('pre')).toContainText(`DROP FUNCTION ${renamedSignature} RESTRICT`);
     const confirmDropRoutine = dropRoutine.getByRole('button', { name: routineText.confirmDrop, exact: true });
     await expect(confirmDropRoutine).toBeDisabled();
+    await dropRoutine.getByRole('button', { name: dependenciesText.open, exact: true }).click();
+    await expect(referencedBy).toContainText(dependenciesText.empty);
+    await dependencyDialog.getByRole('button', { name: dependenciesText.back, exact: true }).click();
+    await expect(dropRoutine.locator('pre')).toContainText(`DROP FUNCTION ${renamedSignature} RESTRICT`);
+    await expect(confirmDropRoutine).toBeDisabled();
     await page.screenshot({ path: info.outputPath('PostgreSQL例程管理.png') });
     await dropRoutine.getByRole('checkbox', { name: routineText.acknowledgeDrop, exact: true }).check();
     await confirmDropRoutine.click();
@@ -1976,6 +1983,12 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
 
     await routineFilter.fill('窗口补全函数');
     await routineRows.filter({ hasText: textSignature }).dblclick();
+    await routineDefinition.getByRole('button', { name: dependenciesText.open, exact: true }).click();
+    await expect(dependencyDialog).toContainText(textSignature);
+    await expect(referencedBy.getByRole('row').filter({ hasText: '窗口例程引用' })).toContainText(dependenciesText.kinds.view);
+    await expect(references.getByRole('row').filter({ hasText: '回归' })).toContainText(dependenciesText.kinds.schema);
+    await page.screenshot({ path: info.outputPath('PostgreSQL例程依赖.png') });
+    await dependencyDialog.getByRole('button', { name: dependenciesText.back, exact: true }).click();
     await routineDefinition.getByRole('button', { name: routineText.callDraft, exact: true }).click();
     await expect(tab().locator('.monaco-editor .view-lines')).toContainText('SELECT "回归"."窗口补全函数"($1::"pg_catalog"."text")');
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(routineHistory);
@@ -1997,6 +2010,14 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await parameters.getByRole('button', { name: parameterZh.execute, exact: true }).click();
     await expect(tab().getByRole('grid')).toContainText('43');
     await discardTestTab(page, page.locator('.tab-strip .tab-close').last());
+
+    await routineFilter.fill('窗口目录依赖过程');
+    await routineRows.filter({ hasText: '窗口目录依赖过程' }).dblclick();
+    await routineDefinition.getByRole('button', { name: dependenciesText.open, exact: true }).click();
+    await expect(references.getByRole('row').filter({ hasText: '调用证据' }).first()).toBeVisible();
+    await dependencyDialog.getByRole('button', { name: dependenciesText.back, exact: true }).click();
+    await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await mark('原生函数定义和删除窗口按重载读取依赖，返回保留原删除预览，SQL 标准过程显示正文目录引用');
     await page.locator('.tab-strip .tab-close').click();
     await mark('原生重载定义生成调用草稿，打开草稿不执行，文本参数原值回读，过程返回 OUT 结果');
 

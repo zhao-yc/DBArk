@@ -4,6 +4,8 @@ export const postgresDependenciesZh = {
   kind: '对象类型', identity: '对象标识', type: '依赖类型',
   hidden: '当前角色不可见的对象', empty: '目录中没有直接依赖。',
   hint: '仅显示数据库目录记录的直接依赖。删除时以 PostgreSQL 的实时检查为准。',
+  routineHint: '字符串正文和动态 SQL 中未记录的引用不会出现在列表中。',
+  stale: '连接已变化，请返回并重新打开对象。',
   limited: '依赖结果超过显示预算，此处仅显示部分条目。',
   loading: '正在读取对象依赖…', back: '返回对象',
   types: { n: '普通依赖', a: '自动依赖', i: '内部依赖', e: '扩展成员', x: '扩展自动依赖', P: '分区主依赖', S: '分区次依赖' },

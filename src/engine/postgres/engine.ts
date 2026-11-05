@@ -22,7 +22,7 @@ import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTab
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
 import { readPostgresRoutine, readPostgresRoutineCatalog } from './routine';
-import { readPostgresDependencies } from './dependencies';
+import { readPostgresDependencies, readPostgresRoutineDependencies } from './dependencies';
 import { PostgresStructureEditWorkspace } from './structureEdit';
 import { matchesPostgresColumnPlan, postgresColumnPlan, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
 import { matchesCreatedPostgresIndex, postgresIndexPlan, type PostgresIndexPreviewInput } from '../../shared/postgresIndexEdit';
@@ -647,6 +647,7 @@ export class PostgresEngine {
       case 'postgres.sequence.read':
       case 'postgres.sequence.targets':
       case 'postgres.routine.read':
+      case 'postgres.routine.dependencies':
       case 'postgres.structure.dependencies':
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
@@ -660,6 +661,10 @@ export class PostgresEngine {
         });
         if (command === 'postgres.structure.dependencies')
           return this.use(profile, input.database, connection => readPostgresDependencies(connection, input.table));
+        if (command === 'postgres.routine.dependencies')
+          return this.use(profile, input.database, connection => readPostgresRoutineDependencies(connection, {
+            connectionId: input.connectionId, database: input.database, kind: input.kind, name: input.name, stamp: input.stamp,
+          }));
         if (command === 'postgres.routine.read')
           return this.use(profile, input.database, connection => readPostgresRoutine(connection, {
             connectionId: input.connectionId, database: input.database, kind: input.kind, name: input.name,

@@ -13,6 +13,8 @@ const routineBody = z.string().min(1).max(128 * 1024)
   .refine(value => !!value.trim() && !/[\u0000\uD800-\uDFFF]/u.test(value), '例程正文不能为空且须为有效文本')
   .refine(value => new TextEncoder().encode(value).length <= 128 * 1024, '例程正文超过 128 KiB');
 const routineManageTarget = postgresRoutineReadSchema.extend({ stamp: routineStamp });
+export const postgresRoutineDependencySchema = routineManageTarget.strict();
+export type PostgresRoutineDependencyInput = z.infer<typeof postgresRoutineDependencySchema>;
 const volatility = z.enum(['i', 's', 'v']);
 const parallel = z.enum(['u', 'r', 's']);
 const estimate = z.string().max(32).regex(/^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/, '请输入正数或科学计数法')

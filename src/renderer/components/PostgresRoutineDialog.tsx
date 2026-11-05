@@ -4,9 +4,11 @@ import { buildPostgresRoutineCall, postgresRoutineManageSchema, type PostgresRou
   type PostgresRoutineReadInput } from '../../shared/postgresRoutine';
 import { errorMessage, invoke } from '../lib';
 import { postgresRoutineZh as text } from '../locales/postgresRoutine.zh-CN';
+import { postgresDependenciesZh as dependenciesText } from '../locales/postgresDependencies.zh-CN';
 import { zh } from '../locales/zh-CN';
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
+import { PostgresDependenciesDialog } from './PostgresDependenciesDialog';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresCreateTableDialog.css';
 import './PostgresStructureDialog.css';
@@ -25,6 +27,7 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
   const key = JSON.stringify([connectionId, database, kind, name, version, attempt]);
   const [result, setResult] = useState<{ key: string; info?: PostgresRoutineInfo; error?: string }>();
   const [manage, setManage] = useState<RoutineManage>();
+  const [dependencies, setDependencies] = useState<{ stamp: string; version: number }>();
   const current = result?.key === key ? result : undefined;
   const info = current?.info;
   useEffect(() => {
@@ -54,6 +57,8 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
       [text.cost, info.cost], ...(info.rows === null ? [] : [[text.rows, info.rows]]),
     ]), [text.security, info.securityDefiner ? text.definer : text.invoker], [text.comment, info.comment ?? '—']];
 
+  if (dependencies) return <PostgresDependenciesDialog target={{ ...target, stamp: dependencies.stamp }}
+    lockedVersion={dependencies.version} onBack={() => setDependencies(undefined)}/>;
   if (manage) return <PostgresManageRoutineDialog target={target} {...manage} onDirtyChange={onDirtyChange}
     onClose={unknown => {
       if (unknown) onClose();
@@ -79,6 +84,7 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
     </div>
     <footer className="modal-footer"><button disabled={!current} onClick={() => setAttempt(value => value + 1)}>{zh.common.refresh}</button>
       <button disabled={!info} onClick={() => { if (info) openDraft(info.definition, name); }}>{text.draft}</button>
+      {info && <button onClick={() => setDependencies({ stamp: info.stamp, version })}>{dependenciesText.open}</button>}
       {!readOnly && <button disabled={!call} title={info && !call ? text.callUnavailable : undefined}
         onClick={() => { if (call) openDraft(call, text.callTitle + name); }}>{text.callDraft}</button>}
       {!readOnly && info?.canManage && <>
@@ -104,6 +110,7 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, originalB
   const [changes, setChanges] = useState<Partial<PostgresRoutineProperties>>({});
   const [preview, setPreview] = useState<PostgresCreateTablePreview>();
   const [acknowledged, setAcknowledged] = useState(false);
+  const [dependencies, setDependencies] = useState(false);
   const [busy, setBusy] = useState(false);
   const [unknown, setUnknown] = useState(false);
   const [error, setError] = useState('');
@@ -171,6 +178,8 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, originalB
     }
   }
 
+  if (dependencies) return <PostgresDependenciesDialog target={{ ...target, stamp }}
+    lockedVersion={version} onBack={() => setDependencies(false)}/>;
   return <Modal title={text[action]} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>{target.database} / {target.name}</strong>
@@ -191,6 +200,7 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, originalB
     </div>
     <footer className="modal-footer">
       {preview && <button disabled={busy} onClick={back}>{text.returnFromPreview}</button>}
+      {dropping && <button disabled={busy || stale || unknown} onClick={() => setDependencies(true)}>{dependenciesText.open}</button>}
       <span className="grow"/><button disabled={busy} onClick={close}>{zh.common.close}</button>
       <button className={preview && dropping ? 'danger' : 'primary'}
         disabled={busy || stale || unknown || (!!preview && requiresAcknowledgement && !acknowledged) ||

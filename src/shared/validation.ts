@@ -1,4 +1,4 @@
-import { postgresRoutineCreateSchema, postgresRoutineManageSchema, postgresRoutineReadSchema } from './postgresRoutine';
+import { postgresRoutineCreateSchema, postgresRoutineDependencySchema, postgresRoutineManageSchema, postgresRoutineReadSchema } from './postgresRoutine';
 import { postgresSequenceCreateSchema, postgresSequenceManageSchema, postgresSequenceReadSchema, postgresSequenceTargetsSchema } from './postgresSequence';
 import { postgresCheckPreviewSchema, postgresCheckApplySchema } from './postgresCheckEdit';
 import { postgresForeignTargetsSchema, postgresForeignPreviewSchema, postgresForeignApplySchema } from './postgresForeignKeyEdit';
@@ -260,6 +260,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.structure.read': postgresStructureInputSchema,
   'postgres.structure.dependencies': postgresStructureInputSchema,
   'postgres.routine.read': postgresRoutineReadSchema,
+  'postgres.routine.dependencies': postgresRoutineDependencySchema,
   'postgres.routine.create.preview': postgresRoutineCreateSchema,
   'postgres.routine.create.apply': postgresCreateTableApplySchema,
   'postgres.routine.manage.preview': postgresRoutineManageSchema,

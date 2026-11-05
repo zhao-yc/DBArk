@@ -138,6 +138,9 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       await engine.handle('connections.open', { id: connectionId, profile });
       const readRoutine = (name: string, kind: 'function' | 'procedure' = 'function', selected = profile) =>
         engine.handle('postgres.routine.read', { connectionId: selected.id, database, profile: selected, name, kind });
+      const routineDependencies = async (name: string, kind: 'function' | 'procedure' = 'function', selected = profile, previousStamp?: string) =>
+        engine.handle('postgres.routine.dependencies', { connectionId: selected.id, database, profile: selected, name, kind,
+          stamp: previousStamp ?? (await readRoutine(name, kind, selected)).stamp });
       const routineCatalog = (id = connectionId) => engine.handle('metadata.objects', { connectionId: id, database });
       const integerRoutine = '"补全.乙"."tabrelio_fold"(integer)', textRoutine = '"补全.乙"."tabrelio_fold"(text)';
       const modesRoutine = '"补全.乙"."tabrelio_modes"(integer, bigint)';
@@ -289,7 +292,21 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       const fixtureOid = await routineOid(fixtureIdentity);
       expect(fixtureOid).toBeTruthy();
       await client.query(`REVOKE EXECUTE ON FUNCTION ${fixtureIdentity} FROM PUBLIC;
-        CREATE VIEW "补全.甲"."例程依赖" AS SELECT "补全.甲"."图形""例程"(42) AS value`);
+        CREATE VIEW "补全.甲"."例程依赖" AS SELECT "补全.甲"."图形""例程"(42) AS value;
+        CREATE TABLE "补全.甲"."例程默认值" (value integer DEFAULT "补全.甲"."图形""例程"(7))`);
+      const originalDependencies = await routineDependencies(fixtureIdentity);
+      expect(originalDependencies).toMatchObject({ limited: false, entries: expect.arrayContaining([
+        { direction: 'referencedBy', kind: 'view', identity: expect.stringContaining('例程依赖'), type: 'n' },
+        { direction: 'referencedBy', kind: 'column default', identity: expect.stringContaining('例程默认值'), type: 'n' },
+      ]) });
+      expect(originalDependencies.entries).not.toEqual(expect.arrayContaining([expect.objectContaining({
+        identity: expect.stringContaining('routine_side_effects'),
+      })]));
+      const customDependencies = await routineDependencies(customIdentity);
+      expect(customDependencies.entries).toContainEqual(expect.objectContaining({
+        direction: 'references', kind: 'type', identity: expect.stringContaining('带.型'), type: 'n',
+      }));
+      expect(customDependencies.entries).not.toContainEqual(expect.objectContaining({ direction: 'referencedBy' }));
       await expect(manageRoutine(fixtureIdentity, 'rename', '抢先签名')).rejects.toThrow('相同输入签名');
       const rename = await manageRoutine(fixtureIdentity, 'rename', '改"名.函数');
       expect(rename.statements.at(-1)).toBe(`ALTER FUNCTION ${fixtureIdentity} RENAME TO "改""名.函数"`);
@@ -302,6 +319,7 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       expect(await routineOid(renamedIdentity)).toBe(fixtureOid);
       expect(await readRoutine(renamedIdentity)).toMatchObject({ canManage: true, comment: fixtureFunction.comment,
         definition: expect.stringContaining('INSERT INTO public.routine_side_effects') });
+      expect((await routineDependencies(renamedIdentity)).entries).toEqual(originalDependencies.entries);
       expect(await readRoutine(customIdentity)).toMatchObject({ securityDefiner: true, volatility: 's' });
       expect((await client.query(`SELECT NOT EXISTS (SELECT FROM pg_catalog.aclexplode(p.proacl) a
         WHERE a.grantee = 0) AS private FROM pg_catalog.pg_proc p WHERE p.oid = $1::oid`, [fixtureOid])).rows)
@@ -359,9 +377,12 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       expect(restricted.statements.at(-1)).toBe(`DROP FUNCTION ${renamedIdentity} RESTRICT`);
       expect(await applyManage(restricted.token)).toMatchObject({ outcome: 'rolledBack' });
       expect(await routineOid(renamedIdentity)).toBe(fixtureOid);
-      await client.query('DROP VIEW "补全.甲"."例程依赖"');
+      await client.query('DROP VIEW "补全.甲"."例程依赖"; DROP TABLE "补全.甲"."例程默认值"');
+      expect((await routineDependencies(renamedIdentity)).entries).not.toContainEqual(expect.objectContaining({ direction: 'referencedBy' }));
       const staleDrop = await manageRoutine(renamedIdentity, 'drop');
+      const beforeComment = await readRoutine(renamedIdentity);
       await client.query(`COMMENT ON FUNCTION ${renamedIdentity} IS '预览后已修改'`);
+      await expect(routineDependencies(renamedIdentity, 'function', profile, beforeComment.stamp)).rejects.toThrow('原例程已变化');
       expect(await applyManage(staleDrop.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('已变化') });
       const replacedDrop = await manageRoutine(renamedIdentity, 'drop');
       await client.query(`DROP FUNCTION ${renamedIdentity};
@@ -372,6 +393,14 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       expect(await applyManage(drop.token)).toMatchObject({ outcome: 'committed', table: renamedIdentity });
       expect(await routineOid(renamedIdentity)).toBeNull();
       expect(await routineOid(customIdentity)).toBeTruthy();
+
+      const trackedProcedure = '"补全.甲"."目录依赖过程"()';
+      await client.query(`CREATE PROCEDURE ${trackedProcedure} LANGUAGE SQL BEGIN ATOMIC
+        INSERT INTO public.routine_side_effects VALUES (42);
+      END`);
+      expect((await routineDependencies(trackedProcedure, 'procedure')).entries).toContainEqual(expect.objectContaining({
+        direction: 'references', identity: expect.stringContaining('routine_side_effects'),
+      }));
 
       const renamedProcedure = '"补全.甲"."改名过程"(integer)';
       const procedureOid = await routineOid(procedureIdentity);
@@ -435,7 +464,11 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       if (limited) {
         if (limited !== database + '_limited') throw Error('补全角色不是本轮专用角色');
         await client.query(`GRANT USAGE ON SCHEMA "补全.乙" TO "${limited}";
-          GRANT SELECT (other_field) ON "补全.乙".duplicate_scope TO "${limited}"`);
+          GRANT SELECT (other_field) ON "补全.乙".duplicate_scope TO "${limited}";
+          CREATE SCHEMA "依赖私有";
+          CREATE VIEW "依赖私有"."跨 schema 调用" AS SELECT "补全.乙".tabrelio_fold(1);
+          CREATE FUNCTION "补全.乙"."仅所有者引用"() RETURNS numeric LANGUAGE SQL RETURN "补全.乙".tabrelio_fold(1);
+          REVOKE EXECUTE ON FUNCTION "补全.乙"."仅所有者引用"() FROM PUBLIC`);
         expect((await run(`SET ROLE "${limited}"; SET search_path TO "补全.乙", public, pg_catalog`)).failure).toBeUndefined();
         expect(await fields('补全.乙')).toEqual(['other_field']);
         expect(await fields('public')).toEqual([]);
@@ -455,6 +488,15 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         const executable = await readRoutine(integerRoutine, 'function', limitedProfile);
         expect(executable).toMatchObject({ canManage: false });
         expect(buildPostgresRoutineCall(executable)).toBe(integerCall);
+        const ownerDependencies = (await routineDependencies(integerRoutine)).entries;
+        expect(ownerDependencies).toEqual(expect.arrayContaining([
+          expect.objectContaining({ direction: 'referencedBy', kind: 'view', identity: expect.stringContaining('跨 schema 调用') }),
+          expect.objectContaining({ direction: 'referencedBy', kind: 'function', identity: expect.stringContaining('仅所有者引用') }),
+        ]));
+        const limitedDependencies = (await routineDependencies(integerRoutine, 'function', limitedProfile)).entries;
+        expect(limitedDependencies.filter((entry: { direction: string }) => entry.direction === 'referencedBy')).toEqual([
+          { direction: 'referencedBy', kind: null, identity: null, type: 'n' },
+        ]);
         await expect(manageRoutine(integerRoutine, 'drop', undefined, 'function', limitedProfile)).rejects.toThrow('没有例程管理权限');
         expect((await run('RESET ROLE')).failure).toBeUndefined();
         expect(await fields('public')).toEqual(['public_field']);
