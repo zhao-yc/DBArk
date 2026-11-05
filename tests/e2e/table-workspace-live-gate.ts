@@ -1,5 +1,5 @@
 export interface TableWorkspaceLiveEnvironment {
-  mode: 'lost-reply' | 'read-failure' | 'unknown' | 'rolled-back';
+  mode: 'lost-reply' | 'read-failure' | 'unknown' | 'rolled-back' | 'draft-restore';
   host: '192.168.31.200'; port: 13357 | 13380 | 13384 | 13310 | 13311; dialect: 'mysql' | 'mariadb'; user: string; password: string;
   database: string; owner: string; version: string; hostname: string; serverUuid?: string;
 }
@@ -26,7 +26,7 @@ export function tableWorkspaceLiveEnvironment(env: Record<string, string | undef
     if (fixed.has(name) && (at < 0 ? args[++index] : value.slice(at + 1)) !== fixed.get(name)) return fail();
   }
   const mode = env.DBARK_WORKSPACE_MODE;
-  if (!['lost-reply', 'read-failure', 'unknown', 'rolled-back'].includes(mode ?? '')) return fail();
+  if (!['lost-reply', 'read-failure', 'unknown', 'rolled-back', 'draft-restore'].includes(mode ?? '')) return fail();
   return Object.freeze({ mode: mode as TableWorkspaceLiveEnvironment['mode'], host, port: Number(rawPort) as TableWorkspaceLiveEnvironment['port'], dialect, user, password, database, owner, version, hostname, ...(serverUuid ? { serverUuid } : {}) });
 }
 
@@ -82,5 +82,33 @@ export function installTableWorkspaceConfirmation({ dialog }: { dialog: any }, i
 export function readTableWorkspaceConfirmations({ dialog }: { dialog: any }, owner: string): TableWorkspaceConfirmationRecord[] {
   const state = (globalThis as any).__dbarkTableWorkspaceConfirmation;
   if (!state || state.owner !== owner || state.failed || state.pending || dialog.showMessageBoxSync !== state.sync || dialog.showMessageBox !== state.asynchronous) throw Error('跨页草稿原生确认尚未消费或原端口未恢复');
+  return structuredClone(state.records);
+}
+
+/** 仅为准确本例选择一次草稿路径，保留正式Main文件IO、文件解析及独立数据库核验。 */
+export function installTableWorkspaceFileChoice({ dialog }: { dialog: any }, input: { owner: string; path: string; mode: 'save' | 'open' }): void {
+  const root = globalThis as any, key = '__dbarkTableWorkspaceFileChoice';
+  if (!/^dbark-table-workspace:[a-f0-9]{32}$/.test(input.owner) || !['save', 'open'].includes(input.mode) || !/^(?:\/|[A-Za-z]:[\\/])/.test(input.path) || input.path.length > 4096 || !input.path.replaceAll('\\', '/').endsWith('/workspace-' + input.owner.slice(-32) + '.dbark-draft')) throw Error('草稿选择器缺少准确本例归属或路径');
+  let state = root[key];
+  if (!state) state = root[key] = { owner: input.owner, path: input.path, save: dialog.showSaveDialog, open: dialog.showOpenDialog, records: [], pending: false, failed: false };
+  if (state.owner !== input.owner || state.path !== input.path || state.failed || state.pending || dialog.showSaveDialog !== state.save || dialog.showOpenDialog !== state.open) throw Error('原草稿选择器归属或函数已变化');
+  state.pending = true;
+  const method = input.mode === 'save' ? 'showSaveDialog' : 'showOpenDialog', original = dialog[method];
+  const selected = async (...args: unknown[]) => {
+    if (!state.pending || dialog[method] !== selected) throw Error('原草稿选择器已失效');
+    dialog[method] = original; state.pending = false;
+    try {
+      const options = args.at(-1) as any;
+      if (!options || options.title !== (input.mode === 'save' ? '保存表格草稿' : '打开表格草稿') || options.filters?.length !== 1 || JSON.stringify(options.filters[0].extensions) !== '["dbark-draft"]') throw Error('拒绝其它文件选择器使用草稿本例路径');
+      state.records.push({ mode: input.mode, options: structuredClone(options) });
+      return input.mode === 'save' ? { canceled: false, filePath: input.path } : { canceled: false, filePaths: [input.path] };
+    } catch (reason) { state.failed = true; throw reason; }
+  };
+  dialog[method] = selected;
+}
+/** 只有实际消费路径且两个原生函数恢复，才记录文件选择终态。 */
+export function readTableWorkspaceFileChoices({ dialog }: { dialog: any }, owner: string): { mode: 'save' | 'open'; options: Record<string, unknown> }[] {
+  const state = (globalThis as any).__dbarkTableWorkspaceFileChoice;
+  if (!state || state.owner !== owner || state.pending || state.failed || dialog.showSaveDialog !== state.save || dialog.showOpenDialog !== state.open) throw Error('原草稿选择尚未闭合');
   return structuredClone(state.records);
 }

@@ -51,6 +51,15 @@ function reactProps(node: MemoryNode): Record<string, any> { const key = Object.
 async function chooseAndConfirm() { await click(button(text.choose)); await acknowledge(); }
 
 describe('显式表格草稿文件正式对话框（RAM）', () => {
+  it('新版显示原页分组统计，全组只核验一次，原样交给父页且不展示行值', async () => {
+    const selected = file(); selected.document.version = 2; selected.document.workspace = { pageSize: 50, activePage: 7, pages: [{ index: 2, changes: 1 }, { index: 7, changes: 2 }] };
+    const { services, callbacks } = await mount('restore', { open: async () => selected });
+    await click(button(text.choose)); expect(doc.body.textContent).toContain(text.workspaceSummary(2,7)); expect(doc.body.textContent).not.toContain('不得显示的');
+    await acknowledge(); await click(button(text.restoreAction));
+    expect(services.verify).toHaveBeenCalledTimes(1); expect(services.verify).toHaveBeenCalledExactlyOnceWith(selected.document, expect.any(String));
+    expect(callbacks.onRestore).toHaveBeenCalledExactlyOnceWith(selected.document); expect(callbacks.onClose).toHaveBeenCalledOnce();
+  });
+
   it('保存需先确认未加密与原始数据风险，不在挂载或确认前打开文件选择器', async () => {
     const { services } = await mount('save');
     expect(doc.body.textContent).toContain('未加密'); expect(doc.body.textContent).toContain('修改前的原始数据');

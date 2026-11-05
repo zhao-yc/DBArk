@@ -136,7 +136,7 @@ export function TableDraftDialog({ services = tableDraftDialogServices, ...props
       <p>{owner.target.database}.{owner.target.table}</p>
       {owner.mode === 'save' ? <><p className="warning-text">{text.saveWarning}</p><UsageHelp><p>{text.saveScope}</p><p>{text.localOnly}</p></UsageHelp></> : <><p>{text.restoreScope}</p><p>{text.restoreView}</p>
         <button className="file-picker" disabled={disabled} onClick={choose}>{view.file ? text.chooseAgain : text.choose}</button>
-        {view.file ? <section aria-label={text.file}><strong>{view.file.name}</strong><div aria-label={text.summary}>{text.insert}：{counts.insert}；{text.update}：{counts.update}；{text.delete}：{counts.delete}</div></section> : <p>{text.noSelection}</p>}
+        {view.file ? <section aria-label={text.file}><strong>{view.file.name}</strong><div aria-label={text.summary}>{text.insert}：{counts.insert}；{text.update}：{counts.update}；{text.delete}：{counts.delete}</div>{view.file.document.workspace && <p>{text.workspaceSummary(view.file.document.workspace.pages.length, view.file.document.workspace.activePage)}</p>}</section> : <p>{text.noSelection}</p>}
       </>}
       <label className="checkbox-line"><input type="checkbox" aria-label={owner.mode === 'save' ? text.saveAcknowledgement : text.restoreAcknowledgement} checked={view.acknowledged} disabled={disabled || owner.mode === 'restore' && !view.file || !!view.saved} onChange={event => { if (editable()) replace({ ...view, acknowledged: event.target.checked }); }}/>{owner.mode === 'save' ? text.saveAcknowledgement : text.restoreAcknowledgement}</label>
       {busy && <Spinner text={progress}/>}<ErrorBox message={view.error}/>{view.message && <p role="status">{view.message}</p>}{view.saved && <p>{view.saved}</p>}

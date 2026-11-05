@@ -11,7 +11,8 @@ export function tableDraftEndpointKey(profile: ConnectionProfile): string {
 }
 /** 保存时由主进程绑定当前配置端点，界面不能指定其它端点的摘要。 */
 export function bindTableDraft(payload: TableDraftPayload, profile: ConnectionProfile): TableDraftDocument {
-  return parseTableDraftDocument({ kind: 'dbark.table-draft', version: 1, ...parseTableDraftPayload(payload), endpointKey: tableDraftEndpointKey(profile) });
+  const checked = parseTableDraftPayload(payload);
+  return parseTableDraftDocument({ kind: 'dbark.table-draft', version: checked.workspace ? 2 : 1, ...checked, endpointKey: tableDraftEndpointKey(profile) });
 }
 /** 文件选择后仍核精确目标；同ID更换主机不能领取旧草稿。 */
 export function assertTableDraftBinding(document: TableDraftDocument, target: TableDraftTarget, profile: ConnectionProfile): void {

@@ -1,9 +1,11 @@
 import type { CellValue, DataRow, RowChange } from './contracts';
 import { tableDraftZh as text } from './tableDraft.zh-CN';
+import { maxTablePage } from './tableLastPage';
 
 export interface TableDraftTarget { connectionId: string; database: string; table: string }
-export interface TableDraftPayload { target: TableDraftTarget; metadataKey: string; changes: RowChange[] }
-export interface TableDraftDocument extends TableDraftPayload { kind: 'dbark.table-draft'; version: 1; endpointKey: string }
+export interface TableDraftWorkspace { pageSize: number; activePage: number; pages: { index: number; changes: number }[] }
+export interface TableDraftPayload { target: TableDraftTarget; metadataKey: string; changes: RowChange[]; workspace?: TableDraftWorkspace }
+export interface TableDraftDocument extends TableDraftPayload { kind: 'dbark.table-draft'; version: 1 | 2; endpointKey: string }
 export const tableDraftLimits = { bytes: 8 * 1024 * 1024, changes: 1000, columns: 1024, cellBytes: 256 * 1024, metadataBytes: 2 * 1024 * 1024, cells: 200000 } as const;
 type WireCell = Exclude<CellValue, number> | { type: 'number'; text: string };
 type Budget = { bytes: number; cells: number };
@@ -119,9 +121,29 @@ function target(value: unknown, budget: Budget): TableDraftTarget {
   return { connectionId: field('connectionId', 200), database: field('database', 1024), table: field('table', 1024) };
 }
 
+/** 页分组只索引连续变更片段，不是服务器分页证明；全组必须恰好覆盖每条变更。 */
+function workspace(value: unknown, changes: number): TableDraftWorkspace {
+  const source = record(value, ['pageSize', 'activePage', 'pages']);
+  const integer = (value: unknown, maximum: number): number => {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > maximum) return invalid();
+    return value;
+  };
+  const pageSize = integer(own(source, 'pageSize'), 1000), activePage = integer(own(source, 'activePage'), maxTablePage);
+  let previous = 0, total = 0;
+  const pages = array(own(source, 'pages'), 16).map(value => {
+    const page = record(value, ['index', 'changes']);
+    const index = integer(own(page, 'index'), maxTablePage), count = integer(own(page, 'changes'), tableDraftLimits.changes);
+    if (index <= previous || (total += count) > changes) return invalid();
+    previous = index; return { index, changes: count };
+  });
+  if (total !== changes || !pages.some(page => page.index === activePage)) return invalid();
+  return { pageSize, activePage, pages };
+}
+
 /** 严格逐项复制变更，任何坏记录都拒绝整份文件，不能部分恢复。 */
 function payload(value: unknown, document: boolean, wire: boolean): TableDraftPayload | TableDraftDocument {
-  const source = record(value, document ? ['kind', 'version', 'endpointKey', 'target', 'metadataKey', 'changes'] : ['target', 'metadataKey', 'changes']);
+  const source = record(value), grouped = Object.hasOwn(source, 'workspace');
+  record(source, [...(document ? ['kind', 'version', 'endpointKey'] : []), 'target', 'metadataKey', 'changes', ...(grouped ? ['workspace'] : [])]);
   const budget: Budget = { bytes: 0, cells: 0 };
   const selectedTarget = target(own(source, 'target'), budget);
   const metadataKey = string(own(source, 'metadataKey'), tableDraftLimits.metadataBytes, budget, true);
@@ -134,12 +156,13 @@ function payload(value: unknown, document: boolean, wire: boolean): TableDraftPa
     if (kind === 'update') { record(candidate, ['kind', 'before', 'values']); const before = row(own(candidate, 'before'), budget, wire), values = row(own(candidate, 'values'), budget, wire); if (!Object.keys(values).length) return invalid(); return { kind, before, values }; }
     return invalid();
   });
-  const result: TableDraftPayload = { target: selectedTarget, metadataKey, changes };
-  if (!document) { assertEncodedSize(toWire({ ...result, kind: 'dbark.table-draft', version: 1, endpointKey: '0'.repeat(64) })); return result; }
-  if (own(source, 'kind') !== 'dbark.table-draft' || own(source, 'version') !== 1) return invalid();
+  const result: TableDraftPayload = { target: selectedTarget, metadataKey, changes, ...(grouped ? { workspace: workspace(own(source, 'workspace'), changes.length) } : {}) };
+  const version = grouped ? 2 : 1;
+  if (!document) { assertEncodedSize(toWire({ ...result, kind: 'dbark.table-draft', version, endpointKey: '0'.repeat(64) })); return result; }
+  if (own(source, 'kind') !== 'dbark.table-draft' || own(source, 'version') !== version) return invalid();
   const endpointKey = own(source, 'endpointKey');
   if (typeof endpointKey !== 'string' || !/^[a-f0-9]{64}$/.test(endpointKey)) return invalid();
-  const full: TableDraftDocument = { ...result, kind: 'dbark.table-draft', version: 1, endpointKey };
+  const full: TableDraftDocument = { ...result, kind: 'dbark.table-draft', version, endpointKey };
   assertEncodedSize(toWire(full)); return full;
 }
 

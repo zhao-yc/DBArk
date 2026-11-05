@@ -1,5 +1,5 @@
 import type { DataRow, TableInfo } from '../shared/contracts';
-import { parseTableDraftDocument, parseTableDraftPayload, type TableDraftDocument, type TableDraftPayload, type TableDraftTarget } from '../shared/tableDraft';
+import { parseTableDraftDocument, parseTableDraftPayload, type TableDraftDocument, type TableDraftPayload, type TableDraftTarget, type TableDraftWorkspace } from '../shared/tableDraft';
 import { tableDraftZh as text } from '../shared/tableDraft.zh-CN';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import { collectChanges, type DraftRow } from './dataChanges';
@@ -28,11 +28,11 @@ function checkedChanges(draft: TableDraftPayload, info: TableInfo): void {
 }
 
 /** 仅保存已暂存的变化；不收集编辑器输入、不持久化整页或原会话令牌。 */
-export function captureTableDraft(rows: DraftRow[], target: TableDraftTarget, info: TableInfo): TableDraftPayload {
+export function captureTableDraft(rows: DraftRow[], target: TableDraftTarget, info: TableInfo, workspace?: TableDraftWorkspace): TableDraftPayload {
   checkedInfo(target, info);
   const changes = collectChanges(rows);
   if (!changes.length) throw Error(text.noChanges);
-  const result = parseTableDraftPayload({ target, metadataKey: tableCopyMetadataKey(info), changes });
+  const result = parseTableDraftPayload({ target, metadataKey: tableCopyMetadataKey(info), changes, ...(workspace ? { workspace } : {}) });
   checkedChanges(result, info); return result;
 }
 

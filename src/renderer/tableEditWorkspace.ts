@@ -4,6 +4,9 @@ import { collectChanges, type DraftRow } from './dataChanges';
 import { DraftHistory } from './draftHistory';
 import { recordBatchCellBytes, assertRecordBatchFields } from './recordDuplicateBatch';
 import { tableEditWorkspaceZh as text } from './locales/tableEditWorkspace.zh-CN';
+import { parseTableDraftDocument, type TableDraftDocument, type TableDraftWorkspace } from '../shared/tableDraft';
+import { restoreTableDraftRows } from './tableDraft';
+import { assertCopiedRecordKeys } from './recordDuplicate';
 
 export const tableEditWorkspaceLimits = { pages: 16, bytes: 64 * 1024 * 1024, cells: 100000, changes: 5000, changedCells: 50000, inputBytes: 1024 * 1024 } as const;
 export interface TableEditPage {
@@ -23,6 +26,7 @@ export class TableEditWorkspace {
   private dead = false;
   private epoch: object = {};
   private pending?: TableEditNavigation;
+  private restoredValue = false;
   private fallback = new DraftHistory();
   revision = 0;
   /** 原表页使用稳定历史端口；切回某页时恢复其原历史，不把另一页的撤销写入本页。 */
@@ -42,11 +46,43 @@ export class TableEditWorkspace {
   get generation(): object { return this.epoch; }
   get selected(): TableEditPage | undefined { return this.active; }
   get stale(): boolean { return this.dead; }
+  get restored(): boolean { return this.restoredValue; }
   get dirty(): boolean { return this.pages.some(page => collectChanges(page.rows).length); }
   get protected(): boolean { return this.pages.some(page => collectChanges(page.rows).length || page.history.status.undo || page.history.status.redo); }
   get changeCount(): number { return this.pages.reduce((n,page) => n+collectChanges(page.rows).length,0); }
   /** 当前页数组尚未采用时不能把旧活动页混入；恢复文件等原单页来源另行显示。 */
   allRows(current: DraftRow[]): DraftRow[] { return this.active?.rows === current ? this.pages.flatMap(page => page.rows) : current; }
+  /** 文件只保留有变化的原页分组；干净页、历史、选择和未暂存输入不写入文件。 */
+  draftLayout(current: DraftRow[]): TableDraftWorkspace | undefined {
+    if (!this.active || this.active.rows !== current) return;
+    if (this.dead || this.pending) throw Error(text.stale);
+    if (this.entries.size < 2 && !this.restoredValue) return;
+    const pages = this.pages.map(page => ({ index: page.index, changes: collectChanges(page.rows).length })).filter(page => page.changes > 0);
+    if (!pages.length) return;
+    return { pageSize: this.active.page.pageSize, activePage: pages.some(page => page.index === this.active!.index) ? this.active.index : pages[0].index, pages };
+  }
+  /** 全部结构、行值和内存预算先通过才一次替换；原页号仅作分组，绝不补读服务器页面。 */
+  restoreDraft(scope: string, profile: unknown, info: TableInfo, source: TableDraftDocument, newId: () => string): TableEditPage {
+    if (this.protected || this.pending) throw Error(text.stale);
+    const document = parseTableDraftDocument(source), layout = document.workspace;
+    if (!layout) throw Error(text.stale);
+    const rows = restoreTableDraftRows(document, info, newId);
+    assertCopiedRecordKeys(rows, info, new Set(rows.filter(row => row.inserted).map(row => row.id)));
+    let offset = 0;
+    const entries: TableEditPage[] = layout.pages.map(group => {
+      const selected = rows.slice(offset, offset += group.changes);
+      return { index: group.index, info, page: { page: group.index, pageSize: layout.pageSize, hasMore: false, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: selected.flatMap(row => row.original ? [row.original] : []), copyMetadataKey: document.metadataKey }, rows: selected, history: new DraftHistory(), selected: new Set(), copied: new Set(selected.filter(row => row.inserted).map(row => row.id)) };
+    });
+    this.budget(entries);
+    this.clear(false); this.scope = scope; this.profile = profile; this.metadata = document.metadataKey; this.restoredValue = true;
+    for (const entry of entries) { this.entries.set(entry.index, entry); this.signatures.set(entry, this.signature(entry)); }
+    this.active = this.entries.get(layout.activePage)!; this.publish(); return this.active;
+  }
+  /** 恢复分组之间只切本地缓存；不接受伪造页对象、过期来源或普通服务器导航。 */
+  selectRestored(entry: TableEditPage): void {
+    if (!this.restoredValue || this.dead || this.pending || this.entries.get(entry.index) !== entry) throw Error(text.stale);
+    this.active = entry; this.publish();
+  }
   /** 条件／连接漂移保留脏稿墓碑；没有用户状态的缓存可以直接退出。 */
   observe(scope: string, profile: unknown): void {
     if (this.scope === undefined) return;
@@ -71,7 +107,7 @@ export class TableEditWorkspace {
   }
   /** 确认原来源后才准备切页，不修改当前草稿或历史；满额不先丢页再等读取。 */
   navigate(target: number | 'last', scope: string): TableEditNavigation {
-    if (!this.active || this.dead || this.pending || scope !== this.scope || target !== 'last' && (!Number.isSafeInteger(target) || target < 1 || target === this.active.index)) throw Error(text.stale);
+    if (this.restoredValue || !this.active || this.dead || this.pending || scope !== this.scope || target !== 'last' && (!Number.isSafeInteger(target) || target < 1 || target === this.active.index)) throw Error(text.stale);
     const cached = target === 'last' ? undefined : this.entries.get(target);
     if (!cached && this.entries.size >= tableEditWorkspaceLimits.pages && !this.pages.some(page => this.disposable(page))) throw Error(text.limit);
     this.budget(this.pages);
@@ -131,5 +167,5 @@ export class TableEditWorkspace {
   /** 明确放弃后台页不读库；当前页由父页安排准确读取。未知／在途由父门统一阻止。 */
   discard(entry:TableEditPage):boolean{if(this.pending||this.entries.get(entry.index)!==entry)return false;this.entries.delete(entry.index);this.signatures.delete(entry);entry.history.clear();if(this.active===entry)this.active=this.pages[0];if(!this.entries.size)this.clear(false);this.publish();return true;}
   /** 成功采用新读取／明确放弃／卸载才清空全部页；不持久化行值或自动重放。 */
-  clear(notify=true):void{this.clearHistory();this.entries.clear();this.signatures.clear();this.active=undefined;this.scope=undefined;this.profile=undefined;this.metadata=undefined;this.dead=false;this.pending=undefined;this.epoch={};if(notify)this.publish();}
+  clear(notify=true):void{this.clearHistory();this.entries.clear();this.signatures.clear();this.active=undefined;this.scope=undefined;this.profile=undefined;this.metadata=undefined;this.dead=false;this.restoredValue=false;this.pending=undefined;this.epoch={};if(notify)this.publish();}
 }

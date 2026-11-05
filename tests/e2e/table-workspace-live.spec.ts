@@ -1,8 +1,9 @@
+import { tableDraftFilesZh as draftText } from '../../src/renderer/locales/tableDraftFiles.zh-CN';
 import { recordBatchEditZh as batchText } from '../../src/renderer/locales/recordBatchEdit.zh-CN';
 import { tableEditWorkspaceZh as workspaceText } from '../../src/renderer/locales/tableEditWorkspace.zh-CN';
 import { recordViewZh as record } from '../../src/renderer/locales/recordViews.zh-CN';
 import { tableToolbarZh } from '../../src/renderer/locales/tableToolbar.zh-CN';
-import { installTableWorkspaceConfirmation, readTableWorkspaceConfirmations } from './table-workspace-live-gate';
+import { installTableWorkspaceConfirmation, readTableWorkspaceConfirmations, installTableWorkspaceFileChoice, readTableWorkspaceFileChoices } from './table-workspace-live-gate';
 import { tableApplyRecoveryZh as recoveryText } from '../../src/renderer/locales/tableApplyRecovery.zh-CN';
 import { tableApplyReceiptZh as receiptText } from '../../src/renderer/locales/tableApplyReceiptZh';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
@@ -76,7 +77,7 @@ test('真实MySQL或MariaDB多页表单暂存、缓存返回、统一事务及�
         if (channel === 'dbark:task' && event && event.taskId === state.taskId && event.tableApply) { state.taskEvents.push(structuredClone(event)); if (target.mode === 'unknown') { state.suppressed++; return; } }
         return Reflect.apply(originalSend, window.webContents, [channel, ...args]);
       }) as typeof window.webContents.send; (globalThis as typeof globalThis & { __tableWorkspaceLive?: Audit }).__tableWorkspaceLive = state;
-      const allowed = new Set(['app.menuState','app.runtimeInfo','app.info','app.setDirty','settings.get','settings.save','connections.list','connections.organizationGet','connections.save','connections.open','connections.close','workbench.get','workbench.protocolReady','workbench.protocolTake','metadata.databases','metadata.objects','metadata.table','table.page','table.preferences.get','table.preview','table.apply','table.applyReceipt.list','table.applyReceipt.detail','table.copySourceRelease','tasks.list','history.list']);
+      const allowed = new Set([...(target.mode === 'draft-restore' ? ['tableDraftFiles.save','tableDraftFiles.open','table.draftVerify'] : []),'app.menuState','app.runtimeInfo','app.info','app.setDirty','settings.get','settings.save','connections.list','connections.organizationGet','connections.save','connections.open','connections.close','workbench.get','workbench.protocolReady','workbench.protocolTake','metadata.databases','metadata.objects','metadata.table','table.page','table.preferences.get','table.preview','table.apply','table.applyReceipt.list','table.applyReceipt.detail','table.copySourceRelease','tasks.list','history.list']);
       const deny = (name: string): never => { state.denied.push(name); throw Error('跨页草稿实库拒绝越界：' + name); };
       utilityProcess.fork = ((file: string, ...args: unknown[]) => { if (!/(?:^|[\\/])worker\.cjs$/.test(file)) return deny('其它utility'); return Reflect.apply(fork, utilityProcess, [file, ...args]); }) as typeof utilityProcess.fork;
       handlers.set('dbark:request', async (event, raw) => {
@@ -88,7 +89,8 @@ test('真实MySQL或MariaDB多页表单暂存、缓存返回、统一事务及�
         if (command === 'metadata.objects' && value.database !== target.database) return deny('其它目录');
         if (['metadata.table','table.page','table.preferences.get','table.preview','table.apply'].includes(command) || command.startsWith('record.templates.')) { if (value.database !== target.database || value.table !== 'items') return deny('其它表'); }
         if (command === 'table.preview' || command === 'table.apply') { const changes = value.changes; if (!Array.isArray(changes) || changes.length !== 2 || changes.some((change,at) => !change || change.kind !== 'update' || !change.before || typeof change.before !== 'object' || String(change.before.id) !== (at===0?'1':'3') || !change.values || typeof change.values !== 'object' || Object.keys(change.values).some(key=>!target.fields.includes(key)))) return deny('非本例准确两条UPDATE'); if (command === 'table.apply') { if (++state.applies !== 1) return deny('重复提交'); state.taskId = String(value.taskId); } }
-        const fact = command.startsWith('record.templates.') || ['app.setDirty','metadata.table','table.page','table.preview','table.apply','table.applyReceipt.list','table.applyReceipt.detail'].includes(command) ? { command, input: structuredClone(value) } as Fact : undefined; if (fact) state.operations.push(fact); state.pending++;
+        if (command.startsWith('tableDraftFiles.')) { const selected = command === 'tableDraftFiles.save' ? value.payload as any : value.target as any; const targetValue = command === 'tableDraftFiles.save' ? selected?.target : selected; if (targetValue?.connectionId !== state.profileId || targetValue.database !== target.database || targetValue.table !== 'items') return deny('其它草稿目标'); }
+        const fact = command.startsWith('tableDraftFiles.') || command === 'table.draftVerify' || command.startsWith('record.templates.') || ['app.setDirty','metadata.table','table.page','table.preview','table.apply','table.applyReceipt.list','table.applyReceipt.detail'].includes(command) ? { command, input: structuredClone(value) } as Fact : undefined; if (fact) state.operations.push(fact); state.pending++;
         try {
           // 只模拟交付失败：原Main提交或回执读取先实际完成，原封套单独留证。
           if (command === 'table.page' && state.applies && ++state.pageReadsAfterApply === 1 && target.mode === 'read-failure') {
@@ -144,6 +146,42 @@ test('真实MySQL或MariaDB多页表单暂存、缓存返回、统一事务及�
     await step(()=>expect(page.locator('.workspace-tab-button.active .dirty-dot')).toHaveCount(1)); await step(()=>batch.getByRole('button',{name:batchText.cancel,exact:true}).click()); await step(()=>expect(batch).toBeHidden());
     await step(()=>expect(page.locator('.workspace-tab-button.active .dirty-dot')).toHaveCount(1)); expect(facts(await audit(),'app.setDirty').slice(dirtyBefore).every(item=>item.input.dirty!==false)).toBe(true);
     await click(table(), zh.table.text019); await step(() => expect(sqlModal()).toContainText(workspaceText.preview(2))); await step(() => sqlModal().getByRole('button', { name: zh.common.backToEdit, exact: true }).click());
+    if (env.mode === 'draft-restore') {
+      stage = '正式草稿文件保存，关闭原表标签后新表页独立核验并恢复分组';
+      await step(() => bar().getByRole('button', { name: workspaceText.page(3), exact: true }).click());
+      const owner = 'dbark-table-workspace:' + env.owner, draftPath = info.outputPath('workspace-' + env.owner + '.dbark-draft');
+      await click(table(), draftText.save); const saving = page.getByRole('dialog', { name: draftText.saveTitle, exact: true });
+      await step(() => saving.getByRole('checkbox', { name: draftText.saveAcknowledgement, exact: true }).check());
+      await step(() => application.evaluate(installTableWorkspaceFileChoice, { owner, path: draftPath, mode: 'save' as const }));
+      await step(() => saving.getByRole('button', { name: draftText.saveAction, exact: true }).click());
+      await step(() => expect(saving).toContainText(draftText.saved)); await step(() => saving.getByRole('button', { name: draftText.close, exact: true }).click());
+      expect(await read(rowsSql)).toEqual(baseline); expect((await audit()).applies).toBe(0);
+      const { readFile } = require('node:fs/promises') as typeof import('node:fs/promises'), { decodeTableDraft } = require('../../src/shared/tableDraft') as typeof import('../../src/shared/tableDraft');
+      const saved = decodeTableDraft(await step(() => readFile(draftPath, 'utf8')));
+      expect(saved.version).toBe(2); expect(saved.workspace).toEqual({ pageSize: 1, activePage: 3, pages: [{ index: 1, changes: 1 }, { index: 3, changes: 1 }] });
+      expect(saved.changes).toHaveLength(2); await info.attach('正式第二版多页草稿文件', { path: draftPath, contentType: 'application/json' });
+      // 使用正式关闭入口销毁原TableTab及RAM工作区，然后经对象树创建全新表页。
+      await step(() => application.evaluate(installTableWorkspaceConfirmation, { owner, expected: zh.app.text002, choice: 'accept' as const }));
+      await step(() => page.keyboard.press(process.platform === 'darwin' ? 'Meta+w' : 'Control+w')); await step(() => expect(table()).toHaveCount(0));
+      expect((await step(() => application.evaluate(readTableWorkspaceConfirmations, owner))).map(item => item.choice)).toEqual(['accept']);
+      await step(() => object.dblclick()); await step(() => expect(grid().getByRole('gridcell', { name: sourceLabel, exact: true })).toBeVisible());
+      await step(() => expect(modified()).toHaveCount(0));
+      await click(table(), draftText.open); const restoring = page.getByRole('dialog', { name: draftText.restoreTitle, exact: true });
+      await step(() => application.evaluate(installTableWorkspaceFileChoice, { owner, path: draftPath, mode: 'open' as const }));
+      await step(() => restoring.getByRole('button', { name: draftText.choose, exact: true }).click());
+      await step(() => expect(restoring).toContainText(draftText.workspaceSummary(2,3))); await step(() => restoring.getByRole('checkbox', { name: draftText.restoreAcknowledgement, exact: true }).check());
+      await step(() => restoring.getByRole('button', { name: draftText.restoreAction, exact: true }).click()); await step(() => expect(restoring).toBeHidden());
+      await step(() => expect(bar()).toContainText(workspaceText.summary(2,2))); await step(() => expect(bar()).toContainText(workspaceText.restoredHint));
+      await step(() => expect(grid().getByRole('gridcell', { name: labelC, exact: true })).toBeVisible());
+      const beforeSwitch = await audit(); expect(facts(beforeSwitch, 'table.draftVerify')).toHaveLength(1);
+      const verified = result(facts(beforeSwitch, 'table.draftVerify')[0].reply); expect(verified.verifiedChanges).toBe(2);
+      await step(() => bar().getByRole('button', { name: workspaceText.page(1), exact: true }).click()); await step(() => expect(grid().getByRole('gridcell', { name: labelA, exact: true })).toBeVisible());
+      const afterSwitch = await audit(); expect(facts(afterSwitch,'table.page')).toHaveLength(facts(beforeSwitch,'table.page').length); expect(facts(afterSwitch,'metadata.table')).toHaveLength(facts(beforeSwitch,'metadata.table').length);
+      expect(afterSwitch.applies).toBe(0); expect(await read(rowsSql)).toEqual(baseline);
+      const choices = await step(() => application.evaluate(readTableWorkspaceFileChoices, owner)); expect(choices.map(item => item.mode)).toEqual(['save','open']);
+      await info.attach('原生文件选择与关闭原表恢复证据', { body: JSON.stringify({ choices, oldTableTabDestroyed: true, newTableTabCreated: true, verifiedChanges: 2, restoredPages: [1,3], activeRestoredPage: 3, localGroupSwitchReads: 0, writesBeforeApply: 0 }), contentType: 'application/json' });
+      const restoredShot = info.outputPath('关闭原表后恢复多页草稿.png'); await step(() => page.screenshot({ path: restoredShot })); await info.attach('关闭原表后恢复多页草稿', { path: restoredShot, contentType: 'image/png' });
+    }
     await step(() => bar().getByRole('button', { name: workspaceText.page(3), exact: true }).click()); await count(1); await click(table(), zh.table.text019); await step(() => expect(sqlModal()).toContainText(workspaceText.preview(2))); expect(await read(rowsSql)).toEqual(baseline);
     let concurrent = baseline;
     if (env.mode === 'rolled-back') {
@@ -203,7 +241,7 @@ test('真实MySQL或MariaDB多页表单暂存、缓存返回、统一事务及�
     const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite'), { join } = require('node:path') as typeof import('node:path'); const config = new DatabaseSync(join(directory,'dbark.sqlite'), { readOnly:true });
     try { expect(config.prepare('SELECT COUNT(*) AS n FROM secrets').get()?.n).toBe(0); } finally { config.close(); }
     await closeMysqlConnection(observer.connection,true); observerClosed=true; expect(stream.closed).toBe(true);
-    await info.attach('跨页草稿实库闭合原件',{body:JSON.stringify({mode:env.mode,platform:process.platform,directory,pid:processHandle.pid,dialect:env.dialect,database:env.database,owner:env.owner,identity,baseline,finalRows,originalDdl,finalDdl,finalAudit,receipt,tasks,normalExit:true,exitCode:processHandle.exitCode,observerClosed:true,localStageWrites:0,retainedPages:3,modifiedPages:[1,3],cachedReturnReads:0,independentHistories:true,cleanPagePreview:true,canceledCleanPageBatchDirtyPreserved:true,changedRows:[1,3],unselectedRow:2,explicitApplyBatches:1,appliedRows:env.mode === 'rolled-back' ? 0 : 2,systemClipboardOperations:0,credentialPersistent:false,coldRestartVerified:false}),contentType:'application/json'}); completed={directory,database:env.database,pid:processHandle.pid,platform:process.platform};
+    await info.attach('跨页草稿实库闭合原件',{body:JSON.stringify({mode:env.mode,platform:process.platform,directory,pid:processHandle.pid,dialect:env.dialect,database:env.database,owner:env.owner,identity,baseline,finalRows,originalDdl,finalDdl,finalAudit,receipt,tasks,normalExit:true,exitCode:processHandle.exitCode,observerClosed:true,localStageWrites:0,retainedPages:3,modifiedPages:[1,3],cachedReturnReads:0,independentHistories:true,cleanPagePreview:true,canceledCleanPageBatchDirtyPreserved:true,changedRows:[1,3],unselectedRow:2,explicitApplyBatches:1,appliedRows:env.mode === 'rolled-back' ? 0 : 2,systemClipboardOperations:0,credentialPersistent:false,coldRestartVerified:false,draftFileRestored:env.mode==='draft-restore',originalTableTabDestroyed:env.mode==='draft-restore'}),contentType:'application/json'}); completed={directory,database:env.database,pid:processHandle.pid,platform:process.platform};
   } catch(reason) {
     if(!closed) try { const shot=info.outputPath('失败原窗口.png'); await page.screenshot({path:shot}); await info.attach('失败原窗口',{path:shot,contentType:'image/png'}); const menus=await (await import('./navigation-menu-diagnostics')).readNavigationMenuObservation(page); await info.attach('失败原菜单观察',{body:JSON.stringify(menus),contentType:'application/json'}); } catch { /* 只观察原页，不重建窗口。 */ }
     let partial: Audit | undefined; if(!closed) try { partial=await audit(); } catch { /* 不重装原观察器或补造失败事实。 */ } runtime.retainOwnedDesktopResources(info);
