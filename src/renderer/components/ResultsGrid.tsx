@@ -32,7 +32,7 @@ export function isResultBinaryCell(value: CellValue | undefined): boolean { retu
 export interface GridCellMenuAnchor { x: number; y: number; element: HTMLElement; }
 
 /** 任意查询结果只读；支持单格或勾选记录复制，始终保留原始值用于剪贴板。 */
-export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, onCellFilterMenu }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; onCellFilterMenu?(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean }) {
+export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange, onCellFilterMenu, onCellEdit }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void; onCellFilterMenu?(cell: QueryResultCopyCell, anchor: GridCellMenuAnchor): boolean; onCellEdit?(cell: QueryResultCopyCell, anchor: HTMLElement, initialText?: string): boolean }) {
   const height = readGridRowHeight(rowHeight);
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
@@ -182,14 +182,20 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);
     const next={sourceRevision:binaryGeneration.current.revision,row,key,rows,columns,value:ownCell(row,key),revision:gridRevisionRef.current,workspaceCurrent,invalid:false};binaryRef.current=next;setBinary(next);
   }
-  /** 用事件所在的原始行列定位菜单，右键不依赖之前选中的格。 */
-  function openCellFilterMenu(row: DataRow | undefined, rowIdx: number, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
-    if (!onCellFilterMenu || !row || rows[rowIdx] !== row || !actionCurrent() || !(target instanceof Element)) return false;
+  /** 右键和编辑都按事件所在格定位，不能借用之前选中的行列。 */
+  function locateCell(row: DataRow | undefined, rowIdx: number, key: string | undefined, target: EventTarget | null) {
+    if (!row || rows[rowIdx] !== row || !actionCurrent() || !(target instanceof Element)) return;
     const column = columns.find(item => item.key === key);
     const element = target.closest<HTMLElement>('[role="gridcell"]');
-    if (!column || !element?.isConnected) return false;
+    if (column && element?.isConnected) return { cell: { row, index: rowIdx, column }, element };
+  }
+
+  function openCellFilterMenu(row: DataRow | undefined, rowIdx: number, key: string | undefined, target: EventTarget | null, point?: { x: number; y: number }): boolean {
+    const located = onCellFilterMenu && locateCell(row, rowIdx, key, target);
+    if (!located) return false;
+    const { cell, element } = located;
     const rect = element.getBoundingClientRect();
-    return onCellFilterMenu({ row, index: rowIdx, column }, { ...(point ?? { x: rect.left, y: rect.bottom }), element });
+    return onCellFilterMenu(cell, { ...(point ?? { x: rect.left, y: rect.bottom }), element });
   }
 
   /** 整理快捷键仅属于当前只读网格；输入框、编辑模式和旧渲染不能借此撤销正文或另一结果。 */
@@ -202,6 +208,17 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
       event.preventDefault();
       event.stopPropagation();
       return;
+    }
+    if (onCellEdit && args.mode === 'ACTIVE' && !event.defaultPrevented && !event.isGridDefaultPrevented() &&
+      !event.nativeEvent.isComposing && event.keyCode !== 229 && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const typed = Array.from(event.key).length === 1 && !(event.shiftKey && event.key === ' ');
+      const located = (key === 'f2' || typed) && locateCell(row, args.rowIdx, column?.key, event.target);
+      if (located && event.target === located.element && onCellEdit(located.cell, located.element, typed ? event.key : undefined)) {
+        event.preventGridDefault();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
     }
     const historyKey=(event.ctrlKey||event.metaKey)&&!event.altKey&&(key==='z'||key==='y'&&event.ctrlKey&&!event.metaKey&&!event.shiftKey);
     if(historyKey&&onHistoryTravel&&selectionScope&&isCurrent&&!onActiveRowChange){
@@ -225,7 +242,17 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     event.preventGridDefault();
     event.preventDefault();
     event.stopPropagation();
-  } : undefined} onCellDoubleClick={({ row, column }) => viewBinary(row, column.key)} onCellKeyDown={cellKeyDown} rowHeight={height} headerRowHeight={40} rowKeyGetter={row => rowIndexes.get(row)!} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onActivePositionChange={({ row, rowIdx, column }) => { if (!actionCurrent()) return; captureCopyCell(row, rowIdx, column); onActiveRowChange?.(row ?? null); onActiveRowIndexChange?.(row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row ? rowIdx : null); }} sortColumns={sort?.map(rule => ({ columnKey: rule.column, direction: rule.direction }))} onSortColumnsChange={changeSortColumns} onCellCopy={({ row, column }, event) => {
+  } : undefined} onCellDoubleClick={({ row, rowIdx, column }, event) => {
+    if (onCellEdit && !event.defaultPrevented) {
+      const located = locateCell(row, rowIdx, column.key, event.target);
+      if (located && onCellEdit(located.cell, located.element)) {
+        event.preventGridDefault();
+        event.preventDefault();
+        return;
+      }
+    }
+    viewBinary(row, column.key);
+  }} onCellKeyDown={cellKeyDown} rowHeight={height} headerRowHeight={40} rowKeyGetter={row => rowIndexes.get(row)!} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onActivePositionChange={({ row, rowIdx, column }) => { if (!actionCurrent()) return; captureCopyCell(row, rowIdx, column); onActiveRowChange?.(row ?? null); onActiveRowIndexChange?.(row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row ? rowIdx : null); }} sortColumns={sort?.map(rule => ({ columnKey: rule.column, direction: rule.direction }))} onSortColumnsChange={changeSortColumns} onCellCopy={({ row, column }, event) => {
     event.preventDefault();
     if(!actionCurrent()||!rowIndexes.has(row)||!selectedRows.size&&!columns.some(item=>item.key===column.key))return;
     try {

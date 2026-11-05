@@ -3,6 +3,7 @@ import { postgresDependenciesZh as dependenciesText } from '../../src/renderer/l
 import { postgresRoutineZh as routineText } from '../../src/renderer/locales/postgresRoutine.zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { test as base, expect } from '@playwright/test';
+import { Client } from 'pg';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -149,6 +150,80 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await expect(tableButton(postgresTableZh.refresh)).toBeEnabled();
       check();
     };
+
+    const inlineCell = (name: string) => grid.getByRole('gridcell', { name, exact: true });
+    const inline = (column: string) => page.getByRole('region', { name: postgresTableZh.cellEdit(column), exact: true });
+    const inlineValue = (column: string) => inline(column).getByLabel(postgresTableZh.value, { exact: true });
+    const inlineMode = (column: string) => inline(column).getByLabel(postgresTableZh.valueMode, { exact: true });
+    const addInline = (column: string) => inline(column).getByRole('button', { name: postgresTableZh.stage, exact: true });
+    const recordDraft = gridTab.getByLabel(postgresTableZh.draft, { exact: true });
+    const exactId = '9007199254740993';
+    const exactNote = "就地编辑 O'Brien\n第二行";
+    await inlineCell('原值').dblclick();
+    await expect(inlineValue('note')).toBeFocused();
+    await expect(inlineValue('note')).toHaveValue('原值');
+    await expect(tableButton(postgresTableZh.refresh)).toBeDisabled();
+    await inlineValue('note').fill('应取消');
+    await page.locator('.object-row .tree-label').filter({ hasText: '结构视图' }).click();
+    await expect(inline('note')).toHaveCount(0);
+    await expect(grid).toContainText('原值');
+    await inlineCell('原值').press('F2');
+    await expect(inline('note')).toHaveCount(0);
+    await table.click();
+    const inlineTestViewTab = page.locator('.tab-strip .workspace-tab-button').filter({ hasText: '结构视图' });
+    await inlineTestViewTab.locator('.tab-close').click();
+    await expect(inlineTestViewTab).toHaveCount(0);
+    await expect(inlineValue('note')).toHaveValue('应取消');
+    await inlineValue('note').press('Escape');
+    await expect(inlineCell('原值')).toBeFocused();
+    await expect(recordDraft).toHaveCount(0);
+    await inlineCell('原值').press('F2');
+    await inlineValue('note').press('Enter');
+    await expect(recordDraft).toHaveCount(0);
+
+    await inlineCell('原值').press('Z');
+    await expect(inlineValue('note')).toHaveValue('Z');
+    await inlineMode('note').selectOption('null');
+    await addInline('note').click();
+    await expect(recordDraft).toContainText('note=NULL');
+    await inlineCell('原值').press('F2');
+    await expect(inlineMode('note')).toHaveValue('null');
+    await inlineMode('note').selectOption('default');
+    await addInline('note').click();
+    await expect(recordDraft).toContainText('note=DEFAULT');
+    await inlineCell('原值').press('F2');
+    await expect(inlineMode('note')).toHaveValue('default');
+    await inlineMode('note').selectOption('text');
+    await inlineValue('note').fill(exactNote);
+    await page.screenshot({ path: info.outputPath('PostgreSQL单元格就地编辑.png') });
+    await inlineValue('note').press('Enter');
+    await inlineCell('1').click();
+    await inlineCell('1').press('F2');
+    await inlineValue('id').fill(exactId);
+    await addInline('id').click();
+    await expect(recordDraft).toContainText(postgresTableZh.changes(1));
+    await expect(recordDraft).toContainText('id=' + exactId);
+    await expect(grid).toContainText('原值');
+
+    const independent = new Client({ host: '127.0.0.1', port, database, user, password, ssl: false, connectionTimeoutMillis: 1500 });
+    try {
+      await independent.connect();
+      const readRecords = async () => (await independent.query('SELECT id::text, note FROM "回归"."带""引号"')).rows;
+      expect(await readRecords()).toEqual([{ id: '1', note: '原值' }]);
+      await commit();
+      expect(await readRecords()).toEqual([{ id: exactId, note: exactNote }]);
+      await inlineCell(exactId).dblclick();
+      await inlineValue('id').fill('1');
+      await addInline('id').click();
+      const edited = grid.getByRole('gridcell').filter({ hasText: '第二行' });
+      await edited.dblclick();
+      await inlineValue('note').fill('原值');
+      await addInline('note').click();
+      await commit();
+      expect(await readRecords()).toEqual([{ id: '1', note: '原值' }]);
+    } finally { await independent.end(); }
+    await mark('PostgreSQL 单元格就地编辑支持双击、F2、直接输入和取消；同一行两列合并草稿并独立回读提交前后精确原文');
+
     await add('2', '新增甲');
     await add('3', '新增乙');
     await expect(tableButton(tableSortText.entry)).toBeDisabled();

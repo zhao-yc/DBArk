@@ -42,6 +42,26 @@
 .pg-record-inputs textarea { flex: 1; }
 .pg-table-preview dd, .pg-table-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.pg-inline-cell-editor {
+  position: fixed;
+  z-index: 85;
+  display: grid;
+  gap: 8px;
+  width: min(320px, calc(100vw - 16px));
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.pg-inline-cell-editor[hidden] { display: none; }
+.pg-inline-cell-editor label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); align-items: center; gap: 8px; }
+.pg-inline-cell-editor label span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pg-inline-cell-editor label select { min-width: 0; }
+.pg-inline-cell-editor textarea { width: 100%; resize: vertical; }
+.pg-inline-cell-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
 .pg-table-export fieldset { margin: 10px 0; border: 1px solid var(--line); }
 .pg-table-export fieldset > button { margin-right: 6px; }
 .pg-table-export-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 6px; max-height: 160px; overflow: auto; padding: 8px 0; }

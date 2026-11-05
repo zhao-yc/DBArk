@@ -6,10 +6,10 @@ import { exactTableLayoutProjection, postgresLayoutSchemas, type PostgresLayoutT
 import { postgresRelationSelect } from '../../shared/postgresSql';
 import { isPostgresPresetTabId, postgresPresetIdFromTab } from '../../shared/postgresPresetTab';
 import {
-  isPostgresTableFiltered, postgresTableLimits, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableField,
+  isPostgresTableFiltered, postgresTableLimits, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTableTarget,
 } from '../../shared/postgresTable';
-import { cellPreview, cellText, errorMessage, invoke } from '../lib';
+import { cellPreview, cellText, errorMessage, invoke, ownCell } from '../lib';
 import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
@@ -19,6 +19,7 @@ import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { PostgresTableImportDialog } from './PostgresTableImportDialog';
 import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
 import { PostgresTableCellFilterMenu } from './PostgresTableCellFilterMenu';
+import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
 import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import type { FilterDraft } from '../tableFilters';
@@ -41,6 +42,10 @@ type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 
 type Editable = Extract<PostgresTableChange, { kind: 'insert' | 'update' }>;
 type DraftEntry = { change: PostgresTableChange & { pageToken: string }; rowKey?: string; offset: number };
 type Mode = PostgresTableField['value']['mode'] | 'unchanged';
+interface InlineEdit {
+  scope: object; cell: QueryResultCopyCell; column: PostgresTableColumn; rowKey: string;
+  anchor: HTMLElement; originalText: string; initial: PostgresInlineCellValue; typed?: string;
+}
 
 /** 表单只产生字段和值，明确区分保留原值、空串、NULL及DEFAULT。 */
 function RecordForm({ page, row, initial, onSave, onClose }: {
@@ -127,6 +132,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     scope: object; cell: QueryResultCopyCell; anchor: GridCellMenuAnchor; seed: FilterDraft;
   }>();
   const cellMenuOwner = useRef<typeof cellMenu>(undefined);
+  const [inlineEdit, setInlineEdit] = useState<InlineEdit>();
+  const inlineOwner = useRef<InlineEdit>(undefined);
+  const inlineReturnFocus = useRef<HTMLElement>(undefined);
   const [sortPageToken, setSortPageToken] = useState<string>();
   const [presetPage, setPresetPage] = useState<{ token: string; connectionVersion: number }>();
   const [layoutDialog, setLayoutDialog] = useState<object>();
@@ -155,7 +163,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     reset: input => invoke('postgres.table.layout.reset', input), acquire: () => acquireWorkspaceBusy(tab.id),
     changed: view => {
       setLayoutView(view);
-      const state = useWorkspace.getState(), dirty = recordDirty.current || view.dirty;
+      const state = useWorkspace.getState(), dirty = recordDirty.current || !!inlineOwner.current || view.dirty;
       if (!!state.dirtyTabs[tab.id] !== dirty) state.setDirty(tab.id, dirty);
     },
   }, postgresLayoutSchemas, layoutText));
@@ -237,7 +245,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || inlineOwner.current || lease.current) return;
     setMessage('');
     void run(isCurrent => read(next, isCurrent, [...new Set(draft.map(entry => entry.change.pageToken))]));
   }
@@ -246,12 +254,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   function setChanges(next: DraftEntry[]) {
     setDraft(next);
     recordDirty.current = next.length > 0;
-    useWorkspace.getState().setDirty(tab.id, recordDirty.current || layout.view.dirty);
+    useWorkspace.getState().setDirty(tab.id, recordDirty.current || !!inlineOwner.current || layout.view.dirty);
   }
 
   /** 每项保留原页和主键身份，重新编辑同一记录只更新这一个动作。 */
-  function stage(change: PostgresTableChange) {
-    if (!page?.pageToken || requiresRefresh || lease.current) return;
+  function stage(change: PostgresTableChange, owner?: InlineEdit) {
+    if (!page?.pageToken || requiresRefresh || lease.current || inlineOwner.current !== owner) return;
     const rowKey = change.kind === 'insert' ? undefined : page.rowKeys?.[change.row];
     if (change.kind !== 'insert' && !rowKey) throw Error(text.noKey);
     const prior = rowKey ? draft.find(item => item.rowKey === rowKey) : undefined;
@@ -269,7 +277,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh) return;
+    if (!pageToken || !draft.length || requiresRefresh || inlineOwner.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -301,7 +309,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   const layoutOpen = layoutDialog === layoutKey;
-  const blocked = busy || !!form || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
+  const blocked = busy || !!form || !!inlineEdit || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
@@ -331,7 +339,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     };
   }, [page?.columns, columnNames, layoutView.preferences]);
 
-  const cellMenuScope = useMemo(() => ({}), [page, gridLayout.columns, connectionVersion]);
+  const cellScope = useMemo(() => ({}), [page, gridLayout.columns, connectionVersion]);
   const cellMenuEnabled = active && !frozenPage && !requiresRefresh && pageConnectionVersion === connectionVersion && !!page?.exportToken;
 
   function closeCellMenu(menu: typeof cellMenu, restoreFocus: boolean) {
@@ -343,12 +351,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   useLayoutEffect(() => {
     const owner = cellMenuOwner.current;
-    if (owner && (!cellMenuEnabled || owner.scope !== cellMenuScope)) closeCellMenu(owner, false);
-  }, [cellMenuEnabled, cellMenuScope]);
+    if (owner && (!cellMenuEnabled || owner.scope !== cellScope)) closeCellMenu(owner, false);
+  }, [cellMenuEnabled, cellScope]);
 
   /** 在打开及选中菜单项时都校验原页及活动标签，避免用旧格或其他连接的值。 */
   function canFilterCell(): boolean {
-    return cellMenuEnabled && !!lifetime.current && issued.current === page?.exportToken && layoutScope.current.current() &&
+    return cellMenuEnabled && !inlineOwner.current && !!lifetime.current && issued.current === page?.exportToken && layoutScope.current.current() &&
       !lease.current && !recordDirty.current && !document.querySelector('[role="dialog"], [role="alertdialog"]');
   }
 
@@ -356,7 +364,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     if (!page || !canFilterCell()) return false;
     try {
       const seed = postgresTableCellFilterDraft(cell, gridLayout.columns, page.rows);
-      const menu = { scope: cellMenuScope, cell, anchor, seed };
+      const menu = { scope: cellScope, cell, anchor, seed };
       cellMenuOwner.current = menu;
       setCellMenu(menu);
       return true;
@@ -366,13 +374,70 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   function chooseCellFilter(menu: NonNullable<typeof cellMenu>, exclude: boolean) {
     if (cellMenuOwner.current !== menu) return;
     closeCellMenu(menu, true);
-    if (!page || !canFilterCell() || menu.scope !== cellMenuScope || !menu.anchor.element.isConnected) return;
+    if (!page || !canFilterCell() || menu.scope !== cellScope || !menu.anchor.element.isConnected) return;
     try {
       const current = postgresTableCellFilterDraft(menu.cell, gridLayout.columns, page.rows);
       if (current.value !== menu.seed.value || current.operator !== menu.seed.operator || current.column !== menu.seed.column) return;
       setCellFilterSeed(exclude ? postgresTableCellFilterDraft(menu.cell, gridLayout.columns, page.rows, true) : current);
       setAdvancedFilters(true);
     } catch { /* 原值失效时保留当前条件。 */ }
+  }
+
+  const canEditGrid = active && writable && !!page?.capabilities.update && pageConnectionVersion === connectionVersion;
+
+  /** 单元格编辑只接收当前可见、可写且有原行身份的字段；字节仍走原查看和记录表单。 */
+  function openInlineEdit(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
+    if (!canEditGrid || !page || inlineOwner.current || lease.current || issued.current !== page.pageToken ||
+      !layoutScope.current.current() || page.rows[cell.index] !== cell.row ||
+      document.querySelector('[role="dialog"], [role="alertdialog"]')) return false;
+    const column = page.columns.find(column => column === cell.column);
+    const rowKey = page.rowKeys?.[cell.index];
+    if (!column || column.generated || column.binary || !rowKey) return false;
+    const raw = ownCell(cell.row, column.key);
+    if (raw === undefined || (raw !== null && typeof raw === 'object')) return false;
+    const prior = draft.find(entry => entry.rowKey === rowKey)?.change;
+    if (prior?.kind === 'delete') return false;
+    const staged = prior?.kind === 'update' ? prior.fields.find(field => field.column === column.key)?.value : undefined;
+    if (staged?.mode === 'binary') return false;
+    const originalText = raw === null ? '' : cellText(raw);
+    const initial = staged ?? (raw === null ? { mode: 'null' } : { mode: 'text', value: originalText });
+    const owner: InlineEdit = { scope: cellScope, cell, column, rowKey, anchor, originalText, initial, typed };
+    closeCellMenu(cellMenuOwner.current, false);
+    inlineOwner.current = owner;
+    useWorkspace.getState().setDirty(tab.id, true);
+    setInlineEdit(owner);
+    return true;
+  }
+
+  function closeInlineEdit(owner: InlineEdit) {
+    if (inlineOwner.current !== owner) return;
+    inlineOwner.current = undefined;
+    inlineReturnFocus.current = owner.anchor;
+    setInlineEdit(undefined);
+    useWorkspace.getState().setDirty(tab.id, recordDirty.current || layout.view.dirty);
+  }
+
+  useLayoutEffect(() => {
+    if (inlineEdit || !active) return;
+    const anchor = inlineReturnFocus.current;
+    inlineReturnFocus.current = undefined;
+    if (anchor?.isConnected) anchor.focus({ preventScroll: true });
+  }, [active, inlineEdit]);
+
+  /** 同一原行的其他暂存字段保留；共享 stage 继续使用首次编辑时的原页和行版本。 */
+  function stageInlineEdit(owner: InlineEdit, value: PostgresInlineCellValue) {
+    if (inlineOwner.current !== owner || owner.scope !== cellScope || !page?.pageToken || issued.current !== page.pageToken ||
+      !layoutScope.current.current() || requiresRefresh || lease.current || page.rows[owner.cell.index] !== owner.cell.row ||
+      page.rowKeys?.[owner.cell.index] !== owner.rowKey || document.querySelector('[role="dialog"], [role="alertdialog"]'))
+      throw Error(text.cellEditExpired);
+    const prior = draft.find(entry => entry.rowKey === owner.rowKey)?.change;
+    if (prior?.kind === 'delete') throw Error(text.cellEditExpired);
+    const unchanged = value.mode === owner.initial.mode && (value.mode !== 'text' || owner.initial.mode === 'text' && value.value === owner.initial.value);
+    if (!unchanged) {
+      const fields = prior?.kind === 'update' ? prior.fields.filter(field => field.column !== owner.column.key) : [];
+      stage({ kind: 'update', row: owner.cell.index, fields: [...fields, { column: owner.column.key, value }] }, owner);
+    }
+    closeInlineEdit(owner);
   }
 
   function closeAdvancedFilters() {
@@ -484,11 +549,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {layoutView.dirty && <span>{tableGridZh.unsaved}</span>}
       {layoutView.fromPreset && <span>{layoutText.fromPreset}</span>}
       {!page.pageToken && <span>{text.noWrite}</span>}
+      {canEditGrid && <span title={text.cellEditHint}>{text.cellEditHint}</span>}
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
-    <div className="pg-table-grid">
+    <div className="pg-table-grid" inert={!!inlineEdit}>
       {page ? <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
         onCellFilterMenu={cellMenuEnabled ? openCellMenu : undefined}
+        onCellEdit={canEditGrid ? openInlineEdit : undefined}
         frozenKeys={gridLayout.frozenKeys} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onColumnWidthsChange={resizeLayout}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           try {
@@ -499,14 +566,17 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
           } catch (reason) { setError(errorMessage(reason)); }
         }}/> : <Empty title={text.empty}/>}
     </div>
-    {cellMenu && cellMenuEnabled && cellMenu.scope === cellMenuScope &&
+    {cellMenu && cellMenuEnabled && cellMenu.scope === cellScope &&
       <PostgresTableCellFilterMenu anchor={cellMenu.anchor} column={cellMenu.seed.column}
         onClose={restoreFocus => closeCellMenu(cellMenu, restoreFocus)} onChoose={exclude => chooseCellFilter(cellMenu, exclude)}/>}
+    {inlineEdit && <PostgresInlineCellEditor anchor={inlineEdit.anchor} column={inlineEdit.column}
+      initial={inlineEdit.initial} originalText={inlineEdit.originalText} typed={inlineEdit.typed} visible={active}
+      onStage={value => stageInlineEdit(inlineEdit, value)} onCancel={() => closeInlineEdit(inlineEdit)}/>}
     {draft.length > 0 && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong><button disabled={blocked} onClick={() => setChanges([])}>{text.discard}</button>
       <ol>{draft.map(({ change, offset }, index) => <li key={index}>
         <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</span>
-        {requiresRefresh && change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {
+        {change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {
           const name = page?.columns.find(column => column.key === field.column)?.name;
           const value = 'value' in field.value ? cellPreview(field.value.value) : field.value.mode.toUpperCase();
           return name + '=' + value;
