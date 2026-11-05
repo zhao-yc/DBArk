@@ -1,5 +1,5 @@
 /** 对象浏览只保存目录定位，不持有查询正文、来源授权或数据库会话。 */
-export const objectCategories = ['table', 'view', 'routine', 'trigger', 'event'] as const;
+export const objectCategories = ['table', 'view', 'routine', 'trigger', 'event', 'sequence'] as const;
 export type ObjectCategory = typeof objectCategories[number];
 
 /** 原输入先核自有属性，避免解析器把继承的对象分类或数据库提升为有效定位。 */

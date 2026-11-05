@@ -9,7 +9,7 @@ export const openTabSearchMessages = {
   invalid: '已打开标签的本地元数据无效，请关闭查找窗口后重试。',
   budget: '已打开标签数量或搜索内容超过预算，未返回部分列表。',
   query: 'SQL 查询', table: '数据表', objects: '对象浏览', legacyMissing: '旧记录的初始库（未记录）',
-  categories: { table: '表', view: '视图', routine: '存储过程／函数', trigger: '触发器', event: '事件' },
+  categories: { sequence: '序列', table: '表', view: '视图', routine: '存储过程／函数', trigger: '触发器', event: '事件' },
 } as const;
 export type OpenTabSearchTab = AppSettings['tabs'][number];
 export interface OpenTabSearchEntry {

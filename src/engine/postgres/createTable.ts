@@ -1,3 +1,5 @@
+import { postgresSequencePlan, type PostgresSequenceCreateInput } from '../../shared/postgresSequence';
+import { readPostgresSequence } from './sequence';
 import { randomUUID } from 'node:crypto';
 import {
   postgresCreateTablePlan, type PostgresCreateTableApply, type PostgresCreateTableInput,
@@ -13,7 +15,7 @@ import { postgresViewOptionsSql, readPostgresViewFacts } from './viewDefinition'
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh';
+type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence';
 interface Plan {
   table: string;
   statements: string[];
@@ -142,6 +144,24 @@ export class PostgresCreateTableWorkspace {
           ...check, length: draft.columns.find(column => column.name === check.name)?.length,
         }))),
         verify: (connection, oid) => verify(connection, draft, oid),
+      };
+    });
+  }
+
+  /** 新序列在同一事务核对类型、范围、缓存和注释，且保持未分配状态。 */
+  async prepareSequence(input: Scoped<PostgresSequenceCreateInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    return this.prepareRelation(input, 'sequence', connect, () => {
+      const { connectionId, database, schema, name, dataType, start, increment, minimum, maximum, cache, cycle, comment } = input;
+      const draft = { connectionId, database, schema, name, dataType, start, increment, minimum, maximum, cache, cycle, comment };
+      const { table, statements, expected } = postgresSequencePlan(draft);
+      return { table, statements, success: 'PostgreSQL 新序列已确认创建',
+        preflight: connection => preflight(connection, draft, name, [], '序列'),
+        async verify(connection, oid) {
+          const { info, schemaOid } = await readPostgresSequence(connection, table);
+          if (schemaOid !== oid || info.lastValue !== null || info.ownedBy !== null ||
+              Object.entries(expected).some(([key, value]) => info[key as keyof typeof expected] !== value))
+            throw Error('实际序列参数与预览不同，未提交');
+        },
       };
     });
   }

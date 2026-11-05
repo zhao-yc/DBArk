@@ -9,14 +9,14 @@ import { ActionMenu, ActionMenuSection } from './ActionMenu';
 import { AdaptiveToolbar } from './AdaptiveToolbar';
 
 /** 模块工具栏只组织既有命令；对象类别独立使用树上下文，页面命令由当前标签注册。 */
-export function NavigationToolbar({ onBrowse, onQueries, onHistory, objectTarget, connectionsAvailable, runningCount, sqliteObjects = false }: {
-  onBrowse(category: ObjectCategory): void; onQueries(): void; onHistory(): void; objectTarget: string; connectionsAvailable: boolean; runningCount: number; sqliteObjects?: boolean;
+export function NavigationToolbar({ onBrowse, onQueries, onHistory, objectTarget, connectionsAvailable, runningCount, sqliteObjects = false, postgresObjects = false }: {
+  onBrowse(category: ObjectCategory): void; onQueries(): void; onHistory(): void; objectTarget: string; connectionsAvailable: boolean; runningCount: number; sqliteObjects?: boolean; postgresObjects?: boolean;
 }) {
   const commands = useUiCommands(), revision = commands.snapshot.revision;
   const current = () => uiCommands.getSnapshot().revision === revision;
   const command = (id: UiCommandId) => <button key={id} disabled={!commands.enabled(id)} aria-pressed={id === 'focus-mode' || id === 'editor-word-wrap' || id === 'editor-sql-folding' || id === 'editor-line-numbers' || id === 'editor-match-brackets' ? commands.checked(id) : undefined} onClick={() => commands.run(id)}>{uiCommandLabels[id]}</button>;
   const connectionActions = <>{command('new-connection')}{command('connections-organize')}{command('connections-transfer')}</>;
-  const otherActions = <>{(['trigger', 'event'] as const).filter(kind => !sqliteObjects || kind === 'trigger').map(kind => <button key={kind} disabled={!connectionsAvailable} onClick={() => onBrowse(kind)}>{text.categories[kind]}</button>)}</>;
+  const otherActions = <>{postgresObjects && <button disabled={!connectionsAvailable} onClick={() => onBrowse('sequence')}>{text.categories.sequence}</button>}{(['trigger', 'event'] as const).filter(kind => !sqliteObjects || kind === 'trigger').map(kind => <button key={kind} disabled={!connectionsAvailable} onClick={() => onBrowse(kind)}>{text.categories[kind]}</button>)}</>;
   const queryActions = <><button onClick={onQueries}>{text.savedQueries}</button><button onClick={onHistory}>{text.queryHistory}</button>{command('new-query')}</>;
   const toolActions = <><ActionMenuSection label="数据库工具">{command('schema-compare')}{command('server-monitor')}{command('structure-search')}</ActionMenuSection>
     <ActionMenuSection label="离线快照">{command('explain-snapshot')}{command('result-snapshot')}</ActionMenuSection>

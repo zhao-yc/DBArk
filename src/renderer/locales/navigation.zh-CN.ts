@@ -2,7 +2,7 @@ export const navigationZh = {
   toolbar: '常用模块', connection: '连接', table: '表', view: '视图', routine: '函数', other: '其他',
   query: '查询', tools: '工具', more: '更多', objects: '对象浏览', objectActions: '对象操作',
   name: '名称', type: '类型', search: '搜索对象名称', refresh: '刷新', newTable: '新建表',
-  categories: { table: '表', view: '视图', routine: '存储过程与函数', trigger: '触发器', event: '事件' },
+  categories: { sequence: '序列', table: '表', view: '视图', routine: '存储过程与函数', trigger: '触发器', event: '事件' },
   pickTitle: '选择对象浏览数据库', pickConnection: '选择连接', pickDatabase: '选择数据库',
   readDatabases: '读取数据库', open: '打开', cancel: '取消', selectConnection: '请选择连接',
   selectDatabase: '请选择数据库', noObjects: '此分类下没有匹配的对象',

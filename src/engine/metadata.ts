@@ -48,7 +48,7 @@ export async function objects(connection: ManagedConnection, database: string): 
 
 /** SHOW CREATE 的对象类型来自固定映射，名称独立引用。 */
 export async function objectDdl(connection: ManagedConnection, database: string, name: string, kind: ObjectKind, query?: MetadataQuery): Promise<string> {
-  const types: Record<ObjectKind, string> = { table: 'TABLE', view: 'VIEW', procedure: 'PROCEDURE', function: 'FUNCTION', trigger: 'TRIGGER', event: 'EVENT' };
+  const types: Partial<Record<ObjectKind, string>> = { table: 'TABLE', view: 'VIEW', procedure: 'PROCEDURE', function: 'FUNCTION', trigger: 'TRIGGER', event: 'EVENT' };
   if (!Object.hasOwn(types, kind)) throw new Error('不支持的数据库对象类型');
   const { rows } = await metadataReader(connection, query)<Record<string, unknown>[]>(`SHOW CREATE ${types[kind]} ${qualified(database, name)}`);
   const row = rows[0];

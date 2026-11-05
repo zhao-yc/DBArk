@@ -60,7 +60,7 @@ import type { ConnectionOrganizationApply, ConnectionOrganizationSnapshot } from
 import type { QueryResultPresetTarget, QueryResultPresetSave, QueryResultPresetSelect, QueryResultPresetRename, QueryResultPresetSnapshot, QueryResultPresetValue } from './queryResultPresets';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
-export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
+export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event' | 'sequence';
 
 export interface NetworkConnectionProfile {
   id: string; name: string; group: string; color: string; dialect: 'mysql' | 'mariadb';
@@ -283,6 +283,9 @@ export interface CommandMap {
   'postgres.viewManage.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.materializedRefresh.preview': { input: import('./postgresMaterializedView').PostgresMaterializedRefreshInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.materializedRefresh.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
+  'postgres.sequence.read': { input: import('./postgresSequence').PostgresSequenceReadInput; output: import('./postgresSequence').PostgresSequenceInfo };
+  'postgres.sequence.preview': { input: import('./postgresSequence').PostgresSequenceCreateInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
+  'postgres.sequence.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.structure.read': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresStructure').PostgresStructureResult };
   'postgres.columnEdit.preview': { input: import('./postgresColumnEdit').PostgresColumnPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.columnEdit.apply': { input: import('./postgresColumnEdit').PostgresColumnApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };

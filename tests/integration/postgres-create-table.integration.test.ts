@@ -385,6 +385,49 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       expect(await indexOid('"生成.甲"."缓存表达式"')).toBeNull();
       expect(await indexOid(snapshot)).toEqual(expect.any(String));
 
+      // 序列浏览和新建使用 64 位原值，读取及预览都不会消耗计数。
+      const sequenceName = '"生成.甲"."独立""序列"';
+      const sequenceDraft = { ...target, schema: draft.schema, name: '独立"序列', dataType: 'bigint',
+        start: '9223372036854775806', minimum: '', maximum: '', increment: '', cache: '', cycle: true, comment: value };
+      const readSequence = (table = sequenceName) => engine.handle('postgres.sequence.read', { ...target, table });
+      const applySequence = (token: string) => engine.handle('postgres.sequence.apply', { ...target, token });
+      await expect(engine.handle('postgres.sequence.preview', { ...sequenceDraft, increment: '0' })).rejects.toThrow('非零');
+      await expect(engine.handle('postgres.sequence.preview', { ...sequenceDraft, maximum: '9223372036854775808' })).rejects.toThrow('上下限');
+      const newSequence = await engine.handle('postgres.sequence.preview', sequenceDraft);
+      expect(newSequence.statements[0]).toContain('MAXVALUE 9223372036854775807 START WITH 9223372036854775806');
+      expect(await indexOid(sequenceName)).toBeNull();
+      await expect(applyView(newSequence.token)).rejects.toThrow('预览已失效');
+      expect(await applySequence(newSequence.token)).toMatchObject({ outcome: 'committed', table: sequenceName });
+      await expect(applySequence(newSequence.token)).rejects.toThrow('预览已失效');
+      expect(await readSequence()).toMatchObject({ start: sequenceDraft.start, maximum: '9223372036854775807', lastValue: null, comment: value });
+      expect((await client.query(`SELECT is_called FROM ${sequenceName}`)).rows).toEqual([{ is_called: false }]);
+      expect((await client.query('SELECT nextval($1::regclass)::text AS value', [sequenceName])).rows).toEqual([{ value: sequenceDraft.start }]);
+      expect((await readSequence()).lastValue).toBe(sequenceDraft.start);
+      await engine.handle('connections.open', { id, profile });
+      expect(await engine.handle('metadata.objects', { connectionId: id, database })).toContainEqual({ name: sequenceName, kind: 'sequence' });
+      if (maintainer && maintainer === database + '_limited') {
+        const delegateId = randomUUID();
+        const delegated = { ...target, connectionId: delegateId, profile: { ...profile, id: delegateId, user: maintainer }, table: sequenceName };
+        await engine.handle('connections.open', { id: delegateId, profile: delegated.profile });
+        const list = () => engine.handle('metadata.objects', { connectionId: delegateId, database });
+        await expect(engine.handle('postgres.sequence.read', delegated)).rejects.toThrow('不可见');
+        expect(await list()).not.toContainEqual({ name: sequenceName, kind: 'sequence' });
+        await client.query(`GRANT UPDATE ON SEQUENCE ${sequenceName} TO ${maintainer}`);
+        expect(await engine.handle('postgres.sequence.read', delegated)).toMatchObject({ lastValue: null });
+        expect(await list()).toContainEqual({ name: sequenceName, kind: 'sequence' });
+        await client.query(`GRANT USAGE ON SEQUENCE ${sequenceName} TO ${maintainer}`);
+        expect(await engine.handle('postgres.sequence.read', delegated)).toMatchObject({ lastValue: sequenceDraft.start });
+      }
+      const identitySequence = (await client.query("SELECT pg_get_serial_sequence($1, '编号') AS name", [qualified])).rows[0].name;
+      const identityTarget = (await client.query(`SELECT pg_catalog.format('"%s"."%s"', replace(n.nspname::text,'"','""'),
+        replace(c.relname::text,'"','""')) AS name FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=$1::regclass`, [identitySequence])).rows[0].name;
+      expect((await readSequence(identityTarget)).ownedBy).toEqual({ schema: draft.schema, relation: draft.table, column: '编号', identity: true });
+      const descending = await engine.handle('postgres.sequence.preview', { ...sequenceDraft, name: '倒序', dataType: 'smallint',
+        start: '', increment: '-3', comment: '' });
+      expect(await applySequence(descending.token)).toMatchObject({ outcome: 'committed' });
+      expect(await readSequence('"生成.甲"."倒序"')).toMatchObject({ start: '-1', minimum: '-32768', maximum: '-1', increment: '-3' });
+
       const closed = await prepare({ table: '关闭' });
       await engine.handle('connections.close', { id });
       await expect(apply(closed.token)).rejects.toThrow('预览已失效');

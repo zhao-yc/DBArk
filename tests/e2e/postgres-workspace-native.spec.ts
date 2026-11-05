@@ -1,3 +1,4 @@
+import { postgresSequenceZh as sequenceText } from '../../src/renderer/locales/postgresSequence.zh-CN';
 import { test as base, expect } from '@playwright/test';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1169,11 +1170,11 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await second.getByLabel(postgresCreateTableZh.comment, { exact: true }).fill('窗口列注释');
     await create.getByRole('button', { name: postgresCreateTableZh.preview, exact: true }).click();
     await expect(create.locator('.pg-create-sql')).toContainText('CREATE TABLE "回归"."窗口新表"');
-    await expect(page.locator('.object-row').filter({ hasText: '窗口新表' })).toHaveCount(0);
+    await expect(page.locator('.object-row').filter({ hasText: /^"回归"\."窗口新表"$/ })).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('PostgreSQL建表确认前.png') });
     await create.getByRole('button', { name: postgresCreateTableZh.apply, exact: true }).click();
     await expect(create).toBeHidden();
-    await expect(page.locator('.object-row').filter({ hasText: '窗口新表' })).toBeVisible();
+    await expect(page.locator('.object-row').filter({ hasText: /^"回归"\."窗口新表"$/ })).toBeVisible();
     await expect(gridTab.locator('.context-bar')).toContainText('"回归"."窗口新表"');
     await tableButton(postgresStructureZh.open).click();
     await expect(structure.getByRole('table')).toContainText('窗口默认');
@@ -1610,6 +1611,38 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(renamedMaterialized).toHaveCount(0);
     await expect(page.locator('.tab-strip .tab-close')).toHaveCount(0);
     await mark('原生窗口确认受限删除物化视图，目录和打开的记录页一并更新');
+    await expect(materializedRow('窗口已填充物化')).toBeVisible();
+    await clickSidebarAction(databaseNode, { name: sequenceText.create, exact: true }, undefined, check);
+    const sequenceForm = page.getByRole('dialog', { name: sequenceText.create, exact: true });
+    await sequenceForm.getByLabel(sequenceText.schema, { exact: true }).selectOption('回归');
+    await sequenceForm.getByLabel(sequenceText.name, { exact: true }).fill('窗口精确序列');
+    await sequenceForm.getByLabel(sequenceText.start, { exact: true }).fill('9223372036854775806');
+    await sequenceForm.getByLabel(sequenceText.comment, { exact: true }).fill('窗口序列注释');
+    await sequenceForm.getByRole('button', { name: sequenceText.preview, exact: true }).click();
+    await expect(sequenceForm.locator('pre')).toContainText('START WITH 9223372036854775806');
+    const sequenceRow = page.locator('.object-row').filter({ hasText: '窗口精确序列' });
+    await expect(sequenceRow).toHaveCount(0);
+    await sequenceForm.getByRole('button', { name: sequenceText.apply, exact: true }).click();
+    const sequenceInfo = page.getByRole('dialog', { name: sequenceText.title, exact: true });
+    await expect(sequenceInfo.getByRole('table')).toContainText('9223372036854775806');
+    await expect(sequenceInfo.getByRole('table')).toContainText(sequenceText.noValue);
+    await expect(sequenceInfo.getByRole('table')).toContainText('窗口序列注释');
+    await page.screenshot({ path: info.outputPath('PostgreSQL序列详情.png') });
+    await sequenceInfo.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await expect(sequenceRow).toBeVisible();
+    await clickSidebarAction(sequenceRow, { name: sequenceText.open + ' "回归"."窗口精确序列"', exact: true }, undefined, check);
+    await expect(sequenceInfo.getByRole('table')).toContainText('9223372036854775806');
+    await sequenceInfo.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '序列', exact: true }, check)).click();
+    const browserSequence = page.locator('.object-list-row .tree-label').filter({ hasText: '窗口精确序列' });
+    await expect(browserSequence).toBeVisible();
+    await browserSequence.dblclick();
+    await expect(sequenceInfo.getByRole('table')).toContainText('9223372036854775806');
+    await sequenceInfo.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await page.locator('.tab-strip .tab-close').click();
+    await mark('原生创建 PostgreSQL 序列并从树和序列目录重新打开，64 位起始值与未分配状态保持');
+
+
 
 
     const offlineBefore = await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}),

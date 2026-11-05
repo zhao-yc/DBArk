@@ -1,3 +1,4 @@
+import { postgresSequenceVisibleSql, readPostgresSequence } from './sequence';
 import { randomUUID } from 'node:crypto';
 import type {
   ConnectionProfile,
@@ -610,7 +611,9 @@ export class PostgresEngine {
       case 'postgres.viewManage.preview':
       case 'postgres.viewManage.apply':
       case 'postgres.materializedRefresh.preview':
-      case 'postgres.materializedRefresh.apply': {
+      case 'postgres.materializedRefresh.apply':
+      case 'postgres.sequence.preview':
+      case 'postgres.sequence.apply': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 建表连接和原文档');
@@ -622,12 +625,16 @@ export class PostgresEngine {
         if (command === 'postgres.editView.preview') return this.creations.prepareViewEdit(input as Parameters<PostgresCreateTableWorkspace['prepareViewEdit']>[0], connect);
         if (command === 'postgres.viewManage.preview') return this.creations.prepareViewManage(input as Parameters<PostgresCreateTableWorkspace['prepareViewManage']>[0], connect);
         if (command === 'postgres.materializedRefresh.preview') return this.creations.prepareMaterializedRefresh(input as Parameters<PostgresCreateTableWorkspace['prepareMaterializedRefresh']>[0], connect);
+        if (command === 'postgres.sequence.preview') return this.creations.prepareSequence(input as Parameters<PostgresCreateTableWorkspace['prepareSequence']>[0], connect);
         return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect,
-          command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
+          command === 'postgres.sequence.apply' ? 'sequence' : command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
       }
+      case 'postgres.sequence.read':
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的PostgreSQL结构连接');
+        if (command === 'postgres.sequence.read') return this.use(profile, input.database,
+          async connection => (await readPostgresSequence(connection, input.table)).info);
         return this.use(profile, input.database, connection => readPostgresStructure(connection, input.table));
       }
       case 'postgres.columnEdit.preview':
@@ -795,13 +802,18 @@ export class PostgresEngine {
         return this.use(this.profile(input.connectionId), input.database, async (m) =>
           (
             await m.query(
-              "SELECT n.nspname,c.relname,c.relkind FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','v','m','f') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname",
+              `SELECT n.nspname,c.relname,c.relkind FROM pg_catalog.pg_class c
+               JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+               WHERE (CASE WHEN c.relkind = 'S' THEN c.relpersistence IN ('p','u') AND n.nspname !~ '^pg_'
+                    AND (${postgresSequenceVisibleSql}) ELSE c.relkind IN ('r','p','v','m','f') END)
+                 AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+                 AND has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname`,
               undefined,
               { rows: 10000, bytes: 4 * 1024 * 1024 },
             )
           ).rows.map((r) => ({
             name: postgresIdentifier(String(r.c0)) + '.' + postgresIdentifier(String(r.c1)),
-            kind: ['v', 'm'].includes(String(r.c2)) ? 'view' : 'table',
+            kind: r.c2 === 'S' ? 'sequence' : ['v', 'm'].includes(String(r.c2)) ? 'view' : 'table',
           })),
         );
       default:

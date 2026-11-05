@@ -37,12 +37,14 @@ export function DefinitionViewer({ connectionId, database, object, search, onClo
   /** 同步读取最新工作区版本，目标ABA不能等待React效果才撤销来源。 */
   function current(): DefinitionNavigationTarget | undefined {
     const props = latest.current, workspace = useWorkspace.getState();
-    if (!workspace.connections.some(connection => connection.id === props.connectionId)) return;
+    if (props.object.kind === 'sequence' || !workspace.connections.some(connection => connection.id === props.connectionId)) return;
     const target = { connectionId: props.connectionId, connectionVersion: workspace.connectionVersions[props.connectionId] ?? 0, database: props.database, name: props.object.name, kind: props.object.kind };
     if (props.search && !binding.current.claim(props.search, target)) return;
     return target;
   }
   useEffect(() => {
+    // PostgreSQL 序列通过独立目录详情打开，不能落入通用 SHOW CREATE。
+    if (object.kind === 'sequence') return;
     const target = { connectionId, connectionVersion: version, database, name: object.name, kind: object.kind }, lease = new DefinitionReadLease(target, current), request = ++generation.current;
     setEditor(null); setRead({ lease, generation: request, busy: true });
     const unsubscribe = useWorkspace.subscribe(() => { if (!lease.current()) setRead(previous => previous?.lease === lease ? { ...previous, busy: false, value: { sql: '', status: 'invalid' } } : previous); });

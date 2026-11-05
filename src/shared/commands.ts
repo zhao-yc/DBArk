@@ -19,6 +19,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.editView.preview': true, 'postgres.editView.apply': true,
   'postgres.viewManage.preview': true, 'postgres.viewManage.apply': true,
   'postgres.materializedRefresh.preview': true, 'postgres.materializedRefresh.apply': true,
+  'postgres.sequence.read': true, 'postgres.sequence.preview': true, 'postgres.sequence.apply': true,
   'postgres.structure.read': true,
   'postgres.columnEdit.preview': true, 'postgres.columnEdit.apply': true,
   'postgres.indexEdit.preview': true, 'postgres.indexEdit.apply': true,

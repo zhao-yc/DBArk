@@ -31,7 +31,7 @@ function binaryCellText(base64: string): string {
 export const cellText = (value: CellValue | undefined) => value === null ? 'NULL' : value === undefined ? '' : typeof value === 'object' ? binaryCellText(value.base64) : String(value);
 /** 比较由同一行快照派生的普通数据，包含 NULL、字符串及二进制包装值。 */
 export const rowEqual = (a: DataRow, b: DataRow) => JSON.stringify(a) === JSON.stringify(b);
-export const kindLabels: Record<string, string> = { table: zh.commonMessages.text002, view: zh.commonMessages.text003, procedure: zh.commonMessages.text004, function: zh.commonMessages.text005, trigger: zh.commonMessages.text006, event: zh.commonMessages.text007 };
+export const kindLabels: Record<string, string> = { sequence: '序列', table: zh.commonMessages.text002, view: zh.commonMessages.text003, procedure: zh.commonMessages.text004, function: zh.commonMessages.text005, trigger: zh.commonMessages.text006, event: zh.commonMessages.text007 };
 
 /** 网格只渲染短预览，避免大文本或 BLOB 为每个可见单元格创建巨量 DOM 字符串。 */
 export function cellPreview(value: CellValue | undefined, limit = 240) {

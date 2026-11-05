@@ -9,6 +9,6 @@ export const workbenchZh = {
   uriHint: '在应用内粘贴打开；跨电脑使用时须存在相同连接标识。链接不含凭据。',
   focus: '进入专注模式', exitFocus: '退出专注模式', focusHint: '专注模式已隐藏侧栏，按 Ctrl / ⌘ Shift L 恢复',
   loading: '正在读取收藏', retry: '重新读取', saved: '收藏已保存', databaseKind: '数据库',
-  kinds: { database: '数据库', table: '表', view: '视图', procedure: '存储过程', function: '函数', trigger: '触发器', event: '事件' },
+  kinds: { sequence: '序列', database: '数据库', table: '表', view: '视图', procedure: '存储过程', function: '函数', trigger: '触发器', event: '事件' },
   action: (action: string, name: string) => `${action}：${name}`
 } as const;

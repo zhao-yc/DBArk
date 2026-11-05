@@ -6,7 +6,7 @@ const id = identifier.max(200);
 const base = { connectionId: id, database: identifier };
 export const workbenchTargetSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('database') }).strict(),
-  ...(['table', 'view', 'procedure', 'function', 'trigger', 'event'] as const).map(kind => z.object({ ...base, kind: z.literal(kind), name: identifier }).strict())
+  ...(['table', 'view', 'procedure', 'function', 'trigger', 'event', 'sequence'] as const).map(kind => z.object({ ...base, kind: z.literal(kind), name: identifier }).strict())
 ]);
 export type WorkbenchTarget = z.infer<typeof workbenchTargetSchema>;
 export const workbenchDocumentSchema = z.object({
