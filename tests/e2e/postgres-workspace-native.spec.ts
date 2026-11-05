@@ -9,6 +9,8 @@ import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
+import { explainSnapshotZh as snapshotText } from '../../src/shared/explainSnapshot.zh-CN';
+import { decodePlanSnapshot } from '../../src/shared/explainSnapshot';
 import { navigationMenuItem } from './navigation-menu';
 import { clickSidebarAction } from './sidebar-menu';
 import { discardTestTab } from './query-close-ui';
@@ -180,6 +182,44 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
 
     // 把光标放在中间语句，估算树与原始输出沿正式窗口交互读取。
     const beforeExplain = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const planPaths = ['估算基准', '估算对比', '实测'].map(name => info.outputPath(name + '.dbark-plan.json'));
+    const nativeWindow = await application.browserWindow(page);
+    const senderId = await nativeWindow.evaluate(native => native.webContents.id);
+    await nativeWindow.dispose();
+    // 只为本例选择固定文件路径，实际读取和写入仍由正式主进程处理。
+    await application.evaluate(({ BrowserWindow, dialog }, input) => {
+      const native = BrowserWindow.getAllWindows().find(item => item.webContents.id === input.senderId);
+      if (!native) throw Error('计划快照的原窗口不存在');
+      const originalSave = dialog.showSaveDialog, originalOpen = dialog.showOpenDialog;
+      let saves = 0, opens = 0;
+      const opening = [input.paths[0], input.paths[1], input.paths[2], input.paths[2]];
+      const validate = (owner: unknown, actual: string | undefined, title: string) => {
+        if (owner !== native || actual !== title || native.isDestroyed()) throw Error('计划快照文件选择来源已变化');
+      };
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        validate(args[0], (args[1] as { title?: string })?.title, '保存计划快照');
+        const filePath = input.paths[saves++];
+        if (!filePath) throw Error('计划快照写入次数超过预期');
+        return { canceled: false, filePath };
+      }) as typeof originalSave;
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        validate(args[0], (args[1] as { title?: string })?.title, '选择计划快照文件');
+        const path = opening[opens++];
+        if (!path) throw Error('计划快照读取次数超过预期');
+        return { canceled: false, filePaths: [path] };
+      }) as typeof originalOpen;
+      Object.assign(globalThis, { finishPostgresSnapshotFiles: () => {
+        dialog.showSaveDialog = originalSave;
+        dialog.showOpenDialog = originalOpen;
+        return { saves, opens };
+      } });
+    }, { senderId, paths: planPaths });
+    /** 真实点击保存并等待主进程写入回执。 */
+    const savePlan = async (view: ReturnType<typeof tab>, index: number) => {
+      await view.getByRole('button', { name: snapshotText.save, exact: true }).click();
+      await expect(view.getByText(snapshotText.saved(planPaths[index].split(/[\\/]/).at(-1)!), { exact: true })).toBeVisible();
+      await expect(button(postgresZh.execute)).toBeEnabled();
+    };
     const planTail = '\nDELETE FROM "回归"."带""引号";';
     await edit('UPDATE "回归"."带""引号" SET note = \'仅估算\';\nSELECT * FROM "回归"."带""引号" LIMIT 1;' + planTail);
     for (let index = 0; index <= planTail.length; index++) await page.keyboard.press('ArrowLeft');
@@ -195,11 +235,13 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await plan.getByRole('button', { name: '原始输出', exact: true }).click();
     await expect(plan.getByLabel('原始输出', { exact: true })).toContainText('"Node Type": "Limit"');
     await expect(plan.getByLabel('原始输出', { exact: true })).not.toContainText('Actual Rows');
+    await savePlan(plan, 0);
     const selectedPlan = 'UPDATE "回归"."带""引号" SET note = \'只预览选区\';';
     await edit('SELECT 77;\n' + selectedPlan);
     for (let index = 0; index < selectedPlan.length; index++) await page.keyboard.press('Shift+ArrowLeft');
     await button(postgresZh.explain).click();
     await expect(plan.getByRole('treeitem').first()).toContainText('ModifyTable');
+    await savePlan(plan, 1);
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeExplain);
     await mark('真实窗口估算光标语句和明确选区，查看树形成本与原始 JSON，原行及执行历史保持');
 
@@ -229,6 +271,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await page.screenshot({ path: info.outputPath('PostgreSQL实际执行分析.png') });
     await actualPlan.getByRole('button', { name: '分析原始输出' }).click();
     await expect(actualPlan.getByLabel('分析原始输出')).toContainText('Actual Rows');
+    await savePlan(actualPlan, 2);
     const analysisHistory = await page.evaluate(() => window.dbark.invoke('history.list', {}));
     expect(analysisHistory.filter(entry => entry.sql.startsWith('EXPLAIN (ANALYZE TRUE') && entry.success)).toHaveLength(1);
     await edit('SELECT note FROM "回归"."带""引号" WHERE id = 1;');
@@ -405,6 +448,33 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
     await page.locator('.tab-strip .tab-close').click();
     await mark('数据库右键建表经过真实 SQL 预览和确认，新表目录自动刷新，实际结构可读');
+    const offlineBefore = await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}),
+      history: await window.dbark.invoke('history.list', {}) }));
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: snapshotText.entry, exact: true }, check)).click();
+    const snapshotDialog = page.getByRole('dialog', { name: snapshotText.title, exact: true });
+    await snapshotDialog.getByRole('button', { name: snapshotText.choose, exact: true }).click();
+    await expect(snapshotDialog.getByRole('treeitem').first()).toContainText('Limit');
+    await snapshotDialog.getByRole('button', { name: snapshotText.compareChoose, exact: true }).click();
+    const comparison = snapshotDialog.getByRole('region', { name: snapshotText.compareTitle });
+    await expect(comparison).toContainText('ModifyTable');
+    await expect(comparison.getByRole('table')).toContainText('Node Type');
+    await page.screenshot({ path: info.outputPath('PostgreSQL估算计划离线比较.png') });
+    await snapshotDialog.getByRole('button', { name: snapshotText.compareChoose, exact: true }).click();
+    await expect(snapshotDialog.getByText(snapshotText.compareUnsupported, { exact: true })).toBeVisible();
+    await expect(comparison).toContainText('ModifyTable');
+    await snapshotDialog.getByRole('button', { name: snapshotText.choose, exact: true }).click();
+    await expect(snapshotDialog.getByRole('region', { name: '实际执行计划' })).toContainText('ModifyTable');
+    await snapshotDialog.getByRole('button', { name: snapshotText.close, exact: true }).click();
+    expect(await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}),
+      history: await window.dbark.invoke('history.list', {}) }))).toEqual(offlineBefore);
+    expect(await application.evaluate(() => (globalThis as typeof globalThis & { finishPostgresSnapshotFiles(): unknown }).finishPostgresSnapshotFiles()))
+      .toEqual({ saves: 3, opens: 4 });
+    for (const [index, path] of planPaths.entries()) {
+      const snapshot = decodePlanSnapshot(await readFile(path, 'utf8'));
+      expect(snapshot).toMatchObject({ dialect: 'postgresql', kind: index < 2 ? 'dbark.explain-snapshot' : 'dbark.analyze-snapshot' });
+      expect(snapshot.result).not.toHaveProperty('statement');
+    }
+    await mark('实际保存两个估算快照及一个实测快照，离线比较与异类拒绝，任务和历史保持');
     check();
     expect(runtime.pageErrors).toEqual([]);
     await runtime.confirmOwnedDesktopExit(info);

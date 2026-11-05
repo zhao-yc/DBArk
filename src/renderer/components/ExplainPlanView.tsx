@@ -107,7 +107,7 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
     <div className="explain-toolbar" role="group" aria-label={t.title}>
       {(['tree', 'raw', 'table'] as const).map(mode => <button key={mode} aria-pressed={view === mode} onClick={() => setView(mode)}>{t[mode]}</button>)}
       {onText && <button disabled={busy} onClick={() => { if (alive.current && !busy) onText(); }}>{t.text}</button>}
-      {fileActions && !postgres && <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={fileBusy ?? busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/>}
+      {fileActions && <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={fileBusy ?? busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/>}
       <span className="muted">{t.source}：{postgres ? 'PostgreSQL' : plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {plan.format === 'json' ? postgres ? 'EXPLAIN (FORMAT JSON)' : 'EXPLAIN FORMAT=JSON' : 'EXPLAIN'}</span>
     </div>
     <div className="explain-search" role="search" aria-label={t.find}>

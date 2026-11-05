@@ -672,8 +672,8 @@ export function PostgresQueryTab({
             ))}
           </select>
         )}
-        {outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} busy={busy} /> :
-          outcome?.explain ? <ExplainPlanView outcome={outcome} busy={busy} /> : result ? (
+        {outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
+          outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
           result.columns.length ? (
             <ResultsGrid columns={result.columns} rows={result.rows} rowJump />
           ) : (

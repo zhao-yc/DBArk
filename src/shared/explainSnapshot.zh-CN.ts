@@ -12,4 +12,13 @@ export const explainSnapshotZh = {
   busy: '计划快照文件操作尚未结束，请稍后再试', stale: '计划或窗口已变化，本次文件操作结果已失效',
   unknownWrite: '无法确认计划快照是否写入完成，请先核对所选文件',
   defaultName: '执行计划.dbark-plan.json', close: '关闭',
+  compareChoose: '打开对比快照', compareClose: '返回原快照', compareTitle: 'PostgreSQL 计划比较',
+  compareUnsupported: '请选择两个同类的 PostgreSQL JSON 快照，估算与实测分别比较。',
+  compareIncomplete: '计划缺少完整节点或超过比较预算，请在原快照中查看。',
+  compareHint: '按 JSON 节点路径对齐。节点重排会在对应路径显示差异。',
+  compareLeft: '基准快照', compareRight: '对比快照', compareField: '变化字段',
+  compareSame: '节点与所比较的字段一致', compareShowAll: '显示未变化节点',
+  compareCount: (different: number, total: number) => `${different} / ${total} 个路径存在变化`,
+  compareMore: (count: number) => `还有 ${count} 项差异，请查看两个快照的原始输出。`,
+  compareStatuses: { added: '新增', removed: '移除', changed: '变化', same: '一致' },
 } as const;

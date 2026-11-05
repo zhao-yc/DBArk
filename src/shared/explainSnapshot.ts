@@ -1,17 +1,19 @@
 import type { CellValue, QueryOutcome, QueryResult } from './contracts';
 import { parseExplainPlan } from './explain';
 import { parseQueryAnalyzePlan } from './queryAnalyze';
+import { parsePostgresAnalyze, parsePostgresExplain } from './postgresExplain';
 import { explainSnapshotZh as text } from './explainSnapshot.zh-CN';
 
 export const explainSnapshotLimits = { bytes: 1048576, columns: 64, rows: 1000, warnings: 64, version: 256, cell: 196608, raw: 196608, column: 2048, warning: 16000, items: 70000 } as const;
 export type SnapshotCell = null | string | boolean | { type: 'number'; text: string } | { type: 'binary'; base64: string };
+type SnapshotDialect = 'mysql' | 'mariadb' | 'postgresql';
 export interface ExplainSnapshotDocument {
-  kind: 'dbark.explain-snapshot'; version: 1; dialect: 'mysql' | 'mariadb'; serverVersion: string; format: 'json' | 'text';
+  kind: 'dbark.explain-snapshot'; version: 1; dialect: SnapshotDialect; serverVersion: string; format: 'json' | 'text';
   raw: string; rawTruncated: boolean; warnings: string[];
   result: { columns: { key: string; name: string; type: string }[]; rows: Record<string, SnapshotCell>[]; truncated: boolean };
 }
 export interface AnalyzeSnapshotDocument {
-  kind: 'dbark.analyze-snapshot'; version: 1; dialect: 'mysql' | 'mariadb'; serverVersion: string; format: 'tree' | 'json';
+  kind: 'dbark.analyze-snapshot'; version: 1; dialect: SnapshotDialect; serverVersion: string; format: 'tree' | 'json';
   raw: string; rawTruncated: boolean; warnings: string[];
   result: ExplainSnapshotDocument['result'];
 }
@@ -139,18 +141,29 @@ function result(value: unknown, budget: Budget, capture: boolean): ExplainSnapsh
   return { columns, rows, truncated };
 }
 
+/** PostgreSQL 原文必须与单列协议结果一致，JSON 超限时只允许完整缺失的那一格。 */
+function validatePostgresPlanRows(snapshot: PlanSnapshotDocument) {
+  const { result, raw, format, rawTruncated } = snapshot;
+  if (result.columns.length !== 1 || rawTruncated !== result.truncated ||
+      format === 'json' && result.rows.length > 1 || !result.rows.length && !rawTruncated) return invalid();
+  const key = result.columns[0].key;
+  const cells = result.rows.map(row => row[key]);
+  if (cells.some(value => typeof value !== 'string') || cells.join('\n') !== raw) return invalid();
+}
+
 /** 有界深复制只保存原始计划和结果，不信任输入节点、路径或派生指标。 */
 function document(value: unknown, capture = false): ExplainSnapshotDocument {
   record(value, ['kind', 'version', 'dialect', 'serverVersion', 'format', 'raw', 'rawTruncated', 'warnings', 'result']);
   const budget: Budget = { bytes: 0, items: 0 };
   if (own(value, 'kind') !== 'dbark.explain-snapshot' || own(value, 'version') !== 1) return invalid();
   const dialect = own(value, 'dialect'), format = own(value, 'format'), rawTruncated = own(value, 'rawTruncated');
-  if ((dialect !== 'mysql' && dialect !== 'mariadb') || (format !== 'json' && format !== 'text') || typeof rawTruncated !== 'boolean') return invalid();
+  if ((dialect !== 'mysql' && dialect !== 'mariadb' && dialect !== 'postgresql') || (format !== 'json' && format !== 'text') || typeof rawTruncated !== 'boolean') return invalid();
   const serverVersion = string(own(value, 'serverVersion'), explainSnapshotLimits.version, budget);
   const raw = string(own(value, 'raw'), explainSnapshotLimits.raw, budget);
-  if (format === 'text' && raw !== '') return invalid();
+  if (dialect !== 'postgresql' && format === 'text' && raw !== '') return invalid();
   const warnings = array(own(value, 'warnings'), explainSnapshotLimits.warnings).map(item => string(item, explainSnapshotLimits.warning, budget));
   const output: ExplainSnapshotDocument = { kind: 'dbark.explain-snapshot', version: 1, dialect, serverVersion, format, raw, rawTruncated, warnings, result: result(own(value, 'result'), budget, capture) };
+  if (dialect === 'postgresql') validatePostgresPlanRows(output);
   if (format === 'json' && output.result.columns.length === 1 && output.result.rows.length === 1 && output.result.rows[0][output.result.columns[0].key] !== raw) return invalid();
   // 前面已经限定累计字符串和单元格数，最终 JSON 编码不会从无界输入扩张。
   if (new TextEncoder().encode(JSON.stringify(output) + '\n').byteLength > explainSnapshotLimits.bytes) return large();
@@ -172,9 +185,12 @@ export function parseExplainSnapshot(value: unknown): ExplainSnapshotDocument { 
 /** 离线恢复仅重建展示树，始终清空语句和耗时，不保留活动事务状态。 */
 export function explainSnapshotOutcome(value: ExplainSnapshotDocument): QueryOutcome {
   const snapshot = parseExplainSnapshot(value);
-  const plan = snapshot.format === 'json' ? parseExplainPlan(snapshot.raw, snapshot.dialect, snapshot.serverVersion)
+  const plan = snapshot.dialect === 'postgresql' ? parsePostgresExplain(snapshot.rawTruncated && snapshot.format === 'json' ? '' : snapshot.raw,
+    snapshot.serverVersion, snapshot.format, snapshot.rawTruncated)
+    : snapshot.format === 'json' ? parseExplainPlan(snapshot.raw, snapshot.dialect, snapshot.serverVersion)
     : { dialect: snapshot.dialect, version: snapshot.serverVersion, format: 'text' as const, raw: '', rawTruncated: false, nodes: [], warnings: [] };
   plan.rawTruncated = snapshot.rawTruncated;
+  if (snapshot.dialect === 'postgresql') plan.raw = snapshot.raw;
   // 保存的警告保留顺序；新解析器诊断不能被文件中的空数组抹掉，也不能反复往返增长。
   const diagnostics = [...new Set(plan.warnings)].slice(0, explainSnapshotLimits.warnings);
   const savedWarnings = [...new Set(snapshot.warnings)].filter(warning => !diagnostics.includes(warning));
@@ -208,11 +224,12 @@ function analyzeDocument(value: unknown, capture = false): AnalyzeSnapshotDocume
   const budget: Budget = { bytes: 0, items: 0 };
   if (own(value, 'kind') !== 'dbark.analyze-snapshot' || own(value, 'version') !== 1) return invalid();
   const dialect = own(value, 'dialect'), format = own(value, 'format'), rawTruncated = own(value, 'rawTruncated');
-  if ((dialect !== 'mysql' && dialect !== 'mariadb') || (format !== 'tree' && format !== 'json') || typeof rawTruncated !== 'boolean' || dialect === 'mysql' && format !== 'tree' || dialect === 'mariadb' && format !== 'json') return invalid();
+  if ((dialect !== 'mysql' && dialect !== 'mariadb' && dialect !== 'postgresql') || (format !== 'tree' && format !== 'json') || typeof rawTruncated !== 'boolean' || (dialect === 'mysql' ? format !== 'tree' : format !== 'json')) return invalid();
   const serverVersion = string(own(value, 'serverVersion'), explainSnapshotLimits.version, budget);
   const raw = string(own(value, 'raw'), explainSnapshotLimits.raw, budget);
   const warnings = array(own(value, 'warnings'), explainSnapshotLimits.warnings).map(item => string(item, explainSnapshotLimits.warning, budget));
   const output: AnalyzeSnapshotDocument = { kind: 'dbark.analyze-snapshot', version: 1, dialect, serverVersion, format, raw, rawTruncated, warnings, result: result(own(value, 'result'), budget, capture) };
+  if (dialect === 'postgresql') validatePostgresPlanRows(output);
   const oneCell = output.result.columns.length === 1 && output.result.rows.length === 1;
   const originalCell = oneCell ? output.result.rows[0][output.result.columns[0].key] : undefined;
   // 不完整标记也不能掩盖两份互相矛盾的单格文本；非文本/多格仅供明确不完整的结果回看。
@@ -247,7 +264,11 @@ export function parsePlanSnapshot(value: unknown): PlanSnapshotDocument {
 export function planSnapshotOutcome(value: PlanSnapshotDocument): QueryOutcome {
   const snapshot = parsePlanSnapshot(value);
   if (snapshot.kind === 'dbark.explain-snapshot') return explainSnapshotOutcome(snapshot);
-  const analysis = parseQueryAnalyzePlan(snapshot.raw, snapshot.dialect, snapshot.serverVersion, snapshot.format, snapshot.rawTruncated || snapshot.result.truncated);
+  const truncated = snapshot.rawTruncated || snapshot.result.truncated;
+  const analysis = snapshot.dialect === 'postgresql'
+    ? parsePostgresAnalyze(truncated ? '' : snapshot.raw, snapshot.serverVersion, truncated)
+    : parseQueryAnalyzePlan(snapshot.raw, snapshot.dialect, snapshot.serverVersion, snapshot.format, truncated);
+  if (snapshot.dialect === 'postgresql' && truncated) analysis.raw = snapshot.raw;
   const diagnostics = [...new Set(analysis.warnings)].slice(0, explainSnapshotLimits.warnings);
   const savedWarnings = [...new Set(snapshot.warnings)].filter(warning => !diagnostics.includes(warning));
   analysis.warnings = [...savedWarnings.slice(0, explainSnapshotLimits.warnings - diagnostics.length), ...diagnostics];

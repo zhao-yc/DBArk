@@ -41,7 +41,7 @@ const record = (value: unknown): value is Record<string, unknown> => !!value && 
 const bounded = (value: string, size: number) => value.slice(0, size).replace(/[\uD800-\uDBFF]$/, '');
 
 /** PostgreSQL 的 Plans 顺序和多根计划结构由同一遍历保留。 */
-function visitPostgresPlans(raw: string, visit: (node: Record<string, unknown>, position: Pick<ExplainNode, 'id' | 'path' | 'depth' | 'parent'>,
+export function visitPostgresPlans(raw: string, visit: (node: Record<string, unknown>, position: Pick<ExplainNode, 'id' | 'path' | 'depth' | 'parent'>,
   entry: Record<string, unknown>) => void): string[] {
   const document = readExplainJson(raw);
   if (!Array.isArray(document)) throw Error('PostgreSQL计划缺少有效的根节点');
