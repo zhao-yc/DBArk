@@ -2018,6 +2018,40 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await dependencyDialog.getByRole('button', { name: dependenciesText.back, exact: true }).click();
     await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
     await mark('原生函数定义和删除窗口按重载读取依赖，返回保留原删除预览，SQL 标准过程显示正文目录引用');
+    if (recipientRole === database + '_sequence_owner') {
+      const transferSignature = '"回归"."窗口例程交接"(integer)';
+      const remainingSignature = '"回归"."窗口例程交接"(text)';
+      await routineFilter.fill('窗口例程交接');
+      await expect(routineRows).toHaveCount(2);
+      await routineRows.filter({ hasText: transferSignature }).dblclick();
+      await routineDefinition.getByRole('button', { name: routineText.transferOwner, exact: true }).click();
+      const transferDialog = page.getByRole('dialog', { name: routineText.transferOwner, exact: true });
+      await expect(transferDialog).toContainText(routineText.ownerDefinerHint);
+      const searchRole = transferDialog.getByLabel(routineText.roleSearch, { exact: true });
+      const selectOwner = transferDialog.getByLabel(routineText.targetOwner, { exact: true });
+      const previewOwner = transferDialog.getByRole('button', { name: routineText.preview, exact: true });
+      await searchRole.fill('_sequence_owner');
+      await selectOwner.selectOption({ label: recipientRole });
+      await searchRole.fill('无匹配');
+      await expect(previewOwner).toBeDisabled();
+      await expect(transferDialog).toContainText(routineText.roleEmpty);
+      await searchRole.fill('_sequence_owner');
+      await selectOwner.selectOption({ label: recipientRole });
+      await previewOwner.click();
+      await expect(transferDialog.locator('pre')).toContainText(`ALTER FUNCTION ${transferSignature} OWNER TO "${recipientRole}"`);
+      const confirmOwner = transferDialog.getByRole('button', { name: routineText.confirmOwner, exact: true });
+      await expect(confirmOwner).toBeDisabled();
+      await page.screenshot({ path: info.outputPath('PostgreSQL例程所有者.png') });
+      await transferDialog.getByRole('checkbox', { name: routineText.acknowledgeOwner, exact: true }).check();
+      await confirmOwner.click();
+      await expect(page.getByText('PostgreSQL 函数所有者已确认更新', { exact: true })).toBeVisible();
+      await expect(transferDialog).toHaveCount(0);
+      await expect(routineRows.filter({ hasText: transferSignature })).toHaveCount(0);
+      await expect(routineRows.filter({ hasText: remainingSignature })).toHaveCount(1);
+      await expect(page.locator('.object-row').filter({ hasText: transferSignature })).toHaveCount(0);
+      await expect(page.locator('.object-row').filter({ hasText: remainingSignature })).toHaveCount(1);
+      await mark('原生窗口搜索并选择所有者，确认权限变化后转移定义者函数，目录只移除失去可见性的重载');
+    }
     await page.locator('.tab-strip .tab-close').click();
     await mark('原生重载定义生成调用草稿，打开草稿不执行，文本参数原值回读，过程返回 OUT 结果');
 

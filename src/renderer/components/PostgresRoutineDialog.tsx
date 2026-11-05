@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview } from '../../shared/postgresCreateTable';
+import type { PostgresTargetChoices } from '../../shared/postgresOwnership';
 import { buildPostgresRoutineCall, postgresRoutineManageSchema, type PostgresRoutineInfo, type PostgresRoutineManageInput, type PostgresRoutineProperties,
   type PostgresRoutineReadInput } from '../../shared/postgresRoutine';
 import { errorMessage, invoke } from '../lib';
@@ -14,7 +15,8 @@ import './PostgresCreateTableDialog.css';
 import './PostgresStructureDialog.css';
 
 type RoutineAction = PostgresRoutineManageInput['action'];
-type RoutineManage = { action: RoutineAction; stamp: string; version: number; originalBody?: string; originalProperties?: PostgresRoutineProperties };
+type RoutineManage = { action: RoutineAction; stamp: string; version: number; originalBody?: string;
+  originalProperties?: PostgresRoutineProperties; ownerDetails?: { owner: string; securityDefiner: boolean } };
 
 /** 定义读取和草稿绑定原连接及完整签名，加载或打开时只读取文本。 */
 export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange, onManaged }: {
@@ -82,7 +84,7 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
         <tr key={label}><th scope="row">{label}</th><td><code>{value}</code></td></tr>)}</tbody></table>
         <SqlEditor value={info.definition} dialect="postgresql" readOnly height={300}/></>}
     </div>
-    <footer className="modal-footer"><button disabled={!current} onClick={() => setAttempt(value => value + 1)}>{zh.common.refresh}</button>
+    <footer className="modal-footer pg-routine-footer"><button disabled={!current} onClick={() => setAttempt(value => value + 1)}>{zh.common.refresh}</button>
       <button disabled={!info} onClick={() => { if (info) openDraft(info.definition, name); }}>{text.draft}</button>
       {info && <button onClick={() => setDependencies({ stamp: info.stamp, version })}>{dependenciesText.open}</button>}
       {!readOnly && <button disabled={!call} title={info && !call ? text.callUnavailable : undefined}
@@ -91,6 +93,8 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
         <button disabled={info.editableBody === null} title={info.editableBody === null ? text.editUnavailable : undefined}
           onClick={() => setManage({ action: 'edit', stamp: info.stamp, version, originalBody: info.editableBody ?? undefined })}>{text.edit}</button>
         <button onClick={() => setManage({ action: 'properties', stamp: info.stamp, version, originalProperties: info })}>{text.properties}</button>
+        <button onClick={() => setManage({ action: 'owner', stamp: info.stamp, version,
+          ownerDetails: { owner: info.owner, securityDefiner: info.securityDefiner } })}>{text.transferOwner}</button>
         <button onClick={() => setManage({ action: 'rename', stamp: info.stamp, version })}>{text.rename}</button>
         <button onClick={() => setManage({ action: 'drop', stamp: info.stamp, version })}>{text.drop}</button>
       </>}
@@ -99,7 +103,7 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
 }
 
 /** 预览与确认绑定原连接版本及输入签名。写入结果未知时需要重新打开核对。 */
-function PostgresManageRoutineDialog({ target, action, stamp, version, originalBody, originalProperties,
+function PostgresManageRoutineDialog({ target, action, stamp, version, originalBody, originalProperties, ownerDetails,
   onClose, onManaged, onDirtyChange }: RoutineManage & {
   target: PostgresRoutineReadInput; onClose(unknown: boolean): void; onManaged(name: string, message: string): void;
   onDirtyChange(value: boolean): void;
@@ -108,6 +112,9 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, originalB
   const [name, setName] = useState('');
   const [body, setBody] = useState(originalBody ?? '');
   const [changes, setChanges] = useState<Partial<PostgresRoutineProperties>>({});
+  const [search, setSearch] = useState('');
+  const [ownerKey, setOwnerKey] = useState('');
+  const [roleResult, setRoleResult] = useState<{ search: string; data?: PostgresTargetChoices; error?: string }>();
   const [preview, setPreview] = useState<PostgresCreateTablePreview>();
   const [acknowledged, setAcknowledged] = useState(false);
   const [dependencies, setDependencies] = useState(false);
@@ -117,11 +124,25 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, originalB
   const locked = useRef(false);
   const dropping = action === 'drop';
   const editing = action === 'edit';
-  const changed = originalProperties ? Object.keys(changes).length > 0 : editing ? body !== originalBody : !!name;
+  const transferring = action === 'owner';
+  const roles = roleResult?.search === search ? roleResult : undefined;
+  const changed = transferring ? !!ownerKey : originalProperties ? Object.keys(changes).length > 0 : editing ? body !== originalBody : !!name;
   const enablingDefiner = changes.securityDefiner === true;
-  const requiresAcknowledgement = dropping || enablingDefiner;
+  const requiresAcknowledgement = dropping || enablingDefiner || transferring;
+  const emptyDraft = !changed || (editing && !body.trim()) || (action === 'rename' && !name.trim());
   useEffect(() => { onDirtyChange(busy || !!preview || changed); }, [busy, preview, changed, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  const { connectionId, database, kind, name: signature } = target;
+  useEffect(() => {
+    if (!transferring || stale) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      void invoke('postgres.routine.ownerTargets', { connectionId, database, kind, name: signature, stamp, search }).then(data => {
+        if (active) setRoleResult({ search, data });
+      }, reason => { if (active) setRoleResult({ search, error: errorMessage(reason) }); });
+    }, 180);
+    return () => { active = false; clearTimeout(timer); };
+  }, [connectionId, database, kind, signature, stamp, search, transferring, stale]);
 
   function back() {
     setPreview(undefined);
@@ -155,7 +176,7 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, originalB
         const base = { ...target, stamp };
         const input = postgresRoutineManageSchema.parse(action === 'drop' ? { ...base, action } :
           action === 'edit' ? { ...base, action, body } : action === 'properties' ? { ...base, action, changes } :
-            { ...base, action, newName: name });
+            action === 'owner' ? { ...base, action, key: ownerKey } : { ...base, action, newName: name });
         const next = await invoke('postgres.routine.manage.preview', input);
         if ((useWorkspace.getState().connectionVersions[target.connectionId] ?? 0) === version) setPreview(next);
       } else {
@@ -180,17 +201,38 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, originalB
 
   if (dependencies) return <PostgresDependenciesDialog target={{ ...target, stamp }}
     lockedVersion={version} onBack={() => setDependencies(false)}/>;
-  return <Modal title={text[action]} wide onClose={close}>
+  return <Modal title={transferring ? text.transferOwner : text[action]} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>{target.database} / {target.name}</strong>
-      <p>{dropping ? text.dropHint : editing ? text.editHint : originalProperties ? text.propertiesHint : text.renameHint}</p>
+      <p>{dropping ? text.dropHint : editing ? text.editHint : originalProperties ? text.propertiesHint :
+        transferring ? text.ownerHint : text.renameHint}</p>
+      {ownerDetails && <p>{text.owner} <code>{ownerDetails.owner}</code>{ownerDetails.securityDefiner && <> · {text.ownerDefinerHint}</>}</p>}
       <ErrorBox message={[stale && text.stale, unknown && text.manageUnknown, error].filter(Boolean).join(' ')}/>
       {busy && <Spinner text={text.working}/>}
       {preview ? <>
         <pre className="pg-create-sql">{preview.statements.join(';\n') + ';'}</pre>
         {requiresAcknowledgement && <label><input type="checkbox" checked={acknowledged} disabled={busy || stale}
-          onChange={event => setAcknowledged(event.target.checked)}/> {dropping ? text.acknowledgeDrop : text.acknowledgeDefiner}</label>}
-      </> : originalProperties ? <fieldset disabled={busy || stale || unknown}>
+          onChange={event => setAcknowledged(event.target.checked)}/> {dropping ? text.acknowledgeDrop :
+          transferring ? text.acknowledgeOwner : text.acknowledgeDefiner}</label>}
+      </> : transferring ? <fieldset disabled={busy || stale || unknown}>
+        <div className="pg-create-target">
+          <Field label={text.roleSearch}><input value={search} maxLength={256} onChange={event => {
+            setSearch(event.target.value);
+            setOwnerKey('');
+            setRoleResult(undefined);
+            setError('');
+          }}/></Field>
+          <Field label={text.targetOwner}><select aria-label={text.targetOwner} value={ownerKey} disabled={!roles?.data?.choices.length}
+            onChange={event => { setOwnerKey(event.target.value); setError(''); }}>
+            <option value="">—</option>
+            {roles?.data?.choices.map(role => <option key={role.key} value={role.key}>{role.label}</option>)}
+          </select></Field>
+        </div>
+        {!stale && !roles && <Spinner text={text.roleLoading}/>}
+        <ErrorBox message={roles?.error ?? ''}/>
+        {roles?.data?.choices.length === 0 && <p>{text.roleEmpty}</p>}
+        {roles?.data?.limited && <p>{text.roleLimited}</p>}
+      </fieldset> : originalProperties ? <fieldset disabled={busy || stale || unknown}>
         <RoutinePropertyFields kind={target.kind} values={{ ...originalProperties, ...changes }} onChange={setProperty}/>
         {enablingDefiner && <p>{text.definerHint}</p>}
       </fieldset> : editing ? <Field label={text.body}><textarea aria-label={text.body} className="pg-create-view-definition" value={body} rows={14} maxLength={128 * 1024}
@@ -204,9 +246,9 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, originalB
       <span className="grow"/><button disabled={busy} onClick={close}>{zh.common.close}</button>
       <button className={preview && dropping ? 'danger' : 'primary'}
         disabled={busy || stale || unknown || (!!preview && requiresAcknowledgement && !acknowledged) ||
-          (!dropping && (!changed || (!originalProperties && !(editing ? body : name).trim())))}
+          (!dropping && emptyDraft)}
         onClick={() => void submit()}>{preview ? (dropping ? text.confirmDrop : editing ? text.confirmEdit :
-          originalProperties ? text.confirmProperties : text.confirmRename) : text.preview}</button>
+          originalProperties ? text.confirmProperties : transferring ? text.confirmOwner : text.confirmRename) : text.preview}</button>
     </footer>
   </Modal>;
 }

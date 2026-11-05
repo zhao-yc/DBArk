@@ -21,7 +21,7 @@ import { PostgresTableWorkspace, type PostgresTableImportRequest } from './table
 import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
-import { readPostgresRoutine, readPostgresRoutineCatalog } from './routine';
+import { readPostgresRoutine, readPostgresRoutineCatalog, readPostgresRoutineOwnerTargets } from './routine';
 import { readPostgresDependencies, readPostgresRoutineDependencies } from './dependencies';
 import { PostgresStructureEditWorkspace } from './structureEdit';
 import { matchesPostgresColumnPlan, postgresColumnPlan, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
@@ -648,6 +648,7 @@ export class PostgresEngine {
       case 'postgres.sequence.targets':
       case 'postgres.routine.read':
       case 'postgres.routine.dependencies':
+      case 'postgres.routine.ownerTargets':
       case 'postgres.structure.dependencies':
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
@@ -664,6 +665,11 @@ export class PostgresEngine {
         if (command === 'postgres.routine.dependencies')
           return this.use(profile, input.database, connection => readPostgresRoutineDependencies(connection, {
             connectionId: input.connectionId, database: input.database, kind: input.kind, name: input.name, stamp: input.stamp,
+          }));
+        if (command === 'postgres.routine.ownerTargets')
+          return this.use(profile, input.database, connection => readPostgresRoutineOwnerTargets(connection, {
+            connectionId: input.connectionId, database: input.database, kind: input.kind, name: input.name,
+            stamp: input.stamp, search: input.search,
           }));
         if (command === 'postgres.routine.read')
           return this.use(profile, input.database, connection => readPostgresRoutine(connection, {

@@ -29,4 +29,10 @@ export const postgresRoutineZh = {
   parallel: '并行级别', parallelValues: { u: '不安全', r: '受限', s: '安全' },
   cost: '执行成本估算', rows: '返回行数估算',
   acknowledgeDefiner: '确认让已有执行权限的角色以例程所有者身份调用',
+  transferOwner: '转移例程所有者', confirmOwner: '确认转移所有者',
+  ownerHint: '选择新所有者，确认后当前角色可能失去查看或执行权限。',
+  ownerDefinerHint: '此例程以定义者身份执行。转移后会使用新所有者的权限。',
+  roleSearch: '搜索角色', targetOwner: '新所有者', roleLoading: '正在读取可用角色…',
+  roleEmpty: '没有符合权限和搜索条件的角色。', roleLimited: '仅显示前 100 个候选，请缩小搜索范围。',
+  acknowledgeOwner: '确认转移当前完整签名对应的例程',
 } as const;

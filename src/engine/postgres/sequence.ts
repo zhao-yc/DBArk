@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { postgresSequenceInfoSchema, type PostgresSequenceTargetsInput } from '../../shared/postgresSequence';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
+import { postgresOwnerTargets } from './ownerTargets';
 
 // pg_sequences 对目录值应用权限与未分配状态的规则，读取不会调用 nextval。
 export const postgresSequenceVisibleSql = `CASE WHEN c.relkind = 'S' THEN pg_catalog.has_sequence_privilege(c.oid, 'USAGE,SELECT,UPDATE')
@@ -54,17 +55,12 @@ export async function readPostgresSequence(connection: PostgresConnection, table
 export async function postgresSequenceTargets(connection: PostgresConnection, original: Awaited<ReturnType<typeof readPostgresSequence>>,
   kind: PostgresSequenceTargetsInput['kind'], search = '', key?: string) {
   if (!original.info.canManage) throw Error('当前角色没有序列管理权限');
-  if (kind === 'role' && original.info.ownedBy) throw Error('已绑定字段的序列须先解除绑定或随所属关系更改所有者');
-  if (kind === 'column' && original.info.ownedBy?.identity) throw Error('标识列序列须随所属字段管理');
-  const result = await connection.query(kind === 'role' ? `
-    SELECT r.oid::text, r.rolname::text FROM pg_catalog.pg_roles r
-    WHERE r.oid <> $2::oid AND ($4::text IS NULL OR r.oid::text = $4)
-      AND pg_catalog.strpos(pg_catalog.lower(r.rolname::text), pg_catalog.lower($3)) > 0
-      AND (EXISTS (SELECT FROM pg_catalog.pg_roles me WHERE me.rolname = current_user AND me.rolsuper)
-        OR (pg_catalog.has_schema_privilege(r.oid, $1::oid, 'CREATE') AND CASE
-          WHEN pg_catalog.current_setting('server_version_num')::int >= 160000 THEN pg_catalog.pg_has_role(current_user, r.oid, 'SET')
-          ELSE pg_catalog.pg_has_role(current_user, r.oid, 'MEMBER') END))
-    ORDER BY r.rolname LIMIT 101` : `
+  if (kind === 'role') {
+    if (original.info.ownedBy) throw Error('已绑定字段的序列须先解除绑定或随所属关系更改所有者');
+    return postgresOwnerTargets(connection, original.schemaOid, original.ownerOid, search, key);
+  }
+  if (original.info.ownedBy?.identity) throw Error('标识列序列须随所属字段管理');
+  const result = await connection.query(`
     SELECT c.oid::text || ':' || a.attnum::text, c.relname::text, a.attname::text
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
     WHERE c.relnamespace = $1::oid AND c.relowner = $2::oid AND c.relkind IN ('r', 'p', 'f', 'v')
@@ -74,9 +70,9 @@ export async function postgresSequenceTargets(connection: PostgresConnection, or
     ORDER BY c.relname, a.attnum LIMIT 101`, [original.schemaOid, original.ownerOid, search, key ?? null], { rows: 101, bytes: 64 * 1024 });
   if (result.truncated) throw Error('候选对象目录回包不完整，请缩小搜索范围');
   const choices = result.rows.slice(0, 100).map(row => {
-    if (typeof row.c0 !== 'string' || typeof row.c1 !== 'string' || (kind === 'column' && typeof row.c2 !== 'string'))
+    if (typeof row.c0 !== 'string' || typeof row.c1 !== 'string' || typeof row.c2 !== 'string')
       throw Error('候选对象目录回包不完整');
-    return { key: row.c0, label: kind === 'role' ? row.c1 : [original.info.schema, row.c1, String(row.c2)].map(postgresIdentifier).join('.') };
+    return { key: row.c0, label: [original.info.schema, row.c1, row.c2].map(postgresIdentifier).join('.') };
   });
   return { choices, limited: result.rows.length > 100 };
 }

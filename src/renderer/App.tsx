@@ -1072,7 +1072,7 @@ function WorkspaceApp() {
         if ((current.connectionVersions[ddl.connectionId] ?? 0) !== version) return;
         refreshRenameDatabase({ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: name });
         if (action === 'rename' && ddl.object) setDdl({ ...ddl, object: { ...ddl.object, name } });
-        if (action === 'drop') setDdl(null);
+        if (action === 'drop' || action === 'owner') setDdl(null);
       }}
       onClose={() => setDdl(null)}/> : ddl.object.kind === 'sequence' ? <PostgresSequenceDialog
       key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])}

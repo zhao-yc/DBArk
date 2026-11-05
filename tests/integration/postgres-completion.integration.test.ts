@@ -428,6 +428,61 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       expect(await routineOid(renamedProcedure)).toBeNull();
       expect((await client.query('SELECT count(*)::int AS count FROM public.routine_side_effects')).rows).toEqual([{ count: 0 }]);
 
+      const ownerRole = process.env.DBARK_POSTGRES_SEQUENCE_OWNER;
+      if (ownerRole) {
+        if (ownerRole !== database + '_sequence_owner') throw Error('目标角色不是本轮专用角色');
+        const transferFunction = '"补全.甲"."交接.例程"(integer)';
+        const transferOverload = '"补全.甲"."交接.例程"(text)';
+        const transferProcedure = '"补全.甲"."交接过程"(integer)';
+        await client.query(`CREATE FUNCTION ${transferFunction} RETURNS name LANGUAGE SQL SECURITY DEFINER
+          SET search_path TO pg_catalog, pg_temp AS 'SELECT current_user';
+          CREATE FUNCTION ${transferOverload} RETURNS text LANGUAGE SQL AS 'SELECT $1';
+          CREATE PROCEDURE "补全.甲"."交接过程"(IN value integer, OUT result integer) LANGUAGE plpgsql
+            AS 'BEGIN result := value + 1; END';
+          COMMENT ON FUNCTION ${transferFunction} IS '交接前注释';
+          REVOKE EXECUTE ON FUNCTION ${transferFunction} FROM PUBLIC;
+          GRANT EXECUTE ON FUNCTION ${transferFunction} TO "${ownerRole}" WITH GRANT OPTION;
+          GRANT USAGE, CREATE ON SCHEMA "补全.甲" TO "${ownerRole}"`);
+        const findOwners = async (name: string, search: string, kind: 'function' | 'procedure' = 'function') =>
+          engine.handle('postgres.routine.ownerTargets', { ...target, profile, name, kind, search, stamp: (await readRoutine(name, kind)).stamp });
+        const transfer = async (name: string, key: string, kind: 'function' | 'procedure' = 'function') =>
+          engine.handle('postgres.routine.manage.preview', { ...target, profile, owner: routineTarget.owner,
+            connectionRevision: routineTarget.connectionRevision, name, kind, stamp: (await readRoutine(name, kind)).stamp,
+            action: 'owner', key });
+        const { choices } = await findOwners(transferFunction, ownerRole.toUpperCase());
+        expect(choices).toEqual([{ label: ownerRole, key: expect.stringMatching(/^\d+$/) }]);
+        const roleKey = choices[0].key;
+        expect((await findOwners(transferFunction, database + '_limited')).choices).toEqual([]);
+        expect((await findOwners(transferFunction, '%')).choices).toEqual([]);
+        const before = await routineOid(transferFunction);
+        const roleDrift = await transfer(transferFunction, roleKey);
+        await client.query(`REVOKE CREATE ON SCHEMA "补全.甲" FROM "${ownerRole}"`);
+        expect(await applyManage(roleDrift.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('目标角色') });
+        expect(await readRoutine(transferFunction)).toMatchObject({ owner: database });
+        await client.query(`GRANT CREATE ON SCHEMA "补全.甲" TO "${ownerRole}"`);
+        const ownerPlan = await transfer(transferFunction, roleKey);
+        expect(ownerPlan.statements.at(-1)).toBe(`ALTER FUNCTION ${transferFunction} OWNER TO "${ownerRole}"`);
+        expect(await readRoutine(transferFunction)).toMatchObject({ owner: database });
+        expect(await applyManage(ownerPlan.token)).toMatchObject({ outcome: 'committed', table: transferFunction });
+        expect(await routineOid(transferFunction)).toBe(before);
+        expect(await readRoutine(transferOverload)).toMatchObject({ owner: database });
+        await expect(readRoutine(transferFunction)).rejects.toThrow('不可见');
+        expect(await routineCatalog()).not.toContainEqual({ kind: 'function', name: transferFunction });
+        expect((await client.query(`SELECT a.grantor::regrole::text AS grantor, a.grantee::regrole::text AS grantee,
+          a.is_grantable, pg_catalog.obj_description(p.oid,'pg_proc') AS comment
+          FROM pg_catalog.pg_proc p CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) a WHERE p.oid = $1::oid`, [before])).rows)
+          .toEqual([{ grantor: ownerRole, grantee: ownerRole, is_grantable: true, comment: '交接前注释' }]);
+        await client.query(`SET ROLE "${ownerRole}"`);
+        try {
+          expect((await client.query('SELECT "补全.甲"."交接.例程"(1) AS owner')).rows).toEqual([{ owner: ownerRole }]);
+        } finally { await client.query('RESET ROLE'); }
+        const procedureOwnerPlan = await transfer(transferProcedure, roleKey, 'procedure');
+        expect(procedureOwnerPlan.statements.at(-1)).toBe(`ALTER PROCEDURE ${transferProcedure} OWNER TO "${ownerRole}"`);
+        expect(await applyManage(procedureOwnerPlan.token)).toMatchObject({ outcome: 'committed', table: transferProcedure });
+        expect(await readRoutine(transferProcedure, 'procedure')).toMatchObject({ owner: ownerRole, canManage: false });
+        expect((await client.query('CALL "补全.甲"."交接过程"(41, NULL)')).rows).toEqual([{ result: 42 }]);
+      }
+
       const { sessionId } = await engine.handle('sessions.open', target);
       const { sessionId: other } = await engine.handle('sessions.open', target);
       const run = (sql: string, taskId = randomUUID()): Promise<QueryOutcome> =>

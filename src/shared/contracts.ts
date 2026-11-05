@@ -293,6 +293,7 @@ export interface CommandMap {
   'postgres.structure.dependencies': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresDependencies').PostgresDependencies };
   'postgres.routine.read': { input: import('./postgresRoutine').PostgresRoutineReadInput; output: import('./postgresRoutine').PostgresRoutineInfo };
   'postgres.routine.dependencies': { input: import('./postgresRoutine').PostgresRoutineDependencyInput; output: import('./postgresDependencies').PostgresDependencies };
+  'postgres.routine.ownerTargets': { input: import('./postgresRoutine').PostgresRoutineOwnerTargetsInput; output: import('./postgresOwnership').PostgresTargetChoices };
   'postgres.routine.create.preview': { input: import('./postgresRoutine').PostgresRoutineCreateInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.routine.create.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.routine.manage.preview': { input: import('./postgresRoutine').PostgresRoutineManageInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };

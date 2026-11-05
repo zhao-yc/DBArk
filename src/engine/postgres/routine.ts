@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseObject } from '../../shared/contracts';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
-import { postgresRoutineInfoSchema, type PostgresRoutineManageInput, type PostgresRoutineReadInput } from '../../shared/postgresRoutine';
+import { postgresRoutineInfoSchema, type PostgresRoutineManageInput, type PostgresRoutineOwnerTargetsInput,
+  type PostgresRoutineReadInput } from '../../shared/postgresRoutine';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
 import { startPostgresDdl } from './createTable';
+import { postgresOwnerTargets } from './ownerTargets';
 
 // 只用输入类型向量区分重载，参数名称、默认值和 OUT 字段的变化不改变身份。
 const signature = `pg_catalog.format('"%s"."%s"(%s)', pg_catalog.replace(n.nspname::text, '"', '""'),
@@ -58,7 +60,8 @@ export async function readPostgresRoutineFacts(connection: PostgresConnection, i
       AND pg_catalog.to_jsonb(p)->>'prosqlbody' IS NULL AND pg_catalog.octet_length(p.prosrc) BETWEEN 1 AND 131072
       AND pg_catalog.pg_has_role(p.proowner, 'USAGE') THEN p.prosrc END)::text,
     p.oid::text, n.oid::text, p.proargtypes::text, p.xmin::text, pg_catalog.pg_has_role(p.proowner, 'USAGE'),
-    pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to((pg_catalog.to_jsonb(p) - 'proname')::text, 'UTF8')), 'hex')
+    pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to((pg_catalog.to_jsonb(p) - 'proname')::text, 'UTF8')), 'hex'),
+    p.proowner::text
     ${source} JOIN pg_catalog.pg_language l ON l.oid = p.prolang
     WHERE n.nspname = $2::name AND p.proname = $3::name AND ${visible}
       AND (CASE WHEN p.prokind = 'p' THEN 'procedure' ELSE 'function' END) = $4
@@ -66,14 +69,44 @@ export async function readPostgresRoutineFacts(connection: PostgresConnection, i
   if (result.truncated) throw Error('PostgreSQL 函数定义超过读取预算');
   const row = result.rows[0];
   if (result.rows.length !== 1 || typeof row.c0 !== 'string' || typeof row.c1 !== 'string' || typeof row.c2 !== 'string' ||
-      typeof row.c3 !== 'string' || typeof row.c4 !== 'string' || typeof row.c6 !== 'string')
+      typeof row.c3 !== 'string' || typeof row.c4 !== 'string' || typeof row.c6 !== 'string' || typeof row.c7 !== 'string')
     throw Error('PostgreSQL 重载不存在、已改名或当前角色不可见');
   const catalog = JSON.parse(row.c0);
   const canManage = row.c5 === 't';
   const preserved = JSON.stringify([row.c1, row.c2, row.c6, catalog.owner, catalog.comment]);
   const stamp = createHash('sha256').update(JSON.stringify([input.name, preserved, row.c4, canManage])).digest('hex');
-  return { schema, name, oid: row.c1, schemaOid: row.c2, inputVector: row.c3, preserved,
+  return { schema, name, oid: row.c1, schemaOid: row.c2, inputVector: row.c3, preserved, ownerOid: row.c7,
     argumentsSql: input.name.slice(qualified[0].length - 1), info: postgresRoutineInfoSchema.parse({ ...catalog, canManage, stamp }) };
+}
+
+/** 转移可见性可能变化，内部验证仅按本事务中已锁定的 OID 读取所有者与授权。 */
+async function readRoutineOwner(connection: PostgresConnection, oid: string, oldOwner?: string, newOwner?: string) {
+  const result = await connection.query(`SELECT p.proowner::text, pg_catalog.pg_get_userbyid(p.proowner)::text,
+    CASE WHEN p.proacl IS NOT NULL THEN COALESCE((
+      SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(grantor, grantee, privilege_type, grantable)
+        ORDER BY grantor, grantee, privilege_type)::text
+      FROM (SELECT grantor, grantee, privilege_type, pg_catalog.bool_or(is_grantable) AS grantable
+        FROM (SELECT CASE WHEN a.grantor = $2::oid THEN $3::oid ELSE a.grantor END AS grantor,
+          CASE WHEN a.grantee = $2::oid THEN $3::oid ELSE a.grantee END AS grantee, a.privilege_type, a.is_grantable
+          FROM pg_catalog.aclexplode(p.proacl) a) mapped GROUP BY grantor, grantee, privilege_type) combined
+    ), '[]') END
+    FROM pg_catalog.pg_proc p WHERE p.oid = $1::oid`, [oid, oldOwner ?? null, newOwner ?? null], { rows: 2, bytes: 1024 * 1024 });
+  const row = result.rows[0];
+  if (result.truncated || result.rows.length !== 1 || typeof row.c0 !== 'string' || typeof row.c1 !== 'string' ||
+      (row.c2 !== null && typeof row.c2 !== 'string')) throw Error('未确认例程所有者或授权');
+  return { ownerOid: row.c0, owner: row.c1, acl: row.c2 };
+}
+
+/** 候选读取也绑定完整签名和原目录摘要，失去管理权限时停止搜索。 */
+export async function readPostgresRoutineOwnerTargets(connection: PostgresConnection, input: PostgresRoutineOwnerTargetsInput) {
+  await startPostgresDdl(connection, true);
+  const facts = await readPostgresRoutineFacts(connection, input);
+  if (!facts.info.canManage) throw Error('当前角色没有例程管理权限');
+  if (facts.info.stamp !== input.stamp) throw Error('原例程已变化，请刷新定义后继续');
+  const targets = await postgresOwnerTargets(connection, facts.schemaOid, facts.ownerOid, input.search);
+  if ((await connection.query('COMMIT', undefined, { rows: 0, bytes: 1024 })).postgresCommand !== 'COMMIT')
+    throw Error('候选角色读取未完成');
+  return targets;
 }
 
 /** 目录摘要仅排除计划允许变化的属性，同时覆盖出向依赖。 */
@@ -234,6 +267,34 @@ export async function compilePostgresRoutineManage(connection: PostgresConnectio
           JSON.stringify(actual.info[key as keyof typeof expected]) !== JSON.stringify(value)) ||
             await readRoutineShape(current, actual.oid, editableColumns, false) !== shape)
           throw Error('回读的例程属性、身份或依赖与预览不同，未提交');
+      },
+    };
+  }
+  if (input.action === 'owner') {
+    const { key } = input;
+    const findRole = async (current: PostgresConnection) => {
+      const { choices } = await postgresOwnerTargets(current, original.schemaOid, original.ownerOid, '', key);
+      if (!choices[0]) throw Error('目标角色已变化或不符合所有者转移权限');
+      return choices[0].label;
+    };
+    const role = await findRole(connection);
+    const ownerColumns = ['proowner', 'proacl'];
+    const shape = await readRoutineShape(connection, original.oid, ownerColumns);
+    const expected = await readRoutineOwner(connection, original.oid, original.ownerOid, key);
+    return { ...plan, table: input.name, success: 'PostgreSQL ' + label + '所有者已确认更新',
+      statements: ['ALTER ' + sqlTarget + ' OWNER TO ' + postgresIdentifier(role)],
+      async preflight(current: PostgresConnection) {
+        const stamp = await plan.preflight(current);
+        if (await findRole(current) !== role) throw Error('目标角色已改名，请重新预览');
+        if (await readRoutineShape(current, original.oid, ownerColumns) !== shape)
+          throw Error('原例程属性或依赖已变化，请重新预览');
+        return stamp;
+      },
+      async verify(current: PostgresConnection) {
+        const actual = await readRoutineOwner(current, original.oid);
+        if (actual.ownerOid !== key || actual.owner !== role || actual.acl !== expected.acl ||
+            await readRoutineShape(current, original.oid, ownerColumns) !== shape)
+          throw Error('回读的例程所有者、授权或其他属性与预览不同，未提交');
       },
     };
   }

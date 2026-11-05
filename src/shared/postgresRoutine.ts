@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresCreateTableSchemasSchema, postgresDdlText, postgresNewIdentifier } from './postgresCreateTable';
 import { postgresIdentifier, scanPostgresEditorTokens } from './postgresSql';
+import { postgresRoleKey, postgresTargetSearch } from './postgresOwnership';
 
 export const postgresRoutineReadSchema = postgresStructureInputSchema.omit({ table: true }).extend({
   kind: z.enum(['function', 'procedure']),
@@ -15,6 +16,8 @@ const routineBody = z.string().min(1).max(128 * 1024)
 const routineManageTarget = postgresRoutineReadSchema.extend({ stamp: routineStamp });
 export const postgresRoutineDependencySchema = routineManageTarget.strict();
 export type PostgresRoutineDependencyInput = z.infer<typeof postgresRoutineDependencySchema>;
+export const postgresRoutineOwnerTargetsSchema = routineManageTarget.extend({ search: postgresTargetSearch }).strict();
+export type PostgresRoutineOwnerTargetsInput = z.infer<typeof postgresRoutineOwnerTargetsSchema>;
 const volatility = z.enum(['i', 's', 'v']);
 const parallel = z.enum(['u', 'r', 's']);
 const estimate = z.string().max(32).regex(/^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/, '请输入正数或科学计数法')
@@ -32,6 +35,7 @@ export const postgresRoutineManageSchema = z.discriminatedUnion('action', [
   routineManageTarget.extend({ action: z.literal('drop') }).strict(),
   routineManageTarget.extend({ action: z.literal('edit'), body: routineBody }).strict(),
   routineManageTarget.extend({ action: z.literal('properties'), changes: routinePropertyChanges }).strict(),
+  routineManageTarget.extend({ action: z.literal('owner'), key: postgresRoleKey }).strict(),
 ]);
 export type PostgresRoutineManageInput = z.infer<typeof postgresRoutineManageSchema>;
 

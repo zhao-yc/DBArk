@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { postgresCreateTableSchemasSchema, postgresDdlLiteral, postgresDdlText, postgresNewIdentifier } from './postgresCreateTable';
 import { postgresIdentifier } from './postgresSql';
+import { postgresRoleKey, postgresTargetSearch, type PostgresTargetChoices } from './postgresOwnership';
 import { postgresStructureInputSchema } from './postgresStructure';
 
 const integer = z.string().regex(/^-?(?:0|[1-9][0-9]{0,18})$/);
@@ -28,12 +29,11 @@ export const postgresSequenceInfoSchema = z.object({
 export type PostgresSequenceInfo = z.infer<typeof postgresSequenceInfoSchema>;
 
 const manageTarget = postgresStructureInputSchema.extend({ stamp: postgresSequenceInfoSchema.shape.stamp });
-const roleKey = z.string().regex(/^[1-9][0-9]{0,9}$/);
 const columnKey = z.string().regex(/^[1-9][0-9]{0,9}:[1-9][0-9]{0,3}$/);
 export const postgresSequenceTargetsSchema = manageTarget.extend({ kind: z.enum(['column', 'role']),
-  search: z.string().max(256).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)) }).strict();
+  search: postgresTargetSearch }).strict();
 export type PostgresSequenceTargetsInput = z.infer<typeof postgresSequenceTargetsSchema>;
-export type PostgresSequenceTargets = { choices: { key: string; label: string }[]; limited: boolean };
+export type PostgresSequenceTargets = PostgresTargetChoices;
 export const postgresSequenceManageSchema = z.discriminatedUnion('action', [
   manageTarget.extend({ action: z.literal('edit'), ...sequenceSettings.shape, comment: postgresDdlText.optional(),
     restart: integer.or(z.literal('')) }).strict(),
@@ -41,7 +41,7 @@ export const postgresSequenceManageSchema = z.discriminatedUnion('action', [
   manageTarget.extend({ action: z.literal('drop') }).strict(),
   manageTarget.extend({ action: z.literal('bind'), key: columnKey }).strict(),
   manageTarget.extend({ action: z.literal('detach') }).strict(),
-  manageTarget.extend({ action: z.literal('owner'), key: roleKey }).strict(),
+  manageTarget.extend({ action: z.literal('owner'), key: postgresRoleKey }).strict(),
 ]);
 export type PostgresSequenceManageInput = z.infer<typeof postgresSequenceManageSchema>;
 

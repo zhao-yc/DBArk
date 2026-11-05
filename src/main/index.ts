@@ -785,7 +785,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     return result;
   }
   if (command === 'postgres.sequence.read' || command === 'postgres.sequence.targets' || command === 'postgres.routine.read' ||
-      command === 'postgres.routine.dependencies' || command.startsWith('postgres.structure.') || command === 'postgres.completion') {
+      command === 'postgres.routine.dependencies' || command === 'postgres.routine.ownerTargets' ||
+      command.startsWith('postgres.structure.') || command === 'postgres.completion') {
     // 原文档、连接修订和实际会话必须一致，关闭中的会话也不再发布目录。
     const revision = store.connectionRevision();
     const binding = command === 'postgres.completion' && input.sessionId ? sessions.get(input.sessionId) : undefined;
