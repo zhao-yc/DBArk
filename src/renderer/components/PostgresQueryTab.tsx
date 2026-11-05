@@ -9,7 +9,8 @@ import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseInten
 import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } from '../store';
 import { invoke, uid, errorMessage } from '../lib';
 import { postgresZh as text } from '../locales/postgres.zh-CN';
-import { zh } from '../locales/zh-CN';
+import { formatText, zh } from '../locales/zh-CN';
+import { snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
 import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, type QueryResultColumnLayout } from '../queryResultColumns';
 import { captureQueryResultMemory, queryResultMemoryMatches } from '../queryResultMemory';
@@ -48,6 +49,7 @@ import { useQueryFileSource } from '../useQueryFileSource';
 import { captureQueryFileSnapshot } from '../queryFileSnapshot';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
 import './PostgresQueryTab.css';
+import '../queryPins.css';
 import '../queryResultSort.css';
 interface Scope {
   profile: unknown;
@@ -86,6 +88,7 @@ interface ColumnDraft { binding: ResultSelectionBinding; owner: string; initial:
 interface StatisticsDraft { binding: ResultSelectionBinding; owner: string; column: ResultColumn; indices: ReadonlySet<number>; }
 interface PresetDraft { binding: ResultSelectionBinding; owner: string; value: QueryResultPresetValue; }
 interface ResultLayout { source: QueryResult; layout: QueryResultColumnLayout; columns: ResultColumn[]; }
+interface PinState { items: PinnedQueryResult[]; selected?: string; sequence: number; }
 /** PostgreSQL查询复用原编辑器、结果网格、文件来源及保存查询；驱动任务和事务明确独立。 */
 export function PostgresQueryTab({
   tab,
@@ -128,6 +131,9 @@ export function PostgresQueryTab({
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
   const [resultSelection] = useState(() => new ResultExportSelection());
+  const [pinState, setPinState] = useState<PinState>({ items: [], sequence: 0 });
+  const pinStateRef = useRef(pinState);
+  const [pinSql, setPinSql] = useState<PinnedQueryResult>();
   const [resultHistory] = useState(() => new QueryResultHistory());
   const [rowDetails] = useState(() => new QueryRowDetails());
   const [activeDetailRow, setActiveDetailRow] = useState<{ binding: QueryRowDetailsBinding; index: number }>();
@@ -335,11 +341,8 @@ export function PostgresQueryTab({
     setBusy(true);
     setError('');
     if (mode !== 'analyzePreview') {
-      resultFilter.invalidate();
-      resultSorter.invalidate();
-      resultSelection.invalidate();
-      resultHistory.invalidate();
-      setColumnLayout(undefined);
+      resetResultView();
+      if (pinStateRef.current.selected) publishPinState({ ...pinStateRef.current, selected: undefined });
       setOutcome(undefined);
       setSelected(0);
     }
@@ -625,11 +628,12 @@ export function PostgresQueryTab({
         if (phase.current && (changed || (left && !phase.current.sent))) phase.current.valid = false;
         if (changed || left) resultSelection.invalidate();
         if (changed) {
-          organization.filter.invalidate();
-          organization.sorter.invalidate();
-          resultHistory.invalidate();
-          setColumnLayout(undefined);
+          resetResultView();
+          publishPinState({ items: [], sequence: 0 });
+          setOutcome(undefined);
+          setSelected(0);
         }
+        if (changed || left) setPinSql(undefined);
         if ((changed || left) && sortDraftRef.current) closeResultSort(sortDraftRef.current);
         if ((changed || left) && filterDraftRef.current) closeResultFilter(filterDraftRef.current);
         if ((changed || left) && columnDraftRef.current) closeResultColumns(columnDraftRef.current);
@@ -651,13 +655,15 @@ export function PostgresQueryTab({
     if (closeRequest && columnDraftRef.current) closeResultColumns(columnDraftRef.current);
     if (closeRequest && statisticsDraftRef.current) closeResultStatistics(statisticsDraftRef.current);
     if (closeRequest && presetDraftRef.current) closeResultPresets(presetDraftRef.current);
+    if (closeRequest) setPinSql(undefined);
   }, [closeRequest]);
+  const pin = pinState.items.find(item => item.id === pinState.selected);
   const results = outcome?.results ?? [],
-    result = results[selected],
-    controlsLocked = busy || fileBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView,
+    result = pin?.result ?? results[selected],
+    controlsLocked = busy || fileBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView || !!pinSql,
     locked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft;
-  const resultSource = !outcome?.analysis && !outcome?.explain && result?.columns.length ? result : undefined;
-  const resultContext = [outcome, selected, profile, version, scope.database];
+  const resultSource = pin?.result ?? (!outcome?.analysis && !outcome?.explain && result?.columns.length ? result : undefined);
+  const resultContext = [pin ?? outcome, pin ? undefined : selected, profile, version, scope.database];
   const currentLayout = columnLayout?.source === resultSource ? columnLayout : undefined;
   const layout = currentLayout?.layout;
   const visibleColumns = currentLayout?.columns ?? resultSource?.columns;
@@ -694,6 +700,63 @@ export function PostgresQueryTab({
   function resultCurrent() {
     return resultScopeCurrent() && !sortDraftRef.current && !filterDraftRef.current && !columnDraftRef.current &&
       !statisticsDraftRef.current && !presetDraftRef.current && resultSelection.current(binding);
+  }
+
+  /** 切换结果来源时同步撤销旧布局、整理历史和网格回执。 */
+  function resetResultView() {
+    organization.filter.invalidate();
+    organization.sorter.invalidate();
+    resultSelection.invalidate();
+    resultHistory.invalidate();
+    setColumnLayout(undefined);
+  }
+
+  /** 同步替换快照列表与选中项，旧按钮不能覆盖后续快照。 */
+  function publishPinState(next: PinState) {
+    pinStateRef.current = next;
+    setPinState(next);
+  }
+
+  /** 快照切换和释放也可在没有本次行结果时使用，仍核对当前标签和操作窗口。 */
+  function pinNavigationCurrent() {
+    return pinStateRef.current === pinState && !locked && available();
+  }
+
+  /** 克隆原始完整结果，保留原列、原行和附带 SQL。 */
+  function pinResult() {
+    if (pin || !resultSource || !pinNavigationCurrent() || !resultCurrent()) return;
+    try {
+      const sequence = pinState.sequence + 1;
+      const next = snapshotQueryResult(pinState.items, resultSource, uid(), formatText(zh.query.pinLabel, sequence));
+      resetResultView();
+      publishPinState({ items: [...pinState.items, next], selected: next.id, sequence });
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 来源切换后，新网格从原返回顺序开始整理。 */
+  function selectPinnedResult(next?: PinnedQueryResult) {
+    if (!pinNavigationCurrent() || next && !pinState.items.includes(next) || pin === next) return;
+    resetResultView();
+    publishPinState({ ...pinState, selected: next?.id });
+  }
+
+  /** 释放当前快照时返回本次结果，释放其它快照保留当前结果视图。 */
+  function releasePinnedResult(item: PinnedQueryResult) {
+    if (!pinNavigationCurrent() || !pinState.items.includes(item)) return;
+    if (pin === item) resetResultView();
+    publishPinState({ ...pinState, items: pinState.items.filter(entry => entry !== item),
+      selected: pin === item ? undefined : pinState.selected });
+  }
+
+  /** 只展示当前固定结果所附带的原 SQL。 */
+  function openPinnedSql() {
+    if (pin?.result.statement.trim() && pinNavigationCurrent() && resultCurrent()) setPinSql(pin);
+  }
+
+  /** 旧预览的关闭回调仅能释放自身。 */
+  function closePinnedSql(item: PinnedQueryResult) {
+    setPinSql(current => current === item ? undefined : current);
   }
 
   /** 行详情沿用当前网格的来源校验，另排除遮挡网格的模态窗口。 */
@@ -1083,7 +1146,7 @@ export function PostgresQueryTab({
           postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
             connectionVersion: scope.version, sessionId: session.current?.id }}
           onCompletionStatus={setCompletionStatus}
-          readOnly={busy || fileBusy || !!analyze || !!exportView || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft}
+          readOnly={busy || fileBusy || !!analyze || !!exportView || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!pinSql}
           onReady={(instance) => {
             editor.current = instance;
           }}
@@ -1101,22 +1164,29 @@ export function PostgresQueryTab({
           : completionStatus === 'sessionUnknown' ? text.completionTransaction : text.completionUnavailable}</p>}
       {busy && <Spinner text={phase.current?.sent ? text.running : text.connecting} />}
       <div className="postgres-results">
-        {(results.length > 1 || dataResult) && (
+        {!!pinState.items.length && <div className="pinned-results" role="group" aria-label={zh.query.pinSection} title={zh.query.pinSessionOnly}>
+          <span>{zh.query.pinSection}</span>
+          <button className={`current-results ${pin ? '' : 'selected'}`} aria-pressed={!pin} disabled={locked}
+            onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>
+          {pinState.items.map(item => <div key={item.id} className={`pinned-result ${pin === item ? 'selected' : ''}`}>
+            <button aria-pressed={pin === item} disabled={locked} onClick={() => selectPinnedResult(item)}>{item.label}</button>
+            <button aria-label={formatText(zh.query.releasePin, item.label)} title={formatText(zh.query.releasePin, item.label)}
+              disabled={locked} onClick={() => releasePinnedResult(item)}>×</button>
+          </div>)}
+        </div>}
+        {(!pin && results.length > 1 || dataResult) && (
           <div className="postgres-result-actions">
-            {results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
+            {!pin && results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
               onChange={event => {
-                if (exportOpen.current || sortDraftRef.current || filterDraftRef.current || columnDraftRef.current ||
-                    statisticsDraftRef.current || presetDraftRef.current) return;
-                resultFilter.invalidate();
-                resultSorter.invalidate();
-                resultSelection.invalidate();
-                resultHistory.invalidate();
-                setColumnLayout(undefined);
+                if (!pinNavigationCurrent()) return;
+                resetResultView();
                 setSelected(Number(event.target.value));
               }}>
               {results.map((r, i) => <option key={i} value={i}>{text.result(i, r.postgresCommand ?? '', r.rows.length)}</option>)}
             </select>}
             {dataResult && <>
+              {pin ? <button disabled={locked || !pin.result.statement.trim()} onClick={openPinnedSql}>{zh.query.pinnedStatement}</button> :
+                <button disabled={locked || !binding} title={zh.query.pinHint} onClick={pinResult}>{zh.query.pinResult}</button>}
               <button disabled={locked || !binding} onClick={openResultColumns}>{columnText.open}</button>
               <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                 title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
@@ -1145,8 +1215,8 @@ export function PostgresQueryTab({
             </>}
           </div>
         )}
-        {outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
-          outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
+        {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
+          !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
           result.columns.length ? (
             <div className="query-result-with-details">
               <div className="query-result-grid">
@@ -1175,6 +1245,14 @@ export function PostgresQueryTab({
         )}
         {result?.truncated && <p className="warning-text">{text.truncated}</p>}
       </div>
+      {pinSql && <Modal title={zh.query.pinSource} wide onClose={() => closePinnedSql(pinSql)}>
+        <div className="modal-content"><p>{zh.query.resultSqlHint}</p>
+          <SqlEditor value={pinSql.result.statement} dialect="postgresql" height={280} readOnly />
+        </div>
+        <footer className="modal-footer"><span className="grow"/>
+          <button onClick={() => closePinnedSql(pinSql)}>{zh.common.close}</button>
+        </footer>
+      </Modal>}
       {columnDraft && <QueryResultColumnsDialog key={columnDraft.owner} binding={columnDraft.binding}
         initial={columnDraft.initial} owner={columnDraft.owner}
         isCurrent={() => columnCurrent(columnDraft)} onApply={next => applyResultColumns(columnDraft, next)}
@@ -1254,7 +1332,7 @@ export function PostgresQueryTab({
           }}
         />
       )}
-      {closeRequest && !save && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && (
+      {closeRequest && !save && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !pinSql && (
         <QueryCloseDialog
           title={tab.title}
           onCancel={() => finishClose(false)}

@@ -754,7 +754,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await selectResultRow(lastId);
     const resultPaths = { json: info.outputPath('PostgreSQL查询勾选.json'), csv: info.outputPath('PostgreSQL查询返回.csv'),
       xlsx: info.outputPath('PostgreSQL查询返回.xlsx'), filtered: info.outputPath('PostgreSQL查询筛选.json'),
-      layout: info.outputPath('PostgreSQL查询列布局.json') };
+      layout: info.outputPath('PostgreSQL查询列布局.json'), pinned: info.outputPath('PostgreSQL固定快照.json') };
     await application.evaluate(({ BrowserWindow, dialog }, input) => {
       const original = dialog.showSaveDialog, calls: string[] = [];
       dialog.showSaveDialog = (async (...args: unknown[]) => {
@@ -765,7 +765,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
             (extension !== 'json' && extension !== 'csv' && extension !== 'xlsx') || options.defaultPath !== '查询结果.' + extension)
           throw Error('PostgreSQL 查询结果保存的窗口或格式不符');
         calls.push(extension);
-        return { canceled: false, filePath: calls.length === 5 ? input.paths.layout : calls.length === 4 ? input.paths.filtered : input.paths[extension] };
+        const filePath = [input.paths.json, input.paths.csv, input.paths.xlsx, input.paths.filtered, input.paths.layout, input.paths.pinned][calls.length - 1];
+        if (!filePath) throw Error('超出 PostgreSQL 查询结果导出次数');
+        return { canceled: false, filePath };
       }) as typeof original;
       Object.assign(globalThis, { finishPostgresResultExport: () => { dialog.showSaveDialog = original; return calls; } });
     }, { sender: tableExportSender, paths: resultPaths });
@@ -914,10 +916,37 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await expect(resultGrid).toHaveClass(/grid-row-height-32/);
       await expect(resultGrid.getByRole('row').nth(1)).toContainText(firstId);
       await mark('列布局保护活动条件和排序，隐藏与重排联动勾选导出，切换结果恢复原布局');
+
+      // 固定原结果时已有筛选与隐藏列。快照仍须包含全部原列、原行和精确数据。
+      await resultGrid.getByRole('gridcell', { name: lastId, exact: true }).click();
+      await button(filterText.cellEquals).click();
+      await applyFilter.click();
+      await expect(resultGrid).not.toContainText(firstId);
+      await button(columnText.open).click();
+      await columns.getByLabel(columnText.visible(3), { exact: true }).uncheck();
+      await applyColumns.click();
+      await expect(resultGrid.getByRole('columnheader', { name: /raw/ })).toHaveCount(0);
+      await button(zh.query.pinResult).click();
+      const pinned = tab().getByRole('group', { name: zh.query.pinSection, exact: true });
+      await expect(pinned.getByRole('button', { name: '固定 1', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(resultGrid).toContainText(firstId);
+      await expect(resultGrid.getByRole('columnheader', { name: /raw/ })).toBeVisible();
+      await expect(resultSwitch).toHaveCount(0);
+      await button(zh.resultExport.title).click();
+      const pinExport = page.getByRole('dialog', { name: zh.resultExport.title, exact: true });
+      await pinExport.getByLabel(zh.resultExport.format, { exact: true }).selectOption('json');
+      await pinExport.locator('.file-picker').click();
+      await expect(pinExport.locator('.file-picker')).toContainText('PostgreSQL固定快照.json');
+      await pinExport.getByRole('button', { name: zh.resultExport.start, exact: true }).click();
+      await expect(pinExport.locator('.success-box')).toHaveText('已导出 3 行已返回结果。');
+      await pinExport.getByRole('button', { name: zh.common.done, exact: true }).click();
+      const pinRows = JSON.parse(await readFile(resultPaths.pinned, 'utf8'));
+      expect(pinRows.map((row: { 同名: string }) => row.同名)).toEqual([firstId, middleId, lastId]);
+      expect(pinRows[0].raw).toEqual({ type: 'binary', base64: 'AP8=' });
     } finally {
       resultExportCalls = await application.evaluate(() => (globalThis as unknown as { finishPostgresResultExport(): string[] }).finishPostgresResultExport());
     }
-    expect(resultExportCalls).toEqual(['json', 'csv', 'xlsx', 'json', 'json']);
+    expect(resultExportCalls).toEqual(['json', 'csv', 'xlsx', 'json', 'json', 'json']);
     expect(JSON.parse(await readFile(resultPaths.json, 'utf8'))).toEqual([
       { 同名: lastId, '同名 [2]': '引;号', raw: { type: 'binary', base64: '' }, 调用序号: '3' },
       { 同名: firstId, '同名 [2]': null, raw: { type: 'binary', base64: 'AP8=' }, 调用序号: '1' },
@@ -940,6 +969,23 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await edit("SELECT '序列确认：' || currval('pg_result_export_seq')::text;");
     await execute();
     await expect(tab().getByRole('grid')).toContainText('序列确认：3');
+    const pinGroup = tab().getByRole('group', { name: zh.query.pinSection, exact: true });
+    const oldResult = pinGroup.getByRole('button', { name: '固定 1', exact: true });
+    await expect(pinGroup.getByRole('button', { name: zh.query.currentResults, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    const historyBeforePinRead = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await oldResult.click();
+    await expect(resultGrid).toContainText(firstId);
+    await expect(resultGrid).not.toContainText('序列确认：3');
+    await page.screenshot({ path: info.outputPath('PostgreSQL固定查询结果.png') });
+    await button(zh.query.pinnedStatement).click();
+    const pinSql = page.getByRole('dialog', { name: zh.query.pinSource, exact: true });
+    await expect(pinSql.locator('.view-lines')).toContainText('pg_result_export_seq');
+    await pinSql.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await pinGroup.getByRole('button', { name: '释放 固定 1', exact: true }).click();
+    await expect(pinGroup).toHaveCount(0);
+    await expect(resultGrid).toContainText('序列确认：3');
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforePinRead);
+    await mark('固定完整原结果、导出原值，执行新查询后回看快照 SQL 并释放，事务及历史保持');
     await button(postgresZh.rollback).click();
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
     await mark('查询结果的勾选 JSON、已返回 CSV 和 Excel 实际落盘，导出未推进原序列或改变事务');
