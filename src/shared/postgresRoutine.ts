@@ -13,17 +13,30 @@ const routineBody = z.string().min(1).max(128 * 1024)
   .refine(value => !!value.trim() && !/[\u0000\uD800-\uDFFF]/u.test(value), '例程正文不能为空且须为有效文本')
   .refine(value => new TextEncoder().encode(value).length <= 128 * 1024, '例程正文超过 128 KiB');
 const routineManageTarget = postgresRoutineReadSchema.extend({ stamp: routineStamp });
+const volatility = z.enum(['i', 's', 'v']);
+const parallel = z.enum(['u', 'r', 's']);
+const estimate = z.string().max(32).regex(/^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/, '请输入正数或科学计数法')
+  .refine(value => Number(value) > 0 && Number.isFinite(Number(value)), '估算值须为有限正数');
+const routineProperties = z.object({
+  volatility, parallel, strict: z.boolean(), securityDefiner: z.boolean(), cost: z.string(),
+  rows: z.string().nullable(), comment: z.string().nullable(),
+});
+const routinePropertyChanges = routineProperties.extend({
+  cost: estimate, rows: estimate, comment: postgresDdlText.min(1).nullable(),
+}).partial().strict().refine(value => Object.keys(value).length > 0, '请修改至少一项例程属性');
+export type PostgresRoutineProperties = z.infer<typeof routineProperties>;
 export const postgresRoutineManageSchema = z.discriminatedUnion('action', [
   routineManageTarget.extend({ action: z.literal('rename'), newName: postgresNewIdentifier }).strict(),
   routineManageTarget.extend({ action: z.literal('drop') }).strict(),
   routineManageTarget.extend({ action: z.literal('edit'), body: routineBody }).strict(),
+  routineManageTarget.extend({ action: z.literal('properties'), changes: routinePropertyChanges }).strict(),
 ]);
 export type PostgresRoutineManageInput = z.infer<typeof postgresRoutineManageSchema>;
 
-export const postgresRoutineInfoSchema = z.object({
+export const postgresRoutineInfoSchema = routineProperties.extend({
   name: z.string().min(1), category: z.enum(['f', 'p', 'w']), arguments: z.string(), returns: z.string().nullable(),
-  language: z.string(), owner: z.string(), volatility: z.enum(['i', 's', 'v']), securityDefiner: z.boolean(),
-  comment: z.string().nullable(), definition: z.string().min(1),
+  language: z.string(), owner: z.string(), definition: z.string().min(1),
+  configuration: z.array(z.string()).nullable(),
   canManage: z.boolean(), stamp: routineStamp, editableBody: z.string().nullable(),
 }).strict();
 export type PostgresRoutineInfo = z.infer<typeof postgresRoutineInfoSchema>;

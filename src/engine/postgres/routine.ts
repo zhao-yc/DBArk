@@ -33,10 +33,14 @@ export async function readPostgresRoutineFacts(connection: PostgresConnection, i
   const qualified = /^"((?:[^"]|"")+)"\."((?:[^"]|"")+)"\(/.exec(input.name);
   if (!qualified) throw Error('PostgreSQL 重载签名无效');
   const [, schema, name] = qualified.map(value => value.replaceAll('""', '"'));
+  // 保留 float4 的往返精度，避免连接默认显示精度影响估算值的核对。
+  await connection.query('SET LOCAL extra_float_digits = 3', undefined, { rows: 0, bytes: 1024 });
   const result = await connection.query(`SELECT pg_catalog.jsonb_build_object(
     'name', ${signature}, 'category', p.prokind::text, 'arguments', pg_catalog.pg_get_function_arguments(p.oid),
     'returns', pg_catalog.pg_get_function_result(p.oid), 'language', l.lanname, 'owner', pg_catalog.pg_get_userbyid(p.proowner),
     'volatility', p.provolatile::text, 'securityDefiner', p.prosecdef, 'comment', pg_catalog.obj_description(p.oid, 'pg_proc'),
+    'strict', p.proisstrict, 'parallel', p.proparallel::text, 'cost', p.procost::text,
+    'rows', CASE WHEN p.proretset THEN p.prorows::text END, 'configuration', p.proconfig,
     'definition', pg_catalog.pg_get_functiondef(p.oid),
     'editableBody', CASE WHEN l.lanname IN ('sql', 'plpgsql') AND p.probin IS NULL
       AND pg_catalog.to_jsonb(p)->>'prosqlbody' IS NULL AND pg_catalog.octet_length(p.prosrc) BETWEEN 1 AND 131072
@@ -60,18 +64,66 @@ export async function readPostgresRoutineFacts(connection: PostgresConnection, i
     argumentsSql: input.name.slice(qualified[0].length - 1), info: postgresRoutineInfoSchema.parse({ ...catalog, canManage, stamp }) };
 }
 
-/** 以目录摘要比对原属性和出向依赖，防止反编译定义重放时改变默认值绑定。 */
-async function readBodyEditShape(connection: PostgresConnection, oid: string) {
+/** 目录摘要仅排除计划允许变化的属性，同时覆盖出向依赖。 */
+async function readRoutineShape(connection: PostgresConnection, oid: string, columns: string[], includeComment = true) {
   const result = await connection.query(`SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
-    pg_catalog.jsonb_build_array(pg_catalog.to_jsonb(p) - 'prosrc',
-      pg_catalog.obj_description(p.oid, 'pg_proc'), (SELECT pg_catalog.jsonb_agg(
+    pg_catalog.jsonb_build_array(pg_catalog.to_jsonb(p) - $2::text[],
+      CASE WHEN $3::boolean THEN pg_catalog.obj_description(p.oid, 'pg_proc') END, (SELECT pg_catalog.jsonb_agg(
         pg_catalog.jsonb_build_array(d.objsubid, d.refclassid, d.refobjid, d.refobjsubid, d.deptype)
         ORDER BY d.objsubid, d.refclassid, d.refobjid, d.refobjsubid, d.deptype)
       FROM pg_catalog.pg_depend d WHERE d.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass AND d.objid = p.oid)
-    )::text, 'UTF8')), 'hex') FROM pg_catalog.pg_proc p WHERE p.oid = $1::oid`, [oid], { rows: 2, bytes: 1024 });
+    )::text, 'UTF8')), 'hex') FROM pg_catalog.pg_proc p WHERE p.oid = $1::oid`,
+  [oid, '{' + columns.join(',') + '}', includeComment ? 'true' : 'false'], { rows: 2, bytes: 1024 });
   if (result.truncated || result.rows.length !== 1 || typeof result.rows[0].c0 !== 'string')
     throw Error('未确认原例程属性与依赖');
   return result.rows[0].c0;
+}
+
+const volatilitySql = { i: 'IMMUTABLE', s: 'STABLE', v: 'VOLATILE' } as const;
+const parallelSql = { u: 'UNSAFE', r: 'RESTRICTED', s: 'SAFE' } as const;
+
+/** 构造有限的 ALTER 属性选项，启用定义者身份时同时固定搜索路径。 */
+async function planRoutineProperties(connection: PostgresConnection, sqlTarget: string,
+  info: Awaited<ReturnType<typeof readPostgresRoutineFacts>>['info'],
+  changes: Extract<PostgresRoutineManageInput, { action: 'properties' }>['changes']) {
+  if (info.category === 'p' && [changes.volatility, changes.parallel, changes.strict, changes.cost, changes.rows].some(value => value !== undefined))
+    throw Error('过程只支持编辑执行身份和注释');
+  if (changes.rows !== undefined && info.rows === null) throw Error('仅返回集合的函数可设置估算行数');
+  const estimates = await connection.query('SELECT $1::real::text, $2::real::text',
+    [changes.cost ?? null, changes.rows ?? null], { rows: 2, bytes: 1024 });
+  const estimate = estimates.rows[0];
+  if (estimates.truncated || estimates.rows.length !== 1) throw Error('未确认 PostgreSQL 估算值');
+  if ([estimate.c0, estimate.c1].some(value => value !== null && !(Number(value) > 0 && Number.isFinite(Number(value)))))
+    throw Error('估算值超出 PostgreSQL real 的正数范围');
+  const expected = {
+    volatility: changes.volatility ?? info.volatility, parallel: changes.parallel ?? info.parallel,
+    strict: changes.strict ?? info.strict, securityDefiner: changes.securityDefiner ?? info.securityDefiner,
+    cost: typeof estimate.c0 === 'string' ? estimate.c0 : info.cost,
+    rows: typeof estimate.c1 === 'string' ? estimate.c1 : info.rows,
+    comment: changes.comment === undefined ? info.comment : changes.comment,
+    configuration: info.configuration,
+  };
+  const options: string[] = [];
+  if (expected.volatility !== info.volatility) options.push(volatilitySql[expected.volatility]);
+  if (expected.parallel !== info.parallel) options.push('PARALLEL ' + parallelSql[expected.parallel]);
+  if (expected.strict !== info.strict) options.push(expected.strict ? 'STRICT' : 'CALLED ON NULL INPUT');
+  if (expected.cost !== info.cost) options.push('COST ' + changes.cost);
+  if (expected.rows !== info.rows) options.push('ROWS ' + changes.rows);
+  if (expected.securityDefiner !== info.securityDefiner) {
+    options.push(expected.securityDefiner ? 'SECURITY DEFINER' : 'SECURITY INVOKER');
+    if (expected.securityDefiner) {
+      options.push('SET search_path TO pg_catalog, pg_temp');
+      const existing = info.configuration ?? [];
+      const path = 'search_path=pg_catalog, pg_temp';
+      expected.configuration = existing.some(value => value.startsWith('search_path='))
+        ? existing.map(value => value.startsWith('search_path=') ? path : value) : [...existing, path];
+    }
+  }
+  const statements = options.length ? ['ALTER ' + sqlTarget + ' ' + options.join(' ')] : [];
+  if (expected.comment !== info.comment)
+    statements.push('COMMENT ON ' + sqlTarget + ' IS ' + (expected.comment === null ? 'NULL' : postgresDdlLiteral(expected.comment)));
+  if (!statements.length) throw Error('例程属性没有变化');
+  return { statements, expected };
 }
 
 /** 仅替换服务器反编译文本中和原 prosrc 逐字一致的最后一个 AS 字面量。 */
@@ -137,19 +189,39 @@ export async function compilePostgresRoutineManage(connection: PostgresConnectio
   }
   if (input.action === 'edit') {
     const statement = routineBodyStatement(original.info, input.body);
-    const shape = await readBodyEditShape(connection, original.oid);
+    const shape = await readRoutineShape(connection, original.oid, ['prosrc']);
     return { ...plan, table: input.name, success: 'PostgreSQL ' + label + '正文已确认更新', statements: [statement],
       async preflight(current: PostgresConnection) {
         const stamp = await plan.preflight(current);
-        if (await readBodyEditShape(current, original.oid) !== shape) throw Error('原例程属性或依赖已变化，请重新预览');
+        if (await readRoutineShape(current, original.oid, ['prosrc']) !== shape) throw Error('原例程属性或依赖已变化，请重新预览');
         await current.query('SET LOCAL check_function_bodies = on', undefined, budget());
         return stamp;
       },
       async verify(current: PostgresConnection) {
         const actual = await readPostgresRoutineFacts(current, input);
         if (actual.oid !== original.oid || actual.info.editableBody !== input.body ||
-            await readBodyEditShape(current, actual.oid) !== shape)
+            await readRoutineShape(current, actual.oid, ['prosrc']) !== shape)
           throw Error('回读的正文、例程身份或依赖与预览不同，未提交');
+      },
+    };
+  }
+  if (input.action === 'properties') {
+    const { statements, expected } = await planRoutineProperties(connection, sqlTarget, original.info, input.changes);
+    const editableColumns = ['provolatile', 'proparallel', 'proisstrict', 'prosecdef', 'procost', 'prorows', 'proconfig'];
+    const shape = await readRoutineShape(connection, original.oid, editableColumns, false);
+    return { ...plan, table: input.name, success: 'PostgreSQL ' + label + '属性已确认更新', statements,
+      async preflight(current: PostgresConnection) {
+        const stamp = await plan.preflight(current);
+        if (await readRoutineShape(current, original.oid, editableColumns, false) !== shape)
+          throw Error('原例程属性或依赖已变化，请重新预览');
+        return stamp;
+      },
+      async verify(current: PostgresConnection) {
+        const actual = await readPostgresRoutineFacts(current, input);
+        if (actual.oid !== original.oid || Object.entries(expected).some(([key, value]) =>
+          JSON.stringify(actual.info[key as keyof typeof expected]) !== JSON.stringify(value)) ||
+            await readRoutineShape(current, actual.oid, editableColumns, false) !== shape)
+          throw Error('回读的例程属性、身份或依赖与预览不同，未提交');
       },
     };
   }

@@ -22,4 +22,10 @@ export const postgresRoutineZh = {
   edit: '编辑例程正文', confirmEdit: '确认更新正文',
   editHint: '当前输入签名、参数、属性与权限会在事务中复核。正文中的业务对象请写完整 schema 限定名。',
   editUnavailable: '此入口支持 128 KiB 以内的 SQL 和 PL/pgSQL 字符串正文。',
+  properties: '编辑例程属性', confirmProperties: '确认更新属性',
+  propertiesHint: '只提交修改过的属性。清空注释会删除原注释。',
+  nullInput: 'NULL 输入', strict: '直接返回 NULL', calledOnNull: '执行函数',
+  parallel: '并行级别', parallelValues: { u: '不安全', r: '受限', s: '安全' },
+  cost: '执行成本估算', rows: '返回行数估算',
+  acknowledgeDefiner: '确认让已有执行权限的角色以例程所有者身份调用',
 } as const;

@@ -1899,6 +1899,42 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
     await mark('原生窗口分别预填函数和过程正文，核对 SQL 后提交，新定义及原注释随即回读');
 
+    await routineRows.filter({ hasText: '窗口图形函数' }).dblclick();
+    await routineDefinition.getByRole('button', { name: routineText.properties, exact: true }).click();
+    const routineProperties = page.getByRole('dialog', { name: routineText.properties, exact: true });
+    const previewProperties = routineProperties.getByRole('button', { name: routineText.preview, exact: true });
+    const confirmProperties = routineProperties.getByRole('button', { name: routineText.confirmProperties, exact: true });
+    await expect(previewProperties).toBeDisabled();
+    await expect(routineProperties.getByLabel(routineText.cost, { exact: true })).toHaveValue('100');
+    await expect(routineProperties.getByLabel(routineText.rows, { exact: true })).toHaveCount(0);
+    await routineProperties.getByLabel(routineText.cost, { exact: true }).fill('12.5');
+    await routineProperties.getByLabel(routineText.volatility, { exact: true }).selectOption('s');
+    await routineProperties.getByLabel(routineText.parallel, { exact: true }).selectOption('r');
+    await routineProperties.getByLabel(routineText.nullInput, { exact: true }).selectOption('true');
+    await routineProperties.getByLabel(routineText.security, { exact: true }).selectOption('true');
+    await previewProperties.click();
+    await expect(routineProperties.locator('pre')).toContainText('STABLE PARALLEL RESTRICTED STRICT COST 12.5 SECURITY DEFINER SET search_path TO pg_catalog, pg_temp');
+    await expect(confirmProperties).toBeDisabled();
+    await page.screenshot({ path: info.outputPath('PostgreSQL例程属性.png') });
+    await routineProperties.getByRole('checkbox', { name: routineText.acknowledgeDefiner, exact: true }).check();
+    await confirmProperties.click();
+    await expect(routineDefinition.getByRole('row').filter({ hasText: routineText.cost })).toContainText('12.5');
+    await expect(routineDefinition.getByRole('row').filter({ hasText: routineText.parallel })).toContainText(routineText.parallelValues.r);
+    await expect(routineDefinition.getByRole('row').filter({ hasText: routineText.nullInput })).toContainText(routineText.strict);
+    await expect(routineDefinition.getByRole('button', { name: zh.common.close, exact: true })).toBeEnabled();
+    await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
+
+    await routineRows.filter({ hasText: '窗口图形过程' }).dblclick();
+    await routineDefinition.getByRole('button', { name: routineText.properties, exact: true }).click();
+    await expect(routineProperties.getByLabel(routineText.cost, { exact: true })).toHaveCount(0);
+    await routineProperties.getByLabel(routineText.comment, { exact: true }).fill('');
+    await previewProperties.click();
+    await expect(routineProperties.locator('pre')).toContainText('COMMENT ON PROCEDURE "回归"."窗口图形过程"() IS NULL');
+    await confirmProperties.click();
+    await expect(routineDefinition.getByRole('row').filter({ hasText: routineText.comment })).toContainText('—');
+    await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await mark('原生属性编辑区分函数和过程，定义者身份需勾选确认，成本和 NULL 策略回读，清空过程注释');
+
     await routineFilter.fill('窗口补全函数');
     await routineRows.filter({ hasText: integerSignature }).dblclick();
     await routineDefinition.getByRole('button', { name: routineText.rename, exact: true }).click();

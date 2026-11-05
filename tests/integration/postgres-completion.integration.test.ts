@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile, QueryOutcome } from '../../src/shared/contracts';
 import type { PostgresCompletionInput, PostgresCompletionResult, PostgresRoutineCompletionTarget } from '../../src/shared/postgresCompletion';
+import type { PostgresRoutineProperties } from '../../src/shared/postgresRoutine';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
 const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
@@ -235,6 +236,11 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         return engine.handle('postgres.routine.manage.preview', { ...target, profile, owner: routineTarget.owner,
           connectionRevision: routineTarget.connectionRevision, name, kind, stamp, action: 'edit', body });
       };
+      const changeProperties = async (name: string, changes: Partial<PostgresRoutineProperties>, kind: 'function' | 'procedure' = 'function') => {
+        const { stamp } = await readRoutine(name, kind);
+        return engine.handle('postgres.routine.manage.preview', { ...target, profile, owner: routineTarget.owner,
+          connectionRevision: routineTarget.connectionRevision, name, kind, stamp, action: 'properties', changes });
+      };
       const routineOid = async (name: string) => (await client.query<{ oid: string | null }>(
         'SELECT pg_catalog.to_regprocedure($1)::oid::text AS oid', [name])).rows[0].oid;
       const renamedIdentity = '"补全.甲"."改""名.函数"(integer)';
@@ -270,6 +276,30 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       const invalidEdit = await editRoutine(renamedIdentity, 'SELECT 不存在的列');
       expect(await applyManage(invalidEdit.token)).toMatchObject({ outcome: 'rolledBack' });
       expect(await readRoutine(renamedIdentity)).toMatchObject({ editableBody: editedBody });
+      await client.query(`ALTER FUNCTION ${renamedIdentity} SET search_path TO public SET work_mem TO '8MB'`);
+      await expect(changeProperties(renamedIdentity, { rows: '20' })).rejects.toThrow('返回集合');
+      await expect(changeProperties(renamedIdentity, { cost: '1e39' })).rejects.toThrow();
+      await expect(changeProperties(renamedIdentity, { cost: '1; DROP SCHEMA public' })).rejects.toThrow('正数');
+      await expect(changeProperties(renamedIdentity, { volatility: 'v' })).rejects.toThrow('没有变化');
+      const properties = await changeProperties(renamedIdentity, { volatility: 's', parallel: 'r', strict: true,
+        cost: '0.125', securityDefiner: true, comment: '属性注释：带引号\'和反斜杠\\' });
+      expect(properties.statements[1]).toBe(`ALTER FUNCTION ${renamedIdentity} STABLE PARALLEL RESTRICTED STRICT COST 0.125 SECURITY DEFINER SET search_path TO pg_catalog, pg_temp`);
+      expect(await readRoutine(renamedIdentity)).toMatchObject({ securityDefiner: false, comment: fixtureFunction.comment });
+      expect(await applyManage(properties.token)).toMatchObject({ outcome: 'committed', table: renamedIdentity });
+      expect(await routineOid(renamedIdentity)).toBe(fixtureOid);
+      expect(await readRoutine(renamedIdentity)).toMatchObject({ volatility: 's', parallel: 'r', strict: true,
+        cost: '0.125', securityDefiner: true, editableBody: editedBody, comment: "属性注释：带引号'和反斜杠\\",
+        configuration: expect.arrayContaining(['work_mem=8MB', 'search_path=pg_catalog, pg_temp']) });
+      expect((await client.query('SELECT value FROM "补全.甲"."例程依赖"')).rows).toEqual([{ value: 43 }]);
+      const reset = await changeProperties(renamedIdentity, { securityDefiner: false, comment: null });
+      expect(await applyManage(reset.token)).toMatchObject({ outcome: 'committed' });
+      expect(await readRoutine(renamedIdentity)).toMatchObject({ securityDefiner: false, comment: null,
+        configuration: expect.arrayContaining(['work_mem=8MB', 'search_path=pg_catalog, pg_temp']) });
+
+      const setIdentity = '"补全.甲"."表函数"(integer)';
+      const setProperties = await changeProperties(setIdentity, { rows: '2.5e2' });
+      expect(await applyManage(setProperties.token)).toMatchObject({ outcome: 'committed', table: setIdentity });
+      expect(await readRoutine(setIdentity)).toMatchObject({ rows: '250' });
 
       const editCustom = await editRoutine(customIdentity, `SELECT "值"::text || '-更新'`);
       expect(await applyManage(editCustom.token)).toMatchObject({ outcome: 'committed', table: customIdentity });
@@ -279,6 +309,9 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       await client.query(`CREATE FUNCTION ${standardIdentity} RETURNS integer LANGUAGE sql RETURN 42`);
       expect(await readRoutine(standardIdentity)).toMatchObject({ editableBody: null });
       await expect(editRoutine(standardIdentity, 'SELECT 43')).rejects.toThrow('未提供可编辑');
+      const standardProperties = await changeProperties(standardIdentity, { comment: '标准正文也可修改属性' });
+      expect(await applyManage(standardProperties.token)).toMatchObject({ outcome: 'committed' });
+      expect((await client.query('SELECT "补全.甲"."标准正文"() AS result')).rows).toEqual([{ result: 42 }]);
 
       const restricted = await manageRoutine(renamedIdentity, 'drop');
       expect(restricted.statements.at(-1)).toBe(`DROP FUNCTION ${renamedIdentity} RESTRICT`);
@@ -305,6 +338,14 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       expect(await applyManage(staleProcedure.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('已变化') });
       const editProcedure = await editRoutine(procedureIdentity, 'BEGIN "结果" := "值" + 2; END', 'procedure');
       expect(await applyManage(editProcedure.token)).toMatchObject({ outcome: 'committed', table: procedureIdentity });
+      await expect(changeProperties(procedureIdentity, { strict: true }, 'procedure')).rejects.toThrow('过程只支持');
+      const staleProperties = await changeProperties(procedureIdentity, { comment: '待确认' }, 'procedure');
+      await client.query(`COMMENT ON PROCEDURE ${procedureIdentity} IS '属性预览后已变化'`);
+      expect(await applyManage(staleProperties.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('已变化') });
+      const procedureProperties = await changeProperties(procedureIdentity, { securityDefiner: true, comment: '过程属性' }, 'procedure');
+      expect(await applyManage(procedureProperties.token)).toMatchObject({ outcome: 'committed', table: procedureIdentity });
+      expect(await readRoutine(procedureIdentity, 'procedure')).toMatchObject({ comment: '过程属性', securityDefiner: true,
+        configuration: ['search_path=pg_catalog, pg_temp'] });
       const renameProcedure = await manageRoutine(procedureIdentity, 'rename', '改名过程', 'procedure');
       expect(renameProcedure.statements.at(-1)).toBe(`ALTER PROCEDURE ${procedureIdentity} RENAME TO "改名过程"`);
       expect(await applyManage(renameProcedure.token)).toMatchObject({ outcome: 'committed', table: renamedProcedure });
