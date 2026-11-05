@@ -4,6 +4,7 @@ export const explainZh = {
   estimates: '优化器估计值，成本不是毫秒。',
   unavailable: '不可用', missing: '当前节点未提供此指标', empty: '当前计划无法生成树，请查看原始输出或获取文本计划。',
   source: '计划来源', node: '计划节点', access: '访问方式', rows: '估计扫描行数', produced: '估计连接输出行数', filtered: '过滤后比例', cost: '成本', index: '使用索引',
+  postgresRows: '估计输出行数',
   details: '节点详情', path: 'JSON 路径', detailHint: '数值保留原精度，完整内容请查看原始输出。',
   unknown: '未知节点', keyboard: '方向键移动和展开收起，Home / End 跳转首尾，Enter / 空格选择节点。',
   expand: '全部展开', collapse: '全部收起', rawMissing: '当前没有可用的 JSON 原文，请查看计划结果表格。', rawLimited: '原始输出展示已截断。',

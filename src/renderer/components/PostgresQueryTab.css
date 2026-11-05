@@ -16,6 +16,10 @@
   min-height: 120px;
   flex-shrink: 0;
 }
+/* 展示计划时保留编辑器上下文，让树和指标同时有足够的可视空间。 */
+.postgres-query:has(> .postgres-results > .explain-view) > .postgres-editor {
+  height: clamp(120px, 19vh, 210px);
+}
 .postgres-results {
   flex: 1;
   min-height: 0;

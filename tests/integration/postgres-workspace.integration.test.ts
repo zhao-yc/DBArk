@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
+import { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 
 const enabled = process.env.DBARK_POSTGRES_WORKSPACE_TEST === '1';
@@ -27,6 +28,8 @@ describe.skipIf(!enabled)('PostgreSQL真实连接、查询、事务及取消', (
     const state = () => call('query.sessionState', { sessionId });
     const execute = (sql: string, taskId = randomUUID(), extra = {}): Promise<QueryOutcome> =>
       call('query.execute', { sessionId, taskId, sql, maxRows: 1000, ...extra });
+    const estimate = (sql: string, extra = {}): Promise<QueryOutcome> =>
+      call('postgres.explain', { sessionId, taskId: randomUUID(), sql, maxRows: 100, ...extra });
     const setup = await execute(`
       CREATE SCHEMA IF NOT EXISTS "回归";
       CREATE TABLE IF NOT EXISTS "回归"."带""引号" (id bigint PRIMARY KEY, note text);
@@ -56,6 +59,31 @@ describe.skipIf(!enabled)('PostgreSQL真实连接、查询、事务及取消', (
     expect((await execute(script, randomUUID(), { currentStatement: { offset: script.indexOf('5') } })).results[0].rows).toEqual([{ c0: '5' }]);
     const clipped = await execute('SELECT generate_series(1,4); SELECT 8;', randomUUID(), { maxRows: 2 });
     expect(clipped.results.map(result => [result.rows.length, result.truncated])).toEqual([[2, true], [0, true]]);
+    const plannedSql = 'SELECT 1; UPDATE "回归"."带""引号" SET note = \'仅估算\'; DELETE FROM "回归"."带""引号";';
+    const guard = new PostgresConnection(profile);
+    try {
+      await guard.open();
+      await expect(guard.query('EXPLAIN (GENERIC_PLAN) SELECT $1::int; DELETE FROM "回归"."带""引号"', undefined,
+        { rows: 0, bytes: 0 }, undefined, 'parse')).rejects.toThrow(/multiple commands/);
+    } finally { await guard.close(); }
+    expect((await estimate(plannedSql)).failure?.message).toContain('只接受一条语句');
+    const planned = await estimate(plannedSql, { currentStatement: { offset: plannedSql.indexOf('UPDATE') } });
+    expect(planned.failure).toBeUndefined();
+    expect(planned.explain).toMatchObject({ dialect: 'postgresql', format: 'json',
+      nodes: [expect.objectContaining({ kind: 'ModifyTable' }), expect.objectContaining({ parent: '0', name: '带"引号' })] });
+    expect(planned.explain?.raw).not.toContain('Actual Rows');
+    expect((await estimate('EXPLAIN ANALYZE DELETE FROM "回归"."带""引号"')).failure?.message).toContain('不支持估算计划');
+    expect((await execute('SELECT note FROM "回归"."带""引号"')).results[0].rows).toEqual([{ c0: '原值' }]);
+    const generic = await estimate('SELECT * FROM "回归"."带""引号" WHERE id = $1');
+    if (generic.failure) throw Error(generic.failure.message);
+    expect(generic.explain?.raw).toContain('$1');
+    expect(generic.explain?.warnings[0]).toContain('通用估算计划');
+    expect((await estimate('SELECT * FROM "回归"."带""引号"', { format: 'text' })).explain)
+      .toMatchObject({ format: 'text', raw: expect.stringContaining('Scan') });
+    expect((await execute('BEGIN; CREATE TEMP TABLE plan_temp (id bigint) ON COMMIT DROP')).failure).toBeUndefined();
+    expect((await estimate('SELECT * FROM plan_temp')).explain?.nodes[0].name).toBe('plan_temp');
+    expect(await state()).toMatchObject({ transactionKnown: true, transactionOpen: true, transactionFailed: false });
+    await call('query.transaction', { sessionId, action: 'rollback' });
     const failure = await execute('BEGIN; UPDATE "回归"."带""引号" SET note = \'事务内\' WHERE id = 1; SELECT 1/0; SELECT 7;');
     expect(failure.failure).toMatchObject({ statementOrdinal: 3, statementsCompleted: 2 });
     expect(await state()).toMatchObject({ transactionKnown: true, transactionOpen: true, transactionFailed: true });
@@ -79,7 +107,19 @@ describe.skipIf(!enabled)('PostgreSQL真实连接、查询、事务及取消', (
     expect((await execute('SELECT note FROM "回归"."带""引号" WHERE id = 1')).results[0].rows).toEqual([{ c0: '原值' }]);
     const { sessionId: controlSession } = await call('sessions.open', { connectionId: id, database });
     const backend = (await execute('SELECT pg_backend_pid()')).results[0].rows[0].c0;
-    expect(typeof backend).toBe('string');
+    expect(backend).toMatch(/^\d+$/);
+    const control = (sql: string): Promise<QueryOutcome> =>
+      call('query.execute', { sessionId: controlSession, taskId: randomUUID(), sql, maxRows: 10 });
+    expect((await control('BEGIN; LOCK TABLE "回归"."带""引号" IN ACCESS EXCLUSIVE MODE')).failure).toBeUndefined();
+    const planId = randomUUID(), blocked = estimate('SELECT * FROM "回归"."带""引号"', { taskId: planId });
+    try {
+      await expect.poll(async () => (await control('SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid = ' + backend)).results[0]?.rows[0]?.c0,
+        { timeout: 5000 }).toBe('Lock');
+      await call('query.cancel', { taskId: planId });
+      expect((await blocked).explain).toBeUndefined();
+      expect(events.filter(event => event.taskId === planId).at(-1)?.status).toBe('cancelled');
+      expect(await state()).toMatchObject({ transactionKnown: true, transactionOpen: false, transactionFailed: false });
+    } finally { await control('ROLLBACK'); }
     const lostId = randomUUID(), lost = execute('BEGIN; SELECT pg_sleep(30); SELECT 99;', lostId);
     await expect.poll(() => events.some(event => event.taskId === lostId && event.executionSql?.includes('pg_sleep')), { timeout: 3000 }).toBe(true);
     const terminated: QueryOutcome = await call('query.executeParameterized', { sessionId: controlSession, taskId: randomUUID(),

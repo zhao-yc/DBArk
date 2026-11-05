@@ -178,6 +178,31 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(tab().getByRole('grid')).toContainText('原值');
     await mark('树中真实对象生成安全SELECT草稿，明确点击后才执行');
 
+    // 把光标放在中间语句，估算树与原始输出沿正式窗口交互读取。
+    const beforeExplain = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const planTail = '\nDELETE FROM "回归"."带""引号";';
+    await edit('UPDATE "回归"."带""引号" SET note = \'仅估算\';\nSELECT * FROM "回归"."带""引号" LIMIT 1;' + planTail);
+    for (let index = 0; index <= planTail.length; index++) await page.keyboard.press('ArrowLeft');
+    await button(postgresZh.explain).click();
+    const plan = tab().getByRole('region', { name: '可视化执行计划' });
+    await expect(plan.getByRole('treeitem').first()).toContainText('Limit');
+    await expect(plan).toContainText('估计输出行数');
+    await plan.getByRole('treeitem').last().click();
+    await expect(plan.getByLabel('节点详情')).toContainText('Total Cost');
+    await expect(plan.getByRole('treeitem').first()).toBeInViewport({ ratio: 0.8 });
+    await expect(plan.getByLabel('节点详情').getByText('Total Cost', { exact: true })).toBeInViewport({ ratio: 0.8 });
+    await page.screenshot({ path: info.outputPath('PostgreSQL实际估算计划.png') });
+    await plan.getByRole('button', { name: '原始输出', exact: true }).click();
+    await expect(plan.getByLabel('原始输出', { exact: true })).toContainText('"Node Type": "Limit"');
+    await expect(plan.getByLabel('原始输出', { exact: true })).not.toContainText('Actual Rows');
+    const selectedPlan = 'UPDATE "回归"."带""引号" SET note = \'只预览选区\';';
+    await edit('SELECT 77;\n' + selectedPlan);
+    for (let index = 0; index < selectedPlan.length; index++) await page.keyboard.press('Shift+ArrowLeft');
+    await button(postgresZh.explain).click();
+    await expect(plan.getByRole('treeitem').first()).toContainText('ModifyTable');
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeExplain);
+    await mark('真实窗口估算光标语句和明确选区，查看树形成本与原始 JSON，原行及执行历史保持');
+
     // 通过真实按键接纳 schema、关系和别名字段，不从 Monaco 注入候选。
     const widget = tab().locator('.suggest-widget.visible');
     const beforeCompletion = await page.evaluate(() => window.dbark.invoke('history.list', {}));

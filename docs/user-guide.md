@@ -208,7 +208,7 @@ Windows 使用 `DBArk-版本-win-x64-unsigned.exe` 安装。macOS 构建按 arm6
 
 点击“新建连接”，填写连接名称、主机、端口、用户名和密码。“连接分组”和“标识颜色”用于区分开发、测试等环境。先“测试连接”，再“保存连接”；测试操作不会保存配置。
 
-PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事务。新建时选择 PostgreSQL，端口默认为 `5432`。在目录点击表或视图可打开分页记录。普通表可将新增、编辑和删除暂存为草稿，核对预览后整批提交；表页也可打开带 schema 的查询草稿。位置参数使用 `$1`、`$2`，各查询标签使用独立会话。在查询页按 Ctrl+空格可[补全 PostgreSQL schema、表和字段](development/postgres-completion-20261105.md)，也可[补全 CTE、派生表和子查询字段](development/postgres-completion-scope-20261105.md)。查询标签连接后，空闲时可[按会话角色、搜索路径和临时表补全](development/postgres-completion-session-20261105.md)，事务打开时暂停目录读取。表页与对象右键菜单中的「查看结构」可核对字段、约束和索引，也可打开视图查询定义。数据库右键菜单及表列表可[图形化建表](development/postgres-create-table-20261105.md)，先配置字段与主键，预览 SQL 后再确认创建。详见[查询工作区](development/postgres-workspace-20261105.md)、[表页与记录事务](development/postgres-table-20261105.md)和[关系结构查看](development/postgres-structure-20261105.md)。
+PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事务。新建时选择 PostgreSQL，端口默认为 `5432`。在目录点击表或视图可打开分页记录。普通表可将新增、编辑和删除暂存为草稿，核对预览后整批提交；表页也可打开带 schema 的查询草稿。位置参数使用 `$1`、`$2`，各查询标签使用独立会话。在查询页按 Ctrl+空格可[补全 PostgreSQL schema、表和字段](development/postgres-completion-20261105.md)，也可[补全 CTE、派生表和子查询字段](development/postgres-completion-scope-20261105.md)。查询标签连接后，空闲时可[按会话角色、搜索路径和临时表补全](development/postgres-completion-session-20261105.md)，事务打开时暂停目录读取。「查看估算计划」可[预览选区或光标所在语句](development/postgres-explain-20261105.md)，并查看节点树与原始输出。表页与对象右键菜单中的「查看结构」可核对字段、约束和索引，也可打开视图查询定义。数据库右键菜单及表列表可[图形化建表](development/postgres-create-table-20261105.md)，先配置字段与主键，预览 SQL 后再确认创建。详见[查询工作区](development/postgres-workspace-20261105.md)、[表页与记录事务](development/postgres-table-20261105.md)和[关系结构查看](development/postgres-structure-20261105.md)。
 
 SSH 模式填写 SSH 主机、端口、用户名和密码或私钥文件，并填写从可信渠道获得的 `SHA256:…` 主机指纹。数据库主机填写从 SSH 服务器可达的地址，例如数据库监听在隧道服务器上的 `127.0.0.1`。私钥口令与数据库密码分别保存。
 

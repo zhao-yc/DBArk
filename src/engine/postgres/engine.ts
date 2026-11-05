@@ -20,6 +20,8 @@ import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTab
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
+import { parsePostgresExplain, postgresExplainSql } from '../../shared/postgresExplain';
+import { explainLimits } from '../../shared/explain';
 interface Session {
   id: string;
   connectionId: string;
@@ -268,8 +270,36 @@ export class PostgresEngine {
       this.stopping = false;
     }
   }
-  /** 原脚本逐句执行，精确保留已完成结果；首错停止、取消或断线均不自动回滚和重放。 */
-  private async execute(session: Session, input: Input): Promise<QueryOutcome> {
+  /** 读取原会话的估算计划，服务器解析门保证只发送单条 EXPLAIN。 */
+  private async explain(task: Task, input: Input): Promise<{ result: QueryResult; plan: NonNullable<QueryOutcome['explain']> }> {
+    const connection = task.session.managed;
+    if (!Number.isInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000 ||
+        ![undefined, 'auto', 'text'].includes(input.format)) throw Error('PostgreSQL执行计划参数无效');
+    if (connection.state().transactionFailed) throw Error('PostgreSQL事务已失败，请先明确回滚');
+    const format = input.format === 'text' ? 'text' : 'json';
+    const { sql, generic } = postgresExplainSql(input.sql, { standardStrings: connection.standardStrings,
+      version: connection.version, format: input.format ?? 'auto', offset: input.currentStatement?.offset });
+    task.sent = true;
+    // 通用计划不能绑定空值，否则优化器可能折叠条件。先由同一会话 Parse 原字节，再无值读取。
+    if (generic) {
+      await connection.query(sql, undefined, { rows: 0, bytes: 0 }, undefined, 'parse');
+      if (task.cancelled) throw Error('PostgreSQL执行计划已取消');
+    }
+    const result = await connection.query(sql, undefined,
+      { rows: format === 'json' ? 1 : Math.min(input.maxRows, explainLimits.textRows), bytes: explainLimits.jsonBytes },
+      undefined, generic ? undefined : 'extended');
+    if (task.cancelled) throw Error('PostgreSQL执行计划已取消');
+    if (result.postgresCommand !== 'EXPLAIN' || result.columns.length !== 1 ||
+        !result.rows.length && !result.truncated || result.rows.some(row => typeof row.c0 !== 'string'))
+      throw Error('PostgreSQL未返回完整的执行计划');
+    const raw = result.rows.map(row => row.c0).join('\n');
+    const plan = parsePostgresExplain(raw, connection.version, format, result.truncated);
+    if (generic) plan.warnings.unshift('使用通用估算计划，位置参数未绑定具体值');
+    return { result, plan };
+  }
+
+  /** 计划和脚本共用原会话排队、取消及终态，用户脚本仍按原文逐句执行。 */
+  private async execute(session: Session, input: Input, estimate = false): Promise<QueryOutcome> {
     if (!input.taskId || this.ownsTask(input.taskId) || this.tasks.size >= 8192)
       throw Error('PostgreSQL任务编号已使用或登记已满');
     if (input.continueOnError || input.collectWarnings)
@@ -281,8 +311,9 @@ export class PostgresEngine {
       budget = { rows: input.maxRows, bytes: 16 * 1024 * 1024 };
     let offset = 0,
       count = 0,
-      failure: QueryOutcome['failure'];
-    this.emit({ taskId: task.id, status: 'running', progress: 0, message: '正在执行PostgreSQL脚本' });
+      failure: QueryOutcome['failure'],
+      explain: QueryOutcome['explain'];
+    this.emit({ taskId: task.id, status: 'running', progress: 0, message: estimate ? '正在读取PostgreSQL估算计划' : '正在执行PostgreSQL脚本' });
     try {
       // 先登记可取消任务，再等待已占用原会话的目录读取。
       if (session.completion) await session.completion.catch(() => {});
@@ -290,10 +321,15 @@ export class PostgresEngine {
       if (this.stopping || this.closing.has(session.connectionId) || session.closing || session.managed.broken)
         throw Error('PostgreSQL会话正在关闭或已失效，未发送用户 SQL');
       const source = String(input.sql);
-      let selected = input.currentStatement
+      const selected = !estimate && input.currentStatement
         ? currentPostgresStatement(source, input.currentStatement.offset, session.managed.standardStrings)
         : undefined;
-      while (true) {
+      if (estimate) {
+        const { result, plan } = await this.explain(task, input);
+        results.push(result);
+        explain = plan;
+      }
+      while (!estimate) {
         if (task.cancelled) throw Error('PostgreSQL任务已取消，已执行语句未重放');
         const part =
           selected ?? firstPostgresStatement(source.slice(offset), session.managed.standardStrings);
@@ -370,12 +406,13 @@ export class PostgresEngine {
       taskId: task.id,
       status: failure ? (task.cancelled ? 'cancelled' : 'failed') : 'completed',
       progress: 100,
-      message: failure ? failure.message : 'PostgreSQL执行完成',
+      message: failure ? failure.message : estimate ? 'PostgreSQL估算计划读取完成' : 'PostgreSQL执行完成',
     });
     return {
       results,
       elapsedMs: performance.now() - started,
       transactionOpen: session.managed.state().transactionOpen,
+      ...(explain ? { explain } : {}),
       ...(failure ? { failure } : {}),
     };
   }
@@ -491,7 +528,8 @@ export class PostgresEngine {
         });
       case 'query.execute':
       case 'query.executeParameterized':
-        return this.session(input.sessionId, (s) => this.execute(s, input), true);
+      case 'postgres.explain':
+        return this.session(input.sessionId, (s) => this.execute(s, input, command === 'postgres.explain'), true);
       case 'query.transaction':
         return this.session(input.sessionId, async (s) => {
           if (input.action === 'commit' && s.managed.state().transactionFailed)

@@ -12,7 +12,7 @@ export interface ExplainNode {
   arrayEntry?: ExplainArrayEntry;
 }
 export interface ExplainPlan {
-  dialect: ExplainDialect; version: string; format: 'json' | 'text'; nodes: ExplainNode[];
+  dialect: ExplainDialect | 'postgresql'; version: string; format: 'json' | 'text'; nodes: ExplainNode[];
   raw: string; rawTruncated: boolean; warnings: string[];
 }
 

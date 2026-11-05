@@ -9,6 +9,7 @@ import { invoke, uid, errorMessage } from '../lib';
 import { postgresZh as text } from '../locales/postgres.zh-CN';
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
+import { ExplainPlanView } from './ExplainPlanView';
 import { ErrorBox, Spinner, Empty } from './ui';
 import { QueryCloseDialog } from './QueryCloseDialog';
 import { QueryBindingDialog } from './QueryBindingDialog';
@@ -188,9 +189,9 @@ export function PostgresQueryTab({
           if (alive.current) setError(errorMessage(reason));
         });
   }
-  /** 全部／选区／当前语句均捕获原模型版本，位置参数仍使用同一物理会话。 */
+  /** 查询和估算计划都捕获原模型版本，计划默认取选区或光标所在语句。 */
   function run(
-    mode: 'normal' | 'current' = 'normal',
+    mode: 'normal' | 'current' | 'explain' = 'normal',
     values?: QueryParameter[],
     parameter?: ParameterOwner,
     sqlOverride?: string,
@@ -216,7 +217,7 @@ export function PostgresQueryTab({
     let sql = sqlOverride ?? original,
       offset: number | undefined;
     if (!sqlOverride && !values && selection) {
-      if (mode === 'current') offset = model!.getOffsetAt(selection.getPosition());
+      if (mode === 'current' || mode === 'explain' && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
       else if (!selection.isEmpty()) sql = model!.getValueInRange(selection);
     }
     if (values) sql = parameter!.source;
@@ -261,7 +262,7 @@ export function PostgresQueryTab({
               parameters: values,
               maxRows: useWorkspace.getState().settings.resultLimit,
             })
-          : await invoke('query.execute', {
+          : await invoke(mode === 'explain' ? 'postgres.explain' : 'query.execute', {
               sessionId: id,
               taskId: owner.taskId,
               sql,
@@ -535,6 +536,9 @@ export function PostgresQueryTab({
             <button disabled={locked || !state.transactionKnown} onClick={() => run('current')}>
               {text.current}
             </button>
+            <button disabled={locked || !state.transactionKnown || state.transactionFailed} onClick={() => run('explain')}>
+              {text.explain}
+            </button>
             <button disabled={locked || !state.transactionKnown} onClick={openParameters}>
               {text.parameters}
             </button>
@@ -609,7 +613,7 @@ export function PostgresQueryTab({
             ))}
           </select>
         )}
-        {result ? (
+        {outcome?.explain ? <ExplainPlanView outcome={outcome} busy={busy} /> : result ? (
           result.columns.length ? (
             <ResultsGrid columns={result.columns} rows={result.rows} rowJump />
           ) : (

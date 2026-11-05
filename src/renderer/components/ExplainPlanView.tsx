@@ -34,6 +34,8 @@ export function ExplainPlanView({ outcome, onText, busy, fileBusy, fileActions =
 /** 交互状态只归属于本轮结果；本地阅读永远不产生新的数据库请求。 */
 function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSnapshot, saveAs, onFileBusyChange }: ExplainPlanViewProps) {
   const plan = outcome.explain!;
+  const postgres = plan.dialect === 'postgresql';
+  const rowLabel = postgres ? t.postgresRows : t.rows;
   const [view, setView] = useState<'tree' | 'raw' | 'table'>(plan.nodes.length ? 'tree' : plan.format === 'text' ? 'table' : 'raw');
   const [selected, setSelected] = useState(plan.nodes[0]?.id ?? '');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -50,6 +52,13 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
     return plan.nodes.filter(node => { if (node.parent && (collapsed.has(node.parent) || hidden.has(node.parent))) { hidden.add(node.id); return false; } return true; });
   }, [plan, collapsed]);
   const current = plan.nodes.find(node => node.id === selected) ?? plan.nodes[0];
+  const detailMetrics = current ? [
+    ...(!postgres ? [[t.access, current.access]] : []),
+    [rowLabel, current.rows?.value, current.rows?.source],
+    ...(!postgres ? [[t.produced, current.produced?.value, current.produced?.source],
+      [t.filtered, current.filtered ? current.filtered.value + '%' : undefined, current.filtered?.source]] : []),
+    [t.index, current.index],
+  ] : [];
   const matches = useMemo(() => {
     if (!search) return [];
     const needle = search.toLocaleLowerCase();
@@ -98,8 +107,8 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
     <div className="explain-toolbar" role="group" aria-label={t.title}>
       {(['tree', 'raw', 'table'] as const).map(mode => <button key={mode} aria-pressed={view === mode} onClick={() => setView(mode)}>{t[mode]}</button>)}
       {onText && <button disabled={busy} onClick={() => { if (alive.current && !busy) onText(); }}>{t.text}</button>}
-      {fileActions && <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={fileBusy ?? busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/>}
-      <span className="muted">{t.source}：{plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {plan.format === 'json' ? 'EXPLAIN FORMAT=JSON' : 'EXPLAIN'}</span>
+      {fileActions && !postgres && <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={fileBusy ?? busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/>}
+      <span className="muted">{t.source}：{postgres ? 'PostgreSQL' : plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {plan.format === 'json' ? postgres ? 'EXPLAIN (FORMAT JSON)' : 'EXPLAIN FORMAT=JSON' : 'EXPLAIN'}</span>
     </div>
     <div className="explain-search" role="search" aria-label={t.find}>
       <input aria-label={t.find} aria-invalid={searchError || undefined} maxLength={200} placeholder={t.findPlaceholder} value={search} onInput={event => {
@@ -123,13 +132,15 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
           <div role="tree" aria-label={t.tree} className="explain-tree">
             {visible.map(node => <button key={node.id} ref={element => { if (element) buttons.current.set(node.id, element); else buttons.current.delete(node.id); }} role="treeitem" aria-level={node.depth + 1} aria-expanded={children.has(node.id) ? !collapsed.has(node.id) : undefined} aria-selected={selected === node.id} tabIndex={selected === node.id ? 0 : -1} className="explain-node" style={{ paddingLeft: 10 + Math.min(node.depth, 10) * 14 }} onFocus={() => setSelected(node.id)} onClick={() => setSelected(node.id)} onDoubleClick={() => { if (children.has(node.id)) toggle(node.id); }} onKeyDown={event => navigate(event, node)}>
               <span className="explain-node-title"><span aria-hidden="true" onClick={event => { if (children.has(node.id)) { event.stopPropagation(); setSelected(node.id); toggle(node.id); } }}>{children.has(node.id) ? collapsed.has(node.id) ? '▸' : '▾' : '·'}</span> {displayTitle(node)}{node.name ? ` · ${node.name}` : ''}{node.unknown && <small>{t.unknown}</small>}</span>
-              <span className="explain-node-metrics">{t.access}：{node.access ?? t.unavailable} · {t.rows}：{node.rows?.value ?? t.unavailable} · {t.filtered}：{node.filtered ? node.filtered.value + '%' : t.unavailable}</span>
+              <span className="explain-node-metrics">{postgres
+                ? <>{rowLabel}：{node.rows?.value ?? t.unavailable}{node.index ? ' · ' + node.index : ''}</>
+                : <>{t.access}：{node.access ?? t.unavailable} · {rowLabel}：{node.rows?.value ?? t.unavailable} · {t.filtered}：{node.filtered ? node.filtered.value + '%' : t.unavailable}</>}</span>
             </button>)}
           </div>
         </div>
         {current && <div className="explain-detail" aria-label={t.details}>
           <strong>{displayTitle(current)} {current.name}</strong>
-          <dl>{[[t.access, current.access], [t.rows, current.rows?.value, current.rows?.source], [t.produced, current.produced?.value, current.produced?.source], [t.filtered, current.filtered ? current.filtered.value + '%' : undefined, current.filtered?.source], [t.index, current.index]].map(([label, value, source]) => <div key={label}><dt>{label}</dt><dd title={source ?? (!value ? t.missing : undefined)}>{value ?? t.unavailable}{source && <small>{source}</small>}</dd></div>)}</dl>
+          <dl>{detailMetrics.map(([label, value, source]) => <div key={label}><dt>{label}</dt><dd title={source ?? (!value ? t.missing : undefined)}>{value ?? t.unavailable}{source && <small>{source}</small>}</dd></div>)}</dl>
           <strong>{t.cost}</strong><dl>{current.costs.length ? current.costs.map(cost => <div key={cost.source}><dt>{cost.source}</dt><dd>{cost.value}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl>
           <strong>{t.properties}</strong><dl className="explain-properties">{current.properties?.length ? current.properties.map(property => <div key={property.source}><dt>{Object.hasOwn(t.propertyLabels, property.source) ? t.propertyLabels[property.source] : property.source}<small>{property.source}</small></dt><dd>{property.value}{property.truncated && <small className="explain-property-truncated">{t.propertyTruncated}</small>}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl>
           <p className="explain-hint">{t.path}：{current.path || '/'}{current.pathTruncated ? '…' : ''}</p><pre tabIndex={0}>{detail}</pre>

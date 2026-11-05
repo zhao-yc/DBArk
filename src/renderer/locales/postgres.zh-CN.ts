@@ -6,6 +6,7 @@ export const postgresZh = {
   completionTransaction: '事务进行中，目录补全将在事务结束后恢复',
   execute: '执行选区或全部',
   current: '执行当前语句',
+  explain: '查看估算计划',
   parameters: '执行位置参数',
   stop: '停止 PostgreSQL 查询',
   format: '格式化 PostgreSQL SQL',

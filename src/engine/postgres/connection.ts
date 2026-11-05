@@ -257,22 +257,33 @@ export class PostgresConnection {
     values: unknown[] | undefined,
     budget: PostgresBudget,
     onRows?: (rows: QueryResult['rows'], columns: QueryResult['columns']) => void,
+    protocol?: 'extended' | 'parse',
   ): Promise<QueryResult> {
     const client = this.client;
     if (!client || this.broken)
       return Promise.reject(Error('PostgreSQL会话已失效，请先核对写入结果再重新连接'));
     const wire = (client as unknown as { connection: PgWire }).connection,
       started = performance.now();
-    const config: QueryConfig & { rowMode: 'array' } = {
+    const config: QueryConfig & { rowMode: 'array'; queryMode?: 'extended' } = {
       text: sql,
       values,
       rowMode: 'array',
       types: postgresTypes,
+      // 计划预览由服务端 Parse 再确认单语句，不允许简单协议执行尾随命令。
+      ...(protocol === 'extended' ? { queryMode: 'extended' } : {}),
     };
     const query = new Query(config);
+    if (protocol === 'parse') {
+      // 只用驱动队列发送 Parse / Sync，等服务器验证单条语句，不发送 Bind 或 Execute。
+      query.submit = connection => {
+        connection.parse({ text: sql, name: '', types: [] }, true);
+        connection.sync();
+      };
+    }
     const rows: QueryResult['rows'] = [];
     let failure: unknown,
       completed = false,
+      parsed = false,
       fields: FieldDef[] = [],
       tag = '',
       affected: number | undefined,
@@ -285,8 +296,10 @@ export class PostgresConnection {
         type: names[field.dataTypeID] ?? 'OID ' + field.dataTypeID,
       }));
     return new Promise((resolve, reject) => {
+      const parsedStatement = () => { parsed = true; };
       const cleanup = () => {
         wire.removeListener('readyForQuery', ready);
+        wire.removeListener('parseComplete', parsedStatement);
         client.removeListener('error', dead);
         client.removeListener('end', ended);
       };
@@ -311,6 +324,7 @@ export class PostgresConnection {
       };
       const ready = () => {
         if (this.broken && !failure) failure = Error('PostgreSQL连接编码已变化，请核对执行结果并重新连接');
+        if (protocol === 'parse' && !parsed && !failure) failure = Error('PostgreSQL未确认单语句解析');
         finish();
       };
       const dead = (reason: unknown) => {
@@ -320,6 +334,7 @@ export class PostgresConnection {
       };
       const ended = () => dead(Error('PostgreSQL连接已结束；执行中的写入请先核对结果'));
       wire.once('readyForQuery', ready);
+      if (protocol === 'parse') wire.once('parseComplete', parsedStatement);
       client.once('error', dead);
       client.once('end', ended);
       query.on('row', (row: unknown[], result?: { fields: FieldDef[] }) => {
