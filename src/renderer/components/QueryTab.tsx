@@ -1175,6 +1175,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       /** 解析和容量检查全部完成后一次追加固定结果，原结果/SQL/事务都保留。 */
       adopt(snapshot, name) {
         if (!intent.current() || snapshotView.current.pins !== view.pins) throw Error(queryResultSnapshotUiZh.stale);
+        if (snapshot.version === 3) throw Error(queryResultSnapshotUiZh.postgresTabRequired);
         const next = snapshotQueryResult(view.pins, snapshot.result, uid(), snapshot.name || name || formatText(zh.query.pinLabel, pinSequence.current + 1));
         intent.consume(); invalidateResultSelection(); pinSequence.current++; setPins([...view.pins, next]); setSelectedPin(next.id); setShowPinSql(null); setError('');
       },

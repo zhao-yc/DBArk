@@ -19,6 +19,8 @@ import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { explainSnapshotZh as snapshotText } from '../../src/shared/explainSnapshot.zh-CN';
 import { decodePlanSnapshot } from '../../src/shared/explainSnapshot';
+import { createQueryResultSnapshot, decodeQueryResultSnapshot, encodeQueryResultSnapshot } from '../../src/shared/queryResultSnapshot';
+import { queryResultSnapshotUiZh as resultSnapshotText } from '../../src/renderer/locales/queryResultSnapshot.zh-CN';
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
@@ -996,6 +998,47 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await execute();
     await button(zh.query.pinResult).click();
     await expect(button(comparisonText.open)).toBeDisabled();
+    const resultSnapshotPath = info.outputPath('PostgreSQL原始结果.dbark-result.json');
+    const legacySnapshotPath = info.outputPath('通用旧版结果.dbark-result.json');
+    await writeFile(legacySnapshotPath, encodeQueryResultSnapshot(createQueryResultSnapshot({
+      columns: [{ key: 'k', name: '旧版字段', type: 'TEXT' }], rows: [{ k: '旧版内容' }],
+      elapsedMs: 0, truncated: false, statement: '旧版快照文字',
+    })));
+    await application.evaluate(({ BrowserWindow, dialog }, input) => {
+      const originalSave = dialog.showSaveDialog, originalOpen = dialog.showOpenDialog;
+      const calls: string[] = [];
+      /** 原生测试只替代选择路径，核对真实所属窗口及快照对话框。 */
+      function checkPicker(owner: unknown, options: { title?: string; filters?: { extensions: string[] }[] }, expected: string) {
+        const window = BrowserWindow.getAllWindows().find(item => item.webContents.id === input.sender);
+        if (!window || owner !== window || options.title !== expected || options.filters?.[0].extensions.join() !== 'json')
+          throw Error('结果快照文件选择器来源或格式不符');
+      }
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        const options = args[1] as { title?: string; defaultPath?: string; filters?: { extensions: string[] }[] };
+        checkPicker(args[0], options, '保存结果快照');
+        if (options.defaultPath !== '结果快照.dbark-result.json' || calls.length) throw Error('结果快照保存请求不符');
+        calls.push('save');
+        return { canceled: false, filePath: input.path };
+      }) as typeof originalSave;
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        checkPicker(args[0], args[1] as { title?: string; filters?: { extensions: string[] }[] }, '打开结果快照');
+        if (calls.length !== 1 && calls.length !== 2) throw Error('结果快照打开次数不符');
+        const path = calls.length === 1 ? input.legacy : input.path;
+        calls.push('open');
+        return { canceled: false, filePaths: [path] };
+      }) as typeof originalOpen;
+      Object.assign(globalThis, { finishPostgresResultSnapshots: () => {
+        dialog.showSaveDialog = originalSave; dialog.showOpenDialog = originalOpen; return calls;
+      } });
+    }, { sender: tableExportSender, path: resultSnapshotPath, legacy: legacySnapshotPath });
+    await button(resultSnapshotText.save).click();
+    await expect(tab().getByText(resultSnapshotText.saved, { exact: true })).toBeVisible();
+    const savedResultSnapshot = decodeQueryResultSnapshot(await readFile(resultSnapshotPath));
+    expect(savedResultSnapshot.version).toBe(3);
+    expect(savedResultSnapshot.result).toMatchObject({ postgresCommand: 'SELECT', affectedRows: 3 });
+    expect(savedResultSnapshot.result.rows[0]).toMatchObject({ c0: '1.00000000000000000001', c1: '旧文本',
+      c2: { type: 'binary', base64: 'AA==' } });
+    await pinGroup.getByRole('button', { name: '释放 固定 2', exact: true }).click();
     await edit(`SELECT * FROM (VALUES
       ('Infinity'::numeric, '新增'::text, NULL::bytea),
       (1.00000000000000000002::numeric, '保留', NULL::bytea),
@@ -1003,10 +1046,29 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await execute();
     await button(zh.query.pinResult).click();
     const historyBeforeComparison = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    try {
+      await button(resultSnapshotText.open).click();
+      await expect(tab().getByRole('alert')).toHaveText(resultSnapshotText.postgresRequired);
+      await expect(resultGrid).toContainText('新文本');
+      await button(resultSnapshotText.open).click();
+      await expect(tab().getByText(resultSnapshotText.opened, { exact: true })).toBeVisible();
+      await expect(resultGrid).toContainText('旧文本');
+      await expect(pinGroup.getByRole('button', { name: '固定 4 · PostgreSQL原始结果.dbark-result.json', exact: true }))
+        .toHaveAttribute('aria-pressed', 'true');
+      await page.screenshot({ path: info.outputPath('PostgreSQL查询结果快照文件.png') });
+    } finally {
+      expect(await application.evaluate(() =>
+        (globalThis as unknown as { finishPostgresResultSnapshots(): string[] }).finishPostgresResultSnapshots()))
+        .toEqual(['save', 'open', 'open']);
+    }
+    await mark('PostgreSQL 结果快照实际保存与回读，拒绝旧版快照后恢复原数值、原字节和命令标签');
     await button(comparisonText.open).click();
     const resultComparison = page.getByRole('dialog', { name: comparisonText.title, exact: true });
     const startComparison = resultComparison.getByRole('button', { name: comparisonText.start, exact: true });
     await expect(startComparison).toBeDisabled();
+    await resultComparison.getByLabel(comparisonText.right, { exact: true }).selectOption({ label: '固定 3' });
+    await resultComparison.getByLabel(comparisonText.left, { exact: true })
+      .selectOption({ label: '固定 4 · PostgreSQL原始结果.dbark-result.json' });
     await expect(resultComparison.getByRole('checkbox', { name: comparisonText.key('c2'), exact: true })).toBeDisabled();
     await resultComparison.getByRole('checkbox', { name: comparisonText.key('c0'), exact: true }).check();
     await startComparison.click();
@@ -1023,7 +1085,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(difference.getByLabel(comparisonText.rightValue + ' c2', { exact: true })).toContainText('/w==');
     await page.screenshot({ path: info.outputPath('PostgreSQL固定结果对比.png') });
     await resultComparison.getByRole('button', { name: comparisonText.close, exact: true }).click();
-    await pinGroup.getByRole('button', { name: '释放 固定 2', exact: true }).click();
+    await pinGroup.getByRole('button', { name: '释放 固定 4 · PostgreSQL原始结果.dbark-result.json', exact: true }).click();
     await expect(button(comparisonText.open)).toBeDisabled();
     await pinGroup.getByRole('button', { name: '释放 固定 3', exact: true }).click();
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeComparison);

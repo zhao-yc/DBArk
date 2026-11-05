@@ -7,6 +7,8 @@ export const queryResultSnapshotUiZh = {
   cancel: '撤销本次回包', cancelling: '已撤销本次回包，仍在等待原文件操作完整结束；未取消磁盘读写。',
   cancelled: '本次文件选择已取消。', opened: '结果快照已新增为固定结果。', saved: '结果快照已保存。',
   stale: '原查询页、结果、固定结果或作业归属已变化，未接纳本次回包。',
+  postgresRequired: '当前查询标签需要 PostgreSQL 结果快照。其它格式可通过全局快照查看器打开。',
+  postgresTabRequired: '请从 PostgreSQL 查询标签或全局快照查看器打开此文件。',
   uncertain: '结果快照文件可能已经保存，但原回执已失效。请核对文件；不会自动重试，下一次明确点击才会重新选择文件。',
   unavailable: '当前查询页仍有操作或正在关闭，暂不可操作结果快照。',
 } as const;

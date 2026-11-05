@@ -5,10 +5,10 @@ import { copySqliteResultStorage, type SqliteResultStorage } from './sqliteResul
 export const queryResultSnapshotLimits = {
   bytes: 16 * 1024 * 1024, rows: 100000, columns: 4096, cells: 1000000,
   cellBytes: 16 * 1024 * 1024, binaryBytes: 16 * 1024 * 1024, columnBytes: 8192, typeBytes: 1024,
-  nameBytes: 256, insertIdBytes: 256, statementBytes: 16 * 1024 * 1024, jsonDepth: 12, jsonNodes: 2200000,
+  nameBytes: 256, insertIdBytes: 256, postgresCommandBytes: 256, statementBytes: 16 * 1024 * 1024, jsonDepth: 12, jsonNodes: 2200000,
 } as const;
 export interface QueryResultSnapshotDocument {
-  kind: 'dbark.query-result-snapshot'; version: 1 | 2; name?: string; result: QueryResult;
+  kind: 'dbark.query-result-snapshot'; version: 1 | 2 | 3; name?: string; result: QueryResult;
 }
 type Budget = { bytes: number; cells: number };
 const invalid = (): never => { throw Error(text.invalid); };
@@ -118,8 +118,10 @@ function cell(value: unknown, budget: Budget, wire: boolean): CellValue {
 }
 
 /** 预算包括列键在每一行的实际重复开销，校验通过的下一格才获得克隆空间。 */
-function result(value: unknown, budget: Budget, wire: boolean, storageRequired: boolean): QueryResult {
-  const source = record(value, storageRequired ? [...requiredResult, 'sqliteStorage'] : requiredResult, optionalResult), inputs = array(own(source, 'columns'), queryResultSnapshotLimits.columns), records = array(own(source, 'rows'), queryResultSnapshotLimits.rows);
+function result(value: unknown, budget: Budget, wire: boolean, version: QueryResultSnapshotDocument['version']): QueryResult {
+  const required = version === 2 ? [...requiredResult, 'sqliteStorage'] :
+    version === 3 ? [...requiredResult, 'postgresCommand'] : requiredResult;
+  const source = record(value, required, optionalResult), inputs = array(own(source, 'columns'), queryResultSnapshotLimits.columns), records = array(own(source, 'rows'), queryResultSnapshotLimits.rows);
   if (inputs.length * records.length > queryResultSnapshotLimits.cells) return large();
   const columns: ResultColumn[] = [], keys = new Set<string>();
   add(budget, '{"columns":['.length);
@@ -160,31 +162,39 @@ function result(value: unknown, budget: Budget, wire: boolean, storageRequired: 
     else extras[key] = number(own(source, key), budget, wire);
   }
   let sqliteStorage: SqliteResultStorage | undefined;
-  if (storageRequired) {
+  if (version === 2) {
     sqliteStorage = copySqliteResultStorage(own(source, 'sqliteStorage'), columns, rows);
     add(budget, ',"sqliteStorage":{"version":1,"rows":['.length);
     for (let index = 0; index < sqliteStorage.rows.length; index++) { if (index) add(budget, 1); string(sqliteStorage.rows[index], columns.length, budget); }
     add(budget, ']}'.length);
   }
+  // 第三版仅保存 PostgreSQL 原命令标签，原有两版继续拒绝未知字段。
+  let postgresCommand: string | undefined;
+  if (version === 3) {
+    add(budget, ',"postgresCommand":'.length);
+    postgresCommand = string(own(source, 'postgresCommand'), queryResultSnapshotLimits.postgresCommandBytes, budget);
+  }
   add(budget, ',"statement":'.length); const statement = string(own(source, 'statement'), queryResultSnapshotLimits.statementBytes, budget); add(budget, 1);
-  return { columns, rows, truncated, elapsedMs, ...extras, ...(sqliteStorage ? { sqliteStorage } : {}), statement };
+  return { columns, rows, truncated, elapsedMs, ...extras, ...(sqliteStorage ? { sqliteStorage } : {}),
+    ...(postgresCommand === undefined ? {} : { postgresCommand }), statement };
 }
 
 /** 文件只包含真实QueryResult及可选标签；源SQL是文字，任何连接或会话字段均拒绝。 */
 function document(value: unknown, wire: boolean): QueryResultSnapshotDocument {
   const source = record(value, ['kind', 'version', 'result'], ['name']);
   const version = own(source, 'version');
-  if (own(source, 'kind') !== 'dbark.query-result-snapshot' || version !== 1 && version !== 2) throw Error(text.version);
+  if (own(source, 'kind') !== 'dbark.query-result-snapshot' || version !== 1 && version !== 2 && version !== 3) throw Error(text.version);
   const budget = { bytes: ('{"kind":"dbark.query-result-snapshot","version":' + version + ',').length, cells: 0 };
   let name: string | undefined;
   if (Object.hasOwn(source, 'name')) { add(budget, '"name":'.length); name = string(own(source, 'name'), queryResultSnapshotLimits.nameBytes, budget); add(budget, 1); }
-  add(budget, '"result":'.length); const captured = result(own(source, 'result'), budget, wire, version === 2); add(budget, '}\n'.length);
+  add(budget, '"result":'.length); const captured = result(own(source, 'result'), budget, wire, version); add(budget, '}\n'.length);
   return { kind: 'dbark.query-result-snapshot', version, ...(name === undefined ? {} : { name }), result: captured };
 }
 
 /** 捕获当前已返回结果，不补读数据库，不接受QueryOutcome/连接状态代替单个结果。 */
 export function createQueryResultSnapshot(value: QueryResult, name?: string): QueryResultSnapshotDocument {
-  const version = value && typeof value === 'object' && Object.hasOwn(value, 'sqliteStorage') ? 2 : 1;
+  const version = value && typeof value === 'object' && Object.hasOwn(value, 'postgresCommand') ? 3 :
+    value && typeof value === 'object' && Object.hasOwn(value, 'sqliteStorage') ? 2 : 1;
   return document({ kind: 'dbark.query-result-snapshot', version, ...(name === undefined ? {} : { name }), result: value }, false);
 }
 /** 内存文档同样严格检查，返回独立副本，保存失败不改源固定结果。 */
@@ -214,11 +224,12 @@ export function encodeQueryResultSnapshot(value: QueryResultSnapshotDocument): s
     for (let index = 0; index < source.sqliteStorage.rows.length; index++) { if (index) output.push(','); output.push(quoted(source.sqliteStorage.rows[index])); }
     output.push(']}');
   }
+  if (source.postgresCommand !== undefined) output.push(',"postgresCommand":', quoted(source.postgresCommand));
   output.push(',"statement":', quoted(source.statement), '}}\n');
   return output.join('');
 }
 
-/** JSON子集解析器拒绝重复解码键；裸数字仅准入格式版本1／2，单元格仍由后续类型合同限制。 */
+/** JSON子集解析器拒绝重复解码键；裸数字仅用于版本或结构标记，单元格由后续类型合同限制。 */
 function parseJson(source: string): unknown {
   let position = 0, nodes = 0;
   const whitespace = () => { while (position < source.length && /[\x20\t\r\n]/.test(source[position])) position++; };
@@ -264,7 +275,7 @@ function parseJson(source: string): unknown {
       }
       return invalid();
     }
-    for (const [token, result] of [['true', true], ['false', false], ['null', null], ['1', 1], ['2', 2]] as const) {
+    for (const [token, result] of [['true', true], ['false', false], ['null', null], ['1', 1], ['2', 2], ['3', 3]] as const) {
       if (source.startsWith(token, position)) { position += token.length; if (position < source.length && !/[\x20\t\r\n,}\]]/.test(source[position])) return invalid(); return result; }
     }
     return invalid();

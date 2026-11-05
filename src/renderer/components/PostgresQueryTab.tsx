@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
 import { format } from 'sql-formatter';
@@ -10,7 +10,9 @@ import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } 
 import { invoke, uid, errorMessage } from '../lib';
 import { postgresZh as text } from '../locales/postgres.zh-CN';
 import { formatText, zh } from '../locales/zh-CN';
-import { snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
+import { pinLimits, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
+import { QueryResultSnapshotIntent } from '../queryResultSnapshotIntent';
+import { queryResultSnapshotUiZh as snapshotText } from '../locales/queryResultSnapshot.zh-CN';
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
 import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, type QueryResultColumnLayout } from '../queryResultColumns';
@@ -39,6 +41,7 @@ import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { QueryResultStatisticsDialog } from './QueryResultStatisticsDialog';
 import { QueryResultPresetsDialog } from './QueryResultPresetsDialog';
 import { QueryResultComparisonDialog } from './QueryResultComparisonDialog';
+import { QueryResultSnapshotActions, type QueryResultSnapshotOperation } from './QueryResultSnapshotActions';
 import { ExplainPlanView } from './ExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
 import { QueryAnalyzeConfirmDialog } from './QueryAnalyzeConfirmDialog';
@@ -136,6 +139,8 @@ export function PostgresQueryTab({
   const [resultSelection] = useState(() => new ResultExportSelection());
   const [pinState, setPinState] = useState<PinState>({ items: [], sequence: 0 });
   const pinStateRef = useRef(pinState);
+  const snapshotOperation = useRef<QueryResultSnapshotIntent | undefined>(undefined);
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
   const [pinSql, setPinSql] = useState<PinnedQueryResult>();
   const [comparisonDraft, setComparisonDraft] = useState<ComparisonDraft>();
   const comparisonDraftRef = useRef<ComparisonDraft | undefined>(undefined);
@@ -198,6 +203,7 @@ export function PostgresQueryTab({
       !statisticsDraftRef.current &&
       !presetDraftRef.current &&
       !comparisonDraftRef.current &&
+      !snapshotOperation.current &&
       !fileBusy &&
       !closeRef.current &&
       !document.querySelector('[role="dialog"], [role="alertdialog"]')
@@ -606,6 +612,7 @@ export function PostgresQueryTab({
     alive.current = true;
     return () => {
       alive.current = false;
+      snapshotOperation.current?.invalidate();
       const pending = phase.current,
         owned = session.current;
       if (pending?.life === token) stop();
@@ -640,6 +647,7 @@ export function PostgresQueryTab({
           setSelected(0);
         }
         if (changed || left) setPinSql(undefined);
+        if (changed || left) snapshotOperation.current?.invalidate();
         if ((changed || left) && sortDraftRef.current) closeResultSort(sortDraftRef.current);
         if ((changed || left) && filterDraftRef.current) closeResultFilter(filterDraftRef.current);
         if ((changed || left) && columnDraftRef.current) closeResultColumns(columnDraftRef.current);
@@ -664,14 +672,17 @@ export function PostgresQueryTab({
     if (closeRequest && presetDraftRef.current) closeResultPresets(presetDraftRef.current);
     if (closeRequest && comparisonDraftRef.current) closeResultComparison(comparisonDraftRef.current);
     if (closeRequest) setPinSql(undefined);
+    if (closeRequest) snapshotOperation.current?.invalidate();
   }, [closeRequest]);
   const pin = pinState.items.find(item => item.id === pinState.selected);
   const results = outcome?.results ?? [],
     result = pin?.result ?? results[selected],
-    controlsLocked = busy || fileBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView || !!pinSql,
+    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView || !!pinSql,
     locked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft;
   const resultSource = pin?.result ?? (!outcome?.analysis && !outcome?.explain && result?.columns.length ? result : undefined);
   const resultContext = [pin ?? outcome, pin ? undefined : selected, profile, version, scope.database];
+  const snapshotIdentity = [tab, pinState, ...resultContext, resultSource];
+  useLayoutEffect(() => { snapshotOperation.current?.observe(snapshotIdentity); });
   const currentLayout = columnLayout?.source === resultSource ? columnLayout : undefined;
   const layout = currentLayout?.layout;
   const visibleColumns = currentLayout?.columns ?? resultSource?.columns;
@@ -700,7 +711,8 @@ export function PostgresQueryTab({
   /** 当前标签、连接和事务操作仍归原工作区，排序不借用数据库会话。 */
   function resultScopeCurrent() {
     const current = useWorkspace.getState();
-    return alive.current && !controlsLocked && !closeRef.current && !exportOpen.current && !phase.current && !current.activeJobs[tab.id] &&
+    return alive.current && !controlsLocked && !closeRef.current && !exportOpen.current && !phase.current &&
+      !snapshotOperation.current && !current.activeJobs[tab.id] &&
       current.settings.activeTabId === tab.id && same(scope);
   }
 
@@ -723,6 +735,51 @@ export function PostgresQueryTab({
   function publishPinState(next: PinState) {
     pinStateRef.current = next;
     setPinState(next);
+  }
+
+  /** 文件回包只归原标签及作业，打开时校验 PostgreSQL 格式和固定快照容量。 */
+  function beginResultSnapshot(mode: 'open' | 'save'): QueryResultSnapshotOperation {
+    if (!pinNavigationCurrent() || currentTab() !== tab) throw Error(snapshotText.unavailable);
+    if (mode === 'save' && !resultSource?.columns.length) throw Error(zh.query.pinRequiresRows);
+    if (mode === 'open' && pinState.items.length >= pinLimits.count) throw Error(zh.query.pinCountLimit);
+    const job = acquireWorkspaceBusy(tab.id);
+    const intent: QueryResultSnapshotIntent = new QueryResultSnapshotIntent(snapshotIdentity, () =>
+      snapshotOperation.current === intent && same(scope) && currentTab() === tab &&
+      useWorkspace.getState().settings.activeTabId === tab.id && !closeRef.current && job.owns() &&
+      pinStateRef.current === pinState && !document.querySelector('[role="dialog"], [role="alertdialog"]'));
+    snapshotOperation.current = intent;
+    setSnapshotBusy(true);
+    let finished = false;
+    const notify = (message: string) => useWorkspace.getState().notify(message, true);
+    return {
+      result: resultSource,
+      current: () => intent.current(),
+      invalidate: () => intent.invalidate(),
+      /** 完成方言和容量检查后一次性加入固定列表。 */
+      adopt(snapshot, name) {
+        if (!intent.current()) throw Error(snapshotText.stale);
+        if (snapshot.version !== 3) throw Error(snapshotText.postgresRequired);
+        const sequence = pinState.sequence + 1;
+        const label = `${formatText(zh.query.pinLabel, sequence)} · ${snapshot.name || name}`;
+        const next = snapshotQueryResult(pinState.items, snapshot.result, uid(), label);
+        intent.consume();
+        resetResultView();
+        publishPinState({ items: [...pinState.items, next], selected: next.id, sequence });
+      },
+      uncertain: notify,
+      reportError: notify,
+      /** 即使窗口撤销回包，也要等待原文件操作完成后才释放作业。 */
+      finish() {
+        if (finished) return;
+        finished = true;
+        intent.invalidate();
+        if (snapshotOperation.current === intent) {
+          snapshotOperation.current = undefined;
+          if (alive.current) setSnapshotBusy(false);
+        }
+        job.release();
+      },
+    };
   }
 
   /** 快照切换和释放也可在没有本次行结果时使用，仍核对当前标签和操作窗口。 */
@@ -1116,7 +1173,8 @@ export function PostgresQueryTab({
         <QueryFileSourceCaption tab={tab} files={files} compact />
         <span>{session.current ? '原查询会话' : '尚未连接'}</span>
       </div>
-      <QueryFileActions
+      <QueryResultSnapshotActions result={resultSource} disabled={locked} begin={beginResultSnapshot}
+        renderActions={snapshotActions => <QueryFileActions
         tab={tab}
         files={files}
         renderActions={(actions) => (
@@ -1168,9 +1226,10 @@ export function PostgresQueryTab({
             <button disabled={locked || !session.current} onClick={() => void reconnect()}>
               {text.reconnect}
             </button>
+            {snapshotActions}
           </div>
         )}
-      />
+      />} />
       <div className="postgres-editor">
         <SqlEditor
           value={tab.sql ?? ''}
@@ -1178,7 +1237,7 @@ export function PostgresQueryTab({
           postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
             connectionVersion: scope.version, sessionId: session.current?.id }}
           onCompletionStatus={setCompletionStatus}
-          readOnly={busy || fileBusy || !!analyze || !!exportView || !!filterDraft || !!columnDraft || !!statisticsDraft ||
+          readOnly={busy || fileBusy || snapshotBusy || !!analyze || !!exportView || !!filterDraft || !!columnDraft || !!statisticsDraft ||
             !!presetDraft || !!pinSql || !!comparisonDraft}
           onReady={(instance) => {
             editor.current = instance;

@@ -14,6 +14,18 @@ function wire(): any { return JSON.parse(encodeQueryResultSnapshot(document()));
 function decoded(value: unknown) { return decodeQueryResultSnapshot(JSON.stringify(value)); }
 
 describe('已返回结果快照的版本化无损合同', () => {
+  it('第三版保留 PostgreSQL 原命令和精确值，版本与方言字段严格对应', () => {
+    const source = { ...result(['9223372036854775807', 'NaN', { type: 'binary' as const, base64: 'AP8=' }]),
+      postgresCommand: 'SELECT 1' };
+    const captured = createQueryResultSnapshot(source);
+    const encoded = encodeQueryResultSnapshot(captured);
+    expect(captured.version).toBe(3);
+    expect(decodeQueryResultSnapshot(encoded).result).toEqual(source);
+    expect(() => decodeQueryResultSnapshot(encoded.replace('"version":3', '"version":1'))).toThrow(text.invalid);
+    expect(() => decodeQueryResultSnapshot(encoded.replace(',"postgresCommand":"SELECT 1"', ''))).toThrow(text.invalid);
+    expect(() => createQueryResultSnapshot({ ...source, postgresCommand: 'X'.repeat(limits.postgresCommandBytes + 1) })).toThrow(text.tooLarge);
+  });
+
   it('源SQL、重复显示名、内部列key/type及完整结果元信息均保留，Number负零不丢失', () => {
     const source = result(), before = structuredClone(source), captured = createQueryResultSnapshot(source, '本次结果'), encoded = encodeQueryResultSnapshot(captured), reopened = decodeQueryResultSnapshot(encoded);
     expect(encoded.endsWith('\n')).toBe(true); expect(reopened).toEqual(captured); expect(source).toEqual(before);
@@ -108,8 +120,8 @@ describe('不可信JSON、UTF8及数值标签', () => {
   });
 
   it('类型、版本、必填和可选字段均严格验证，不忽略未知字段或undefined', () => {
-    const value = document(); expect(() => parseQueryResultSnapshot({ ...value, version: 3 })).toThrow(text.version);
-    const unsupported = wire(); unsupported.version = 3; expect(() => decoded(unsupported)).toThrow();
+    const value = document(); expect(() => parseQueryResultSnapshot({ ...value, version: 4 })).toThrow(text.version);
+    const unsupported = wire(); unsupported.version = 4; expect(() => decoded(unsupported)).toThrow();
     expect(() => parseQueryResultSnapshot({ ...value, kind: '别的文件' })).toThrow(text.version);
     expect(() => parseQueryResultSnapshot({ ...value, name: undefined })).toThrow(text.invalid);
     for (const key of ['columns', 'rows', 'truncated', 'elapsedMs', 'statement']) { const changed = wire(); delete changed.result[key]; expect(() => decoded(changed)).toThrow(text.invalid); }
