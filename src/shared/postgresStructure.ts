@@ -40,6 +40,10 @@ const structureIndex = z.object({
   valid: z.boolean(),
   ready: z.boolean(),
   constraint: optionalText,
+  replicaIdentity: z.boolean().optional(),
+  parts: z.array(z.object({
+    column: optionalText, key: z.boolean(), descending: z.boolean(), nullsFirst: z.boolean(),
+  }).strict()).max(128).optional(),
 }).strict();
 
 /** 大型关系的结构必须完整交付；超过目录预算时整体拒绝。 */

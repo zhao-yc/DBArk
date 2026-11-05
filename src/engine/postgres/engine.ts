@@ -19,7 +19,9 @@ import { PostgresTableWorkspace } from './tableWorkspace';
 import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
-import { PostgresColumnWorkspace } from './columnEdit';
+import { PostgresStructureEditWorkspace } from './structureEdit';
+import { matchesPostgresColumnPlan, postgresColumnPlan, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
+import { matchesCreatedPostgresIndex, postgresIndexPlan, type PostgresIndexPreviewInput } from '../../shared/postgresIndexEdit';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { explainLimits } from '../../shared/explain';
@@ -52,7 +54,23 @@ type Input = Record<string, any>;
 export class PostgresEngine {
   private readonly completionReads = new Map<string, number>();
   private readonly creations = new PostgresCreateTableWorkspace();
-  private readonly columnEdits = new PostgresColumnWorkspace();
+  private readonly columnEdits = new PostgresStructureEditWorkspace('字段', ({ output }, input: PostgresColumnPreviewInput) => {
+    const { connectionId, database, table, editStamp, changes } = input;
+    const plan = postgresColumnPlan(output, { connectionId, database, table, editStamp, changes });
+    return { ...plan, verify: final => matchesPostgresColumnPlan(final.output.columns, plan.columns) };
+  });
+  private readonly indexEdits = new PostgresStructureEditWorkspace('索引', ({ output, indexIds }, input: PostgresIndexPreviewInput) => {
+    const { connectionId, database, table, editStamp, changes } = input;
+    const plan = postgresIndexPlan(output, { connectionId, database, table, editStamp, changes });
+    const originals = new Set(indexIds.values());
+    return { ...plan, verify: final => final.output.indexes.length === plan.indexes.size && final.output.indexes.every(index => {
+      const expected = plan.indexes.get(index.name);
+      const oid = final.indexIds.get(index.name)!;
+      // 同名替换和锁内名称重用都不能通过原索引身份核对。
+      if (expected?.original) return oid === indexIds.get(expected.original.name);
+      return !!expected?.created && !originals.has(oid) && matchesCreatedPostgresIndex(index, expected.created);
+    }) };
+  });
   private readonly tables = new PostgresTableWorkspace();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
@@ -72,7 +90,7 @@ export class PostgresEngine {
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
         (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) ||
-          this.columnEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
+          this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
       this.ownsTask(input.taskId)
@@ -236,6 +254,7 @@ export class PostgresEngine {
       this.tables.clear(id);
       this.creations.clear(id);
       this.columnEdits.clear(id);
+      this.indexEdits.clear(id);
       this.profiles.delete(id);
     } finally {
       this.closing.delete(id);
@@ -259,6 +278,7 @@ export class PostgresEngine {
       this.tables.clear(input.id);
       this.creations.clear(input.id);
       this.columnEdits.clear(input.id);
+      this.indexEdits.clear(input.id);
       this.profiles.delete(input.id);
     }
   }
@@ -270,6 +290,7 @@ export class PostgresEngine {
         ...this.tables.connectionIds(),
         ...this.creations.connectionIds(),
         ...this.columnEdits.connectionIds(),
+        ...this.indexEdits.connectionIds(),
         ...[...this.leases].map((l) => l.managed.profile.id),
         ...[...this.sessions.values()].map((s) => s.connectionId),
       ]))
@@ -478,15 +499,20 @@ export class PostgresEngine {
         return this.use(profile, input.database, connection => readPostgresStructure(connection, input.table));
       }
       case 'postgres.columnEdit.preview':
-      case 'postgres.columnEdit.apply': {
+      case 'postgres.columnEdit.apply':
+      case 'postgres.indexEdit.preview':
+      case 'postgres.indexEdit.apply': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
-            !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 字段编辑来源');
+            !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 结构编辑来源');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
-        return command === 'postgres.columnEdit.preview'
-          ? this.columnEdits.preview(input as Parameters<PostgresColumnWorkspace['preview']>[0], connect)
-          : this.columnEdits.apply(input as Parameters<PostgresColumnWorkspace['apply']>[0], connect);
+        if (command === 'postgres.columnEdit.preview')
+          return this.columnEdits.preview(input as Parameters<PostgresStructureEditWorkspace<PostgresColumnPreviewInput>['preview']>[0], connect);
+        if (command === 'postgres.indexEdit.preview')
+          return this.indexEdits.preview(input as Parameters<PostgresStructureEditWorkspace<PostgresIndexPreviewInput>['preview']>[0], connect);
+        const workspace = command === 'postgres.columnEdit.apply' ? this.columnEdits : this.indexEdits;
+        return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
       case 'postgres.table.page':
       case 'postgres.table.apply': {

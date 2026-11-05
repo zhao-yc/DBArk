@@ -278,6 +278,8 @@ export interface CommandMap {
   'postgres.structure.read': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresStructure').PostgresStructureResult };
   'postgres.columnEdit.preview': { input: import('./postgresColumnEdit').PostgresColumnPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.columnEdit.apply': { input: import('./postgresColumnEdit').PostgresColumnApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
+  'postgres.indexEdit.preview': { input: import('./postgresIndexEdit').PostgresIndexPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
+  'postgres.indexEdit.apply': { input: import('./postgresIndexEdit').PostgresIndexApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.table.page': { input: import('./postgresTable').PostgresTablePageInput; output: import('./postgresTable').PostgresTablePage };
   'postgres.table.preview': { input: import('./postgresTable').PostgresTablePreviewInput; output: import('./postgresTable').PostgresTablePreview };
   'postgres.table.apply': { input: import('./postgresTable').PostgresTableApplyInput; output: import('./postgresTable').PostgresTableOutcome };

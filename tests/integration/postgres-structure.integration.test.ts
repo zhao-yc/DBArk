@@ -5,6 +5,7 @@ import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import type { PostgresStructureResult } from '../../src/shared/postgresStructure';
 import type { PostgresColumnChange } from '../../src/shared/postgresColumnEdit';
+import type { PostgresIndexChange } from '../../src/shared/postgresIndexEdit';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
 const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
@@ -170,6 +171,85 @@ describe.skipIf(!enabled)('PostgreSQL 实库结构快照', () => {
       await client.query(`DROP TABLE ${replacement}; CREATE TABLE ${replacement} (id int)`);
       expect((await engine.handle('postgres.columnEdit.apply', { ...scoped, table: replacement, token: replacePlan.token })).outcome).toBe('notSent');
       expect((await structure(replacement)).columns.map(column => column.name)).toEqual(['id']);
+
+      // 在同一 schema 里验证六种索引方法、约束保护、重命名身份和批次回滚。
+      const indexTarget = '"结构.甲"."索引目标"';
+      await client.query(`CREATE TABLE ${indexTarget} (id integer PRIMARY KEY, note text, j jsonb, p point, tag text NOT NULL);
+        INSERT INTO ${indexTarget} VALUES (1, '重复值', '{}', '(1,1)', '甲'), (2, '重复值', '{}', '(2,2)', '乙');
+        CREATE UNIQUE INDEX identity_idx ON ${indexTarget}(tag);
+        ALTER TABLE ${indexTarget} REPLICA IDENTITY USING INDEX identity_idx;
+        CREATE INDEX start_idx ON ${indexTarget}(note);`);
+      const indexScoped = { ...scoped, table: indexTarget };
+      const indexPreview = async (changes: PostgresIndexChange[], editStamp?: string) =>
+        engine.handle('postgres.indexEdit.preview', { ...indexScoped, changes, editStamp: editStamp ?? (await structure(indexTarget)).editStamp });
+      const indexApply = (token: string, owner = indexScoped.owner) => engine.handle('postgres.indexEdit.apply', { ...indexScoped, token, owner });
+      const ordinary = { column: 'note', direction: 'asc', nulls: 'default' } as const;
+      await expect(indexPreview([{ kind: 'drop', from: 'identity_idx' }])).rejects.toThrow('复制标识');
+      await expect(indexPreview([{ kind: 'rename', from: '索引目标_pkey', name: 'invalid' }])).rejects.toThrow('受约束');
+      const start = await structure(indexTarget);
+      const rollbackIndex = await indexPreview([{ kind: 'rename', from: 'start_idx', name: '临时重命名' },
+        { kind: 'create', name: '重复唯一值', method: 'btree', unique: true, keys: [ordinary], include: [] }]);
+      expect((await indexApply(rollbackIndex.token)).outcome).toBe('rolledBack');
+      expect((await structure(indexTarget)).editStamp).toBe(start.editStamp);
+      const staleIndex = await indexPreview([{ kind: 'drop', from: 'start_idx' }]);
+      await client.query(`DROP INDEX "结构.甲".start_idx; CREATE INDEX start_idx ON ${indexTarget}(note)`);
+      const sameDefinition = await structure(indexTarget);
+      expect(sameDefinition.indexes).toEqual(start.indexes);
+      expect(sameDefinition.editStamp).not.toBe(start.editStamp);
+      expect((await indexApply(staleIndex.token)).outcome).toBe('notSent');
+
+      // ALTER INDEX 锁的是索引本身。让原名称在其锁等待期间被另一张表的索引占用。
+      await client.query(`CREATE TABLE "结构.甲".other_index_table (note text);
+        CREATE INDEX other_idx ON "结构.甲".other_index_table(note);`);
+      const indexOid = async (name: string) => (await client.query('SELECT $1::regclass::oid::text AS id', [name])).rows[0].id;
+      const firstOid = await indexOid('"结构.甲".start_idx');
+      const otherOid = await indexOid('"结构.甲".other_idx');
+      const raceIndex = await indexPreview([{ kind: 'rename', from: 'start_idx', name: 'race_idx' }]);
+      await client.query('BEGIN; ALTER INDEX "结构.甲".start_idx RENAME TO moved_idx; ALTER INDEX "结构.甲".other_idx RENAME TO start_idx');
+      const racingIndex = indexApply(raceIndex.token);
+      try {
+        await expect.poll(async () => (await client.query(
+          'SELECT count(*)::int AS n FROM pg_catalog.pg_locks WHERE relation = $1::oid AND NOT granted', [firstOid],
+        )).rows[0].n, { timeout: 3000 }).toBe(1);
+        await client.query('COMMIT');
+      } catch (reason) {
+        await client.query('ROLLBACK');
+        await racingIndex;
+        throw reason;
+      }
+      expect(await racingIndex).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('实际索引') });
+      expect(await indexOid('"结构.甲".moved_idx')).toBe(firstOid);
+      expect(await indexOid('"结构.甲".start_idx')).toBe(otherOid);
+      expect((await client.query('SELECT pg_catalog.to_regclass($1) AS resolved', ['"结构.甲".race_idx'])).rows[0].resolved).toBeNull();
+      await client.query('ALTER INDEX "结构.甲".start_idx RENAME TO other_idx; ALTER INDEX "结构.甲".moved_idx RENAME TO start_idx');
+
+      const methods = [['hash', 'note'], ['gin', 'j'], ['gist', 'p'], ['spgist', 'tag'], ['brin', 'id']] as const;
+      const readyIndexes = await indexPreview([
+        { kind: 'rename', from: 'start_idx', name: '旧"索引' },
+        { kind: 'create', name: '复合"索引', method: 'btree', unique: true, keys: [
+          { ...ordinary, direction: 'desc', nulls: 'last' }, { ...ordinary, column: 'id', nulls: 'first' },
+        ], include: ['tag'] },
+        ...methods.map(([method, column]): PostgresIndexChange => ({ kind: 'create', name: 'method_' + method,
+          method, unique: false, keys: [{ ...ordinary, column }], include: [] })),
+      ]);
+      expect(readyIndexes.statements[1]).toContain('"note" DESC NULLS LAST, "id" ASC NULLS FIRST) INCLUDE ("tag")');
+      expect((await indexApply(readyIndexes.token, '其他文档')).outcome).toBe('notSent');
+      expect((await structure(indexTarget)).editStamp).toBe(sameDefinition.editStamp);
+      expect((await indexApply(readyIndexes.token)).outcome).toBe('committed');
+      expect((await indexApply(readyIndexes.token)).outcome).toBe('notSent');
+      const indexed = await structure(indexTarget);
+      expect(indexed.indexes.find(index => index.name === '复合"索引')).toMatchObject({ method: 'btree', unique: true, parts: [
+        { column: 'note', key: true, descending: true, nullsFirst: false },
+        { column: 'id', key: true, descending: false, nullsFirst: true },
+        { column: 'tag', key: false },
+      ] });
+      expect(indexed.indexes.filter(index => index.name.startsWith('method_')).map(index => index.method).sort())
+        .toEqual(methods.map(([method]) => method).sort());
+      const deleting = await indexPreview([{ kind: 'drop', from: '旧"索引' }]);
+      expect(deleting.statements).toEqual(['DROP INDEX "结构.甲"."旧""索引" RESTRICT']);
+      expect((await indexApply(deleting.token)).outcome).toBe('committed');
+      expect((await structure(indexTarget)).indexes.some(index => index.name === '旧"索引')).toBe(false);
+      expect((await client.query(`SELECT count(*)::int AS n FROM ${indexTarget}`)).rows[0].n).toBe(2);
     } finally {
       await engine.closeAll();
       await client.end();

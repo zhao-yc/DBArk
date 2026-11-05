@@ -73,6 +73,14 @@ SELECT pg_catalog.jsonb_build_object(
       'primary', x.indisprimary,
       'valid', x.indisvalid,
       'ready', x.indisready,
+      'replicaIdentity', x.indisreplident,
+      'parts', (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'column', a.attname, 'key', k.pos <= x.indnkeyatts,
+        'descending', (COALESCE(x.indoption[(k.pos - 1)::int], 0) & 1) <> 0,
+        'nullsFirst', (COALESCE(x.indoption[(k.pos - 1)::int], 0) & 2) <> 0
+      ) ORDER BY k.pos)
+        FROM pg_catalog.unnest(x.indkey) WITH ORDINALITY AS k(attnum, pos)
+        LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum),
       'constraint', (SELECT c.conname FROM pg_catalog.pg_constraint c WHERE c.conrelid = t.oid
         AND c.conindid = i.oid AND c.contype IN ('p', 'u', 'x') ORDER BY c.oid LIMIT 1)
     ) AS item
@@ -81,7 +89,12 @@ SELECT pg_catalog.jsonb_build_object(
     WHERE x.indrelid = t.oid
     ORDER BY i.relname, i.oid LIMIT 2001
   ) ix), '[]'::jsonb)
-), t.oid::text, t.editable
+), t.oid::text, t.editable,
+  COALESCE((SELECT pg_catalog.jsonb_object_agg(index_name, index_oid) FROM (
+    SELECT i.relname::text AS index_name, i.oid::text AS index_oid
+    FROM pg_catalog.pg_index x JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
+    WHERE x.indrelid = t.oid ORDER BY i.oid LIMIT 2001
+  ) index_ids), '{}'::jsonb)
 FROM target t
 `;
 
@@ -111,8 +124,11 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
   if (!parsed.success || parsed.data.database !== connection.database || parsed.data.schema !== schema || parsed.data.name !== name) {
     throw Error('PostgreSQL结构回包不完整或目标已经变化');
   }
-  const { c0: raw, c1: oid, c2: editable } = result.rows[0] as { c0: string; c1: string; c2: string };
+  const { c0: raw, c1: oid, c2: editable, c3: ids } = result.rows[0] as { c0: string; c1: string; c2: string; c3: string };
+  const indexIds = new Map<string, string>(Object.entries(JSON.parse(ids)));
+  if (indexIds.size !== parsed.data.indexes.length || parsed.data.indexes.some(index => !/^\d+$/.test(indexIds.get(index.name) ?? '')))
+    throw Error('PostgreSQL 索引身份回包不完整');
   const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ?
-    { editStamp: createHash('sha256').update(oid + '\0' + raw).digest('hex') } : {}) };
-  return { output, oid };
+    { editStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex') } : {}) };
+  return { output, oid, indexIds };
 }

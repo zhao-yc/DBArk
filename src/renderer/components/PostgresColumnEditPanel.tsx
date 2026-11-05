@@ -1,24 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { postgresColumnPlan, type PostgresColumnChange } from '../../shared/postgresColumnEdit';
-import { postgresCreateTypes, type PostgresColumnType, type PostgresCreateColumn, type PostgresCreateTablePreview } from '../../shared/postgresCreateTable';
-import type { PostgresStructureInput, PostgresStructureResult } from '../../shared/postgresStructure';
-import { postgresRelationName } from '../../shared/postgresSql';
+import { postgresCreateTypes, type PostgresColumnType, type PostgresCreateColumn } from '../../shared/postgresCreateTable';
 import { postgresColumnEditZh as text } from '../locales/postgresColumnEdit.zh-CN';
 import { errorMessage, invoke } from '../lib';
-import { useWorkspace } from '../store';
+import { usePostgresStructureEdit, type PostgresStructureEditProps } from './usePostgresStructureEdit';
 import { ErrorBox } from './ui';
 
-interface Props {
-  target: PostgresStructureInput;
-  original: PostgresStructureResult;
-  version: number;
-  onClose(): void;
-  onResult(message: string, unknown: boolean): void;
-  onDirtyChange(value: boolean): void;
-}
-
 /** 在原结构视图中编辑结构化草稿，输入、预览和实际提交分别锁定。 */
-export function PostgresColumnEditPanel({ target, original, version, onClose, onResult, onDirtyChange }: Props) {
+export function PostgresColumnEditPanel(props: PostgresStructureEditProps) {
+  const { target, original, onClose } = props;
   const [kind, setKind] = useState<PostgresColumnChange['kind']>('add');
   const [changes, setChanges] = useState<PostgresColumnChange[]>([]);
   const [name, setName] = useState('');
@@ -27,14 +17,6 @@ export function PostgresColumnEditPanel({ target, original, version, onClose, on
   const [length, setLength] = useState(''), [precision, setPrecision] = useState(''), [scale, setScale] = useState('');
   const [nullable, setNullable] = useState(true), [hasDefault, setHasDefault] = useState(false);
   const [defaultValue, setDefaultValue] = useState(''), [comment, setComment] = useState('');
-  const [preview, setPreview] = useState<PostgresCreateTablePreview>();
-  const [acceptDrop, setAcceptDrop] = useState(false);
-  const [busy, setBusy] = useState(false), [unknown, setUnknown] = useState(false), [error, setError] = useState('');
-  const operation = useRef(false), alive = useRef(false);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  useEffect(() => { onDirtyChange(busy || !!changes.length || !!name); }, [busy, changes.length, name, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
-
   const names = useMemo(() => changes.length
     ? postgresColumnPlan(original, { ...target, editStamp: original.editStamp!, changes }).columns.map(column => column.name)
     : original.columns.map(column => column.name), [original, target, changes]);
@@ -44,17 +26,10 @@ export function PostgresColumnEditPanel({ target, original, version, onClose, on
   const dropping = changes.some(change => change.kind === 'drop');
   const canStage = (!needsName || !!name) && (!needsType || !!type) && (kind === 'add' || !!old);
 
-  /** 只允许已读连接修订及无表页草稿的目标进入修改流程。 */
-  function assertCurrent() {
-    const workspace = useWorkspace.getState();
-    if (!alive.current || (workspace.connectionVersions[target.connectionId] ?? 0) !== version) throw Error(text.changed);
-    if (workspace.settings.tabs.some(tab => {
-      if (tab.kind !== 'table' || tab.connectionId !== target.connectionId || (tab.database || 'postgres') !== target.database ||
-          !tab.table || !(workspace.dirtyTabs[tab.id] || workspace.activeJobs[tab.id])) return false;
-      const relation = postgresRelationName(tab.table);
-      return relation.schema === original.schema && relation.name === original.name;
-    })) throw Error(text.dirty);
-  }
+  const { preview, setPreview, acceptDrop, setAcceptDrop, busy, unknown, error, setError, operation, submit } =
+    usePostgresStructureEdit(props, !!changes.length || !!name, dropping,
+      () => invoke('postgres.columnEdit.preview', { ...target, editStamp: original.editStamp!, changes }),
+      token => invoke('postgres.columnEdit.apply', { ...target, token }));
 
   /** 将当前表单编译成一项受限改动，及早发现批次中的名称冲突。 */
   function stage() {
@@ -83,46 +58,6 @@ export function PostgresColumnEditPanel({ target, original, version, onClose, on
       setPreview(undefined);
       setName('');
     } catch (reason) { setError(errorMessage(reason)); }
-  }
-
-  /** 同步占有预览或提交按钮，实际回执不依赖窗口渲染时序。 */
-  async function submit(apply: boolean) {
-    if (operation.current || unknown || apply && (!preview || dropping && !acceptDrop)) return;
-    operation.current = true;
-    setBusy(true);
-    setError('');
-    let sent = false;
-    try {
-      assertCurrent();
-      if (!apply) {
-        setAcceptDrop(false);
-        setPreview(undefined);
-        const result = await invoke('postgres.columnEdit.preview', { ...target, editStamp: original.editStamp!, changes });
-        assertCurrent();
-        setPreview(result);
-        return;
-      }
-      setPreview(undefined);
-      sent = true;
-      const result = await invoke('postgres.columnEdit.apply', { ...target, token: preview!.token });
-      if (result.outcome === 'committed') onResult(result.message, false);
-      else if (result.outcome === 'unknown') {
-        setUnknown(true);
-        onResult(result.message, true);
-      } else setError(result.message);
-    } catch (reason) {
-      if (alive.current) {
-        const message = errorMessage(reason);
-        setError(message);
-        if (sent) {
-          setUnknown(true);
-          onResult(message, true);
-        }
-      }
-    } finally {
-      operation.current = false;
-      if (alive.current) setBusy(false);
-    }
   }
 
   return <section aria-label={text.title} className="pg-column-edit">
