@@ -200,8 +200,25 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await page.screenshot({ path: info.outputPath('PostgreSQL实际别名字段补全.png') });
     await page.keyboard.press('Enter');
     await expect(tab().locator('.monaco-editor .view-lines')).toContainText('SELECT r."note"' + suffix);
+
+    // CTE 显式输出从编辑器解析，派生表的通配字段从真实目录回填到外层别名。
+    const cases = [
+      { prefix: 'WITH x AS (SELECT note AS "对外名称"' + suffix + ') SELECT x.对外', tail: ' FROM x',
+        label: '对外名称', inserted: 'SELECT x."对外名称" FROM x', screenshot: 'PostgreSQL实际CTE字段补全.png' },
+      { prefix: 'SELECT d.no', tail: ' FROM (SELECT r.*' + suffix + ') AS d',
+        label: 'note', inserted: 'SELECT d."note"', screenshot: undefined },
+    ];
+    for (const item of cases) {
+      await edit(item.prefix + item.tail);
+      for (let index = 0; index < item.tail.length; index++) await page.keyboard.press('ArrowLeft');
+      await page.keyboard.press('Control+Space');
+      await expect(widget.locator('.monaco-list-row.focused')).toContainText(item.label);
+      if (item.screenshot) await page.screenshot({ path: info.outputPath(item.screenshot) });
+      await page.keyboard.press('Enter');
+      await expect(tab().locator('.monaco-editor .view-lines')).toContainText(item.inserted);
+    }
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeCompletion);
-    await mark('真实按键验证 schema、带引号关系和查询别名字段补全，目录读取没有写入执行历史');
+    await mark('真实按键验证 schema、带引号关系、查询别名、CTE 和派生表字段补全，目录读取没有写入执行历史');
 
     await edit("/* 外 /* 内 ; */ 外 */ SELECT 9223372036854775807::bigint AS exact; SELECT $标记$含;号$标记$ AS note;");
     await execute();
