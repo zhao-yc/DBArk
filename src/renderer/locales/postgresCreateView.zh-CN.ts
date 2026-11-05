@@ -1,4 +1,9 @@
 export const postgresCreateViewZh = {
+  materializedTitle: '新建 PostgreSQL 物化视图',
+  materializedName: '物化视图名',
+  populate: '创建时填充数据',
+  materializedHint: '输入单条查询，并用 schema 限定业务对象。勾选后将在确认创建时执行定义查询；留空则可稍后刷新填充。',
+  materializedApply: '确认创建物化视图',
   title: '新建 PostgreSQL 视图',
   schema: '目标 schema',
   name: '视图名',

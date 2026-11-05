@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview, PostgresCreateTableTarget } from '../../shared/postgresCreateTable';
-import { postgresCreateViewPreviewSchema } from '../../shared/postgresCreateView';
+import { postgresCreateViewPreviewSchema, type PostgresCreateViewKind } from '../../shared/postgresCreateView';
 import { errorMessage, invoke } from '../lib';
 import { postgresCreateViewZh as text } from '../locales/postgresCreateView.zh-CN';
 import { zh } from '../locales/zh-CN';
@@ -9,17 +9,19 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresCreateTableDialog.css';
 
 /** 编辑、预览及确认绑定原数据库和连接修订，提交结果未知时停止再次发送。 */
-export function PostgresCreateViewDialog({ target, onDirtyChange, onCreated, onClose }: {
+export function PostgresCreateViewDialog({ target, kind, onDirtyChange, onCreated, onClose }: {
   target: PostgresCreateTableTarget;
+  kind: PostgresCreateViewKind;
   onDirtyChange(value: boolean): void;
   onCreated(view: string, version: number, message: string): void;
   onClose(): void;
 }) {
+  const materialized = kind === 'materialized';
   const { connectionId, database } = target;
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const dialect = useWorkspace(state => state.connections.find(item => item.id === connectionId)?.dialect);
   const [schemas, setSchemas] = useState<string[]>([]);
-  const [draft, setDraft] = useState({ schema: '', view: '', definition: '', comment: '' });
+  const [draft, setDraft] = useState({ schema: '', view: '', definition: '', comment: '', populate: true });
   const [preview, setPreview] = useState<(PostgresCreateTablePreview & { version: number })>();
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false), [unknown, setUnknown] = useState(false), [error, setError] = useState('');
@@ -52,7 +54,7 @@ export function PostgresCreateViewDialog({ target, onDirtyChange, onCreated, onC
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
   /** 编辑只修改本地草稿，原预览不再可提交。 */
-  function edit(field: keyof typeof draft, value: string) {
+  function edit<K extends keyof typeof draft>(field: K, value: typeof draft[K]) {
     if (operation.current || unknown) return;
     setDraft(previous => ({ ...previous, [field]: value }));
     setDirty(true);
@@ -73,7 +75,10 @@ export function PostgresCreateViewDialog({ target, onDirtyChange, onCreated, onC
     let sent = false;
     try {
       if (!apply) {
-        const input = postgresCreateViewPreviewSchema.parse({ connectionId, database, ...draft });
+        const { populate, ...fields } = draft;
+        const input = postgresCreateViewPreviewSchema.parse({ connectionId, database, ...fields,
+          ...(materialized ? { materialized: { populate } } : {}),
+        });
         const result = await invoke('postgres.createView.preview', input);
         if (lifecycle.current === owner) setPreview({ ...result, version });
         return;
@@ -103,10 +108,10 @@ export function PostgresCreateViewDialog({ target, onDirtyChange, onCreated, onC
     onClose();
   }
 
-  return <Modal title={text.title} wide onClose={close}>
+  return <Modal title={materialized ? text.materializedTitle : text.title} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>PostgreSQL / {database}</strong>
-      <p>{preview ? text.review : text.hint}</p>
+      <p>{preview ? text.review : materialized ? text.materializedHint : text.hint}</p>
       {loading && <Spinner text={text.wait} />}
       {busy && <Spinner text={text.working} />}
       <ErrorBox message={error || (!loading && !schemas.length ? text.empty : '')} />
@@ -115,11 +120,13 @@ export function PostgresCreateViewDialog({ target, onDirtyChange, onCreated, onC
           <div className="pg-create-target">
             <Field label={text.schema}><select value={draft.schema} onChange={event => edit('schema', event.target.value)}>
               {schemas.map(schema => <option key={schema}>{schema}</option>)}</select></Field>
-            <Field label={text.name}><input value={draft.view} maxLength={63} onChange={event => edit('view', event.target.value)} /></Field>
+            <Field label={materialized ? text.materializedName : text.name}><input value={draft.view} maxLength={63} onChange={event => edit('view', event.target.value)} /></Field>
             <Field label={text.comment}><input value={draft.comment} maxLength={4096} onChange={event => edit('comment', event.target.value)} /></Field>
           </div>
           <Field label={text.definition}><textarea className="pg-create-view-definition" value={draft.definition}
             spellCheck={false} rows={8} maxLength={128 * 1024} onChange={event => edit('definition', event.target.value)} /></Field>
+          {materialized && <label><input type="checkbox" checked={draft.populate}
+            onChange={event => edit('populate', event.target.checked)} /> {text.populate}</label>}
         </fieldset>}
     </div>
     <footer className="modal-footer">
@@ -127,7 +134,7 @@ export function PostgresCreateViewDialog({ target, onDirtyChange, onCreated, onC
       <span className="grow"/>
       <button disabled={busy} onClick={close}>{zh.common.close}</button>
       <button className="primary" disabled={busy || loading || unknown || !schemas.length}
-        onClick={() => void submit(!!preview)}>{preview ? text.apply : text.preview}</button>
+        onClick={() => void submit(!!preview)}>{preview ? materialized ? text.materializedApply : text.apply : text.preview}</button>
     </footer>
   </Modal>;
 }

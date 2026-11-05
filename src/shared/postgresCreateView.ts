@@ -11,7 +11,9 @@ export const postgresCreateViewPreviewSchema = postgresCreateTableSchemasSchema.
   view: postgresNewIdentifier,
   definition: definitionSchema,
   comment: postgresDdlText,
+  materialized: z.object({ populate: z.boolean() }).strict().optional(),
 }).strict();
+export type PostgresCreateViewKind = 'ordinary' | 'materialized';
 export type PostgresCreateViewInput = z.infer<typeof postgresCreateViewPreviewSchema>;
 export const postgresEditViewPreviewSchema = postgresStructureInputSchema.extend({
   definition: definitionSchema,
@@ -40,7 +42,9 @@ export function postgresCreateViewPlan(raw: PostgresCreateViewInput) {
   const input = postgresCreateViewPreviewSchema.parse(raw);
   if (input.schema.startsWith('pg_') || input.schema === 'information_schema') throw Error('请选择普通用户 schema');
   const table = postgresIdentifier(input.schema) + '.' + postgresIdentifier(input.view);
-  const statements = ['CREATE VIEW ' + table + ' AS\n' + postgresViewQuery(input.definition)];
-  if (input.comment) statements.push('COMMENT ON VIEW ' + table + ' IS ' + postgresDdlLiteral(input.comment));
+  const type = input.materialized ? 'MATERIALIZED VIEW ' : 'VIEW ';
+  const fill = input.materialized ? input.materialized.populate ? 'WITH DATA' : 'WITH NO DATA' : '';
+  const statements = ['CREATE ' + type + table + ' AS\n' + postgresViewQuery(input.definition) + fill];
+  if (input.comment) statements.push('COMMENT ON ' + type + table + ' IS ' + postgresDdlLiteral(input.comment));
   return { table, statements };
 }

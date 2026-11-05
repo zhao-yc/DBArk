@@ -192,8 +192,35 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       // 三种物化刷新都通过实际目录和独立查询核对，保留原 OID 和授权。
       const snapshot = '"生成.甲"."缓存""视图"';
       const snapshotQuery = `SELECT "编号", "代码" FROM ${qualified}`;
-      await client.query(`CREATE MATERIALIZED VIEW ${snapshot} AS ${snapshotQuery} WITH NO DATA;
-        CREATE UNIQUE INDEX 缓存表达式 ON ${snapshot} (("编号" + 1));
+      const snapshotDraft = { ...target, schema: draft.schema, view: '缓存"视图', comment: '物化快照注释',
+        definition: snapshotQuery + ' -- 行尾注释', materialized: { populate: false } };
+      const snapshotPreview = await engine.handle('postgres.createView.preview', snapshotDraft);
+      expect(snapshotPreview.statements[0]).toContain('CREATE MATERIALIZED VIEW ' + snapshot);
+      expect(snapshotPreview.statements[0]).toMatch(/-- 行尾注释\nWITH NO DATA$/);
+      expect(snapshotPreview.statements[1]).toContain('COMMENT ON MATERIALIZED VIEW ' + snapshot);
+      expect((await client.query('SELECT to_regclass($1)::text AS name', [snapshot])).rows[0].name).toBeNull();
+      expect(await applyView(snapshotPreview.token)).toMatchObject({ outcome: 'committed', table: snapshot });
+      await expect(applyView(snapshotPreview.token)).rejects.toThrow('预览已失效');
+      await expect(engine.handle('postgres.createView.preview', snapshotDraft)).rejects.toThrow('同名关系');
+      expect((await client.query('SELECT pg_catalog.obj_description($1::regclass) AS comment', [snapshot])).rows[0].comment).toBe('物化快照注释');
+
+      // 创建时填充只在明确确认后执行定义，错误时不留下目录项。
+      const populatedDraft = { ...snapshotDraft, view: '创建时填充', comment: '', materialized: { populate: true },
+        definition: `SELECT pg_catalog.nextval('"生成.甲".创建填充序列') AS id` };
+      await client.query('CREATE SEQUENCE "生成.甲".创建填充序列');
+      const filledPreview = await engine.handle('postgres.createView.preview', populatedDraft);
+      expect(filledPreview.statements[0]).toMatch(/WITH DATA$/);
+      expect((await client.query('SELECT is_called FROM "生成.甲".创建填充序列')).rows).toEqual([{ is_called: false }]);
+      expect(await applyView(filledPreview.token)).toMatchObject({ outcome: 'committed', table: '"生成.甲"."创建时填充"' });
+      expect((await client.query('SELECT id::text FROM "生成.甲"."创建时填充"')).rows).toEqual([{ id: '1' }]);
+      expect((await client.query('SELECT last_value::text, is_called FROM "生成.甲".创建填充序列')).rows)
+        .toEqual([{ last_value: '1', is_called: true }]);
+      const badSnapshot = await engine.handle('postgres.createView.preview',
+        { ...populatedDraft, view: '创建失败', definition: 'SELECT 1 / 0 AS id' });
+      expect(await applyView(badSnapshot.token)).toMatchObject({ outcome: 'rolledBack' });
+      expect((await client.query('SELECT to_regclass($1)::text AS name', ['"生成.甲"."创建失败"'])).rows[0].name).toBeNull();
+
+      await client.query(`CREATE UNIQUE INDEX 缓存表达式 ON ${snapshot} (("编号" + 1));
         CREATE UNIQUE INDEX 缓存局部 ON ${snapshot} ("编号") WHERE "编号" > 0`);
       const readSnapshot = async () => postgresStructureResultSchema.parse(await engine.handle('postgres.structure.read', { ...target, table: snapshot }));
       const refresh = async (mode: 'data' | 'concurrent' | 'empty') => engine.handle('postgres.materializedRefresh.preview',

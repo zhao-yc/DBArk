@@ -24,6 +24,7 @@ interface Plan {
   success: string;
   guard?: { sql: string; stamp: string; parseOnly?: true };
   statementTimeout?: '120s';
+  firstCommand?: 'SELECT';
 }
 interface Prepared {
   input: Scoped<PostgresCreateTableTarget>;
@@ -147,20 +148,25 @@ export class PostgresCreateTableWorkspace {
   /** 预览仅读取目标目录；视图定义由服务器在确认后的扩展协议 DDL 中校验。 */
   async prepareView(input: Scoped<PostgresCreateViewInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     return this.prepareRelation(input, 'view', connect, () => {
-      const draft = { connectionId: input.connectionId, database: input.database, schema: input.schema,
-        view: input.view, definition: input.definition, comment: input.comment };
+      const { connectionId, database, schema, view, definition, comment, materialized } = input;
+      const draft = { connectionId, database, schema, view, definition, comment, materialized };
       const plan = postgresCreateViewPlan(draft);
-      return { ...plan, success: 'PostgreSQL 新视图已确认创建', protocol: 'extended',
-        preflight: connection => preflight(connection, draft, draft.view, [], '视图'),
+      const label = materialized ? '物化视图' : '视图';
+      return { ...plan, success: 'PostgreSQL 新' + label + '已确认创建', protocol: 'extended',
+        // 立即填充的原生命令回执为 SELECT 行数，仍须回读新建对象后才能提交。
+        ...(materialized?.populate ? { statementTimeout: '120s' as const, firstCommand: 'SELECT' as const } : {}),
+        preflight: connection => preflight(connection, draft, view, [], label),
         async verify(connection, oid) {
           const result = await connection.query(`
-            SELECT pg_catalog.obj_description(c.oid, 'pg_class')
+            SELECT pg_catalog.obj_description(c.oid, 'pg_class'), c.relispopulated
             FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
             WHERE n.oid = $1::oid AND n.nspname::text = $2 AND c.relname::text = $3
-              AND c.relkind = 'v' AND c.relpersistence = 'p'
-          `, [oid, draft.schema, draft.view], budget());
-          if (result.truncated || result.rows.length !== 1 || result.rows[0].c0 !== (draft.comment || null))
-            throw Error('新视图的实际 schema、类别或注释与预览不同，未提交');
+              AND c.relkind = $4::pg_catalog."char" AND c.relpersistence = 'p'
+          `, [oid, schema, view, materialized ? 'm' : 'v'], budget());
+          const row = result.rows[0];
+          if (result.truncated || result.rows.length !== 1 || row.c0 !== (comment || null) ||
+              materialized && row.c1 !== (materialized.populate ? 't' : 'f'))
+            throw Error('新视图的实际 schema、类别、注释或填充状态与预览不同，未提交');
         },
       };
     });
@@ -330,10 +336,11 @@ export class PostgresCreateTableWorkspace {
         throw Error(plan.guard ? '原视图已变化，请刷新结构后继续' : '原 schema 已被替换，请重新预览');
       if (plan.statementTimeout) await connection.query(
         "SELECT pg_catalog.set_config('statement_timeout', $1, true)", [plan.statementTimeout], budget());
-      for (const statement of plan.statements) {
+      for (const [index, statement] of plan.statements.entries()) {
         sent = true;
         const result = await connection.query(statement, undefined, budget(), undefined, prepared.plan.protocol);
-        if (result.postgresCommand !== statement.slice(0, statement.indexOf(' '))) {
+        const command = index === 0 && plan.firstCommand || statement.slice(0, statement.indexOf(' '));
+        if (result.postgresCommand !== command) {
           throw Error('PostgreSQL 未返回预期的结构回执');
         }
       }

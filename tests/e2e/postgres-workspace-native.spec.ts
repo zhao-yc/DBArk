@@ -1479,6 +1479,46 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(renamedViewRow).toHaveCount(0);
     await expect(page.locator('.tab-strip .tab-close')).toHaveCount(0);
     await mark('受限删除需明确勾选，确认后实际目录移除视图并关闭记录页');
+    const materializedRow = (name: string) => page.locator('.object-row').filter({ hasText: name });
+    const createMaterialized = async (name: string, populate: boolean) => {
+      // 上一步 DDL 刷新对象目录，等真实对象回到树上再打开菜单。
+      await expect(materializedRow('物化快照')).toBeVisible();
+      await clickSidebarAction(databaseNode, { name: createViewText.materializedTitle, exact: true }, undefined, check);
+      const dialog = page.getByRole('dialog', { name: createViewText.materializedTitle, exact: true });
+      await dialog.getByLabel(createViewText.schema, { exact: true }).selectOption('回归');
+      await dialog.getByRole('textbox', { name: createViewText.materializedName, exact: true }).fill(name);
+      await dialog.getByRole('textbox', { name: createViewText.comment, exact: true }).fill('窗口创建的物化视图');
+      await dialog.getByRole('textbox', { name: createViewText.definition, exact: true })
+        .fill('SELECT id, note FROM "回归"."带""引号" WHERE id = 1');
+      const fill = dialog.getByRole('checkbox', { name: createViewText.populate, exact: true });
+      await expect(fill).toBeChecked();
+      if (!populate) await fill.uncheck();
+      await dialog.getByRole('button', { name: createViewText.preview, exact: true }).click();
+      const sql = dialog.locator('.pg-create-sql');
+      await expect(sql).toContainText('CREATE MATERIALIZED VIEW "回归"."' + name + '"');
+      await expect(sql).toContainText(populate ? 'WITH DATA' : 'WITH NO DATA');
+      await expect(sql).toContainText('COMMENT ON MATERIALIZED VIEW "回归"."' + name + '"');
+      await expect(materializedRow(name)).toHaveCount(0);
+      if (!populate) await page.screenshot({ path: info.outputPath('PostgreSQL创建物化视图.png') });
+      await dialog.getByRole('button', { name: createViewText.materializedApply, exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(materializedRow(name)).toBeVisible();
+      await expect(gridTab.locator('.context-bar')).toContainText('"回归"."' + name + '"');
+    };
+    await createMaterialized('窗口已填充物化', true);
+    await expect(gridTab.getByRole('grid')).toContainText('原值');
+    await page.locator('.tab-strip .tab-close').click();
+    await mark('窗口创建并立即填充物化视图，提交后直接读取真实记录');
+    await createMaterialized('窗口待填充物化', false);
+    await expect(gridTab).toContainText(refreshText.empty);
+    await tableButton(postgresStructureZh.open).click();
+    await expect(structure).toContainText(refreshText.empty);
+    await expect(structure.locator('.pg-structure-comment')).toContainText('窗口创建的物化视图');
+    await expect(structure.getByRole('button', { name: refreshText.title, exact: true })).toBeEnabled();
+    await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
+    await page.locator('.tab-strip .tab-close').click();
+    await mark('窗口创建未填充物化视图，实际结构、原注释、记录页提示和刷新入口一致');
+
     await page.locator('.object-row .tree-label').filter({ hasText: '物化快照' }).click();
     await expect(gridTab).toContainText(refreshText.empty);
     await tableButton(postgresStructureZh.open).click();
