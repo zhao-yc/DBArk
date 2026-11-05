@@ -4,7 +4,7 @@ import { postgresIdentifier, postgresRelationName } from '../../shared/postgresS
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import {
-  isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
+  isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresTableLimits, type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
 } from '../../shared/postgresTable';
@@ -24,7 +24,7 @@ interface Relation {
   capabilities: Capabilities;
   canImport: boolean;
 }
-interface Original { tid: string; version: string; digest: string; }
+interface Original { tid: string; version: string; digest: string; key: string; }
 interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; }
 type ExportSource = { kind: 'copy'; write: (sink: (chunk: Buffer) => Promise<void>) => Promise<number> } |
   { kind: 'cursor'; columns: PostgresTableColumn[]; rows: AsyncIterable<CellValue[]>;
@@ -39,11 +39,14 @@ interface Snapshot {
   writeEligible: boolean;
   preview?: { token: string; expires: number; writes: Write[] };
 }
+interface TableSnapshots { current: Snapshot; retained: Map<string, Snapshot>; }
 export type PostgresTableImportRequest = Scoped<PostgresTableImportInput> & { source: PostgresCopySource };
 const noWrites: Capabilities = { insert: false, update: false, delete: false };
 const small = () => ({ rows: 1024, bytes: 2 * 1024 * 1024 });
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const only = (relation: Relation) => (relation.kind === 'r' ? 'ONLY ' : '') + relation.sql;
+const pageScope = ({ filter, sort }: Snapshot['options']) =>
+  JSON.stringify([filter?.column, filter?.text, sort?.column, sort?.direction]);
 
 /** 每次从实际库读取关系、主键顺序、列权限与结构；标识符及类型显示均来自目录。 */
 async function readRelation(connection: PostgresConnection, table: string): Promise<Relation> {
@@ -153,17 +156,22 @@ async function begin(connection: PostgresConnection, mode: 'page' | 'export' | '
 
 /** 页面、预览、提交绑定同一文档和表标签；所有真实数据修改使用独立事务。 */
 export class PostgresTableWorkspace {
-  private readonly snapshots = new Map<string, Snapshot>();
+  private readonly snapshots = new Map<string, TableSnapshots>();
   private readonly active = new Set<string>();
 
   private key(scope: Scoped<PostgresTableTarget>): string { return JSON.stringify([scope.owner, scope.tabId]); }
 
-  /** 逐次读取只发布当前页面能力，提交期间不能加载另一页替换原快照。 */
+  /** 仅保留本标签仍有草稿的原页，导入和导出继续绑定当前页。 */
   async page(input: Scoped<PostgresTablePageInput>, connect: Connect): Promise<PostgresTablePage> {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     this.active.add(key);
     try {
+      const pins = input.retainPageTokens ?? [];
+      if (pins.length > postgresTableLimits.draftPages) throw Error('草稿原页超过保留上限');
+      const retained = new Map(pins.map(pageToken => [pageToken, this.snapshot({ ...input, pageToken }, true, true)]));
+      for (const snapshot of retained.values()) if (pageScope(snapshot.options) !== pageScope(input))
+        throw Error('请先处理草稿，再更改筛选或排序');
       const result = await connect(async connection => {
         await begin(connection, 'page');
         const relation = await readRelation(connection, input.table);
@@ -172,33 +180,41 @@ export class PostgresTableWorkspace {
         const completed = await connection.query('COMMIT', undefined, small());
         if (completed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL表页读取事务未完成');
         const rows: DataRow[] = [], originals: Original[] = [];
+        const keyColumns = relation.columns.filter(column => column.primary);
         for (const raw of records.rows.slice(0, input.limit)) {
           const row = Object.fromEntries(relation.columns.map(column => [column.key, raw[column.key]]));
           if (withOriginal) {
             const tid = raw['c' + relation.columns.length], version = raw['c' + (relation.columns.length + 1)];
             if (typeof tid !== 'string' || typeof version !== 'string') throw Error('PostgreSQL原行身份回包不完整');
-            originals.push({ tid, version, digest: digest(row) });
+            originals.push({ tid, version, digest: digest(row),
+              key: digest([relation.fingerprint, keyColumns.map(column => row[column.key])]) });
           }
           rows.push(row);
         }
         return { relation, rows, originals, hasNext: records.rows.length > input.limit, truncated: records.truncated };
       });
+      for (const snapshot of retained.values()) if (snapshot.relation.fingerprint !== result.relation.fingerprint)
+        throw Error('关系结构或权限已变化，请先核对并处理原草稿');
       this.snapshots.delete(key);
       const capabilities = result.truncated ? noWrites : result.relation.capabilities;
       const now = Date.now();
-      for (const [id, value] of this.snapshots) if (value.expires <= now) this.snapshots.delete(id);
+      for (const [id, value] of this.snapshots) if (value.current.expires <= now) this.snapshots.delete(id);
       if (this.snapshots.size >= 128) throw Error('PostgreSQL表页快照已满，请关闭空闲表标签');
       const exportToken = randomUUID();
       const writeEligible = Object.values(capabilities).some(Boolean);
       const { owner, tabId, connectionRevision, connectionId, database, table, filter, sort } = input;
-      this.snapshots.set(key, {
+      for (const snapshot of retained.values()) snapshot.preview = undefined;
+      const current: Snapshot = {
         token: exportToken, scope: { owner, tabId, connectionRevision, connectionId, database, table },
-        expires: now + 30 * 60 * 1000, relation: result.relation, rows: result.originals, options: { filter, sort }, writeEligible,
-      });
+        expires: now + 30 * 60 * 1000, relation: retained.values().next().value?.relation ?? result.relation,
+        rows: result.originals, options: { filter, sort }, writeEligible,
+      };
+      this.snapshots.set(key, { current, retained });
       return {
         columns: result.relation.columns, rows: result.rows, hasNext: result.hasNext, truncated: result.truncated,
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
         relationKind: result.relation.kind, capabilities, exportToken, ...(writeEligible ? { pageToken: exportToken } : {}),
+        ...(writeEligible && result.originals.length ? { rowKeys: result.originals.map(row => row.key) } : {}),
         ...(result.relation.canImport ? { canImport: true as const } : {}),
       };
     } finally { this.active.delete(key); }
@@ -255,8 +271,10 @@ export class PostgresTableWorkspace {
   }
 
   /** 令牌不能跨标签、库、连接修订或文档使用。 */
-  private snapshot(input: Scoped<PostgresTableReleaseInput>, writing = false): Snapshot {
-    const snapshot = this.snapshots.get(this.key(input)), scope = snapshot?.scope;
+  private snapshot(input: Scoped<PostgresTableReleaseInput>, writing = false, allowRetained = false): Snapshot {
+    const group = this.snapshots.get(this.key(input));
+    const snapshot = group?.current.token === input.pageToken ? group.current : allowRetained ? group?.retained.get(input.pageToken) : undefined;
+    const scope = snapshot?.scope;
     if (!snapshot || !scope || snapshot.token !== input.pageToken || snapshot.expires <= Date.now() ||
         scope.connectionId !== input.connectionId || scope.connectionRevision !== input.connectionRevision ||
         scope.database !== input.database || scope.table !== input.table) throw Error('PostgreSQL表页快照已过期或来源变化，请刷新');
@@ -311,9 +329,18 @@ export class PostgresTableWorkspace {
   /** 预览只签发服务端构建的语句，不执行写入或读取渲染器提供的SQL。 */
   preview(input: Scoped<PostgresTablePreviewInput>): PostgresTablePreview {
     if (this.active.has(this.key(input))) throw Error('当前PostgreSQL表页仍有在途操作');
-    const snapshot = this.snapshot(input, true), relation = snapshot.relation;
+    const snapshot = this.snapshot(input), relation = snapshot.relation;
     const counts = { insert: 0, update: 0, delete: 0 };
+    const sources = new Map<string, Snapshot>();
+    const keys = new Set<string>(), tids = new Set<string>();
     const writes: Write[] = input.changes.map(change => {
+      const pageToken = change.pageToken ?? input.pageToken;
+      let source = sources.get(pageToken);
+      if (!source) {
+        source = this.snapshot({ ...input, pageToken }, true, true);
+        if (source.relation.fingerprint !== relation.fingerprint) throw Error('原页关系结构或权限已变化');
+        sources.set(pageToken, source);
+      }
       if (!relation.capabilities[change.kind]) throw Error('此PostgreSQL关系不支持该记录操作');
       const values: unknown[] = [];
       const fields = change.kind === 'delete' ? [] : change.fields.map(field => fieldExpression(field, relation, values));
@@ -324,8 +351,10 @@ export class PostgresTableWorkspace {
           : ' DEFAULT VALUES');
         return { kind: change.kind, sql, values };
       }
-      const original = snapshot.rows[change.row];
+      const original = source.rows[change.row];
       if (!original) throw Error('待修改的原行已失效');
+      if (keys.has(original.key) || tids.has(original.tid)) throw Error('同一原记录只允许一个草稿动作');
+      keys.add(original.key); tids.add(original.tid);
       const predicate = rowPredicate(values, original);
       const sql = change.kind === 'delete'
         ? 'DELETE FROM ' + only(relation) + ' WHERE ' + predicate
@@ -333,7 +362,7 @@ export class PostgresTableWorkspace {
       return { kind: change.kind, sql, values, original };
     });
     const token = randomUUID();
-    snapshot.preview = { token, expires: Date.now() + 5 * 60 * 1000, writes };
+    snapshot.preview = { token, expires: Math.min(Date.now() + 5 * 60 * 1000, ...Array.from(sources.values(), source => source.expires)), writes };
     return { previewToken: token, statements: writes.map(write => write.sql), counts };
   }
 
@@ -341,7 +370,7 @@ export class PostgresTableWorkspace {
   async apply(input: Scoped<PostgresTableApplyInput>, connect: Connect): Promise<PostgresTableOutcome> {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
-    const snapshot = this.snapshot(input, true), preview = snapshot.preview;
+    const snapshot = this.snapshot(input), preview = snapshot.preview;
     if (!preview || preview.token !== input.previewToken || preview.expires <= Date.now()) throw Error('PostgreSQL提交预览已失效');
     this.snapshots.delete(key);
     this.active.add(key);
@@ -413,18 +442,18 @@ export class PostgresTableWorkspace {
   /** 释放仅消费同一文档的原页令牌，旧标签销毁不影响后来读取的快照。 */
   release(input: Scoped<PostgresTableReleaseInput>): void {
     const key = this.key(input);
-    const snapshot = this.snapshots.get(key);
+    const snapshot = this.snapshots.get(key)?.current;
     if (snapshot?.token === input.pageToken && snapshot.scope.connectionId === input.connectionId) this.snapshots.delete(key);
   }
 
   /** 原表能力也参与连接断开路由，冷打开的表页无需额外缓存密码。 */
   connectionIds(): string[] {
-    return [...new Set([...this.snapshots.values()].map(snapshot => snapshot.scope.connectionId))];
+    return [...new Set([...this.snapshots.values()].map(group => group.current.scope.connectionId))];
   }
 
   /** 断开或修改传输配置后撤销该连接的全部待提交预览。 */
   clear(connectionId: string): void {
-    for (const [key, snapshot] of this.snapshots) if (snapshot.scope.connectionId === connectionId) this.snapshots.delete(key);
+    for (const [key, group] of this.snapshots) if (group.current.scope.connectionId === connectionId) this.snapshots.delete(key);
   }
 }
 

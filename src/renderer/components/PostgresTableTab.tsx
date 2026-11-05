@@ -19,6 +19,7 @@ import './PostgresTableTab.css';
 
 type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 'sort'>;
 type Editable = Extract<PostgresTableChange, { kind: 'insert' | 'update' }>;
+type DraftEntry = { change: PostgresTableChange & { pageToken: string }; rowKey?: string; offset: number };
 type Mode = PostgresTableField['value']['mode'] | 'unchanged';
 
 /** 表单只产生字段和值，明确区分保留原值、空串、NULL及DEFAULT。 */
@@ -89,7 +90,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [exportPage, setExportPage] = useState<PostgresTablePage>();
   const [importPage, setImportPage] = useState<PostgresTablePage>();
   const [row, setRow] = useState<number | null>(null);
-  const [draft, setDraft] = useState<PostgresTableChange[]>([]);
+  const [draft, setDraft] = useState<DraftEntry[]>([]);
   const [form, setForm] = useState<{ row: number | null }>();
   const [preview, setPreview] = useState<PostgresTablePreview>();
   const [busy, setBusy] = useState(false);
@@ -124,8 +125,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   /** 只发布完整回包，旧组件迟到的原页能力显式释放。 */
-  async function read(next: PageOptions, isCurrent: () => boolean) {
-    const result = await invoke('postgres.table.page', { ...target, ...next });
+  async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = []) {
+    const result = await invoke('postgres.table.page', { ...target, ...next,
+      ...(retainPageTokens.length ? { retainPageTokens } : {}) });
     if (!isCurrent()) {
       const token = result.exportToken ?? result.pageToken;
       if (token) await invoke('postgres.table.release', { ...target, pageToken: token }).catch(() => {});
@@ -155,24 +157,31 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     void run(isCurrent => read(options, isCurrent));
   }, [active]);
 
-  /** 只在无草稿时改变当前页，避免原行编号被翻页或筛选替换。 */
-  function navigate(next: PageOptions) {
-    if (draft.length || preview || form || lease.current) return;
+  /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
+  function navigate(next: PageOptions, keepDraft = false) {
+    if ((!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || lease.current) return;
     setMessage('');
-    void run(isCurrent => read(next, isCurrent));
+    void run(isCurrent => read(next, isCurrent, [...new Set(draft.map(entry => entry.change.pageToken))]));
   }
 
   /** 更新草稿及标签退出保护。 */
-  function setChanges(next: PostgresTableChange[]) {
+  function setChanges(next: DraftEntry[]) {
     setDraft(next);
     useWorkspace.getState().setDirty(tab.id, next.length > 0);
   }
 
-  /** 同一行可重新编辑或改为删除，整批继续绑定页面原行。 */
+  /** 每项保留原页和主键身份，重新编辑同一记录只更新这一个动作。 */
   function stage(change: PostgresTableChange) {
     if (!page?.pageToken || requiresRefresh || lease.current) return;
-    const next = [...draft.filter(item => change.kind === 'insert' || item.kind === 'insert' || item.row !== change.row), change];
-    const checked = postgresTablePreviewSchema.safeParse({ ...target, pageToken: page.pageToken, changes: next });
+    const rowKey = change.kind === 'insert' ? undefined : page.rowKeys?.[change.row];
+    if (change.kind !== 'insert' && !rowKey) throw Error(text.noKey);
+    const prior = rowKey ? draft.find(item => item.rowKey === rowKey) : undefined;
+    // 回到该页时保留首次暂存的原行版本，避免把外部写入静默变成新的编辑基线。
+    const entry: DraftEntry = prior && prior.change.kind !== 'insert' && change.kind !== 'insert'
+      ? { ...prior, change: { ...change, row: prior.change.row, pageToken: prior.change.pageToken } }
+      : { change: { ...change, pageToken: page.pageToken }, rowKey, offset: options.offset };
+    const next = [...draft.filter(item => rowKey === undefined || item.rowKey !== rowKey), entry];
+    const checked = postgresTablePreviewSchema.safeParse({ ...target, pageToken: page.pageToken, changes: next.map(item => item.change) });
     if (!checked.success) throw Error(checked.error.issues[0]?.message ?? text.noChange);
     setChanges(next);
     setForm(undefined);
@@ -180,17 +189,17 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
-    const pageToken = page?.pageToken;
+    const pageToken = page?.exportToken;
     if (!pageToken || !draft.length || requiresRefresh) return;
     void run(async isCurrent => {
-      const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft });
+      const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
     });
   }
 
   /** 每个预览只发送一次；任何未确认回执都要先刷新核对，避免重复提交。 */
   function apply() {
-    const pageToken = page?.pageToken;
+    const pageToken = page?.exportToken;
     if (!pageToken || !preview || !active) return;
     const previewToken = preview.previewToken;
     void run(async isCurrent => {
@@ -214,10 +223,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const blocked = busy || !!form || !!preview || !!exportPage || !!importPage;
   const frozenPage = blocked || draft.length > 0;
+  const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
   const firstPage = { ...options, offset: 0, limit: pageSize };
   const sortedColumn = page?.columns.find(column => column.name === options.sort?.column);
   const sorted = sortedColumn ? [{ column: sortedColumn.key, direction: options.sort?.direction === 'asc' ? 'ASC' as const : 'DESC' as const }] : [];
+  const formKey = form?.row == null ? undefined : page?.rowKeys?.[form.row];
+  const stagedChange = formKey ? draft.find(entry => entry.rowKey === formKey)?.change : undefined;
   return <div className="workspace-tab postgres-table-tab" aria-label={text.relation}>
     <div className="context-bar"><strong>{tab.title}</strong><span>PostgreSQL / {target.database}</span></div>
     <div className="query-toolbar pg-table-toolbar">
@@ -236,14 +248,16 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         if (row === null) return;
         try { stage({ kind: 'delete', row }); } catch (reason) { setError(errorMessage(reason)); }
       }}>{text.remove}</button>
-      <button className="primary" disabled={!writable || !draft.length} onClick={prepare}>{text.preview}</button>
+      <button className="primary" disabled={blocked || requiresRefresh || !page?.exportToken || !draft.length} onClick={prepare}>{text.preview}</button>
       {busy && <Spinner text={text.waiting}/>}
     </div>
     <div className="pg-table-controls">
-      <button disabled={frozenPage || options.offset === 0} onClick={() => navigate(firstPage)}>{text.first}</button>
-      <button disabled={frozenPage || options.offset === 0} onClick={() => navigate({ ...options, offset: Math.max(0, options.offset - options.limit) })}>{text.previous}</button>
-      <button disabled={frozenPage || !page?.hasNext || options.offset + options.limit > postgresTableLimits.offset}
-        onClick={() => navigate({ ...options, offset: options.offset + options.limit })}>{text.next}</button>
+      <button disabled={pagingBlocked || options.offset === 0}
+        onClick={() => navigate({ ...firstPage, limit: draft.length ? options.limit : pageSize }, true)}>{text.first}</button>
+      <button disabled={pagingBlocked || options.offset === 0}
+        onClick={() => navigate({ ...options, offset: Math.max(0, options.offset - options.limit) }, true)}>{text.previous}</button>
+      <button disabled={pagingBlocked || !page?.hasNext || options.offset + options.limit > postgresTableLimits.offset}
+        onClick={() => navigate({ ...options, offset: options.offset + options.limit }, true)}>{text.next}</button>
       <Field label={text.pageSize}><input type="number" min={1} max={postgresTableLimits.page} value={pageSize} disabled={frozenPage}
         onChange={event => setPageSize(Math.max(1, Math.min(postgresTableLimits.page, Math.trunc(Number(event.target.value)) || 1)))}/></Field>
       <Field label={text.filterColumn}><select aria-label={text.filterColumn} value={filterColumn} disabled={frozenPage}
@@ -261,7 +275,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
     <div className="pg-table-grid">
-      {page ? <ResultsGrid columns={page.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
+      {page ? <ResultsGrid key={page.exportToken} columns={page.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           const first = sort[0];
           const column = page.columns.find(column => column.key === first?.column);
@@ -270,8 +284,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     </div>
     {draft.length > 0 && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong><button disabled={blocked} onClick={() => setChanges([])}>{text.discard}</button>
-      <ol>{draft.map((change, index) => <li key={index}>
-        <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.selected(change.row + 1)}</span>
+      <ol>{draft.map(({ change, offset }, index) => <li key={index}>
+        <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</span>
         {requiresRefresh && change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {
           const name = page?.columns.find(column => column.key === field.column)?.name;
           const value = 'value' in field.value ? cellPreview(field.value.value) : field.value.mode.toUpperCase();
@@ -292,14 +306,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         if (committed) void run(isCurrent => read(options, isCurrent));
       }}/>}
     {form && page && <RecordForm page={page} row={form.row}
-      initial={draft.find((change): change is Editable => change.kind === 'update' && change.row === form.row)}
+      initial={stagedChange?.kind === 'update' ? stagedChange : undefined}
       onSave={stage} onClose={() => setForm(undefined)}/>}
     {preview && <Modal title={text.preview} onClose={() => { if (!busy) setPreview(undefined); }} wide>
       <div className="modal-content pg-table-preview">
         <p>{text.previewHint}</p>
         <p>{text.change.insert} {preview.counts.insert}　{text.change.update} {preview.counts.update}　{text.change.delete} {preview.counts.delete}</p>
-        <ol>{draft.map((change, index) => <li key={index}>
-          <strong>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.selected(change.row + 1)}</strong>
+        <ol>{draft.map(({ change, offset }, index) => <li key={index}>
+          <strong>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</strong>
           {change.kind !== 'delete' && <dl>{change.fields.map(field => <div key={field.column}>
             <dt>{page?.columns.find(column => column.key === field.column)?.name}</dt>
             <dd>{'value' in field.value ? field.value.value : field.value.mode === 'null' ? 'NULL' : 'DEFAULT'}</dd>

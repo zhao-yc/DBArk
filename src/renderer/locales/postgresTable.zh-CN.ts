@@ -6,6 +6,7 @@ export const postgresTableZh = {
   valueMode: '写入方式', value: '字段值', original: '原值', draft: '记录草稿', undo: '撤销此项',
   discard: '放弃草稿', preview: '预览记录修改', apply: '确认提交整批修改', cancel: '取消',
   empty: '尚未读取记录', waiting: '正在等待数据库结果', selected: (n: number) => '已选择本页第 ' + n + ' 行',
+  originalRow: (n: number) => '暂存时第 ' + n + ' 行',
   page: (offset: number, rows: number) => rows ? '第 ' + (offset + 1) + ' 至 ' + (offset + rows) + ' 行' : '当前页无记录',
   noSelection: '请选择一行记录', noChange: '请选择至少一个要修改的字段',
   generated: '数据库生成', noWrite: '此关系以只读方式打开', noKey: '当前关系没有可用的行编辑权限或主键',

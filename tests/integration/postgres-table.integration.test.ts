@@ -67,6 +67,40 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       const current = await read();
       await expect(preview(first, [{ kind: 'delete', row: 0 }])).rejects.toThrow('快照');
       await expect(preview(current, [{ kind: 'delete', row: 0 }], { owner: randomUUID() })).rejects.toThrow('快照');
+      const cross = { table: '"浏览"."跨页编辑"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE ${cross.table} (id bigint PRIMARY KEY, note text CHECK (note <> '拒绝'));
+        INSERT INTO ${cross.table} VALUES (1,'原甲'),(2,'原乙'),(3,'原丙')`);
+      const crossPage = (offset: number, retainPageTokens: string[] = []) => read({ ...cross, offset, limit: 1, retainPageTokens });
+      const pin = (page: PostgresTablePage) => page.pageToken!;
+      const crossRows = () => client.query(`SELECT id::text, note FROM ${cross.table} ORDER BY id`).then(result => result.rows);
+      const a = await crossPage(0);
+      await expect(read({ ...cross, offset: 1, limit: 1, retainPageTokens: [pin(a)], owner: randomUUID() })).rejects.toThrow('快照');
+      await expect(read({ ...cross, offset: 1, limit: 1, retainPageTokens: [pin(a)], sort: { column: 'id', direction: 'desc' } }))
+        .rejects.toThrow('筛选或排序');
+      const b = await crossPage(1, [pin(a)]);
+      const revisited = await crossPage(0, [pin(a), pin(b)]);
+      expect(revisited.rowKeys).toEqual(a.rowKeys);
+      expect(b.rowKeys).not.toEqual(a.rowKeys);
+      const update = (page: PostgresTablePage, note: string): PostgresTableChange =>
+        ({ kind: 'update', pageToken: pin(page), row: 0, fields: [field('c1', note)] });
+      await expect(preview(revisited, [update(a, '重复'), update(revisited, '重复')], cross)).rejects.toThrow('同一原记录');
+      await expect(preview(revisited, [update(first, '他表')], cross)).rejects.toThrow('快照');
+      const multiple = await preview(revisited, [update(a, '已改甲'), update(b, '已改乙')], cross);
+      expect(await crossRows()).toEqual([{ id: '1', note: '原甲' }, { id: '2', note: '原乙' }, { id: '3', note: '原丙' }]);
+      expect(await apply(revisited, multiple, cross)).toMatchObject({ outcome: 'committed', affected: 2 });
+      await expect(apply(revisited, multiple, cross)).rejects.toThrow('快照');
+      expect(await crossRows()).toEqual([{ id: '1', note: '已改甲' }, { id: '2', note: '已改乙' }, { id: '3', note: '原丙' }]);
+      const conflictA = await crossPage(0);
+      const conflictB = await crossPage(1, [pin(conflictA)]);
+      const multiConflict = await preview(conflictB, [update(conflictA, '不能写入'), update(conflictB, '旧乙')], cross);
+      await client.query(`UPDATE ${cross.table} SET note='外部变动' WHERE id=2`);
+      expect(await apply(conflictB, multiConflict, cross)).toMatchObject({ outcome: 'notSent', affected: 0 });
+      const rollbackA = await crossPage(0);
+      const rollbackB = await crossPage(1, [pin(rollbackA)]);
+      const multiRollback = await preview(rollbackB, [update(rollbackA, '应回滚'), update(rollbackB, '拒绝')], cross);
+      expect(await apply(rollbackB, multiRollback, cross)).toMatchObject({ outcome: 'rolledBack', affected: 0 });
+      expect(await crossRows()).toEqual([{ id: '1', note: '已改甲' }, { id: '2', note: '外部变动' }, { id: '3', note: '原丙' }]);
+
       await expect(preview(current, [{ kind: 'update', row: 0, fields: [field('c4', '禁止修改')] }])).rejects.toThrow('数据库生成');
       const prepared = await preview(current, [
         { kind: 'update', row: 0, fields: [{ column: 'c1', value: { mode: 'null' } }, { column: 'c3', value: { mode: 'binary', value: 'abcd' } }] },

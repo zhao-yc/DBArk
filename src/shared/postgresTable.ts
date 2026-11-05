@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { DataRow, ResultColumn } from './contracts';
 import { csvExportDelimiters } from './csvExport';
 
-export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
+export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
 const relation = z.string().min(1).max(512).refine(value => !value.includes('\0'));
 const token = z.uuid();
@@ -15,6 +15,8 @@ export const postgresTablePageSchema = target.extend({
   limit: z.number().int().min(1).max(postgresTableLimits.page),
   sort: z.object({ column: relation, direction: z.enum(['asc', 'desc']) }).strict().optional(),
   filter: z.object({ column: relation, text: z.string().max(4096).refine(value => !value.includes('\0')) }).strict().optional(),
+  retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
+    .refine(value => new Set(value).size === value.length, '保留的草稿原页不能重复').optional(),
 }).strict();
 
 const fieldValue = z.discriminatedUnion('mode', [
@@ -26,21 +28,25 @@ const fieldValue = z.discriminatedUnion('mode', [
 const field = z.object({ column, value: fieldValue }).strict();
 const row = z.number().int().min(0).max(postgresTableLimits.page - 1);
 const change = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('insert'), fields: z.array(field).max(postgresTableLimits.fields) }).strict(),
-  z.object({ kind: z.literal('update'), row, fields: z.array(field).min(1).max(postgresTableLimits.fields) }).strict(),
-  z.object({ kind: z.literal('delete'), row }).strict(),
+  z.object({ kind: z.literal('insert'), pageToken: token.optional(), fields: z.array(field).max(postgresTableLimits.fields) }).strict(),
+  z.object({ kind: z.literal('update'), pageToken: token.optional(), row, fields: z.array(field).min(1).max(postgresTableLimits.fields) }).strict(),
+  z.object({ kind: z.literal('delete'), pageToken: token.optional(), row }).strict(),
 ]);
 
-/** 预览限定一页、每个原行一次及有限值预算；实际提交只接收服务器签发的预览号。 */
+/** 预览限制原页数量、每页原行和整批值预算，跨页重复原行由引擎按身份复核。 */
 export const postgresTablePreviewSchema = target.extend({
   pageToken: token, changes: z.array(change).min(1).max(postgresTableLimits.changes),
 }).strict().superRefine((input, context) => {
   let size = 0;
-  const usedRows = new Set<number>();
+  const usedRows = new Set<string>();
+  const pages = new Set<string>();
   for (const item of input.changes) {
+    const source = item.pageToken ?? input.pageToken;
+    pages.add(source);
     if (item.kind !== 'insert') {
-      if (usedRows.has(item.row)) context.addIssue({ code: 'custom', message: '同一原行只允许一个草稿动作' });
-      usedRows.add(item.row);
+      const identity = source + ':' + item.row;
+      if (usedRows.has(identity)) context.addIssue({ code: 'custom', message: '同一原行只允许一个草稿动作' });
+      usedRows.add(identity);
     }
     if (item.kind === 'delete') continue;
     const keys = new Set<string>();
@@ -50,6 +56,7 @@ export const postgresTablePreviewSchema = target.extend({
       size += 32 + ('value' in field.value ? 4 * field.value.value.length : 0);
     }
   }
+  if (pages.size > postgresTableLimits.draftPages) context.addIssue({ code: 'custom', message: '草稿最多来自 16 个原页' });
   if (size > postgresTableLimits.draft) context.addIssue({ code: 'custom', message: '编辑草稿超过大小预算' });
 });
 export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token }).strict();
@@ -118,6 +125,7 @@ export interface PostgresTablePage {
   canImport?: true;
   columns: PostgresTableColumn[];
   rows: DataRow[];
+  rowKeys?: string[];
   capabilities: { insert: boolean; update: boolean; delete: boolean };
   hasNext: boolean;
   truncated: boolean;

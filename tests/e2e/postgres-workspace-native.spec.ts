@@ -287,12 +287,23 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     expect(importCalls).toBe(3);
     await mark('有表头和无表头 CSV 均显示样本，切换首行模式清除旧映射，确认后实际写入并刷新原表页');
 
+    await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('1');
+    await tableButton(postgresTableZh.refresh).click();
+    await expect(grid).not.toContainText('新增甲');
     await editRecord('原值', '原生整批更新');
+    await expect(tableButton(postgresTableZh.filter)).toBeDisabled();
     for (const note of ['新增甲', '新增乙', '窗口;CSV', '首行;无表头']) {
+      await tableButton(postgresTableZh.next).click();
       await grid.getByRole('gridcell', { name: note, exact: true }).click();
       await tableButton(postgresTableZh.remove).click();
     }
-    await expect(grid).toContainText('新增甲');
+    await expect(grid).toContainText('首行;无表头');
+    await tableButton(postgresTableZh.first).click();
+    await expect(grid).toContainText('原值');
+    await editRecord('原值', '原生整批更新');
+    await expect(gridTab.getByLabel(postgresTableZh.draft, { exact: true })).toContainText(postgresTableZh.changes(5));
+    await expect(grid).not.toContainText('原生整批更新');
+    await page.screenshot({ path: info.outputPath('PostgreSQL跨页草稿.png') });
     await page.screenshot({ path: info.outputPath('PostgreSQL表记录草稿.png') });
     await commit();
     await expect(grid).toContainText('原生整批更新');
@@ -301,7 +312,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await editRecord('原生整批更新', '原值');
     await commit();
     await expect(grid).toContainText('原值');
-    await mark('表页真实分页与筛选，预览前未写入，真实新增和整批更新删除，最终恢复原值');
+    await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('20');
+    await tableButton(postgresTableZh.refresh).click();
+    await mark('表页真实筛选和跨五页草稿，回到首页重编同一记录，统一提交更新与删除并恢复原值');
     // 同一表页查看原目录字段、约束和部分索引，并验证刷新。
     await tableButton(postgresStructureZh.open).click();
     const structure = page.getByRole('dialog', { name: postgresStructureZh.title, exact: true });
