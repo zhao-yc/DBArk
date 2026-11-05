@@ -19,6 +19,7 @@ import { PostgresTableWorkspace } from './tableWorkspace';
 import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
+import { PostgresColumnWorkspace } from './columnEdit';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { explainLimits } from '../../shared/explain';
@@ -51,6 +52,7 @@ type Input = Record<string, any>;
 export class PostgresEngine {
   private readonly completionReads = new Map<string, number>();
   private readonly creations = new PostgresCreateTableWorkspace();
+  private readonly columnEdits = new PostgresColumnWorkspace();
   private readonly tables = new PostgresTableWorkspace();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
@@ -69,7 +71,8 @@ export class PostgresEngine {
       input.dialect === 'postgresql' ||
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
-        (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
+        (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) ||
+          this.columnEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
       this.ownsTask(input.taskId)
@@ -232,6 +235,7 @@ export class PostgresEngine {
       }
       this.tables.clear(id);
       this.creations.clear(id);
+      this.columnEdits.clear(id);
       this.profiles.delete(id);
     } finally {
       this.closing.delete(id);
@@ -254,6 +258,7 @@ export class PostgresEngine {
     if (changed) {
       this.tables.clear(input.id);
       this.creations.clear(input.id);
+      this.columnEdits.clear(input.id);
       this.profiles.delete(input.id);
     }
   }
@@ -264,6 +269,7 @@ export class PostgresEngine {
         ...this.profiles.keys(),
         ...this.tables.connectionIds(),
         ...this.creations.connectionIds(),
+        ...this.columnEdits.connectionIds(),
         ...[...this.leases].map((l) => l.managed.profile.id),
         ...[...this.sessions.values()].map((s) => s.connectionId),
       ]))
@@ -470,6 +476,17 @@ export class PostgresEngine {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的PostgreSQL结构连接');
         return this.use(profile, input.database, connection => readPostgresStructure(connection, input.table));
+      }
+      case 'postgres.columnEdit.preview':
+      case 'postgres.columnEdit.apply': {
+        const profile = input.profile as PostgresConnectionProfile | undefined;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
+            !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 字段编辑来源');
+        const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
+          this.use(profile, input.database, action, false, false, writing);
+        return command === 'postgres.columnEdit.preview'
+          ? this.columnEdits.preview(input as Parameters<PostgresColumnWorkspace['preview']>[0], connect)
+          : this.columnEdits.apply(input as Parameters<PostgresColumnWorkspace['apply']>[0], connect);
       }
       case 'postgres.table.page':
       case 'postgres.table.apply': {

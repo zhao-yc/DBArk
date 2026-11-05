@@ -35,7 +35,7 @@ export async function postgresCreateSchemas(connection: PostgresConnection): Pro
 }
 
 /** 设置本次事务边界，只有内置类型能参与默认值校验与建表。 */
-async function start(connection: PostgresConnection, readOnly: boolean): Promise<void> {
+export async function startPostgresDdl(connection: PostgresConnection, readOnly: boolean): Promise<void> {
   await connection.query(readOnly ? 'BEGIN READ ONLY' : 'BEGIN', undefined, budget());
   for (const sql of [
     'SET LOCAL search_path = pg_catalog', "SET LOCAL statement_timeout = '15s'",
@@ -65,11 +65,11 @@ async function preflight(connection: PostgresConnection, input: PostgresCreateTa
 }
 
 /** 校验服务器真实类型转换，同时拒绝 varchar 显式转换可能造成的默认文字截断。 */
-async function validateDefaults(connection: PostgresConnection, plan: Plan, input: PostgresCreateTableInput): Promise<void> {
-  if (!plan.checks.length) return;
-  const values = plan.checks.map(field => field.value);
-  const expressions = plan.checks.map((field, index) => {
-    const arg = '$' + (index + 1), length = input.columns.find(column => column.name === field.name)?.length;
+export async function validatePostgresDefaults(connection: PostgresConnection, checks: { type: string; value: string; length?: number }[]): Promise<void> {
+  if (!checks.length) return;
+  const values = checks.map(field => field.value);
+  const expressions = checks.map((field, index) => {
+    const arg = '$' + (index + 1), length = field.length;
     const cast = '((' + arg + '::text)::' + field.type + ' IS NOT NULL)';
     return length === undefined ? cast : '(' + cast + ' AND pg_catalog.char_length(' + arg + '::text) <= ' + length + ')';
   });
@@ -112,9 +112,11 @@ export class PostgresCreateTableWorkspace {
       const draft = { connectionId, database, schema, table, columns, comment };
       const plan = postgresCreateTablePlan(draft);
       const schemaOid = await connect(async connection => {
-        await start(connection, true);
+        await startPostgresDdl(connection, true);
         const oid = await preflight(connection, draft);
-        await validateDefaults(connection, plan, draft);
+        await validatePostgresDefaults(connection, plan.checks.map(check => ({
+          ...check, length: draft.columns.find(column => column.name === check.name)?.length,
+        })));
         if ((await connection.query('COMMIT', undefined, budget())).postgresCommand !== 'COMMIT') throw Error('预览读取未完成');
         return oid;
       });
@@ -149,7 +151,7 @@ export class PostgresCreateTableWorkspace {
   private async execute(connection: PostgresConnection, prepared: Prepared): Promise<PostgresCreateTableOutcome> {
     let sent = false;
     try {
-      await start(connection, false);
+      await startPostgresDdl(connection, false);
       if (await preflight(connection, prepared.input) !== prepared.schemaOid) throw Error('原 schema 已被替换，请重新预览');
       for (const statement of prepared.plan.statements) {
         sent = true;

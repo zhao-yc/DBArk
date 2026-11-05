@@ -9,3 +9,14 @@
 .pg-structure-table tbody th { text-align: left; overflow-wrap: anywhere; }
 .pg-structure-table code, .pg-structure-comment { white-space: pre-wrap; overflow-wrap: anywhere; }
 .pg-structure-table td small { display: block; }
+
+/* 字段表单和预览共享原结构弹窗，长 SQL 可在预览区独立滚动。 */
+.pg-column-edit { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pg-column-edit h3, .pg-column-edit ol { margin: 0; }
+.pg-column-edit fieldset { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); }
+.pg-column-edit fieldset > button { align-self: flex-start; }
+.pg-column-edit-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.pg-column-edit-fields label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pg-column-edit-fields label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
+.pg-column-edit pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pg-column-edit-actions { display: flex; flex-wrap: wrap; gap: 6px; }

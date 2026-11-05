@@ -759,21 +759,21 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         !columnsMain.sharesDocumentOwner(session.postgres.owner, columns))
       throw Error('PostgreSQL执行计划的原窗口或会话已变化');
   }
-  if (command === 'postgres.createTable.schemas' || command === 'postgres.createTable.preview' || command === 'postgres.createTable.apply') {
+  if (command.startsWith('postgres.createTable.') || command.startsWith('postgres.columnEdit.')) {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document, connectionRevision = store.connectionRevision();
     let owner = postgresTableOwners.get(document);
     if (!owner) { owner = randomUUID(); postgresTableOwners.set(document, owner); }
-    if (shuttingDown) throw Error('客户端正在退出，不能开始 PostgreSQL 建表');
+    if (shuttingDown) throw Error('客户端正在退出，不能开始 PostgreSQL 结构操作');
     connectionConfig.assertAvailable(input.connectionId);
     const profile = store.resolveConnection(input.connectionId);
-    if (profile.dialect !== 'postgresql') throw Error('建表需要已保存的 PostgreSQL 连接');
+    if (profile.dialect !== 'postgresql') throw Error('结构操作需要已保存的 PostgreSQL 连接');
     const result = await broker.request(command, { ...input, profile, owner, connectionRevision });
     // 写入一旦发送，原事务回执必须交付，即使原文档已失效。
-    if (command !== 'postgres.createTable.apply') {
+    if (command !== 'postgres.createTable.apply' && command !== 'postgres.columnEdit.apply') {
       columnsMain.assertCapturedOwner(columns);
       connectionConfig.assertAvailable(input.connectionId);
-      if (shuttingDown || connectionRevision !== store.connectionRevision()) throw Error('PostgreSQL 建表来源已变化');
+      if (shuttingDown || connectionRevision !== store.connectionRevision()) throw Error('PostgreSQL 结构操作来源已变化');
     }
     return result;
   }
@@ -2084,7 +2084,8 @@ else {
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
-            payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.table.') ||
+            payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') ||
+            payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.table.') ||
             payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);

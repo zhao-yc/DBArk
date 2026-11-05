@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import type { PostgresStructureResult } from '../../src/shared/postgresStructure';
+import type { PostgresColumnChange } from '../../src/shared/postgresColumnEdit';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
 const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
@@ -89,6 +90,53 @@ describe.skipIf(!enabled)('PostgreSQL 实库结构快照', () => {
       await expect(structure('"结构.甲"."不存在"')).rejects.toThrow('关系不存在');
       await expect(structure('pg_catalog.pg_class')).rejects.toThrow('关系不存在');
       expect((await client.query(`SELECT count(*)::int n FROM ${target}`)).rows[0].n).toBe(1);
+      const scoped = { connectionId: id, database, table: target, profile, owner: '原结构文档', connectionRevision: 1 };
+      const field = { name: '扩"展', type: 'text', nullable: true, primary: false, unique: false, identity: 'none',
+        default: { mode: 'literal', value: "原值'; --" }, comment: '附加字段' } as const;
+      const rename = { kind: 'rename', from: 'note', name: '现注记' } as const;
+      const preview = (changes: PostgresColumnChange[], editStamp = result.editStamp) =>
+        engine.handle('postgres.columnEdit.preview', { ...scoped, changes, editStamp });
+      const apply = (token: string, owner = scoped.owner) => engine.handle('postgres.columnEdit.apply', { ...scoped, token, owner });
+      expect(result.editStamp).toMatch(/^[a-f0-9]{64}$/);
+      expect((await structure('"结构.甲"."range_child"')).editStamp).toBeUndefined();
+      const invalid = await preview([rename, { kind: 'add', field: { ...field, nullable: false, default: { mode: 'none' } } }]);
+      expect((await apply(invalid.token)).outcome).toBe('rolledBack');
+      expect((await structure(target)).editStamp).toBe(result.editStamp);
+      const stale = await preview([rename]);
+      await client.query(`BEGIN; LOCK TABLE ${target} IN SHARE MODE; COMMENT ON TABLE ${target} IS '并发修改'`);
+      const racing = apply(stale.token);
+      try {
+        await expect.poll(async () => (await client.query(
+          'SELECT count(*)::int AS n FROM pg_catalog.pg_locks WHERE relation = $1::regclass AND NOT granted', [target],
+        )).rows[0].n, { timeout: 3000 }).toBe(1);
+        await client.query('COMMIT');
+      } catch (reason) {
+        await client.query('ROLLBACK');
+        await racing;
+        throw reason;
+      }
+      expect(await racing).toMatchObject({ outcome: 'notSent', message: expect.stringContaining('加锁后') });
+      expect((await structure(target)).columns.some(column => column.name === 'note')).toBe(true);
+      const current = await structure(target);
+      const ready = await preview([rename, { kind: 'add', field }], current.editStamp);
+      expect(ready.statements[0]).toContain('RENAME COLUMN "note" TO "现注记"');
+      expect((await apply(ready.token, '另一个文档')).outcome).toBe('notSent');
+      expect((await structure(target)).editStamp).toBe(current.editStamp);
+      expect((await apply(ready.token)).outcome).toBe('committed');
+      expect((await apply(ready.token)).outcome).toBe('notSent');
+      const altered = await structure(target);
+      expect(altered.columns.find(column => column.name === '现注记')?.position).toBe(3);
+      expect(altered.columns.find(column => column.name === '扩"展')?.comment).toBe('附加字段');
+      expect((await client.query(`SELECT "现注记", "扩""展" FROM ${target}`)).rows).toEqual([{ 现注记: '原注记', '扩"展': "原值'; --" }]);
+      expect(altered.indexes.find(index => index.name === 'partial_note')?.definition).toContain('现注记');
+      const replacement = '"结构.甲"."同名替换"';
+      await client.query(`CREATE TABLE ${replacement} (id int)`);
+      const beforeReplacement = await structure(replacement);
+      const replacePlan = await engine.handle('postgres.columnEdit.preview', { ...scoped, table: replacement,
+        editStamp: beforeReplacement.editStamp, changes: [{ kind: 'rename', from: 'id', name: 'new_id' }] });
+      await client.query(`DROP TABLE ${replacement}; CREATE TABLE ${replacement} (id int)`);
+      expect((await engine.handle('postgres.columnEdit.apply', { ...scoped, table: replacement, token: replacePlan.token })).outcome).toBe('notSent');
+      expect((await structure(replacement)).columns.map(column => column.name)).toEqual(['id']);
     } finally {
       await engine.closeAll();
       await client.end();

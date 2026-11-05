@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { postgresCreateTableZh } from '../../src/renderer/locales/postgresCreateTable.zh-CN';
 import { postgresStructureZh } from '../../src/renderer/locales/postgresStructure.zh-CN';
+import { postgresColumnEditZh } from '../../src/renderer/locales/postgresColumnEdit.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
@@ -445,7 +446,26 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await tableButton(postgresStructureZh.open).click();
     await expect(structure.getByRole('table')).toContainText('窗口默认');
     await expect(structure.getByRole('table')).toContainText('窗口列注释');
+    // 新增和重命名同批预览，原结构在明确确认之前保持。
+    await structure.getByRole('button', { name: postgresColumnEditZh.open, exact: true }).click();
+    const fieldEdit = structure.getByRole('region', { name: postgresColumnEditZh.title });
+    await fieldEdit.getByLabel(postgresColumnEditZh.name, { exact: true }).fill('字段草稿');
+    await fieldEdit.getByLabel(postgresColumnEditZh.comment, { exact: true }).fill('结构编辑确认');
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
+    await fieldEdit.getByLabel(postgresColumnEditZh.operation, { exact: true }).selectOption('rename');
+    await fieldEdit.getByLabel(postgresColumnEditZh.from, { exact: true }).selectOption('字段草稿');
+    await fieldEdit.getByLabel(postgresColumnEditZh.name, { exact: true }).fill('字段确认');
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.stage }).click();
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.preview, exact: true }).click();
+    await expect(fieldEdit.getByLabel(postgresColumnEditZh.previewTitle)).toContainText('RENAME COLUMN "字段草稿" TO "字段确认"');
+    await expect(gridTab.getByRole('columnheader', { name: '字段确认', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('PostgreSQL字段编辑预览.png') });
+    await fieldEdit.getByRole('button', { name: postgresColumnEditZh.apply, exact: true }).click();
+    await expect(structure.getByRole('table')).toContainText('字段确认');
+    await expect(structure.getByRole('table')).toContainText('结构编辑确认');
     await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
+    await expect(gridTab.getByRole('columnheader').filter({ hasText: '字段确认' })).toBeVisible();
+    await mark('字段新增与重命名按同批 SQL 确认，实际结构和原表页刷新到新字段');
     await page.locator('.tab-strip .tab-close').click();
     await mark('数据库右键建表经过真实 SQL 预览和确认，新表目录自动刷新，实际结构可读');
     const offlineBefore = await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}),

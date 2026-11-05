@@ -5,6 +5,8 @@ import { errorMessage, invoke } from '../lib';
 import { postgresStructureZh as text } from '../locales/postgresStructure.zh-CN';
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
+import { PostgresColumnEditPanel } from './PostgresColumnEditPanel';
+import { postgresColumnEditZh } from '../locales/postgresColumnEdit.zh-CN';
 import { Empty, ErrorBox, Modal, Spinner } from './ui';
 import './PostgresStructureDialog.css';
 
@@ -19,11 +21,15 @@ function CatalogTable({ headers, children, empty }: { headers: readonly string[]
 }
 
 /** 在原窗口、连接修订和关系目标下读取结构，刷新、关闭及切换来源废弃迟到回包。 */
-export function PostgresStructureDialog({ target, onClose }: { target: PostgresStructureInput; onClose(): void }) {
+export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdited }: {
+  target: PostgresStructureInput; onClose(): void; onDirtyChange(value: boolean): void;
+  onEdited(target: PostgresStructureInput, message: string, unknown: boolean, version: number): void;
+}) {
   const version = useWorkspace(state => state.connectionVersions[target.connectionId] ?? 0);
   const dialect = useWorkspace(state => state.connections.find(profile => profile.id === target.connectionId)?.dialect);
   const [section, setSection] = useState<Section>('columns');
   const [attempt, setAttempt] = useState(0);
+  const [editing, setEditing] = useState(false);
   const [view, setView] = useState<{ key: string; output?: PostgresStructureResult; error?: string }>();
   const owner = useRef<object | undefined>(undefined);
   const { connectionId, database, table } = target;
@@ -31,6 +37,7 @@ export function PostgresStructureDialog({ target, onClose }: { target: PostgresS
   const currentView = view?.key === scope && dialect === 'postgresql' ? view : undefined;
   const output = currentView?.output;
   const busy = !currentView && dialect === 'postgresql';
+  useEffect(() => { setEditing(false); }, [scope]);
 
   useEffect(() => {
     if (dialect !== 'postgresql') return;
@@ -62,12 +69,17 @@ export function PostgresStructureDialog({ target, onClose }: { target: PostgresS
   }
 
   const sections: Section[] = output?.viewDefinition ? ['columns', 'constraints', 'indexes', 'definition'] : ['columns', 'constraints', 'indexes'];
-  return <Modal title={text.title} wide onClose={onClose}>
+  return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
       <div className="pg-structure-caption"><strong>{table}</strong><span>{database}</span>{output && <span>{text.kinds[output.kind]}</span>}</div>
       {busy && <Spinner text={text.loading}/>}
       <ErrorBox message={dialect !== 'postgresql' ? text.missing : currentView?.error ?? ''}/>
-      {output && <>
+      {editing && output?.editStamp ? <PostgresColumnEditPanel target={target} original={output} version={version}
+        onDirtyChange={onDirtyChange} onClose={() => { setEditing(false); setAttempt(value => value + 1); }}
+        onResult={(message, unknown) => {
+          onEdited(target, message, unknown, version);
+          if (!unknown) { setEditing(false); setAttempt(value => value + 1); }
+        }}/> : output && <>
         {output.comment !== null && <p className="pg-structure-comment">{text.comment}　{output.comment}</p>}
         {output.partitionKey && <p>{text.partitionKey}　<code>{output.partitionKey}</code></p>}
         {output.partitionBound && <p>{text.partitionBound}　<code>{output.partitionBound}</code></p>}
@@ -105,9 +117,10 @@ export function PostgresStructureDialog({ target, onClose }: { target: PostgresS
       </>}
     </div>
     <footer className="modal-footer">
-      <button disabled={busy || dialect !== 'postgresql'} onClick={() => { owner.current = undefined; setAttempt(value => value + 1); }}>{text.refresh}</button>
+      <button disabled={editing || busy || dialect !== 'postgresql'} onClick={() => { owner.current = undefined; setAttempt(value => value + 1); }}>{text.refresh}</button>
+      {output?.editStamp && !editing && <button onClick={() => setEditing(true)}>{postgresColumnEditZh.open}</button>}
       {section === 'definition' && output?.viewDefinition && <button onClick={openDraft}>{text.openDraft}</button>}
-      <span className="grow"/><button onClick={onClose}>{text.close}</button>
+      <span className="grow"/><button disabled={editing} onClick={onClose}>{text.close}</button>
     </footer>
   </Modal>;
 }

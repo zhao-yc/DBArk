@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { postgresRelationName } from '../../shared/postgresSql';
 import { postgresStructureResultSchema, type PostgresStructureResult } from '../../shared/postgresStructure';
 import type { PostgresConnection } from './connection';
@@ -6,7 +7,10 @@ import type { PostgresConnection } from './connection';
 const structureSql = `
 WITH target AS MATERIALIZED (
   SELECT c.oid, c.relkind, c.relname, c.relispartition, c.relpartbound,
-         c.relrowsecurity, c.relforcerowsecurity, n.nspname
+         c.relrowsecurity, c.relforcerowsecurity, n.nspname,
+         c.relkind = 'r' AND c.relpersistence IN ('p', 'u') AND NOT c.relispartition
+           AND pg_catalog.pg_has_role(c.relowner, 'USAGE')
+           AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid) AS editable
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname::text = $1 AND c.relname::text = $2
@@ -77,29 +81,38 @@ SELECT pg_catalog.jsonb_build_object(
     WHERE x.indrelid = t.oid
     ORDER BY i.relname, i.oid LIMIT 2001
   ) ix), '[]'::jsonb)
-)
+), t.oid::text, t.editable
 FROM target t
 `;
 
 /** 用独立只读会话加载目录，服务端反编译文本保留实际表达式及必要的 schema 限定。 */
 export async function readPostgresStructure(connection: PostgresConnection, table: string): Promise<PostgresStructureResult> {
-  const { schema, name } = postgresRelationName(table);
   const small = { rows: 2, bytes: 8192 };
   await connection.query('BEGIN READ ONLY', undefined, { ...small });
   await connection.query("SET LOCAL statement_timeout = '15s'", undefined, { ...small });
   await connection.query("SET LOCAL lock_timeout = '5s'", undefined, { ...small });
   await connection.query("SET LOCAL idle_in_transaction_session_timeout = '20s'", undefined, { ...small });
   await connection.query('SET LOCAL search_path = pg_catalog', undefined, { ...small });
+  const { output } = await readPostgresStructureFacts(connection, table);
+  const committed = await connection.query('COMMIT', undefined, { ...small });
+  if (committed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL结构读取事务未完成');
+  return output;
+}
+
+/** 在调用者的原事务读取完整目录和关系 OID，生成可复核的结构摘要。 */
+export async function readPostgresStructureFacts(connection: PostgresConnection, table: string) {
+  const { schema, name } = postgresRelationName(table);
   const result = await connection.query(structureSql, [schema, name], { rows: 2, bytes: 4 * 1024 * 1024 });
   if (result.truncated) throw Error('PostgreSQL结构超过显示预算，无法完整读取');
-  if (result.rows.length !== 1 || typeof result.rows[0].c0 !== 'string') {
+  if (result.rows.length !== 1 || typeof result.rows[0].c0 !== 'string' || typeof result.rows[0].c1 !== 'string') {
     throw Error('PostgreSQL关系不存在、已改名或没有读取结构的权限');
   }
   const parsed = postgresStructureResultSchema.safeParse(JSON.parse(result.rows[0].c0));
   if (!parsed.success || parsed.data.database !== connection.database || parsed.data.schema !== schema || parsed.data.name !== name) {
     throw Error('PostgreSQL结构回包不完整或目标已经变化');
   }
-  const committed = await connection.query('COMMIT', undefined, { ...small });
-  if (committed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL结构读取事务未完成');
-  return parsed.data;
+  const { c0: raw, c1: oid, c2: editable } = result.rows[0] as { c0: string; c1: string; c2: string };
+  const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ?
+    { editStamp: createHash('sha256').update(oid + '\0' + raw).digest('hex') } : {}) };
+  return { output, oid };
 }

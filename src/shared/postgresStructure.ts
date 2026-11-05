@@ -57,5 +57,6 @@ export const postgresStructureResultSchema = z.object({
   columns: z.array(structureColumn).max(2000),
   constraints: z.array(structureConstraint).max(2000),
   indexes: z.array(structureIndex).max(2000),
+  editStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 export type PostgresStructureResult = z.infer<typeof postgresStructureResultSchema>;
