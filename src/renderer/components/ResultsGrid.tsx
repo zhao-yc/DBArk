@@ -3,7 +3,7 @@ import { readGridRowHeight, type GridRowHeight } from '../../shared/gridRowHeigh
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DataGrid, SelectColumn, type DataGridHandle, type ColumnWidths, type Column, type CellKeyDownArgs, type CellKeyboardEvent } from 'react-data-grid';
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../../shared/contracts';
-import type { QueryResultSortRule } from '../queryResultSort';
+import type { QueryResultSortRule, SortDialect } from '../queryResultSort';
 import { cellPreview, errorMessage, ownCell } from '../lib';
 import { BinaryCellViewer } from './BinaryCellViewer';
 import { Modal } from './ui';
@@ -30,7 +30,7 @@ import { queryResultStatisticsZh as statisticsText } from '../locales/queryResul
 export function isResultBinaryCell(value: CellValue | undefined): boolean { return isBinaryCell(value); }
 
 /** 任意查询结果只读；支持单格或勾选记录复制，始终保留原始值用于剪贴板。 */
-export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult;onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void }) {
+export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight, rowJump = false, onColumnWidthsChange, onColumnResize, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, binarySourceIdentity, binaryIsCurrent, binaryFileActions = true, sqliteSource, filterDialect, onFilterCell, onFilterSelected, onHistoryTravel, onStatistics, onActiveCellChange }: { columns: ResultColumn[]; rows: DataRow[]; frozenKeys?: readonly string[]; columnWidths?: ReadonlyMap<string, number>; rowJump?: boolean; rowHeight?: GridRowHeight; onColumnWidthsChange?(widths: ColumnWidths): void; onColumnResize?(key: string, width: number): void; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean; binarySourceIdentity?: readonly unknown[]; binaryIsCurrent?(): boolean; binaryFileActions?: boolean;sqliteSource?: QueryResult; filterDialect?: SortDialect; onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void;onStatistics?(column:ResultColumn,indices:ReadonlySet<number>):void; onActiveCellChange?(cell: QueryResultCopyCell | undefined): void }) {
   const height = readGridRowHeight(rowHeight);
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
@@ -47,7 +47,7 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   })();
   const [gridRevision,setGridRevision]=useState(0), gridRevisionRef=useRef(0);
   const filterCapable=!!(onFilterCell||onFilterSelected||onStatistics)&&!onActiveRowChange;
-  const scope = useMemo(() => ({ columns, rows, selectionScope,filterCapable,sqliteSource }), [columns, rows, selectionScope,gridRevision,filterCapable,frozenCount,sqliteSource]);
+  const scope = useMemo(() => ({ columns, rows, selectionScope,filterCapable,sqliteSource,filterDialect }), [columns, rows, selectionScope,gridRevision,filterCapable,frozenCount,sqliteSource,filterDialect]);
   const currentScope = useRef<typeof scope|null>(scope); currentScope.current = scope;
   const alive=useRef(true);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;currentScope.current=null;};},[]);
@@ -88,7 +88,7 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
   function captureSelectedFilter(cell:typeof copyCellRef.current,indices:ReadonlySet<number>):void{
     selectedFilterRef.current=undefined;selectedFilterErrorRef.current='';
     if(!onFilterSelected||!cell||cell.scope!==scope||!indices.size)return;
-    try{selectedFilterRef.current={scope,revision:copyRevisionRef.current,capture:captureQueryResultSelectedFilter(columns,rows,cell.cell,indices,sqliteSource)};}
+    try{selectedFilterRef.current={scope,revision:copyRevisionRef.current,capture:captureQueryResultSelectedFilter(columns,rows,cell.cell,indices,sqliteSource,filterDialect)};}
     catch(reason){selectedFilterErrorRef.current=errorMessage(reason);}
   }
   /** 同坐标重选不一定通知活动位置；显式点击仍须重新核验当前行列。 */
@@ -97,7 +97,7 @@ export function ResultsGrid({ columns, rows, frozenKeys, columnWidths, rowHeight
     copyRevisionRef.current++;
     const next=row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row && (!column || columns.some(item => item.key === column.key)) ? { scope, cell: { index: rowIdx, row, column: columns.find(item => item.key === column?.key) } } : undefined;
     filterCellRef.current=undefined;
-    if(onFilterCell&&next)try{filterCellRef.current={scope,capture:captureQueryResultCellFilter(columns,rows,next.cell,sqliteSource)};}catch{/* 不支持的原值仅禁用快捷填入，不影响原复制或查看。 */}
+    if(onFilterCell&&next)try{filterCellRef.current={scope,capture:captureQueryResultCellFilter(columns,rows,next.cell,sqliteSource,filterDialect)};}catch{/* 不支持的原值仅禁用快捷填入，不影响原复制或查看。 */}
     copyCellRef.current=next;
     onActiveCellChange?.(next?.cell);
     captureSelectedFilter(next,selectedRowsRef.current?.scope===scope?selectedRowsRef.current.indices:new Set());

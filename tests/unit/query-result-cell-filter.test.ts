@@ -18,6 +18,19 @@ describe('当前单元格筛选的精确原值捕获',()=>{
   it.each(['TEXT','BIGINT','GEOMETRY'])('%s的NULL单独映射为NULL／非NULL，不写成字符串NULL',type=>{
     const f=fixture(null,type),capture=f.capture();expect(queryResultCellFilterRule(capture,'eq')).toEqual({column:'k',operator:'null',value:''});expect(queryResultCellFilterRule(capture,'ne')).toEqual({column:'k',operator:'notNull',value:''});
   });
+  it.each([['BOOLEAN', 't'], ['REAL', '-Infinity'], ['DOUBLE PRECISION', '1.2e+40'], ['NUMERIC', 'NaN']])(
+    'PostgreSQL %s 使用声明类型的原文构造等值筛选', (type, value) => {
+      const f = fixture(value, type);
+      const capture = captureQueryResultCellFilter(f.columns, f.rows, f.cell, undefined, 'postgresql');
+      const controller = new QueryResultFilter('postgresql');
+      const source = { columns: f.columns, rows: f.rows, elapsedMs: 0, truncated: false, statement: '' };
+      const binding = controller.bind(source, [])!;
+      expect(queryResultCellFilterRule(capture, 'eq').value).toBe(value);
+      expect(controller.applyExpression(binding, controller.view(binding)!, {
+        mode: 'AND', children: [queryResultCellFilterRule(capture, 'eq')],
+      }).sourceIndices).toEqual([0]);
+    },
+  );
   it.each([['BIGINT',9007199254740992],['TEXT',true],['GEOMETRY','原值'],['DECIMAL','坏值'],['DOUBLE',Infinity],['BLOB',{type:'binary',base64:'QQ=='}]] as [string,CellValue][])('%s不猜测不可靠或字节原值', (type,value)=>{
     const f=fixture(value,type);expect(()=>f.capture()).toThrow();
   });

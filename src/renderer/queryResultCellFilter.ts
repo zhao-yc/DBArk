@@ -1,7 +1,7 @@
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
 import type { QueryResultCopyCell } from './queryResultHeaderCopy';
 import { queryResultFilterLimits, queryResultFilterOperators, type QueryResultFilterGroup, type QueryResultFilterRule } from './queryResultFilter';
-import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultFilterLiteral } from './queryResultSort';
+import { compareQueryResultFilterKeys, queryResultFilterKey, queryResultFilterLiteral, type SortDialect } from './queryResultSort';
 import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
 import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
@@ -10,7 +10,7 @@ export type CellFilterOperator='eq'|'ne';
 export interface QueryResultCellFilterCapture {readonly cell:Readonly<QueryResultCopyCell>;readonly value:CellValue;readonly key:string;readonly name:string;readonly type:string;readonly literal:string;readonly sqliteType?:SqliteResultFilterType;}
 const sqliteBindings=new WeakMap<QueryResultCellFilterCapture,{source?:SqliteResultFilterSource;columns:readonly ResultColumn[];rows:readonly DataRow[];invalid:boolean}>();
 /** 只捕获当前可见原格；标量按声明类型往返核对，不能截断精确数值或把字节转成文本。 */
-export function captureQueryResultCellFilter(columns:readonly ResultColumn[],rows:readonly DataRow[],cell:QueryResultCopyCell|undefined,sqliteSource?:QueryResult):QueryResultCellFilterCapture{
+export function captureQueryResultCellFilter(columns:readonly ResultColumn[],rows:readonly DataRow[],cell:QueryResultCopyCell|undefined,sqliteSource?:QueryResult,dialect?:SortDialect):QueryResultCellFilterCapture{
   const column=cell?.column;
   if(!cell||!column||!Number.isSafeInteger(cell.index)||cell.index<0||rows[cell.index]!==cell.row||!columns.includes(column)||typeof column.key!=='string'||!column.key||column.key.length>4096||typeof column.name!=='string'||typeof column.type!=='string')throw Error(text.cellUnavailable);
   const field=Object.getOwnPropertyDescriptor(cell.row,column.key);
@@ -24,10 +24,11 @@ export function captureQueryResultCellFilter(columns:readonly ResultColumn[],row
     const capture:QueryResultCellFilterCapture=Object.freeze({cell:Object.freeze({...cell}),value,key:column.key,name:column.name,type:column.type,literal:typed.literal,...(typed.sqliteType?{sqliteType:typed.sqliteType}:{})});
     sqliteBindings.set(capture,{source,columns,rows,invalid:false});return capture;
   }
-  if(value!==null&&(typeof value!=='string'&&typeof value!=='number'||!queryResultFilterOperators(column).includes('eq')))throw Error(text.cellUnavailable);
+  if(value!==null&&(typeof value!=='string'&&typeof value!=='number'||!queryResultFilterOperators(column,undefined,dialect).includes('eq')))throw Error(text.cellUnavailable);
   const literal=value===null?'':String(value);
   if(literal.length>queryResultFilterLimits.valueUnits)throw Error(text.budget);
-  if(value!==null&&compareQueryResultFilterKeys(queryResultFilterKey(column,value),queryResultFilterKey(column,queryResultFilterLiteral(column,literal)))!==0)throw Error(text.value);
+  // 使用与筛选控制器相同的方言，保留 PostgreSQL 数值特殊值和布尔原文。
+  if(value!==null&&compareQueryResultFilterKeys(queryResultFilterKey(column,value,dialect),queryResultFilterKey(column,queryResultFilterLiteral(column,literal,dialect),dialect))!==0)throw Error(text.value);
   return Object.freeze({cell:Object.freeze({...cell}),value,key:column.key,name:column.name,type:column.type,literal});
 }
 /** 捕获后原格或元数据漂移即拒绝；父级另核结果、工作区及模态租约。 */

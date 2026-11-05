@@ -234,6 +234,8 @@ PostgreSQL 查询结果可点击支持排序的列头切换升序、降序和原
 
 在 PostgreSQL 查询结果区点「筛选已返回结果」，可以组合条件、从结果选值或手动填写比较值。应用和清除筛选都会保留当前排序。导出按筛选后的显示范围和顺序写入。详见[PostgreSQL 查询结果筛选](development/postgres-query-result-filter-20261105.md)。
 
+选中单元格后，可点「追加等值条件」或「追加排除条件」。要用多个值，先勾选行，再点选目标列中的一个单元格，点击「勾选值加入筛选」。检查草稿后点击「应用筛选」。详见[PostgreSQL 查询结果快捷筛选](development/postgres-query-shortcut-filter-20261105.md)。
+
 点「管理结果列」可搜索、隐藏、重排和冻结结果列，也可调整列宽和行高。复制及导出使用当前可见列和顺序。隐藏用于筛选或排序的列前，请先移除该列的规则。切换结果集或执行新查询会恢复默认布局。详见[PostgreSQL 查询结果列管理](development/postgres-query-result-columns-20261105.md)。
 
 在 PostgreSQL 结果网格点选一个数据单元格，再点「行详情」，可按当前筛选和排序后的顺序翻行。侧栏可搜索原字段，切换字段列表、记录树和整行只读 JSON。完整记录包含隐藏列和同名列。详见[PostgreSQL 查询结果行详情](development/postgres-query-row-details-20261105.md)。

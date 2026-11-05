@@ -46,6 +46,10 @@
 .postgres-result-actions > select {
   max-width: 100%;
 }
+/* 独立筛选窗口可展开更多条件，便于同时审阅候选列表和 NULL 子条件。 */
+.postgres-query .modal-content .query-result-filter-conditions {
+  max-height: min(48vh, 420px);
+}
 .postgres-results > .query-result-with-details {
   flex: 1;
   height: auto;

@@ -22,6 +22,7 @@ import { decodePlanSnapshot } from '../../src/shared/explainSnapshot';
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
@@ -535,6 +536,55 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(amountGrid.getByRole('row').nth(1)).toContainText('不是数字');
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeSort);
     await mark('真实 NUMERIC 列头排序和多列草稿，复核精度、NULL 位置、并列次键和恢复原顺序');
+
+    // 从网格取完整 NUMERIC 原文，取消等值草稿，再应用排除条件与含 NULL 的勾选条件。
+    const shortcut = page.getByRole('dialog', { name: filterText.title, exact: true });
+    const shortcutOperator = (index: number) => shortcut.getByLabel(filterText.operator + ' ' + index, { exact: true });
+    const applyShortcut = shortcut.getByRole('button', { name: filterText.apply, exact: true });
+    const exactAmount = '1.00000000000000000002';
+    const exactCell = amountGrid.getByRole('gridcell', { name: exactAmount, exact: true });
+    await expect(button(filterText.cellEquals)).toBeDisabled();
+    await exactCell.click();
+    await button(filterText.cellEquals).click();
+    await expect(shortcutOperator(1)).toHaveValue('eq');
+    await expect(shortcut.getByLabel(filterText.input + ' 1', { exact: true })).toHaveValue(exactAmount);
+    await shortcut.getByRole('button', { name: filterText.cancel, exact: true }).click();
+    await expect(amountGrid.getByRole('row')).toHaveCount(6);
+    await exactCell.click();
+    await button(filterText.cellNotEquals).click();
+    await expect(shortcutOperator(1)).toHaveValue('ne');
+    await applyShortcut.click();
+    await expect(tab().getByText(filterText.counts(5, 3), { exact: true })).toBeVisible();
+    await expect(amountGrid).not.toContainText('高精度较大');
+    await expect(amountGrid).not.toContainText('空值');
+    await button(filterText.clear).click();
+
+    for (const label of ['不是数字', '空值']) {
+      await amountGrid.getByRole('row').filter({
+        has: page.getByRole('gridcell', { name: label, exact: true }),
+      }).getByRole('checkbox').check();
+    }
+    const nanCell = amountGrid.getByRole('gridcell', { name: 'NaN', exact: true });
+    await nanCell.click();
+    await button(selectedFilterText.open).click();
+    await expect(shortcut.getByLabel(filterText.groupMode('1'), { exact: true })).toHaveValue('OR');
+    await expect(shortcutOperator(1)).toHaveValue('in');
+    await expect(shortcut.getByLabel(filterText.member(1, 1), { exact: true })).toHaveValue('NaN');
+    await expect(shortcutOperator(2)).toHaveValue('null');
+    await page.screenshot({ path: info.outputPath('PostgreSQL查询结果快捷筛选.png') });
+    await applyShortcut.click();
+    await expect(tab().getByText(filterText.counts(5, 2), { exact: true })).toBeVisible();
+    await expect(amountGrid).toContainText('不是数字');
+    await expect(amountGrid).toContainText('空值');
+    await nanCell.click();
+    await button(filterText.cellEquals).click();
+    await expect(shortcut.getByLabel(filterText.groupMode('1'), { exact: true })).toHaveValue('OR');
+    await expect(shortcutOperator(3)).toHaveValue('eq');
+    await applyShortcut.click();
+    await expect(tab().getByText(filterText.counts(5, 1), { exact: true })).toBeVisible();
+    await expect(amountGrid).not.toContainText('空值');
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeSort);
+    await mark('快捷筛选保留 NUMERIC 原值，取消草稿不改结果，NaN 与 NULL 勾选和后续 AND 追加均通过原生窗口');
 
     // 查询带可观测的序列推进，导出三种文件后复核只执行了原查询一次。
     await button(postgresZh.begin).click();

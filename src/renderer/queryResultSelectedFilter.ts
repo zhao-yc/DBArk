@@ -6,6 +6,7 @@ import { queryResultSelectedFilterZh as text } from './locales/queryResultSelect
 import { queryResultFilterZh } from './locales/queryResultFilter.zh-CN';
 import { captureSqliteResultFilterSource, type SqliteResultFilterSource } from './sqliteResultFilterSource';
 import type { SqliteResultFilterType } from '../shared/sqliteResultStorage';
+import type { SortDialect } from './queryResultSort';
 
 export interface QueryResultSelectedFilterCapture {
   readonly cell: Readonly<QueryResultCopyCell>;
@@ -64,7 +65,7 @@ function metadata(column: ResultColumn): ResultColumn {
 }
 
 /** 勾选决定候选集合，当前格只指定列；逐原格复用现有类型往返，不读剪贴板或截断部分值。 */
-export function captureQueryResultSelectedFilter(columns: readonly ResultColumn[], rows: readonly DataRow[], cell: QueryResultCopyCell | undefined, indices: ReadonlySet<number>, sqliteSource?: QueryResult): QueryResultSelectedFilterCapture {
+export function captureQueryResultSelectedFilter(columns: readonly ResultColumn[], rows: readonly DataRow[], cell: QueryResultCopyCell | undefined, indices: ReadonlySet<number>, sqliteSource?: QueryResult, dialect?: SortDialect): QueryResultSelectedFilterCapture {
   const columnRefs = array(columns, queryResultFilterLimits.columns, 1), rowRefs = array(rows, queryResultFilterLimits.rows, 1);
   const stamp = columnRefs.map(metadata);
   if (new Set(stamp.map(column => column.key)).size !== stamp.length || new Set(rowRefs).size !== rowRefs.length || rowRefs.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw Error(text.unavailable);
@@ -81,7 +82,7 @@ export function captureQueryResultSelectedFilter(columns: readonly ResultColumn[
     // 先核原格自有数据描述符；现有捕获器仅面对可信元数据副本及真实原行，不会读活动格值。
     const value = own(selectedRow, admitted.key) as CellValue;
     if (sqlite && !source && value !== null) throw Error(queryResultFilterZh.sqliteUnknown);
-    const captured = sqlite ? source?.literal(selectedIndex, admitted.key) ?? { value, literal: '' } : captureQueryResultCellFilter([admitted], rowRefs, { index: selectedIndex, row: selectedRow, column: admitted });
+    const captured = sqlite ? source?.literal(selectedIndex, admitted.key) ?? { value, literal: '' } : captureQueryResultCellFilter([admitted], rowRefs, { index: selectedIndex, row: selectedRow, column: admitted }, undefined, dialect);
     if (!Object.is(value, captured.value)) throw Error(text.stale);
     selectedValues.push(value); units += captured.literal.length;
     if (units > queryResultFilterLimits.units) throw Error(text.budget);

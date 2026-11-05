@@ -16,7 +16,10 @@ import { QueryRowDetails, type QueryRowDetailsBinding, type QueryRowDetailsView 
 import { queryRowDetailsZh as detailText } from '../locales/queryRowDetails.zh-CN';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
-import { QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterView } from '../queryResultFilter';
+import { appendQueryResultFilterNode, QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterRule, type QueryResultFilterView } from '../queryResultFilter';
+import { captureQueryResultCellFilter, queryResultCellFilterNode, type CellFilterOperator } from '../queryResultCellFilter';
+import { currentQueryResultSelectedFilter, queryResultSelectedFilterNode, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
+import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import { prepareQueryResultOrganization } from '../queryResultHistory';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
@@ -71,7 +74,7 @@ interface AnalyzeOwner {
   version: number;
 }
 interface SortDraft { binding: QueryResultSortBinding; view: QueryResultSortView; }
-interface FilterDraft { binding: QueryResultFilterBinding; view: QueryResultFilterView; sortView: QueryResultSortView; }
+interface FilterDraft { binding: QueryResultFilterBinding; view: QueryResultFilterView; sortView: QueryResultSortView; seed?: QueryResultFilterGroup; }
 interface ColumnDraft { binding: ResultSelectionBinding; owner: string; initial: QueryResultColumnLayout; }
 interface ResultLayout { source: QueryResult; layout: QueryResultColumnLayout; columns: ResultColumn[]; }
 /** PostgreSQL查询复用原编辑器、结果网格、文件来源及保存查询；驱动任务和事务明确独立。 */
@@ -713,6 +716,33 @@ export function PostgresQueryTab({
       resultFilter.view(filterBinding) === filterView && resultSorter.view(sortBinding) === sortView;
   }
 
+  /** 普通入口和快捷入口都打开同一草稿，追加条件与当前生效表达式分开保存。 */
+  function openResultFilter(node?: QueryResultFilterRule | QueryResultFilterGroup) {
+    if (!filterBinding || !filterView || !sortView || !filterCurrent() ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const seed = node && appendQueryResultFilterNode(filterView.expression, node);
+    const draft = { binding: filterBinding, view: filterView, sortView, seed };
+    filterDraftRef.current = draft;
+    setFilterDraft(draft);
+  }
+
+  /** 重新核对当前可见列和显示行，从原格填入等值或排除条件。 */
+  function openCellFilter(cell: QueryResultCopyCell, operator: CellFilterOperator) {
+    if (!resultCurrent() || !binding) return;
+    try {
+      const capture = captureQueryResultCellFilter(binding.visibleColumns, binding.rows, cell, undefined, 'postgresql');
+      openResultFilter(queryResultCellFilterNode(capture, operator));
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 只接受当前网格与导出选择共同认可的勾选位置，以活动列原值构造审核草稿。 */
+  function openSelectedFilter(capture: QueryResultSelectedFilterCapture) {
+    if (!resultCurrent() || !binding || !resultSelection.matchesIndices(binding, capture.indices) ||
+        !currentQueryResultSelectedFilter(capture, binding.visibleColumns, binding.rows)) return;
+    try { openResultFilter(queryResultSelectedFilterNode(capture)); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+
   /** 只关闭自己打开的草稿。 */
   function closeResultFilter(draft: FilterDraft) {
     if (filterDraftRef.current !== draft) return;
@@ -956,13 +986,7 @@ export function PostgresQueryTab({
               <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
                 title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
               <button disabled={locked || !filterBinding || !filterView || !sortView}
-                onClick={() => {
-                  if (!filterBinding || !filterView || !sortView || !filterCurrent() ||
-                      document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
-                  const draft = { binding: filterBinding, view: filterView, sortView };
-                  filterDraftRef.current = draft;
-                  setFilterDraft(draft);
-                }}>{filterText.open}</button>
+                onClick={() => openResultFilter()}>{filterText.open}</button>
               {!!filterView?.rules.length && <>
                 <button disabled={locked} onClick={() => applyResultFilter({ mode: 'AND', children: [] })}>{filterText.clear}</button>
                 <span role="status">{filterText.counts(resultSource!.rows.length, dataResult.rows.length)}</span>
@@ -989,6 +1013,9 @@ export function PostgresQueryTab({
                   frozenKeys={frozenKeys} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
                   isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
                   onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
+                  filterDialect="postgresql"
+                  onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
+                  onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
                   sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons}
                   onSortChange={sortView ? rules => applyResultSort(rules) : undefined} />
               </div>
@@ -1015,7 +1042,7 @@ export function PostgresQueryTab({
         event.stopPropagation();
         closeResultFilter(filterDraft);
       }}>
-        <div className="modal-content"><QueryResultFilterPanel binding={filterDraft.binding} initial={filterDraft.view}
+        <div className="modal-content"><QueryResultFilterPanel binding={filterDraft.binding} initial={filterDraft.view} seed={filterDraft.seed}
           isCurrent={() => filterCurrent(filterDraft)} onApply={expression => applyResultFilter(expression, filterDraft)}
           onClose={() => closeResultFilter(filterDraft)} /><ErrorBox message={filterError} /></div>
       </Modal>}
