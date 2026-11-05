@@ -214,6 +214,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 在 PostgreSQL 普通表选中起始格后按 `Ctrl/⌘+V` 可覆盖本页记录，也可从工具栏「粘贴新增记录」追加多行。两种[网格粘贴](development/postgres-grid-paste-20261106.md)都会先暂存，确认整批后写入。
 
+在 PostgreSQL 表页按 `Ctrl/⌘+F` 可[查找当前页的数据、字段名或 SQL NULL](development/postgres-table-find-replace-20261106.md)。可更新的普通表也可预览替换单处或全部文字匹配，先加入草稿，再走整批 SQL 预览与提交。
+
 在 PostgreSQL 表或视图的记录网格右键单元格，或聚焦后按 `Shift+F10`，可以[按此值筛选或排除此值](development/postgres-table-cell-filter-20261106.md)。检查带入的列、操作符和原值，点击「添加条件」，再点击「应用高级筛选」。
 
 在同一入口可修改已有字段的数据类型、默认值、空值约束和注释，或删除字段。删除在 SQL 预览后需额外确认，本表内引用该字段的索引和约束可能随之移除。详见[已有字段属性与删除](development/postgres-column-alter-20261105.md)。

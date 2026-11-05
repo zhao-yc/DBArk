@@ -34,6 +34,19 @@
 .postgres-table-tab .table-preferences-display-controls input[type="search"] { width: min(200px, 55vw); }
 .pg-table-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pg-table-grid .results-grid { flex: 1; }
+.pg-find-host { display: contents; }
+.pg-table-find { flex: none; max-height: 50%; overflow: auto; border-bottom: 1px solid var(--line-soft); }
+.pg-table-find:has(.pg-find-review) { max-height: min(65%, 420px); }
+.pg-find-mode { display: inline-flex; align-items: center; gap: 6px; }
+.pg-find-mode select,
+.pg-table-find .query-result-find-toolbar > select { width: auto; max-width: 180px; min-width: 0; height: 26px; padding-block: 2px; font-size: 11px; }
+.pg-find-review { padding: 6px 10px; }
+.pg-find-review dl { margin: 6px 0; max-height: min(24vh, 200px); overflow: auto; }
+.pg-find-review dl > div { display: grid; grid-template-columns: minmax(120px, .65fr) repeat(2, minmax(0, 1fr)); gap: 8px; margin: 4px 0; }
+.pg-find-review dd { margin-left: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pg-find-review button + button { margin-left: 8px; }
+.results-grid .pg-find-match { background: var(--accent-bg); }
+@media (max-width: 800px) { .pg-find-review dl > div { grid-template-columns: 1fr; gap: 2px; } }
 .pg-table-draft { max-height: 26%; overflow: auto; padding: 8px 12px; border-top: 1px solid var(--border); }
 .pg-table-draft button { margin-left: 10px; }
 .pg-record-form, .pg-table-preview { overflow: auto; max-height: min(60vh, 640px); }

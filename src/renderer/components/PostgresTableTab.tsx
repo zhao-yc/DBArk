@@ -13,7 +13,7 @@ import { cellPreview, cellText, errorMessage, invoke, ownCell } from '../lib';
 import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
-import { ResultsGrid, type GridCellMenuAnchor } from './ResultsGrid';
+import { ResultsGrid, type GridCellMenuAnchor, type GridFindTarget } from './ResultsGrid';
 import { PostgresTableExportDialog } from './PostgresTableExportDialog';
 import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { PostgresTableImportDialog } from './PostgresTableImportDialog';
@@ -23,6 +23,10 @@ import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './Postgr
 import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
 import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
+import { PostgresTableFindPanel, type PostgresFindRequest } from './PostgresTableFindPanel';
+import { postgresFindPlan, postgresFindRows, type PostgresFindPlan } from '../postgresTableFind';
+import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh-CN';
+import { useUiCommandScope } from '../uiCommands';
 import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import type { FilterDraft } from '../tableFilters';
@@ -121,9 +125,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [importPage, setImportPage] = useState<PostgresTablePage>();
   const [row, setRow] = useState<number | null>(null);
   const [draft, setDraft] = useState<DraftEntry[]>([]);
-  const draftRef = useRef<DraftEntry[]>([]);
+  const draftRef = useRef(draft);
   const [pasteScope, setPasteScope] = useState<object>();
   const pasteOwner = useRef<object>(undefined);
+  const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
+  const findAnchor = useRef<{ scope: object; value?: GridFindTarget }>(undefined);
   const [form, setForm] = useState<{ row: number | null }>();
   const [preview, setPreview] = useState<PostgresTablePreview>();
   const [busy, setBusy] = useState(false);
@@ -397,6 +403,34 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   const canEditGrid = active && writable && !!page?.capabilities.update && pageConnectionVersion === connectionVersion;
+  const canFind = active && !!page?.exportToken && !blocked && !requiresRefresh && pageConnectionVersion === connectionVersion;
+  const findScope = useMemo(() => ({}), [cellScope, draft]);
+  const latestFindScope = useRef(findScope);
+  latestFindScope.current = findScope;
+  const findRows = useMemo(() => page && findRequest
+    ? postgresFindRows(page, key => draft.find(entry => entry.rowKey === key)?.change) : [], [page, draft, !!findRequest]);
+
+  /** 查找和替换只接纳活动标签的当前页；草稿、筛选或列位置变化都换代。 */
+  function findIsCurrent() {
+    return canFind && !!lifetime.current && latestFindScope.current === findScope && draftRef.current === draft &&
+      issued.current === page?.exportToken && layoutScope.current.current() && !lease.current && !inlineOwner.current && !pasteOwner.current &&
+      !document.querySelector('[role="dialog"], [role="alertdialog"]');
+  }
+
+  function openFind(replace: boolean) {
+    if (findIsCurrent() && (!replace || canEditGrid)) setFindRequest({ replace });
+  }
+
+  useUiCommandScope('tab:' + tab.id, {
+    find: { enabled: canFind, run: () => openFind(false) },
+    replace: { enabled: canEditGrid, run: () => openFind(true) },
+  }, { active, contextKey: page?.exportToken });
+
+  function stageFind(scope: object, plan: PostgresFindPlan) {
+    if (!findIsCurrent() || !canEditGrid || scope !== findScope || !stageChanges(plan.changes)) throw Error(findText.stale);
+    setMessage(findText.staged(plan.changes.length));
+    setError('');
+  }
   const canPasteAppend = active && writable && !!page?.capabilities.insert && pageConnectionVersion === connectionVersion &&
     gridLayout.columns.some(column => !column.generated);
 
@@ -572,6 +606,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         closeAdvancedFilters(); setFilterText(''); navigate({ ...firstPage, filter: undefined });
       }}>{text.clearFilter}</button>
       <button disabled={frozenPage || !page?.exportToken || !columnNames.length} onClick={() => setSortPageToken(page?.exportToken)}>{tableSortZh.entry}</button>
+      <button disabled={!canFind} aria-expanded={!!findRequest && !findRequest.replace} onClick={() => openFind(false)}>{findText.title}</button>
+      <button disabled={!canEditGrid} aria-expanded={findRequest?.replace === true} onClick={() => openFind(true)}>{findText.replaceTitle}</button>
       <button disabled={frozenPage || !page?.exportToken || !layoutView.ready || layoutView.pending} onClick={() => {
         if (page?.exportToken) setPresetPage({ token: page.exportToken, connectionVersion });
       }}>{text.presets}</button>
@@ -597,7 +633,17 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
     <div className="pg-table-grid" inert={!!inlineEdit}>
-      {page ? <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
+      {page ? <PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
+        rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent}
+        anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
+        onOpen={openFind} onClose={() => setFindRequest(undefined)} onStage={stageFind}
+        onPreview={(hits, replacement) => {
+          if (!findIsCurrent() || !canEditGrid) throw Error(findText.stale);
+          return postgresFindPlan(page, findRows, gridLayout.columns, hits, replacement,
+            key => draftRef.current.find(entry => entry.rowKey === key)?.change);
+        }}
+        renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
+        findTarget={findTarget} findMarks={findMarks} onGridAnchor={value => { findAnchor.current = { scope: cellScope, value }; }}
         onCellFilterMenu={cellMenuEnabled ? openCellMenu : undefined}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
         onCellPaste={(cell, data) => {
@@ -613,7 +659,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
             }));
             navigate({ ...firstPage, sort: validateTableSort(rules, columnNames) });
           } catch (reason) { setError(errorMessage(reason)); }
-        }}/> : <Empty title={text.empty}/>}
+        }}/>}/> : <Empty title={text.empty}/>}
     </div>
     {cellMenu && cellMenuEnabled && cellMenu.scope === cellScope &&
       <PostgresTableCellFilterMenu anchor={cellMenu.anchor} column={cellMenu.seed.column}
@@ -624,7 +670,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     {pasteScope && <PostgresGridPasteDialog columns={gridLayout.columns} onClose={() => closePasteAppend(pasteScope)}
       onStage={(start, source) => stageGridPaste(start, source, undefined, pasteScope)}/>}
     {draft.length > 0 && <div className="pg-table-draft" aria-label={text.draft}>
-      <strong>{text.changes(draft.length)}</strong><button disabled={blocked} onClick={() => setChanges([])}>{text.discard}</button>
+      <strong>{text.changes(draft.length)}</strong><button disabled={blocked} onClick={() => { setChanges([]); setMessage(''); }}>{text.discard}</button>
       <ol>{draft.map(({ change, offset }, index) => <li key={index}>
         <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</span>
         {change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {
@@ -632,7 +678,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
           const value = 'value' in field.value ? cellPreview(field.value.value) : field.value.mode.toUpperCase();
           return name + '=' + value;
         }).join('，')}</span>}
-        <button disabled={blocked} onClick={() => setChanges(draft.filter((_, other) => index !== other))}>{text.undo}</button>
+        <button disabled={blocked} onClick={() => { setChanges(draft.filter((_, other) => index !== other)); setMessage(''); }}>{text.undo}</button>
       </li>)}</ol>
     </div>}
     {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
