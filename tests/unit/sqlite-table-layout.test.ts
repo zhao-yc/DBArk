@@ -29,6 +29,16 @@ function fixture() {
   return { controller, state, get, save, reset, release, changed };
 }
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+it('方案布局只改当前显示，按新页字段调和并可重读独立布局', async () => {
+  const f = fixture(); f.controller.activate(); await flush();
+  f.controller.set({ version: 1, columns: preferences.columns });
+  f.controller.applyPreset({ version: 1, columns: [{ name: 'B', hidden: false, width: 305 }, { name: '已删', hidden: false }], frozenThrough: 'B' }, ['B', '新增']);
+  expect(f.controller.view).toMatchObject({ fromPreset: true, dirty: false, preferences: { columns: [{ name: 'B', hidden: false, width: 305 }, { name: '新增', hidden: false }], frozenThrough: 'B' } });
+  expect(f.save).not.toHaveBeenCalled();
+  await f.controller.reload();
+  expect(f.controller.view.fromPreset).toBeUndefined();
+  expect(f.controller.view.preferences).toEqual(preferences);
+});
 it('自动恢复只get一次，分页不重置；调整、保存、重置只操作本机并释放准确租约', async () => {
   const f = fixture(); f.controller.activate(); await flush(); expect(f.get).toHaveBeenCalledTimes(1); expect(f.controller.view).toMatchObject({ ready: true, dirty: false, preferences });
   f.controller.sync(); expect(f.get).toHaveBeenCalledTimes(1); f.controller.set({ version: 1, columns: preferences.columns });

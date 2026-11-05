@@ -43,7 +43,7 @@ import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type Work
 import { querySaveContentSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
 import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { tablePresetDocumentSchema, tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, validateTablePresetBudget, type TablePresetTarget, type TablePresetSource, type TablePresetStoredSnapshot as TablePresetSnapshot, type TablePresetSelect } from '../shared/tablePresets';
-import { postgresTablePresetDocumentSchema, postgresTablePresetListSchema, postgresTablePresetSaveSchema, postgresTablePresetSelectSchema, type TablePresetSave } from '../shared/tablePresets';
+import { postgresPresetLayoutsSchema, postgresTablePresetDocumentSchema, postgresTablePresetListSchema, postgresTablePresetSaveSchema, postgresTablePresetSelectSchema, type TablePresetSave } from '../shared/tablePresets';
 import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
 import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema, validateQueryResultPresetBudget, type QueryResultPresetSource, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue, type QueryResultPresetSelect, type QueryResultPresetSave, type QueryResultPresetRename } from '../shared/queryResultPresets';
 import { importPresetDocumentSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, importPresetText, type ImportPresetDocument, type ImportPresetSnapshot, type ImportPresetSaveInput, type ImportPresetDeleteInput } from '../shared/importPresets';
@@ -100,6 +100,11 @@ export class LocalStore {
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_presets_postgres'").length) {
       for (const document of this.records<unknown>('SELECT data FROM table_presets_postgres')) postgresTablePresetDocumentSchema.parse(document);
     }
+    if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_preset_layouts_postgres'").length) {
+      const [[count, bytes]] = this.db.exec('SELECT COUNT(*), COALESCE(SUM(length(CAST(data AS BLOB))),0) FROM table_preset_layouts_postgres')[0].values;
+      validateTablePresetBudget(Number(count), 0, Number(bytes));
+      for (const document of this.records<unknown>('SELECT data FROM table_preset_layouts_postgres')) postgresPresetLayoutsSchema.parse(document);
+    }
     // 可选元数据也须先完整校验；坏文档不能被迁移或任务恢复写盘掩盖。
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='query_result_presets'").length) this.validateQueryResultPresetCollection();
     // 可选导入配置先校验原始字节和完整文档；未知版本不能被任何迁移写盘覆盖。
@@ -126,6 +131,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS table_presets (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         CREATE TABLE IF NOT EXISTS table_presets_postgres (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         DELETE FROM table_presets_postgres WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=table_presets_postgres.connection_id);
+        CREATE TABLE IF NOT EXISTS table_preset_layouts_postgres (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
+        DELETE FROM table_preset_layouts_postgres WHERE NOT EXISTS (SELECT 1 FROM table_presets_postgres AS p WHERE p.connection_id=table_preset_layouts_postgres.connection_id AND p.database_name=table_preset_layouts_postgres.database_name AND p.table_name=table_preset_layouts_postgres.table_name);
         CREATE TABLE IF NOT EXISTS record_templates (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         DELETE FROM record_templates WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=record_templates.connection_id);
         -- SQLite命名筛选为可选schema9元数据，与MySQL方案合同隔离。
@@ -514,13 +521,23 @@ export class LocalStore {
     const target = postgresTablePresetListSchema.parse(raw), { schema, name } = postgresRelationName(target.table);
     return { ...target, table: postgresIdentifier(schema) + '.' + postgresIdentifier(name) };
   }
+  /** 绑定原条目的精确内容，旧版本编辑同名方案后不再套用不相配的布局。 */
+  private presetEntryDigest(entry: unknown): string { return createHash('sha256').update(JSON.stringify(entry)).digest('hex'); }
   /** 精确主键读取；空表保留修订墓碑，删除后再创建不能让旧CAS复活。 */
   tablePresets(raw: unknown, postgres = false): TablePresetSnapshot {
     const target = this.tablePresetTarget(raw, postgres), source = this.tablePresetSource(target, postgres);
     const table = postgres ? 'table_presets_postgres' : 'table_presets';
     const value = this.records<unknown>(`SELECT data FROM ${table} WHERE connection_id=? AND database_name=? AND table_name=?`, [target.connectionId,target.database,target.table])[0];
     const schema = postgres ? postgresTablePresetDocumentSchema : tablePresetDocumentSchema;
-    return { ...schema.parse(value ?? { version: 1, revision: 0, entries: [] }), source };
+    const document = schema.parse(value ?? { version: 1, revision: 0, entries: [] });
+    if (!postgres || !document.entries.length) return { ...document, source };
+    const storedLayouts = this.records<unknown>('SELECT data FROM table_preset_layouts_postgres WHERE connection_id=? AND database_name=? AND table_name=?',
+      [target.connectionId, target.database, target.table])[0];
+    const layouts = new Map(postgresPresetLayoutsSchema.parse(storedLayouts ?? []).map(item => [item.id, item]));
+    return { ...document, source, entries: document.entries.map(entry => {
+      const item = layouts.get(entry.id);
+      return item && item.digest === this.presetEntryDigest(entry) ? { ...entry, configuration: { ...entry.configuration, layout: item.layout } } : entry;
+    }) };
   }
   /** 连接修订和来源必须与Main当前事实相同；调用方提供的摘要本身不代表可信。 */
   private checkedTablePresets(input: TablePresetSelect | TablePresetSave, postgres: boolean): TablePresetSnapshot {
@@ -532,7 +549,17 @@ export class LocalStore {
   private writeTablePresets({ connectionId, database, table: name }: TablePresetTarget, document: TablePresetSnapshot, postgres: boolean): void {
     const target = this.tablePresetTarget({ connectionId, database, table: name }, postgres);
     const table = postgres ? 'table_presets_postgres' : 'table_presets', schema = postgres ? postgresTablePresetDocumentSchema : tablePresetDocumentSchema;
-    const stored=schema.parse({version:1,revision:document.revision,entries:document.entries});
+    const entries = document.entries.map(entry => {
+      const { layout: _layout, ...configuration } = entry.configuration;
+      return { ...entry, configuration };
+    });
+    const stored=schema.parse({version:1,revision:document.revision,entries});
+    const layoutById = new Map(document.entries.map(entry => [entry.id, entry.configuration.layout]));
+    const layouts = postgresPresetLayoutsSchema.parse(stored.entries.flatMap(entry => {
+      const layout = layoutById.get(entry.id);
+      return layout ? [{ id: entry.id, digest: this.presetEntryDigest(entry), layout }] : [];
+    }));
+    const layoutData = JSON.stringify(layouts), keys = [target.connectionId, target.database, target.table];
     const statement=this.db.prepare(`SELECT connection_id,database_name,table_name,data FROM ${table} WHERE NOT(connection_id=? AND database_name=? AND table_name=?)`);
     let targets=0,count=stored.entries.length,bytes=Buffer.byteLength(JSON.stringify(stored)+target.connectionId+target.database+target.table,'utf8');
     try {
@@ -542,8 +569,15 @@ export class LocalStore {
         count+=other.entries.length;bytes+=row.reduce<number>((sum,value)=>sum+Buffer.byteLength(String(value),'utf8'),0);
       }
     } finally {statement.free();}
+    if (postgres) {
+      const summary = this.db.prepare('SELECT COALESCE(SUM(length(CAST(connection_id AS BLOB))+length(CAST(database_name AS BLOB))+length(CAST(table_name AS BLOB))+length(CAST(data AS BLOB))),0) FROM table_preset_layouts_postgres WHERE NOT(connection_id=? AND database_name=? AND table_name=?)');
+      try { summary.bind(keys); summary.step(); bytes += Number(summary.get()[0]); } finally { summary.free(); }
+      if (layouts.length) bytes += Buffer.byteLength(keys.join('') + layoutData);
+    }
     validateTablePresetBudget(targets+1,count,bytes);
     this.db.run(`INSERT INTO ${table} VALUES (?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data`,[target.connectionId,target.database,target.table,JSON.stringify(stored)]);
+    if (postgres && layouts.length) this.db.run('INSERT INTO table_preset_layouts_postgres VALUES (?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data', [...keys, layoutData]);
+    else if (postgres) this.db.run('DELETE FROM table_preset_layouts_postgres WHERE connection_id=? AND database_name=? AND table_name=?', keys);
   }
   /** 新建不隐式覆盖同名项；覆盖必须携带明确replaceId及所见表级修订。 */
   saveTablePreset(raw: unknown, postgres = false): TablePresetSnapshot {
@@ -774,6 +808,7 @@ export class LocalStore {
       this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets_postgres WHERE connection_id=?', [id]);
+      this.db.run('DELETE FROM table_preset_layouts_postgres WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets_sqlite WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM record_templates WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_layouts_sqlite WHERE connection_id=?', [id]);

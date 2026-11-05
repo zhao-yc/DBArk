@@ -6,17 +6,20 @@ import { ErrorBox, UsageHelp } from './ui';
 
 interface Props {
   target:TablePresetTarget;connectionVersion:number;refreshVersion:number;columns:string[];
-  configuration:TablePresetConfiguration;disabled:boolean;postgres?:boolean;beforeApply():boolean;onApply(configuration:TablePresetConfiguration):boolean | Promise<boolean>;
+  configuration:TablePresetConfiguration;disabled:boolean;postgres?:boolean;layoutDirty?:boolean;beforeApply():boolean;onApply(configuration:TablePresetConfiguration):boolean | Promise<boolean>;
 }
 /** 本机命名方案独立于条件输入器；保存回包从不清空名称、条件输入或表格草稿。 */
 export function TablePresetPanel(props:Props) {
   const [snapshot,setSnapshot]=useState<TablePresetSnapshot|null>(null),[name,setName]=useState(''),[selected,setSelected]=useState(''),[pending,setPending]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
-  const [confirmation,setConfirmation]=useState<{kind:'replace'|'delete';key:string}>();
+  const [confirmation,setConfirmation]=useState<{kind:'replace'|'delete'|'apply';key:string}>();
+  const [includeLayout, setIncludeLayout] = useState(true);
+  const { layout, ...conditions } = props.configuration;
+  const captured = includeLayout ? props.configuration : conditions;
   const identity=JSON.stringify([props.postgres,props.target,props.connectionVersion,props.refreshVersion,props.columns]);
   const environment=useRef({identity,epoch:0});if(environment.current.identity!==identity)environment.current={identity,epoch:environment.current.epoch+1};
-  const configurationKey=JSON.stringify(props.configuration),configurationEpoch=useRef({key:configurationKey,epoch:0});
+  const configurationKey=JSON.stringify(captured),configurationEpoch=useRef({key:configurationKey,epoch:0});
   if(configurationEpoch.current.key!==configurationKey)configurationEpoch.current={key:configurationKey,epoch:configurationEpoch.current.epoch+1};
-  const latest=useRef(props);latest.current=props;const mounted=useRef(true),request=useRef(0),lock=useRef(false);
+  const latest=useRef(props);latest.current={ ...props, configuration: captured };const mounted=useRef(true),request=useRef(0),lock=useRef(false);
   const activeRead=useRef<{taskId:string;cancelled:boolean}|null>(null),[reading,setReading]=useState(false);
   /** 取消只是发起请求，仍等待原metadata读取的严格资源结算，不能提前恢复busy门。 */
   function cancelRead(){const read=activeRead.current;if(read&&!read.cancelled){read.cancelled=true;void invoke('query.cancel',{taskId:read.taskId}).catch(reason=>{if(mounted.current)setError(errorMessage(reason));});}}
@@ -34,7 +37,7 @@ export function TablePresetPanel(props:Props) {
     const current=latest.current;if(lock.current||activeRead.current||current.disabled||!snapshot)return;
     const same=snapshot.entries.find(item=>item.name===name),entry=snapshot.entries.find(item=>item.id===selected);
     if(kind==='replace'&&!same||kind==='delete'&&!entry||kind==='apply'&&!entry)return;
-    if (kind === 'replace' || kind === 'delete') {
+    if (kind === 'replace' || kind === 'delete' || (kind === 'apply' && current.postgres && (confirmed || current.layoutDirty && entry?.configuration?.layout))) {
       const chosen = kind === 'replace' ? same! : entry!;
       if (current.postgres) {
         // 确认绑定选中的方案和当前条件，避免旧确认覆盖新版本或另一项。
@@ -73,15 +76,18 @@ export function TablePresetPanel(props:Props) {
     }
   }
   const disabled=props.disabled||pending||reading||!snapshot,editingDisabled=disabled||!!confirmation,same=snapshot?.entries.some(item=>item.name===name);
-  return <section aria-label={t.title}><strong>{t.title}</strong><UsageHelp><p>{t.notice}</p></UsageHelp><div className="filter-inputs">
+  const selectedEntry = snapshot?.entries.find(entry => entry.id === selected);
+  return <section aria-label={t.title}><strong>{t.title}</strong><UsageHelp><p>{props.postgres ? t.postgresNotice : t.notice}</p></UsageHelp><div className="filter-inputs">
     <input aria-label={t.name} maxLength={tablePresetLimits.name} value={name} disabled={!!confirmation} onChange={event=>setName(event.target.value)}/>
     <button disabled={editingDisabled||!name.trim()||same} onClick={()=>void action('save')}>{t.save}</button>
     <button disabled={editingDisabled||!same} onClick={()=>void action('replace')}>{t.replace}</button>
     <select aria-label={t.choose} value={selected} disabled={editingDisabled} onChange={event=>setSelected(event.target.value)}><option value="">{t.none}</option>{snapshot?.entries.map(entry=><option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
     <button disabled={editingDisabled||!selected} onClick={()=>void action('apply')}>{t.apply}</button><button disabled={editingDisabled||!selected} onClick={()=>void action('delete')}>{t.remove}</button><button disabled={pending||props.disabled||!!confirmation} onClick={()=>void reload()}>{t.reload}</button>{reading&&<button onClick={cancelRead}>{t.cancel}</button>}
-  </div>{confirmation&&<div className="filter-inputs">
-    <p>{confirmation.kind==='replace'?t.replaceConfirm:t.deleteConfirm}</p>
+  </div>{props.postgres && layout && <label className="check"><input type="checkbox" checked={includeLayout} disabled={editingDisabled} onChange={event => setIncludeLayout(event.target.checked)}/>{t.includeLayout}</label>}
+  {props.postgres && selectedEntry?.configuration?.layout && <p>{t.hasLayout}</p>}
+  {confirmation&&<div className="filter-inputs">
+    <p>{confirmation.kind==='apply' ? t.applyLayoutPrompt : confirmation.kind==='replace'?t.replaceConfirm:t.deleteConfirm}</p>
     <button onClick={()=>setConfirmation(undefined)}>{t.cancelChange}</button>
-    <button className="danger" disabled={disabled} onClick={()=>void action(confirmation.kind,true)}>{confirmation.kind==='replace'?t.confirmReplace:t.confirmRemove}</button>
+    <button className="danger" disabled={disabled} onClick={()=>void action(confirmation.kind,true)}>{confirmation.kind==='apply' ? t.confirmApplyLayout : confirmation.kind==='replace'?t.confirmReplace:t.confirmRemove}</button>
   </div>}<ErrorBox message={error}/>{notice&&<p role="status">{notice}</p>}</section>;
 }

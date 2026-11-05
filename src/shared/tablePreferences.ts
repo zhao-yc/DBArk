@@ -57,6 +57,21 @@ export const tablePreferencesSchema = z.unknown().transform((input, context) => 
   catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '表偏好无效' }); return z.NEVER; }
 });
 
+/** 表页布局至少保留一列可见，旧通用表偏好的独立校验语义继续沿用。 */
+export function strictTableLayoutPreferences(name: z.ZodType<string>, maximum: number) {
+  const shape = tablePreferencesShapeFor(name, maximum);
+  return z.unknown().transform((raw, context) => {
+    try {
+      const value = shape.parse(preferenceInput(raw));
+      if (value.columns.length && value.columns.every(column => column.hidden)) throw Error('至少保留一个可见字段');
+      return value;
+    } catch (reason) {
+      context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '列布局无效' });
+      return z.NEVER;
+    }
+  });
+}
+
 /** 与 SQLite BLOB 字节统计保持一致，名称只是数据，原型同名列也不转换为对象属性。 */
 export function tablePreferenceBytes(target: TablePreferenceTarget, preferences: TablePreferences): number {
   const encoder = new TextEncoder();

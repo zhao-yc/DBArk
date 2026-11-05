@@ -1,27 +1,16 @@
 import { z } from 'zod';
 import { sqliteTablePageSchema, sqliteTableBrowseLimits } from './sqliteTableBrowse';
-import { tablePreferencesShapeFor, preferenceInput, tablePreferencesLimits, type TablePreferences, type TablePreferenceTarget } from './tablePreferences';
+import { strictTableLayoutPreferences, tablePreferencesLimits, type TablePreferences, type TablePreferenceTarget } from './tablePreferences';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSourceSchema } from './sqliteTablePresets';
 import { postgresTablePresetListSchema } from './tablePresets';
-import { postgresTablePageSchema } from './postgresTable';
+import { postgresTableLayoutPreferencesSchema } from './postgresTable';
 
 const revision = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1);
 
 /** 两个驱动使用各自的目标及名称限制，复用显示设置、CAS 和持久化预算。 */
 function layoutSchemas<T extends TablePreferenceTarget>(
-  target: z.ZodType<T>, name: z.ZodType<string>, maximum: number,
+  target: z.ZodType<T>, preferences: ReturnType<typeof strictTableLayoutPreferences>,
 ) {
-  const shape = tablePreferencesShapeFor(name, maximum);
-  const preferences = z.unknown().transform((raw, context) => {
-    try {
-      const value = shape.parse(preferenceInput(raw));
-      if (value.columns.length && value.columns.every(column => column.hidden)) throw Error('至少保留一个可见字段');
-      return value;
-    } catch (reason) {
-      context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '列布局无效' });
-      return z.NEVER;
-    }
-  });
   const document = z.object({ version: z.literal(1), target, revision, preferences: preferences.nullable(), connectionDigest: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict().superRefine((value, context) => {
     if ((value.preferences !== null) !== (value.connectionDigest !== undefined)) context.addIssue({ code: 'custom', message: '列布局来源不完整' });
     const stored = { version: value.version, target: value.target, revision: value.revision, preferences: value.preferences, connectionDigest: value.connectionDigest };
@@ -31,13 +20,13 @@ function layoutSchemas<T extends TablePreferenceTarget>(
   return { target, preferences, document, snapshot };
 }
 export const sqliteLayoutTargetSchema = sqliteTablePresetTargetSchema;
-const sqliteSchemas = layoutSchemas(sqliteLayoutTargetSchema, sqliteTablePageSchema.shape.table, sqliteTableBrowseLimits.columns);
+const sqliteSchemas = layoutSchemas(sqliteLayoutTargetSchema, strictTableLayoutPreferences(sqliteTablePageSchema.shape.table, sqliteTableBrowseLimits.columns));
 export const { preferences: sqliteLayoutPreferencesSchema, document: sqliteLayoutDocumentSchema, snapshot: sqliteLayoutSnapshotSchema } = sqliteSchemas;
 const checked = { expectedRevision: revision, source: sqliteTablePresetSourceSchema, bindingToken: z.string().uuid() };
 export const sqliteLayoutResetSchema = sqliteLayoutTargetSchema.extend(checked).strict();
 export const sqliteLayoutSaveSchema = sqliteLayoutResetSchema.extend({ preferences: sqliteLayoutPreferencesSchema }).strict();
 
-const postgresLayout = layoutSchemas(postgresTablePresetListSchema, postgresTablePageSchema.shape.table, 1022);
+const postgresLayout = layoutSchemas(postgresTablePresetListSchema, postgresTableLayoutPreferencesSchema);
 const postgresReset = postgresTablePresetListSchema.extend(checked).strict();
 export const postgresLayoutSchemas = { ...postgresLayout, reset: postgresReset, save: postgresReset.extend({ preferences: postgresLayout.preferences }).strict() };
 export type PostgresLayoutTarget = z.infer<typeof postgresLayoutSchemas.target>;

@@ -168,7 +168,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   /** 只发布完整回包，旧组件迟到的原页能力显式释放。 */
-  async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = [], checkFilterColumns = false) {
+  async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = [], checkFilterColumns = false, presetLayout?: TablePreferences) {
     const result = await invoke('postgres.table.page', { ...target, ...next,
       ...(retainPageTokens.length ? { retainPageTokens } : {}), ...(checkFilterColumns ? { checkFilterColumns: true } : {}) });
     if (!isCurrent()) {
@@ -177,6 +177,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       return false;
     }
     issued.current = result.exportToken ?? result.pageToken;
+    if (presetLayout) layout.applyPreset(presetLayout, result.columns.map(column => column.name));
     setPage(result);
     setPageConnectionVersion(connectionVersion);
     setOptions(next);
@@ -285,7 +286,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     !lease.current && !recordDirty.current;
   const presetIsCurrent = () => {
     const state = useWorkspace.getState();
-    return !!lifetime.current && active && !!presetPage && issued.current === presetPage.token && !lease.current &&
+    return !!lifetime.current && active && !!presetPage && issued.current === presetPage.token && !lease.current && !layout.view.pending &&
       state.settings.activeTabId === tab.id && !recordDirty.current &&
       (state.connectionVersions[tab.connectionId] ?? 0) === presetPage.connectionVersion;
   };
@@ -326,12 +327,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     let applied = false, failure: unknown;
     const conditions = postgresTablePresetOptions(configuration);
     await run(async isCurrent => {
-      applied = await read({ ...options, ...conditions, offset: 0 }, isCurrent, [], true);
+      applied = await read({ ...options, ...conditions, offset: 0 }, isCurrent, [], true, configuration.layout);
       if (!applied) return;
       setAdvancedFilters(false);
       setFilterText(configuration.quickFilter?.text ?? '');
       if (configuration.quickFilter) setFilterColumn(configuration.quickFilter.column);
-      setMessage(tablePresetsZh.applied);
+      setMessage(configuration.layout ? tablePresetsZh.appliedWithLayout : tablePresetsZh.applied);
       setPresetPage(undefined);
     }, reason => { failure = reason; });
     if (failure) throw failure;
@@ -380,7 +381,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         setAdvancedFilters(false); setFilterText(''); navigate({ ...firstPage, filter: undefined });
       }}>{text.clearFilter}</button>
       <button disabled={frozenPage || !page?.exportToken || !columnNames.length} onClick={() => setSortPageToken(page?.exportToken)}>{tableSortZh.entry}</button>
-      <button disabled={frozenPage || !page?.exportToken} onClick={() => {
+      <button disabled={frozenPage || !page?.exportToken || !layoutView.ready || layoutView.pending} onClick={() => {
         if (page?.exportToken) setPresetPage({ token: page.exportToken, connectionVersion });
       }}>{text.presets}</button>
       <button disabled={blocked || !layoutView.ready || layoutView.pending || !layoutScope.current.current()} onClick={() => {
@@ -397,6 +398,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {appliedAdvanced && <span>{text.activeAdvancedFilter(appliedAdvanced.rules.filter(rule => rule.enabled !== false).length)}</span>}
       {sortRules.length > 0 && <span>{text.activeSort(sortRules.length)}</span>}
       {layoutView.dirty && <span>{tableGridZh.unsaved}</span>}
+      {layoutView.fromPreset && <span>{layoutText.fromPreset}</span>}
       {!page.pageToken && <span>{text.noWrite}</span>}
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
@@ -429,6 +431,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         !recordDirty.current} onClose={() => setExportPage(undefined)}/>}
     {layoutOpen && page && <TablePreferencesDialog title={layoutText.title} hint={layoutText.hint} defaultWidth={170}
       preferences={layoutView.preferences} pending={layoutView.pending} dirty={layoutView.dirty} error={layoutError || layoutView.error}
+      cleanNotice={layoutView.fromPreset ? layoutText.fromPreset : undefined}
       onChange={changeLayout} onSave={() => persistLayout()} onReset={() => persistLayout(true)} resetPrompt={layoutText.reset}
       onReload={() => { setLayoutError(''); void layout.reload(); }} reloadPrompt={layoutText.discard} reloadLabel={layoutText.reload}
       fitSource={() => ({ columns: gridLayout.columns.map(column => ({ ...column, key: column.name })), rowCount: page.rows.length,
@@ -449,7 +452,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <div className="modal-content">
         <TablePresetPanel postgres target={{ connectionId: target.connectionId, database: target.database, table: target.table }}
           connectionVersion={connectionVersion} refreshVersion={0} columns={columnNames}
-          configuration={postgresTablePresetConfiguration(options)} disabled={!presetIsCurrent()}
+          configuration={postgresTablePresetConfiguration(options, layoutView.preferences)} layoutDirty={layoutView.dirty} disabled={!presetIsCurrent()}
           beforeApply={presetIsCurrent} onApply={applyPreset}/>
       </div>
     </Modal>}

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { filterRuleSchema, filterGroupSchema, assertFilterGroupInput, sortRulesSchema, validateFilterGroup, FILTER_LIMITS } from './filtering';
-import { tablePreferenceTargetSchema } from './tablePreferences';
-import { postgresAdvancedTableFilterSchema, postgresQuickTableFilterSchema, postgresTablePageSchema, postgresTableSortRules, postgresTableSortSchema, type PostgresTablePageInput } from './postgresTable';
+import { tablePreferencesLimits, tablePreferenceTargetSchema, type TablePreferences } from './tablePreferences';
+import { postgresAdvancedTableFilterSchema, postgresQuickTableFilterSchema, postgresTableLayoutPreferencesSchema, postgresTablePageSchema, postgresTableSortRules, postgresTableSortSchema, type PostgresTablePageInput } from './postgresTable';
 
 export const tablePresetLimits = { name:80, perTarget:20, targets:500, entries:500, entryBytes:65536, totalBytes:4*1024*1024 } as const;
 const revision = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER-1);
@@ -23,10 +23,16 @@ const postgresConfiguration = configurationShape.safeExtend({ quickFilter: postg
     context.addIssue({ code: 'custom', message: 'PostgreSQL 方案的筛选或排序无效' });
   }
 });
-const postgresTablePresetConfigurationSchema = z.unknown().transform((input, context): z.output<typeof postgresConfiguration> => {
-  try { assertFilterGroupInput(input); return postgresConfiguration.parse(input); }
+/** 布局保存在独立补充表，旧筛选方案文档继续用原严格形状读取。 */
+const postgresPresetLayout = postgresTableLayoutPreferencesSchema.refine(value => value.columns.length > 0 &&
+  new TextEncoder().encode(JSON.stringify(value)).byteLength <= tablePreferencesLimits.entryBytes, '方案布局须包含显示列且不能超过512 KiB');
+const postgresProfile = postgresConfiguration.safeExtend({ layout: postgresPresetLayout.optional() });
+const postgresTablePresetConfigurationSchema = z.unknown().transform((input, context): z.output<typeof postgresProfile> => {
+  try { assertFilterGroupInput(input); return postgresProfile.parse(input); }
   catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : 'PostgreSQL 方案无效' }); return z.NEVER; }
 });
+export const postgresPresetLayoutsSchema = z.array(z.object({ id: z.uuid(), digest, layout: postgresPresetLayout }).strict())
+  .max(tablePresetLimits.perTarget).refine(items => new Set(items.map(item => item.id)).size === items.length, '方案布局编号重复');
 
 /** 两种持久化格式复用预算和修订规则，既有文档仍按原格式校验。 */
 function presetDocument<T extends TablePresetConfiguration>(configuration: z.ZodType<T>) {
@@ -38,7 +44,10 @@ function presetDocument<T extends TablePresetConfiguration>(configuration: z.Zod
   });
 }
 export const tablePresetDocumentSchema = presetDocument(tablePresetConfigurationSchema);
-export const postgresTablePresetDocumentSchema = presetDocument(postgresTablePresetConfigurationSchema);
+export const postgresTablePresetDocumentSchema = presetDocument(z.unknown().transform((input, context): z.output<typeof postgresConfiguration> => {
+  try { assertFilterGroupInput(input); return postgresConfiguration.parse(input); }
+  catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : 'PostgreSQL 方案无效' }); return z.NEVER; }
+}));
 export const tablePresetSourceSchema = z.object({connectionRevision:revision,connectionDigest:digest}).strict();
 export const tablePresetListSchema = tablePreferenceTargetSchema;
 const checked = tablePreferenceTargetSchema.extend({expectedRevision:revision,source:tablePresetSourceSchema,bindingToken:z.string().uuid()}).strict();
@@ -49,8 +58,11 @@ export const postgresTablePresetListSchema = postgresTablePageSchema.pick({ conn
 const postgresChecked = postgresTablePresetListSchema.extend({ expectedRevision: revision, source: tablePresetSourceSchema, bindingToken: z.string().uuid() }).strict();
 export const postgresTablePresetSaveSchema = postgresChecked.extend({ name, configuration: postgresTablePresetConfigurationSchema, replaceId: z.string().uuid().optional() });
 export const postgresTablePresetSelectSchema = postgresChecked.extend({ id: z.string().uuid() });
-export type TablePresetConfiguration = z.output<typeof postgresConfiguration>;
-export type TablePresetDocument = z.infer<typeof postgresTablePresetDocumentSchema>;
+export type TablePresetConfiguration = z.output<typeof postgresProfile>;
+type StoredPresetDocument = z.infer<typeof postgresTablePresetDocumentSchema>;
+export type TablePresetDocument = Omit<StoredPresetDocument, 'entries'> & {
+  entries: Array<Omit<StoredPresetDocument['entries'][number], 'configuration'> & { configuration: TablePresetConfiguration }>;
+};
 export type TablePresetSource = z.infer<typeof tablePresetSourceSchema>;
 export type TablePresetStoredSnapshot = TablePresetDocument & {source:TablePresetSource};
 export type TablePresetSnapshot = TablePresetStoredSnapshot & {bindingToken:string};
@@ -72,10 +84,11 @@ export function validateTablePresetColumns(raw:TablePresetConfiguration,columns:
 }
 
 /** 捕获已应用的条件，快速输入框和高级筛选面板的未应用草稿独立保留。 */
-export function postgresTablePresetConfiguration({ filter, sort }: Pick<PostgresTablePageInput, 'filter' | 'sort'>): TablePresetConfiguration {
+export function postgresTablePresetConfiguration({ filter, sort }: Pick<PostgresTablePageInput, 'filter' | 'sort'>, layout?: TablePreferences): TablePresetConfiguration {
   const advanced = filter && 'rules' in filter ? filter : undefined;
   return { filters: advanced?.rules ?? [], filterMode: advanced?.mode ?? 'all', sort: postgresTableSortRules(sort),
-    ...(advanced?.group ? { filterGroup: advanced.group } : {}), ...(filter && 'text' in filter ? { quickFilter: filter } : {}) };
+    ...(advanced?.group ? { filterGroup: advanced.group } : {}), ...(filter && 'text' in filter ? { quickFilter: filter } : {}),
+    ...(layout ? { layout } : {}) };
 }
 
 /** 载入时恢复原快速筛选或完整高级条件。页码和页长继续由当前表页管理。 */

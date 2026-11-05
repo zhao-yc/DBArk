@@ -2,10 +2,12 @@ import { z } from 'zod';
 import type { DataRow, ResultColumn, SortRule } from './contracts';
 import { csvExportDelimiters } from './csvExport';
 import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, validateFilterGroup } from './filtering';
+import { strictTableLayoutPreferences } from './tablePreferences';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
 const relation = z.string().min(1).max(512).refine(value => !value.includes('\0'));
+export const postgresTableLayoutPreferencesSchema = strictTableLayoutPreferences(relation, 1022);
 const token = z.uuid();
 const column = z.string().regex(/^c[0-9]{1,4}$/);
 const target = z.object({ connectionId: identity, database: identity, table: relation, tabId: identity }).strict();

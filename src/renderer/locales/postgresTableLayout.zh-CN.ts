@@ -6,4 +6,5 @@ export const postgresTableLayoutZh = {
   source: '连接配置已改变，当前显示默认布局。可检查后保存新的列布局。',
   reset: '恢复全部列、原顺序、默认列宽和行高，并清除已保存的冻结设置？',
   discard: '放弃本标签尚未保存的列布局，重新读取已保存的设置？',
+  fromPreset: '当前显示命名方案的列布局',
 } as const;

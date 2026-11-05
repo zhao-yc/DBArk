@@ -234,6 +234,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     const tablePresetName = presetDialog.getByLabel(tablePresetText.name, { exact: true });
     const tablePresetChoice = presetDialog.getByLabel(tablePresetText.choose, { exact: true });
     await tableButton(postgresTableZh.presets).click();
+    await presetDialog.getByRole('checkbox', { name: tablePresetText.includeLayout }).uncheck();
     await tablePresetName.fill('新增记录浏览');
     await presetButton(tablePresetText.save).click();
     await expect(presetDialog.getByRole('status')).toHaveText(tablePresetText.saved);
@@ -299,16 +300,66 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     finally { await page.mouse.up(); }
     await expect(noteHeader).toHaveCSS('width', '300px');
     await expect(gridTab.locator('.tab-status')).toContainText(tableGridText.unsaved);
+    // 命名方案捕获当前 300px 布局，但本机独立布局仍是 245px。
+    await tableButton(postgresTableZh.presets).click();
+    await expect(presetDialog.getByRole('checkbox', { name: tablePresetText.includeLayout })).toBeChecked();
+    await tablePresetName.fill('窄表审核方案');
+    await presetButton(tablePresetText.save).click();
+    await expect(presetDialog.getByRole('status')).toHaveText(tablePresetText.saved);
+    await tablePresetChoice.selectOption({ label: '窄表审核方案' });
+    await expect(presetDialog.getByText(tablePresetText.hasLayout, { exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('PostgreSQL命名方案列布局.png') });
+    await page.keyboard.press('Escape');
     await tableButton(tableLayoutText.entry).click();
     await expect(layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true })).toHaveValue('300');
+    await layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true }).fill('310');
+    await layoutButton(zh.common.close).click();
+    await expect(noteHeader).toHaveCSS('width', '310px');
+    await tableButton(postgresTableZh.clearFilter).click();
+    await expect(grid).toContainText('原值');
+    await tableButton(postgresTableZh.presets).click();
+    await tablePresetChoice.selectOption({ label: '窄表审核方案' });
+    await presetButton(tablePresetText.apply).click();
+    await presetButton(tablePresetText.cancelChange).click();
+    await expect(grid).toContainText('原值');
+    await expect(noteHeader).toHaveCSS('width', '310px');
+    await presetButton(tablePresetText.apply).click();
+    await presetButton(tablePresetText.confirmApplyLayout).click();
+    await expect(presetDialog).toHaveCount(0);
+    await expect(gridTab.getByRole('status')).toHaveText(tablePresetText.appliedWithLayout);
+    await expect(grid).toContainText('新增甲');
+    await expect(noteHeader).toHaveCSS('width', '300px');
+    await expect(gridTab.locator('.tab-status')).toContainText(tableLayoutText.fromPreset);
+
+    // 注入无法被 PostgreSQL 解析的值，走实际应用按钮验证失败不发布布局或新页。
+    await page.evaluate(async () => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      const tab = settings.tabs.find(item => item.id === settings.activeTabId);
+      if (!tab?.database || !tab.table) throw Error('测试表页缺少准确目标');
+      const target = { connectionId: tab.connectionId, database: tab.database, table: tab.table };
+      const stored = await window.dbark.invoke('postgres.table.presets.list', target);
+      await window.dbark.invoke('postgres.table.presets.save', { ...target, name: '无效数值方案', expectedRevision: stored.revision,
+        bindingToken: stored.bindingToken, source: stored.source, configuration: { filterMode: 'all', sort: [],
+          filters: [{ column: 'id', operator: '=', value: '无法解析的整数' }],
+          layout: { version: 1, columns: [{ name: 'id', hidden: false }, { name: 'note', hidden: true }] } } });
+    });
+    await tableButton(postgresTableZh.presets).click();
+    await tablePresetChoice.selectOption({ label: '无效数值方案' });
+    await presetButton(tablePresetText.apply).click();
+    await expect(presetDialog.getByRole('alert')).toContainText(/bigint/i);
+    await expect(grid).toContainText('新增甲');
+    await expect(noteHeader).toHaveCSS('width', '300px');
+    await page.keyboard.press('Escape');
+    await tableButton(tableLayoutText.entry).click();
     await layoutButton(tableLayoutText.reload).click();
-    await layoutButton(tableGridText.confirmLayout).click();
     await expect(layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true })).toHaveValue('245');
     await layoutButton(zh.common.close).click();
+    await tableButton(postgresTableZh.next).click();
     await expect(noteHeader).toHaveCSS('width', '245px');
     await expect(grid).toHaveClass(/grid-row-height-56/);
     await expect(gridTab.locator('.tab-status')).toContainText(postgresTableZh.activeSort(1));
     await expect(grid).toContainText('新增乙');
+    await mark('PostgreSQL 命名方案同时恢复筛选排序与列布局，取消和查询失败保持原页，重读独立布局恢复默认偏好');
 
     // 从第二页导出全部筛选记录，真实文件写入仍由原 Main 和 Engine 处理。
     const tableFile = info.outputPath('PostgreSQL原生导出.json');

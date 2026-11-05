@@ -5,7 +5,7 @@ import { sqliteTableLayoutZh } from './locales/sqliteTableLayout.zh-CN';
 
 export interface TableLayoutScope<T extends TablePreferenceTarget> { key: object; target: T; names: readonly string[]; current(): boolean; }
 export type SqliteLayoutScope = TableLayoutScope<SqliteLayoutTarget>;
-export interface SqliteLayoutView { preferences: TablePreferences; ready: boolean; pending: boolean; dirty: boolean; error: string; }
+export interface SqliteLayoutView { preferences: TablePreferences; ready: boolean; pending: boolean; dirty: boolean; error: string; fromPreset?: boolean; }
 interface Ports<T extends TablePreferenceTarget> {
   scope(): TableLayoutScope<T>;
   get(target: T): Promise<TableLayoutSnapshot<T>>;
@@ -41,7 +41,7 @@ export class TableLayoutController<T extends TablePreferenceTarget> {
     if (!this.owner || this.owner.key !== scope.key) {
       if (this.owner) this.owner.valid = false;
       this.owner = { key: scope.key, valid: true, busy: false };
-      this.changeView({ preferences: reconcileExactTableLayout(scope.names, null), ready: false, pending: false, dirty: false, error: '' });
+      this.changeView({ preferences: reconcileExactTableLayout(scope.names, null), ready: false, pending: false, dirty: false, error: '', fromPreset: undefined });
     }
     // 同一路由分页/刷新时暂时没有新页；这不是零字段结构，不能删除已恢复或未保存的布局。
     if (!scope.names.length) return;
@@ -56,7 +56,7 @@ export class TableLayoutController<T extends TablePreferenceTarget> {
     try {
       const value = this.snapshot(await this.ports.get({ ...this.ports.scope().target }), owner!); owner!.snapshot = value;
       const sourceChanged = !!value.preferences && value.connectionDigest !== value.source.connectionDigest;
-      this.changeView({ preferences: reconcileExactTableLayout(this.ports.scope().names, sourceChanged ? null : value.preferences), ready: true, dirty: false, error: sourceChanged ? this.text.source : '' });
+      this.changeView({ preferences: reconcileExactTableLayout(this.ports.scope().names, sourceChanged ? null : value.preferences), ready: true, dirty: false, error: sourceChanged ? this.text.source : '', fromPreset: undefined });
     } catch (reason) { if (this.current(owner)) this.changeView({ ready: true, error: reason instanceof Error ? reason.message : String(reason) }); }
     finally { owner!.busy = false; if (this.owner === owner && !this.disposed) this.changeView({ pending: false }); }
   }
@@ -73,6 +73,10 @@ export class TableLayoutController<T extends TablePreferenceTarget> {
   }
   /** 取消布局窗口可恢复打开时副本，不影响数据库草稿。 */
   restore(preferences: TablePreferences, dirty: boolean): void { if (!this.current() || this.owner!.busy) return; this.changeView({ preferences: reconcileExactTableLayout(this.ports.scope().names, preferences), dirty }); }
+  /** 与成功读取的新表页一起应用。保留独立布局的 CAS，直到用户明确保存或重读默认。 */
+  applyPreset(preferences: TablePreferences, names: readonly string[]): void {
+    this.changeView({ preferences: reconcileExactTableLayout(names, preferences), dirty: false, error: '', fromPreset: true });
+  }
   /** 本机持久化持有原工作区租约；旧回包不能改后继页，已落盘事实不自动重放。 */
   async persist(reset = false): Promise<void> {
     const owner = this.owner; if (!this.current(owner) || owner!.busy || !owner!.snapshot || !this.view.ready) throw Error(this.text.stale);
@@ -81,7 +85,7 @@ export class TableLayoutController<T extends TablePreferenceTarget> {
     try {
       lease = this.ports.acquire(); this.changeView({ pending: true, error: '' });
       const value = this.snapshot(await (reset ? this.ports.reset(input) : this.ports.save({ ...input, preferences })), owner!); owner!.snapshot = value;
-      this.changeView({ preferences: reconcileExactTableLayout(this.ports.scope().names, value.preferences), dirty: false });
+      this.changeView({ preferences: reconcileExactTableLayout(this.ports.scope().names, value.preferences), dirty: false, fromPreset: undefined });
     } catch (reason) { if (this.current(owner)) this.changeView({ error: reason instanceof Error ? reason.message : String(reason) }); }
     finally { owner!.busy = false; lease?.release(); if (this.owner === owner && !this.disposed) this.changeView({ pending: false }); }
   }

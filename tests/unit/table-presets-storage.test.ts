@@ -8,7 +8,7 @@ import initSqlJs from 'sql.js';
 import {LocalStore} from '../../src/main/storage';
 import {exportConnectionProfile,copyConnectionProfile} from '../../src/shared/connectionTransfer';
 import {tablePresetDocumentSchema,tablePresetSaveSchema,validateTablePresetBudget,validateTablePresetColumns,type TablePresetConfiguration,type TablePresetStoredSnapshot} from '../../src/shared/tablePresets';
-import { postgresTablePresetConfiguration, postgresTablePresetOptions } from '../../src/shared/tablePresets';
+import { postgresTablePresetConfiguration, postgresTablePresetDocumentSchema, postgresTablePresetOptions } from '../../src/shared/tablePresets';
 const require=createRequire(import.meta.url),wasm=require.resolve('sql.js/dist/sql-wasm.wasm'),dirs:string[]=[];
 const protector={available:()=>true,encrypt:(value:string)=>'RAM密文:'+value,decrypt:(value:string)=>value.slice(6)};
 const target={connectionId:'ram-a',database:'库.__proto__',table:'表/constructor'};
@@ -18,6 +18,49 @@ const packet=(snapshot:TablePresetStoredSnapshot)=>({...target,source:snapshot.s
 async function fixture(){const dir=mkdtempSync(join(tmpdir(),'dbark-preset-'));dirs.push(dir);const file=join(dir,'local.sqlite'),store=await LocalStore.open(file,wasm,protector);store.saveConnection(profile);return {file,store};}
 afterEach(()=>{for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 describe('命名方案真实SQLite、CAS与原子持久化',()=>{
+ it('PostgreSQL 方案布局与旧格式条件原子持久化，旧版本改条件不会错配布局', async () => {
+  const { store, file } = await fixture();
+  const pg = { connectionId: 'ram-layout', database: '库', table: '"schema"."表"' };
+  store.saveConnection({ ...profile, id: pg.connectionId, dialect: 'postgresql', port: 5432 });
+  const checked = (snapshot: TablePresetStoredSnapshot) => ({ ...packet(snapshot), ...pg });
+  const layout = { version: 1 as const, columns: [{ name: 'payload', hidden: false, width: 300 }, { name: 'id', hidden: true }], frozenThrough: 'payload', rowHeight: 56 as const };
+  const conditions = postgresTablePresetConfiguration({ filter: { column: 'payload', text: '精确%_' }, sort: [{ column: 'id', direction: 'ASC' }] });
+  const empty = store.tablePresets(pg, true);
+  const old = store.saveTablePreset({ ...checked(empty), name: '旧方案', configuration: conditions }, true);
+  const configuration = { ...conditions, layout };
+  const saved = store.saveTablePreset({ ...checked(old), name: '组合', configuration }, true);
+  const id = saved.entries[1].id;
+  expect(store.selectedTablePreset({ ...checked(saved), id }, true)).toEqual(configuration);
+  expect(store.tablePresets(pg, true).entries[0].configuration.layout).toBeUndefined();
+  expect(() => store.saveTablePreset({ ...checked(saved), name: '全隐藏', configuration: { ...conditions, layout: { version: 1, columns: [{ name: 'id', hidden: true }] } } }, true)).toThrow();
+  const original = readFileSync(file); mkdirSync(file + '.tmp');
+  expect(() => store.deleteTablePreset({ ...checked(saved), id }, true)).toThrow('未保存');
+  expect(store.tablePresets(pg, true)).toEqual(saved);
+  expect(readFileSync(file)).toEqual(original);
+  rmSync(file + '.tmp', { recursive: true });
+  store.close();
+  const SQL = await initSqlJs({ locateFile: () => wasm }), disk = new SQL.Database(readFileSync(file));
+  const legacy = postgresTablePresetDocumentSchema.parse(JSON.parse(String(disk.exec('SELECT data FROM table_presets_postgres')[0].values[0][0])));
+  expect(legacy.entries[1].configuration).toEqual(conditions);
+  const reopened = await LocalStore.open(file, wasm, protector);
+  expect(reopened.tablePresets(pg, true).entries).toEqual(saved.entries);
+  reopened.close();
+  // 模拟仍只写原条件文档的旧客户端，补充布局必须与原条目内容重新核对。
+  legacy.revision++;
+  legacy.entries[1].configuration.quickFilter!.text = '旧客户端改动';
+  disk.run('UPDATE table_presets_postgres SET data=?', [JSON.stringify(legacy)]);
+  writeFileSync(file, disk.export()); disk.close();
+  const after = await LocalStore.open(file, wasm, protector);
+  try {
+   const current = after.tablePresets(pg, true);
+   expect(current.entries[1].configuration).toEqual(legacy.entries[1].configuration);
+   const replaced = after.saveTablePreset({ ...checked(current), name: '组合', replaceId: id, configuration }, true);
+   expect(replaced.entries[1].configuration).toEqual(configuration);
+   const stripped = after.saveTablePreset({ ...checked(replaced), name: '组合', replaceId: id, configuration: conditions }, true);
+   expect(after.tablePresets(pg, true).entries[1].configuration.layout).toBeUndefined();
+   expect(after.deleteTablePreset({ ...checked(stripped), id }, true).entries).toHaveLength(1);
+  } finally { after.close(); }
+ });
  it('PostgreSQL 独立持久化快速筛选原文和高级条件组，按连接、数据库和 schema 隔离', async () => {
   const { store, file } = await fixture();
   const pg = { ...target, connectionId: 'ram-pg', table: '记录' };
