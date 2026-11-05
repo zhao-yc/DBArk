@@ -20,6 +20,7 @@ import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { explainSnapshotZh as snapshotText } from '../../src/shared/explainSnapshot.zh-CN';
 import { decodePlanSnapshot } from '../../src/shared/explainSnapshot';
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
+import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { clickSidebarAction } from './sidebar-menu';
 import { discardTestTab } from './query-close-ui';
@@ -499,6 +500,36 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await tab().getByRole('combobox', { name: 'PostgreSQL结果集' }).selectOption('1');
     await expect(tab().getByRole('grid')).toContainText('含;号');
 
+    // NUMERIC 使用 PostgreSQL 原值，精确小数相差末位；面板设置同值次键与显式 NULL 位置。
+    await edit(`SELECT amount AS "金额", note AS "次键" FROM (VALUES
+      (1, 'NaN'::numeric, '不是数字'), (2, 1.00000000000000000002::numeric, '高精度较大'),
+      (3, NULL::numeric, '空值'), (4, 1.00000000000000000001::numeric, 'a-次键'),
+      (5, 1.00000000000000000001::numeric, 'z-次键')) AS v(id, amount, note) ORDER BY id;`);
+    await execute();
+    const amountGrid = tab().getByRole('grid');
+    await expect(amountGrid.getByRole('row').nth(1)).toContainText('不是数字');
+    const historyBeforeSort = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const amountHeader = amountGrid.getByRole('columnheader').filter({ hasText: '金额' });
+    await amountHeader.click();
+    await expect(amountGrid.getByRole('row').nth(1)).toContainText('a-次键');
+    await expect(amountGrid.getByRole('row').nth(3)).toContainText('高精度较大');
+    await expect(amountGrid.getByRole('row').nth(5)).toContainText('空值');
+    await button(sortText.panelTitle).click();
+    const sortDialog = page.getByRole('dialog', { name: sortText.panelTitle, exact: true });
+    await sortDialog.getByLabel(sortText.panelNulls(1), { exact: true }).selectOption('FIRST');
+    await sortDialog.getByRole('button', { name: sortText.panelAdd, exact: true }).click();
+    await sortDialog.getByLabel(sortText.panelDirection(2), { exact: true }).selectOption('DESC');
+    await page.screenshot({ path: info.outputPath('PostgreSQL查询结果多列排序.png') });
+    await sortDialog.getByRole('button', { name: sortText.panelApply, exact: true }).click();
+    await expect(sortDialog).toHaveCount(0);
+    await expect(amountGrid.getByRole('row').nth(1)).toContainText('空值');
+    await expect(amountGrid.getByRole('row').nth(2)).toContainText('z-次键');
+    await expect(amountGrid.getByRole('row').nth(3)).toContainText('a-次键');
+    await button(sortText.clear).click();
+    await expect(amountGrid.getByRole('row').nth(1)).toContainText('不是数字');
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeSort);
+    await mark('真实 NUMERIC 列头排序和多列草稿，复核精度、NULL 位置、并列次键和恢复原顺序');
+
     // 查询带可观测的序列推进，导出三种文件后复核只执行了原查询一次。
     await button(postgresZh.begin).click();
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
@@ -525,8 +556,14 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(selectedExport).toBeDisabled();
     await resultSwitch.selectOption('1');
     await expect(selectedExport).toBeDisabled();
+    const idHeader = resultGrid.getByRole('columnheader').filter({ hasText: '同名' }).first();
     await selectResultRow(lastId);
+    await idHeader.click();
+    await expect(selectedExport).toBeDisabled();
+    await idHeader.click();
+    await expect(resultGrid.getByRole('row').nth(1)).toContainText(lastId);
     await selectResultRow(firstId);
+    await selectResultRow(lastId);
     const resultPaths = { json: info.outputPath('PostgreSQL查询勾选.json'), csv: info.outputPath('PostgreSQL查询返回.csv'),
       xlsx: info.outputPath('PostgreSQL查询返回.xlsx') };
     await application.evaluate(({ BrowserWindow, dialog }, input) => {
@@ -568,23 +605,23 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     }
     expect(resultExportCalls).toEqual(['json', 'csv', 'xlsx']);
     expect(JSON.parse(await readFile(resultPaths.json, 'utf8'))).toEqual([
-      { 同名: firstId, '同名 [2]': null, raw: { type: 'binary', base64: 'AP8=' }, 调用序号: '1' },
       { 同名: lastId, '同名 [2]': '引;号', raw: { type: 'binary', base64: '' }, 调用序号: '3' },
+      { 同名: firstId, '同名 [2]': null, raw: { type: 'binary', base64: 'AP8=' }, 调用序号: '1' },
     ]);
     expect(await readFile(resultPaths.csv, 'utf8')).toBe('同名;同名 [2];raw;调用序号\r\n' +
-      firstId + ';\\N;base64:AP8=;1\r\n9223372036854775806;"";\\N;2\r\n' + lastId + ';"引;号";base64:;3\r\n');
+      lastId + ';"引;号";base64:;3\r\n9223372036854775806;"";\\N;2\r\n' + firstId + ';\\N;base64:AP8=;1\r\n');
     const { Workbook } = require('exceljs') as typeof import('exceljs');
     const resultBook = new Workbook();
     await resultBook.xlsx.readFile(resultPaths.xlsx);
     expect(resultBook.worksheets).toHaveLength(1);
     const sheet = resultBook.worksheets[0];
     expect(sheet.rowCount).toBe(4);
-    expect(sheet.getCell('A2').text).toBe(firstId);
+    expect(sheet.getCell('A2').text).toBe(lastId);
     expect(sheet.getCell('B1').text).toBe('同名 [2]');
-    expect(sheet.getCell('B2').text).toBe('\\N');
-    expect(sheet.getCell('C2').text).toBe('\\B:AP8=');
+    expect(sheet.getCell('B4').text).toBe('\\N');
+    expect(sheet.getCell('C4').text).toBe('\\B:AP8=');
     expect(sheet.getCell('B3').text).toBe('');
-    expect(sheet.getCell('A4').text).toBe(lastId);
+    expect(sheet.getCell('A4').text).toBe(firstId);
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeExport);
     await edit("SELECT '序列确认：' || currval('pg_result_export_seq')::text;");
     await execute();

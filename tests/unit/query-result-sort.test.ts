@@ -4,11 +4,41 @@ import { QueryResultSort, queryResultSortLimits } from '../../src/renderer/query
 import { queryResultSortZh as text } from '../../src/renderer/locales/queryResultSort.zh-CN';
 
 /** 仅原数据对象和索引，不加载UI、数据库、编辑器或剪贴板。 */
-function fixture(type: string, values: CellValue[]) {
+function fixture(type: string, values: CellValue[], dialect?: 'postgresql') {
   const source: QueryResult={columns:[{key:'k',name:'同名',type},{key:'__proto__',name:'同名',type:'TEXT'}],rows:values.map((k,i)=>({k,['__proto__']:String(i)})),truncated:true,statement:'SELECT 原SQL',elapsedMs:7};
-  const controller=new QueryResultSort(),binding=controller.bind(source,['owner'])!;
+  const controller=new QueryResultSort(dialect),binding=controller.bind(source,['owner'])!;
   return {source,controller,binding,sort(direction:'ASC'|'DESC'='ASC') { return controller.apply(binding,controller.view(binding)!,{column:'k',direction}); }};
 }
+describe('PostgreSQL 已返回行的类型与空值顺序', () => {
+  it('精确比较 NUMERIC 及其特殊值，默认空值位置按 PostgreSQL 升降序变化', () => {
+    const f = fixture('NUMERIC', ['NaN', null, '0.00000000000000000002', 'Infinity', '-Infinity', '0.00000000000000000001', 'NaN'], 'postgresql');
+    expect(f.sort().sourceIndices).toEqual([4, 5, 2, 3, 0, 6, 1]);
+    expect(f.sort('DESC').sourceIndices).toEqual([1, 0, 6, 3, 2, 5, 4]);
+    expect(f.controller.apply(f.binding, f.controller.view(f.binding)!, { column: 'k', direction: 'ASC', nulls: 'FIRST' }).sourceIndices)
+      .toEqual([1, 4, 5, 2, 3, 0, 6]);
+  });
+  it.each(['REAL', 'DOUBLE PRECISION'])('%s比较原浮点文本和特殊值', type => {
+    const f = fixture(type, ['1e-300', '-2e+200', 'NaN', '-Infinity', 'Infinity', null, '-0'], 'postgresql');
+    expect(f.sort().sourceIndices).toEqual([3, 1, 6, 0, 4, 2, 5]);
+  });
+  it('相邻 BIGINT 不转 Number，布尔值按真值排序，文本次键保持稳定', () => {
+    const ids = fixture('BIGINT', ['9223372036854775807', '9223372036854775805', '9223372036854775806'], 'postgresql');
+    expect(ids.sort().sourceIndices).toEqual([1, 2, 0]);
+    const f = fixture('BOOLEAN', ['t', 'f', 't', null], 'postgresql');
+    expect(f.controller.apply(f.binding, f.controller.view(f.binding)!, [
+      { column: 'k', direction: 'ASC' }, { column: '__proto__', direction: 'DESC' },
+    ]).sourceIndices).toEqual([1, 2, 0, 3]);
+    expect(f.source.rows.map(row => row.k)).toEqual(['t', 'f', 't', null]);
+  });
+  it('保留未支持类型与异常值的整列拒绝，原视图不变', () => {
+    for (const [type, value] of [['DOUBLE PRECISION', '1e999'], ['BOOLEAN', 'true'], ['TIMESTAMPTZ', '2026-11-05 10:00:00+00']]) {
+      const f = fixture(type, [value], 'postgresql');
+      expect(f.binding.reasons.get('k')).toBeTruthy();
+      expect(() => f.sort()).toThrow();
+      expect(f.controller.view(f.binding)?.result).toBe(f.source);
+    }
+  });
+});
 describe('已返回SQL结果精确比较及原行身份',()=>{
   it.each(['LONGLONG','BIGINT','DECIMAL','NEWDECIMAL','DECIMAL(65,30)'])('%s大数、负零、精确小数及相等键按原位置稳定，不用Number',type=>{
     const integer=/LONGLONG|BIGINT/.test(type), values=integer ? ['18446744073709551615','9007199254740993','-9007199254740993','0','-0','0000',null] : ['0.12345678901234567891','0.12345678901234567890','-0.00000000000000000001','0','-0.0','000.000',null];

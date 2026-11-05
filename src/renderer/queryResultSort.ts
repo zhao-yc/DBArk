@@ -7,6 +7,8 @@ import { compareSqliteResultKeys, sqliteResultComparisonKey, type SqliteResultCo
 
 export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 2000000, valueUnits: 4096, units: 8 * 1024 * 1024 } as const;
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
+type SortKind = Kind | 'sqlite' | 'postgresNumeric' | 'postgresFloat' | 'postgresBoolean';
+type SortDialect = 'postgresql';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
 type SortKey = Key | SqliteResultComparisonKey;
@@ -17,6 +19,7 @@ export interface QueryResultSortBinding {
   readonly visibleRefs: readonly ResultColumn[]; readonly context: readonly unknown[]; readonly truncated: boolean;
   readonly reasons: ReadonlyMap<string, string | undefined>;
   readonly storageCurrent: () => boolean;
+  readonly dialect?: SortDialect;
 }
 const failure = () => new Error(text.stale);
 
@@ -36,10 +39,21 @@ function kind(type: string): Kind | undefined {
 }
 /** 仅明确文本类型可选择大小写比较；不从单元格外观或列名猜测。 */
 export function queryResultSortSupportsIgnoreCase(column: ResultColumn): boolean { return kind(column.type) === 'text' || column.type === 'SQLITE'; }
-/** 动态类型仅开放排序专用分支；统计与MySQL筛选不获得伪造的列类型。 */
-function sortKind(column: ResultColumn): Kind | 'sqlite' | undefined { return column.type === 'SQLITE' ? 'sqlite' : kind(column.type); }
+/** PostgreSQL 数值与布尔值按原协议类型准入，现有筛选与统计继续用原类型合同。 */
+function sortKind(column: ResultColumn, dialect?: SortDialect): SortKind | undefined {
+  if (dialect !== 'postgresql') return column.type === 'SQLITE' ? 'sqlite' : kind(column.type);
+  switch (column.type) {
+    case 'SMALLINT': case 'INTEGER': case 'BIGINT': return 'integer';
+    case 'NUMERIC': return 'postgresNumeric';
+    case 'REAL': case 'DOUBLE PRECISION': return 'postgresFloat';
+    case 'BOOLEAN': return 'postgresBoolean';
+    case 'TEXT': case 'VARCHAR': case 'CHAR': return 'text';
+  }
+}
 /** 入口和面板共用准确说明，不能把UTF-8固定本地序误称数据库COLLATE或原MySQL文本序。 */
-export function queryResultSortScope(source: QueryResult | undefined): string { return source?.columns.some(column => column.type === 'SQLITE') ? text.sqliteScope : text.scope; }
+export function queryResultSortScope(source: QueryResult | undefined, dialect?: SortDialect): string {
+  return dialect === 'postgresql' ? text.postgresScope : source?.columns.some(column => column.type === 'SQLITE') ? text.sqliteScope : text.scope;
+}
 /** 精确十进制按数字文本比较；负零与前导/尾随零归一，但不改原值。 */
 function exact(value: string, integer: boolean): Exact {
   if (!(integer ? /^[+-]?\d+$/ : /^[+-]?\d+(?:\.\d+)?$/).test(value)) throw Error(text.value);
@@ -118,7 +132,23 @@ export { kind as queryResultSortKind };
 /** SQLite二进制按Base64原文计预算，比较键字节另计；普通结果保持既有计费。 */
 function valueUnits(value: CellValue, sqlite: boolean): number { return typeof value === 'string' ? value.length : sqlite && value && typeof value === 'object' ? value.base64.length : 1; }
 /** 原类型标记是唯一准入凭据；BLOB与文本键在分配前受单值上限约束。 */
-function sortingKey(value: CellValue, type: Kind | 'sqlite', column: ResultColumn, code?: string, ignoreCase = false): SortKey {
+function sortingKey(value: CellValue, type: SortKind, column: ResultColumn, code?: string, ignoreCase = false): SortKey {
+  if (type === 'postgresBoolean') {
+    if (value === null) return null;
+    if (value === 'f') return 0;
+    if (value === 't') return 1;
+    throw Error(text.value);
+  }
+  if (type === 'postgresNumeric' || type === 'postgresFloat') {
+    if (value === null) return null;
+    if (typeof value !== 'string') throw Error(text.value);
+    if (value.length > queryResultSortLimits.valueUnits) throw Error(text.budget);
+    if (value === '-Infinity' || value === 'Infinity' || value === 'NaN') return Number(value);
+    if (type === 'postgresNumeric') return key(value, 'decimal');
+    const number = Number(value);
+    if (!/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(number)) throw Error(text.value);
+    return number;
+  }
   if (type !== 'sqlite') return key(value, type, column.type.trim().toUpperCase().endsWith(' UNSIGNED'));
   if (code === undefined) throw Error(text.sqliteUnknown);
   if (valueUnits(value, true) > queryResultSortLimits.valueUnits) throw Error(text.budget);
@@ -126,6 +156,11 @@ function sortingKey(value: CellValue, type: Kind | 'sqlite', column: ResultColum
 }
 /** 编码后的比较键也计费，不把非BMP文本或BLOB解码空间排除在本地整理预算外。 */
 function keyUnits(value: SortKey): number { return value && typeof value === 'object' && 'sqlite' in value && value.storage !== 'number' ? value.bytes.byteLength : 0; }
+/** PostgreSQL 的两种数值均令 NaN 等值且排在正无穷之后。 */
+function specialOrder(value: Key): number {
+  if (typeof value !== 'number' || Number.isFinite(value)) return 0;
+  return Number.isNaN(value) ? 2 : value < 0 ? -1 : 1;
+}
 /** SQLite键只进入排序；既有筛选、统计和结果比较继续使用原有静态类型键合同。 */
 function compareSortingKeys(left: SortKey, right: SortKey): number {
   if (left === null || right === null) return left === right ? 0 : left === null ? -1 : 1;
@@ -134,6 +169,8 @@ function compareSortingKeys(left: SortKey, right: SortKey): number {
     throw Error(text.value);
   }
   if (typeof right === 'object' && 'sqlite' in right) throw Error(text.value);
+  const a = specialOrder(left), b = specialOrder(right);
+  if (a || b) return a - b;
   return compare(left, right);
 }
 /** 不调用二进制访问器，记录原包装的自有值以发现原地字节漂移。 */
@@ -144,6 +181,7 @@ export class QueryResultSort {
   private binding?: QueryResultSortBinding;
   private projection?: QueryResultSortView;
   private values?: { column: ResultColumn; values: CellValue[]; binary: (readonly unknown[] | undefined)[] }[];
+  constructor(private readonly dialect?: SortDialect) {}
   /** 只冻结本地索引、完整优先级与视图容器，绝不冻结或克隆原行对象。 */
   private project(binding: QueryResultSortBinding, sourceIndices: number[], rules: readonly QueryResultSortRule[] = []): QueryResultSortView {
     const frozenRules=Object.freeze(rules.map(rule=>Object.freeze({...rule})));
@@ -165,7 +203,7 @@ export class QueryResultSort {
     const identity = keys.every(key=>typeof key==='string'&&key.length>0) && new Set(keys).size === keys.length && new Set(visible.map(c=>c.key)).size === visible.length && new Set(source.rows).size === source.rows.length && visible.every(column=>source.columns.includes(column));
     let units=0;
     for (const column of visible) {
-      const type=sortKind(column), position=source.columns.indexOf(column);
+      const type=sortKind(column, this.dialect), position=source.columns.indexOf(column);
       if (!identity) { reasons.set(column.key,text.identity); continue; }
       if (!type) { reasons.set(column.key,text.type); continue; }
       if (type === 'sqlite' && !source.sqliteStorage) { reasons.set(column.key,text.sqliteUnknown); continue; }
@@ -175,7 +213,7 @@ export class QueryResultSort {
         reasons.set(column.key,undefined);
       } catch (reason) { reasons.set(column.key,reason instanceof Error && reason.message === text.budget ? text.budget : text.value); }
     }
-    const binding:QueryResultSortBinding = { source, rows:source.rows, rowRefs:source.rows.slice(), columns:source.columns, columnRefs:source.columns.slice(), metadata:source.columns.map(c=>({...c})), visible, visibleRefs:visible.slice(),context:[...context],truncated:source.truncated,reasons,storageCurrent };
+    const binding:QueryResultSortBinding = { source, rows:source.rows, rowRefs:source.rows.slice(), columns:source.columns, columnRefs:source.columns.slice(), metadata:source.columns.map(c=>({...c})), visible, visibleRefs:visible.slice(),context:[...context],truncated:source.truncated,reasons,storageCurrent, ...(this.dialect ? { dialect: this.dialect } : {}) };
     this.binding=binding; this.projection=this.project(binding,source.rows.map((_,i)=>i)); return binding;
   }
   /** 行位置/列身份及排序键漂移即永久撤销；旧binding不能影响较新的视图。 */
@@ -200,12 +238,13 @@ export class QueryResultSort {
     if (next.length>binding.visible.length || new Set(next.map(rule=>rule.column)).size!==next.length) throw Error(text.rules);
     if (next.length*binding.rows.length>queryResultSortLimits.cells) throw Error(text.budget);
     const admitted=next.map(rule=>{
-      const column=binding.visible.find(c=>c.key===rule.column),type=column&&sortKind(column);
+      const column=binding.visible.find(c=>c.key===rule.column),type=column&&sortKind(column,this.dialect);
       if (!column || !type || !['ASC','DESC'].includes(rule.direction)) throw Error(text.type);
       if (rule.nulls !== undefined && rule.nulls !== 'FIRST' && rule.nulls !== 'LAST') throw Error(text.nullsInvalid);
       if (rule.ignoreCase !== undefined && (typeof rule.ignoreCase !== 'boolean' || !queryResultSortSupportsIgnoreCase(column))) throw Error(text.caseInvalid);
       const reason=binding.reasons.get(column.key); if (reason) throw Error(reason);
-      return {column,type,position:binding.columns.indexOf(column),direction:rule.direction,nulls:rule.nulls,ignoreCase:rule.ignoreCase};
+      const nulls=rule.nulls ?? (this.dialect === 'postgresql' ? rule.direction === 'ASC' ? 'LAST' : 'FIRST' : undefined);
+      return {column,type,position:binding.columns.indexOf(column),direction:rule.direction,nulls,ignoreCase:rule.ignoreCase};
     });
     let units=0;
     const values=admitted.map(({column,type})=>{const values=binding.rows.map(row=>{const value=cell(row,column);units+=valueUnits(value,type==='sqlite');if(units>queryResultSortLimits.units)throw Error(text.budget);return value;});return{column,values,binary:values.map(binaryStamp)};});

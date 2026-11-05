@@ -67,7 +67,7 @@ export function QueryResultSortPanel({ binding, initial, isCurrent, onApply, onC
   const available = binding.visible.filter(column => binding.reasons.has(column.key) && !binding.reasons.get(column.key) && !entries.some(item => item.rule.column === column.key));
   const pages = Math.max(1, Math.ceil(entries.length / pageSize)), currentPage = Math.min(page, pages - 1);
   return <section role="region" aria-label={text.panelTitle} aria-description={text.panelShortcuts} className="filter-panel expanded-filter-panel query-result-sort-panel" onKeyDown={keyDown} onCompositionStart={() => { composition.current = true; setComposing(true); }} onCompositionEnd={() => { composition.current = false; setComposing(false); }}>
-    <strong>{text.panelTitle}</strong><UsageHelp><p>{text.panelHint}</p><p>{queryResultSortScope(binding.source)}</p><p>{text.nullsHint}</p><p>{text.selection}</p><p>{text.panelShortcuts}</p></UsageHelp>
+    <strong>{text.panelTitle}</strong><UsageHelp><p>{binding.dialect === 'postgresql' ? text.postgresPanelHint : text.panelHint}</p><p>{queryResultSortScope(binding.source, binding.dialect)}</p><p>{binding.dialect === 'postgresql' ? text.postgresNullsHint : text.nullsHint}</p><p>{text.selection}</p><p>{text.panelShortcuts}</p></UsageHelp>
     {!entries.length && <p>{text.panelEmpty}</p>}
     {entries.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(({ id, rule }, position) => {
       const index = currentPage * pageSize + position, order = index + 1, column = binding.visible.find(item => item.key === rule.column)!;
