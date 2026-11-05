@@ -2,6 +2,7 @@ import { test as base, expect } from '@playwright/test';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { postgresCreateTableZh } from '../../src/renderer/locales/postgresCreateTable.zh-CN';
 import { postgresStructureZh } from '../../src/renderer/locales/postgresStructure.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
@@ -20,7 +21,7 @@ test.use({ trace: 'off', video: 'off', screenshot: 'off', ...(enabled ? { preser
 test.describe.configure({ timeout: 120000, retries: 0 });
 
 /** 仅由可核对的独占测试目标驱动真实表单、目录、编辑器与正常退出。 */
-test('PostgreSQL窗口表页、关系结构、查询和正常退出', async ({}, info) => {
+test('PostgreSQL窗口建表、表页、关系结构和正常退出', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Runtime;
   const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '', user = process.env.DBARK_POSTGRES_TEST_USER;
   const password = process.env.DBARK_POSTGRES_TEST_PASSWORD ?? '', port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
@@ -233,6 +234,38 @@ test('PostgreSQL窗口表页、关系结构、查询和正常退出', async ({},
     const queries = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
     expect(queries).toHaveLength(1);
     expect(queries[0].name).toBe('保留的PostgreSQL查询');
+
+    // 使用数据库原右键入口建表，再从实际新表页核对目录。
+    const databaseNode = page.locator('.database-row').filter({ hasText: database });
+    await clickSidebarAction(databaseNode, { name: zh.sidebar.text017, exact: true }, undefined, check);
+    const create = page.getByRole('dialog', { name: postgresCreateTableZh.title, exact: true });
+    await create.getByLabel(postgresCreateTableZh.schema, { exact: true }).selectOption('回归');
+    await create.getByLabel(postgresCreateTableZh.table, { exact: true }).fill('窗口新表');
+    const first = create.getByRole('group', { name: postgresCreateTableZh.field(1), exact: true });
+    await first.getByLabel(postgresCreateTableZh.name, { exact: true }).fill('id');
+    await first.getByLabel(postgresCreateTableZh.type, { exact: true }).selectOption('bigint');
+    await first.getByLabel(postgresCreateTableZh.identity, { exact: true }).selectOption('always');
+    await first.getByRole('checkbox', { name: postgresCreateTableZh.primary, exact: true }).check();
+    await create.getByRole('button', { name: postgresCreateTableZh.add, exact: true }).click();
+    const second = create.getByRole('group', { name: postgresCreateTableZh.field(2), exact: true });
+    await second.getByLabel(postgresCreateTableZh.name, { exact: true }).fill('note');
+    await second.getByLabel(postgresCreateTableZh.default, { exact: true }).selectOption('literal');
+    await second.getByLabel(postgresCreateTableZh.value, { exact: true }).fill('窗口默认');
+    await second.getByLabel(postgresCreateTableZh.comment, { exact: true }).fill('窗口列注释');
+    await create.getByRole('button', { name: postgresCreateTableZh.preview, exact: true }).click();
+    await expect(create.locator('.pg-create-sql')).toContainText('CREATE TABLE "回归"."窗口新表"');
+    await expect(page.locator('.object-row').filter({ hasText: '窗口新表' })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('PostgreSQL建表确认前.png') });
+    await create.getByRole('button', { name: postgresCreateTableZh.apply, exact: true }).click();
+    await expect(create).toBeHidden();
+    await expect(page.locator('.object-row').filter({ hasText: '窗口新表' })).toBeVisible();
+    await expect(gridTab.locator('.context-bar')).toContainText('"回归"."窗口新表"');
+    await tableButton(postgresStructureZh.open).click();
+    await expect(structure.getByRole('table')).toContainText('窗口默认');
+    await expect(structure.getByRole('table')).toContainText('窗口列注释');
+    await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
+    await page.locator('.tab-strip .tab-close').click();
+    await mark('数据库右键建表经过真实 SQL 预览和确认，新表目录自动刷新，实际结构可读');
     check();
     expect(runtime.pageErrors).toEqual([]);
     await runtime.confirmOwnedDesktopExit(info);

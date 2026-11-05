@@ -1,0 +1,90 @@
+import { randomUUID } from 'node:crypto';
+import { Client } from 'pg';
+import { describe, expect, it } from 'vitest';
+import { Engine } from '../../src/engine';
+import type { PostgresConnectionProfile } from '../../src/shared/contracts';
+import type { PostgresCreateTableInput } from '../../src/shared/postgresCreateTable';
+
+const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
+const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
+const port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
+const enabled = process.env.DBARK_POSTGRES_WORKSPACE_TEST === '1';
+
+describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
+  /** 独立客户端复核预览不写库、精确落表、一次性确认及目录竞争保护。 */
+  it('验证默认值、复合主键、标识、注释、重名及 schema 替换', async () => {
+    if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) ||
+        database !== process.env.DBARK_POSTGRES_TEST_USER || !password || !Number.isInteger(port) || port <= 1024) {
+      throw Error('只允许本轮专用回环 PostgreSQL 实库');
+    }
+    const id = randomUUID(), owner = randomUUID();
+    const profile: PostgresConnectionProfile = { id, name: '隔离建表', group: '', color: '#123456',
+      dialect: 'postgresql', host: '127.0.0.1', port, user: database, password, database, rememberPassword: false };
+    const config = { host: profile.host, port, user: database, password, database, ssl: false,
+      sslnegotiation: 'postgres' as const, options: ' ', replication: 'false' };
+    const client = Object.assign(new Client(config), { binary: false });
+    const engine = new Engine(), target = { connectionId: id, database, owner, profile, connectionRevision: 1 };
+    const value = "中文\\'; DROP TABLE 原表; --";
+    const draft: PostgresCreateTableInput = {
+      connectionId: id, database, schema: '生成.甲', table: '新"表', comment: '表原注释',
+      columns: [
+        { name: '编号', type: 'bigint', nullable: false, primary: true, unique: false, identity: 'always', default: { mode: 'none' }, comment: '' },
+        { name: '代码', type: 'varchar', length: 50, nullable: false, primary: true, unique: true, identity: 'none', default: { mode: 'literal', value }, comment: '列原注释' },
+        { name: '金额', type: 'numeric', precision: 40, scale: 18, nullable: false, primary: false, unique: false,
+          identity: 'none', default: { mode: 'literal', value: '1234567890123456789012.123456789012345678' }, comment: '' },
+        { name: '日期', type: 'date', nullable: false, primary: false, unique: false, identity: 'none', default: { mode: 'currentDate' }, comment: '' },
+      ],
+    };
+    const prepare = (patch: Partial<PostgresCreateTableInput> = {}) => engine.handle('postgres.createTable.preview', { ...target, ...draft, ...patch });
+    const apply = (token: string, extra = {}) => engine.handle('postgres.createTable.apply', { ...target, token, ...extra });
+    const qualified = '"生成.甲"."新""表"';
+    await client.connect();
+    try {
+      await client.query('CREATE SCHEMA "生成.甲"; CREATE SCHEMA "另一个"; CREATE TABLE "生成.甲".原表 (id int)');
+      const schemas = await engine.handle('postgres.createTable.schemas', target);
+      expect(schemas).toContain(draft.schema);
+      expect(schemas).not.toContain('pg_catalog');
+      await expect(prepare({ schema: '不存在' })).rejects.toThrow('缺少建表权限');
+      await expect(prepare({ columns: [{ ...draft.columns[1], length: 1 }] })).rejects.toThrow('默认值与字段类型或长度不符');
+      await expect(prepare({ columns: [{ ...draft.columns[2], default: { mode: 'literal', value: '非法' } }] })).rejects.toThrow();
+
+      const preview = await prepare();
+      expect(preview.statements).toHaveLength(3);
+      expect((await client.query('SELECT to_regclass($1)::text value', [qualified])).rows[0].value).toBeNull();
+      await expect(apply(preview.token, { owner: randomUUID() })).rejects.toThrow('预览已失效');
+      await expect(apply(preview.token, { connectionRevision: 2 })).rejects.toThrow('预览已失效');
+      expect(await apply(preview.token)).toMatchObject({ outcome: 'committed', table: qualified });
+      await expect(apply(preview.token)).rejects.toThrow('预览已失效');
+
+      const structure = await engine.handle('postgres.structure.read', { ...target, table: qualified });
+      expect(structure.comment).toBe(draft.comment);
+      expect(structure.columns[0]).toMatchObject({ name: '编号', identity: 'a', nullable: false });
+      expect(structure.columns[1]).toMatchObject({ name: '代码', type: 'character varying(50)', comment: '列原注释' });
+      expect(structure.constraints).toContainEqual(expect.objectContaining({ kind: 'p', definition: expect.stringContaining('编号') }));
+      expect((await client.query(`INSERT INTO ${qualified} DEFAULT VALUES
+        RETURNING "编号"::text AS id, "代码" AS note, "金额"::text AS amount, "日期" = CURRENT_DATE AS today`)).rows)
+        .toEqual([{ id: '1', note: value, amount: '1234567890123456789012.123456789012345678', today: true }]);
+      expect((await client.query('SELECT count(*)::int n FROM "生成.甲".原表')).rows[0].n).toBe(0);
+      await expect(prepare()).rejects.toThrow('同名关系');
+
+      const race = await prepare({ table: '竞争' });
+      await client.query('CREATE TABLE "生成.甲"."竞争" (marker text)');
+      expect(await apply(race.token)).toMatchObject({ outcome: 'notSent' });
+      expect((await client.query('SELECT marker FROM "生成.甲"."竞争"')).rows).toEqual([]);
+
+      const replaced = await prepare({ schema: '另一个', table: '原目标' });
+      await client.query('DROP SCHEMA "另一个"; CREATE SCHEMA "另一个"');
+      expect(await apply(replaced.token)).toMatchObject({ outcome: 'notSent', message: expect.stringContaining('已被替换') });
+      const rejected = await prepare({ table: '回滚', columns: [{ ...draft.columns[0], name: 'ctid' }] });
+      expect(await apply(rejected.token)).toMatchObject({ outcome: 'rolledBack' });
+      expect((await client.query('SELECT to_regclass($1)::text value', ['"生成.甲"."回滚"'])).rows[0].value).toBeNull();
+
+      const closed = await prepare({ table: '关闭' });
+      await engine.handle('connections.close', { id });
+      await expect(apply(closed.token)).rejects.toThrow('预览已失效');
+    } finally {
+      await engine.closeAll();
+      await client.end();
+    }
+  }, 60000);
+});

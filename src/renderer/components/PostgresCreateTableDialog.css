@@ -1,0 +1,8 @@
+.pg-create-content { overflow: auto; min-width: 0; }
+.pg-create-content fieldset { border: 0; padding: 0; min-inline-size: 0; }
+.pg-create-target, .pg-create-field { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 8px 0; }
+.pg-create-content .pg-create-field { padding: 10px; margin: 8px 0; border: 1px solid var(--line); border-radius: 6px; }
+.pg-create-field legend { padding: 0 5px; }
+.pg-create-field > label:not(.field) { display: flex; gap: 5px; align-items: center; margin-bottom: 8px; }
+.pg-create-field .field input[type="number"] { width: 85px; }
+.pg-create-sql { max-height: min(50vh, 520px); overflow: auto; padding: 12px; background: var(--editor); border: 1px solid var(--line); }

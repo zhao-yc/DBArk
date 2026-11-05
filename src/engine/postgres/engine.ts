@@ -16,6 +16,7 @@ import {
 } from '../../shared/postgresSql';
 import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace } from './tableWorkspace';
+import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
 import { readPostgresStructure } from './relationStructure';
 interface Session {
   id: string;
@@ -41,6 +42,7 @@ interface Lease {
 type Input = Record<string, any>;
 /** PostgreSQL独立网络执行账本，共用utility隔离进程及TaskEvent，不进入mysql2或其SQL生成器。 */
 export class PostgresEngine {
+  private readonly creations = new PostgresCreateTableWorkspace();
   private readonly tables = new PostgresTableWorkspace();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
@@ -59,7 +61,7 @@ export class PostgresEngine {
       input.dialect === 'postgresql' ||
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
-        (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
+        (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
       this.ownsTask(input.taskId)
@@ -193,6 +195,7 @@ export class PostgresEngine {
         this.leases.delete(lease);
       }
       this.tables.clear(id);
+      this.creations.clear(id);
       this.profiles.delete(id);
     } finally {
       this.closing.delete(id);
@@ -214,6 +217,7 @@ export class PostgresEngine {
       throw Error('该PostgreSQL连接仍有会话或未确认资源，请先关闭标签并显式断开');
     if (changed) {
       this.tables.clear(input.id);
+      this.creations.clear(input.id);
       this.profiles.delete(input.id);
     }
   }
@@ -223,6 +227,7 @@ export class PostgresEngine {
       for (const id of new Set([
         ...this.profiles.keys(),
         ...this.tables.connectionIds(),
+        ...this.creations.connectionIds(),
         ...[...this.leases].map((l) => l.managed.profile.id),
         ...[...this.sessions.values()].map((s) => s.connectionId),
       ]))
@@ -339,6 +344,18 @@ export class PostgresEngine {
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
   async handle(command: string, input: Input): Promise<any> {
     switch (command) {
+      case 'postgres.createTable.schemas':
+      case 'postgres.createTable.preview':
+      case 'postgres.createTable.apply': {
+        const profile = input.profile as PostgresConnectionProfile | undefined;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
+            !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 建表连接和原文档');
+        const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
+          this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.createTable.schemas') return connect(postgresCreateSchemas);
+        if (command === 'postgres.createTable.preview') return this.creations.prepare(input as Parameters<PostgresCreateTableWorkspace['prepare']>[0], connect);
+        return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect);
+      }
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的PostgreSQL结构连接');

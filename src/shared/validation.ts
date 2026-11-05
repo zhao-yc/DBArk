@@ -1,3 +1,4 @@
+import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema } from './postgresTable';
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
@@ -228,6 +229,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'record.templates.list': recordTemplateTargetSchema, 'record.templates.save': recordTemplateSaveSchema, 'record.templates.rename': recordTemplateRenameSchema, 'record.templates.delete': recordTemplateSelectSchema, 'record.templates.read': recordTemplateSelectSchema,
   'sqlite.tableLayout.get': sqliteLayoutTargetSchema, 'sqlite.tableLayout.save': sqliteLayoutSaveSchema, 'sqlite.tableLayout.reset': sqliteLayoutResetSchema,
   'sqlite.tablePresets.list': sqliteTablePresetTargetSchema, 'sqlite.tablePresets.save': sqliteTablePresetSaveSchema, 'sqlite.tablePresets.delete': sqliteTablePresetSelectSchema, 'sqlite.tablePresets.read': sqliteTablePresetSelectSchema,
+  'postgres.createTable.schemas': postgresCreateTableSchemasSchema,
+  'postgres.createTable.preview': postgresCreateTablePreviewSchema,
+  'postgres.createTable.apply': postgresCreateTableApplySchema,
   'postgres.structure.read': postgresStructureInputSchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.preview': postgresTablePreviewSchema,
