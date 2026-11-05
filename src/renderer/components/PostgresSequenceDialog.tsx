@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { PostgresCreateTablePreview, PostgresCreateTableTarget } from '../../shared/postgresCreateTable';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import { postgresSequenceCreateSchema, postgresSequenceManageSchema, postgresSequencePlan, type PostgresSequenceInfo,
-  type PostgresSequenceManageInput, type PostgresSequenceReadInput } from '../../shared/postgresSequence';
+  type PostgresSequenceManageInput, type PostgresSequenceReadInput, type PostgresSequenceTargets } from '../../shared/postgresSequence';
 import { errorMessage, invoke } from '../lib';
 import { postgresSequenceZh as text } from '../locales/postgresSequence.zh-CN';
 import { zh } from '../locales/zh-CN';
@@ -11,12 +11,14 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresCreateTableDialog.css';
 
 const numericFields = ['start', 'increment', 'minimum', 'maximum', 'cache'] as const;
-type SequenceAction = PostgresSequenceManageInput['action'];
+type SequenceOperation = PostgresSequenceManageInput['action'];
+type SequenceAction = 'edit' | 'rename' | 'drop' | 'ownership';
+type OwnershipAction = 'bind' | 'detach' | 'owner';
 
 /** 详情绑定原数据库目录；连接版本变化后废弃旧的读取回包。 */
 export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManaged }: {
   target: PostgresSequenceReadInput; onClose(): void; onDirtyChange(value: boolean): void;
-  onManaged(action: SequenceAction, name: string, version: number, message: string): void;
+  onManaged(action: SequenceOperation, name: string, version: number, message: string): void;
 }) {
   const { connectionId, database, table } = target;
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
@@ -39,7 +41,7 @@ export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManag
   const current = result?.key === key ? result : undefined;
   const info = current?.info;
   const fields = info && [
-    [text.dataType, info.dataType], ...numericFields.map(field => [text[field], info[field]]),
+    [text.dataType, info.dataType], [text.owner, info.owner], ...numericFields.map(field => [text[field], info[field]]),
     [text.cycle, info.cycle ? '是' : '否'], [text.lastValue, info.lastValue ?? text.noValue],
     [text.ownedBy, info.ownedBy ? [info.ownedBy.schema, info.ownedBy.relation, info.ownedBy.column]
       .map(postgresIdentifier).join('.') + (info.ownedBy.identity ? ' · ' + text.identity : '') : '—'],
@@ -49,10 +51,10 @@ export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManag
     onClose={unknown => {
       if (unknown) onClose();
       else setManage(undefined);
-    }} onManaged={(name, message) => {
+    }} onManaged={(action, name, message) => {
       setManage(undefined);
       setAttempt(value => value + 1);
-      onManaged(manage.action, name, manage.version, message);
+      onManaged(action, name, manage.version, message);
     }}/>;
   return <Modal title={text.title} wide onClose={onClose}>
     <div className="modal-content pg-structure-content">
@@ -66,6 +68,7 @@ export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManag
       {info?.canManage && <>
         <button onClick={() => setManage({ action: 'edit', info, version })}>{text.edit}</button>
         <button onClick={() => setManage({ action: 'rename', info, version })}>{text.rename}</button>
+        {!info.ownedBy?.identity && <button onClick={() => setManage({ action: 'ownership', info, version })}>{text.ownership}</button>}
         {!info.ownedBy?.identity && <button onClick={() => setManage({ action: 'drop', info, version })}>{text.drop}</button>}
       </>}
       <span className="grow"/><button onClick={onClose}>{zh.common.close}</button></footer>
@@ -75,20 +78,45 @@ export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManag
 /** 详情版本和一次性预览共同绑定本次编辑，重启或删除须再次明确确认。 */
 function PostgresManageSequenceDialog({ target, action, info, version, onClose, onManaged, onDirtyChange }: {
   target: PostgresSequenceReadInput; action: SequenceAction; info: PostgresSequenceInfo; version: number;
-  onClose(unknown: boolean): void; onManaged(name: string, message: string): void; onDirtyChange(value: boolean): void;
+  onClose(unknown: boolean): void; onManaged(action: SequenceOperation, name: string, message: string): void; onDirtyChange(value: boolean): void;
 }) {
   const currentVersion = useWorkspace(state => state.connectionVersions[target.connectionId] ?? 0);
   const [draft, setDraft] = useState({ dataType: info.dataType, start: info.start, increment: info.increment,
     minimum: info.minimum, maximum: info.maximum, cache: info.cache, cycle: info.cycle, comment: info.comment ?? '', restart: '' });
   const [name, setName] = useState(info.name);
+  const [ownership, setOwnership] = useState<OwnershipAction>('bind');
+  const [search, setSearch] = useState(''), [choice, setChoice] = useState('');
+  const [targets, setTargets] = useState<PostgresSequenceTargets>();
+  const [targetsError, setTargetsError] = useState('');
   const [dirty, setDirty] = useState(false), [busy, setBusy] = useState(false), [unknown, setUnknown] = useState(false);
   const [preview, setPreview] = useState<PostgresCreateTablePreview>(), [acknowledged, setAcknowledged] = useState(false);
   const [error, setError] = useState('');
   const locked = useRef(false);
   const stale = version !== currentVersion;
-  const needsAcknowledgement = action === 'drop' || (action === 'edit' && !!draft.restart);
+  const operation = action === 'ownership' ? ownership : action;
+  const choosingTarget = operation === 'bind' || operation === 'owner';
+  const needsAcknowledgement = action === 'ownership' || action === 'drop' || (action === 'edit' && !!draft.restart);
   useEffect(() => { onDirtyChange(dirty || busy || !!preview); }, [dirty, busy, preview, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  useEffect(() => {
+    if (!choosingTarget || stale) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      void invoke('postgres.sequence.targets', { ...target, stamp: info.stamp,
+        kind: operation === 'owner' ? 'role' : 'column', search }).then(result => {
+        if (active) setTargets(result);
+      }, reason => { if (active) setTargetsError(errorMessage(reason)); });
+    }, 180);
+    return () => { active = false; clearTimeout(timer); };
+  }, [choosingTarget, info.stamp, operation, search, stale, target.connectionId, target.database, target.table]);
+
+  /** 筛选变化后必须从新结果选择，防止把上一份目录的选择用于当前操作。 */
+  function resetTargets() {
+    setChoice('');
+    setTargets(undefined);
+    setTargetsError('');
+    setError('');
+  }
 
   /** 取消预览后清除上一次的确认。 */
   function back() {
@@ -106,15 +134,16 @@ function PostgresManageSequenceDialog({ target, action, info, version, onClose, 
     back();
     try {
       if (!preview) {
-        const base = { ...target, action, stamp: info.stamp };
-        const input = postgresSequenceManageSchema.parse(action === 'edit' ? { ...base, ...draft,
-          comment: draft.comment === (info.comment ?? '') ? undefined : draft.comment } : action === 'rename' ? { ...base, name } : base);
+        const base = { ...target, action: operation, stamp: info.stamp };
+        const input = postgresSequenceManageSchema.parse(operation === 'edit' ? { ...base, ...draft,
+          comment: draft.comment === (info.comment ?? '') ? undefined : draft.comment } : operation === 'rename' ? { ...base, name } :
+          choosingTarget ? { ...base, key: choice } : base);
         const next = await invoke('postgres.sequence.manage.preview', input);
         if ((useWorkspace.getState().connectionVersions[target.connectionId] ?? 0) === version) setPreview(next);
       } else {
         const result = await invoke('postgres.sequence.manage.apply', { connectionId: target.connectionId,
           database: target.database, token: preview.token });
-        if (result.outcome === 'committed' && result.table) onManaged(result.table, result.message);
+        if (result.outcome === 'committed' && result.table) onManaged(operation, result.table, result.message);
         else {
           setUnknown(result.outcome === 'unknown');
           setError(result.message);
@@ -139,8 +168,9 @@ function PostgresManageSequenceDialog({ target, action, info, version, onClose, 
     setError('');
   }
 
-  const hint = action === 'edit' ? text.editHint : action === 'rename' ? text.renameHint : text.dropHint;
-  const confirm = action === 'edit' ? text.applyEdit : action === 'rename' ? text.applyRename : text.applyDrop;
+  const hint = { edit: text.editHint, rename: text.renameHint, drop: text.dropHint, bind: text.bindHint,
+    detach: text.detachHint, owner: text.transferHint }[operation];
+  const confirm = { edit: text.applyEdit, rename: text.applyRename, drop: text.applyDrop, ownership: text.applyOwnership }[action];
   return <Modal title={text[action]} wide onClose={close}>
     <div className="modal-content pg-create-content">
       <strong>{target.database} / {target.table}</strong><p>{hint}</p>
@@ -149,8 +179,31 @@ function PostgresManageSequenceDialog({ target, action, info, version, onClose, 
       {preview ? <>
         <pre className="pg-create-sql">{preview.statements.join(';\n') + ';'}</pre>
         {needsAcknowledgement && <label><input type="checkbox" checked={acknowledged} disabled={stale}
-          onChange={event => setAcknowledged(event.target.checked)}/> {action === 'drop' ? text.acknowledge : text.acknowledgeRestart}</label>}
+          onChange={event => setAcknowledged(event.target.checked)}/> {action === 'ownership' ? text.acknowledgeOwnership :
+            action === 'drop' ? text.acknowledge : text.acknowledgeRestart}</label>}
       </> : <fieldset disabled={busy || unknown || stale}>
+        {action === 'ownership' && <>
+          <Field label={text.ownershipMode}><select aria-label={text.ownershipMode} value={ownership} onChange={event => {
+            setOwnership(event.target.value as OwnershipAction); setSearch(''); resetTargets();
+          }}>
+            <option value="bind">{text.bind}</option>
+            {info.ownedBy ? <option value="detach">{text.detach}</option> : <option value="owner">{text.transfer}</option>}
+          </select></Field>
+          {choosingTarget && <>
+            <Field label={text.targetSearch}><input value={search} maxLength={256} onChange={event => {
+              setSearch(event.target.value); resetTargets();
+            }}/></Field>
+            <Field label={text.targetChoice}><select aria-label={text.targetChoice} value={choice} disabled={!targets?.choices.length}
+              onChange={event => { setChoice(event.target.value); setDirty(true); setError(''); }}>
+              <option value="">{text.targetPlaceholder}</option>
+              {targets?.choices.map(item => <option value={item.key} key={item.key}>{item.label}</option>)}
+            </select></Field>
+            {!targets && !targetsError && !stale && <Spinner text={text.loading}/>}
+            <ErrorBox message={targetsError}/>
+            {targets && !targets.choices.length && <p>{text.targetEmpty}</p>}
+            {targets?.limited && <p>{text.targetLimited}</p>}
+          </>}
+        </>}
         {action === 'rename' && <Field label={text.name}><input value={name} maxLength={63}
           onChange={event => { setName(event.target.value); setDirty(true); setError(''); }}/></Field>}
         {action === 'edit' && <>
@@ -172,7 +225,8 @@ function PostgresManageSequenceDialog({ target, action, info, version, onClose, 
       {preview && <button disabled={busy} onClick={back}>{text.back}</button>}
       <span className="grow"/><button disabled={busy} onClick={close}>{zh.common.close}</button>
       <button className="primary" disabled={busy || stale || unknown || (preview && needsAcknowledgement && !acknowledged) ||
-        (action === 'rename' && (!name.trim() || name === info.name))} onClick={() => void submit()}>{preview ? confirm : text.preview}</button>
+        (action === 'rename' && (!name.trim() || name === info.name)) || (choosingTarget && !choice)}
+        onClick={() => void submit()}>{preview ? confirm : text.preview}</button>
     </footer>
   </Modal>;
 }

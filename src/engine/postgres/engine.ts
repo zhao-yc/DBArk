@@ -1,4 +1,4 @@
-import { postgresSequenceVisibleSql, readPostgresSequence } from './sequence';
+import { postgresSequenceTargets, postgresSequenceVisibleSql, readPostgresSequence } from './sequence';
 import { randomUUID } from 'node:crypto';
 import type {
   ConnectionProfile,
@@ -636,11 +636,17 @@ export class PostgresEngine {
           command === 'postgres.sequence.manage.apply' ? 'sequenceManage' : command === 'postgres.sequence.apply' ? 'sequence' : command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
       }
       case 'postgres.sequence.read':
+      case 'postgres.sequence.targets':
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的PostgreSQL结构连接');
         if (command === 'postgres.sequence.read') return this.use(profile, input.database,
           async connection => (await readPostgresSequence(connection, input.table)).info);
+        if (command === 'postgres.sequence.targets') return this.use(profile, input.database, async connection => {
+          const original = await readPostgresSequence(connection, input.table);
+          if (original.info.stamp !== input.stamp) throw Error('原序列已变化，请刷新详情后继续');
+          return postgresSequenceTargets(connection, original, input.kind, input.search);
+        });
         return this.use(profile, input.database, connection => readPostgresStructure(connection, input.table));
       }
       case 'postgres.columnEdit.preview':

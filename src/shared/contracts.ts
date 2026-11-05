@@ -288,6 +288,7 @@ export interface CommandMap {
   'postgres.sequence.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.sequence.manage.preview': { input: import('./postgresSequence').PostgresSequenceManageInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.sequence.manage.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
+  'postgres.sequence.targets': { input: import('./postgresSequence').PostgresSequenceTargetsInput; output: import('./postgresSequence').PostgresSequenceTargets };
   'postgres.structure.read': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresStructure').PostgresStructureResult };
   'postgres.columnEdit.preview': { input: import('./postgresColumnEdit').PostgresColumnPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.columnEdit.apply': { input: import('./postgresColumnEdit').PostgresColumnApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };

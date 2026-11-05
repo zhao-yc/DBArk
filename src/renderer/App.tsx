@@ -1061,7 +1061,7 @@ function WorkspaceApp() {
         if ((current.connectionVersions[ddl.connectionId] ?? 0) !== version) return;
         refreshRenameDatabase({ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: name });
         if (action === 'rename') setDdl({ ...ddl, object: { kind: 'sequence', name } });
-        if (action === 'drop') setDdl(null);
+        if (action === 'drop' || action === 'owner') setDdl(null);
       }}
       onClose={() => setDdl(null)}/> : <PostgresStructureDialog key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])} target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: ddl.object.name }} onDirtyChange={setColumnEdits} onEdited={finishPostgresColumnEdit} onManaged={finishPostgresViewManage} onClose={() => setDdl(null)}/> : <DdlDialog {...ddl} onDirtyChange={setDatabaseCreateEdits} onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {transfer && <TransferDialog {...transfer} onClose={() => setTransfer(null)}/>}{importNewTable && <ImportNewTableDialog {...importNewTable} onSqliteCreated={finishSqliteImportNewTableCreate} onCreated={finishTableCreate} onDirtyChange={setImportNewTableEdits} onClose={() => { setImportNewTable(null); setImportNewTableEdits(false); }}/>}
     {objectPicker && <ObjectDatabasePicker connections={connections} preferredConnectionId={state.selection?.connectionId} onClose={() => setObjectPicker(null)} onOpen={(connectionId, database) => openObjectBrowser(objectPicker, { connectionId, database })}/>}

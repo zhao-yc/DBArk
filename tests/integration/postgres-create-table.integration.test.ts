@@ -394,6 +394,8 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       const applySequenceManage = (token: string) => engine.handle('postgres.sequence.manage.apply', { ...target, token });
       const manageSequence = async (table: string, operation: Record<string, unknown>) => engine.handle('postgres.sequence.manage.preview',
         { ...target, table, stamp: (await readSequence(table)).stamp, ...operation });
+      const sequenceTargets = async (table: string, kind: 'column' | 'role', search = '') => engine.handle('postgres.sequence.targets',
+        { ...target, table, stamp: (await readSequence(table)).stamp, kind, search });
       await expect(engine.handle('postgres.sequence.preview', { ...sequenceDraft, increment: '0' })).rejects.toThrow('非零');
       await expect(engine.handle('postgres.sequence.preview', { ...sequenceDraft, maximum: '9223372036854775808' })).rejects.toThrow('上下限');
       const newSequence = await engine.handle('postgres.sequence.preview', sequenceDraft);
@@ -432,6 +434,7 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       const identityOwner = { schema: draft.schema, relation: draft.table, column: '编号', identity: true };
       expect(identityInfo.ownedBy).toEqual(identityOwner);
       await expect(manageSequence(identityTarget, { action: 'drop' })).rejects.toThrow('标识列序列');
+      await expect(sequenceTargets(identityTarget, 'column')).rejects.toThrow('标识列序列');
       const { dataType, start, increment, minimum, maximum, cycle } = identityInfo;
       const identityEdit = await manageSequence(identityTarget, { action: 'edit', dataType, start, increment, minimum, maximum, cycle,
         cache: '2', restart: '' });
@@ -492,6 +495,63 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         start: '', increment: '-3', comment: '' });
       expect(await applySequence(descending.token)).toMatchObject({ outcome: 'committed' });
       expect(await readSequence('"生成.甲"."倒序"')).toMatchObject({ start: '-1', minimum: '-32768', maximum: '-1', increment: '-3' });
+
+      const dependencySequence = '"生成.甲"."字段依赖序列"', dependencyTable = '"生成.甲"."绑定.表"';
+      const dependencyLabel = dependencyTable + '."取""号"';
+      await client.query(`CREATE SEQUENCE ${dependencySequence} START WITH 42; CREATE TABLE ${dependencyTable} (
+        "取""号" bigint DEFAULT nextval('${dependencySequence}'::regclass)); CREATE TABLE "另一个"."绑定.表" ("取""号" bigint)`);
+      expect(await readSequence(dependencySequence)).toMatchObject({ owner: database, ownedBy: null });
+      const bindTargets = await sequenceTargets(dependencySequence, 'column', '绑定.表');
+      expect(bindTargets.choices).toHaveLength(1);
+      const [binding] = bindTargets.choices;
+      expect(binding.label).toBe(dependencyLabel);
+      const bindSequence = () => manageSequence(dependencySequence, { action: 'bind', key: binding.key });
+      const staleBinding = await bindSequence();
+      expect(staleBinding.statements[1]).toContain('OWNED BY ' + dependencyLabel);
+      await client.query(`ALTER TABLE ${dependencyTable} RENAME COLUMN "取""号" TO "外部改名"`);
+      expect(await applySequenceManage(staleBinding.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('名称已变化') });
+      expect((await readSequence(dependencySequence)).ownedBy).toBeNull();
+      await client.query(`ALTER TABLE ${dependencyTable} RENAME COLUMN "外部改名" TO "取""号"`);
+      expect(await applySequenceManage((await bindSequence()).token)).toMatchObject({ outcome: 'committed' });
+      expect(await readSequence(dependencySequence)).toMatchObject({ ownedBy: { schema: draft.schema, relation: '绑定.表', column: '取"号', identity: false } });
+      await expect(sequenceTargets(dependencySequence, 'role')).rejects.toThrow('已绑定字段');
+      const detachSequence = await manageSequence(dependencySequence, { action: 'detach' });
+      expect(detachSequence.statements[1]).toContain('OWNED BY NONE');
+      expect(await applySequenceManage(detachSequence.token)).toMatchObject({ outcome: 'committed' });
+      expect((await readSequence(dependencySequence)).ownedBy).toBeNull();
+      expect((await client.query(`INSERT INTO ${dependencyTable} DEFAULT VALUES RETURNING "取""号"::text AS value`)).rows)
+        .toEqual([{ value: '42' }]);
+      expect(await applySequenceManage((await bindSequence()).token)).toMatchObject({ outcome: 'committed' });
+      await client.query(`DROP TABLE ${dependencyTable}`);
+      expect(await indexOid(dependencySequence)).toBeNull();
+
+      const transferUser = process.env.DBARK_POSTGRES_SEQUENCE_OWNER;
+      if (transferUser === database + '_sequence_owner') {
+        const sequenceToTransfer = '"生成.甲"."转移序列"';
+        await client.query(`CREATE SEQUENCE ${sequenceToTransfer} START WITH 123; GRANT USAGE ON SCHEMA "生成.甲" TO ${transferUser}`);
+        expect((await sequenceTargets(sequenceToTransfer, 'role', transferUser)).choices).toEqual([]);
+        await client.query(`GRANT CREATE ON SCHEMA "生成.甲" TO ${transferUser}`);
+        const { choices: [recipient] } = await sequenceTargets(sequenceToTransfer, 'role', transferUser);
+        expect(recipient.label).toBe(transferUser);
+        expect((await sequenceTargets(sequenceToTransfer, 'role', '%')).choices).toEqual([]);
+        const transferSequence = () => manageSequence(sequenceToTransfer, { action: 'owner', key: recipient.key });
+        const revokedTransfer = await transferSequence();
+        await client.query(`REVOKE CREATE ON SCHEMA "生成.甲" FROM ${transferUser}`);
+        expect(await applySequenceManage(revokedTransfer.token)).toMatchObject({ outcome: 'rolledBack' });
+        expect((await readSequence(sequenceToTransfer)).owner).toBe(database);
+        await client.query(`GRANT CREATE ON SCHEMA "生成.甲" TO ${transferUser}`);
+        const transferOid = await indexOid(sequenceToTransfer);
+        const transferPlan = await transferSequence();
+        expect(transferPlan.statements[1]).toContain('OWNER TO "' + transferUser + '"');
+        expect(await applySequenceManage(transferPlan.token)).toMatchObject({ outcome: 'committed' });
+        expect(await indexOid(sequenceToTransfer)).toBe(transferOid);
+        await expect(readSequence(sequenceToTransfer)).rejects.toThrow('不可见');
+        await client.query(`SET ROLE ${transferUser}`);
+        try {
+          expect((await client.query(`SELECT last_value::text, is_called FROM ${sequenceToTransfer}`)).rows)
+            .toEqual([{ last_value: '123', is_called: false }]);
+        } finally { await client.query('RESET ROLE'); }
+      }
 
       const closed = await prepare({ table: '关闭' });
       await engine.handle('connections.close', { id });

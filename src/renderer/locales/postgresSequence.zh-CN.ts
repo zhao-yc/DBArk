@@ -19,4 +19,12 @@ export const postgresSequenceZh = {
   applyEdit: '确认更新序列', applyRename: '确认重命名序列', applyDrop: '确认删除序列',
   acknowledge: '我确认删除此序列', acknowledgeRestart: '我确认重设下次取号值',
   unknownManage: '操作结果未确认，请关闭窗口后在原数据库核对。',
+  owner: '所有者角色', ownership: '管理序列归属', ownershipMode: '归属操作',
+  bind: '绑定所属字段', detach: '解除字段绑定', transfer: '转移所有者角色',
+  bindHint: '绑定后，删除所属字段或关系会同时删除序列。此操作保留字段的默认表达式。',
+  detachHint: '解除后，序列独立保留。现有默认表达式及其他引用仍然有效。',
+  transferHint: '转移后，当前角色可能失去查看或管理序列的权限。',
+  targetSearch: '搜索字段或角色', targetChoice: '目标字段或角色', targetPlaceholder: '请选择目标',
+  targetEmpty: '没有符合条件的候选对象。', targetLimited: '仅显示前 100 项，可输入名称缩小范围。',
+  acknowledgeOwnership: '我确认修改序列归属', applyOwnership: '确认修改归属',
 } as const;

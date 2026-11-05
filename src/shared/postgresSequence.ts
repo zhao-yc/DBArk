@@ -22,16 +22,26 @@ export const postgresSequenceInfoSchema = z.object({
   start: integer, increment: integer, minimum: integer, maximum: integer, cache: integer,
   cycle: z.boolean(), lastValue: integer.nullable(), comment: z.string().nullable(),
   ownedBy: z.object({ schema: z.string(), relation: z.string(), column: z.string(), identity: z.boolean() }).strict().nullable(),
+  owner: z.string().min(1),
   canManage: z.boolean(), stamp: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 export type PostgresSequenceInfo = z.infer<typeof postgresSequenceInfoSchema>;
 
 const manageTarget = postgresStructureInputSchema.extend({ stamp: postgresSequenceInfoSchema.shape.stamp });
+const roleKey = z.string().regex(/^[1-9][0-9]{0,9}$/);
+const columnKey = z.string().regex(/^[1-9][0-9]{0,9}:[1-9][0-9]{0,3}$/);
+export const postgresSequenceTargetsSchema = manageTarget.extend({ kind: z.enum(['column', 'role']),
+  search: z.string().max(256).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)) }).strict();
+export type PostgresSequenceTargetsInput = z.infer<typeof postgresSequenceTargetsSchema>;
+export type PostgresSequenceTargets = { choices: { key: string; label: string }[]; limited: boolean };
 export const postgresSequenceManageSchema = z.discriminatedUnion('action', [
   manageTarget.extend({ action: z.literal('edit'), ...sequenceSettings.shape, comment: postgresDdlText.optional(),
     restart: integer.or(z.literal('')) }).strict(),
   manageTarget.extend({ action: z.literal('rename'), name: postgresNewIdentifier }).strict(),
   manageTarget.extend({ action: z.literal('drop') }).strict(),
+  manageTarget.extend({ action: z.literal('bind'), key: columnKey }).strict(),
+  manageTarget.extend({ action: z.literal('detach') }).strict(),
+  manageTarget.extend({ action: z.literal('owner'), key: roleKey }).strict(),
 ]);
 export type PostgresSequenceManageInput = z.infer<typeof postgresSequenceManageSchema>;
 

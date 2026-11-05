@@ -1,6 +1,6 @@
 import { postgresSequenceEditPlan, postgresSequenceManageSchema, postgresSequencePlan, type PostgresSequenceCreateInput,
   type PostgresSequenceManageInput } from '../../shared/postgresSequence';
-import { readPostgresSequence, readPostgresSequenceAllocation } from './sequence';
+import { postgresSequenceTargets, readPostgresSequence, readPostgresSequenceAllocation } from './sequence';
 import { randomUUID } from 'node:crypto';
 import {
   postgresCreateTablePlan, type PostgresCreateTableApply, type PostgresCreateTableInput,
@@ -213,6 +213,37 @@ export class PostgresCreateTableWorkspace {
                 '(c.relnamespace = $2::oid AND c.relname::text = $3))', [original.oid, original.schemaOid, name], budget());
               if (result.truncated || result.rows.length !== 1 || result.rows[0].c0 !== 'f')
                 throw Error('未确认原序列已从目录删除');
+            },
+          };
+        }
+        if (action.action === 'bind' || action.action === 'detach' || action.action === 'owner') {
+          const transfer = action.action === 'owner';
+          if (original.info.ownedBy?.identity) throw Error('标识列序列须随所属字段管理');
+          if (action.action === 'detach' && !original.info.ownedBy) throw Error('原序列没有所属字段');
+          if (action.action === 'bind' && action.key === original.associationKey) throw Error('序列已绑定该字段');
+          const find = async (current: PostgresConnection) => {
+            if (action.action === 'detach') return 'NONE';
+            const { choices } = await postgresSequenceTargets(current, original, transfer ? 'role' : 'column', '', action.key);
+            if (!choices[0]) throw Error('目标字段或角色已变化，或当前角色没有所需权限');
+            return choices[0].label;
+          };
+          const destination = await find(connection);
+          return { ...guard, table,
+            success: transfer ? 'PostgreSQL 序列所有者已确认更新' : 'PostgreSQL 序列所属字段已确认更新',
+            statements: ['ALTER SEQUENCE ' + table + (transfer ? ' OWNER TO ' + postgresIdentifier(destination) : ' OWNED BY ' + destination)],
+            async preflight(current) {
+              const stamp = await guard.preflight!(current);
+              if (await find(current) !== destination) throw Error('目标字段或角色名称已变化，请重新预览');
+              return stamp;
+            },
+            async verify(current) {
+              // 转移后原角色可能失去读取权限，仅用已锁定的序列 OID 回读本次事务结果。
+              const actual = await readPostgresSequence(current, table, transfer ? original.oid : undefined);
+              const association = action.action === 'bind' ? action.key : null;
+              const identityMatches = transfer ? actual.oid === original.oid && actual.schemaOid === original.schemaOid &&
+                actual.ownerOid === action.key && actual.persistence === original.persistence : actual.objectIdentity === original.objectIdentity;
+              if (!identityMatches || actual.definition !== original.definition || actual.associationKey !== association || actual.info.ownedBy?.identity)
+                throw Error('实际序列身份或归属与预览不同，未提交');
             },
           };
         }

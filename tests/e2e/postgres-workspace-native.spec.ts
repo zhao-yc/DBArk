@@ -1666,6 +1666,31 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await renameSequence.getByRole('button', { name: sequenceText.applyRename, exact: true }).click();
     await expect(sequenceInfo.getByText(/窗口改名序列/)).toBeVisible();
     await expect(sequenceInfo.getByRole('table')).toContainText('窗口改后注释');
+
+    await sequenceInfo.getByRole('button', { name: sequenceText.ownership, exact: true }).click();
+    const sequenceOwnership = page.getByRole('dialog', { name: sequenceText.ownership, exact: true });
+    await sequenceOwnership.getByLabel(sequenceText.targetSearch, { exact: true }).fill('带"引号');
+    const expectedBinding = '"回归"."带""引号"."id"';
+    await sequenceOwnership.getByLabel(sequenceText.targetChoice, { exact: true }).selectOption({ label: expectedBinding });
+    await sequenceOwnership.getByRole('button', { name: sequenceText.preview, exact: true }).click();
+    await expect(sequenceOwnership.locator('pre')).toContainText('OWNED BY ' + expectedBinding);
+    const confirmOwnership = sequenceOwnership.getByRole('button', { name: sequenceText.applyOwnership, exact: true });
+    await expect(confirmOwnership).toBeDisabled();
+    await sequenceOwnership.getByRole('checkbox', { name: sequenceText.acknowledgeOwnership, exact: true }).check();
+    await page.screenshot({ path: info.outputPath('PostgreSQL序列归属预览.png') });
+    await confirmOwnership.click();
+    await expect(sequenceInfo.getByRole('table')).toContainText(expectedBinding);
+    await sequenceInfo.getByRole('button', { name: sequenceText.ownership, exact: true }).click();
+    const ownershipMode = sequenceOwnership.getByLabel(sequenceText.ownershipMode, { exact: true });
+    await expect(ownershipMode.locator('option[value="owner"]')).toHaveCount(0);
+    await ownershipMode.selectOption('detach');
+    await sequenceOwnership.getByRole('button', { name: sequenceText.preview, exact: true }).click();
+    await expect(sequenceOwnership.locator('pre')).toContainText('OWNED BY NONE');
+    await sequenceOwnership.getByRole('checkbox', { name: sequenceText.acknowledgeOwnership, exact: true }).check();
+    await confirmOwnership.click();
+    await expect(sequenceInfo.getByRole('row').filter({ hasText: sequenceText.ownedBy })).toContainText('—');
+    await mark('原生按名称搜索同 schema 的字段并绑定或解绑，按目录回读呈现所属字段');
+
     await sequenceInfo.getByRole('button', { name: zh.common.close, exact: true }).click();
     await expect(sequenceRow).toHaveCount(0);
     await expect(page.locator('.object-row').filter({ hasText: '窗口改名序列' })).toBeVisible();
@@ -1687,6 +1712,27 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(disposableSequence).toHaveCount(0);
     await expect(page.locator('.object-row').filter({ hasText: '窗口删除序列' })).toHaveCount(0);
     await mark('原生窗口独立确认受限删除序列，刷新对象树和序列列表');
+
+    const recipientRole = process.env.DBARK_POSTGRES_SEQUENCE_OWNER;
+    if (recipientRole === database + '_sequence_owner') {
+      const sequenceToTransfer = page.locator('.object-list-row .tree-label').filter({ hasText: '窗口转移序列' });
+      await sequenceToTransfer.dblclick();
+      await expect(sequenceInfo.getByRole('row').filter({ hasText: sequenceText.owner })).toContainText(database);
+      await sequenceInfo.getByRole('button', { name: sequenceText.ownership, exact: true }).click();
+      await ownershipMode.selectOption('owner');
+      await sequenceOwnership.getByLabel(sequenceText.targetSearch, { exact: true }).fill('_sequence_owner');
+      await sequenceOwnership.getByLabel(sequenceText.targetChoice, { exact: true }).selectOption({ label: recipientRole });
+      await sequenceOwnership.getByRole('button', { name: sequenceText.preview, exact: true }).click();
+      await expect(sequenceOwnership.locator('pre')).toContainText('OWNER TO "' + recipientRole + '"');
+      await expect(confirmOwnership).toBeDisabled();
+      await sequenceOwnership.getByRole('checkbox', { name: sequenceText.acknowledgeOwnership, exact: true }).check();
+      await confirmOwnership.click();
+      await expect(page.getByText('PostgreSQL 序列所有者已确认更新', { exact: true })).toBeVisible();
+      await expect(sequenceOwnership).toHaveCount(0);
+      await expect(sequenceToTransfer).toHaveCount(0);
+      await expect(page.locator('.object-row').filter({ hasText: '窗口转移序列' })).toHaveCount(0);
+      await mark('原生转移序列角色后确认提交，原角色失去查看权限时两个目录同步移除');
+    }
     await page.locator('.tab-strip .tab-close').click();
 
 
