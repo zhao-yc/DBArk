@@ -156,6 +156,7 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
 export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.dialect === 'sqlite' ? undefined : profile.database, signal?: AbortSignal, onResources?: (resources: ConnectionResourceRecovery) => void): Promise<ManagedConnection> {
   // SQLite由独立文件驱动处理，必须在分配任何MySQL/SSH/TLS资源前拒绝误路由。
   if (profile.dialect === 'sqlite') throw new Error('SQLite连接不能交给MySQL网络驱动');
+  if (profile.dialect === 'postgresql') throw new Error('PostgreSQL连接不能交给MySQL网络驱动');
   assertConnectionReady(profile);
   assertTlsPassphrase(profile.tls?.passphrase);
   let ssh: SshClient | undefined;

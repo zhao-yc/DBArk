@@ -1,3 +1,4 @@
+import { sameConnectionFamily } from '../shared/connectionDialect';
 import { randomUUID } from 'node:crypto';
 import type { ConnectionProfile } from '../shared/contracts';
 import { connectionTransportChanged } from '../shared/connectionProfile';
@@ -52,7 +53,7 @@ export class ConnectionConfigManager {
     const profile = { ...input, id: input.id || randomUUID() };
     this.assertAvailable(profile.id);
     const previous = this.store.connections().find(item => item.id === profile.id);
-    if (previous && (previous.dialect === 'sqlite') !== (profile.dialect === 'sqlite')) throw new Error('不能更改已有连接的数据库类型，请另建连接');
+    if (previous && !sameConnectionFamily(previous.dialect, profile.dialect)) throw new Error('不能更改已有连接的数据库类型，请另建连接');
     // 先按公开概要判断编辑意图，不能因旧系统密文不可解密而阻止用户重填新密码修复连接。
     if (previous && !connectionTransportChanged(previous, profile)) {
       assertCurrent?.();

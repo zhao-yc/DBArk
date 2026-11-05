@@ -1,3 +1,4 @@
+import { PostgresEngine } from './postgres/engine';
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { verifyTableDraft } from './tableDraftVerify';
 import { readRoutineInvocationMetadata, type RoutineInvocationInput } from './routineInvocationMetadata';
@@ -138,6 +139,7 @@ type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
 export class Engine {
+  private readonly postgres = new PostgresEngine(event => this.emit(event));
   private readonly excelReads = new ExcelReadTasks(event => this.emit(event));
   private readonly importInspections = new ImportFileInspectTasks(event => this.emit(event));
   private readonly excelConnecting = new Map<string, { connectionId: string; controller: AbortController; done: Promise<void> }>();
@@ -212,6 +214,15 @@ export class Engine {
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
+    if (command === '__connections.prepareSave') this.postgres.prepareSave(input);
+    else if (this.postgres.accepts(input)) {
+      if (this.closing && !['connections.close', 'sessions.close', 'query.cancel', 'query.sessionState'].includes(command)) {
+        throw Error('数据库引擎正在关闭，不能开始新操作');
+      }
+      // 各驱动共用任务事件和取消入口，必须在分流前保证编号唯一。
+      if ((command === 'query.execute' || command === 'query.executeParameterized') && this.taskIdInUse(input.taskId)) throw Error('任务编号已使用');
+      return this.postgres.handle(command, input);
+    }
     if (command.startsWith('sqlite.')) throw Error('SQLite专用接口不能进入MySQL网络引擎');
     // 网络引擎只接受网络配置；跨进程误路由不能缓存SQLite身份或进入mysql2。
     if (command !== '__connections.prepareSave' && (input.dialect === 'sqlite' || [input.profile, input.sourceProfile, input.targetProfile].some(profile => profile?.dialect === 'sqlite'))) throw new Error('SQLite连接不能交给MySQL网络引擎');
@@ -301,7 +312,9 @@ export class Engine {
         conflicts.forEach(task => { if (task.phase === 'connecting') task.controller.abort(); });
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
-        const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+        // 退出意图必须在首个await前传给所有驱动，不能让PostgreSQL收尾延迟原MySQL建连取消。
+    const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup,
+      ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id)), this.postgres.closeAll()]);
         await Promise.all([...connecting.map(task => task.done), ...conflicts.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         const recovered = await this.independentResources.recover(input.id);
@@ -772,7 +785,7 @@ export class Engine {
   }
 
   /** 所有任务通道共用编号占用检查，避免集成后取消误命中另一种活动任务。 */
-  private taskIdInUse(id: string): boolean { return this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.importInspections.has(id) || this.excelConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id); }
+  private taskIdInUse(id: string): boolean { return this.postgres.ownsTask(id) || this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.importInspections.has(id) || this.excelConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id); }
 
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {

@@ -1,3 +1,4 @@
+import { sameConnectionFamily } from '../shared/connectionDialect';
 import type { SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import { SqliteTableDraftFiles, bindSqliteTableDraft, assertSqliteTableDraftBinding } from './sqliteTableDraftFiles';
 import { tableDraftEndpointKey } from './tableDraftBinding';
@@ -1303,6 +1304,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       columns!.objectDefinitionPublication = (output?: unknown) => {
         columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(original.connectionId);
         if (shuttingDown || store.connectionRevision() !== revision || original.sessionId && sessions.get(original.sessionId) !== session) throw Error('对象结构原窗口、连接或会话已变化，请重新读取');
+        if (profile.dialect === 'postgresql') throw Error('PostgreSQL对象定义导航尚未接入');
         if (output !== undefined) assertObjectDefinitionOutput(output, original, profile.dialect);
       };
       columns!.objectDefinitionPublication();
@@ -1429,7 +1431,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
     case 'connections.test': {
       const previous = store.connections().find(profile => profile.id === input.id);
-      if (previous && (previous.dialect === 'sqlite') !== (input.dialect === 'sqlite')) throw Error('已保存连接不能在SQLite与网络数据库之间切换，请另建连接');
+      if (previous && !sameConnectionFamily(previous.dialect, input.dialect)) throw Error('不能更改已有连接的数据库类型，请另建连接');
       input = input.dialect === 'sqlite' ? sqliteFiles.confirm(input, previous, columns!) : { ...input, pendingFiles: [...new Set([...(previous?.dialect !== 'sqlite' ? previous?.pendingFiles : undefined) ?? [], ...input.pendingFiles ?? []])] };
       assertConnectionReady(input); input = store.resolveConnection(input.id, input as ConnectionProfile); break;
     }

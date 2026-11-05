@@ -1,0 +1,32 @@
+/** PostgreSQL查询使用真实协议状态，不把MySQL会话或取消语义套到另一驱动。 */
+export const postgresZh = {
+  execute: '执行选区或全部',
+  current: '执行当前语句',
+  parameters: '执行位置参数',
+  stop: '停止 PostgreSQL 查询',
+  format: '格式化 PostgreSQL SQL',
+  save: '保存查询',
+  history: '执行历史',
+  reconnect: '关闭原会话并重新连接',
+  begin: '开始事务',
+  commit: '提交事务',
+  rollback: '回滚事务',
+  idle: '事务空闲',
+  transaction: '事务进行中',
+  failedTransaction: '事务已失败，请回滚后继续',
+  unknown: '会话状态未知，请核对原数据库；不会自动重连或重放写入。',
+  changed: '原查询、连接或输入已经变化，本次未发送后继SQL。',
+  connecting: '正在准备 PostgreSQL 原会话',
+  running: '正在等待 PostgreSQL 原查询终态',
+  noSql: '没有可执行的SQL',
+  confirmReconnect:
+    '关闭原PostgreSQL会话？未提交事务将放弃。若原写入结果未知，请先核对数据库；重新连接不会重放任何SQL。',
+  parameterHint: 'PostgreSQL使用$1、$2等连续位置参数，对应下方p1、p2；值通过协议绑定，不插入SQL文本。',
+  retainedSave: '查询已保存到本地查询目录，但原页已变化，请重新核对；原输入没有被覆盖。',
+  closeFailed: 'PostgreSQL原会话关闭未确认，请保留现场并显式断开原连接：',
+  empty: '执行SQL后在此显示结果',
+  result: (index: number, command: string, rows: number) => `${index + 1} · ${command} · ${rows} 行`,
+  complete: (command: string, rows?: number) =>
+    `服务器回执：${command}${rows === undefined ? '' : ` · 影响 ${rows} 行`}`,
+  truncated: '显示结果达到行数或16MiB预算，未显示部分已截断；SQL仍按原意执行。',
+} as const;

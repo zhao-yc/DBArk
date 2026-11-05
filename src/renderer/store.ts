@@ -1,3 +1,4 @@
+import { postgresRelationSelect } from '../shared/postgresSql';
 import { isSqliteRelatedTabId } from '../shared/sqliteRelatedTab';
 import { assertSqliteTableRebuildFactTransition, sqliteTableRebuildFactSchema } from '../shared/sqliteTableRebuild';
 import { sqliteTableRebuildFactMessage, sqliteTableRebuildTaskMessage } from '../shared/sqliteTableRebuildFact';
@@ -193,6 +194,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   updateSettings: update => commitWorkspaceSettings(update),
   /** 表页与每库对象目录各自复用；SQL查询始终保持独立标签和会话。 */
   openTab: candidate => {
+    if(candidate.kind==='table'&&get().connections.find(profile=>profile.id===candidate.connectionId)?.dialect==='postgresql')candidate={kind:'query',title:candidate.title,connectionId:candidate.connectionId,database:candidate.database,sql:postgresRelationSelect(candidate.table!)};
     const current = get().settings;
     const existing = candidate.kind === 'table' ? current.tabs.find(tab => !isSqliteRelatedTabId(candidate.id) && !isSqliteRelatedTabId(tab.id) && tab.kind === 'table' && tab.connectionId === candidate.connectionId && tab.database === candidate.database && tab.table === candidate.table)
       : candidate.kind === 'objects' ? current.tabs.find(tab => tab.kind === 'objects' && tab.connectionId === candidate.connectionId && tab.database === candidate.database) : undefined;

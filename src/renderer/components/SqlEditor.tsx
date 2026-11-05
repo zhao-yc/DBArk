@@ -55,7 +55,9 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect, completion, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
+  // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
+  const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
   const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { LocalStore } from '../../src/main/storage';
 import initSqlJs from 'sql.js';
-import type { NetworkConnectionProfile as ConnectionProfile } from '../../src/shared/contracts';
+import type { NetworkConnectionProfile as ConnectionProfile, PostgresConnectionProfile } from '../../src/shared/contracts';
 const require = createRequire(import.meta.url);
 const temporary: string[] = [];
 const profile: ConnectionProfile = { id: 'test', name: '测试数据库', host: '127.0.0.1', port: 3306, user: 'test', group: '开发', color: '#abcdef', dialect: 'mysql', password: 'never-plaintext-123', rememberPassword: true };
@@ -35,6 +35,22 @@ describe('配置与凭据持久化', () => {
     store.close(); expect(readFileSync(path).includes(Buffer.from(profile.password!))).toBe(false);
     const restored = await LocalStore.open(path, require.resolve('sql.js/dist/sql-wasm.wasm'), protector);
     expect(assertNetworkProfile(restored.resolveConnection('test')).password).toBe(profile.password); restored.close();
+  });
+  it('测试和保存不能借用另一驱动的连接凭据', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dbark-test-')); temporary.push(directory);
+    let reads = 0;
+    const store = await LocalStore.open(join(directory, 'test.sqlite'), require.resolve('sql.js/dist/sql-wasm.wasm'), {
+      ...protector, decrypt(value) { reads++; return protector.decrypt(value); },
+    });
+    try {
+      store.saveConnection(profile);
+      const postgres: PostgresConnectionProfile = { ...profile, dialect: 'postgresql', password: undefined, port: 5432 };
+      expect(() => store.resolveConnection(profile.id, postgres)).toThrow('不能更改已有连接的数据库类型');
+      expect(() => store.saveConnection(postgres)).toThrow('不能更改已有连接的数据库类型');
+      expect(reads).toBe(0);
+      expect(store.resolveConnection(profile.id, { ...profile, dialect: 'mariadb', password: undefined }).password).toBe(profile.password);
+      expect(reads).toBe(1);
+    } finally { store.close(); }
   });
   it('系统加密不可用时密码只存在当前会话', async () => {
     const { store, path } = await open(false); store.saveConnection(profile);

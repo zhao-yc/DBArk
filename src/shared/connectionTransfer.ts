@@ -1,5 +1,6 @@
+import { sameConnectionFamily } from './connectionDialect';
 import { z } from 'zod';
-import type { ConnectionProfile, NetworkConnectionProfile, SqliteConnectionProfile } from './contracts';
+import type { ConnectionProfile, NetworkConnectionProfile, PostgresConnectionProfile, SqliteConnectionProfile } from './contracts';
 
 export const connectionTransferLimits = { connections: 500, fileBytes: 2 * 1024 * 1024, previewLifetimeMs: 10 * 60 * 1000, previews: 4 } as const;
 export const connectionFileRequirements = ['sshPrivateKey', 'tlsCa', 'tlsCert', 'tlsKey'] as const;
@@ -14,12 +15,13 @@ const exportedNetworkConnectionSchema = z.object({
   tls: z.object({ enabled: z.boolean(), rejectUnauthorized: z.boolean(), caFileName: fileName.optional(), certFileName: fileName.optional(), keyFileName: fileName.optional() }).strict().optional(),
 }).strict();
 /** SQLite交换材料只含文件名提示，绝不接受可生效路径或授权令牌。 */
-export const exportedConnectionSchema = z.discriminatedUnion('dialect', [exportedNetworkConnectionSchema, z.object({
+export const exportedConnectionSchema = z.discriminatedUnion('dialect', [exportedNetworkConnectionSchema, exportedNetworkConnectionSchema.extend({ dialect: z.literal('postgresql') }), z.object({
   id: identifier, name: z.string().min(1).max(256), group: z.string().max(100), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), dialect: z.literal('sqlite'),
   sqlite: z.object({ fileName: fileName.optional(), readOnly: z.boolean(), busyTimeoutMs: z.number().int().min(0).max(5000) }).strict(),
 }).strict()]);
 export type ExportedConnectionProfile = z.infer<typeof exportedConnectionSchema>;
 export type ExportedNetworkConnectionProfile = Extract<ExportedConnectionProfile, { dialect: 'mysql' | 'mariadb' }>;
+export type ExportedPostgresConnectionProfile = Extract<ExportedConnectionProfile, { dialect: 'postgresql' }>;
 export type ExportedSqliteConnectionProfile = Extract<ExportedConnectionProfile, { dialect: 'sqlite' }>;
 export const connectionTransferDocumentSchema = z.object({ format: z.literal('DBArk-connections'), version: z.literal(1), connections: z.array(exportedConnectionSchema).min(1).max(connectionTransferLimits.connections) }).strict().superRefine((document, context) => {
   const ids = new Set<string>();
@@ -48,6 +50,7 @@ export const connectionImportApplySchema = connectionImportReviewSchema.extend({
 function hint(path: string | undefined): string | undefined { return path?.split(/[\\/]/).at(-1) || undefined; }
 
 /** 导出采用字段白名单，公开概要中的凭据存在标记也不能被序列化。 */
+export function exportConnectionProfile(profile: PostgresConnectionProfile): ExportedPostgresConnectionProfile;
 export function exportConnectionProfile(profile: NetworkConnectionProfile): ExportedNetworkConnectionProfile;
 export function exportConnectionProfile(profile: SqliteConnectionProfile): ExportedSqliteConnectionProfile;
 export function exportConnectionProfile(profile: ConnectionProfile): ExportedConnectionProfile;
@@ -64,6 +67,7 @@ export function exportConnectionProfile(profile: ConnectionProfile): ExportedCon
 }
 
 /** 复制也必须重新选择本机认证文件；不复用秘密、存在标记或可生效路径。 */
+export function copyConnectionProfile(profile: PostgresConnectionProfile): PostgresConnectionProfile;
 export function copyConnectionProfile(profile: NetworkConnectionProfile): NetworkConnectionProfile;
 export function copyConnectionProfile(profile: SqliteConnectionProfile): SqliteConnectionProfile;
 export function copyConnectionProfile(profile: ConnectionProfile): ConnectionProfile;
@@ -72,6 +76,7 @@ export function copyConnectionProfile(profile: ConnectionProfile): ConnectionPro
 }
 
 /** 文件名仅作为提示；导入只生成缺文件标记，不将任何导入值作为本机路径。 */
+export function importConnectionProfile(profile: ExportedPostgresConnectionProfile, id: string): PostgresConnectionProfile;
 export function importConnectionProfile(profile: ExportedNetworkConnectionProfile, id: string): NetworkConnectionProfile;
 export function importConnectionProfile(profile: ExportedSqliteConnectionProfile, id: string): SqliteConnectionProfile;
 export function importConnectionProfile(profile: ExportedConnectionProfile, id: string): ConnectionProfile;
@@ -95,7 +100,7 @@ export function importConnectionProfile(profile: ExportedConnectionProfile, id: 
 
 /** 替换丢弃所有路径；旧认证文件即使被源概要省略也保留缺项，不能静默回退到另一认证方式。 */
 export function importReplacementProfile(profile: ExportedConnectionProfile, previous: ExportedConnectionProfile): ConnectionProfile {
-  if ((profile.dialect === 'sqlite') !== (previous.dialect === 'sqlite')) throw new Error('不能将已有连接替换为其他数据库类型，请另建连接');
+  if (!sameConnectionFamily(profile.dialect, previous.dialect)) throw new Error('不能将已有连接替换为其他数据库类型，请另建连接');
   const next = importConnectionProfile(profile, previous.id);
   if (next.dialect === 'sqlite') return next;
   const before = importConnectionProfile(previous, previous.id);

@@ -62,8 +62,8 @@ async function chooseNative(mode: 'open' | 'save', file?: string) {
   }, { mode, file });
 }
 /** 种子经真实存储 IPC 建立；刷新页面只让侧栏读取种子，不展开或连接目标。 */
-async function seed(input: ConnectionProfile) { return page.evaluate(value => window.dbark.invoke('connections.save', value).then(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), input); }
-async function list() { return page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if (profile.dialect === 'sqlite') throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))); }
+async function seed(input: ConnectionProfile) { return page.evaluate(value => window.dbark.invoke('connections.save', value).then(profile => { if ((profile.dialect === 'sqlite' || profile.dialect === 'postgresql')) throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }), input); }
+async function list() { return page.evaluate(() => window.dbark.invoke('connections.list', {}).then(profiles => profiles.map(profile => { if ((profile.dialect === 'sqlite' || profile.dialect === 'postgresql')) throw new Error('网络连接专项收到SQLite，停止当前验收'); return profile; }))); }
 async function reloadWorkspace() { await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible(); }
 /** UI 模式和文件选择保持用户实际顺序；不绕过预览直接发路径给业务接口。 */
 async function transfer(mode: 'export' | 'import') {

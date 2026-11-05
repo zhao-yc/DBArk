@@ -1648,7 +1648,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   /** 目录、选中和相邻跳转共用原分段规则，均不创建连接、会话或查询任务。 */
   function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' = 'panel'): void {
-    if (!queryMenuCurrent() || !connection || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || navigationIntent.current?.controller.busy) return;
+    if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || navigationIntent.current?.controller.busy) return;
     const model = instance.getModel(); if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
     const oneShot = action !== 'panel', direction = action === 'previous' ? -1 : action === 'next' ? 1 : undefined;
     const selections = oneShot ? instance.getSelections() : undefined;
@@ -1724,7 +1724,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function closeStatementNavigation(): void { const binding = navigationIntent.current; navigationIntent.current = null; binding?.controller.dispose(); setNavigationView(null); }
   /** 检查只读取原会话缓存；不创建会话、不执行正文，也不让树选择更换当前查询目标。 */
   function openSyntaxCheck(instance = editor.current): void {
-    if (sqlite || !queryMenuCurrent() || !connection || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || syntaxIntent.current?.controller.busy) return;
+    if (sqlite || !queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || syntaxIntent.current?.controller.busy) return;
     const model = instance.getModel();
     if (!model || model.isDisposed() || instance.getRawOptions().readOnly) return;
     closeStatementNavigation(); closeSyntaxCheck();
@@ -1770,7 +1770,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function closeSyntaxCheck(): void { const binding = syntaxIntent.current; syntaxIntent.current = null; binding?.controller.dispose(); setSyntaxView(null); }
   /** 捕获活动查询的原模型与连接；树选择不会成为这个对象导航的目标。 */
   function openObjectStructure(instance = editor.current): void {
-    if (!queryMenuCurrent() || !connection || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || objectDefinitionRef.current) return;
+    if (!queryMenuCurrent() || !connection || connection.dialect === 'postgresql' || !instance || instance !== editor.current || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id] || objectDefinitionRef.current) return;
     const model = instance.getModel(), position = instance.getPosition();
     if (!model || model.isDisposed() || !position || instance.getRawOptions().readOnly) return;
     const version = model.getVersionId(), originalSession = sessionRef.current, profile = connection;

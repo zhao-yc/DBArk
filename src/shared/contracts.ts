@@ -76,9 +76,11 @@ export interface SqliteConnectionProfile {
   sqlite: { filePath?: string; fileName?: string; fileToken?: string; readOnly: boolean; busyTimeoutMs: number };
   pendingFiles?: ('sqliteDatabase')[];
 }
-export type ConnectionProfile = NetworkConnectionProfile | SqliteConnectionProfile;
+/** PostgreSQL独立方言；配置形状复用网络传输字段，不与MySQL驱动混用。 */
+export interface PostgresConnectionProfile extends Omit<NetworkConnectionProfile, 'dialect'> { dialect: 'postgresql'; }
+export type ConnectionProfile = NetworkConnectionProfile | PostgresConnectionProfile | SqliteConnectionProfile;
 export interface NetworkConnectionStatus { version: string; dialect: 'mysql' | 'mariadb'; connectionId?: number; }
-export type ConnectionStatus = NetworkConnectionStatus | { version: string; dialect: 'sqlite' };
+export type ConnectionStatus = NetworkConnectionStatus | { version: string; dialect: 'postgresql'; connectionId?: number } | { version: string; dialect: 'sqlite' };
 /** 内部配置检查仅由主进程调用，不加入渲染进程可访问的 CommandMap/参数白名单。 */
 export type EngineCommand = Command | '__connections.prepareSave';
 export interface DatabaseObject { name: string; kind: ObjectKind; }
@@ -87,7 +89,7 @@ export interface IndexInfo { name: string; unique: boolean; columns: string[]; }
 export interface ForeignKeyInfo { name: string; columns: string[]; referencedDatabase: string; referencedTable: string; referencedColumns: string[]; onUpdate: string; onDelete: string; }
 export interface TableInfo { database: string; name: string; columns: ColumnInfo[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; primaryKey: string[]; editableKey: string[]; engine: string; ddl: string; charset?: string; collation?: string; comment?: string; /** 来自可信 information_schema.TABLES；未知类型不通过空 engine 推测。 */ objectKind?: 'table' | 'view'; }
 export interface ResultColumn { key: string; name: string; type: string; }
-export interface QueryResult { columns: ResultColumn[]; rows: DataRow[]; /** SQLite逐格原生存储类型；缺省表示未知，不可从字符串外观推断。 */ sqliteStorage?: import('./sqliteResultStorage').SqliteResultStorage; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
+export interface QueryResult { /** PostgreSQL真实CommandComplete标签，COMMIT在失败事务中可能实际回滚。 */ postgresCommand?: string; columns: ResultColumn[]; rows: DataRow[]; /** SQLite逐格原生存储类型；缺省表示未知，不可从字符串外观推断。 */ sqliteStorage?: import('./sqliteResultStorage').SqliteResultStorage; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
 export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳过注释，名称单独按已完成结果的序号传回。 */ resultTitles?: (string | null)[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; /** SQLite原始四列计划，与MySQL指标和实际执行分析分别建模。 */ sqliteExplain?: import('./sqliteExplain').SqliteExplainPlan; /** 独立于估算计划；该结果来自用户明确确认后的实际执行。 */ analysis?: QueryAnalyzePlan; /** 默认首错停止；显式遇错继续也只保留完整结果，失败语句不保证未执行且不重放。 */ failure?: import('./queryFailure').QueryFailure; /** 仅显式遇错继续携带，不改变默认首错停止回包。 */ scriptReport?: QueryScriptReport; /** 仅显式采集携带；SHOW诊断会改变ROW_COUNT等原会话诊断信息。 */ warnings?: QueryWarningsReport; }
 export type FilterMode = 'all' | 'any';
 /** 数字引用同一filters数组位置；每条条件（含停用）在完整树中恰好出现一次。 */
@@ -238,7 +240,7 @@ export interface CommandMap {
   'query.analyze': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; acknowledged: true; expectedDatabase: string | null }; output: QueryOutcome };
   'query.analyzeContext': { input: { sessionId: string; taskId: string }; output: CompletionSessionState };
   'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
-  'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; broken: boolean } };
+  'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; transactionFailed?: boolean; broken: boolean } };
   'query.completionState':{input:{sessionId:string};output:CompletionSessionState};
   'query.databaseSwitch': { input: QueryDatabaseSwitchInput; output: QueryDatabaseSwitchOutput };
   'query.temporaryState':{input:{sessionId:string};output:SessionObjectSnapshot};

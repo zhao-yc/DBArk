@@ -108,7 +108,7 @@ export class ObjectDefinitionReader {
   }
 
   /** 网络配置允许同协议服务器报告真实MySQL或MariaDB；能力仍按其真实家族和版本计算。 */
-  private dialectUsable(dialect: CompletionSessionState['dialect']): boolean {
+  private dialectUsable(dialect: string | undefined): boolean {
     return this.dialect === 'sqlite' ? dialect === 'sqlite' : dialect === 'mysql' || dialect === 'mariadb';
   }
 

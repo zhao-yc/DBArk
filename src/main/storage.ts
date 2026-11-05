@@ -1,3 +1,4 @@
+import { sameConnectionFamily } from '../shared/connectionDialect';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema, sqliteTablePresetDocumentSchema, sqliteTablePresetLimits, type SqliteTablePresetTarget, type SqliteTablePresetDocument, type SqliteTablePresetStoredSnapshot, type SqliteTablePresetSave, type SqliteTablePresetSelect } from '../shared/sqliteTablePresets';
 import { RecordTemplateStorage, readRecordTemplateDocuments } from './recordTemplateStorage';
 import type { RecordTemplateTarget, RecordTemplateSource } from '../shared/recordTemplates';
@@ -283,7 +284,7 @@ export class LocalStore {
     if (input.dialect !== 'sqlite') assertTlsPassphrase(input.tls?.passphrase);
     const profile = structuredClone({ ...input, id: input.id || randomUUID() });
     const previous = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [profile.id])[0];
-    if (previous && (previous.dialect === 'sqlite') !== (profile.dialect === 'sqlite')) throw new Error('不能更改已有连接的数据库类型，请另建连接');
+    if (previous && !sameConnectionFamily(previous.dialect, profile.dialect)) throw new Error('不能更改已有连接的数据库类型，请另建连接');
     this.mutate(() => {
       if (profile.dialect === 'sqlite') {
         // Main已经兑换文件授权；持久记录只保存路径与模式，不保存临时令牌。
@@ -706,6 +707,8 @@ export class LocalStore {
     const stored = this.connections().find(x => x.id === id);
     const profile = overrides ?? stored;
     if (!profile) throw new Error('连接不存在，请重新选择连接');
+    // 在读取任何秘密之前锁定原驱动家族，测试配置也不能借用其他驱动的凭据。
+    if (stored && !sameConnectionFamily(stored.dialect, profile.dialect)) throw new Error('不能更改已有连接的数据库类型，请另建连接');
     if (profile.dialect === 'sqlite') return structuredClone(profile);
     assertTlsPassphrase(profile.tls?.passphrase);
     return { ...profile, password: profile.password ?? this.readSecret(id, 'password'), ssh: profile.ssh ? { ...profile.ssh, password: profile.ssh.password ?? this.readSecret(id, 'sshPassword'), passphrase: profile.ssh.passphrase ?? this.readSecret(id, 'sshPassphrase') } : undefined,

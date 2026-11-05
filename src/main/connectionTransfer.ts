@@ -1,3 +1,4 @@
+import { sameConnectionFamily } from '../shared/connectionDialect';
 import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { AtomicFile, type AtomicFileIO } from '../engine/atomicFile';
@@ -94,7 +95,8 @@ export class ConnectionTransfer {
     const replacements = decisions.flatMap(decision => {
       if (decision.action !== 'replace') return [];
       const previous = stored.get(decision.targetId); if (!previous) throw new Error(messages.missing);
-      if ((snapshot.profiles.find(profile => profile.id === decision.sourceId)?.dialect === 'sqlite') !== (previous.dialect === 'sqlite')) throw new Error('不能将已有连接替换为其他数据库类型，请另建连接');
+      const source = snapshot.profiles.find(profile => profile.id === decision.sourceId);
+      if (!source || !sameConnectionFamily(source.dialect, previous.dialect)) throw new Error('不能将已有连接替换为其他数据库类型，请另建连接');
       return [{ sourceId: decision.sourceId, targetId: decision.targetId, previous: structuredClone(previous) }];
     });
     if (!replacements.length) throw new Error(messages.decision);
