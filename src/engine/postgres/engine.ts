@@ -17,6 +17,7 @@ import {
 import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace } from './tableWorkspace';
 import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
+import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
 interface Session {
   id: string;
@@ -42,6 +43,7 @@ interface Lease {
 type Input = Record<string, any>;
 /** PostgreSQL独立网络执行账本，共用utility隔离进程及TaskEvent，不进入mysql2或其SQL生成器。 */
 export class PostgresEngine {
+  private readonly completionReads = new Map<string, number>();
   private readonly creations = new PostgresCreateTableWorkspace();
   private readonly tables = new PostgresTableWorkspace();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
@@ -344,6 +346,20 @@ export class PostgresEngine {
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
   async handle(command: string, input: Input): Promise<any> {
     switch (command) {
+      case 'postgres.completion': {
+        const profile = input.profile as PostgresConnectionProfile | undefined;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 补全连接');
+        const count = this.completionReads.get(profile.id) ?? 0;
+        if (count >= 3) throw Error('该 PostgreSQL 连接的目录读取正忙');
+        this.completionReads.set(profile.id, count + 1);
+        try {
+          return await this.use(profile, input.database, connection => readPostgresCompletion(connection, input as Parameters<typeof readPostgresCompletion>[1]));
+        } finally {
+          const remaining = (this.completionReads.get(profile.id) ?? 1) - 1;
+          if (remaining) this.completionReads.set(profile.id, remaining);
+          else this.completionReads.delete(profile.id);
+        }
+      }
       case 'postgres.createTable.schemas':
       case 'postgres.createTable.preview':
       case 'postgres.createTable.apply': {

@@ -21,7 +21,7 @@ test.use({ trace: 'off', video: 'off', screenshot: 'off', ...(enabled ? { preser
 test.describe.configure({ timeout: 120000, retries: 0 });
 
 /** 仅由可核对的独占测试目标驱动真实表单、目录、编辑器与正常退出。 */
-test('PostgreSQL窗口建表、表页、关系结构和正常退出', async ({}, info) => {
+test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Runtime;
   const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '', user = process.env.DBARK_POSTGRES_TEST_USER;
   const password = process.env.DBARK_POSTGRES_TEST_PASSWORD ?? '', port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
@@ -177,6 +177,31 @@ test('PostgreSQL窗口建表、表页、关系结构和正常退出', async ({},
     await execute();
     await expect(tab().getByRole('grid')).toContainText('原值');
     await mark('树中真实对象生成安全SELECT草稿，明确点击后才执行');
+
+    // 通过真实按键接纳 schema、关系和别名字段，不从 Monaco 注入候选。
+    const widget = tab().locator('.suggest-widget.visible');
+    const beforeCompletion = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await edit('SELECT * FROM 回');
+    await page.keyboard.press('Control+Space');
+    await expect(widget.locator('.monaco-list-row.focused')).toContainText('回归');
+    await page.keyboard.press('Enter');
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('FROM "回归".');
+    await page.keyboard.press('Escape');
+    await edit('SELECT * FROM "回归"."带');
+    await page.keyboard.press('Control+Space');
+    await expect(widget.locator('.monaco-list-row.focused')).toContainText('带"引号');
+    await page.keyboard.press('Enter');
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('FROM "回归"."带""引号"');
+    const suffix = ' FROM "回归"."带""引号" AS r';
+    await edit('SELECT r.no' + suffix);
+    for (let index = 0; index < suffix.length; index++) await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('Control+Space');
+    await expect(widget.locator('.monaco-list-row.focused')).toContainText('note');
+    await page.screenshot({ path: info.outputPath('PostgreSQL实际别名字段补全.png') });
+    await page.keyboard.press('Enter');
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('SELECT r."note"' + suffix);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeCompletion);
+    await mark('真实按键验证 schema、带引号关系和查询别名字段补全，目录读取没有写入执行历史');
 
     await edit("/* 外 /* 内 ; */ 外 */ SELECT 9223372036854775807::bigint AS exact; SELECT $标记$含;号$标记$ AS note;");
     await execute();

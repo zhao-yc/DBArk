@@ -1,5 +1,8 @@
 /** PostgreSQL查询使用真实协议状态，不把MySQL会话或取消语义套到另一驱动。 */
 export const postgresZh = {
+  completionLimited: 'SQL 超出补全分析范围',
+  completionPartial: '补全只显示部分目录项，可继续输入前缀',
+  completionUnavailable: '暂时无法读取 PostgreSQL 补全目录',
   execute: '执行选区或全部',
   current: '执行当前语句',
   parameters: '执行位置参数',

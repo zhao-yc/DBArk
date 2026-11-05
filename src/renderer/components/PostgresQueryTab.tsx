@@ -7,7 +7,7 @@ import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseInten
 import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } from '../store';
 import { invoke, uid, errorMessage } from '../lib';
 import { postgresZh as text } from '../locales/postgres.zh-CN';
-import { SqlEditor } from './SqlEditor';
+import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
 import { ErrorBox, Spinner, Empty } from './ui';
 import { QueryCloseDialog } from './QueryCloseDialog';
@@ -78,6 +78,7 @@ export function PostgresQueryTab({
     [parameterOwner, setParameterOwner] = useState<ParameterOwner>(),
     parameters = useRef<ParameterOwner | undefined>(undefined);
   parameters.current = parameterOwner;
+  const [completionStatus, setCompletionStatus] = useState<SqlCompletionStatus>('idle');
   const scope: Scope = {
     profile,
     version,
@@ -575,6 +576,8 @@ export function PostgresQueryTab({
         <SqlEditor
           value={tab.sql ?? ''}
           dialect="postgresql"
+          postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database, connectionVersion: scope.version }}
+          onCompletionStatus={setCompletionStatus}
           readOnly={busy || fileBusy}
           onReady={(instance) => {
             editor.current = instance;
@@ -587,6 +590,8 @@ export function PostgresQueryTab({
         />
       </div>
       <ErrorBox message={error} />
+      {!busy && completionStatus !== 'idle' && <p className="muted small" role="status">{completionStatus === 'limited'
+        ? text.completionLimited : completionStatus === 'partial' ? text.completionPartial : text.completionUnavailable}</p>}
       {busy && <Spinner text={phase.current?.sent ? text.running : text.connecting} />}
       <div className="postgres-results">
         {results.length > 1 && (

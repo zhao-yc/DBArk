@@ -267,6 +267,7 @@ export interface CommandMap {
   'sqlite.tablePresets.save': { input: import('./sqliteTablePresets').SqliteTablePresetSave; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.delete': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetSnapshot };
   'sqlite.tablePresets.read': { input: import('./sqliteTablePresets').SqliteTablePresetSelect; output: import('./sqliteTablePresets').SqliteTablePresetQuery };
+  'postgres.completion': { input: import('./postgresCompletion').PostgresCompletionInput; output: import('./postgresCompletion').PostgresCompletionResult };
   'postgres.createTable.schemas': { input: import('./postgresCreateTable').PostgresCreateTableTarget; output: string[] };
   'postgres.createTable.preview': { input: import('./postgresCreateTable').PostgresCreateTableInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.createTable.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };

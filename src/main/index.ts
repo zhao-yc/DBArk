@@ -770,17 +770,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     return result;
   }
-  if (command === 'postgres.structure.read') {
+  if (command === 'postgres.structure.read' || command === 'postgres.completion') {
     // 原文档和连接修订失效时拒绝迟到结构，读取不占用任何查询标签的事务。
     const revision = store.connectionRevision();
     const check = () => {
       columnsMain.assertCapturedOwner(columns);
       connectionConfig.assertAvailable(input.connectionId);
-      if (shuttingDown || revision !== store.connectionRevision()) throw Error('PostgreSQL结构的原窗口或连接已变化');
+      if (shuttingDown || revision !== store.connectionRevision()) throw Error('PostgreSQL目录的原窗口或连接已变化');
     };
     check();
     const profile = store.resolveConnection(input.connectionId);
-    if (profile.dialect !== 'postgresql') throw Error('结构查看需要已保存的PostgreSQL连接');
+    if (profile.dialect !== 'postgresql') throw Error('目录读取需要已保存的 PostgreSQL 连接');
     const result = await broker.request(command, { ...input, profile });
     check();
     return result;
@@ -2045,7 +2045,7 @@ else {
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
-        if (payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.table.')) columns = columnsMain.capture(event);
+        if (payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.table.')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);

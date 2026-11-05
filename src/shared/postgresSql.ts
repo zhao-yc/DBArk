@@ -151,3 +151,55 @@ export function postgresRelationSelect(name: string): string {
     : postgresIdentifier(name);
   return 'SELECT * FROM ' + target + ' LIMIT 1000;';
 }
+
+export interface PostgresEditorToken {
+  kind: 'word' | 'identifier' | 'punct' | 'blocked';
+  start: number;
+  end: number;
+  text: string;
+  open?: boolean;
+}
+
+/** 编辑器允许未闭合的标识符，字符串和注释沿原词法边界一律禁止目录请求。 */
+export function scanPostgresEditorTokens(source: string, budget: number): PostgresEditorToken[] | undefined {
+  const result: PostgresEditorToken[] = [];
+  let i = 0;
+  while (i < source.length) {
+    const c = source[i], next = source[i + 1];
+    if (whitespace.test(c)) { i++; continue; }
+    if (result.length >= budget) return;
+    const start = i;
+    if (c === '-' && next === '-') {
+      i += 2;
+      while (i < source.length && source[i] !== '\r' && source[i] !== '\n') i++;
+      result.push({ kind: 'blocked', start, end: i, text: 'comment', open: true });
+    } else if (c === '/' && next === '*') {
+      let open = false;
+      try { i = blockCommentEnd(source, i); } catch { i = source.length; open = true; }
+      result.push({ kind: 'blocked', start, end: i, text: 'comment', open });
+    } else if (c === '"' || c === "'") {
+      let open = false;
+      // 兼容未掌握的会话字符串设置，反斜杠后一律不恢复字符串内的补全。
+      try { i = quotedEnd(source, i, c === "'"); } catch { i = source.length; open = true; }
+      result.push({ kind: c === '"' ? 'identifier' : 'blocked', start, end: i,
+        text: c === '"' ? source.slice(start + 1, open ? i : i - 1).replaceAll('""', '"') : '', open });
+    } else if (c === '$' && dollarTag(source, i)) {
+      const tag = dollarTag(source, i)!;
+      const end = source.indexOf(tag, i + tag.length);
+      i = end < 0 ? source.length : end + tag.length;
+      result.push({ kind: 'blocked', start, end: i, text: '', open: end < 0 });
+    } else if (c === '$') {
+      i++;
+      while (i < source.length && /[0-9]/.test(source[i])) i++;
+      result.push({ kind: 'blocked', start, end: i, text: '', open: true });
+    } else if (identifierStart.test(c)) {
+      i++;
+      while (i < source.length && identifierPart.test(source[i])) i++;
+      result.push({ kind: 'word', start, end: i, text: source.slice(start, i) });
+    } else {
+      i++;
+      result.push({ kind: 'punct', start, end: i, text: c });
+    }
+  }
+  return result;
+}
