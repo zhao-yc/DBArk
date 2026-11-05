@@ -189,6 +189,93 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       expect((await client.query('SELECT to_regclass($1)::text AS name', [renamed])).rows[0].name).toBeNull();
       expect((await client.query(`SELECT "代码" AS note FROM ${qualified}`)).rows).toEqual([{ note: value }]);
 
+      // 三种物化刷新都通过实际目录和独立查询核对，保留原 OID 和授权。
+      const snapshot = '"生成.甲"."缓存""视图"';
+      const snapshotQuery = `SELECT "编号", "代码" FROM ${qualified}`;
+      await client.query(`CREATE MATERIALIZED VIEW ${snapshot} AS ${snapshotQuery} WITH NO DATA;
+        CREATE UNIQUE INDEX 缓存表达式 ON ${snapshot} (("编号" + 1));
+        CREATE UNIQUE INDEX 缓存局部 ON ${snapshot} ("编号") WHERE "编号" > 0`);
+      const readSnapshot = async () => postgresStructureResultSchema.parse(await engine.handle('postgres.structure.read', { ...target, table: snapshot }));
+      const refresh = async (mode: 'data' | 'concurrent' | 'empty') => engine.handle('postgres.materializedRefresh.preview',
+        { ...target, table: snapshot, mode, stamp: (await readSnapshot()).materialized?.stamp });
+      const applyRefresh = (token: string) => engine.handle('postgres.materializedRefresh.apply', { ...target, token });
+      const state = async () => (await client.query(
+        'SELECT oid::text, relispopulated FROM pg_catalog.pg_class WHERE oid = $1::regclass', [snapshot])).rows[0];
+      const unpopulated = await state();
+      expect(unpopulated.relispopulated).toBe(false);
+      expect((await readSnapshot()).materialized).toMatchObject({ populated: false, uniqueIndex: false, stamp: expect.any(String) });
+      await expect(refresh('concurrent')).rejects.toThrow('并发刷新要求');
+      const populate = await refresh('data');
+      expect(populate.statements.at(-1)).toBe('REFRESH MATERIALIZED VIEW ' + snapshot + ' WITH DATA');
+      expect(await state()).toEqual(unpopulated);
+      await expect(applyManage(populate.token)).rejects.toThrow('预览已失效');
+      expect(await applyRefresh(populate.token)).toMatchObject({ outcome: 'committed' });
+      await expect(applyRefresh(populate.token)).rejects.toThrow('预览已失效');
+      expect(await state()).toEqual({ ...unpopulated, relispopulated: true });
+      await expect(refresh('concurrent')).rejects.toThrow('并发刷新要求');
+
+      // 另一个读事务阻塞普通刷新，独立目录确认应用在申请排他锁前已持有目标的共享锁。
+      const lockProof = await refresh('data');
+      await client.query('BEGIN');
+      let locking: ReturnType<typeof applyRefresh> | undefined;
+      try {
+        await client.query(`SELECT "编号" FROM ${snapshot} LIMIT 1`);
+        locking = applyRefresh(lockProof.token);
+        await expect.poll(async () => (await client.query(`SELECT EXISTS (
+          SELECT FROM pg_catalog.pg_locks held JOIN pg_catalog.pg_locks waiting
+            ON waiting.pid = held.pid AND waiting.relation = held.relation
+          WHERE held.relation = $1::oid AND held.mode = 'AccessShareLock' AND held.granted
+            AND waiting.mode = 'AccessExclusiveLock' AND NOT waiting.granted
+        ) AS guarded`, [unpopulated.oid])).rows[0].guarded, { timeout: 3500 }).toBe(true);
+        await client.query('COMMIT');
+        expect(await locking).toMatchObject({ outcome: 'committed' });
+      } finally {
+        await client.query('ROLLBACK');
+        await locking;
+      }
+
+      await client.query(`CREATE UNIQUE INDEX 缓存唯一 ON ${snapshot} ("编号")`);
+      await client.query(`UPDATE ${qualified} SET "代码" = '刷新后的值'`);
+      const concurrent = await refresh('concurrent');
+      expect(concurrent.statements.at(-1)).toBe('REFRESH MATERIALIZED VIEW CONCURRENTLY ' + snapshot + ' WITH DATA');
+      await client.query('BEGIN');
+      try {
+        expect((await client.query(`SELECT "代码" AS note FROM ${snapshot}`)).rows).toEqual([{ note: value }]);
+        // 原读会话保持共享锁，应用若误取排他锁就无法提交。
+        expect(await applyRefresh(concurrent.token)).toMatchObject({ outcome: 'committed' });
+        expect((await client.query(`SELECT "代码" AS note FROM ${snapshot}`)).rows).toEqual([{ note: '刷新后的值' }]);
+      } finally { await client.query('ROLLBACK'); }
+
+      const maintainer = process.env.DBARK_POSTGRES_MAINTAIN_TEST_USER;
+      if (maintainer && maintainer === database + '_limited') {
+        await client.query(`GRANT USAGE ON SCHEMA "生成.甲" TO ${maintainer};
+          GRANT MAINTAIN ON ${snapshot} TO ${maintainer}`);
+        expect((await client.query("SELECT pg_catalog.has_table_privilege($1, $2, 'SELECT') AS can_read",
+          [maintainer, snapshot])).rows[0].can_read).toBe(false);
+        const delegateId = randomUUID();
+        const delegated = { ...target, connectionId: delegateId, profile: { ...profile, id: delegateId, user: maintainer }, table: snapshot };
+        const delegateState = await engine.handle('postgres.structure.read', delegated);
+        expect(delegateState.materialized?.stamp).toEqual(expect.any(String));
+        const delegatedPreview = await engine.handle('postgres.materializedRefresh.preview',
+          { ...delegated, stamp: delegateState.materialized.stamp, mode: 'data' });
+        expect(await engine.handle('postgres.materializedRefresh.apply', { ...delegated, token: delegatedPreview.token }))
+          .toMatchObject({ outcome: 'committed' });
+        await client.query(`REVOKE MAINTAIN ON ${snapshot} FROM ${maintainer}`);
+        await expect(engine.handle('postgres.structure.read', delegated)).rejects.toThrow('没有读取结构的权限');
+      }
+
+      const clear = await refresh('empty');
+      expect(clear.statements.at(-1)).toBe('REFRESH MATERIALIZED VIEW ' + snapshot + ' WITH NO DATA');
+      expect(await applyRefresh(clear.token)).toMatchObject({ outcome: 'committed' });
+      expect(await state()).toEqual(unpopulated);
+      await expect(client.query(`SELECT * FROM ${snapshot}`)).rejects.toMatchObject({ code: '55000' });
+      const staleRefresh = await refresh('data');
+      await client.query(`ALTER MATERIALIZED VIEW ${snapshot} RENAME TO 缓存旧名;
+        CREATE SEQUENCE "生成.甲".刷新副作用;
+        CREATE MATERIALIZED VIEW ${snapshot} AS SELECT pg_catalog.nextval('"生成.甲".刷新副作用') AS id WITH NO DATA`);
+      expect(await applyRefresh(staleRefresh.token)).toMatchObject({ outcome: 'notSent' });
+      expect((await client.query('SELECT is_called FROM "生成.甲".刷新副作用')).rows).toEqual([{ is_called: false }]);
+
       const closed = await prepare({ table: '关闭' });
       await engine.handle('connections.close', { id });
       await expect(apply(closed.token)).rejects.toThrow('预览已失效');

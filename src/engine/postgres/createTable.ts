@@ -7,11 +7,13 @@ import type { PostgresConnection } from './connection';
 import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQuery,
   type PostgresCreateViewInput, type PostgresEditViewInput, type PostgresViewManageInput } from '../../shared/postgresCreateView';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
+import { postgresMaterializedRefreshSchema, type PostgresMaterializedRefreshInput } from '../../shared/postgresMaterializedView';
+import { readPostgresMaterializedFacts } from './materializedView';
 import { postgresViewOptionsSql, readPostgresViewFacts } from './viewDefinition';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage';
+type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh';
 interface Plan {
   table: string;
   statements: string[];
@@ -20,7 +22,8 @@ interface Plan {
   verify(connection: PostgresConnection, schemaOid: string): Promise<void>;
   protocol?: 'extended';
   success: string;
-  guard?: { sql: string; stamp: string };
+  guard?: { sql: string; stamp: string; parseOnly?: true };
+  statementTimeout?: '120s';
 }
 interface Prepared {
   input: Scoped<PostgresCreateTableTarget>;
@@ -230,6 +233,38 @@ export class PostgresCreateTableWorkspace {
     });
   }
 
+  /** 用仅解析的语句固定物化视图关系，确认后交给 PostgreSQL 的原生刷新。 */
+  async prepareMaterializedRefresh(input: Scoped<PostgresMaterializedRefreshInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    return this.prepareRelation(input, 'materializedRefresh', connect, () => {
+      const { connectionId, database, table, stamp, mode } = input;
+      const draft = postgresMaterializedRefreshSchema.parse({ connectionId, database, table, stamp, mode });
+      const { schema, name } = postgresRelationName(draft.table);
+      const qualified = postgresIdentifier(schema) + '.' + postgresIdentifier(name);
+      return async connection => {
+        const original = await readPostgresMaterializedFacts(connection, schema, name);
+        if (!original.state.stamp || original.state.stamp !== draft.stamp)
+          throw Error('物化视图或刷新权限已变化，请刷新结构后继续');
+        if (mode === 'concurrent' && !(original.state.populated && original.state.uniqueIndex))
+          throw Error('并发刷新要求已填充数据并具有有效的全行唯一列索引');
+        const populate = mode !== 'empty';
+        return {
+          table: qualified, protocol: 'extended', statementTimeout: '120s',
+          success: populate ? 'PostgreSQL 物化视图已确认刷新' : 'PostgreSQL 物化视图已确认清除填充数据',
+          // 只发送 Parse / Sync，保留关系共享锁，无需 SELECT 权限，也不执行查询。
+          guard: { sql: 'SELECT 1 FROM ONLY ' + qualified + ' WHERE FALSE', stamp: original.state.stamp, parseOnly: true },
+          statements: ['REFRESH MATERIALIZED VIEW ' + (mode === 'concurrent' ? 'CONCURRENTLY ' : '') +
+            qualified + (populate ? ' WITH DATA' : ' WITH NO DATA')],
+          preflight: async current => (await readPostgresMaterializedFacts(current, schema, name)).state.stamp ?? '',
+          async verify(current) {
+            const actual = await readPostgresMaterializedFacts(current, schema, name);
+            if (actual.identity !== original.identity || actual.state.populated !== populate)
+              throw Error('未确认原物化视图身份或填充状态');
+          },
+        };
+      };
+    });
+  }
+
   /** 关系创建及视图维护共用预检、令牌、预算和事务回执。 */
   private async prepareRelation(input: Scoped<PostgresCreateTableTarget>, kind: RelationKind, connect: Connect, compile: () => Plan | ((connection: PostgresConnection) => Promise<Plan>)) {
     const key = this.key(input, kind);
@@ -252,7 +287,7 @@ export class PostgresCreateTableWorkspace {
       if (this.plans.size >= 128) throw Error('PostgreSQL 关系创建预览已满，请稍后重试');
       const token = randomUUID();
       this.plans.set(key, { input: { connectionId, database, owner, connectionRevision }, token, targetStamp, plan, expires: now + 300_000 });
-      return { token, statements: plan.guard ? [plan.guard.sql, ...plan.statements] : plan.statements };
+      return { token, statements: plan.guard && !plan.guard.parseOnly ? [plan.guard.sql, ...plan.statements] : plan.statements };
     } finally { this.pending.delete(key); }
   }
 
@@ -283,13 +318,19 @@ export class PostgresCreateTableWorkspace {
       if (plan.guard) {
         await connection.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED', undefined, budget());
         // 先取目标锁，再读取会取得共享锁的反编译定义，避免并发替换时先阻塞在读路径。
-        sent = true;
-        if ((await connection.query(plan.guard.sql, undefined, budget(), undefined, 'extended')).postgresCommand !== 'ALTER')
-          throw Error('服务器未确认锁定原视图');
+        if (plan.guard.parseOnly) {
+          await connection.query(plan.guard.sql, undefined, budget(), undefined, 'parse');
+        } else {
+          sent = true;
+          if ((await connection.query(plan.guard.sql, undefined, budget(), undefined, 'extended')).postgresCommand !== 'ALTER')
+            throw Error('服务器未确认锁定原视图');
+        }
       }
       if (await plan.preflight(connection) !== targetStamp)
         throw Error(plan.guard ? '原视图已变化，请刷新结构后继续' : '原 schema 已被替换，请重新预览');
-      for (const statement of prepared.plan.statements) {
+      if (plan.statementTimeout) await connection.query(
+        "SELECT pg_catalog.set_config('statement_timeout', $1, true)", [plan.statementTimeout], budget());
+      for (const statement of plan.statements) {
         sent = true;
         const result = await connection.query(statement, undefined, budget(), undefined, prepared.plan.protocol);
         if (result.postgresCommand !== statement.slice(0, statement.indexOf(' '))) {

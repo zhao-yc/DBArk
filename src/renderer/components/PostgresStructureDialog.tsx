@@ -5,6 +5,8 @@ import { errorMessage, invoke } from '../lib';
 import { postgresStructureZh as text } from '../locales/postgresStructure.zh-CN';
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
+import { PostgresMaterializedRefreshPanel } from './PostgresMaterializedRefreshPanel';
+import { postgresMaterializedRefreshZh as refreshText } from '../locales/postgresMaterializedRefresh.zh-CN';
 import { PostgresViewManagePanel } from './PostgresViewManagePanel';
 import { postgresViewManageZh } from '../locales/postgresViewManage.zh-CN';
 import { PostgresViewEditPanel } from './PostgresViewEditPanel';
@@ -24,6 +26,7 @@ import './PostgresStructureDialog.css';
 
 type Section = keyof typeof text.sections;
 const editors = {
+  materialized: { Panel: PostgresMaterializedRefreshPanel, label: refreshText.title },
   manage: { Panel: PostgresViewManagePanel, label: postgresViewManageZh.title },
   definition: { Panel: PostgresViewEditPanel, label: postgresViewEditZh.title },
   columns: { Panel: PostgresColumnEditPanel, label: postgresColumnEditZh.open },
@@ -92,12 +95,14 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
 
   const sections: Section[] = output?.viewDefinition ? ['columns', 'constraints', 'indexes', 'definition'] : ['columns', 'constraints', 'indexes'];
   const EditPanel = editing && editors[editing].Panel;
+  const editStamp = editing === 'materialized' ? output?.materialized?.stamp :
+    editing === 'definition' || editing === 'manage' ? output?.viewEditStamp : output?.editStamp;
   return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
       <div className="pg-structure-caption"><strong>{table}</strong><span>{database}</span>{output && <span>{text.kinds[output.kind]}</span>}</div>
       {busy && <Spinner text={text.loading}/>}
       <ErrorBox message={dialect !== 'postgresql' ? text.missing : currentView?.error ?? ''}/>
-      {EditPanel && output && (editing === 'definition' || editing === 'manage' ? output.viewEditStamp : output.editStamp) ? <EditPanel target={target} original={output} version={version}
+      {EditPanel && output && editStamp ? <EditPanel target={target} original={output} version={version}
         onDirtyChange={onDirtyChange} onClose={() => { setEditing(undefined); setAttempt(value => value + 1); }}
         onResult={(message, unknown, receipt) => {
           if (editing === 'manage') {
@@ -108,6 +113,10 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
           onEdited(target, message, unknown, version);
           if (!unknown) { setEditing(undefined); setAttempt(value => value + 1); }
         }}/> : output && <>
+        {output.materialized && <p className="muted">
+          {output.materialized.populated ? refreshText.populated : refreshText.empty}
+          {output.materialized.stamp && output.materialized.populated && output.materialized.uniqueIndex ? ' · ' + refreshText.eligible : ''}
+        </p>}
         {output.comment !== null && <p className="pg-structure-comment">{text.comment}　{output.comment}</p>}
         {output.partitionKey && <p>{text.partitionKey}　<code>{output.partitionKey}</code></p>}
         {output.partitionBound && <p>{text.partitionBound}　<code>{output.partitionBound}</code></p>}
@@ -153,6 +162,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
       {output?.editStamp && !editing && section === 'constraints' &&
         <><button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>
           <button onClick={() => setEditing('check')}>{editors.check.label}</button></>}
+      {output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
       {output?.viewEditStamp && !editing && <button onClick={() => setEditing('manage')}>{postgresViewManageZh.title}</button>}
       {section === 'definition' && output?.viewEditStamp && !editing && <button onClick={() => setEditing('definition')}>
         {postgresViewEditZh.title}

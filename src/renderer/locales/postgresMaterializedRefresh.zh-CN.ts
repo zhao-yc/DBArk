@@ -1,0 +1,22 @@
+export const postgresMaterializedRefreshZh = {
+  title: '刷新物化视图',
+  populated: '已填充数据',
+  empty: '尚未填充数据',
+  eligible: '可并发刷新',
+  ineligible: '并发刷新要求已填充数据并具有有效的全行唯一列索引。',
+  mode: '刷新方式',
+  modes: { data: '普通刷新', concurrent: '并发刷新', empty: '清除填充数据' },
+  descriptions: {
+    data: '执行定义查询，重新填充数据。刷新期间可能阻塞其他会话读取该视图。',
+    concurrent: '执行定义查询并更新已填充的数据，允许其他会话继续读取。',
+    empty: '清除已填充的数据。再次填充之前，该视图不可查询。',
+  },
+  preview: '预览刷新 SQL',
+  sql: '物化视图刷新 SQL',
+  back: '返回编辑',
+  confirm: '确认刷新',
+  confirmEmpty: '确认清除',
+  acknowledge: '我确认清除物化视图的填充数据',
+  close: '关闭刷新',
+  unknown: '刷新结果未确认，请先在原数据库核对填充状态。',
+} as const;

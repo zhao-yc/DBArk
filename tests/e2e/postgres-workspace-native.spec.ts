@@ -3,6 +3,7 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { postgresCreateTableZh } from '../../src/renderer/locales/postgresCreateTable.zh-CN';
+import { postgresMaterializedRefreshZh as refreshText } from '../../src/renderer/locales/postgresMaterializedRefresh.zh-CN';
 import { postgresViewManageZh as viewManageText } from '../../src/renderer/locales/postgresViewManage.zh-CN';
 import { postgresViewEditZh as viewEditText } from '../../src/renderer/locales/postgresViewEdit.zh-CN';
 import { postgresCreateViewZh as createViewText } from '../../src/renderer/locales/postgresCreateView.zh-CN';
@@ -1478,6 +1479,55 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(renamedViewRow).toHaveCount(0);
     await expect(page.locator('.tab-strip .tab-close')).toHaveCount(0);
     await mark('受限删除需明确勾选，确认后实际目录移除视图并关闭记录页');
+    await page.locator('.object-row .tree-label').filter({ hasText: '物化快照' }).click();
+    await expect(gridTab).toContainText(refreshText.empty);
+    await tableButton(postgresStructureZh.open).click();
+    const closeMaterializedStructure = () => structure.locator('.modal-footer')
+      .getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
+    const openMaterializedRefresh = async () => {
+      await structure.getByRole('button', { name: refreshText.title, exact: true }).click();
+      return structure.getByRole('region', { name: refreshText.title, exact: true });
+    };
+    const refreshMode = (panel: import('@playwright/test').Locator) => panel.getByRole('combobox', { name: refreshText.mode, exact: true });
+    const prepareRefresh = (panel: import('@playwright/test').Locator) => panel.getByRole('button', { name: refreshText.preview, exact: true }).click();
+    const confirmRefresh = (panel: import('@playwright/test').Locator) => panel.getByRole('button', { name: refreshText.confirm, exact: true }).click();
+    await expect(structure).toContainText(refreshText.empty);
+    const firstRefresh = await openMaterializedRefresh();
+    await expect(refreshMode(firstRefresh).locator('option[value="concurrent"]')).toHaveJSProperty('disabled', true);
+    await prepareRefresh(firstRefresh);
+    await expect(firstRefresh.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW "回归"."物化快照" WITH DATA');
+    await confirmRefresh(firstRefresh);
+    await expect(structure).toContainText(refreshText.populated);
+    await closeMaterializedStructure();
+    await expect(gridTab.getByRole('grid')).toContainText('原值');
+
+    await tableButton(postgresStructureZh.open).click();
+    await expect(structure).toContainText(refreshText.eligible);
+    const concurrentRefresh = await openMaterializedRefresh();
+    await refreshMode(concurrentRefresh).selectOption('concurrent');
+    await prepareRefresh(concurrentRefresh);
+    await expect(concurrentRefresh.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW CONCURRENTLY "回归"."物化快照" WITH DATA');
+    await page.screenshot({ path: info.outputPath('PostgreSQL刷新物化视图.png') });
+    await confirmRefresh(concurrentRefresh);
+    await expect(structure).toContainText(refreshText.populated);
+    await closeMaterializedStructure();
+    await expect(gridTab.getByRole('grid')).toContainText('原值');
+
+    await tableButton(postgresStructureZh.open).click();
+    const clearMaterialized = await openMaterializedRefresh();
+    await refreshMode(clearMaterialized).selectOption('empty');
+    await prepareRefresh(clearMaterialized);
+    await expect(clearMaterialized.locator('pre')).toContainText('REFRESH MATERIALIZED VIEW "回归"."物化快照" WITH NO DATA');
+    const confirmEmpty = clearMaterialized.getByRole('button', { name: refreshText.confirmEmpty, exact: true });
+    await expect(confirmEmpty).toBeDisabled();
+    await clearMaterialized.getByRole('checkbox', { name: refreshText.acknowledge, exact: true }).check();
+    await confirmEmpty.click();
+    await expect(structure).toContainText(refreshText.empty);
+    await closeMaterializedStructure();
+    await expect(gridTab).toContainText(refreshText.empty);
+    await page.locator('.tab-strip .tab-close').click();
+    await mark('物化视图从未填充到普通和并发刷新，再明确清除；结构状态及打开的记录页一致');
+
     const offlineBefore = await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}),
       history: await window.dbark.invoke('history.list', {}) }));
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: snapshotText.entry, exact: true }, check)).click();

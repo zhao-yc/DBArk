@@ -54,7 +54,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
            pg_catalog.has_table_privilege(c.oid, 'DELETE'),
            (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND i.indisvalid),
            CASE WHEN c.relkind IN ('v','m') THEN pg_catalog.pg_get_viewdef(c.oid, false) END,
-           pg_catalog.row_security_active(c.oid)
+           pg_catalog.row_security_active(c.oid), c.relispopulated
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname::text = $1 AND c.relname::text = $2 AND c.relkind IN ('r','p','v','m','f')
       AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
@@ -62,6 +62,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
   `, [schema, name], small());
   const info = header.rows[0];
   if (!info || typeof info.c0 !== 'string') throw Error('PostgreSQL关系不存在、已改名或无权查看');
+  if (info.c2 === 'm' && info.c11 === 'f') throw Error('PostgreSQL 物化视图尚未填充数据，请从「查看结构」执行刷新。');
   const fields = await connection.query(`
     SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull,
            a.atthasdef, a.attgenerated, a.attidentity, a.atttypid,

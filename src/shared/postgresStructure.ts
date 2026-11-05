@@ -70,6 +70,9 @@ export const postgresStructureResultSchema = z.object({
   constraints: z.array(structureConstraint).max(2000),
   indexes: z.array(structureIndex).max(2000),
   serverVersion: z.number().int().positive().optional(),
+  materialized: z.object({
+    populated: z.boolean(), uniqueIndex: z.boolean(), stamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  }).strict().optional(),
   viewEditStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   editStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
