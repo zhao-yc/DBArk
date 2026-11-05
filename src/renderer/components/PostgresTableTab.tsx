@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { DataRow } from '../../shared/contracts';
 import { postgresRelationSelect } from '../../shared/postgresSql';
 import {
-  isPostgresTableFiltered, postgresTableLimits, postgresTablePreviewSchema, type PostgresTableChange, type PostgresTableField,
+  isPostgresTableFiltered, postgresTableLimits, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableField,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTableTarget,
 } from '../../shared/postgresTable';
 import { cellPreview, cellText, errorMessage, invoke } from '../lib';
@@ -14,6 +14,9 @@ import { PostgresTableExportDialog } from './PostgresTableExportDialog';
 import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { PostgresTableImportDialog } from './PostgresTableImportDialog';
 import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
+import { TableSortPanel } from './TableSortPanel';
+import { tableSortZh } from '../locales/tableSort.zh-CN';
+import { validateTableSort } from '../tableSort';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
@@ -101,6 +104,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [filterColumn, setFilterColumn] = useState('');
   const [filterText, setFilterText] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState(false);
+  const [sortPageToken, setSortPageToken] = useState<string>();
   const [pageSize, setPageSize] = useState(options.limit);
   const lease = useRef<object | undefined>(undefined);
   const issued = useRef<string | undefined>(undefined);
@@ -223,14 +227,20 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     });
   }
 
-  const blocked = busy || !!form || !!preview || !!exportPage || !!importPage;
+  const blocked = busy || !!form || !!preview || !!exportPage || !!importPage || !!sortPageToken;
   const frozenPage = blocked || draft.length > 0;
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
   const firstPage = { ...options, offset: 0, limit: pageSize };
   const appliedAdvanced = options.filter && 'rules' in options.filter ? options.filter : undefined;
-  const sortedColumn = page?.columns.find(column => column.name === options.sort?.column);
-  const sorted = sortedColumn ? [{ column: sortedColumn.key, direction: options.sort?.direction === 'asc' ? 'ASC' as const : 'DESC' as const }] : [];
+  const columnNames = page?.columns.map(column => column.name) ?? [];
+  const sortRules = postgresTableSortRules(options.sort);
+  const sorted = sortRules.flatMap(rule => {
+    const column = page?.columns.find(column => column.name === rule.column);
+    return column ? [{ ...rule, column: column.key }] : [];
+  });
+  const sortIsCurrent = () => !!lifetime.current && active && !!sortPageToken && issued.current === sortPageToken &&
+    !lease.current && !useWorkspace.getState().dirtyTabs[tab.id];
   const formKey = form?.row == null ? undefined : page?.rowKeys?.[form.row];
   const stagedChange = formKey ? draft.find(entry => entry.rowKey === formKey)?.change : undefined;
   return <div className="workspace-tab postgres-table-tab" aria-label={text.relation}>
@@ -273,6 +283,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <button disabled={frozenPage || !options.filter} onClick={() => {
         setAdvancedFilters(false); setFilterText(''); navigate({ ...firstPage, filter: undefined });
       }}>{text.clearFilter}</button>
+      <button disabled={frozenPage || !page?.exportToken || !columnNames.length} onClick={() => setSortPageToken(page?.exportToken)}>{tableSortZh.entry}</button>
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
       initial={appliedAdvanced} disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
@@ -282,15 +293,19 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     {page?.order === 'unstable' && <div className="info-strip">{text.unstable}</div>}
     {page && <div className="tab-status"><span>{text.page(options.offset, page.rows.length)}</span><span>{row === null ? text.noSelection : text.selected(row + 1)}</span>
       {appliedAdvanced && <span>{text.activeAdvancedFilter(appliedAdvanced.rules.filter(rule => rule.enabled !== false).length)}</span>}
+      {sortRules.length > 0 && <span>{text.activeSort(sortRules.length)}</span>}
       {!page.pageToken && <span>{text.noWrite}</span>}
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
     <div className="pg-table-grid">
       {page ? <ResultsGrid key={page.exportToken} columns={page.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
-          const first = sort[0];
-          const column = page.columns.find(column => column.key === first?.column);
-          navigate({ ...firstPage, sort: first && column ? { column: column.name, direction: first.direction === 'ASC' ? 'asc' : 'desc' } : undefined });
+          try {
+            const rules = sort.map(({ column, direction, nulls }) => ({
+              column: page.columns.find(item => item.key === column)?.name ?? '', direction, nulls,
+            }));
+            navigate({ ...firstPage, sort: validateTableSort(rules, columnNames) });
+          } catch (reason) { setError(errorMessage(reason)); }
         }}/> : <Empty title={text.empty}/>}
     </div>
     {draft.length > 0 && <div className="pg-table-draft" aria-label={text.draft}>
@@ -308,6 +323,17 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
       isCurrent={() => !!lifetime.current && !!exportPage.exportToken && issued.current === exportPage.exportToken &&
         !useWorkspace.getState().dirtyTabs[tab.id]} onClose={() => setExportPage(undefined)}/>}
+    {sortPageToken && <Modal title={tableSortZh.entry} onClose={() => setSortPageToken(undefined)} wide>
+      <div className="modal-content pg-table-sort-dialog">
+        <TableSortPanel columns={columnNames} initial={sortRules} hint={text.sortHint} isCurrent={sortIsCurrent}
+          onClose={() => setSortPageToken(undefined)} onApply={sort => {
+            if (!sortIsCurrent()) return false;
+            setSortPageToken(undefined);
+            navigate({ ...firstPage, sort });
+            return true;
+          }}/>
+      </div>
+    </Modal>}
     {importPage && <PostgresTableImportDialog target={target} page={importPage}
       isCurrent={() => !!lifetime.current && !!importPage.exportToken && issued.current === importPage.exportToken &&
         !useWorkspace.getState().dirtyTabs[tab.id]} onClose={() => setImportPage(undefined)}

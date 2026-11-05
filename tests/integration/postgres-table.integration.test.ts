@@ -95,6 +95,10 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       const revisited = await crossPage(0, [pin(a), pin(b)]);
       expect(revisited.rowKeys).toEqual(a.rowKeys);
       expect(b.rowKeys).not.toEqual(a.rowKeys);
+      const compatible = { ...cross, tabId: randomUUID() };
+      const legacy = await read({ ...compatible, limit: 1, sort: { column: 'id', direction: 'desc' } });
+      const normalized = await read({ ...compatible, offset: 1, limit: 1, sort: [{ column: 'id', direction: 'DESC' }], retainPageTokens: [pin(legacy)] });
+      expect([legacy.rows[0].c0, normalized.rows[0].c0]).toEqual(['3', '2']);
       const update = (page: PostgresTablePage, note: string): PostgresTableChange =>
         ({ kind: 'update', pageToken: pin(page), row: 0, fields: [field('c1', note)] });
       await expect(preview(revisited, [update(a, '重复'), update(revisited, '重复')], cross)).rejects.toThrow('同一原记录');
@@ -241,6 +245,31 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         ]);
         expect(await engine.handle('postgres.table.export', typedCopy)).toEqual({ rows: 3, fileCommitted: true });
         expect(await readFile(typedCopy.filePath, 'utf8')).toBe('id,note\n9007199254740994,\n9007199254740995,""\n9007199254740996,引;号\n');
+
+        // 验证首列 NULL 置前、次列 NULL 置后、NUMERIC 精确比较和主键补足顺序。
+        const sortSource = { ...source, table: '"浏览"."多列排序"', tabId: randomUUID() };
+        await client.query(`CREATE TABLE ${sortSource.table} (id bigint PRIMARY KEY, "分""组" int, score numeric);
+          INSERT INTO ${sortSource.table} VALUES (1,NULL,5),(2,NULL,NULL),(3,1,9007199254740992.0001),
+            (4,1,9007199254740992.0002),(5,1,9007199254740992.0002),(6,1,NULL),(7,2,10),(8,3,20)`);
+        const sort = [{ column: '分"组', direction: 'ASC', nulls: 'FIRST' }, { column: 'score', direction: 'DESC', nulls: 'LAST' }];
+        const sortedInput = { ...sortSource, sort, limit: 3, filter: { mode: 'all', rules: [{ column: 'id', operator: '<', value: '8' }] } };
+        const sortedFirst = await read(sortedInput);
+        const sortedSecond = await read({ ...sortedInput, offset: 3, retainPageTokens: [pin(sortedFirst)] });
+        expect(sortedFirst.rows.map(row => row.c0)).toEqual(['1', '2', '4']);
+        expect(sortedSecond.rows.map(row => row.c0)).toEqual(['5', '3', '6']);
+        expect(sortedSecond.hasNext).toBe(true);
+        await expect(read({ ...sortedInput, sort: [...sort].reverse(), retainPageTokens: [pin(sortedFirst)] })).rejects.toThrow('筛选或排序');
+        await expect(read({ ...sortedInput, sort: [{ ...sort[0], nulls: 'LAST' }, sort[1]], retainPageTokens: [pin(sortedFirst)] })).rejects.toThrow('筛选或排序');
+        await expect(read({ ...sortedInput, sort: [sort[0], sort[0]] })).rejects.toThrow('排序字段不能重复');
+        await expect(read({ ...sortedInput, sort: [{ column: 'id', direction: 'DESC; SELECT 1' }] })).rejects.toThrow();
+        await expect(read({ ...sortedInput, sort: [{ column: '不存在', direction: 'ASC' }] })).rejects.toThrow('排序或筛选列');
+        const sortExtra = { ...sortSource, columns: ['c0'], exportToken: sortedSecond.exportToken };
+        const sortedJson = exportRequest('json', '多列排序.json', sortExtra);
+        const sortedCopy = exportRequest('copy', '多列排序.csv', sortExtra);
+        expect(await engine.handle('postgres.table.export', sortedJson)).toEqual({ rows: 7, fileCommitted: true });
+        expect(await engine.handle('postgres.table.export', sortedCopy)).toEqual({ rows: 7, fileCommitted: true });
+        expect(JSON.parse(await readFile(sortedJson.filePath, 'utf8')).map((row: { id: string }) => row.id)).toEqual(['1', '2', '4', '5', '3', '6', '7']);
+        expect(await readFile(sortedCopy.filePath, 'utf8')).toBe('id\n1\n2\n4\n5\n3\n6\n7\n');
 
         // 真实 COPY FROM 复核原生 CSV 的精度、NULL、空字符串、换行和跨协议块字段。
         const marker = "保留%'\\; SELECT 1; --";

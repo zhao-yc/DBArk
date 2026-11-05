@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import type { DataRow, ResultColumn } from './contracts';
+import type { DataRow, ResultColumn, SortRule } from './contracts';
 import { csvExportDelimiters } from './csvExport';
-import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, validateFilterGroup } from './filtering';
+import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, validateFilterGroup } from './filtering';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -30,11 +30,21 @@ export function isPostgresTableFiltered(filter: PostgresTableFilter | undefined)
   return !!filter && ('rules' in filter ? filter.rules.some(rule => rule.enabled !== false) : !!filter.text);
 }
 
+const legacySort = z.object({ column: relation, direction: z.enum(['asc', 'desc']) }).strict();
+export const postgresTableSortSchema = z.union([legacySort, sortRulesSchema.refine(rules =>
+  new Set(rules.map(rule => rule.column)).size === rules.length, '排序字段不能重复')]).optional();
+
+/** 旧版单列请求和新规则使用相同顺序，草稿作用域也以规范化规则比较。 */
+export function postgresTableSortRules(sort: PostgresTablePageInput['sort']): SortRule[] {
+  if (!sort || Array.isArray(sort)) return sort ?? [];
+  return [{ column: sort.column, direction: sort.direction === 'asc' ? 'ASC' : 'DESC' }];
+}
+
 /** 筛选值与排序方向使用独立结构，标识符只从已读的列目录解析。 */
 export const postgresTablePageSchema = target.extend({
   offset: z.number().int().min(0).max(postgresTableLimits.offset),
   limit: z.number().int().min(1).max(postgresTableLimits.page),
-  sort: z.object({ column: relation, direction: z.enum(['asc', 'desc']) }).strict().optional(),
+  sort: postgresTableSortSchema,
   filter: z.union([quickFilter, postgresAdvancedTableFilterSchema]).optional(),
   retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
     .refine(value => new Set(value).size === value.length, '保留的草稿原页不能重复').optional(),

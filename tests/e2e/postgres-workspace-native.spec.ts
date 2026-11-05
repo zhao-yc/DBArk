@@ -18,6 +18,7 @@ import { postgresKeyEditZh as keyText } from '../../src/renderer/locales/postgre
 import { postgresForeignEditZh as fkText } from '../../src/renderer/locales/postgresForeignEdit.zh-CN';
 import { postgresCheckEditZh as checkText } from '../../src/renderer/locales/postgresCheckEdit.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
+import { tableSortZh as tableSortText } from '../../src/renderer/locales/tableSort.zh-CN';
 import { postgresTableExportZh as tableExportText } from '../../src/renderer/locales/postgresTableExport.zh-CN';
 import { postgresTableImportZh as tableImportText } from '../../src/renderer/locales/postgresTableImport.zh-CN';
 import { csvImportHeaderZh } from '../../src/renderer/locales/csvImportHeader.zh-CN';
@@ -145,11 +146,45 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     };
     await add('2', '新增甲');
     await add('3', '新增乙');
+    await expect(tableButton(tableSortText.entry)).toBeDisabled();
     await expect(grid).not.toContainText('新增甲');
     await commit();
     await expect(grid).toContainText('新增乙');
 
     await gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true }).fill('1');
+    await grid.getByRole('columnheader').filter({ hasText: /^id/ }).press('Enter');
+    await expect(gridTab.locator('.tab-status')).toContainText(postgresTableZh.activeSort(1));
+    const sortModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await grid.getByRole('columnheader').filter({ hasText: /^note/ }).press(sortModifier + '+Enter');
+    await expect(gridTab.locator('.tab-status')).toContainText(postgresTableZh.activeSort(2));
+    await tableButton(tableSortText.entry).click();
+    const tableSortDialog = page.getByRole('dialog', { name: tableSortText.entry, exact: true });
+    const sortField = (label: string) => tableSortDialog.getByLabel(label, { exact: true });
+    const sortButton = (name: string) => tableSortDialog.getByRole('button', { name, exact: true });
+    await expect(sortField(tableSortText.field(1))).toHaveValue('id');
+    await expect(sortField(tableSortText.field(2))).toHaveValue('note');
+    await sortButton(tableSortText.earlier(2)).click();
+    await expect(sortField(tableSortText.field(1))).toHaveValue('note');
+    await sortButton(tableSortText.later(1)).click();
+    await sortField(tableSortText.direction(1)).selectOption('DESC');
+    await sortField(tableSortText.nulls(2)).selectOption('FIRST');
+    await expect(grid).toContainText('原值');
+    await page.screenshot({ path: info.outputPath('PostgreSQL多列排序.png') });
+    await sortButton(tableSortText.apply).click();
+    await expect(grid).toContainText('新增乙');
+    await tableButton(postgresTableZh.next).click();
+    await expect(grid).toContainText('新增甲');
+    await tableButton(tableSortText.entry).click();
+    await expect(sortField(tableSortText.nulls(2))).toHaveValue('FIRST');
+    await sortButton(tableSortText.clear).click();
+    await sortButton(tableSortText.cancel).click();
+    await expect(grid).toContainText('新增甲');
+    await tableButton(tableSortText.entry).click();
+    await sortButton(tableSortText.clear).click();
+    await sortButton(tableSortText.apply).click();
+    await expect(grid).toContainText('原值');
+    await mark('PostgreSQL 表页列头键盘多列排序、调整优先级和 NULL 位置、跨页、取消与清空实测，草稿锁定排序');
+
     await tableButton(postgresTableZh.advancedFilter).click();
     const advanced = gridTab.getByRole('region', { name: postgresTableZh.advancedFilter, exact: true });
     const addFilter = async (column: string, operator: string, value: string) => {

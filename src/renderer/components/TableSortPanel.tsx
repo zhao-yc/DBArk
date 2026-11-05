@@ -8,7 +8,7 @@ import { ErrorBox, UsageHelp } from './ui';
 type SortEntry = { id: number; rule: SortRule };
 
 /** 排序草稿独立于已应用状态；只有一次明确应用才能交还父页读取服务器。 */
-export function TableSortPanel({ columns, initial, isCurrent, onApply, onClose }: { columns: readonly string[]; initial: readonly SortRule[]; isCurrent(): boolean; onApply(rules: SortRule[]): boolean; onClose(): void }) {
+export function TableSortPanel({ columns, initial, hint = text.hint, isCurrent, onApply, onClose }: { columns: readonly string[]; initial: readonly SortRule[]; hint?: string; isCurrent(): boolean; onApply(rules: SortRule[]): boolean; onClose(): void }) {
   const sequence = useRef(0);
   const [draft, setDraft] = useState<SortEntry[]>(() => validateTableSort(initial, columns).map(rule => ({ id: sequence.current++, rule }))), [error, setError] = useState('');
   const live = useRef<object | null>(null), invalid = useRef(false), consumed = useRef(false), ticket = {};
@@ -47,7 +47,7 @@ export function TableSortPanel({ columns, initial, isCurrent, onApply, onClose }
   }
   const disabled = invalid.current || consumed.current, available = columns.filter(column => !draft.some(item => item.rule.column === column));
   return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title}>
-    <strong>{text.title}</strong><UsageHelp><p>{text.hint}</p><p>{text.ties}</p></UsageHelp>
+    <strong>{text.title}</strong><UsageHelp><p>{hint}</p><p>{text.ties}</p></UsageHelp>
     {!draft.length && <p>{text.empty}</p>}
     {draft.map(({ id, rule }, index) => <div className="filter-inputs" key={id}>
       <span>{index + 1}.</span><label>{text.field(index + 1)}<select aria-label={text.field(index + 1)} disabled={disabled} value={rule.column} onChange={event => edit(draft.map((item, position) => position === index ? { ...item, rule: { ...item.rule, column: event.target.value } } : item))}>{columns.map(column => <option key={column} value={column} disabled={column !== rule.column && draft.some(item => item.rule.column === column)}>{column}</option>)}</select></label>

@@ -4,7 +4,8 @@ import { postgresIdentifier, postgresRelationName } from '../../shared/postgresS
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import {
-  isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresTableLimits, type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
+  isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema,
+  type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
 } from '../../shared/postgresTable';
@@ -47,7 +48,7 @@ const small = () => ({ rows: 1024, bytes: 2 * 1024 * 1024 });
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const only = (relation: Relation) => (relation.kind === 'r' ? 'ONLY ' : '') + relation.sql;
 const pageScope = ({ filter, sort }: Snapshot['options']) =>
-  JSON.stringify([filter, sort]);
+  JSON.stringify([filter, postgresTableSortRules(sort).map(({ column, direction, nulls }) => [column, direction, nulls])]);
 
 /** 每次从实际库读取关系、主键顺序、列权限与结构；标识符及类型显示均来自目录。 */
 async function readRelation(connection: PostgresConnection, table: string): Promise<Relation> {
@@ -102,7 +103,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
   };
 }
 
-/** 使用已核对的列号生成安全排序与条件，文字筛选按 PostgreSQL 显示文本匹配。 */
+/** 翻页、游标和 COPY 共用排序，显式规则优先，同值时沿用关系的分页键。 */
 function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter' | 'sort'>,
   page?: Pick<PostgresTablePageInput, 'limit' | 'offset'>, columns = relation.columns, copy = false) {
   const key = (id: string) => {
@@ -111,9 +112,12 @@ function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter
     return postgresIdentifier(column.name);
   };
   const projection = columns.map(column => postgresIdentifier(column.name)).join(', ');
-  const ordered = input.sort ? key(input.sort.column) : undefined;
+  const ordered = postgresTableSortRules(input.sort).map(rule => ({ ...rule, column: key(rule.column) }));
   const tie = relation.keys.length ? relation.keys : relation.kind === 'r' ? ['ctid'] : relation.kind === 'p' ? ['tableoid', 'ctid'] : [];
-  const ordering = [...(ordered && input.sort ? [ordered + (input.sort.direction === 'desc' ? ' DESC' : ' ASC')] : []), ...tie.filter(item => item !== ordered)];
+  const ordering = [
+    ...ordered.map(rule => `${rule.column} ${rule.direction}${rule.nulls ? ` NULLS ${rule.nulls}` : ''}`),
+    ...tie.filter(item => !ordered.some(rule => rule.column === item)),
+  ];
   const args: unknown[] = page ? [page.limit + 1, page.offset] : [];
   // COPY 流使用简单协议，其筛选值使用与会话转义设置无关的显式字面量。
   const condition = postgresTableCondition(input.filter, key, value => copy ? postgresDdlLiteral(value) : '$' + args.push(value));
@@ -164,15 +168,16 @@ export class PostgresTableWorkspace {
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     this.active.add(key);
     try {
+      const options = { filter: input.filter, sort: postgresTableSortSchema.parse(input.sort) };
       const pins = input.retainPageTokens ?? [];
       if (pins.length > postgresTableLimits.draftPages) throw Error('草稿原页超过保留上限');
       const retained = new Map(pins.map(pageToken => [pageToken, this.snapshot({ ...input, pageToken }, true, true)]));
-      for (const snapshot of retained.values()) if (pageScope(snapshot.options) !== pageScope(input))
+      for (const snapshot of retained.values()) if (pageScope(snapshot.options) !== pageScope(options))
         throw Error('请先处理草稿，再更改筛选或排序');
       const result = await connect(async connection => {
         await begin(connection, 'page');
         const relation = await readRelation(connection, input.table);
-        const { sql, args, withOriginal } = readSql(relation, input, input);
+        const { sql, args, withOriginal } = readSql(relation, options, input);
         const records = await connection.query(sql, args, { rows: input.limit + 1, bytes: 8 * 1024 * 1024 });
         const completed = await connection.query('COMMIT', undefined, small());
         if (completed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL表页读取事务未完成');
@@ -199,12 +204,12 @@ export class PostgresTableWorkspace {
       if (this.snapshots.size >= 128) throw Error('PostgreSQL表页快照已满，请关闭空闲表标签');
       const exportToken = randomUUID();
       const writeEligible = Object.values(capabilities).some(Boolean);
-      const { owner, tabId, connectionRevision, connectionId, database, table, filter, sort } = input;
+      const { owner, tabId, connectionRevision, connectionId, database, table } = input;
       for (const snapshot of retained.values()) snapshot.preview = undefined;
       const current: Snapshot = {
         token: exportToken, scope: { owner, tabId, connectionRevision, connectionId, database, table },
         expires: now + 30 * 60 * 1000, relation: retained.values().next().value?.relation ?? result.relation,
-        rows: result.originals, options: { filter, sort }, writeEligible,
+        rows: result.originals, options, writeEligible,
       };
       this.snapshots.set(key, { current, retained });
       return {
