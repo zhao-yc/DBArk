@@ -1,3 +1,4 @@
+import { postgresKeyPreviewSchema, postgresKeyApplySchema } from './postgresKeyEdit';
 import { postgresIndexPreviewSchema, postgresIndexApplySchema } from './postgresIndexEdit';
 import { postgresColumnPreviewSchema, postgresColumnApplySchema } from './postgresColumnEdit';
 import { postgresCompletionSchema } from './postgresCompletion';
@@ -239,6 +240,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.structure.read': postgresStructureInputSchema,
   'postgres.columnEdit.preview': postgresColumnPreviewSchema, 'postgres.columnEdit.apply': postgresColumnApplySchema,
   'postgres.indexEdit.preview': postgresIndexPreviewSchema, 'postgres.indexEdit.apply': postgresIndexApplySchema,
+  'postgres.keyEdit.preview': postgresKeyPreviewSchema, 'postgres.keyEdit.apply': postgresKeyApplySchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.preview': postgresTablePreviewSchema,
   'postgres.table.apply': postgresTableApplySchema,

@@ -30,6 +30,7 @@ const structureConstraint = z.object({
   initiallyDeferred: z.boolean(),
   validated: z.boolean(),
   inherited: z.boolean(),
+  keyColumns: z.array(identifier).max(128).optional(),
 }).strict();
 const structureIndex = z.object({
   name: identifier,
@@ -41,6 +42,7 @@ const structureIndex = z.object({
   ready: z.boolean(),
   constraint: optionalText,
   replicaIdentity: z.boolean().optional(),
+  nullsNotDistinct: z.boolean().optional(),
   parts: z.array(z.object({
     column: optionalText, key: z.boolean(), descending: z.boolean(), nullsFirst: z.boolean(),
   }).strict()).max(128).optional(),
@@ -61,6 +63,7 @@ export const postgresStructureResultSchema = z.object({
   columns: z.array(structureColumn).max(2000),
   constraints: z.array(structureConstraint).max(2000),
   indexes: z.array(structureIndex).max(2000),
+  serverVersion: z.number().int().positive().optional(),
   editStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 export type PostgresStructureResult = z.infer<typeof postgresStructureResultSchema>;

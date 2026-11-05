@@ -7,12 +7,19 @@ import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { PostgresColumnEditPanel } from './PostgresColumnEditPanel';
 import { PostgresIndexEditPanel } from './PostgresIndexEditPanel';
+import { PostgresKeyEditPanel } from './PostgresKeyEditPanel';
+import { postgresKeyEditZh } from '../locales/postgresKeyEdit.zh-CN';
 import { postgresIndexEditZh } from '../locales/postgresIndexEdit.zh-CN';
 import { postgresColumnEditZh } from '../locales/postgresColumnEdit.zh-CN';
 import { Empty, ErrorBox, Modal, Spinner } from './ui';
 import './PostgresStructureDialog.css';
 
 type Section = keyof typeof text.sections;
+const editors = {
+  columns: { Panel: PostgresColumnEditPanel, label: postgresColumnEditZh.open },
+  indexes: { Panel: PostgresIndexEditPanel, label: postgresIndexEditZh.open },
+  constraints: { Panel: PostgresKeyEditPanel, label: postgresKeyEditZh.open },
+};
 
 /** 统一目录表格语义，空列表和数据库空值分别显示。 */
 function CatalogTable({ headers, children, empty }: { headers: readonly string[]; children: React.ReactNode; empty: boolean }) {
@@ -31,7 +38,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
   const dialect = useWorkspace(state => state.connections.find(profile => profile.id === target.connectionId)?.dialect);
   const [section, setSection] = useState<Section>('columns');
   const [attempt, setAttempt] = useState(0);
-  const [editing, setEditing] = useState<'columns' | 'indexes'>();
+  const [editing, setEditing] = useState<keyof typeof editors>();
   const [view, setView] = useState<{ key: string; output?: PostgresStructureResult; error?: string }>();
   const owner = useRef<object | undefined>(undefined);
   const { connectionId, database, table } = target;
@@ -71,13 +78,13 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
   }
 
   const sections: Section[] = output?.viewDefinition ? ['columns', 'constraints', 'indexes', 'definition'] : ['columns', 'constraints', 'indexes'];
-  const EditPanel = editing === 'indexes' ? PostgresIndexEditPanel : PostgresColumnEditPanel;
+  const EditPanel = editing && editors[editing].Panel;
   return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
       <div className="pg-structure-caption"><strong>{table}</strong><span>{database}</span>{output && <span>{text.kinds[output.kind]}</span>}</div>
       {busy && <Spinner text={text.loading}/>}
       <ErrorBox message={dialect !== 'postgresql' ? text.missing : currentView?.error ?? ''}/>
-      {editing && output?.editStamp ? <EditPanel target={target} original={output} version={version}
+      {EditPanel && output?.editStamp ? <EditPanel target={target} original={output} version={version}
         onDirtyChange={onDirtyChange} onClose={() => { setEditing(undefined); setAttempt(value => value + 1); }}
         onResult={(message, unknown) => {
           onEdited(target, message, unknown, version);
@@ -122,8 +129,8 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
     </div>
     <footer className="modal-footer">
       <button disabled={!!editing || busy || dialect !== 'postgresql'} onClick={() => { owner.current = undefined; setAttempt(value => value + 1); }}>{text.refresh}</button>
-      {output?.editStamp && !editing && <button onClick={() => setEditing(section === 'indexes' ? 'indexes' : 'columns')}>
-        {section === 'indexes' ? postgresIndexEditZh.open : postgresColumnEditZh.open}
+      {output?.editStamp && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
+        {editors[section].label}
       </button>}
       {section === 'definition' && output?.viewDefinition && <button onClick={openDraft}>{text.openDraft}</button>}
       <span className="grow"/><button disabled={!!editing} onClick={onClose}>{text.close}</button>

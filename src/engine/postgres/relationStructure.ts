@@ -21,6 +21,7 @@ WITH target AS MATERIALIZED (
 )
 SELECT pg_catalog.jsonb_build_object(
   'database', pg_catalog.current_database(),
+  'serverVersion', pg_catalog.current_setting('server_version_num')::int,
   'schema', t.nspname,
   'name', t.relname,
   'kind', t.relkind,
@@ -58,7 +59,12 @@ SELECT pg_catalog.jsonb_build_object(
       'deferrable', c.condeferrable,
       'initiallyDeferred', c.condeferred,
       'validated', c.convalidated,
-      'inherited', c.conparentid <> 0 OR NOT c.conislocal
+      'inherited', c.conparentid <> 0 OR NOT c.conislocal,
+      'keyColumns', CASE WHEN c.contype IN ('p', 'u') THEN (
+        SELECT pg_catalog.jsonb_agg(a.attname ORDER BY k.pos)
+        FROM pg_catalog.unnest(c.conkey) WITH ORDINALITY AS k(attnum, pos)
+        JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+      ) ELSE '[]'::jsonb END
     ) AS item
     FROM pg_catalog.pg_constraint c
     WHERE c.conrelid = t.oid AND c.contype IN ('p', 'f', 'u', 'c', 'x', 'n')
@@ -74,6 +80,7 @@ SELECT pg_catalog.jsonb_build_object(
       'valid', x.indisvalid,
       'ready', x.indisready,
       'replicaIdentity', x.indisreplident,
+      'nullsNotDistinct', COALESCE((pg_catalog.to_jsonb(x)->>'indnullsnotdistinct')::boolean, false),
       'parts', (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
         'column', a.attname, 'key', k.pos <= x.indnkeyatts,
         'descending', (COALESCE(x.indoption[(k.pos - 1)::int], 0) & 1) <> 0,
@@ -90,11 +97,15 @@ SELECT pg_catalog.jsonb_build_object(
     ORDER BY i.relname, i.oid LIMIT 2001
   ) ix), '[]'::jsonb)
 ), t.oid::text, t.editable,
-  COALESCE((SELECT pg_catalog.jsonb_object_agg(index_name, index_oid) FROM (
+  pg_catalog.jsonb_build_object('indexes', COALESCE((SELECT pg_catalog.jsonb_object_agg(index_name, index_oid) FROM (
     SELECT i.relname::text AS index_name, i.oid::text AS index_oid
     FROM pg_catalog.pg_index x JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
     WHERE x.indrelid = t.oid ORDER BY i.oid LIMIT 2001
-  ) index_ids), '{}'::jsonb)
+  ) index_ids), '{}'::jsonb),
+    'keys', COALESCE((SELECT pg_catalog.jsonb_object_agg(key_name, key_oid) FROM (
+      SELECT c.conname::text AS key_name, c.oid::text AS key_oid FROM pg_catalog.pg_constraint c
+      WHERE c.conrelid = t.oid AND c.contype IN ('p', 'u') ORDER BY c.oid LIMIT 2001
+    ) key_ids), '{}'::jsonb))
 FROM target t
 `;
 
@@ -125,10 +136,18 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
     throw Error('PostgreSQL结构回包不完整或目标已经变化');
   }
   const { c0: raw, c1: oid, c2: editable, c3: ids } = result.rows[0] as { c0: string; c1: string; c2: string; c3: string };
-  const indexIds = new Map<string, string>(Object.entries(JSON.parse(ids)));
-  if (indexIds.size !== parsed.data.indexes.length || parsed.data.indexes.some(index => !/^\d+$/.test(indexIds.get(index.name) ?? '')))
-    throw Error('PostgreSQL 索引身份回包不完整');
+  const identity = JSON.parse(ids);
+  const indexIds = catalogIds(identity.indexes, parsed.data.indexes);
+  const keyIds = catalogIds(identity.keys, parsed.data.constraints.filter(key => key.kind === 'p' || key.kind === 'u'));
   const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ?
     { editStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex') } : {}) };
-  return { output, oid, indexIds };
+  return { output, oid, indexIds, keyIds };
+}
+
+/** 目录身份只接受与同一快照中的名称一一对应的 OID。 */
+function catalogIds(raw: Record<string, string>, expected: { name: string }[]) {
+  const ids = new Map(Object.entries(raw));
+  if (ids.size !== expected.length || expected.some(entry => !/^\d+$/.test(ids.get(entry.name) ?? '')))
+    throw Error('PostgreSQL 目录身份回包不完整');
+  return ids;
 }

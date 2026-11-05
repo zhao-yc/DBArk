@@ -95,6 +95,12 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       await client.query(`ALTER TABLE ${table} ADD COLUMN extra text`);
       expect(await apply(beforeDdl, staleStructure)).toMatchObject({ outcome: 'notSent', affected: 0 });
       expect((await client.query(`SELECT count(*)::int n FROM ${table}`)).rows).toEqual([{ n: 3 }]);
+      // 名称与列都相同的主键替换也要拒绝旧记录草稿。
+      const beforeKey = await read();
+      const staleKey = await preview(beforeKey, [{ kind: 'delete', row: 0 }]);
+      await client.query(`ALTER TABLE ${table} DROP CONSTRAINT "项目""清单_pkey", ADD CONSTRAINT "项目""清单_pkey" PRIMARY KEY (id)`);
+      expect(await apply(beforeKey, staleKey)).toMatchObject({ outcome: 'notSent', affected: 0 });
+      expect((await client.query(`SELECT count(*)::int n FROM ${table}`)).rows).toEqual([{ n: 3 }]);
       const beforeClose = await read();
       const closing = await preview(beforeClose, [{ kind: 'delete', row: 0 }]);
       await engine.handle('connections.close', { id });

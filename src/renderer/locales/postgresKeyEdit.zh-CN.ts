@@ -1,0 +1,15 @@
+export const postgresKeyEditZh = {
+  open: '编辑主键与唯一约束', title: 'PostgreSQL 主键与唯一约束',
+  actions: { create: '创建约束', rename: '重命名约束', drop: '删除约束' },
+  operation: '操作', from: '原约束', name: '约束名称', keyType: '约束类型',
+  primary: '主键', unique: '唯一约束', timing: '检查时机',
+  timingValues: { immediate: '不可延迟', deferrable: '可延迟，默认立即', deferred: '可延迟，默认事务结束' },
+  key: (index: number) => '键列 ' + index, choose: '选择字段', addColumn: '添加键列',
+  removeColumn: (index: number) => '移除键列 ' + index, nullsNotDistinct: '将 NULL 视为相同',
+  stage: '加入约束改动', undo: '撤回最后一项', preview: '预览约束 SQL', apply: '确认提交约束修改',
+  close: '退出约束编辑', draft: '待提交约束改动', previewTitle: '实际提交约束 SQL',
+  confirmDrop: '确认删除预览中的约束及其关联索引。外键依赖可能阻止删除。',
+  lockNote: '确认后独占锁定原表。创建主键会把键列设为非空，已有数据违反约束时整批回滚。',
+  unknown: '提交结果待核对，请退出约束编辑后刷新实际结构。',
+  rename: (from: string, name: string) => from + ' → ' + name,
+} as const;

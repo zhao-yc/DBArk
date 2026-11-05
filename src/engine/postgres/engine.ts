@@ -22,6 +22,7 @@ import { readPostgresStructure } from './relationStructure';
 import { PostgresStructureEditWorkspace } from './structureEdit';
 import { matchesPostgresColumnPlan, postgresColumnPlan, type PostgresColumnPreviewInput } from '../../shared/postgresColumnEdit';
 import { matchesCreatedPostgresIndex, postgresIndexPlan, type PostgresIndexPreviewInput } from '../../shared/postgresIndexEdit';
+import { matchesCreatedPostgresKey, postgresKeyPlan, type PostgresKeyPreviewInput } from '../../shared/postgresKeyEdit';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { explainLimits } from '../../shared/explain';
@@ -71,6 +72,27 @@ export class PostgresEngine {
       return !!expected?.created && !originals.has(oid) && matchesCreatedPostgresIndex(index, expected.created);
     }) };
   });
+  private readonly keyEdits = new PostgresStructureEditWorkspace('键约束', ({ output, keyIds, indexIds }, input: PostgresKeyPreviewInput) => {
+    const { connectionId, database, table, editStamp, changes } = input;
+    const plan = postgresKeyPlan(output, { connectionId, database, table, editStamp, changes });
+    const originalKeys = new Set(keyIds.values()), originalIndexes = new Set(indexIds.values());
+    const backing = new Map(output.indexes.map(index => [index.constraint, indexIds.get(index.name)]));
+    return { ...plan, verify: final => {
+      const keys = final.output.constraints.filter(key => key.kind === 'p' || key.kind === 'u');
+      const indexes = new Map(final.output.indexes.map(index => [index.constraint, index]));
+      return keys.length === plan.keys.size &&
+        final.output.columns.every(column => !plan.requiredNotNull.has(column.name) || !column.nullable) &&
+        keys.every(key => {
+          const expected = plan.keys.get(key.name), index = indexes.get(key.name);
+          if (!expected || !index) return false;
+          const oid = final.keyIds.get(key.name)!, indexOid = final.indexIds.get(index.name)!;
+          // 重命名应保留原约束及其索引；同名新建必须使用新身份。
+          if (expected.original) return oid === keyIds.get(expected.original.name) && indexOid === backing.get(expected.original.name);
+          return !!expected.created && !originalKeys.has(oid) && !originalIndexes.has(indexOid) &&
+            matchesCreatedPostgresKey(key, index, expected.created);
+        });
+    } };
+  });
   private readonly tables = new PostgresTableWorkspace();
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
@@ -90,7 +112,7 @@ export class PostgresEngine {
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
         (id) => this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) ||
-          this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
+          this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || this.keyEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
       this.ownsTask(input.taskId)
@@ -255,6 +277,7 @@ export class PostgresEngine {
       this.creations.clear(id);
       this.columnEdits.clear(id);
       this.indexEdits.clear(id);
+      this.keyEdits.clear(id);
       this.profiles.delete(id);
     } finally {
       this.closing.delete(id);
@@ -279,6 +302,7 @@ export class PostgresEngine {
       this.creations.clear(input.id);
       this.columnEdits.clear(input.id);
       this.indexEdits.clear(input.id);
+      this.keyEdits.clear(input.id);
       this.profiles.delete(input.id);
     }
   }
@@ -291,6 +315,7 @@ export class PostgresEngine {
         ...this.creations.connectionIds(),
         ...this.columnEdits.connectionIds(),
         ...this.indexEdits.connectionIds(),
+        ...this.keyEdits.connectionIds(),
         ...[...this.leases].map((l) => l.managed.profile.id),
         ...[...this.sessions.values()].map((s) => s.connectionId),
       ]))
@@ -501,7 +526,9 @@ export class PostgresEngine {
       case 'postgres.columnEdit.preview':
       case 'postgres.columnEdit.apply':
       case 'postgres.indexEdit.preview':
-      case 'postgres.indexEdit.apply': {
+      case 'postgres.indexEdit.apply':
+      case 'postgres.keyEdit.preview':
+      case 'postgres.keyEdit.apply': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 结构编辑来源');
@@ -511,7 +538,10 @@ export class PostgresEngine {
           return this.columnEdits.preview(input as Parameters<PostgresStructureEditWorkspace<PostgresColumnPreviewInput>['preview']>[0], connect);
         if (command === 'postgres.indexEdit.preview')
           return this.indexEdits.preview(input as Parameters<PostgresStructureEditWorkspace<PostgresIndexPreviewInput>['preview']>[0], connect);
-        const workspace = command === 'postgres.columnEdit.apply' ? this.columnEdits : this.indexEdits;
+        if (command === 'postgres.keyEdit.preview')
+          return this.keyEdits.preview(input as Parameters<PostgresStructureEditWorkspace<PostgresKeyPreviewInput>['preview']>[0], connect);
+        const workspace = command === 'postgres.columnEdit.apply' ? this.columnEdits :
+          command === 'postgres.indexEdit.apply' ? this.indexEdits : this.keyEdits;
         return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
       case 'postgres.table.page':

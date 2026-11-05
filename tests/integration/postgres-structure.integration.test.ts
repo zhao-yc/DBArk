@@ -6,6 +6,7 @@ import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import type { PostgresStructureResult } from '../../src/shared/postgresStructure';
 import type { PostgresColumnChange } from '../../src/shared/postgresColumnEdit';
 import type { PostgresIndexChange } from '../../src/shared/postgresIndexEdit';
+import type { PostgresKeyChange } from '../../src/shared/postgresKeyEdit';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
 const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
@@ -250,6 +251,68 @@ describe.skipIf(!enabled)('PostgreSQL 实库结构快照', () => {
       expect((await indexApply(deleting.token)).outcome).toBe('committed');
       expect((await structure(indexTarget)).indexes.some(index => index.name === '旧"索引')).toBe(false);
       expect((await client.query(`SELECT count(*)::int AS n FROM ${indexTarget}`)).rows[0].n).toBe(2);
+
+      // 主键替换会更新真实键序和非空状态，原外键和复制标识仍有保护。
+      const keyTarget = '"结构.甲"."键目标"';
+      await client.query(`CREATE TABLE ${keyTarget} (id int, tenant int, code text, tag text NOT NULL,
+        CONSTRAINT original_key PRIMARY KEY (id), CONSTRAINT replica_key UNIQUE (tag));
+        INSERT INTO ${keyTarget} VALUES (1, 10, 'a', '甲'), (2, 10, 'b', '乙');
+        ALTER TABLE ${keyTarget} REPLICA IDENTITY USING INDEX replica_key;
+        CREATE TABLE "结构.甲".key_child (id int REFERENCES ${keyTarget}(id));
+        INSERT INTO "结构.甲".key_child VALUES (1);`);
+      const keyScope = { ...scoped, table: keyTarget };
+      const keyPreview = async (changes: PostgresKeyChange[]) => engine.handle('postgres.keyEdit.preview', {
+        ...keyScope, editStamp: (await structure(keyTarget)).editStamp, changes,
+      });
+      const keyApply = (token: string, owner = keyScope.owner) => engine.handle('postgres.keyEdit.apply', { ...keyScope, token, owner });
+      await expect(keyPreview([{ kind: 'drop', from: 'replica_key' }])).rejects.toThrow('复制标识');
+      const blockedByFk = await keyPreview([{ kind: 'drop', from: 'original_key' }]);
+      expect(await keyApply(blockedByFk.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('depend') });
+      expect((await client.query('SELECT id FROM "结构.甲".key_child')).rows).toEqual([{ id: 1 }]);
+      const beforeKeys = await structure(keyTarget);
+      const badKeys = await keyPreview([{ kind: 'rename', from: 'original_key', name: '临时主键' },
+        { kind: 'create', key: 'u', name: '重复的租户', columns: ['tenant'], timing: 'immediate', nullsNotDistinct: false }]);
+      expect((await keyApply(badKeys.token)).outcome).toBe('rolledBack');
+      expect((await structure(keyTarget)).editStamp).toBe(beforeKeys.editStamp);
+      await client.query('DROP TABLE "结构.甲".key_child');
+      const replacePrimary: PostgresKeyChange[] = [{ kind: 'drop', from: 'original_key' },
+        { kind: 'create', key: 'p', name: '新"主键', columns: ['tenant', 'id'], timing: 'immediate', nullsNotDistinct: false }];
+      await client.query(`UPDATE ${keyTarget} SET tenant = NULL WHERE id = 1`);
+      const invalidPrimary = await keyPreview(replacePrimary);
+      expect((await keyApply(invalidPrimary.token)).outcome).toBe('rolledBack');
+      expect((await structure(keyTarget)).constraints.find(key => key.kind === 'p')?.name).toBe('original_key');
+      await client.query(`UPDATE ${keyTarget} SET tenant = 10 WHERE id = 1`);
+      const replacementKeys = await keyPreview([...replacePrimary,
+        { kind: 'create', key: 'u', name: '值唯一', columns: ['code'], timing: 'deferred', nullsNotDistinct: true },
+        { kind: 'rename', from: '值唯一', name: '新唯一键' }]);
+      expect(replacementKeys.statements[0]).toContain('DROP CONSTRAINT "original_key" RESTRICT');
+      expect(replacementKeys.statements[1]).toContain('"新""主键" PRIMARY KEY ("tenant", "id")');
+      expect(replacementKeys.statements[2]).toContain('UNIQUE NULLS NOT DISTINCT ("code") DEFERRABLE INITIALLY DEFERRED');
+      expect((await keyApply(replacementKeys.token, '其他文档')).outcome).toBe('notSent');
+      expect((await keyApply(replacementKeys.token)).outcome).toBe('committed');
+      expect((await keyApply(replacementKeys.token)).outcome).toBe('notSent');
+      const keyResult = await structure(keyTarget);
+      expect(keyResult.constraints).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: '新"主键', kind: 'p', keyColumns: ['tenant', 'id'] }),
+        expect.objectContaining({ name: '新唯一键', kind: 'u', keyColumns: ['code'], deferrable: true, initiallyDeferred: true }),
+      ]));
+      expect(keyResult.columns.find(column => column.name === 'tenant')?.nullable).toBe(false);
+      expect(keyResult.indexes.find(index => index.constraint === '新唯一键')).toMatchObject({ unique: true, nullsNotDistinct: true });
+      await client.query(`INSERT INTO ${keyTarget} VALUES (3, 10, NULL, '丙')`);
+      await expect(client.query(`INSERT INTO ${keyTarget} VALUES (4, 10, NULL, '丁')`)).rejects.toMatchObject({ code: '23505' });
+      const staleConstraint = await keyPreview([{ kind: 'drop', from: '新唯一键' }]);
+      await client.query(`ALTER TABLE ${keyTarget} DROP CONSTRAINT "新唯一键",
+        ADD CONSTRAINT "新唯一键" UNIQUE NULLS NOT DISTINCT (code) DEFERRABLE INITIALLY DEFERRED`);
+      const sameConstraint = await structure(keyTarget);
+      expect(sameConstraint.constraints).toEqual(keyResult.constraints);
+      expect(sameConstraint.editStamp).not.toBe(keyResult.editStamp);
+      expect((await keyApply(staleConstraint.token)).outcome).toBe('notSent');
+      const dropUnique = await keyPreview([{ kind: 'drop', from: '新唯一键' }]);
+      expect((await keyApply(dropUnique.token)).outcome).toBe('committed');
+      const afterDrop = await structure(keyTarget);
+      expect(afterDrop.constraints.some(key => key.name === '新唯一键')).toBe(false);
+      expect(afterDrop.indexes.some(index => index.name === '新唯一键')).toBe(false);
+      expect(afterDrop.indexes.find(index => index.name === 'replica_key')?.replicaIdentity).toBe(true);
     } finally {
       await engine.closeAll();
       await client.end();
