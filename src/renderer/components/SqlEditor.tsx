@@ -252,7 +252,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         return aliveRef.current && !propsRef.current.readOnly && !suggestionsBlocked() && contentRef.current?.ready === true &&
           !document.querySelector('[role="dialog"], [role="alertdialog"]') &&
           editor?.getSelections()?.length === 1 && editor.getSelection()?.isEmpty() === true &&
-          workspace.settings.activeTabId === original.tabId && tab?.connectionId === original.connectionId &&
+          workspace.settings.activeTabId === original.tabId && !workspace.activeJobs[original.tabId] && tab?.connectionId === original.connectionId &&
           profile?.dialect === 'postgresql' && (tab.database || profile.database || 'postgres') === original.database &&
           (workspace.connectionVersions[original.connectionId] ?? 0) === original.connectionVersion;
       },
@@ -265,11 +265,12 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const registration = monaco.languages.registerCompletionItemProvider('sql', provider);
     const stop = useWorkspace.subscribe((next, previous) => {
       if (next.settings.activeTabId !== previous.settings.activeTabId ||
+          next.activeJobs[original.tabId] !== previous.activeJobs[original.tabId] ||
           next.connectionVersions[original.connectionId] !== previous.connectionVersions[original.connectionId]) provider.invalidate();
     });
     return () => { stop(); registration.dispose(); provider.dispose(); };
   }, [requestedDialect, readOnly, contentReady, postgresCompletion?.tabId, postgresCompletion?.connectionId,
-    postgresCompletion?.database, postgresCompletion?.connectionVersion]);
+    postgresCompletion?.database, postgresCompletion?.connectionVersion, postgresCompletion?.sessionId]);
   useEffect(() => {
     if (requestedDialect === 'postgresql') return;
     if(readOnly||!completion){statusRef.current?.('idle');return;}

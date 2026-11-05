@@ -4,9 +4,9 @@ import { postgresCompletionLimits } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { analyzePostgresCompletion } from './postgresCompletionAnalysis';
 
-export interface PostgresCompletionScope { tabId: string; connectionId: string; database: string; connectionVersion: number; }
+export interface PostgresCompletionScope { tabId: string; connectionId: string; database: string; connectionVersion: number; sessionId?: string; }
 type Kind = 'schema' | 'table' | 'view' | 'column' | 'keyword';
-type Status = 'idle' | 'partial' | 'unavailable' | 'limited';
+type Status = 'idle' | 'partial' | 'unavailable' | 'limited' | 'sessionUnknown';
 const keywords = ['SELECT','FROM','JOIN','LEFT JOIN','RIGHT JOIN','INNER JOIN','WHERE','GROUP BY','ORDER BY',
   'HAVING','LIMIT','OFFSET','INSERT INTO','VALUES','UPDATE','SET','DELETE FROM','RETURNING','ON CONFLICT',
   'DISTINCT','WITH','UNION ALL','IS NULL','IS NOT NULL','CASE','WHEN','THEN','ELSE','END','BEGIN','COMMIT','ROLLBACK'];
@@ -83,7 +83,8 @@ export function createPostgresCompletionProvider(options: {
             }
           }
         }
-        const base = { connectionId: options.scope.connectionId, database: options.scope.database, prefix };
+        const { connectionId, database, sessionId } = options.scope;
+        const base = { connectionId, database, prefix, ...(sessionId ? { sessionId } : {}) };
         // CTE 名称、别名和投影只在编辑器中使用，目录只接收实际物理目标。
         const input: PostgresCompletionInput | undefined = query?.kind === 'relations'
           ? { ...base, kind: 'relations', ...(query.schema ? { schema: query.schema } : {}) }
@@ -145,7 +146,9 @@ export function createPostgresCompletionProvider(options: {
             suggestions.push({ label, kind: options.kinds.keyword, insertText: label, range, sortText: '9' + label });
           }
         }
-        if (result.incomplete || suggestions.length > postgresCompletionLimits.items) options.status('partial');
+        if (result.deferred === 'transaction') options.status('sessionUnknown');
+        else if (result.deferred === 'busy') options.status('unavailable');
+        else if (result.incomplete || suggestions.length > postgresCompletionLimits.items) options.status('partial');
         return { suggestions: suggestions.slice(0, postgresCompletionLimits.items), incomplete: !!query };
       } finally {
         cancel.dispose();

@@ -133,7 +133,7 @@ let rendererHasSettings = false;
 // 标签清单写入失败后不能把旧布局当作当前空闲事实；必须先成功保存当前布局才能替换。
 let rendererSettingsCurrent = true;
 let lastStorageWarning = 0;
-const sessions = new Map<string, { connectionId: string }>();
+const sessions = new Map<string, { connectionId: string; postgres?: { owner: ColumnsInvocation; database: string; closing: boolean } }>();
 // 历史上下文由引擎在会话互斥内报告，不能由渲染进程提供或从较早的标签状态推测。
 const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatement: boolean; executionSqlReceived: boolean }>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
@@ -771,14 +771,25 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     return result;
   }
   if (command === 'postgres.structure.read' || command === 'postgres.completion') {
-    // 原文档和连接修订失效时拒绝迟到结构，读取不占用任何查询标签的事务。
+    // 原文档、连接修订和实际会话必须一致，关闭中的会话也不再发布目录。
     const revision = store.connectionRevision();
+    const binding = command === 'postgres.completion' && input.sessionId ? sessions.get(input.sessionId) : undefined;
     const check = () => {
       columnsMain.assertCapturedOwner(columns);
       connectionConfig.assertAvailable(input.connectionId);
       if (shuttingDown || revision !== store.connectionRevision()) throw Error('PostgreSQL目录的原窗口或连接已变化');
+      if (command === 'postgres.completion' && input.sessionId &&
+          (!binding?.postgres || binding.postgres.closing || sessions.get(input.sessionId) !== binding ||
+            binding.connectionId !== input.connectionId || binding.postgres.database !== input.database ||
+            !columnsMain.sharesDocumentOwner(binding.postgres.owner, columns!)))
+        throw Error('PostgreSQL补全的原会话与窗口或数据库不符');
     };
     check();
+    if (binding) {
+      const result = await broker.request(command, input);
+      check();
+      return result;
+    }
     const profile = store.resolveConnection(input.connectionId);
     if (profile.dialect !== 'postgresql') throw Error('目录读取需要已保存的 PostgreSQL 连接');
     const result = await broker.request(command, { ...input, profile });
@@ -1607,6 +1618,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (tableValueOptionsRead) tableValueOptionsAdmitted = true;
   }
   const session = sessions.get(input.sessionId);
+  const postgresSessionOwner = command === 'sessions.open' ? columns : undefined;
+  const postgresSessionRevision = postgresSessionOwner ? store.connectionRevision() : undefined;
   // 实际分析与当前语句均等待Engine报告真正发送的SQL；历史不能把ANALYZE误记成裸DML。
   const currentStatement = command === 'query.analyze' || command === 'query.execute' && input.currentStatement !== undefined;
   const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream' || command === 'query.analyze') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
@@ -1661,6 +1674,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     sqliteEditLease?.beforeSend(); sqlitePreview?.check();
     if (tableFilteredExport) tableFilteredExportSubmitted = true;
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!();
+    if (postgresSessionOwner) columnsMain.assertCapturedOwner(postgresSessionOwner);
+    if (command === 'sessions.close' && session?.postgres) session.postgres.closing = true;
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!(result);
@@ -1719,7 +1734,22 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (input.snapshotId) for (const [token, value] of structureTokens) if (value.purpose === structurePurpose && (token === input.snapshotId || value.snapshotId === input.snapshotId)) structureTokens.delete(token);
       if (input.previewToken) structureTokens.delete(input.previewToken);
     }
-    if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId });
+    if (command === 'sessions.open') {
+      const entry: NonNullable<typeof session> = { connectionId: input.connectionId };
+      if (postgresSessionOwner) {
+        try {
+          columnsMain.assertCapturedOwner(postgresSessionOwner);
+          connectionConfig.assertAvailable(input.connectionId);
+          if (shuttingDown || postgresSessionRevision !== store.connectionRevision()) throw Error('PostgreSQL会话的原窗口或连接已变化');
+        } catch (reason) {
+          await broker.request('sessions.close', { sessionId: result.sessionId });
+          throw reason;
+        }
+        const profile = store.connections().find(profile => profile.id === input.connectionId);
+        entry.postgres = { owner: postgresSessionOwner, database: input.database || (profile?.dialect === 'postgresql' && profile.database) || 'postgres', closing: false };
+      }
+      sessions.set(result.sessionId, entry);
+    }
     if (command === 'sessions.close') sessions.delete(input.sessionId);
     if (command === 'table.apply' && !tableApplyReceipts.confirmed(taskId!)) throw Error('未收到可信提交确认，结果未知；请查看提交记录，不要重复执行原批次');
     // 查询可带首错停止前的完整结果返回；响应成功不代表整份脚本执行成功。
@@ -1731,6 +1761,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: !queryFailure, ...(queryFailure ? { error: persistedQueryError(command, queryFailure.message) } : {}) }));
     return command === 'table.apply' ? { ...result, ...tableApplyReceipts.finish(taskId!) } : result;
   } catch (error) {
+    if (command === 'sessions.close' && session?.postgres) session.postgres.closing = false;
     if (sqliteClaim && taskId) {
       let fact = tasks.get(taskId)?.sqliteWrite;
       if (fact && !fact.commitAcknowledged && sentToEngine && fact.phase !== 'rolled-back') {
@@ -2045,7 +2076,8 @@ else {
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
-        if (payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.table.')) columns = columnsMain.capture(event);
+        if (payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.table.') ||
+            payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);

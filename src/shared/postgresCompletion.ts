@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const postgresCompletionLimits = { source: 64 * 1024, tokens: 4096, items: 120, relations: 8, name: 256 } as const;
 const text = z.string().max(postgresCompletionLimits.name).refine(value => !value.includes('\0'));
 const name = text.refine(value => value.length > 0);
-const target = z.object({ connectionId: name, database: name, prefix: text });
+const target = z.object({ connectionId: name, database: name, prefix: text, sessionId: name.optional() });
 export const postgresCompletionReferenceSchema = z.object({ schema: name.optional(), name }).strict();
 export type PostgresCompletionReference = z.infer<typeof postgresCompletionReferenceSchema>;
 
@@ -20,4 +20,5 @@ export type PostgresCompletionItem =
 export interface PostgresCompletionResult {
   items: PostgresCompletionItem[];
   incomplete: boolean;
+  deferred?: 'transaction' | 'busy';
 }

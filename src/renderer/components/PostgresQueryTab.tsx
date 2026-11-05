@@ -576,7 +576,8 @@ export function PostgresQueryTab({
         <SqlEditor
           value={tab.sql ?? ''}
           dialect="postgresql"
-          postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database, connectionVersion: scope.version }}
+          postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
+            connectionVersion: scope.version, sessionId: session.current?.id }}
           onCompletionStatus={setCompletionStatus}
           readOnly={busy || fileBusy}
           onReady={(instance) => {
@@ -591,7 +592,8 @@ export function PostgresQueryTab({
       </div>
       <ErrorBox message={error} />
       {!busy && completionStatus !== 'idle' && <p className="muted small" role="status">{completionStatus === 'limited'
-        ? text.completionLimited : completionStatus === 'partial' ? text.completionPartial : text.completionUnavailable}</p>}
+        ? text.completionLimited : completionStatus === 'partial' ? text.completionPartial
+          : completionStatus === 'sessionUnknown' ? text.completionTransaction : text.completionUnavailable}</p>}
       {busy && <Spinner text={phase.current?.sent ? text.running : text.connecting} />}
       <div className="postgres-results">
         {results.length > 1 && (

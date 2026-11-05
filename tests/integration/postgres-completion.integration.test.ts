@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
-import type { PostgresConnectionProfile } from '../../src/shared/contracts';
+import type { PostgresConnectionProfile, QueryOutcome } from '../../src/shared/contracts';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
@@ -11,8 +11,8 @@ const port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
 const enabled = process.env.DBARK_POSTGRES_WORKSPACE_TEST === '1';
 
 describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
-  /** 核对精确 schema、前缀、字段类型、重名保护及与用户事务隔离。 */
-  it('只返回权限范围内的独立目录，未限定的重名关系不猜测', async () => {
+  /** 核对独立目录、空闲原会话及事务内延后读取三种路径。 */
+  it('保留独立目录，按原会话读取角色、路径和临时对象', async () => {
     if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) ||
         database !== process.env.DBARK_POSTGRES_TEST_USER || !password || !Number.isInteger(port) || port <= 1024) {
       throw Error('只允许本轮专用回环 PostgreSQL 实库');
@@ -25,10 +25,11 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
     const client = Object.assign(new Client(config), { binary: false });
     const engine = new Engine();
     const read = (input: PostgresCompletionInput): Promise<PostgresCompletionResult> =>
-      engine.handle('postgres.completion', { ...input, profile });
+      engine.handle('postgres.completion', input.sessionId ? input : { ...input, profile });
     const target = { connectionId, database };
-    const relations = (prefix: string, schema?: string) => read({ ...target, kind: 'relations', prefix, schema });
-    const columns = (prefix: string, refs: { schema?: string; name: string }[]) => read({ ...target, kind: 'columns', prefix, relations: refs });
+    const relations = (prefix: string, schema?: string, sessionId?: string) => read({ ...target, kind: 'relations', prefix, schema, sessionId });
+    const columns = (prefix: string, refs: { schema?: string; name: string }[], sessionId?: string) =>
+      read({ ...target, kind: 'columns', prefix, relations: refs, sessionId });
     await client.connect();
     try {
       await client.query(`
@@ -68,6 +69,64 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       expect((await relations('temp_completion')).items).toEqual([]);
       expect((await client.query('SELECT original FROM temp_completion')).rows).toEqual([{ original: 7 }]);
       await client.query('ROLLBACK');
+
+      await engine.handle('connections.open', { id: connectionId, profile });
+      const { sessionId } = await engine.handle('sessions.open', target);
+      const { sessionId: other } = await engine.handle('sessions.open', target);
+      const run = (sql: string, taskId = randomUUID()): Promise<QueryOutcome> =>
+        engine.handle('query.execute', { sessionId, taskId, sql, maxRows: 100 });
+      const fields = async (schema?: string, id = sessionId) =>
+        (await columns('', [{ name: 'duplicate_scope', schema }], id)).items.map(item => item.name);
+      expect((await run(`SET search_path TO "补全.乙", public, pg_catalog;
+        SET statement_timeout TO '800ms'; SET lock_timeout TO '250ms'`)).failure).toBeUndefined();
+      expect(await fields()).toEqual(['other_field']);
+      expect(await fields(undefined, other)).toEqual(['public_field']);
+      expect((await run('CREATE TEMP TABLE duplicate_scope (temp_field bigint); INSERT INTO duplicate_scope VALUES (7)')).failure).toBeUndefined();
+      expect(await fields()).toEqual(['temp_field']);
+      expect(await fields('pg_temp')).toEqual(['temp_field']);
+      expect(await fields('pg_temp', other)).toEqual([]);
+      expect((await relations('duplicate', undefined, sessionId)).items[0])
+        .toEqual({ kind: 'table', name: 'duplicate_scope', schema: 'pg_temp' });
+      expect((await relations('duplicate', undefined, other)).items).not.toContainEqual({ kind: 'table', name: 'duplicate_scope', schema: 'pg_temp' });
+      expect((await run('SET search_path TO public, pg_temp, "补全.乙", pg_catalog')).failure).toBeUndefined();
+      expect(await fields()).toEqual(['public_field']);
+      const settings = await run("SELECT current_setting('statement_timeout'), current_setting('lock_timeout'), (SELECT temp_field FROM pg_temp.duplicate_scope)");
+      expect(settings.results[0]?.rows).toEqual([{ c0: '800ms', c1: '250ms', c2: '7' }]);
+
+      const limited = process.env.DBARK_POSTGRES_COMPLETION_ROLE;
+      if (limited) {
+        if (limited !== database + '_limited') throw Error('补全角色不是本轮专用角色');
+        await client.query(`GRANT USAGE ON SCHEMA "补全.乙" TO "${limited}";
+          GRANT SELECT (other_field) ON "补全.乙".duplicate_scope TO "${limited}"`);
+        expect((await run(`SET ROLE "${limited}"; SET search_path TO "补全.乙", public, pg_catalog`)).failure).toBeUndefined();
+        expect(await fields('补全.乙')).toEqual(['other_field']);
+        expect(await fields('public')).toEqual([]);
+        expect((await run('RESET ROLE')).failure).toBeUndefined();
+        expect(await fields('public')).toEqual(['public_field']);
+      }
+
+      const pending = fields('public');
+      const user = run('SELECT 17');
+      expect(await columns('', [{ name: 'duplicate_scope' }], sessionId)).toMatchObject({ deferred: 'busy' });
+      expect(await pending).toEqual(['public_field']);
+      expect((await user).results[0]?.rows).toEqual([{ c0: '17' }]);
+      const waiting = fields('pg_temp'), taskId = randomUUID();
+      const write = run('UPDATE pg_temp.duplicate_scope SET temp_field = 99', taskId);
+      await Promise.resolve();
+      await engine.handle('query.cancel', { taskId });
+      expect(await waiting).toEqual(['temp_field']);
+      expect((await write).failure?.message).toContain('未发送用户 SQL');
+      expect((await run('SELECT temp_field FROM pg_temp.duplicate_scope')).results[0]?.rows).toEqual([{ c0: '7' }]);
+      await expect(read({ ...target, database: 'postgres', kind: 'relations', prefix: '', sessionId })).rejects.toThrow('原会话');
+      expect((await run('BEGIN; SET LOCAL search_path TO public')).transactionOpen).toBe(true);
+      expect(await columns('', [{ name: 'duplicate_scope' }], sessionId)).toMatchObject({ deferred: 'transaction', items: [] });
+      expect((await run('SELECT 1/0')).failure).toBeDefined();
+      expect(await relations('duplicate', undefined, sessionId)).toMatchObject({ deferred: 'transaction' });
+      expect(await engine.handle('query.sessionState', { sessionId })).toMatchObject({ transactionFailed: true, transactionOpen: true });
+      await run('ROLLBACK');
+      expect(await fields('pg_temp')).toEqual(['temp_field']);
+      await engine.handle('sessions.close', { sessionId });
+      await expect(relations('duplicate', undefined, sessionId)).rejects.toThrow('原会话');
     } finally {
       await engine.closeAll();
       await client.end();

@@ -1,4 +1,6 @@
 import type * as monaco from 'monaco-editor';
+import { readPostgresCompletion } from '../../src/engine/postgres/completion';
+import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it } from 'vitest';
@@ -84,7 +86,7 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
 });
 
 /** 通过生产 provider 检查请求内容和插入文字。 */
-function editor(marked: string, request: (input: PostgresCompletionInput) => Promise<PostgresCompletionResult>) {
+function editor(marked: string, request: (input: PostgresCompletionInput) => Promise<PostgresCompletionResult>, sessionId?: string) {
   const offset = marked.indexOf('|');
   const sql = marked.replace('|', '');
   const position = { lineNumber: 1, column: offset + 1 } as monaco.Position;
@@ -96,7 +98,7 @@ function editor(marked: string, request: (input: PostgresCompletionInput) => Pro
   } as unknown as monaco.editor.ITextModel;
   const token: monaco.CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => disposable };
   const provider = createPostgresCompletionProvider({
-    scope: { tabId: '原页', connectionId: '原连接', database: '原库', connectionVersion: 1 },
+    scope: { tabId: '原页', connectionId: '原连接', database: '原库', connectionVersion: 1, sessionId },
     model: () => model, position: () => position, current: () => true,
     request,
     kinds: { schema: 1, table: 1, view: 1, column: 1, keyword: 1 },
@@ -142,4 +144,43 @@ it('切走再返回原标签时丢弃迟到目录，并由原承诺串行收尾'
     pending[1]({ items: [{ kind: 'table', schema: '新', name: 'test_new' }], incomplete: false });
     expect((await latest)?.suggestions).toMatchObject([{ insertText: '"新"."test_new"' }]);
   } finally { provider.dispose(); }
+});
+
+it('物理目录延后时保留本地 CTE 候选，并且只投递原会话', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const { provider, suggest } = editor('WITH x AS (SELECT 1 AS value) SELECT * FROM x|', async input => {
+    inputs.push(input);
+    return { items: [], incomplete: false, deferred: 'transaction' };
+  }, '原会话');
+  try {
+    expect((await suggest())?.suggestions).toMatchObject([{ insertText: '"x"' }]);
+    expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', prefix: 'x',
+      kind: 'relations', sessionId: '原会话' }]);
+  } finally { provider.dispose(); }
+});
+
+it('目录失败只回滚自己的读取事务，回滚失效时封住原会话', async () => {
+  const input = { kind: 'relations', connectionId: '原连接', database: '原库', prefix: '' } as const;
+  for (const rollbackFails of [false, true]) {
+    const calls: string[] = [];
+    let transactionOpen = false;
+    const connection = {
+      database: '原库', broken: false,
+      state: () => ({ transactionKnown: true, transactionOpen }),
+      query: async (sql: string) => {
+        calls.push(sql.trim());
+        if (sql.startsWith('BEGIN')) transactionOpen = true;
+        if (sql.includes('WITH namespaces')) throw Error('原目录读取失败');
+        if (sql === 'ROLLBACK') {
+          if (rollbackFails) throw Error('原回滚失败');
+          transactionOpen = false;
+        }
+        return { rows: [] };
+      },
+    } as unknown as PostgresConnection;
+    await expect(readPostgresCompletion(connection, input, true)).rejects.toThrow(rollbackFails ? '原回滚失败' : '原目录读取失败');
+    expect(calls.at(-1)).toBe('ROLLBACK');
+    expect(connection.broken).toBe(rollbackFails);
+    expect(transactionOpen).toBe(rollbackFails);
+  }
 });

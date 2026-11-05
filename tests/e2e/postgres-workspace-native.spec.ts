@@ -220,6 +220,43 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeCompletion);
     await mark('真实按键验证 schema、带引号关系、查询别名、CTE 和派生表字段补全，目录读取没有写入执行历史');
 
+    // 通过原标签执行临时表与 search_path 设置，再在同一标签请求目录。
+    await edit('CREATE TEMP TABLE temp_scope_native ("会话值" int); INSERT INTO temp_scope_native VALUES (7); SET search_path TO "回归", public; SELECT "会话值" FROM temp_scope_native;');
+    await execute();
+    const setupResults = tab().getByRole('combobox', { name: 'PostgreSQL结果集' });
+    await expect(setupResults.getByRole('option', { name: '4 · SELECT · 1 行' })).toHaveCount(1);
+    await setupResults.selectOption('3');
+    await expect(tab().getByRole('grid')).toContainText('7');
+    await expect(button(postgresZh.execute)).toBeEnabled();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+    const beforeSessionCompletion = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await edit('SELECT * FROM temp_scope_nat');
+    await page.keyboard.press('Control+Space');
+    await expect(widget.locator('.monaco-list-row.focused')).toContainText('temp_scope_native');
+    await expect(widget.locator('.monaco-list-row.focused')).toContainText('pg_temp');
+    await page.screenshot({ path: info.outputPath('PostgreSQL实际会话临时表补全.png') });
+    await page.keyboard.press('Enter');
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('FROM "pg_temp"."temp_scope_native"');
+    const localSuffix = ' FROM "带""引号" r';
+    await edit('SELECT r.no' + localSuffix);
+    for (let index = 0; index < localSuffix.length; index++) await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('Control+Space');
+    await expect(widget.locator('.monaco-list-row.focused')).toContainText('note');
+    await page.keyboard.press('Enter');
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('SELECT r."note"' + localSuffix);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeSessionCompletion);
+
+    await button(postgresZh.begin).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    await expect(button(postgresZh.execute)).toBeEnabled();
+    await edit('SELECT * FROM temp_scope_nat');
+    await page.keyboard.press('Control+Space');
+    await expect(tab().getByText(postgresZh.completionTransaction, { exact: true })).toBeVisible();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    await button(postgresZh.rollback).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+    await mark('原查询标签补全实际临时表与搜索路径，打开事务后目录暂停且原事务状态保持');
+
     await edit("/* 外 /* 内 ; */ 外 */ SELECT 9223372036854775807::bigint AS exact; SELECT $标记$含;号$标记$ AS note;");
     await execute();
     await expect(tab().getByRole('grid')).toContainText('9223372036854775807');

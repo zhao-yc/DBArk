@@ -19,17 +19,20 @@ import { PostgresTableWorkspace } from './tableWorkspace';
 import { PostgresCreateTableWorkspace, postgresCreateSchemas } from './createTable';
 import { readPostgresCompletion } from './completion';
 import { readPostgresStructure } from './relationStructure';
+import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 interface Session {
   id: string;
   connectionId: string;
   managed: PostgresConnection;
   pending?: Promise<unknown>;
+  completion?: Promise<PostgresCompletionResult>;
   closing?: Promise<void>;
 }
 interface Task {
   id: string;
   session: Session;
   cancelled: boolean;
+  sent: boolean;
   cancel?: Promise<void>;
   terminal: boolean;
 }
@@ -123,13 +126,19 @@ export class PostgresEngine {
       }
     }
   }
-  private async session<T>(id: string, action: (session: Session) => Promise<T>): Promise<T> {
+  private async session<T>(id: string, action: (session: Session) => Promise<T>, managesCompletion = false): Promise<T> {
     const session = this.sessions.get(id);
     if (!session || session.managed.broken) throw Error('PostgreSQL会话已失效，请核对写入结果后重新连接');
     if (this.stopping || this.closing.has(session.connectionId) || session.pending || session.closing) {
       throw Error('PostgreSQL会话仍有在途操作或正在关闭');
     }
-    const pending = Promise.resolve().then(() => action(session));
+    const pending = Promise.resolve().then(async () => {
+      // 用户操作先占位，原目录读取真实收尾后才允许新的用户 SQL 上线。
+      if (!managesCompletion && session.completion) await session.completion.catch(() => {});
+      if (this.stopping || this.closing.has(session.connectionId) || session.closing || session.managed.broken)
+        throw Error('PostgreSQL会话正在关闭或已失效');
+      return action(session);
+    });
     session.pending = pending;
     try {
       return await pending;
@@ -145,6 +154,7 @@ export class PostgresEngine {
       const tasks = [...this.tasks.values()].filter(task => task.session === session && !task.terminal);
       await Promise.all(tasks.map(task => this.cancel(task)));
       await session.pending?.catch(() => {});
+      await session.completion?.catch(() => {});
       await session.managed.close();
       this.sessions.delete(session.id);
     });
@@ -153,11 +163,31 @@ export class PostgresEngine {
     return close;
   }
 
+  /** 原会话目录读取只在空闲时进入，失败事务和在途操作保持原样。 */
+  private async completeSession(input: PostgresCompletionInput): Promise<PostgresCompletionResult> {
+    const session = this.sessions.get(input.sessionId!);
+    if (!session || session.connectionId !== input.connectionId || session.managed.database !== input.database ||
+        session.managed.broken || session.closing || this.stopping || this.closing.has(input.connectionId))
+      throw Error('PostgreSQL补全的原会话已变化');
+    const state = session.managed.state();
+    if (session.pending || session.completion || !state.transactionKnown) return { items: [], incomplete: false, deferred: 'busy' };
+    if (state.transactionOpen) return { items: [], incomplete: false, deferred: 'transaction' };
+    const pending = Promise.resolve().then(() => readPostgresCompletion(session.managed, input, true));
+    session.completion = pending;
+    try {
+      return await pending;
+    } finally {
+      if (session.completion === pending) session.completion = undefined;
+    }
+  }
+
   /** 结果取消使用独立同身份连接请求原backend，ACK之后仍等原查询ReadyForQuery；不取消后继查询。 */
   private cancel(task: Task): Promise<void> {
     if (task.terminal) return Promise.resolve();
     if (task.cancel) return task.cancel;
     task.cancelled = true;
+    // 尚在等待补全的任务没有后端 SQL，取消只能撤销自己的投递。
+    if (!task.sent) return Promise.resolve();
     const original = task.session.managed;
     task.cancel = (async () => {
       const pid = original.processId,
@@ -244,7 +274,7 @@ export class PostgresEngine {
       throw Error('PostgreSQL任务编号已使用或登记已满');
     if (input.continueOnError || input.collectWarnings)
       throw Error('PostgreSQL尚未实现遇错继续或MySQL诊断采集');
-    const task: Task = { id: input.taskId, session, cancelled: false, terminal: false };
+    const task: Task = { id: input.taskId, session, cancelled: false, sent: false, terminal: false };
     this.tasks.set(task.id, task);
     const started = performance.now(),
       results: QueryResult[] = [],
@@ -254,6 +284,11 @@ export class PostgresEngine {
       failure: QueryOutcome['failure'];
     this.emit({ taskId: task.id, status: 'running', progress: 0, message: '正在执行PostgreSQL脚本' });
     try {
+      // 先登记可取消任务，再等待已占用原会话的目录读取。
+      if (session.completion) await session.completion.catch(() => {});
+      if (task.cancelled) throw Error('PostgreSQL任务在等待补全时已取消，未发送用户 SQL');
+      if (this.stopping || this.closing.has(session.connectionId) || session.closing || session.managed.broken)
+        throw Error('PostgreSQL会话正在关闭或已失效，未发送用户 SQL');
       const source = String(input.sql);
       let selected = input.currentStatement
         ? currentPostgresStatement(source, input.currentStatement.offset, session.managed.standardStrings)
@@ -291,6 +326,7 @@ export class PostgresEngine {
           if (firstPostgresStatement(source.slice(part.end + 1), session.managed.standardStrings))
             throw Error('PostgreSQL参数查询一次只能执行一条语句');
         }
+        task.sent = true;
         const index = results.length,
           result = await session.managed.query(part.sql, parameters, budget, (batch, columns) =>
             this.emit({
@@ -347,6 +383,7 @@ export class PostgresEngine {
   async handle(command: string, input: Input): Promise<any> {
     switch (command) {
       case 'postgres.completion': {
+        if (input.sessionId) return this.completeSession(input as PostgresCompletionInput);
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 补全连接');
         const count = this.completionReads.get(profile.id) ?? 0;
@@ -433,6 +470,8 @@ export class PostgresEngine {
         const s = this.sessions.get(input.sessionId);
         if (!s) throw Error('PostgreSQL会话不存在');
         const state = s.managed.state();
+        if (s.completion) return { ...state, transactionOpen: false, transactionFailed: false,
+          transactionKnown: !s.pending && !s.closing && !state.broken };
         return { ...state, transactionKnown: !s.pending && !s.closing && state.transactionKnown };
       }
       case 'query.parameterNames':
@@ -452,7 +491,7 @@ export class PostgresEngine {
         });
       case 'query.execute':
       case 'query.executeParameterized':
-        return this.session(input.sessionId, (s) => this.execute(s, input));
+        return this.session(input.sessionId, (s) => this.execute(s, input), true);
       case 'query.transaction':
         return this.session(input.sessionId, async (s) => {
           if (input.action === 'commit' && s.managed.state().transactionFailed)
