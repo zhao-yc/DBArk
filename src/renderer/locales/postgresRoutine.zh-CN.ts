@@ -4,4 +4,13 @@ export const postgresRoutineZh = {
   owner: '所有者', language: '语言', arguments: '参数', returns: '返回类型',
   volatility: '易变性', volatilityValues: { i: '不可变', s: '稳定', v: '易变' },
   security: '执行身份', definer: '定义者', invoker: '调用者', comment: '注释',
+  create: '新建 PostgreSQL 函数或过程', schema: '目标 schema', name: '例程名称',
+  addParameter: '添加参数', removeParameter: '移除参数', parameterName: '参数名', parameterType: '参数类型', parameterMode: '参数模式',
+  defaultMode: '默认值方式', defaultValue: '参数默认值', noDefault: '无默认值', literal: '字面量',
+  setReturning: '返回集合', inferred: '返回类型由输出参数推导。', body: '例程正文',
+  hint: '填写正文即可，应用会生成完整的 CREATE 语句。确认前请核对 SQL。',
+  definerHint: '定义者模式固定搜索路径为 pg_catalog, pg_temp。正文中引用业务对象时须使用完整 schema 限定名。',
+  preview: '预览例程 SQL', confirm: '确认创建例程', back: '返回编辑', wait: '正在读取可创建对象的 schema…',
+  empty: '当前连接没有可创建例程的 schema。', working: '正在处理 PostgreSQL 例程…',
+  unknown: '创建结果未确认，请在原数据库核对该例程。', discard: '放弃当前例程草稿？',
 } as const;

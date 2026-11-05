@@ -616,6 +616,8 @@ export class PostgresEngine {
       case 'postgres.materializedRefresh.preview':
       case 'postgres.materializedRefresh.apply':
       case 'postgres.sequence.preview':
+      case 'postgres.routine.create.preview':
+      case 'postgres.routine.create.apply':
       case 'postgres.sequence.manage.preview':
       case 'postgres.sequence.manage.apply':
       case 'postgres.sequence.apply': {
@@ -631,12 +633,13 @@ export class PostgresEngine {
         if (command === 'postgres.viewManage.preview') return this.creations.prepareViewManage(input as Parameters<PostgresCreateTableWorkspace['prepareViewManage']>[0], connect);
         if (command === 'postgres.materializedRefresh.preview') return this.creations.prepareMaterializedRefresh(input as Parameters<PostgresCreateTableWorkspace['prepareMaterializedRefresh']>[0], connect);
         if (command === 'postgres.sequence.preview') return this.creations.prepareSequence(input as Parameters<PostgresCreateTableWorkspace['prepareSequence']>[0], connect);
-        if (command === 'postgres.sequence.manage.preview') {
+        if (command === 'postgres.sequence.manage.preview' || command === 'postgres.routine.create.preview') {
           const { profile: _profile, ...draft } = input;
+          if (command === 'postgres.routine.create.preview') return this.creations.prepareRoutine(draft as Parameters<PostgresCreateTableWorkspace['prepareRoutine']>[0], connect);
           return this.creations.prepareSequenceManage(draft as Parameters<PostgresCreateTableWorkspace['prepareSequenceManage']>[0], connect);
         }
         return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect,
-          command === 'postgres.sequence.manage.apply' ? 'sequenceManage' : command === 'postgres.sequence.apply' ? 'sequence' : command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
+          command === 'postgres.routine.create.apply' ? 'routineCreate' : command === 'postgres.sequence.manage.apply' ? 'sequenceManage' : command === 'postgres.sequence.apply' ? 'sequence' : command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
       }
       case 'postgres.sequence.read':
       case 'postgres.sequence.targets':

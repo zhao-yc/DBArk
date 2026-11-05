@@ -159,6 +159,66 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       await expect(readRoutine(hiddenRoutine)).rejects.toThrow('不可见');
       expect(await readRoutine('"public"."tabrelio_write"()')).toMatchObject({ definition: expect.stringContaining('routine_side_effects') });
       expect((await client.query('SELECT count(*)::int AS count FROM public.routine_side_effects')).rows).toEqual([{ count: 0 }]);
+
+      const routineTarget = { ...target, profile, owner: randomUUID(), connectionRevision: 1, schema: '补全.甲' };
+      const createRoutine = (fields: Record<string, unknown>) => engine.handle('postgres.routine.create.preview', { ...routineTarget, ...fields });
+      const applyRoutine = (token: string) => engine.handle('postgres.routine.create.apply', { ...target, profile, owner: routineTarget.owner,
+        connectionRevision: routineTarget.connectionRevision, token });
+      const parameter = { name: '值', mode: 'in', type: 'integer', default: { mode: 'none' } };
+      const fixtureFunction = { kind: 'function', name: '图形"例程', language: 'sql', parameters: [parameter], returns: 'integer',
+        setReturning: false, volatility: 'volatile', securityDefiner: false, comment: '图形化注释',
+        body: 'INSERT INTO public.routine_side_effects VALUES ("值");\nSELECT "值";' };
+      await client.query('CREATE TABLE "补全.甲"."图形""例程" (id integer)');
+      await expect(createRoutine({ ...fixtureFunction, returns: 'integer); DROP TABLE public.routine_side_effects; --' })).rejects.toThrow('类型名');
+      const integerCreate = await createRoutine(fixtureFunction);
+      const fixtureIdentity = '"补全.甲"."图形""例程"(integer)';
+      expect(integerCreate.statements).toHaveLength(2);
+      expect(integerCreate.statements[0]).toContain('CREATE FUNCTION "补全.甲"."图形""例程"(IN "值" integer)');
+      expect((await routineCatalog()).some((object: { name: string }) => object.name === fixtureIdentity)).toBe(false);
+      expect(await applyRoutine(integerCreate.token)).toMatchObject({ outcome: 'committed', table: fixtureIdentity });
+      await expect(applyRoutine(integerCreate.token)).rejects.toThrow('预览已失效');
+      await expect(createRoutine(fixtureFunction)).rejects.toThrow('相同输入签名');
+      expect(await readRoutine(fixtureIdentity)).toMatchObject({ comment: fixtureFunction.comment, returns: 'integer' });
+      expect((await client.query('SELECT count(*)::int AS count FROM public.routine_side_effects')).rows).toEqual([{ count: 0 }]);
+
+      const customCreate = await createRoutine({ ...fixtureFunction, volatility: 'stable', securityDefiner: true, returns: 'text',
+        parameters: [{ ...parameter, type: '"补全.甲"."带.型"', default: { mode: 'literal', value: 'x' } }], body: 'SELECT "值"::text' });
+      const customIdentity = '"补全.甲"."图形""例程"("补全.甲"."带.型")';
+      expect(await applyRoutine(customCreate.token)).toMatchObject({ outcome: 'committed', table: customIdentity });
+      expect(await readRoutine(customIdentity)).toMatchObject({ securityDefiner: true, volatility: 's', returns: 'text' });
+      expect((await client.query('SELECT "补全.甲"."图形""例程"() AS result')).rows).toEqual([{ result: 'x' }]);
+
+      const procedureCreate = await createRoutine({ kind: 'procedure', name: '图形过程', language: 'plpgsql', securityDefiner: false,
+        parameters: [parameter, { ...parameter, mode: 'out', name: '结果' }], comment: '过程注释', body: 'BEGIN "结果" := "值" + 1; END' });
+      const procedureIdentity = '"补全.甲"."图形过程"(integer)';
+      expect(await applyRoutine(procedureCreate.token)).toMatchObject({ outcome: 'committed', table: procedureIdentity });
+      expect(await readRoutine(procedureIdentity, 'procedure')).toMatchObject({ comment: '过程注释', returns: null });
+      expect((await client.query('CALL "补全.甲"."图形过程"(41, NULL)')).rows).toEqual([{ 结果: 42 }]);
+
+      const tableFunction = await createRoutine({ ...fixtureFunction, name: '表函数', returns: '', setReturning: true,
+        parameters: [parameter, { ...parameter, mode: 'out', name: '编号' }, { ...parameter, mode: 'out', name: '标签', type: 'text' }],
+        body: 'SELECT "值", \'文本\'::text' });
+      expect(await applyRoutine(tableFunction.token)).toMatchObject({ outcome: 'committed' });
+      expect((await client.query('SELECT * FROM "补全.甲"."表函数"(7)')).rows).toEqual([{ 编号: 7, 标签: '文本' }]);
+      const variadic = await createRoutine({ ...fixtureFunction, name: '可变函数', parameters: [{ ...parameter, mode: 'variadic', type: 'integer[]' }],
+        body: 'SELECT cardinality("值")' });
+      expect(await applyRoutine(variadic.token)).toMatchObject({ outcome: 'committed', table: '"补全.甲"."可变函数"(integer[])' });
+      expect((await client.query('SELECT "补全.甲"."可变函数"(1, 2, 3) AS result')).rows).toEqual([{ result: 3 }]);
+
+      const rejectedBody = await createRoutine({ ...fixtureFunction, name: '无效正文', body: 'SELECT 不存在的列' });
+      expect(await applyRoutine(rejectedBody.token)).toMatchObject({ outcome: 'rolledBack' });
+      await expect(readRoutine('"补全.甲"."无效正文"(integer)')).rejects.toThrow('不可见');
+
+      await client.query('CREATE TYPE "补全.甲"."可漂移" AS ENUM (\'a\')');
+      const staleType = await createRoutine({ ...fixtureFunction, name: '漂移类型', parameters: [{ ...parameter, type: '"补全.甲"."可漂移"' }], body: 'SELECT 1' });
+      await client.query('DROP TYPE "补全.甲"."可漂移"; CREATE TYPE "补全.甲"."可漂移" AS ENUM (\'b\')');
+      expect(await applyRoutine(staleType.token)).toMatchObject({ outcome: 'notSent', message: expect.stringContaining('类型已变化') });
+      await expect(readRoutine('"补全.甲"."漂移类型"("补全.甲"."可漂移")')).rejects.toThrow('不可见');
+
+      const occupied = await createRoutine({ ...fixtureFunction, name: '抢先签名', body: 'SELECT 1' });
+      await client.query('CREATE FUNCTION "补全.甲"."抢先签名"(integer) RETURNS integer LANGUAGE sql AS \'SELECT 2\'');
+      expect(await applyRoutine(occupied.token)).toMatchObject({ outcome: 'notSent', message: expect.stringContaining('相同输入签名') });
+      expect((await client.query('SELECT "补全.甲"."抢先签名"(0) AS result')).rows).toEqual([{ result: 2 }]);
       const { sessionId } = await engine.handle('sessions.open', target);
       const { sessionId: other } = await engine.handle('sessions.open', target);
       const run = (sql: string, taskId = randomUUID()): Promise<QueryOutcome> =>

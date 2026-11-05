@@ -13,10 +13,12 @@ import { postgresIdentifier, postgresRelationName } from '../../shared/postgresS
 import { postgresMaterializedRefreshSchema, type PostgresMaterializedRefreshInput } from '../../shared/postgresMaterializedView';
 import { readPostgresMaterializedFacts } from './materializedView';
 import { postgresViewOptionsSql, readPostgresViewFacts } from './viewDefinition';
+import { compilePostgresRoutine } from './createRoutine';
+import { postgresRoutineCreateSchema, type PostgresRoutineCreateInput } from '../../shared/postgresRoutine';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage';
+type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate';
 interface Plan {
   table: string;
   statements: string[];
@@ -261,6 +263,15 @@ export class PostgresCreateTableWorkspace {
           },
         };
       };
+    });
+  }
+
+  /** 预览只解析原目录类型，确认后由 PostgreSQL 校验例程正文。 */
+  async prepareRoutine(input: Scoped<PostgresRoutineCreateInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    return this.prepareRelation(input, 'routineCreate', connect, () => {
+      const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+      const draft = postgresRoutineCreateSchema.parse(raw);
+      return connection => compilePostgresRoutine(connection, draft);
     });
   }
 

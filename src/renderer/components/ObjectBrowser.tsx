@@ -1,4 +1,5 @@
 import { postgresSequenceZh } from '../locales/postgresSequence.zh-CN';
+import { postgresRoutineZh } from '../locales/postgresRoutine.zh-CN';
 import { sqliteObjectsZh } from '../locales/sqliteObjects.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Database, RefreshCw, Table2 } from 'lucide-react';
@@ -12,9 +13,9 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 import '../navigation.css';
 import { importNewTableZh } from '../locales/importNewTable.zh-CN';
 
-interface Props { tab: WorkspaceTab; active: boolean; refreshVersion: number; onOpen(object: DatabaseObject): void; onNewTable(): void; onNewSequence?(): void; onSqliteCreate?(kind: 'view' | 'trigger'): void; onImportNewTable?(): void; actions(object: DatabaseObject, refresh: () => void): ReactNode; }
+interface Props { tab: WorkspaceTab; active: boolean; refreshVersion: number; onOpen(object: DatabaseObject): void; onNewTable(): void; onNewSequence?(): void; onNewRoutine?(): void; onSqliteCreate?(kind: 'view' | 'trigger'): void; onImportNewTable?(): void; actions(object: DatabaseObject, refresh: () => void): ReactNode; }
 /** 目录标签只读取元数据，固定行高虚拟滚动，不取得查询会话或自动执行用户SQL。 */
-export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable, onNewSequence, onSqliteCreate, onImportNewTable, actions }: Props) {
+export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable, onNewSequence, onNewRoutine, onSqliteCreate, onImportNewTable, actions }: Props) {
   const workspace = useWorkspace();
   const profile = workspace.connections.find(item => item.id === tab.connectionId), version = workspace.connectionVersions[tab.connectionId] ?? 0;
   const [objects, setObjects] = useState<DatabaseObject[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -84,6 +85,8 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
     <div className="object-browser-header"><Database size={16}/><strong title={`${profile?.name ?? tab.connectionId} / ${tab.database}`}>{profile?.name ?? tab.connectionId} / {tab.database}</strong><span className="grow"/>
       {category === 'sequence' && profile?.dialect === 'postgresql' && onNewSequence && <button disabled={busy}
         onClick={() => { if (contextCurrent()) onNewSequence(); }}>{postgresSequenceZh.create}</button>}
+      {category === 'routine' && profile?.dialect === 'postgresql' && onNewRoutine && <button disabled={busy}
+        onClick={() => { if (contextCurrent()) onNewRoutine(); }}>{postgresRoutineZh.create}</button>}
       {profile?.dialect === 'sqlite' && tab.database === 'main' && (category === 'view' || category === 'trigger') && onSqliteCreate && <button aria-label={category === 'view' ? sqliteObjectsZh.createView : sqliteObjectsZh.createTrigger} disabled={busy} onClick={() => { if (contextCurrent() && (category === 'view' || category === 'trigger')) onSqliteCreate(category); }}>{category === 'view' ? sqliteObjectsZh.createView : sqliteObjectsZh.createTrigger}</button>}{category === 'table' && <button disabled={busy || !profile || profile.dialect === 'sqlite' && tab.database !== 'main'} onClick={() => { if (contextCurrent() && (profile?.dialect !== 'sqlite' || tab.database === 'main')) onNewTable(); }}>{text.newTable}</button>}{category === 'table' && profile?.dialect !== 'postgresql' && onImportNewTable && <button disabled={busy || !profile || profile.dialect === 'sqlite' && (tab.database !== 'main' || profile.sqlite.readOnly)} onClick={() => { if (contextCurrent() && (profile?.dialect !== 'sqlite' || tab.database === 'main' && !profile.sqlite.readOnly)) onImportNewTable(); }}>{importNewTableZh.title}</button>}<button disabled={busy || !profile} onClick={() => { if (contextCurrent()) reload(); }}><RefreshCw size={13}/>{text.refresh}</button></div>
     <div className="object-browser-filter"><select aria-label={text.type} value={category} onChange={event => { if (contextCurrent()) useWorkspace.getState().updateTab(tab.id, { objectCategory: event.target.value as ObjectCategory }); }}>
       {objectCategories.filter(kind => kind === 'sequence' ? profile?.dialect === 'postgresql' : profile?.dialect !== 'sqlite' || kind === 'table' || kind === 'view' || kind === 'trigger').map(kind => <option key={kind} value={kind}>{text.categories[kind]}</option>)}</select>
