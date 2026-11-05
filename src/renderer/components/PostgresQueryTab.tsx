@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as monaco from 'monaco-editor';
 import { format } from 'sql-formatter';
-import type { QueryOutcome } from '../../shared/contracts';
+import type { QueryOutcome, QueryResult } from '../../shared/contracts';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
 import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } from '../store';
 import { invoke, uid, errorMessage } from '../lib';
 import { postgresZh as text } from '../locales/postgres.zh-CN';
+import { zh } from '../locales/zh-CN';
+import { ResultExportSelection, type ResultGridSelection } from '../resultExport';
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
+import { ResultExportDialog } from './ResultExportDialog';
 import { ExplainPlanView } from './ExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
 import { QueryAnalyzeConfirmDialog } from './QueryAnalyzeConfirmDialog';
@@ -93,6 +96,10 @@ export function PostgresQueryTab({
   const [completionStatus, setCompletionStatus] = useState<SqlCompletionStatus>('idle');
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
+  const [resultSelection] = useState(() => new ResultExportSelection());
+  const [, refreshSelection] = useState(0);
+  const [exportView, setExportView] = useState<{ result: QueryResult; selected: boolean }>();
+  const exportOpen = useRef(false);
   const scope: Scope = {
     profile,
     version,
@@ -124,6 +131,7 @@ export function PostgresQueryTab({
       !now.activeJobs[tab.id] &&
       !phase.current &&
       !analyzeRef.current &&
+      !exportOpen.current &&
       !fileBusy &&
       !closeRef.current &&
       !document.querySelector('[role="dialog"], [role="alertdialog"]')
@@ -273,6 +281,7 @@ export function PostgresQueryTab({
     setBusy(true);
     setError('');
     if (mode !== 'analyzePreview') {
+      resultSelection.invalidate();
       setOutcome(undefined);
       setSelected(0);
     }
@@ -556,6 +565,7 @@ export function PostgresQueryTab({
           beforeTab?.connectionId !== afterTab?.connectionId;
         const left = next.settings.activeTabId !== tab.id;
         if (phase.current && (changed || (left && !phase.current.sent))) phase.current.valid = false;
+        if (changed || left) resultSelection.invalidate();
         const parameter = parameters.current;
         if (parameter && (changed || left)) {
           parameter.valid = false;
@@ -570,7 +580,42 @@ export function PostgresQueryTab({
   }, [closeRequest]);
   const results = outcome?.results ?? [],
     result = results[selected],
-    locked = busy || fileBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest;
+    locked = busy || fileBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView;
+  const dataResult = !busy && !outcome?.analysis && !outcome?.explain && result?.columns.length ? result : undefined;
+  const binding = resultSelection.bind(workspace.settings.activeTabId === tab.id ? dataResult : undefined,
+    [outcome, selected, profile, version, scope.database]);
+  const selectedCount = resultSelection.count(binding);
+
+  /** 选择归属于当前结果集及工作区代次，旧回调不能读取后来切换的结果。 */
+  function resultCurrent() {
+    const current = useWorkspace.getState();
+    return !locked && !exportOpen.current && !phase.current && !current.activeJobs[tab.id] &&
+      current.settings.activeTabId === tab.id && same(scope) && resultSelection.current(binding);
+  }
+
+  /** 仅接收当前网格送出的行位置；校验失败后旧勾选失效。 */
+  function acceptResultSelection(selection: ResultGridSelection) {
+    if (!resultCurrent()) return false;
+    try {
+      if (!resultSelection.select(binding, selection)) return false;
+      refreshSelection(value => value + 1);
+      return true;
+    } catch (reason) {
+      resultSelection.invalidate();
+      setError(errorMessage(reason));
+      return false;
+    }
+  }
+
+  /** 打开时冻结导出内容，不通过会话、SQL 或数据库连接再次读取。 */
+  function openResultExport(selectedOnly: boolean) {
+    if (!resultCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    try {
+      const snapshot = selectedOnly ? resultSelection.snapshot(binding) : resultSelection.allSnapshot(binding);
+      exportOpen.current = true;
+      setExportView({ result: snapshot, selected: selectedOnly });
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   return (
     <div className="workspace-tab query-tab postgres-query">
       <div className="context-bar">
@@ -641,7 +686,7 @@ export function PostgresQueryTab({
           postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
             connectionVersion: scope.version, sessionId: session.current?.id }}
           onCompletionStatus={setCompletionStatus}
-          readOnly={busy || fileBusy || !!analyze}
+          readOnly={busy || fileBusy || !!analyze || !!exportView}
           onReady={(instance) => {
             editor.current = instance;
           }}
@@ -659,23 +704,27 @@ export function PostgresQueryTab({
           : completionStatus === 'sessionUnknown' ? text.completionTransaction : text.completionUnavailable}</p>}
       {busy && <Spinner text={phase.current?.sent ? text.running : text.connecting} />}
       <div className="postgres-results">
-        {results.length > 1 && (
-          <select
-            aria-label="PostgreSQL结果集"
-            value={selected}
-            onChange={(event) => setSelected(Number(event.target.value))}
-          >
-            {results.map((r, i) => (
-              <option key={i} value={i}>
-                {text.result(i, r.postgresCommand ?? '', r.rows.length)}
-              </option>
-            ))}
-          </select>
+        {(results.length > 1 || dataResult) && (
+          <div className="postgres-result-actions">
+            {results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
+              onChange={event => {
+                if (exportOpen.current) return;
+                resultSelection.invalidate();
+                setSelected(Number(event.target.value));
+              }}>
+              {results.map((r, i) => <option key={i} value={i}>{text.result(i, r.postgresCommand ?? '', r.rows.length)}</option>)}
+            </select>}
+            {dataResult && <>
+              <button disabled={locked || !binding} onClick={() => openResultExport(false)}>{zh.resultExport.title}</button>
+              <button disabled={locked || !selectedCount} onClick={() => openResultExport(true)}>{zh.resultExport.selectedTitle}</button>
+            </>}
+          </div>
         )}
         {outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
           outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
           result.columns.length ? (
-            <ResultsGrid columns={result.columns} rows={result.rows} rowJump />
+            <ResultsGrid columns={result.columns} rows={result.rows} rowJump selectionScope={binding}
+              isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined} />
           ) : (
             <div className="info-strip">
               {text.complete(result.postgresCommand ?? '', result.affectedRows)}
@@ -686,6 +735,11 @@ export function PostgresQueryTab({
         )}
         {result?.truncated && <p className="warning-text">{text.truncated}</p>}
       </div>
+      {exportView && <ResultExportDialog result={exportView.result} tabId={tab.id} selected={exportView.selected}
+        allowSql={false} onClose={() => {
+          exportOpen.current = false;
+          setExportView(undefined);
+        }} />}
       <div className="tab-status">
         <span>
           {!state.transactionKnown
@@ -732,7 +786,7 @@ export function PostgresQueryTab({
           }}
         />
       )}
-      {closeRequest && !save && (
+      {closeRequest && !save && !exportView && (
         <QueryCloseDialog
           title={tab.title}
           onCancel={() => finishClose(false)}

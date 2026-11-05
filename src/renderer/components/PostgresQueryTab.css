@@ -20,6 +20,10 @@
 .postgres-query:has(> .postgres-results > :is(.explain-view, .query-analyze-view)) > .postgres-editor {
   height: clamp(120px, 19vh, 210px);
 }
+/* 结果操作栏和网格复用同一滚动区，小窗口也为表头和数据行保留空间。 */
+.postgres-query:has(> .postgres-results > .query-result-copy-region) > .postgres-editor {
+  height: clamp(120px, 26vh, 240px);
+}
 .postgres-results {
   flex: 1;
   min-height: 0;
@@ -27,10 +31,21 @@
   flex-direction: column;
   overflow: hidden;
 }
-.postgres-results > select {
-  align-self: flex-start;
-  margin: 6px 12px;
+.postgres-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 6px 12px;
+}
+.postgres-result-actions > select {
   max-width: 100%;
+}
+.postgres-results > :is(.results-grid, .query-result-copy-region) {
+  flex: 1;
+  height: auto;
+  min-height: 0;
 }
 .postgres-query > .context-bar {
   display: flex;

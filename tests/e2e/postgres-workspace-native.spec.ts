@@ -19,6 +19,7 @@ import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { explainSnapshotZh as snapshotText } from '../../src/shared/explainSnapshot.zh-CN';
 import { decodePlanSnapshot } from '../../src/shared/explainSnapshot';
+import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { clickSidebarAction } from './sidebar-menu';
 import { discardTestTab } from './query-close-ui';
@@ -497,6 +498,100 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(tab().getByRole('grid')).toContainText('9223372036854775807');
     await tab().getByRole('combobox', { name: 'PostgreSQL结果集' }).selectOption('1');
     await expect(tab().getByRole('grid')).toContainText('含;号');
+
+    // 查询带可观测的序列推进，导出三种文件后复核只执行了原查询一次。
+    await button(postgresZh.begin).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    await edit(`CREATE TEMP SEQUENCE pg_result_export_seq;
+      SELECT id AS "同名", note AS "同名", raw, nextval('pg_result_export_seq') AS "调用序号"
+      FROM (VALUES (9223372036854775805::bigint, NULL::text, decode('00ff','hex')),
+                   (9223372036854775806::bigint, ''::text, NULL::bytea),
+                   (9223372036854775807::bigint, '引;号'::text, decode('','hex'))) AS items(id,note,raw)
+      ORDER BY id; SELECT '另一结果' AS note;`);
+    await execute();
+    const resultSwitch = tab().getByRole('combobox', { name: 'PostgreSQL结果集' });
+    const resultGrid = tab().getByRole('grid');
+    const selectedExport = button(zh.resultExport.selectedTitle);
+    const firstId = '9223372036854775805', lastId = '9223372036854775807';
+    const selectResultRow = (value: string) => resultGrid.getByRole('row').filter({
+      has: page.getByRole('gridcell', { name: value, exact: true }),
+    }).getByRole('checkbox').check();
+    await resultSwitch.selectOption('1');
+    await expect(resultGrid).toContainText(firstId);
+    await selectResultRow(lastId);
+    await expect(selectedExport).toBeEnabled();
+    await resultSwitch.selectOption('2');
+    await expect(resultGrid).toContainText('另一结果');
+    await expect(selectedExport).toBeDisabled();
+    await resultSwitch.selectOption('1');
+    await expect(selectedExport).toBeDisabled();
+    await selectResultRow(lastId);
+    await selectResultRow(firstId);
+    const resultPaths = { json: info.outputPath('PostgreSQL查询勾选.json'), csv: info.outputPath('PostgreSQL查询返回.csv'),
+      xlsx: info.outputPath('PostgreSQL查询返回.xlsx') };
+    await application.evaluate(({ BrowserWindow, dialog }, input) => {
+      const original = dialog.showSaveDialog, calls: string[] = [];
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        const owner = BrowserWindow.getAllWindows().find(window => window.webContents.id === input.sender);
+        const options = args[1] as { title?: string; defaultPath?: string; filters?: { extensions: string[] }[] };
+        const extension = options.filters?.[0].extensions[0];
+        if (!owner || args[0] !== owner || options.title !== '导出文件' ||
+            (extension !== 'json' && extension !== 'csv' && extension !== 'xlsx') || options.defaultPath !== '查询结果.' + extension)
+          throw Error('PostgreSQL 查询结果保存的窗口或格式不符');
+        calls.push(extension);
+        return { canceled: false, filePath: input.paths[extension] };
+      }) as typeof original;
+      Object.assign(globalThis, { finishPostgresResultExport: () => { dialog.showSaveDialog = original; return calls; } });
+    }, { sender: tableExportSender, paths: resultPaths });
+    const historyBeforeExport = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    let resultExportCalls: string[];
+    try {
+      for (const format of ['json', 'csv', 'xlsx'] as const) {
+        const selected = format === 'json', title = selected ? zh.resultExport.selectedTitle : zh.resultExport.title;
+        await button(title).click();
+        const saveResult = page.getByRole('dialog', { name: title, exact: true });
+        await expect(saveResult).toContainText(selected ? '勾选的 2 行' : '已返回 3 行');
+        await expect(saveResult.getByRole('option', { name: 'INSERT SQL', exact: true })).toHaveCount(0);
+        await saveResult.getByLabel(zh.resultExport.format, { exact: true }).selectOption(format);
+        if (format === 'csv') await saveResult.getByLabel(csvExportZh.label, { exact: true }).selectOption(';');
+        await saveResult.locator('.file-picker').click();
+        await expect(saveResult.locator('.file-picker')).toContainText(selected ? 'PostgreSQL查询勾选.json' : 'PostgreSQL查询返回.' + format);
+        if (selected) await page.screenshot({ path: info.outputPath('PostgreSQL查询结果导出确认.png') });
+        await saveResult.getByRole('button', { name: zh.resultExport.start, exact: true }).click();
+        await expect(saveResult.locator('.success-box')).toHaveText('已导出 ' + (selected ? 2 : 3) + ' 行已返回结果。');
+        await saveResult.getByRole('button', { name: zh.common.done, exact: true }).click();
+        await expect(saveResult).toHaveCount(0);
+        await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+      }
+    } finally {
+      resultExportCalls = await application.evaluate(() => (globalThis as unknown as { finishPostgresResultExport(): string[] }).finishPostgresResultExport());
+    }
+    expect(resultExportCalls).toEqual(['json', 'csv', 'xlsx']);
+    expect(JSON.parse(await readFile(resultPaths.json, 'utf8'))).toEqual([
+      { 同名: firstId, '同名 [2]': null, raw: { type: 'binary', base64: 'AP8=' }, 调用序号: '1' },
+      { 同名: lastId, '同名 [2]': '引;号', raw: { type: 'binary', base64: '' }, 调用序号: '3' },
+    ]);
+    expect(await readFile(resultPaths.csv, 'utf8')).toBe('同名;同名 [2];raw;调用序号\r\n' +
+      firstId + ';\\N;base64:AP8=;1\r\n9223372036854775806;"";\\N;2\r\n' + lastId + ';"引;号";base64:;3\r\n');
+    const { Workbook } = require('exceljs') as typeof import('exceljs');
+    const resultBook = new Workbook();
+    await resultBook.xlsx.readFile(resultPaths.xlsx);
+    expect(resultBook.worksheets).toHaveLength(1);
+    const sheet = resultBook.worksheets[0];
+    expect(sheet.rowCount).toBe(4);
+    expect(sheet.getCell('A2').text).toBe(firstId);
+    expect(sheet.getCell('B1').text).toBe('同名 [2]');
+    expect(sheet.getCell('B2').text).toBe('\\N');
+    expect(sheet.getCell('C2').text).toBe('\\B:AP8=');
+    expect(sheet.getCell('B3').text).toBe('');
+    expect(sheet.getCell('A4').text).toBe(lastId);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeExport);
+    await edit("SELECT '序列确认：' || currval('pg_result_export_seq')::text;");
+    await execute();
+    await expect(tab().getByRole('grid')).toContainText('序列确认：3');
+    await button(postgresZh.rollback).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+    await mark('查询结果的勾选 JSON、已返回 CSV 和 Excel 实际落盘，导出未推进原序列或改变事务');
 
     const parameterSql = 'SELECT $1::text AS bound';
     await edit('SELECT 10;\n' + parameterSql);
