@@ -1,6 +1,11 @@
 /* 对象操作脱离树行流式布局，名称行保持固定高度与原缩进。 */
 .sidebar .tree-row{height:31px;min-height:31px;max-height:31px;flex-wrap:nowrap}
 .sidebar .tree-row>.tree-label{flex-basis:auto;width:100%;min-width:0}
+.sidebar .postgres-preset-toggle{flex:0 0 20px;width:20px;height:24px;padding:0;color:var(--muted)}
+.sidebar .postgres-preset-toggle + .tree-label{padding-left:2px}
+.sidebar .postgres-preset-branch{margin-left:42px;min-width:0}
+.sidebar .postgres-preset-entry{min-height:28px;width:100%;padding-left:5px}
+.sidebar .postgres-preset-entry svg{flex-shrink:0;color:var(--muted)}
 .sidebar-context-menu{position:fixed;z-index:90;width:240px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;padding:5px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow);font-size:11px}
 .sidebar-context-menu-title{padding:6px 8px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sidebar-context-menu>button{display:flex;align-items:center;justify-content:flex-start;gap:9px;width:100%;min-height:30px;height:auto;padding:6px 8px;border:0;background:transparent;text-align:left;white-space:normal;overflow-wrap:anywhere}

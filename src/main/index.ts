@@ -101,6 +101,7 @@ import { captureObjectUriLaunch, receiveObjectUriLaunch } from './externalObject
 import { externalObjectUrisZh } from '../shared/externalObjectUris.zh-CN';
 import { objectUri } from '../shared/workbench';
 import { applyTablePreset, TablePresetSources } from './tablePresets';
+import { postgresTablePresetOptions, type PostgresTablePresetOpening } from '../shared/tablePresets';
 import { RecordTemplateMain, type RecordTemplateCommand } from './recordTemplateMain';
 import { QueryResultPresetSources } from './queryResultPresetSources';
 import { productName } from '../shared/productName';
@@ -1348,6 +1349,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'postgres.table.presets.list':
     case 'postgres.table.presets.save':
     case 'postgres.table.presets.delete':
+    case 'postgres.table.presets.open':
     case 'postgres.table.presets.read': {
       const revision = store.connectionRevision();
       const check = () => {
@@ -1362,6 +1364,22 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         check();
         if (command === 'postgres.table.presets.read') store.selectedTablePreset(input, true);
       };
+      if (command === 'postgres.table.presets.open') {
+        const { tabId, limit, ...selected } = input;
+        const configuration = store.selectedTablePreset(selected, true);
+        const { connectionId, database, table } = selected, target = { connectionId, database, table, tabId };
+        // 按同一次主进程调用中的连接修订领首屏，条件在引擎按当前目录复核。
+        const page = await dispatch('postgres.table.page', { ...target, limit, offset: 0, ...postgresTablePresetOptions(configuration), checkFilterColumns: true }, columns) as PostgresTablePresetOpening['page'];
+        const owner = postgresTableOwners.get(columns!.owner.document), pageToken = page.exportToken ?? page.pageToken;
+        columns!.postgresPresetPublication = () => {
+          try { check(); }
+          catch (reason) {
+            if (owner && pageToken) void broker.request('postgres.table.release', { ...target, owner, connectionRevision: revision, pageToken }).catch(() => {});
+            throw reason;
+          }
+        };
+        return { page, configuration } satisfies PostgresTablePresetOpening;
+      }
       if (command === 'postgres.table.presets.read') return store.selectedTablePreset(input, true);
       const snapshot = command === 'postgres.table.presets.save' ? store.saveTablePreset(input, true) :
         command === 'postgres.table.presets.delete' ? store.deleteTablePreset(input, true) : store.tablePresets(input, true);

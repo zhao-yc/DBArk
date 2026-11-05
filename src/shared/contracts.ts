@@ -321,6 +321,7 @@ export interface CommandMap {
   'postgres.table.presets.save': { input: TablePresetSave; output: TablePresetSnapshot };
   'postgres.table.presets.delete': { input: TablePresetSelect; output: TablePresetSnapshot };
   'postgres.table.presets.read': { input: TablePresetSelect; output: TablePresetConfiguration };
+  'postgres.table.presets.open': { input: import('./tablePresets').PostgresTablePresetOpen; output: import('./tablePresets').PostgresTablePresetOpening };
   'postgres.table.preview': { input: import('./postgresTable').PostgresTablePreviewInput; output: import('./postgresTable').PostgresTablePreview };
   'postgres.table.apply': { input: import('./postgresTable').PostgresTableApplyInput; output: import('./postgresTable').PostgresTableOutcome };
   'postgres.table.release': { input: import('./postgresTable').PostgresTableReleaseInput; output: void };

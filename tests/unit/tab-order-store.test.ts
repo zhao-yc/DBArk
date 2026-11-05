@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings, ConnectionProfile } from '../../src/shared/contracts';
+import { postgresPresetTabId } from '../../src/shared/postgresPresetTab';
 
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('../../src/renderer/lib', () => ({ invoke: request, uid: () => 'new-tab', errorMessage: (error: unknown) => error instanceof Error ? error.message : String(error) }));
@@ -16,6 +17,20 @@ describe('工作台重排沿真实store及原配置持久化通道', () => {
   });
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
   function install(tabs: Tab[], activeTabId = tabs[0]?.id) { workspace.useWorkspace.setState({ settings: { ...workspace.useWorkspace.getState().settings, tabs, activeTabId } }); request.mockClear(); return workspace.useWorkspace.getState().tabOrderSnapshot(); }
+
+  it('同关系的普通表页和两个命名方案各用独立标签，重复打开只聚焦原方案', () => {
+    const ordinary = table('original'), first = postgresPresetTabId(fileId, '11111111-2222-4333-8444-555555555555');
+    const same = postgresPresetTabId(fileId, '11111111-2222-4333-8444-666666666666');
+    const other = postgresPresetTabId('11111111-2222-4333-8444-777777777777', '11111111-2222-4333-8444-888888888888');
+    install([ordinary]);
+    const state = workspace.useWorkspace.getState(); state.setDirty(ordinary.id, true);
+    state.openTab({ ...ordinary, id: first }); state.openTab({ ...ordinary, id: other }); state.openTab({ ...ordinary, id: same });
+    expect(workspace.useWorkspace.getState().settings.tabs.map(tab => tab.id)).toEqual([ordinary.id, first, other]);
+    expect(workspace.useWorkspace.getState().settings.activeTabId).toBe(first);
+    state.openTab({ ...ordinary, id: undefined });
+    expect(workspace.useWorkspace.getState().settings.activeTabId).toBe(ordinary.id);
+    expect(workspace.useWorkspace.getState().dirtyTabs[ordinary.id]).toBe(true);
+  });
 
   it('100混合/同名跨连接标签只移动原对象，活动页/dirty/任务/表草稿/文件视图保持', () => {
     const tabs = Array.from({ length: 100 }, (_, index) => index % 2 ? table('t' + index) : query('q' + index)); tabs[0] = query('q0', { fileSourceBinding: { id: fileId, revision: 1 } });

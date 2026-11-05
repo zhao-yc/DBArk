@@ -47,14 +47,16 @@ export class TableLayoutController<T extends TablePreferenceTarget> {
     if (!scope.names.length) return;
     const next = reconcileExactTableLayout(scope.names, this.view.preferences);
     if (JSON.stringify(next) !== JSON.stringify(this.view.preferences)) this.changeView({ preferences: next });
-    if (scope.names.length && !this.view.ready && !this.owner.busy && this.current()) void this.reload();
+    if (scope.names.length && !this.view.ready && !this.owner.busy && this.current()) void this.reload(this.view.fromPreset === true);
   }
   /** 显式重读保留失败时原布局；成功才整份恢复，不发SQL或释放编辑快照。 */
-  async reload(): Promise<void> {
+  async reload(preservePreset = false): Promise<void> {
     const owner = this.owner; if (!this.current(owner) || owner!.busy) return;
     owner!.busy = true; this.changeView({ pending: true, error: '' });
     try {
       const value = this.snapshot(await this.ports.get({ ...this.ports.scope().target }), owner!); owner!.snapshot = value;
+      // 方案标签先得到首屏布局，再领取独立布局的保存修订。初次领取不覆盖方案显示。
+      if (preservePreset && this.view.fromPreset) { this.changeView({ ready: true }); return; }
       const sourceChanged = !!value.preferences && value.connectionDigest !== value.source.connectionDigest;
       this.changeView({ preferences: reconcileExactTableLayout(this.ports.scope().names, sourceChanged ? null : value.preferences), ready: true, dirty: false, error: sourceChanged ? this.text.source : '', fromPreset: undefined });
     } catch (reason) { if (this.current(owner)) this.changeView({ ready: true, error: reason instanceof Error ? reason.message : String(reason) }); }

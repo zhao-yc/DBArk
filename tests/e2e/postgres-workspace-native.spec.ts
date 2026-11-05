@@ -300,6 +300,13 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     finally { await page.mouse.up(); }
     await expect(noteHeader).toHaveCSS('width', '300px');
     await expect(gridTab.locator('.tab-status')).toContainText(tableGridText.unsaved);
+    const rawTableName = (await table.locator('.truncate').textContent())!;
+    const presetBranchLabel = tablePresetText.treeExpand(rawTableName);
+    const presetBranchButton = page.getByRole('button', { name: presetBranchLabel, exact: true });
+    const presetBranch = page.getByRole('group', { name: presetBranchLabel, exact: true });
+    await expect(presetBranch).toHaveCount(0);
+    await presetBranchButton.click();
+    await expect(presetBranch).toContainText(tablePresetText.treeEmpty);
     // 命名方案捕获当前 300px 布局，但本机独立布局仍是 245px。
     await tableButton(postgresTableZh.presets).click();
     await expect(presetDialog.getByRole('checkbox', { name: tablePresetText.includeLayout })).toBeChecked();
@@ -310,6 +317,32 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(presetDialog.getByText(tablePresetText.hasLayout, { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('PostgreSQL命名方案列布局.png') });
     await page.keyboard.press('Escape');
+    // 已展开清单在本机保存后自动更新，独立标签使用方案首屏且保留普通表的原草稿。
+    const presetChild = presetBranch.getByRole('button', { name: tablePresetText.treeOpen('窄表审核方案'), exact: true });
+    const tabStrip = page.locator('.tab-strip'), ordinaryTab = tabStrip.locator('.workspace-tab-button').filter({ has: page.getByRole('button', { name: rawTableName, exact: true }) });
+    const schemeTitle = tablePresetText.tabTitle(rawTableName, '窄表审核方案');
+    const schemeTab = tabStrip.locator('.workspace-tab-button').filter({ has: page.getByRole('button', { name: schemeTitle, exact: true }) });
+    await expect(presetChild).toBeVisible();
+    await editRecord('新增乙', '从对象树打开前的草稿');
+    await expect(ordinaryTab.locator('.dirty-dot')).toBeVisible();
+    await presetChild.press('Enter');
+    await expect(schemeTab).toHaveAttribute('data-active-workspace-tab', 'true');
+    await expect(grid.getByRole('row').nth(1)).toContainText('新增甲');
+    await expect(grid).not.toContainText('原值');
+    await expect(noteHeader).toHaveCSS('width', '300px');
+    await expect(gridTab.locator('.tab-status')).toContainText(tableLayoutText.fromPreset);
+    await expect(tableButton(tableLayoutText.entry)).toBeEnabled();
+    await expect(noteHeader).toHaveCSS('width', '300px');
+    await page.screenshot({ path: info.outputPath('PostgreSQL对象树打开方案.png') });
+    await ordinaryTab.locator('.tab-select').click();
+    await expect(gridTab.getByLabel(postgresTableZh.draft, { exact: true })).toContainText(postgresTableZh.changes(1));
+    await presetChild.click();
+    await expect(schemeTab).toHaveCount(1);
+    await schemeTab.locator('.tab-close').click();
+    await expect(ordinaryTab).toHaveAttribute('data-active-workspace-tab', 'true');
+    await expect(grid).toContainText('新增乙');
+    await tableButton(postgresTableZh.discard).click();
+    await expect(gridTab.getByLabel(postgresTableZh.draft, { exact: true })).toHaveCount(0);
     await tableButton(tableLayoutText.entry).click();
     await expect(layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true })).toHaveValue('300');
     await layoutDialog.getByLabel(tableGridText.width + ' note', { exact: true }).fill('310');
@@ -343,6 +376,18 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
           filters: [{ column: 'id', operator: '=', value: '无法解析的整数' }],
           layout: { version: 1, columns: [{ name: 'id', hidden: false }, { name: 'note', hidden: true }] } } });
     });
+    await presetBranchButton.click();
+    await presetBranchButton.click();
+    const invalidTitle = tablePresetText.tabTitle(rawTableName, '无效数值方案');
+    await presetBranch.getByRole('button', { name: tablePresetText.treeOpen('无效数值方案'), exact: true }).click();
+    await expect(gridTab.getByRole('alert')).toContainText(/bigint/i);
+    await expect(grid).toHaveCount(0);
+    await expect(tableButton(tablePresetText.treeRetry)).toBeEnabled();
+    await tabStrip.locator('.workspace-tab-button').filter({ has: page.getByRole('button', { name: invalidTitle, exact: true }) }).locator('.tab-close').click();
+    await expect(grid).toContainText('新增甲');
+    await expect(noteHeader).toHaveCSS('width', '300px');
+    await presetBranchButton.click();
+    await mark('PostgreSQL 对象树展开并刷新命名方案，打开独立首屏并保留普通页草稿，失败方案没有全表回退');
     await tableButton(postgresTableZh.presets).click();
     await tablePresetChoice.selectOption({ label: '无效数值方案' });
     await presetButton(tablePresetText.apply).click();

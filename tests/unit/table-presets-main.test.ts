@@ -5,7 +5,9 @@ import {createContext,runInContext} from 'node:vm';
 import ts from 'typescript';
 import {ColumnsMainCapabilities} from '../../src/main/columnsMainCapabilities';
 import {TablePresetSources,applyTablePreset} from '../../src/main/tablePresets';
-import type {TablePresetConfiguration} from '../../src/shared/tablePresets';
+import { postgresTablePresetOptions, type TablePresetConfiguration } from '../../src/shared/tablePresets';
+import { postgresPresetTabId } from '../../src/shared/postgresPresetTab';
+import { deferred, mainColumnsHarness } from './main-columns-owner-harness';
 const target={connectionId:'ram',database:'db',table:'t'},configuration:TablePresetConfiguration={filters:[{column:'payload',operator:'IS NULL'}],filterMode:'all',sort:[{column:'payload',direction:'ASC'}]};
 const snapshot={version:1 as const,revision:2,entries:[],source:{connectionRevision:1,connectionDigest:'a'.repeat(64)}};
 /** Electron端口只用内存对象；执行原真实capture/文档换代，不接受测试自造invocation。 */
@@ -19,6 +21,31 @@ function ownership(){
  return {owner,sources,capture:()=>owner.capture(event),navigate:()=>listeners.get('did-start-navigation')!.forEach(callback=>callback({isMainFrame:true,isSameDocument:false})),replace:()=>{current={...window};}};
 }
 describe('命名方案Main真实来源及只读字段核对',()=>{
+ it('独立方案首屏用已保存条件，并拒绝其它标签、旧修订及晚到的异源页', async () => {
+  const f = mainColumnsHarness(), id = randomUUID(), tabId = postgresPresetTabId(id, randomUUID()), pageToken = randomUUID();
+  let revision = 7;
+  const profile = { id: target.connectionId, dialect: 'postgresql' };
+  const selected = vi.fn((input: { expectedRevision: number }) => {
+   if (input.expectedRevision !== snapshot.revision) throw Error('方案修订已变化');
+   return configuration;
+  });
+  Object.assign(f.context, { postgresTableOwners: new WeakMap(), postgresTablePresetOptions, randomUUID,
+   store: { connectionRevision: () => revision, connections: () => [profile], resolveConnection: () => profile,
+    tablePresets: () => ({ ...snapshot, source: { ...snapshot.source, connectionRevision: revision } }), selectedTablePreset: selected } });
+  const listed = await f.run('postgres.table.presets.list', target);
+  const input = { ...target, id, tabId, limit: 3, bindingToken: listed.bindingToken, source: listed.source, expectedRevision: listed.revision };
+  await expect(f.run('postgres.table.presets.open', { ...input, tabId: 'ordinary' })).rejects.toThrow('标签不匹配');
+  await expect(f.run('postgres.table.presets.open', { ...input, expectedRevision: 0 })).rejects.toThrow('方案修订');
+  expect(f.request).not.toHaveBeenCalled();
+  const result = deferred<{ exportToken: string }>(); f.request.mockImplementationOnce(() => result.promise).mockResolvedValue(undefined);
+  const opening = f.run('postgres.table.presets.open', input);
+  await vi.waitFor(() => expect(f.request).toHaveBeenCalledOnce());
+  const request = f.request.mock.calls[0][1];
+  expect(request).toMatchObject({ ...target, tabId, limit: 3, offset: 0, checkFilterColumns: true, ...postgresTablePresetOptions(configuration), connectionRevision: 7 });
+  revision = 8; f.setRevision(8); result.resolve({ exportToken: pageToken });
+  await expect(opening).rejects.toThrow('来源');
+  expect(f.request).toHaveBeenLastCalledWith('postgres.table.release', { ...target, tabId, connectionRevision: 7, owner: request.owner, pageToken });
+ });
  it('list不调用worker；令牌绑定原窗口/主frame/文档/准确库表和连接来源',()=>{
   const f=ownership(),first=f.capture(),listed=f.sources.issue(first,target,snapshot),input={...target,source:listed.source,bindingToken:listed.bindingToken};
   expect(()=>f.sources.assert(f.capture(),input)).not.toThrow();

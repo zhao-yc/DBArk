@@ -39,6 +39,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.table.page': true, 'postgres.table.preview': true, 'postgres.table.apply': true, 'postgres.table.release': true,
   'postgres.table.layout.get': true, 'postgres.table.layout.save': true, 'postgres.table.layout.reset': true,
   'postgres.table.presets.list': true, 'postgres.table.presets.save': true, 'postgres.table.presets.delete': true, 'postgres.table.presets.read': true,
+  'postgres.table.presets.open': true,
   'sqlite.tablePage': true,
   'sqlite.relationships': true,
   'sqlite.referencePage': true,

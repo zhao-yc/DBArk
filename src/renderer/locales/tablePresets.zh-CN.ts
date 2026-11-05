@@ -7,5 +7,14 @@ export const tablePresetsZh={
   includeLayout:'包含当前列布局', hasLayout:'所选方案包含列布局',
   applyLayoutPrompt:'应用方案将替换本标签尚未保存的列布局，确认继续？', confirmApplyLayout:'确认应用方案布局',
   appliedWithLayout:'已应用方案的筛选、排序和列布局。',
+  treeExpand: (name:string) => `已保存方案 ${name}`,
+  treeEmpty:'此对象暂无命名方案。', treeRetry:'重新读取方案',
+  treeOpen: (name:string) => `打开方案 ${name}`,
+  tabTitle: (table:string, name:string) => {
+    const limit = 256 - name.length - 3;
+    const label = table.length <= limit ? table : table.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/u, '') + '…';
+    return `${label} · ${name}`;
+  },
+  tabMissing:'此标签的命名方案已删除或无法识别。可重新读取方案，或从对象树打开普通表页。',
   saved:'方案已保存本机，当前输入保持不变。',deleted:'所选本机方案已删除。',applied:'方案已应用，仅重新读取表数据。',changed:'表页、连接、字段或筛选已变化，本次未应用；请刷新方案后重试。',
 } as const;

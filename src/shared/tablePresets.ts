@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { filterRuleSchema, filterGroupSchema, assertFilterGroupInput, sortRulesSchema, validateFilterGroup, FILTER_LIMITS } from './filtering';
 import { tablePreferencesLimits, tablePreferenceTargetSchema, type TablePreferences } from './tablePreferences';
-import { postgresAdvancedTableFilterSchema, postgresQuickTableFilterSchema, postgresTableLayoutPreferencesSchema, postgresTablePageSchema, postgresTableSortRules, postgresTableSortSchema, type PostgresTablePageInput } from './postgresTable';
+import { postgresAdvancedTableFilterSchema, postgresQuickTableFilterSchema, postgresTableLayoutPreferencesSchema, postgresTablePageSchema, postgresTableSortRules, postgresTableSortSchema, type PostgresTablePage, type PostgresTablePageInput } from './postgresTable';
+import { postgresPresetIdFromTab } from './postgresPresetTab';
 
 export const tablePresetLimits = { name:80, perTarget:20, targets:500, entries:500, entryBytes:65536, totalBytes:4*1024*1024 } as const;
 const revision = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER-1);
@@ -58,6 +59,13 @@ export const postgresTablePresetListSchema = postgresTablePageSchema.pick({ conn
 const postgresChecked = postgresTablePresetListSchema.extend({ expectedRevision: revision, source: tablePresetSourceSchema, bindingToken: z.string().uuid() }).strict();
 export const postgresTablePresetSaveSchema = postgresChecked.extend({ name, configuration: postgresTablePresetConfigurationSchema, replaceId: z.string().uuid().optional() });
 export const postgresTablePresetSelectSchema = postgresChecked.extend({ id: z.string().uuid() });
+/** 只为绑定了此方案的独立标签签发首屏；禁止传入额外筛选、偏移或草稿原页。 */
+export const postgresTablePresetOpenSchema = postgresTablePresetSelectSchema.extend({
+  tabId: postgresTablePageSchema.shape.tabId,
+  limit: postgresTablePageSchema.shape.limit,
+}).refine(value => postgresPresetIdFromTab(value.tabId) === value.id, '方案与目标标签不匹配');
+export type PostgresTablePresetOpen = z.infer<typeof postgresTablePresetOpenSchema>;
+export interface PostgresTablePresetOpening { page: PostgresTablePage; configuration: TablePresetConfiguration; }
 export type TablePresetConfiguration = z.output<typeof postgresProfile>;
 type StoredPresetDocument = z.infer<typeof postgresTablePresetDocumentSchema>;
 export type TablePresetDocument = Omit<StoredPresetDocument, 'entries'> & {

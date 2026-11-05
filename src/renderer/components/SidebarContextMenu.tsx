@@ -249,7 +249,7 @@ function SidebarSubmenu({ label, open, onOpen, onClose, children }: { label: str
 }
 
 /** 每个节点持有独立租约，目录代次变化或卸载永久撤销旧菜单；不依赖名称反查新对象。 */
-export function SidebarTreeRow({ target, label, className, version, actions, children, isCurrent }: { target: SidebarNodeTarget; label: string; className: string; version: readonly unknown[]; actions: ReactNode; children: ReactElement; isCurrent?: () => boolean }) {
+export function SidebarTreeRow({ target, label, className, version, actions, children, leading, isCurrent }: { target: SidebarNodeTarget; label: string; className: string; version: readonly unknown[]; actions: ReactNode; children: ReactElement; leading?: ReactNode; isCurrent?: () => boolean }) {
   const context = useContext(Context), row = useRef<HTMLDivElement>(null);
   const present = useRef(false);
   const lease = useRef<{ key: string; version: readonly unknown[]; token: object } | undefined>(undefined);
@@ -269,6 +269,7 @@ export function SidebarTreeRow({ target, label, className, version, actions, chi
   }
   const button = children as ReactElement<{ onClick?: (event: MouseEvent<HTMLButtonElement>) => void; onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void; title?: string }>;
   return <div ref={row} className={`tree-row ${className}${context?.selected(target) ? ' active' : ''}`} data-sidebar-node={key} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); menu(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined); }}>
+    {leading}
     {cloneElement(button, { title: button.props.title ?? label, 'aria-haspopup': 'menu', onClick: (event: MouseEvent<HTMLButtonElement>) => {
       const node = row.current, captured = latest.current;
       if (!node || captured.token !== token) return;

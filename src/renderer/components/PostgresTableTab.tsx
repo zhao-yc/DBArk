@@ -4,6 +4,7 @@ import type { ColumnWidths } from 'react-data-grid';
 import type { TablePreferences } from '../../shared/tablePreferences';
 import { exactTableLayoutProjection, postgresLayoutSchemas, type PostgresLayoutTarget } from '../../shared/sqliteTableLayout';
 import { postgresRelationSelect } from '../../shared/postgresSql';
+import { isPostgresPresetTabId, postgresPresetIdFromTab } from '../../shared/postgresPresetTab';
 import {
   isPostgresTableFiltered, postgresTableLimits, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableField,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTableTarget,
@@ -129,6 +130,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const recordDirty = useRef(false);
   const started = useRef(false);
   const target: PostgresTableTarget = { connectionId: tab.connectionId, database: tab.database ?? 'postgres', table: tab.table ?? '', tabId: tab.id };
+  const presetTab = isPostgresPresetTabId(tab.id);
   const layoutTarget = useMemo(() => ({ connectionId: target.connectionId, database: target.database, table: target.table }), [target.connectionId, target.database, target.table]);
   const layoutKey = useMemo(() => ({}), [layoutTarget, connectionVersion]);
   const columnNames = useMemo(() => page?.columns.map(column => column.name) ?? [], [page?.columns]);
@@ -171,6 +173,10 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = [], checkFilterColumns = false, presetLayout?: TablePreferences) {
     const result = await invoke('postgres.table.page', { ...target, ...next,
       ...(retainPageTokens.length ? { retainPageTokens } : {}), ...(checkFilterColumns ? { checkFilterColumns: true } : {}) });
+    return publishPage(result, next, isCurrent, presetLayout);
+  }
+
+  async function publishPage(result: PostgresTablePage, next: PageOptions, isCurrent: () => boolean, presetLayout?: TablePreferences) {
     if (!isCurrent()) {
       const token = result.exportToken ?? result.pageToken;
       if (token) await invoke('postgres.table.release', { ...target, pageToken: token }).catch(() => {});
@@ -188,6 +194,21 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     return true;
   }
 
+  /** 方案页首屏只走方案读取；方案已删除或查询失败时保留空页和重试入口。 */
+  async function openPresetPage(isCurrent: () => boolean) {
+    const id = postgresPresetIdFromTab(tab.id);
+    if (!id) throw Error(tablePresetsZh.tabMissing);
+    const { tabId, ...relation } = target;
+    const snapshot = await invoke('postgres.table.presets.list', relation);
+    if (!isCurrent()) return;
+    if (!snapshot.entries.some(entry => entry.id === id)) throw Error(tablePresetsZh.tabMissing);
+    const { page: result, configuration } = await invoke('postgres.table.presets.open', { ...relation, id, tabId,
+      limit: options.limit, source: snapshot.source, expectedRevision: snapshot.revision, bindingToken: snapshot.bindingToken });
+    if (!await publishPage(result, { ...postgresTablePresetOptions(configuration), offset: 0, limit: options.limit }, isCurrent, configuration.layout) || !isCurrent()) return;
+    if (configuration.quickFilter) { setFilterColumn(configuration.quickFilter.column); setFilterText(configuration.quickFilter.text); }
+    setMessage(configuration.layout ? tablePresetsZh.appliedWithLayout : tablePresetsZh.applied);
+  }
+
   /** 标签移除时只释放本代签发的表页令牌。 */
   useEffect(() => {
     lifetime.current = {};
@@ -200,14 +221,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   useEffect(() => {
     if (!active || started.current) return;
     started.current = true;
-    void run(isCurrent => read(options, isCurrent));
+    void run(isCurrent => presetTab ? openPresetPage(isCurrent) : read(options, isCurrent));
   }, [active]);
   useEffect(() => { layout.activate(); return () => layout.dispose(); }, [layout]);
   useEffect(() => { layout.sync(); });
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false) {
-    if ((!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || lease.current) return;
     setMessage('');
     void run(isCurrent => read(next, isCurrent, [...new Set(draft.map(entry => entry.change.pageToken))]));
   }
@@ -272,7 +293,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const layoutOpen = layoutDialog === layoutKey;
   const blocked = busy || !!form || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
-  const frozenPage = blocked || draft.length > 0;
+  const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
   const firstPage = { ...options, offset: 0, limit: pageSize };
@@ -343,7 +364,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   return <div className="workspace-tab postgres-table-tab" aria-label={text.relation}>
     <div className="context-bar"><strong>{tab.title}</strong><span>PostgreSQL / {target.database}</span></div>
     <div className="query-toolbar pg-table-toolbar">
-      <button disabled={frozenPage} onClick={() => navigate({ ...options, limit: pageSize })}>{text.refresh}</button>
+      {presetTab && !page
+        ? <button disabled={blocked} onClick={() => void run(openPresetPage)}>{tablePresetsZh.treeRetry}</button>
+        : <button disabled={frozenPage} onClick={() => navigate({ ...options, limit: pageSize })}>{text.refresh}</button>}
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
       <button disabled={frozenPage || requiresRefresh || !page?.exportToken}
         onClick={() => setExportPage(page)}>{postgresTableExportZh.open}</button>
