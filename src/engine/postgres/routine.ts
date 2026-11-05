@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseObject } from '../../shared/contracts';
+import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import { postgresRoutineInfoSchema, type PostgresRoutineManageInput, type PostgresRoutineReadInput } from '../../shared/postgresRoutine';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresConnection } from './connection';
@@ -36,13 +37,16 @@ export async function readPostgresRoutineFacts(connection: PostgresConnection, i
     'name', ${signature}, 'category', p.prokind::text, 'arguments', pg_catalog.pg_get_function_arguments(p.oid),
     'returns', pg_catalog.pg_get_function_result(p.oid), 'language', l.lanname, 'owner', pg_catalog.pg_get_userbyid(p.proowner),
     'volatility', p.provolatile::text, 'securityDefiner', p.prosecdef, 'comment', pg_catalog.obj_description(p.oid, 'pg_proc'),
-    'definition', pg_catalog.pg_get_functiondef(p.oid))::text,
+    'definition', pg_catalog.pg_get_functiondef(p.oid),
+    'editableBody', CASE WHEN l.lanname IN ('sql', 'plpgsql') AND p.probin IS NULL
+      AND pg_catalog.to_jsonb(p)->>'prosqlbody' IS NULL AND pg_catalog.octet_length(p.prosrc) BETWEEN 1 AND 131072
+      AND pg_catalog.pg_has_role(p.proowner, 'USAGE') THEN p.prosrc END)::text,
     p.oid::text, n.oid::text, p.proargtypes::text, p.xmin::text, pg_catalog.pg_has_role(p.proowner, 'USAGE'),
     pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to((pg_catalog.to_jsonb(p) - 'proname')::text, 'UTF8')), 'hex')
     ${source} JOIN pg_catalog.pg_language l ON l.oid = p.prolang
     WHERE n.nspname = $2::name AND p.proname = $3::name AND ${visible}
       AND (CASE WHEN p.prokind = 'p' THEN 'procedure' ELSE 'function' END) = $4
-      AND ${signature} = $1`, [input.name, schema, name, input.kind], { rows: 2, bytes: 2 * 1024 * 1024 });
+      AND ${signature} = $1`, [input.name, schema, name, input.kind], { rows: 2, bytes: 3 * 1024 * 1024 });
   if (result.truncated) throw Error('PostgreSQL 函数定义超过读取预算');
   const row = result.rows[0];
   if (result.rows.length !== 1 || typeof row.c0 !== 'string' || typeof row.c1 !== 'string' || typeof row.c2 !== 'string' ||
@@ -54,6 +58,30 @@ export async function readPostgresRoutineFacts(connection: PostgresConnection, i
   const stamp = createHash('sha256').update(JSON.stringify([input.name, preserved, row.c4, canManage])).digest('hex');
   return { schema, name, oid: row.c1, schemaOid: row.c2, inputVector: row.c3, preserved,
     argumentsSql: input.name.slice(qualified[0].length - 1), info: postgresRoutineInfoSchema.parse({ ...catalog, canManage, stamp }) };
+}
+
+/** 以目录摘要比对原属性和出向依赖，防止反编译定义重放时改变默认值绑定。 */
+async function readBodyEditShape(connection: PostgresConnection, oid: string) {
+  const result = await connection.query(`SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+    pg_catalog.jsonb_build_array(pg_catalog.to_jsonb(p) - 'prosrc',
+      pg_catalog.obj_description(p.oid, 'pg_proc'), (SELECT pg_catalog.jsonb_agg(
+        pg_catalog.jsonb_build_array(d.objsubid, d.refclassid, d.refobjid, d.refobjsubid, d.deptype)
+        ORDER BY d.objsubid, d.refclassid, d.refobjid, d.refobjsubid, d.deptype)
+      FROM pg_catalog.pg_depend d WHERE d.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass AND d.objid = p.oid)
+    )::text, 'UTF8')), 'hex') FROM pg_catalog.pg_proc p WHERE p.oid = $1::oid`, [oid], { rows: 2, bytes: 1024 });
+  if (result.truncated || result.rows.length !== 1 || typeof result.rows[0].c0 !== 'string')
+    throw Error('未确认原例程属性与依赖');
+  return result.rows[0].c0;
+}
+
+/** 仅替换服务器反编译文本中和原 prosrc 逐字一致的最后一个 AS 字面量。 */
+function routineBodyStatement(info: { definition: string; editableBody: string | null }, body: string) {
+  if (info.editableBody === null) throw Error('当前例程未提供可编辑的 SQL 或 PL/pgSQL 字符串正文');
+  if (info.editableBody === body) throw Error('例程正文没有变化');
+  const delimiter = /(\$[A-Za-z_][A-Za-z_0-9]*\$)\n$/.exec(info.definition)?.[1];
+  const suffix = '\nAS ' + delimiter + info.editableBody + delimiter + '\n';
+  if (!delimiter || !info.definition.endsWith(suffix)) throw Error('无法定位服务器定义中的原例程正文');
+  return info.definition.slice(0, -suffix.length) + '\nAS ' + postgresDdlLiteral(body);
 }
 
 /** 独立定义读取按目录解析重载，不依赖参数类型的访问权限。 */
@@ -104,6 +132,24 @@ export async function compilePostgresRoutineManage(connection: PostgresConnectio
       async verify(current: PostgresConnection) {
         const actual = await readPostgresRoutineFacts(current, { ...input, name: destination });
         if (actual.preserved !== original.preserved) throw Error('重命名后的例程身份或属性与原例程不同，未提交');
+      },
+    };
+  }
+  if (input.action === 'edit') {
+    const statement = routineBodyStatement(original.info, input.body);
+    const shape = await readBodyEditShape(connection, original.oid);
+    return { ...plan, table: input.name, success: 'PostgreSQL ' + label + '正文已确认更新', statements: [statement],
+      async preflight(current: PostgresConnection) {
+        const stamp = await plan.preflight(current);
+        if (await readBodyEditShape(current, original.oid) !== shape) throw Error('原例程属性或依赖已变化，请重新预览');
+        await current.query('SET LOCAL check_function_bodies = on', undefined, budget());
+        return stamp;
+      },
+      async verify(current: PostgresConnection) {
+        const actual = await readPostgresRoutineFacts(current, input);
+        if (actual.oid !== original.oid || actual.info.editableBody !== input.body ||
+            await readBodyEditShape(current, actual.oid) !== shape)
+          throw Error('回读的正文、例程身份或依赖与预览不同，未提交');
       },
     };
   }

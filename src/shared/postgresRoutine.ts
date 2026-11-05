@@ -9,10 +9,14 @@ export const postgresRoutineReadSchema = postgresStructureInputSchema.omit({ tab
 }).strict();
 export type PostgresRoutineReadInput = z.infer<typeof postgresRoutineReadSchema>;
 const routineStamp = z.string().regex(/^[a-f0-9]{64}$/);
+const routineBody = z.string().min(1).max(128 * 1024)
+  .refine(value => !!value.trim() && !/[\u0000\uD800-\uDFFF]/u.test(value), '例程正文不能为空且须为有效文本')
+  .refine(value => new TextEncoder().encode(value).length <= 128 * 1024, '例程正文超过 128 KiB');
 const routineManageTarget = postgresRoutineReadSchema.extend({ stamp: routineStamp });
 export const postgresRoutineManageSchema = z.discriminatedUnion('action', [
   routineManageTarget.extend({ action: z.literal('rename'), newName: postgresNewIdentifier }).strict(),
   routineManageTarget.extend({ action: z.literal('drop') }).strict(),
+  routineManageTarget.extend({ action: z.literal('edit'), body: routineBody }).strict(),
 ]);
 export type PostgresRoutineManageInput = z.infer<typeof postgresRoutineManageSchema>;
 
@@ -20,7 +24,7 @@ export const postgresRoutineInfoSchema = z.object({
   name: z.string().min(1), category: z.enum(['f', 'p', 'w']), arguments: z.string(), returns: z.string().nullable(),
   language: z.string(), owner: z.string(), volatility: z.enum(['i', 's', 'v']), securityDefiner: z.boolean(),
   comment: z.string().nullable(), definition: z.string().min(1),
-  canManage: z.boolean(), stamp: routineStamp,
+  canManage: z.boolean(), stamp: routineStamp, editableBody: z.string().nullable(),
 }).strict();
 export type PostgresRoutineInfo = z.infer<typeof postgresRoutineInfoSchema>;
 

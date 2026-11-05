@@ -11,7 +11,7 @@ import './PostgresCreateTableDialog.css';
 import './PostgresStructureDialog.css';
 
 type RoutineAction = PostgresRoutineManageInput['action'];
-type RoutineManage = { action: RoutineAction; stamp: string; version: number };
+type RoutineManage = { action: RoutineAction; stamp: string; version: number; originalBody?: string };
 
 /** 定义读取和草稿绑定原连接及完整签名，加载或打开时只读取文本。 */
 export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange, onManaged }: {
@@ -76,6 +76,8 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
     <footer className="modal-footer"><button disabled={!current} onClick={() => setAttempt(value => value + 1)}>{zh.common.refresh}</button>
       <button disabled={!info} onClick={openDraft}>{text.draft}</button>
       {!readOnly && info?.canManage && <>
+        <button disabled={info.editableBody === null} title={info.editableBody === null ? text.editUnavailable : undefined}
+          onClick={() => setManage({ action: 'edit', stamp: info.stamp, version, originalBody: info.editableBody ?? undefined })}>{text.edit}</button>
         <button onClick={() => setManage({ action: 'rename', stamp: info.stamp, version })}>{text.rename}</button>
         <button onClick={() => setManage({ action: 'drop', stamp: info.stamp, version })}>{text.drop}</button>
       </>}
@@ -84,12 +86,13 @@ export function PostgresRoutineDialog({ target, readOnly, onClose, onDirtyChange
 }
 
 /** 预览与确认绑定原连接版本及输入签名。写入结果未知时需要重新打开核对。 */
-function PostgresManageRoutineDialog({ target, action, stamp, version, onClose, onManaged, onDirtyChange }: RoutineManage & {
+function PostgresManageRoutineDialog({ target, action, stamp, version, originalBody, onClose, onManaged, onDirtyChange }: RoutineManage & {
   target: PostgresRoutineReadInput; onClose(unknown: boolean): void; onManaged(name: string, message: string): void;
   onDirtyChange(value: boolean): void;
 }) {
   const stale = useWorkspace(state => (state.connectionVersions[target.connectionId] ?? 0) !== version);
   const [name, setName] = useState('');
+  const [body, setBody] = useState(originalBody ?? '');
   const [preview, setPreview] = useState<PostgresCreateTablePreview>();
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -97,8 +100,9 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, onClose, 
   const [error, setError] = useState('');
   const locked = useRef(false);
   const dropping = action === 'drop';
-  const dirty = busy || !!preview || !!name;
-  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  const editing = action === 'edit';
+  const changed = editing ? body !== originalBody : !!name;
+  useEffect(() => { onDirtyChange(busy || !!preview || changed); }, [busy, preview, changed, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
   function back() {
@@ -108,7 +112,7 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, onClose, 
   }
 
   function close() {
-    if (!locked.current && (!name || stale || unknown || window.confirm(text.discardManage))) onClose(unknown);
+    if (!locked.current && (!changed || stale || unknown || window.confirm(editing ? text.discard : text.discardManage))) onClose(unknown);
   }
 
   async function submit() {
@@ -120,7 +124,8 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, onClose, 
     try {
       if (!preview) {
         const base = { ...target, stamp };
-        const input = postgresRoutineManageSchema.parse(dropping ? { ...base, action } : { ...base, action, newName: name });
+        const input = postgresRoutineManageSchema.parse(action === 'drop' ? { ...base, action } :
+          action === 'edit' ? { ...base, action, body } : { ...base, action, newName: name });
         const next = await invoke('postgres.routine.manage.preview', input);
         if ((useWorkspace.getState().connectionVersions[target.connectionId] ?? 0) === version) setPreview(next);
       } else {
@@ -145,22 +150,24 @@ function PostgresManageRoutineDialog({ target, action, stamp, version, onClose, 
 
   return <Modal title={text[action]} wide onClose={close}>
     <div className="modal-content pg-create-content">
-      <strong>{target.database} / {target.name}</strong><p>{dropping ? text.dropHint : text.renameHint}</p>
+      <strong>{target.database} / {target.name}</strong><p>{dropping ? text.dropHint : editing ? text.editHint : text.renameHint}</p>
       <ErrorBox message={[stale && text.stale, unknown && text.manageUnknown, error].filter(Boolean).join(' ')}/>
       {busy && <Spinner text={text.working}/>}
       {preview ? <>
         <pre className="pg-create-sql">{preview.statements.join(';\n') + ';'}</pre>
         {dropping && <label><input type="checkbox" checked={acknowledged} disabled={busy || stale}
           onChange={event => setAcknowledged(event.target.checked)}/> {text.acknowledgeDrop}</label>}
-      </> : !dropping && <Field label={text.newName}><input value={name} maxLength={63} disabled={busy || stale || unknown}
-        onChange={event => { setName(event.target.value); setError(''); }}/></Field>}
+      </> : editing ? <Field label={text.body}><textarea aria-label={text.body} className="pg-create-view-definition" value={body} rows={14} maxLength={128 * 1024}
+        disabled={busy || stale || unknown} spellCheck={false} onChange={event => { setBody(event.target.value); setError(''); }}/></Field> :
+        !dropping && <Field label={text.newName}><input value={name} maxLength={63} disabled={busy || stale || unknown}
+          onChange={event => { setName(event.target.value); setError(''); }}/></Field>}
     </div>
     <footer className="modal-footer">
       {preview && <button disabled={busy} onClick={back}>{text.returnFromPreview}</button>}
       <span className="grow"/><button disabled={busy} onClick={close}>{zh.common.close}</button>
       <button className={preview && dropping ? 'danger' : 'primary'}
-        disabled={busy || stale || unknown || (dropping ? !!preview && !acknowledged : !name.trim())}
-        onClick={() => void submit()}>{preview ? (dropping ? text.confirmDrop : text.confirmRename) : text.preview}</button>
+        disabled={busy || stale || unknown || (dropping ? !!preview && !acknowledged : !changed || !(editing ? body : name).trim())}
+        onClick={() => void submit()}>{preview ? (dropping ? text.confirmDrop : editing ? text.confirmEdit : text.confirmRename) : text.preview}</button>
     </footer>
   </Modal>;
 }

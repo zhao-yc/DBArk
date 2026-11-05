@@ -19,4 +19,7 @@ export const postgresRoutineZh = {
   acknowledgeDrop: '确认删除此完整签名对应的例程', confirmDrop: '确认删除例程', confirmRename: '确认重命名例程',
   returnFromPreview: '返回操作', stale: '连接已变化，请关闭后重新打开例程。',
   manageUnknown: '操作结果未确认，请在原数据库核对该例程。', discardManage: '放弃当前重命名草稿？',
+  edit: '编辑例程正文', confirmEdit: '确认更新正文',
+  editHint: '当前输入签名、参数、属性与权限会在事务中复核。正文中的业务对象请写完整 schema 限定名。',
+  editUnavailable: '此入口支持 128 KiB 以内的 SQL 和 PL/pgSQL 字符串正文。',
 } as const;

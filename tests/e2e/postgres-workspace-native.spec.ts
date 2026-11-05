@@ -1870,6 +1870,35 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(routineRows).toHaveCount(2);
     await mark('原生函数列表和数据库右键分别创建函数和过程，预览零写入并在确认后自动打开定义');
 
+    await routineRows.filter({ hasText: '窗口图形函数' }).dblclick();
+    await routineDefinition.getByRole('button', { name: routineText.edit, exact: true }).click();
+    const editRoutine = page.getByRole('dialog', { name: routineText.edit, exact: true });
+    const editBody = editRoutine.getByLabel(routineText.body, { exact: true });
+    await expect(editBody).toHaveValue('SELECT "输入" + 1');
+    const previewEdit = editRoutine.getByRole('button', { name: routineText.preview, exact: true });
+    await expect(previewEdit).toBeDisabled();
+    await editBody.fill('SELECT "输入" + 2');
+    await previewEdit.click();
+    await expect(editRoutine.locator('pre')).toContainText('CREATE OR REPLACE FUNCTION');
+    await expect(editRoutine.locator('pre')).toContainText('SELECT "输入" + 2');
+    await page.screenshot({ path: info.outputPath('PostgreSQL编辑例程.png') });
+    await editRoutine.getByRole('button', { name: routineText.confirmEdit, exact: true }).click();
+    await expect(routineDefinition.locator('.monaco-editor .view-lines')).toContainText('SELECT "输入" + 2');
+    await expect(routineDefinition.getByRole('table')).toContainText('创建函数注释');
+    await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
+
+    await routineRows.filter({ hasText: '窗口图形过程' }).dblclick();
+    await routineDefinition.getByRole('button', { name: routineText.edit, exact: true }).click();
+    await expect(editBody).toHaveValue('BEGIN NULL; END');
+    await editBody.fill('BEGIN PERFORM 42; END');
+    await previewEdit.click();
+    await expect(editRoutine.locator('pre')).toContainText('CREATE OR REPLACE PROCEDURE');
+    await editRoutine.getByRole('button', { name: routineText.confirmEdit, exact: true }).click();
+    await expect(routineDefinition.locator('.monaco-editor .view-lines')).toContainText('BEGIN PERFORM 42; END');
+    await expect(routineDefinition.getByRole('table')).toContainText('创建过程注释');
+    await routineDefinition.getByRole('button', { name: zh.common.close, exact: true }).click();
+    await mark('原生窗口分别预填函数和过程正文，核对 SQL 后提交，新定义及原注释随即回读');
+
     await routineFilter.fill('窗口补全函数');
     await routineRows.filter({ hasText: integerSignature }).dblclick();
     await routineDefinition.getByRole('button', { name: routineText.rename, exact: true }).click();
