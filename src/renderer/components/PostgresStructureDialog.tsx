@@ -5,6 +5,8 @@ import { errorMessage, invoke } from '../lib';
 import { postgresStructureZh as text } from '../locales/postgresStructure.zh-CN';
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
+import { PostgresViewEditPanel } from './PostgresViewEditPanel';
+import { postgresViewEditZh } from '../locales/postgresViewEdit.zh-CN';
 import { PostgresColumnEditPanel } from './PostgresColumnEditPanel';
 import { PostgresIndexEditPanel } from './PostgresIndexEditPanel';
 import { PostgresKeyEditPanel } from './PostgresKeyEditPanel';
@@ -20,6 +22,7 @@ import './PostgresStructureDialog.css';
 
 type Section = keyof typeof text.sections;
 const editors = {
+  definition: { Panel: PostgresViewEditPanel, label: postgresViewEditZh.title },
   columns: { Panel: PostgresColumnEditPanel, label: postgresColumnEditZh.open },
   indexes: { Panel: PostgresIndexEditPanel, label: postgresIndexEditZh.open },
   constraints: { Panel: PostgresKeyEditPanel, label: postgresKeyEditZh.open },
@@ -90,7 +93,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
       <div className="pg-structure-caption"><strong>{table}</strong><span>{database}</span>{output && <span>{text.kinds[output.kind]}</span>}</div>
       {busy && <Spinner text={text.loading}/>}
       <ErrorBox message={dialect !== 'postgresql' ? text.missing : currentView?.error ?? ''}/>
-      {EditPanel && output?.editStamp ? <EditPanel target={target} original={output} version={version}
+      {EditPanel && output && (editing === 'definition' ? output.viewEditStamp : output.editStamp) ? <EditPanel target={target} original={output} version={version}
         onDirtyChange={onDirtyChange} onClose={() => { setEditing(undefined); setAttempt(value => value + 1); }}
         onResult={(message, unknown) => {
           onEdited(target, message, unknown, version);
@@ -141,7 +144,10 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
       {output?.editStamp && !editing && section === 'constraints' &&
         <><button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>
           <button onClick={() => setEditing('check')}>{editors.check.label}</button></>}
-      {section === 'definition' && output?.viewDefinition && <button onClick={openDraft}>{text.openDraft}</button>}
+      {section === 'definition' && output?.viewEditStamp && !editing && <button onClick={() => setEditing('definition')}>
+        {postgresViewEditZh.title}
+      </button>}
+      {section === 'definition' && output?.viewDefinition && !editing && <button onClick={openDraft}>{text.openDraft}</button>}
       <span className="grow"/><button disabled={!!editing} onClick={onClose}>{text.close}</button>
     </footer>
   </Modal>;

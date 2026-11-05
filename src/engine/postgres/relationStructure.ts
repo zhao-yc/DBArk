@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { postgresRelationName } from '../../shared/postgresSql';
 import { postgresStructureResultSchema, type PostgresStructureResult } from '../../shared/postgresStructure';
 import type { PostgresConnection } from './connection';
+import { postgresEditableViewSql, postgresViewFactsSql, postgresViewStamp } from './viewDefinition';
 import { startPostgresDdl } from './createTable';
 
 // 单条目录查询提供一致的关系、字段、约束和索引快照；绝不读取目标关系的数据行。
@@ -9,6 +10,7 @@ const structureSql = `
 WITH target AS MATERIALIZED (
   SELECT c.oid, c.relkind, c.relname, c.relispartition, c.relpartbound,
          c.relrowsecurity, c.relforcerowsecurity, n.nspname,
+         CASE WHEN ${postgresEditableViewSql} THEN (${postgresViewFactsSql})::text END AS view_edit,
          c.relkind = 'r' AND c.relpersistence IN ('p', 'u') AND NOT c.relispartition
            AND pg_catalog.pg_has_role(c.relowner, 'USAGE')
            AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid) AS editable
@@ -131,7 +133,7 @@ SELECT pg_catalog.jsonb_build_object(
       pg_catalog.jsonb_build_object('oid', oid::text, 'reference', confrelid::text, 'index', conindid::text)) FROM (
       SELECT c.conname, c.oid, c.confrelid, c.conindid FROM pg_catalog.pg_constraint c
       WHERE c.conrelid = t.oid AND c.contype = 'f' ORDER BY c.oid LIMIT 2001
-    ) foreign_ids), '{}'::jsonb))
+    ) foreign_ids), '{}'::jsonb)), t.view_edit
 FROM target t
 `;
 
@@ -157,7 +159,7 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
   if (!parsed.success || parsed.data.database !== connection.database || parsed.data.schema !== schema || parsed.data.name !== name) {
     throw Error('PostgreSQL结构回包不完整或目标已经变化');
   }
-  const { c0: raw, c1: oid, c2: editable, c3: ids } = result.rows[0] as { c0: string; c1: string; c2: string; c3: string };
+  const { c0: raw, c1: oid, c2: editable, c3: ids, c4: viewEdit } = result.rows[0] as { c0: string; c1: string; c2: string; c3: string; c4: string | null };
   const identity = JSON.parse(ids);
   const indexIds = catalogIds(identity.indexes, parsed.data.indexes);
   const keyIds = catalogIds(identity.keys, parsed.data.constraints.filter(key => key.kind === 'p' || key.kind === 'u'));
@@ -169,7 +171,8 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
     return !value || ![value.oid, value.reference, value.index].every(oid => typeof oid === 'string' && /^\d+$/.test(oid));
   })) throw Error('PostgreSQL 外键身份回包不完整');
   const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ?
-    { editStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex') } : {}) };
+    { editStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex') } : {}),
+    ...(viewEdit ? { viewEditStamp: postgresViewStamp(viewEdit) } : {}) };
   return { output, oid, indexIds, keyIds, foreignIds, checkIds };
 }
 

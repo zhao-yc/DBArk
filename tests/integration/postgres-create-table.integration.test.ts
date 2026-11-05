@@ -3,6 +3,7 @@ import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
+import { postgresStructureResultSchema } from '../../src/shared/postgresStructure';
 import type { PostgresCreateTableInput } from '../../src/shared/postgresCreateTable';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
@@ -99,6 +100,61 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       const badView = await engine.handle('postgres.createView.preview', { ...viewInput, view: '无效定义', definition: 'SELECT missing FROM pg_catalog.pg_class' });
       expect(await applyView(badView.token)).toMatchObject({ outcome: 'rolledBack' });
       expect((await client.query('SELECT to_regclass($1)::text AS name', ['"生成.甲"."无效定义"'])).rows[0].name).toBeNull();
+
+      // 更新定义必须保留同一关系、依赖、授权、注释和安全选项。
+      const viewOptions = '(security_barrier = true, security_invoker = true, check_option = local)';
+      const dependent = '"生成.甲"."视图依赖"';
+      await client.query(`CREATE OR REPLACE VIEW ${viewName} WITH ${viewOptions} AS
+        SELECT "编号", "代码" FROM ${qualified} WHERE "编号" > 0;
+        GRANT SELECT ON ${viewName} TO PUBLIC;
+        CREATE VIEW ${dependent} AS SELECT * FROM ${viewName}`);
+      const viewCatalog = async () => (await client.query(`SELECT c.oid::text, c.relowner::text,
+        c.relacl::text, c.reloptions, pg_catalog.obj_description(c.oid) AS comment
+        FROM pg_catalog.pg_class c WHERE c.oid = $1::regclass`, [viewName])).rows[0];
+      const viewOriginal = await viewCatalog();
+      const readView = async () => postgresStructureResultSchema.parse(await engine.handle('postgres.structure.read', { ...target, table: viewName }));
+      const newQuery = `SELECT "编号", "代码", 42 AS "附加" FROM ${qualified}`;
+      const previewEdit = async (definition = newQuery) => engine.handle('postgres.editView.preview', {
+        ...target, table: viewName, stamp: (await readView()).viewEditStamp, definition,
+      });
+      const applyEdit = (token: string) => engine.handle('postgres.editView.apply', { ...target, token });
+      const edit = await previewEdit();
+      expect(edit.statements[0]).toContain('ALTER VIEW ' + viewName);
+      expect(edit.statements[1]).toContain('CREATE OR REPLACE VIEW ' + viewName);
+      expect(edit.statements[1]).toContain('"security_invoker"');
+      expect(edit.statements[1]).toContain('"check_option"');
+      expect((await readView()).columns.map(column => column.name)).toEqual(['编号', '代码']);
+      await expect(applyView(edit.token)).rejects.toThrow('预览已失效');
+      await client.query('BEGIN; LOCK TABLE ' + qualified + ' IN ROW EXCLUSIVE MODE');
+      try {
+        expect(await applyEdit(edit.token)).toMatchObject({ outcome: 'committed', table: viewName });
+      } finally { await client.query('ROLLBACK'); }
+      await expect(applyEdit(edit.token)).rejects.toThrow('预览已失效');
+      expect(await viewCatalog()).toEqual(viewOriginal);
+      expect((await client.query(`SELECT "附加" AS value FROM ${viewName}`)).rows).toEqual([{ value: 42 }]);
+      expect((await client.query(`SELECT "代码" AS note FROM ${dependent}`)).rows).toEqual([{ note: value }]);
+      const incompatible = await previewEdit(`SELECT "编号", "代码" FROM ${qualified}`);
+      expect(await applyEdit(incompatible.token)).toMatchObject({ outcome: 'rolledBack' });
+
+      // 另一会话已持有原视图的排他锁，等本次申请锁后提交，验证锁后仍会重读。
+      const racing = await previewEdit(newQuery.replace('42', '43'));
+      await client.query('BEGIN');
+      let pending: ReturnType<typeof applyEdit> | undefined;
+      try {
+        await client.query(`CREATE OR REPLACE VIEW ${viewName} WITH ${viewOptions} AS ${newQuery.replace('42', '41')}`);
+        pending = applyEdit(racing.token);
+        await expect.poll(async () => (await client.query(`SELECT EXISTS (
+          SELECT FROM pg_catalog.pg_locks WHERE relation = $1::oid
+            AND mode = 'AccessExclusiveLock' AND NOT granted AND pid <> pg_catalog.pg_backend_pid()
+        ) AS waiting`, [viewOriginal.oid])).rows[0].waiting, { timeout: 3500 }).toBe(true);
+        await client.query('COMMIT');
+        expect(await pending).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('原视图已变化') });
+      } finally {
+        await client.query('ROLLBACK');
+        await pending;
+      }
+      expect((await client.query(`SELECT "附加" AS value FROM ${viewName}`)).rows).toEqual([{ value: 41 }]);
+      expect(await viewCatalog()).toEqual(viewOriginal);
 
       const closed = await prepare({ table: '关闭' });
       await engine.handle('connections.close', { id });

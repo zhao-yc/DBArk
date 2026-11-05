@@ -766,7 +766,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         !columnsMain.sharesDocumentOwner(session.postgres.owner, columns))
       throw Error('PostgreSQL执行计划的原窗口或会话已变化');
   }
-  if (command.startsWith('postgres.createTable.') || command.startsWith('postgres.createView.') || command.startsWith('postgres.columnEdit.') || command.startsWith('postgres.indexEdit.') || command.startsWith('postgres.keyEdit.') || command.startsWith('postgres.foreignEdit.') || command.startsWith('postgres.checkEdit.')) {
+  if (command.startsWith('postgres.createTable.') || command.startsWith('postgres.createView.') || command.startsWith('postgres.editView.') || command.startsWith('postgres.columnEdit.') || command.startsWith('postgres.indexEdit.') || command.startsWith('postgres.keyEdit.') || command.startsWith('postgres.foreignEdit.') || command.startsWith('postgres.checkEdit.')) {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document, connectionRevision = store.connectionRevision();
     let owner = postgresTableOwners.get(document);
@@ -2182,7 +2182,7 @@ else {
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind === 'postgres.table.import') columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
-            payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') ||
+            payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') ||
             payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
