@@ -4,6 +4,8 @@ import { postgresRoutineZh as routineText } from '../../src/renderer/locales/pos
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
 import { test as base, expect } from '@playwright/test';
 import { Client } from 'pg';
+import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
+import { postgresGridPasteZh as gridPasteText } from '../../src/renderer/locales/postgresGridPaste.zh-CN';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -226,6 +228,24 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
 
     await add('2', '新增甲');
     await add('3', '新增乙');
+    /** 向真实窗口投递剪贴板事件，保留设备剪贴板原内容。 */
+    const pasteInto = async (locator: ReturnType<typeof page.locator>, source: { text: string; typed?: string }) => {
+      await locator.evaluate((element, { source, mime }) => {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData('text/plain', source.text);
+        if (source.typed) clipboardData.setData(mime, source.typed);
+        element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }));
+      }, { source, mime: cellClipboardType });
+    };
+    await tableButton(gridPasteText.append).click();
+    const appendPaste = page.getByRole('dialog', { name: gridPasteText.append, exact: true });
+    const pasteInput = appendPaste.getByLabel(gridPasteText.source, { exact: true });
+    await pasteInto(pasteInput, encodeClipboard([['98', '粘贴新增甲'], ['99', null]]));
+    await expect(appendPaste.getByText(gridPasteText.typed, { exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('PostgreSQL网格粘贴新增.png') });
+    await appendPaste.getByRole('button', { name: postgresTableZh.stage, exact: true }).click();
+    await expect(recordDraft).toContainText(postgresTableZh.changes(4));
+    await expect(grid).not.toContainText('粘贴新增甲');
     await expect(tableButton(tableSortText.entry)).toBeDisabled();
     await expect(tableButton(postgresTableZh.presets)).toBeDisabled();
     const cellFilterMenu = page.getByRole('menu', { name: tableCellFilterText.context, exact: true });
@@ -235,6 +255,32 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(grid).not.toContainText('新增甲');
     await commit();
     await expect(grid).toContainText('新增乙');
+
+    await inlineCell('粘贴新增甲').click();
+    await pasteInto(inlineCell('粘贴新增甲'), { text: '多出\t一列' });
+    await expect(gridTab.getByRole('alert')).toContainText(gridPasteText.bounds);
+    await expect(recordDraft).toHaveCount(0);
+    await inlineCell('3').click();
+    await inlineCell('3').press('ArrowDown');
+    await expect(inlineCell('98')).toBeFocused();
+    await pasteInto(inlineCell('98'), { text: `${exactId}\t"覆盖\n原文"\r\n99\tNULL` });
+    await expect(recordDraft).toContainText(postgresTableZh.changes(2));
+    await expect(recordDraft).toContainText('id=' + exactId);
+    const pasteReadback = new Client({ host: '127.0.0.1', port, database, user, password, ssl: false, connectionTimeoutMillis: 1500 });
+    try {
+      await pasteReadback.connect();
+      const readPasted = async () => (await pasteReadback.query('SELECT id::text, note FROM "回归"."带""引号" WHERE id >= 98 ORDER BY id::bigint')).rows;
+      expect(await readPasted()).toEqual([{ id: '98', note: '粘贴新增甲' }, { id: '99', note: null }]);
+      await commit();
+      expect(await readPasted()).toEqual([{ id: '99', note: 'NULL' }, { id: exactId, note: '覆盖\n原文' }]);
+      for (const key of ['99', exactId]) {
+        await inlineCell(key).click();
+        await tableButton(postgresTableZh.remove).click();
+      }
+      await commit();
+      expect(await readPasted()).toEqual([]);
+    } finally { await pasteReadback.end(); }
+    await mark('PostgreSQL 网格粘贴追加与覆盖，越界整批拒绝，真实提交前后复核大整数、多行文本、真实与字面 NULL');
 
     const advanced = gridTab.getByRole('region', { name: postgresTableZh.advancedFilter, exact: true });
     const addCondition = advanced.getByRole('button', { name: zh.table.text013, exact: true });

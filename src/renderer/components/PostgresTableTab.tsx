@@ -20,6 +20,9 @@ import { PostgresTableImportDialog } from './PostgresTableImportDialog';
 import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
 import { PostgresTableCellFilterMenu } from './PostgresTableCellFilterMenu';
 import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
+import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
+import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
+import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
 import { postgresTableCellFilterDraft } from '../postgresTableCellFilter';
 import type { QueryResultCopyCell } from '../queryResultHeaderCopy';
 import type { FilterDraft } from '../tableFilters';
@@ -118,6 +121,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [importPage, setImportPage] = useState<PostgresTablePage>();
   const [row, setRow] = useState<number | null>(null);
   const [draft, setDraft] = useState<DraftEntry[]>([]);
+  const draftRef = useRef<DraftEntry[]>([]);
+  const [pasteScope, setPasteScope] = useState<object>();
+  const pasteOwner = useRef<object>(undefined);
   const [form, setForm] = useState<{ row: number | null }>();
   const [preview, setPreview] = useState<PostgresTablePreview>();
   const [busy, setBusy] = useState(false);
@@ -245,39 +251,46 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || inlineOwner.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || inlineOwner.current || pasteOwner.current || lease.current) return;
     setMessage('');
     void run(isCurrent => read(next, isCurrent, [...new Set(draft.map(entry => entry.change.pageToken))]));
   }
 
   /** 更新草稿及标签退出保护。 */
   function setChanges(next: DraftEntry[]) {
+    draftRef.current = next;
     setDraft(next);
     recordDirty.current = next.length > 0;
     useWorkspace.getState().setDirty(tab.id, recordDirty.current || !!inlineOwner.current || layout.view.dirty);
   }
 
-  /** 每项保留原页和主键身份，重新编辑同一记录只更新这一个动作。 */
-  function stage(change: PostgresTableChange, owner?: InlineEdit) {
-    if (!page?.pageToken || requiresRefresh || lease.current || inlineOwner.current !== owner) return;
-    const rowKey = change.kind === 'insert' ? undefined : page.rowKeys?.[change.row];
-    if (change.kind !== 'insert' && !rowKey) throw Error(text.noKey);
-    const prior = rowKey ? draft.find(item => item.rowKey === rowKey) : undefined;
-    // 回到该页时保留首次暂存的原行版本，避免把外部写入静默变成新的编辑基线。
-    const entry: DraftEntry = prior && prior.change.kind !== 'insert' && change.kind !== 'insert'
-      ? { ...prior, change: { ...change, row: prior.change.row, pageToken: prior.change.pageToken } }
-      : { change: { ...change, pageToken: page.pageToken }, rowKey, offset: options.offset };
-    const next = [...draft.filter(item => rowKey === undefined || item.rowKey !== rowKey), entry];
+  /** 单格和矩形共用一次整批校验，重编同一主键时继续使用首次暂存的原行版本。 */
+  function stageChanges(changes: readonly PostgresTableChange[], owner?: InlineEdit) {
+    if (!page?.pageToken || requiresRefresh || lease.current || inlineOwner.current !== owner) return false;
+    const next = [...draftRef.current];
+    for (const change of changes) {
+      const rowKey = change.kind === 'insert' ? undefined : page.rowKeys?.[change.row];
+      if (change.kind !== 'insert' && !rowKey) throw Error(text.noKey);
+      const index = rowKey ? next.findIndex(item => item.rowKey === rowKey) : -1;
+      const prior = index >= 0 ? next.splice(index, 1)[0] : undefined;
+      next.push(prior && prior.change.kind !== 'insert' && change.kind !== 'insert'
+        ? { ...prior, change: { ...change, row: prior.change.row, pageToken: prior.change.pageToken } }
+        : { change: { ...change, pageToken: page.pageToken }, rowKey, offset: options.offset });
+    }
     const checked = postgresTablePreviewSchema.safeParse({ ...target, pageToken: page.pageToken, changes: next.map(item => item.change) });
     if (!checked.success) throw Error(checked.error.issues[0]?.message ?? text.noChange);
     setChanges(next);
-    setForm(undefined);
+    return true;
+  }
+
+  function stage(change: PostgresTableChange, owner?: InlineEdit) {
+    if (stageChanges([change], owner)) setForm(undefined);
   }
 
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh || inlineOwner.current) return;
+    if (!pageToken || !draft.length || requiresRefresh || inlineOwner.current || pasteOwner.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -309,7 +322,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   const layoutOpen = layoutDialog === layoutKey;
-  const blocked = busy || !!form || !!inlineEdit || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
+  const blocked = busy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
@@ -384,6 +397,30 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   const canEditGrid = active && writable && !!page?.capabilities.update && pageConnectionVersion === connectionVersion;
+  const canPasteAppend = active && writable && !!page?.capabilities.insert && pageConnectionVersion === connectionVersion &&
+    gridLayout.columns.some(column => !column.generated);
+
+  function closePasteAppend(owner: object) {
+    if (pasteOwner.current !== owner) return;
+    pasteOwner.current = undefined;
+    setPasteScope(undefined);
+  }
+
+  /** 只消费当前页剪贴板计划，读取、预览和提交由既有按钮独立触发。 */
+  function stageGridPaste(start: string, source: { plain: string; typed?: string }, cell?: QueryResultCopyCell, owner?: object) {
+    if (!page?.pageToken || issued.current !== page.pageToken || !layoutScope.current.current() || lease.current ||
+      inlineOwner.current || requiresRefresh || pasteOwner.current !== owner) throw Error(pasteText.expired);
+    if (cell) {
+      if (!canEditGrid || !cell.column || page.rows[cell.index] !== cell.row || !gridLayout.columns.some(column => column === cell.column) ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')) throw Error(pasteText.expired);
+    } else if (!owner || owner !== cellScope || !page.capabilities.insert) throw Error(pasteText.expired);
+    const changes = postgresGridPasteChanges(page, gridLayout.columns, start, source, cell?.index,
+      key => draftRef.current.find(entry => entry.rowKey === key)?.change);
+    if (!stageChanges(changes)) throw Error(pasteText.expired);
+    if (owner) closePasteAppend(owner);
+    setError('');
+    setMessage(pasteText.staged(changes.length));
+  }
 
   /** 单元格编辑只接收当前可见、可写且有原行身份的字段；字节仍走原查看和记录表单。 */
   function openInlineEdit(cell: QueryResultCopyCell, anchor: HTMLElement, typed?: string): boolean {
@@ -499,6 +536,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         kind: 'query', title: tab.title, connectionId: target.connectionId, database: target.database, sql: postgresRelationSelect(target.table),
       })}>{text.query}</button>
       <button disabled={!writable || !page?.capabilities.insert} onClick={() => setForm({ row: null })}>{text.add}</button>
+      <button disabled={!canPasteAppend} onClick={() => {
+        if (!canPasteAppend || lease.current || inlineOwner.current || !layoutScope.current.current() ||
+          document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+        closeCellMenu(cellMenuOwner.current, false);
+        pasteOwner.current = cellScope;
+        setPasteScope(cellScope);
+      }}>{pasteText.append}</button>
       <button disabled={!writable || !page?.capabilities.update || row === null} onClick={() => setForm({ row })}>{text.edit}</button>
       <button disabled={!writable || !page?.capabilities.delete || row === null} onClick={() => {
         if (row === null) return;
@@ -549,13 +593,18 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {layoutView.dirty && <span>{tableGridZh.unsaved}</span>}
       {layoutView.fromPreset && <span>{layoutText.fromPreset}</span>}
       {!page.pageToken && <span>{text.noWrite}</span>}
-      {canEditGrid && <span title={text.cellEditHint}>{text.cellEditHint}</span>}
+      {canEditGrid && <span title={pasteText.overwriteHint}>{text.cellEditHint} {pasteText.overwriteHint}</span>}
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
     <div className="pg-table-grid" inert={!!inlineEdit}>
       {page ? <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump onActiveRowIndexChange={setRow}
         onCellFilterMenu={cellMenuEnabled ? openCellMenu : undefined}
         onCellEdit={canEditGrid ? openInlineEdit : undefined}
+        onCellPaste={(cell, data) => {
+          if (!canEditGrid || !cell.column) return;
+          try { stageGridPaste(cell.column.key, postgresClipboardInput(data), cell); }
+          catch (reason) { setError(errorMessage(reason)); }
+        }}
         frozenKeys={gridLayout.frozenKeys} columnWidths={gridLayout.widths} rowHeight={layoutView.preferences.rowHeight} onColumnWidthsChange={resizeLayout}
         sort={sorted} onSortChange={frozenPage ? undefined : sort => {
           try {
@@ -572,6 +621,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     {inlineEdit && <PostgresInlineCellEditor anchor={inlineEdit.anchor} column={inlineEdit.column}
       initial={inlineEdit.initial} originalText={inlineEdit.originalText} typed={inlineEdit.typed} visible={active}
       onStage={value => stageInlineEdit(inlineEdit, value)} onCancel={() => closeInlineEdit(inlineEdit)}/>}
+    {pasteScope && <PostgresGridPasteDialog columns={gridLayout.columns} onClose={() => closePasteAppend(pasteScope)}
+      onStage={(start, source) => stageGridPaste(start, source, undefined, pasteScope)}/>}
     {draft.length > 0 && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong><button disabled={blocked} onClick={() => setChanges([])}>{text.discard}</button>
       <ol>{draft.map(({ change, offset }, index) => <li key={index}>

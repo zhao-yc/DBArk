@@ -23,7 +23,7 @@ function assertTabularRowBudget(text: string, budget: ClipboardRowBudget) {
       if (char === '"' && text[index + 1] === '"') { content = true; index++; }
       else if (char === '"') quoted = false;
       else content = true;
-    } else if (char === '"' && !content) quoted = true;
+    } else if (char === '"' && !content) { quoted = true; hasCells = true; }
     else if (char === '\t') { hasCells = true; content = false; }
     else if (char === '\n' || char === '\r') {
       if (++rows > budget.maximum) throw new Error(budget.message);
@@ -31,29 +31,29 @@ function assertTabularRowBudget(text: string, budget: ClipboardRowBudget) {
     } else content = true;
   }
   if (quoted) throw new Error(zh.clipboard.text003);
-  // 与原解析器保持相同的末行规则：末尾分隔符及空引号不额外制造一行。
+  // 末尾换行不制造新行，明确写出的空引号仍是一格。
   if ((content || hasCells || !rows) && rows + 1 > budget.maximum) throw new Error(budget.message);
 }
 
 /** 兼容电子表格的制表符格式，保留被引号包裹的换行、制表符和双引号。 */
 export function parseTabularText(text: string): string[][] {
   if (text.length > maxClipboardCharacters) throw new Error(zh.clipboard.text001);
-  const rows: string[][] = []; let row: string[] = [], value = '', quoted = false, cells = 0;
+  const rows: string[][] = []; let row: string[] = [], value = '', quoted = false, explicitCell = false, cells = 0;
   /** 每个分隔符完成一个单元格，并在构建矩阵时限制总规模。 */
-  const addCell = () => { row.push(value); value = ''; if (++cells > maxClipboardCells) throw new Error(zh.clipboard.text002); };
+  const addCell = () => { row.push(value); value = ''; explicitCell = false; if (++cells > maxClipboardCells) throw new Error(zh.clipboard.text002); };
   for (let index = 0; index < text.length; index++) {
     const char = text[index];
     if (quoted) {
       if (char === '"' && text[index + 1] === '"') { value += '"'; index++; }
       else if (char === '"') quoted = false;
       else value += char;
-    } else if (char === '"' && value === '') quoted = true;
+    } else if (char === '"' && value === '') { quoted = true; explicitCell = true; }
     else if (char === '\t') addCell();
     else if (char === '\n' || char === '\r') { addCell(); rows.push(row); row = []; if (char === '\r' && text[index + 1] === '\n') index++; }
     else value += char;
   }
   if (quoted) throw new Error(zh.clipboard.text003);
-  if (value !== '' || row.length || !rows.length) { addCell(); rows.push(row); }
+  if (value !== '' || explicitCell || row.length || !rows.length) { addCell(); rows.push(row); }
   return rows;
 }
 
