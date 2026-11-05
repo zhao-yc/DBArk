@@ -21,8 +21,12 @@
   height: clamp(120px, 19vh, 210px);
 }
 /* 结果操作栏和网格复用同一滚动区，小窗口也为表头和数据行保留空间。 */
-.postgres-query:has(> .postgres-results > .query-result-copy-region) > .postgres-editor {
+.postgres-query:has(> .postgres-results > .query-result-with-details .query-result-copy-region) > .postgres-editor {
   height: clamp(120px, 26vh, 240px);
+}
+/* 展开详情时给网格和记录正文留出更多高度。 */
+.postgres-query:has(> .postgres-results > .query-result-with-details > .query-row-details) > .postgres-editor {
+  height: clamp(120px, 14vh, 148px);
 }
 .postgres-results {
   flex: 1;
@@ -42,7 +46,7 @@
 .postgres-result-actions > select {
   max-width: 100%;
 }
-.postgres-results > :is(.results-grid, .query-result-copy-region) {
+.postgres-results > .query-result-with-details {
   flex: 1;
   height: auto;
   min-height: 0;

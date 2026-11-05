@@ -12,6 +12,8 @@ import { zh } from '../locales/zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
 import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, type QueryResultColumnLayout } from '../queryResultColumns';
 import { queryResultColumnsZh as columnText } from '../locales/queryResultColumns.zh-CN';
+import { QueryRowDetails, type QueryRowDetailsBinding, type QueryRowDetailsView } from '../queryRowDetails';
+import { queryRowDetailsZh as detailText } from '../locales/queryRowDetails.zh-CN';
 import { QueryResultSort, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
 import { QueryResultFilter, type QueryResultFilterBinding, type QueryResultFilterGroup, type QueryResultFilterView } from '../queryResultFilter';
@@ -23,6 +25,7 @@ import { ResultExportDialog } from './ResultExportDialog';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
+import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { ExplainPlanView } from './ExplainPlanView';
 import { QueryAnalyzeView } from './QueryAnalyzeView';
 import { QueryAnalyzeConfirmDialog } from './QueryAnalyzeConfirmDialog';
@@ -113,6 +116,9 @@ export function PostgresQueryTab({
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
   const [resultSelection] = useState(() => new ResultExportSelection());
+  const [rowDetails] = useState(() => new QueryRowDetails());
+  const [activeDetailRow, setActiveDetailRow] = useState<{ binding: QueryRowDetailsBinding; index: number }>();
+  const [rowDetail, setRowDetail] = useState<QueryRowDetailsView>();
   const [organization] = useState(() => ({ filter: new QueryResultFilter('postgresql'), sorter: new QueryResultSort('postgresql') }));
   const { filter: resultFilter, sorter: resultSorter } = organization;
   const [, refreshResult] = useState(0);
@@ -641,6 +647,14 @@ export function PostgresQueryTab({
   const binding = resultSelection.bind(workspace.settings.activeTabId === tab.id ? dataResult : undefined,
     resultContext, visibleColumns);
   const selectedCount = resultSelection.count(binding);
+  // 显示行已筛选和排序，完整列仍来自该结果的原始元数据。
+  const detailBinding = rowDetails.bind(!locked ? binding?.result : undefined, [binding]);
+  const currentRowDetail = rowDetail && rowDetails.valid(rowDetail) ? rowDetail : undefined;
+  useEffect(() => {
+    // 切换来源后释放旧快照，旧行号不会沿用到新结果。
+    setRowDetail(old => old?.binding === detailBinding ? old : undefined);
+    setActiveDetailRow(old => old?.binding === detailBinding ? old : undefined);
+  }, [detailBinding]);
 
   /** 当前标签、连接和事务操作仍归原工作区，排序不借用数据库会话。 */
   function resultScopeCurrent() {
@@ -652,6 +666,37 @@ export function PostgresQueryTab({
   /** 选择归属于当前显示顺序及工作区代次，旧网格回调不能读取后来切换的行。 */
   function resultCurrent() {
     return resultScopeCurrent() && !sortDraftRef.current && !filterDraftRef.current && !columnDraftRef.current && resultSelection.current(binding);
+  }
+
+  /** 行详情沿用当前网格的来源校验，另排除遮挡网格的模态窗口。 */
+  function rowDetailCurrent(source: QueryRowDetailsBinding | undefined) {
+    return resultCurrent() && rowDetails.current(source) && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+  }
+
+  /** 同坐标重新点击也采集当前单元格，旧投影的行索引不能重用。 */
+  function selectDetailRow(index: number | undefined) {
+    if (!detailBinding || !rowDetailCurrent(detailBinding)) return;
+    setActiveDetailRow(old => index === undefined ? undefined :
+      old?.binding === detailBinding && old.index === index ? old : { binding: detailBinding, index });
+  }
+
+  /** 打开准确活动行，保留完整原值。 */
+  function openRowDetail() {
+    if (!activeDetailRow || activeDetailRow.binding !== detailBinding || !rowDetailCurrent(detailBinding)) return;
+    try { setRowDetail(rowDetails.open(detailBinding, activeDetailRow.index)); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 侧栏翻行只访问当前显示行，旧侧栏回调必须通过同一视图校验。 */
+  function moveRowDetail(view: QueryRowDetailsView, index: number) {
+    if (!rowDetailCurrent(view.binding) || !rowDetails.valid(view)) return;
+    try { setRowDetail(rowDetails.move(view, index)); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 关闭对应侧栏，保留网格中的活动行。 */
+  function closeRowDetail(view: QueryRowDetailsView) {
+    if (rowDetailCurrent(view.binding) && rowDetails.close(view)) setRowDetail(undefined);
   }
 
   /** 排序草稿只消费所属结果与排序视图。 */
@@ -908,6 +953,8 @@ export function PostgresQueryTab({
             </select>}
             {dataResult && <>
               <button disabled={locked || !binding} onClick={openResultColumns}>{columnText.open}</button>
+              <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
+                title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
               <button disabled={locked || !filterBinding || !filterView || !sortView}
                 onClick={() => {
                   if (!filterBinding || !filterView || !sortView || !filterCurrent() ||
@@ -936,11 +983,18 @@ export function PostgresQueryTab({
         {outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
           outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
           result.columns.length ? (
-            <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
-              frozenKeys={frozenKeys} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
-              isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
-              sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons}
-              onSortChange={sortView ? rules => applyResultSort(rules) : undefined} />
+            <div className="query-result-with-details">
+              <div className="query-result-grid">
+                <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
+                  frozenKeys={frozenKeys} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
+                  isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
+                  onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
+                  sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons}
+                  onSortChange={sortView ? rules => applyResultSort(rules) : undefined} />
+              </div>
+              {currentRowDetail && <QueryRowDetailsPanel controller={rowDetails} view={currentRowDetail}
+                isCurrent={() => rowDetailCurrent(currentRowDetail.binding)} onMove={moveRowDetail} onClose={closeRowDetail} />}
+            </div>
           ) : (
             <div className="info-strip">
               {text.complete(result.postgresCommand ?? '', result.affectedRows)}

@@ -24,6 +24,8 @@ import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryR
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
+import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
+import { queryReadonlyRecordZh as recordText } from '../../src/renderer/locales/queryReadonlyRecord.zh-CN';
 import { queryResultValueOptionsZh as valueText } from '../../src/renderer/locales/queryResultValueOptions.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { clickSidebarAction } from './sidebar-menu';
@@ -683,7 +685,40 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
         { 同名: '引;号', '同名 [2]': lastId, 调用序号: '3' },
         { 同名: '', '同名 [2]': middleId, 调用序号: '2' },
       ]);
+
+      // 行详情沿用筛选后的降序，完整原列仍包含隐藏二进制和两个同名字段。
+      const detailButton = button(detailText.open);
+      await expect(detailButton).toBeDisabled();
+      await resultGrid.getByRole('gridcell', { name: lastId, exact: true }).click();
+      await detailButton.click();
+      const detail = tab().getByRole('region', { name: detailText.region, exact: true });
+      const rowDocument = detail.getByRole('textbox', { name: recordText.jsonText, exact: true });
+      await expect(detail.locator('header')).toContainText('1 / 2');
+      await expect(detail.getByRole('button', { name: detailText.previous, exact: true })).toBeDisabled();
+      await detail.getByRole('searchbox', { name: detailText.fieldSearch, exact: true }).fill('raw');
+      await expect(detail.locator('.query-row-details-fields article')).toHaveCount(1);
+      await detail.getByRole('button', { name: recordText.tree, exact: true }).click();
+      await expect(detail.getByLabel(recordText.tree, { exact: true })).toContainText('二进制 · Base64 · 0 字节');
+      await detail.getByRole('button', { name: recordText.json, exact: true }).click();
+      expect(JSON.parse(await rowDocument.inputValue())).toMatchObject({
+        complete: true, sourceTypes: 'returned-values', fields: [
+          { key: 'c0', name: '同名', protocolType: 'BIGINT', value: { kind: 'text', value: lastId } },
+          { key: 'c1', name: '同名', protocolType: 'TEXT', value: { kind: 'text', value: '引;号' } },
+          { key: 'c2', name: 'raw', protocolType: 'BYTEA', value: { kind: 'blob', bytes: 0, value: '' } },
+          { key: 'c3', name: '调用序号', value: { kind: 'text', value: '3' } },
+        ],
+      });
+      await rowDocument.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: info.outputPath('PostgreSQL查询结果行详情.png') });
+      await detail.getByRole('button', { name: detailText.next, exact: true }).click();
+      await expect(detail.locator('header')).toContainText('2 / 2');
+      await expect(detail.getByRole('button', { name: detailText.next, exact: true })).toBeDisabled();
+      expect(JSON.parse(await rowDocument.inputValue()).fields.slice(0, 3).map((field: { value: unknown }) => field.value))
+        .toEqual([{ kind: 'text', value: middleId }, { kind: 'text', value: '' }, { kind: 'null' }]);
       await button(filterText.clear).click();
+      await expect(detail).toHaveCount(0);
+      await expect(detailButton).toBeDisabled();
+      await mark('行详情按当前筛选降序翻行，隐藏原列、重复别名、BIGINT、空串、NULL 和二进制在只读视图中可区分');
       await expect(resultGrid.getByRole('row').nth(1)).toContainText(lastId);
       await expect(resultGrid).toContainText(firstId);
       await mark('BIGINT 候选、错误草稿、排序保留、筛选后 JSON 和清除筛选通过原生窗口');
