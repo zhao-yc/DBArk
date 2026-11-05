@@ -141,6 +141,19 @@ describe('收藏与链接的最新显式导航意图', () => {
     const other = { ...view, database: 'other' }; request.mockResolvedValueOnce(other);
     expect(await navigation.open(other)).toBe(true);
   });
+  it('PostgreSQL 退役精确名称，不阻止另一大小写视图', async () => {
+    const old = { connectionId: 'c', database: 'pg', kind: 'view', name: '"public"."Report"' } as const;
+    const different = { ...old, name: '"public"."report"' };
+    const waiting = pending();
+    request.mockReturnValueOnce(waiting.promise);
+    const opening = navigation.open(old);
+    navigation.retireObject(old, true);
+    waiting.resolve(old);
+    expect(await opening).toBe(false);
+    await expect(navigation.open(old)).rejects.toThrow('旧对象链接');
+    request.mockResolvedValueOnce(different);
+    await expect(navigation.open(different)).resolves.toBe(true);
+  });
   it('触发器删除退役准确种类，解析替换为已退役目标也在投影前拒绝', async () => {
     const trigger = { connectionId: 'c', database: 'main', kind: 'trigger', name: 'Audit' } as const;
     navigation.retireObject(trigger);

@@ -39,7 +39,7 @@ export async function readPostgresViewFacts(connection: PostgresConnection, sche
   if (result.truncated || result.rows.length !== 1 || typeof raw !== 'string')
     throw Error('视图不存在、权限已变化或目录超出预算');
   const { definition, revision, options, ...identity } = factsSchema.parse(JSON.parse(raw));
-  return { stamp: postgresViewStamp(raw), preserved: JSON.stringify({ ...identity, options: [...options].sort() }), options };
+  return { oid: identity.oid, namespace: identity.namespace, revision, stamp: postgresViewStamp(raw), preserved: JSON.stringify({ ...identity, options: [...options].sort() }), options };
 }
 
 /** 把原服务器选项逐项转义，避免替换定义时 PostgreSQL 重置选项。 */

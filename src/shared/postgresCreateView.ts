@@ -19,6 +19,13 @@ export const postgresEditViewPreviewSchema = postgresStructureInputSchema.extend
 }).strict();
 export type PostgresEditViewInput = z.infer<typeof postgresEditViewPreviewSchema>;
 
+const viewManageTarget = postgresStructureInputSchema.extend({ stamp: z.string().regex(/^[a-f0-9]{64}$/) });
+export const postgresViewManagePreviewSchema = z.discriminatedUnion('action', [
+  viewManageTarget.extend({ action: z.literal('rename'), name: postgresNewIdentifier }).strict(),
+  viewManageTarget.extend({ action: z.literal('drop') }).strict(),
+]);
+export type PostgresViewManageInput = z.infer<typeof postgresViewManagePreviewSchema>;
+
 /** 统一使用同一个词法边界保留有效的单条查询定义。 */
 export function postgresViewQuery(definition: string): string {
   const [query, extra] = splitPostgresSql(definition);

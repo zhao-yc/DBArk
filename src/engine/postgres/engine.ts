@@ -603,7 +603,9 @@ export class PostgresEngine {
       case 'postgres.createView.preview':
       case 'postgres.createView.apply':
       case 'postgres.editView.preview':
-      case 'postgres.editView.apply': {
+      case 'postgres.editView.apply':
+      case 'postgres.viewManage.preview':
+      case 'postgres.viewManage.apply': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的 PostgreSQL 建表连接和原文档');
@@ -613,8 +615,9 @@ export class PostgresEngine {
         if (command === 'postgres.createTable.preview') return this.creations.prepare(input as Parameters<PostgresCreateTableWorkspace['prepare']>[0], connect);
         if (command === 'postgres.createView.preview') return this.creations.prepareView(input as Parameters<PostgresCreateTableWorkspace['prepareView']>[0], connect);
         if (command === 'postgres.editView.preview') return this.creations.prepareViewEdit(input as Parameters<PostgresCreateTableWorkspace['prepareViewEdit']>[0], connect);
+        if (command === 'postgres.viewManage.preview') return this.creations.prepareViewManage(input as Parameters<PostgresCreateTableWorkspace['prepareViewManage']>[0], connect);
         return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect,
-          command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
+          command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
       }
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;

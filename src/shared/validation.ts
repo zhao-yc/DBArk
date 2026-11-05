@@ -4,7 +4,7 @@ import { postgresKeyPreviewSchema, postgresKeyApplySchema } from './postgresKeyE
 import { postgresIndexPreviewSchema, postgresIndexApplySchema } from './postgresIndexEdit';
 import { postgresColumnPreviewSchema, postgresColumnApplySchema } from './postgresColumnEdit';
 import { postgresCompletionSchema } from './postgresCompletion';
-import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema } from './postgresCreateView';
+import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema } from './postgresCreateView';
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema } from './postgresTable';
@@ -244,6 +244,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.createView.apply': postgresCreateTableApplySchema,
   'postgres.editView.preview': postgresEditViewPreviewSchema,
   'postgres.editView.apply': postgresCreateTableApplySchema,
+  'postgres.viewManage.preview': postgresViewManagePreviewSchema,
+  'postgres.viewManage.apply': postgresCreateTableApplySchema,
   'postgres.structure.read': postgresStructureInputSchema,
   'postgres.columnEdit.preview': postgresColumnPreviewSchema, 'postgres.columnEdit.apply': postgresColumnApplySchema,
   'postgres.indexEdit.preview': postgresIndexPreviewSchema, 'postgres.indexEdit.apply': postgresIndexApplySchema,

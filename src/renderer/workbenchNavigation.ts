@@ -19,10 +19,12 @@ export interface WorkbenchDefinitionTarget { connectionId: string; database: str
 /** 收藏与对象链接共用请求代次；只允许最新且仍有界面归属的显式导航落地。 */
 export function createWorkbenchNavigation(openDefinition: (target: WorkbenchDefinitionTarget) => void) {
   let generation = 0, disposed = false;
-  const retiredObjects = new Set<string>(), objectKey = (target: { connectionId: string; database: string; kind: string; name?: string }) => JSON.stringify([target.connectionId, target.database, target.kind, target.name?.replace(/[A-Z]/g, character => character.toLowerCase())]);
+  const retiredObjects = new Set<string>(), retiredExactObjects = new Set<string>();
+  const objectKey = (target: { connectionId: string; database: string; kind: string; name?: string }, exact = false) =>
+    JSON.stringify([target.connectionId, target.database, target.kind, exact ? target.name : target.name?.replace(/[A-Z]/g, character => character.toLowerCase())]);
   const retiredDatabases = new Set<string>();
   const names = new Map<string, { identity?: string; retired: boolean; ambiguous: boolean }>(), key = (target: TableRenameTarget) => JSON.stringify([target.connectionId, target.database, target.table]);
-  const blocked = (target: WorkbenchTarget) => retiredObjects.has(objectKey(target)) || retiredDatabases.has(JSON.stringify([target.connectionId, target.database])) || target.kind === 'table' && names.get(key({ connectionId: target.connectionId, database: target.database, table: target.name }))?.retired;
+  const blocked = (target: WorkbenchTarget) => retiredObjects.has(objectKey(target)) || retiredExactObjects.has(objectKey(target, true)) || retiredDatabases.has(JSON.stringify([target.connectionId, target.database])) || target.kind === 'table' && names.get(key({ connectionId: target.connectionId, database: target.database, table: target.name }))?.retired;
   /** 保留整个窗口已知的名称身份历史；不同物理表占用过同名时不能靠新一次完成回执抹掉旧URI歧义。 */
   function remember(target: TableRenameTarget, identity: string | undefined, retired: boolean): boolean {
     const id = key(target), previous = names.get(id);
@@ -62,7 +64,9 @@ export function createWorkbenchNavigation(openDefinition: (target: WorkbenchDefi
     /** 已重命名的名称在当前窗口不再通过旧收藏/链接复活；同步废弃所有迟到解析。 */
     retireTable(target: TableRenameTarget): void { remember(target, undefined, true); generation++; },
     /** 对象删除或未知DDL后同类型旧链接退役；同名重建不能继承原身份。 */
-    retireObject(target: { connectionId: string; database: string; kind: 'view' | 'trigger'; name: string }): void { retiredObjects.add(objectKey(target)); generation++; },
+    retireObject(target: { connectionId: string; database: string; kind: 'view' | 'trigger'; name: string }, exact = false): void {
+      (exact ? retiredExactObjects : retiredObjects).add(objectKey(target, exact)); generation++;
+    },
     /** 整库删除后所有旧种类链接退役；同名重建不能自动继承原收藏或迟到解析的身份。 */
     retireDatabase(target: { connectionId: string; database: string }): void { retiredDatabases.add(JSON.stringify([target.connectionId, target.database])); generation++; },
     /** 仅在完整核验后调用：同一物理身份可重新认可往返名称，未知或不同身份的名称链接继续停用。 */

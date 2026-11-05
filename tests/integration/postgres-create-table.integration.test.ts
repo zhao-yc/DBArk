@@ -156,6 +156,39 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       expect((await client.query(`SELECT "附加" AS value FROM ${viewName}`)).rows).toEqual([{ value: 41 }]);
       expect(await viewCatalog()).toEqual(viewOriginal);
 
+      // 受限删除必须保留依赖，重命名须在同一 OID 上完成并验证真实属性。
+      const renamed = '"生成.甲"."改"".视图"';
+      const manageView = async (table: string, change: { action: 'drop' } | { action: 'rename'; name: string }) => {
+        const structure = await engine.handle('postgres.structure.read', { ...target, table });
+        return engine.handle('postgres.viewManage.preview', { ...target, table, stamp: structure.viewEditStamp, ...change });
+      };
+      const applyManage = (token: string) => engine.handle('postgres.viewManage.apply', { ...target, token });
+      const blockedDrop = await manageView(viewName, { action: 'drop' });
+      expect(blockedDrop.statements.at(-1)).toBe('DROP VIEW ' + viewName + ' RESTRICT');
+      expect(await applyManage(blockedDrop.token)).toMatchObject({ outcome: 'rolledBack' });
+      expect(await viewCatalog()).toEqual(viewOriginal);
+      await expect(manageView(viewName, { action: 'rename', name: '原表' })).rejects.toThrow('同名关系');
+      const rename = await manageView(viewName, { action: 'rename', name: '改".视图' });
+      expect(rename.statements.at(-1)).toBe('ALTER VIEW ' + viewName + ' RENAME TO "改"".视图"');
+      expect((await client.query('SELECT to_regclass($1)::text AS name', [renamed])).rows[0].name).toBeNull();
+      await expect(applyEdit(rename.token)).rejects.toThrow('预览已失效');
+      expect(await applyManage(rename.token)).toMatchObject({ outcome: 'committed', table: renamed });
+      await expect(applyManage(rename.token)).rejects.toThrow('预览已失效');
+      expect((await client.query(`SELECT to_regclass($1)::text AS old, c.oid::text, c.relowner::text,
+        c.relacl::text, c.reloptions, pg_catalog.obj_description(c.oid) AS comment
+        FROM pg_catalog.pg_class c WHERE c.oid = $2::regclass`, [viewName, renamed])).rows).toEqual([{ old: null, ...viewOriginal }]);
+      expect((await client.query(`SELECT "代码" AS note FROM ${dependent}`)).rows).toEqual([{ note: value }]);
+
+      await client.query('DROP VIEW ' + dependent);
+      const staleDrop = await manageView(renamed, { action: 'drop' });
+      await client.query(`COMMENT ON VIEW ${renamed} IS '另一会话的注释'`);
+      expect(await applyManage(staleDrop.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('原视图已变化') });
+      expect((await client.query(`SELECT "附加" AS value FROM ${renamed}`)).rows).toEqual([{ value: 41 }]);
+      const drop = await manageView(renamed, { action: 'drop' });
+      expect(await applyManage(drop.token)).toMatchObject({ outcome: 'committed', table: renamed });
+      expect((await client.query('SELECT to_regclass($1)::text AS name', [renamed])).rows[0].name).toBeNull();
+      expect((await client.query(`SELECT "代码" AS note FROM ${qualified}`)).rows).toEqual([{ note: value }]);
+
       const closed = await prepare({ table: '关闭' });
       await engine.handle('connections.close', { id });
       await expect(apply(closed.token)).rejects.toThrow('预览已失效');

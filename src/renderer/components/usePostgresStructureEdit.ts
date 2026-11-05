@@ -11,7 +11,7 @@ export interface PostgresStructureEditProps {
   original: PostgresStructureResult;
   version: number;
   onClose(): void;
-  onResult(message: string, unknown: boolean): void;
+  onResult(message: string, unknown: boolean, receipt?: PostgresCreateTableOutcome): void;
   onDirtyChange(value: boolean): void;
 }
 
@@ -58,7 +58,7 @@ export function usePostgresStructureEdit({ target, original, version, onResult, 
       }
       sent = true;
       const result = await applyPreview(preview!.token);
-      if (result.outcome === 'committed') onResult(result.message, false);
+      if (result.outcome === 'committed') onResult(result.message, false, result);
       else if (result.outcome === 'unknown') {
         setUnknown(true);
         onResult(result.message, true);

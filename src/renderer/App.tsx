@@ -1,4 +1,5 @@
-import { postgresRelationName } from '../shared/postgresSql';
+import { postgresViewManageZh } from './locales/postgresViewManage.zh-CN';
+import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
 import { PostgresCreateTableDialog } from './components/PostgresCreateTableDialog';
 import { PostgresCreateViewDialog } from './components/PostgresCreateViewDialog';
 import { PostgresStructureDialog } from './components/PostgresStructureDialog';
@@ -833,6 +834,36 @@ function WorkspaceApp() {
         markStructureTarget({ ...target, table: tab.table }, true);
     }
   }
+  /** 只在服务端确认后关闭旧视图标签；改名以新标签身份读取，不改写查询正文。 */
+  function finishPostgresViewManage(target: TableColumnPatchTarget, message: string, unknown: boolean, version: number, destination?: string) {
+    const workspace = useWorkspace.getState();
+    workspace.notify(message, unknown);
+    if ((workspace.connectionVersions[target.connectionId] ?? 0) !== version ||
+        workspace.connections.find(profile => profile.id === target.connectionId)?.dialect !== 'postgresql') return;
+    const original = postgresRelationName(target.table);
+    const name = postgresIdentifier(original.schema) + '.' + postgresIdentifier(original.name);
+    refreshRenameDatabase(target);
+    workbenchNavigation.retireObject({ ...target, kind: 'view', name }, true);
+    if (unknown || !destination) {
+      markStructureTarget(target, false);
+      return;
+    }
+    let retained = false;
+    for (const tab of workspace.settings.tabs) {
+      if (tab.kind !== 'table' || !tab.table || tab.connectionId !== target.connectionId || (tab.database || 'postgres') !== target.database) continue;
+      const relation = postgresRelationName(tab.table);
+      if (relation.schema !== original.schema || relation.name !== original.name) continue;
+      if (workspace.dirtyTabs[tab.id] || workspace.activeJobs[tab.id] || workspace.tableLayoutDrafts[tab.id]) {
+        retained = true;
+        markStructureTarget({ ...target, table: tab.table }, false);
+      } else workspace.closeTab(tab.id);
+    }
+    if (destination !== name) {
+      finishPostgresColumnEdit({ ...target, table: destination }, message, false, version);
+      workspace.openTab({ kind: 'table', connectionId: target.connectionId, database: target.database, table: destination, title: destination });
+    }
+    if (retained) workspace.notify(message + '。' + postgresViewManageZh.retainedTab, true);
+  }
   function markStructureTarget(target: TableColumnPatchTarget, automatic: boolean) {
     const key = columnTargetKey(target); setStructureRefresh(current => ({ ...current, [key]: { version: (current[key]?.version ?? 0) + 1, automatic } }));
   }
@@ -1005,7 +1036,7 @@ function WorkspaceApp() {
     {indexTarget && <IndexPatchDialog target={indexTarget} targetVersion={state.connectionVersions[indexTarget.connectionId] ?? 0} services={indexPatchServices} onDirtyChange={setIndexEdits} beforeApply={() => assertIndexTargetAvailable(indexTarget, useWorkspace.getState())} onApplied={result => { markStructureTarget(indexTarget, result.definitionVerified); if (!result.definitionVerified) useWorkspace.getState().notify(indexPatchZh.verificationFailed, true); }} onExecutionUncertain={message => { markStructureTarget(indexTarget, false); useWorkspace.getState().notify(message, true); }} onCleanupError={message => useWorkspace.getState().notify(message, true)} onClose={() => { setIndexTarget(null); setIndexEdits(false); }}/>} {structureSearch&&<StructureSearchDialog onSavedQueries={openSavedQuerySearch} onData={()=>{setStructureSearch(false);setDataSearch(true);}} onClose={()=>setStructureSearch(false)} onOpen={(connectionId,hit,definitionSearch)=>{setStructureSearch(false);setDdl({connectionId,database:hit.database,object:{name:hit.object,kind:hit.parentKind},readOnly:true,definitionSearch});}}/>} {columnTarget && <ColumnPatchDialog target={columnTarget} targetVersion={state.connectionVersions[columnTarget.connectionId] ?? 0} services={columnPatchServices} onDirtyChange={setColumnEdits} beforeApply={() => assertColumnTargetAvailable(columnTarget, useWorkspace.getState())} onApplied={result => { markStructureTarget(columnTarget, result.definitionVerified); if (!result.definitionVerified) useWorkspace.getState().notify(columnPatchZh.verificationFailed, true); }} onExecutionUncertain={message => { markStructureTarget(columnTarget, false); useWorkspace.getState().notify(message, true); }} onCleanupError={message => useWorkspace.getState().notify(message, true)} onClose={() => { setColumnTarget(null); setColumnEdits(false); }}/>} {connectionOrganization && <ConnectionOrganizationDialog onClose={closeConnectionOrganization} onApplied={snapshot => state.setConnections(snapshot.connections)}/>} {connectionsTransfer && <ConnectionsTransferDialog onClose={closeConnectionsTransfer}/>} {connectionDialog && <ConnectionDialog profile={connectionDialog === 'new' ? undefined : connectionDialog} initialProfile={connectionDialog === 'new' ? connectionCopy ?? undefined : undefined} onClose={() => { setConnectionCopy(null); setConnectionDialog(null); }} onTransportChanged={state.invalidateConnection}/>} {newQuery && <NewQueryDialog onClose={closeNewQueryDialog}/>} {history && <HistoryDialog initialSection={history.section} initialConnectionId={history.connectionId} insertion={historyInsertion} onClose={closeHistoryPanel}/>} {tasks && <TasksDialog onClose={() => setTasks(false)}/>} {schema && (schema.createView ? <PostgresCreateViewDialog key={JSON.stringify([schema.connectionId, schema.database, 'view'])}
       target={schema} onDirtyChange={setTableCreateEdits}
       onCreated={(view, version, message) => finishPostgresTableCreate({ connectionId: schema.connectionId, database: schema.database }, view, version, message)}
-      onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : !schema.table && connections.find(profile => profile.id === schema.connectionId)?.dialect === 'postgresql' ? <PostgresCreateTableDialog key={JSON.stringify([schema.connectionId, schema.database])} target={{ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }} onDirtyChange={setTableCreateEdits} onCreated={(table, version, message) => finishPostgresTableCreate({ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }, table, version, message)} onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : <SchemaDialog {...schema} onDirtyChange={setTableCreateEdits} onCreated={finishTableCreate} onSqliteCreated={finishSqliteTableCreate} onClose={() => { setSchema(null); setTableCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {ddl && (ddl.object && connections.find(profile => profile.id === ddl.connectionId)?.dialect === 'postgresql' ? <PostgresStructureDialog key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])} target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: ddl.object.name }} onDirtyChange={setColumnEdits} onEdited={finishPostgresColumnEdit} onClose={() => setDdl(null)}/> : <DdlDialog {...ddl} onDirtyChange={setDatabaseCreateEdits} onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {transfer && <TransferDialog {...transfer} onClose={() => setTransfer(null)}/>}{importNewTable && <ImportNewTableDialog {...importNewTable} onSqliteCreated={finishSqliteImportNewTableCreate} onCreated={finishTableCreate} onDirtyChange={setImportNewTableEdits} onClose={() => { setImportNewTable(null); setImportNewTableEdits(false); }}/>}
+      onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : !schema.table && connections.find(profile => profile.id === schema.connectionId)?.dialect === 'postgresql' ? <PostgresCreateTableDialog key={JSON.stringify([schema.connectionId, schema.database])} target={{ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }} onDirtyChange={setTableCreateEdits} onCreated={(table, version, message) => finishPostgresTableCreate({ connectionId: schema.connectionId, database: schema.database ?? 'postgres' }, table, version, message)} onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : <SchemaDialog {...schema} onDirtyChange={setTableCreateEdits} onCreated={finishTableCreate} onSqliteCreated={finishSqliteTableCreate} onClose={() => { setSchema(null); setTableCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {ddl && (ddl.object && connections.find(profile => profile.id === ddl.connectionId)?.dialect === 'postgresql' ? <PostgresStructureDialog key={JSON.stringify([ddl.connectionId, ddl.database, ddl.object.name])} target={{ connectionId: ddl.connectionId, database: ddl.database ?? 'postgres', table: ddl.object.name }} onDirtyChange={setColumnEdits} onEdited={finishPostgresColumnEdit} onManaged={finishPostgresViewManage} onClose={() => setDdl(null)}/> : <DdlDialog {...ddl} onDirtyChange={setDatabaseCreateEdits} onClose={() => { setDdl(null); setDatabaseCreateEdits(false); }} onApplied={() => setRefreshVersion(value => value + 1)}/>)} {transfer && <TransferDialog {...transfer} onClose={() => setTransfer(null)}/>}{importNewTable && <ImportNewTableDialog {...importNewTable} onSqliteCreated={finishSqliteImportNewTableCreate} onCreated={finishTableCreate} onDirtyChange={setImportNewTableEdits} onClose={() => { setImportNewTable(null); setImportNewTableEdits(false); }}/>}
     {objectPicker && <ObjectDatabasePicker connections={connections} preferredConnectionId={state.selection?.connectionId} onClose={() => setObjectPicker(null)} onOpen={(connectionId, database) => openObjectBrowser(objectPicker, { connectionId, database })}/>}
     {editorIndentPreferences && <EditorIndentPreferencesDialog onClose={() => { workbenchNavigation.invalidate(); setEditorIndentPreferences(false); }}/>}
     {navigationHelp && <Modal title={navigationHelp === 'usage' ? navigationZh.helpTitle : navigationZh.shortcutsTitle} onClose={() => setNavigationHelp(null)}><div className="modal-content">{navigationHelp === 'usage' ? navigationZh.help.map(line => <p key={line}>{line}</p>) : <table><tbody>{navigationZh.shortcuts.map(([label, keys]) => <tr key={label}><td>{label}</td><td><kbd>{keys}</kbd></td></tr>)}</tbody></table>}</div></Modal>}

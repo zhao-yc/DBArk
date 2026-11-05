@@ -1,0 +1,18 @@
+export const postgresViewManageZh = {
+  title: '管理视图',
+  operation: '操作',
+  rename: '重命名视图',
+  drop: '删除视图',
+  name: '新视图名',
+  renameHint: '在同一 schema 内重命名，保留视图及其数据库依赖。',
+  dropHint: '删除由 PostgreSQL 检查依赖。存在阻止删除的对象时，事务将回滚。',
+  preview: '预览视图操作',
+  sql: '视图操作 SQL',
+  back: '返回编辑',
+  confirmRename: '确认重命名',
+  confirmDrop: '确认删除',
+  acknowledge: '我确认删除当前视图',
+  close: '关闭管理',
+  unknown: '操作结果未确认，请先在原数据库核对视图。',
+  retainedTab: '有改动或任务的旧标签已保留。',
+} as const;

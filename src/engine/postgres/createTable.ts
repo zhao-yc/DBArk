@@ -4,14 +4,14 @@ import {
   type PostgresCreateTableOutcome, type PostgresCreateTablePreview, type PostgresCreateTableTarget,
 } from '../../shared/postgresCreateTable';
 import type { PostgresConnection } from './connection';
-import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewQuery,
-  type PostgresCreateViewInput, type PostgresEditViewInput } from '../../shared/postgresCreateView';
+import { postgresCreateViewPlan, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema, postgresViewQuery,
+  type PostgresCreateViewInput, type PostgresEditViewInput, type PostgresViewManageInput } from '../../shared/postgresCreateView';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import { postgresViewOptionsSql, readPostgresViewFacts } from './viewDefinition';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'view' | 'viewEdit';
+type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage';
 interface Plan {
   table: string;
   statements: string[];
@@ -77,6 +77,15 @@ async function preflight(connection: PostgresConnection, input: PostgresCreateTa
     throw Error(label + '名或字段名超过目标服务器标识符长度');
   }
   return schema.c0;
+}
+
+/** 同 schema 的操作仅锁原视图，避免 LOCK TABLE 递归锁底层关系。 */
+function viewGuard(schema: string, name: string, table: string, stamp: string): Pick<Plan, 'guard' | 'preflight' | 'protocol'> {
+  return {
+    guard: { sql: 'ALTER VIEW ' + table + ' SET SCHEMA ' + postgresIdentifier(schema), stamp },
+    preflight: async connection => (await readPostgresViewFacts(connection, schema, name)).stamp,
+    protocol: 'extended',
+  };
 }
 
 /** 校验服务器真实类型转换，同时拒绝 varchar 显式转换可能造成的默认文字截断。 */
@@ -166,11 +175,9 @@ export class PostgresCreateTableWorkspace {
         const original = await readPostgresViewFacts(connection, schema, name);
         if (original.stamp !== draft.stamp) throw Error('原视图已变化，请刷新结构后编辑');
         return {
-          table: qualified, protocol: 'extended', success: 'PostgreSQL 视图定义已确认更新',
-          // 同 schema 的 SET SCHEMA 持有视图本身的排他锁，避免 LOCK TABLE 递归锁定底层关系。
-          guard: { sql: 'ALTER VIEW ' + qualified + ' SET SCHEMA ' + postgresIdentifier(schema), stamp: original.stamp },
+          ...viewGuard(schema, name, qualified, original.stamp),
+          table: qualified, success: 'PostgreSQL 视图定义已确认更新',
           statements: ['CREATE OR REPLACE VIEW ' + qualified + postgresViewOptionsSql(original.options) + ' AS\n' + query],
-          preflight: async current => (await readPostgresViewFacts(current, schema, name)).stamp,
           async verify(current) {
             const actual = await readPostgresViewFacts(current, schema, name);
             if (actual.preserved !== original.preserved) throw Error('视图身份、所有者、授权、注释或选项已变化，未提交');
@@ -180,7 +187,50 @@ export class PostgresCreateTableWorkspace {
     });
   }
 
-  /** 关系创建及视图编辑共用预检、令牌、预算和事务回执。 */
+  /** 重命名与受限删除绑定原视图身份，并在提交前复核实际目录。 */
+  async prepareViewManage(input: Scoped<PostgresViewManageInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    return this.prepareRelation(input, 'viewManage', connect, () => {
+      const { connectionId, database, table, stamp, action } = input;
+      const target = { connectionId, database, table, stamp, action };
+      const draft = postgresViewManagePreviewSchema.parse(input.action === 'rename' ? { ...target, name: input.name } : target);
+      const { schema, name } = postgresRelationName(draft.table);
+      const prefix = postgresIdentifier(schema) + '.';
+      const qualified = prefix + postgresIdentifier(name);
+      return async connection => {
+        const original = await readPostgresViewFacts(connection, schema, name);
+        if (original.stamp !== draft.stamp) throw Error('原视图已变化，请刷新结构后继续');
+        const guard = viewGuard(schema, name, qualified, original.stamp);
+        if (draft.action === 'rename') {
+          if (draft.name === name) throw Error('请输入不同的视图名称');
+          await preflight(connection, { connectionId, database, schema }, draft.name, [], '视图');
+          const identifier = postgresIdentifier(draft.name);
+          return {
+            ...guard, table: prefix + identifier, success: 'PostgreSQL 视图已确认重命名',
+            statements: ['ALTER VIEW ' + qualified + ' RENAME TO ' + identifier],
+            async verify(current) {
+              const actual = await readPostgresViewFacts(current, schema, draft.name);
+              if (actual.preserved !== original.preserved || actual.revision !== original.revision)
+                throw Error('重命名后的视图身份、定义或属性与原视图不同，未提交');
+            },
+          };
+        }
+        return {
+          ...guard, table: qualified, success: 'PostgreSQL 视图已确认删除',
+          statements: ['DROP VIEW ' + qualified + ' RESTRICT'],
+          async verify(current) {
+            const result = await current.query(`SELECT EXISTS (
+              SELECT FROM pg_catalog.pg_class c
+              WHERE c.oid = $1::oid OR (c.relnamespace = $2::oid AND c.relname::text = $3)
+            )`, [original.oid, original.namespace, name], budget());
+            if (result.truncated || result.rows.length !== 1 || result.rows[0].c0 !== 'f')
+              throw Error('未确认原视图已从目录删除');
+          },
+        };
+      };
+    });
+  }
+
+  /** 关系创建及视图维护共用预检、令牌、预算和事务回执。 */
   private async prepareRelation(input: Scoped<PostgresCreateTableTarget>, kind: RelationKind, connect: Connect, compile: () => Plan | ((connection: PostgresConnection) => Promise<Plan>)) {
     const key = this.key(input, kind);
     if (this.pending.has(key)) throw Error('目标已有关系创建操作');
@@ -238,20 +288,20 @@ export class PostgresCreateTableWorkspace {
           throw Error('服务器未确认锁定原视图');
       }
       if (await plan.preflight(connection) !== targetStamp)
-        throw Error(plan.guard ? '原视图已变化，请刷新结构后编辑' : '原 schema 已被替换，请重新预览');
+        throw Error(plan.guard ? '原视图已变化，请刷新结构后继续' : '原 schema 已被替换，请重新预览');
       for (const statement of prepared.plan.statements) {
         sent = true;
         const result = await connection.query(statement, undefined, budget(), undefined, prepared.plan.protocol);
-        if (result.postgresCommand !== (statement.startsWith('CREATE ') ? 'CREATE' : 'COMMENT')) {
+        if (result.postgresCommand !== statement.slice(0, statement.indexOf(' '))) {
           throw Error('PostgreSQL 未返回预期的结构回执');
         }
       }
       await prepared.plan.verify(connection, prepared.targetStamp);
       committing = true;
       const result = await connection.query('COMMIT', undefined, budget());
-      if (result.postgresCommand === 'ROLLBACK') return { outcome: 'rolledBack', message: '服务器已回滚创建操作' };
+      if (result.postgresCommand === 'ROLLBACK') return { outcome: 'rolledBack', message: '服务器已回滚结构操作' };
       if (result.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen) {
-        throw Error('PostgreSQL 创建提交未确认');
+        throw Error('PostgreSQL 结构提交未确认');
       }
       return { outcome: 'committed', table: prepared.plan.table, message: prepared.plan.success };
     } catch (reason) {
