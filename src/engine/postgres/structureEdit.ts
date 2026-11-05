@@ -13,6 +13,7 @@ interface Plan {
   table: string;
   statements: string[];
   checks?: Parameters<typeof validatePostgresDefaults>[1];
+  protocol?: 'extended';
   before?(connection: PostgresConnection): Promise<void>;
   verify(facts: Facts): boolean;
 }
@@ -95,7 +96,7 @@ export class PostgresStructureEditWorkspace<T extends Draft> {
       await plan.before?.(connection);
       for (const sql of plan.statements) {
         sent = true;
-        const result = await connection.query(sql, undefined, budget());
+        const result = await connection.query(sql, undefined, budget(), undefined, plan.protocol);
         if (result.postgresCommand !== sql.split(' ', 1)[0]) throw Error(this.label + '结构回执不符');
       }
       const final = await readPostgresStructureFacts(connection, input.table);

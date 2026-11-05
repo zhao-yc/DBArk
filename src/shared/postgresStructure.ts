@@ -31,6 +31,7 @@ const structureConstraint = z.object({
   validated: z.boolean(),
   inherited: z.boolean(),
   keyColumns: z.array(identifier).max(128).optional(),
+  check: z.object({ expression: z.string().min(1), noInherit: z.boolean(), enforced: z.boolean(), comment: optionalText.optional() }).strict().nullable().optional(),
   foreign: z.object({
     schema: identifier, table: identifier, enforced: z.boolean(),
     match: z.enum(['s', 'f', 'p']), onUpdate: z.enum(['a', 'r', 'c', 'n', 'd']), onDelete: z.enum(['a', 'r', 'c', 'n', 'd']),

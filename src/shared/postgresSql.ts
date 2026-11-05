@@ -203,3 +203,47 @@ export function scanPostgresEditorTokens(source: string, budget: number): Postgr
   }
   return result;
 }
+
+/** 在 standard_conforming_strings=on 下隔离一个 CHECK 表达式，语义交给 PostgreSQL。 */
+export function assertPostgresCheckExpression(source: string): void {
+  if (!source.length || new TextEncoder().encode(source).length > 16384 || /[\u0000\uD800-\uDFFF]/u.test(source))
+    throw Error('CHECK 表达式须为 16 KiB 内有效文本');
+  const closing: string[] = [];
+  let i = 0, meaningful = false;
+  while (i < source.length) {
+    const c = source[i], next = source[i + 1];
+    if (whitespace.test(c)) { i++; continue; }
+    if (c === '-' && next === '-') {
+      i += 2;
+      while (i < source.length && source[i] !== '\r' && source[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && next === '*') { i = blockCommentEnd(source, i); continue; }
+    meaningful = true;
+    if (c === '"' || c === "'") {
+      const escape = c === "'" && /[eE]/.test(source[i - 1] ?? '') && !identifierPart.test(source[i - 2] ?? '');
+      i = quotedEnd(source, i, escape);
+      continue;
+    }
+    if (identifierStart.test(c)) {
+      i++;
+      while (i < source.length && identifierPart.test(source[i])) i++;
+      continue;
+    }
+    if (c === '$') {
+      const tag = dollarTag(source, i);
+      if (!tag) throw Error('CHECK 表达式不能包含外部参数');
+      const end = source.indexOf(tag, i + tag.length);
+      if (end < 0) throw Error('PostgreSQL dollar-quote未闭合');
+      i = end + tag.length;
+      continue;
+    }
+    if (c === ';') throw Error('CHECK 表达式不能包含语句分隔符');
+    if (c === '(' || c === '[') {
+      closing.push(c === '(' ? ')' : ']');
+      if (closing.length > 64) throw Error('CHECK 表达式嵌套超过 64 层');
+    } else if ((c === ')' || c === ']') && closing.pop() !== c) throw Error('CHECK 表达式括号不平衡');
+    i++;
+  }
+  if (!meaningful || closing.length) throw Error('CHECK 表达式为空或括号不平衡');
+}

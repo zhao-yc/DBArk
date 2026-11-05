@@ -38,7 +38,7 @@ export async function postgresCreateSchemas(connection: PostgresConnection): Pro
 export async function startPostgresDdl(connection: PostgresConnection, readOnly: boolean): Promise<void> {
   await connection.query(readOnly ? 'BEGIN READ ONLY' : 'BEGIN', undefined, budget());
   for (const sql of [
-    'SET LOCAL search_path = pg_catalog', "SET LOCAL statement_timeout = '15s'",
+    'SET LOCAL search_path = pg_catalog', 'SET LOCAL standard_conforming_strings = on', "SET LOCAL statement_timeout = '15s'",
     "SET LOCAL lock_timeout = '5s'", "SET LOCAL idle_in_transaction_session_timeout = '20s'",
   ]) await connection.query(sql, undefined, budget());
 }

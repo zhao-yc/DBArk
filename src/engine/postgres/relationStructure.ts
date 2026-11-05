@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { postgresRelationName } from '../../shared/postgresSql';
 import { postgresStructureResultSchema, type PostgresStructureResult } from '../../shared/postgresStructure';
 import type { PostgresConnection } from './connection';
+import { startPostgresDdl } from './createTable';
 
 // 单条目录查询提供一致的关系、字段、约束和索引快照；绝不读取目标关系的数据行。
 const structureSql = `
@@ -65,6 +66,11 @@ SELECT pg_catalog.jsonb_build_object(
         FROM pg_catalog.unnest(c.conkey) WITH ORDINALITY AS k(attnum, pos)
         JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
       ) ELSE '[]'::jsonb END,
+      'check', CASE WHEN c.contype = 'c' THEN pg_catalog.jsonb_build_object(
+        'expression', pg_catalog.pg_get_expr(c.conbin, c.conrelid), 'noInherit', c.connoinherit,
+        'comment', pg_catalog.obj_description(c.oid, 'pg_constraint'),
+        'enforced', COALESCE((pg_catalog.to_jsonb(c)->>'conenforced')::boolean, true)
+      ) END,
       'foreign', CASE WHEN c.contype = 'f' THEN pg_catalog.jsonb_build_object(
         'schema', rns.nspname, 'table', ref.relname, 'match', c.confmatchtype,
         'onUpdate', c.confupdtype, 'onDelete', c.confdeltype,
@@ -117,6 +123,10 @@ SELECT pg_catalog.jsonb_build_object(
       SELECT c.conname::text AS key_name, c.oid::text AS key_oid FROM pg_catalog.pg_constraint c
       WHERE c.conrelid = t.oid AND c.contype IN ('p', 'u') ORDER BY c.oid LIMIT 2001
     ) key_ids), '{}'::jsonb),
+    'checks', COALESCE((SELECT pg_catalog.jsonb_object_agg(check_name, check_oid) FROM (
+      SELECT c.conname::text AS check_name, c.oid::text AS check_oid FROM pg_catalog.pg_constraint c
+      WHERE c.conrelid = t.oid AND c.contype = 'c' ORDER BY c.oid LIMIT 2001
+    ) check_ids), '{}'::jsonb),
     'foreign', COALESCE((SELECT pg_catalog.jsonb_object_agg(conname::text,
       pg_catalog.jsonb_build_object('oid', oid::text, 'reference', confrelid::text, 'index', conindid::text)) FROM (
       SELECT c.conname, c.oid, c.confrelid, c.conindid FROM pg_catalog.pg_constraint c
@@ -128,11 +138,7 @@ FROM target t
 /** 用独立只读会话加载目录，服务端反编译文本保留实际表达式及必要的 schema 限定。 */
 export async function readPostgresStructure(connection: PostgresConnection, table: string): Promise<PostgresStructureResult> {
   const small = { rows: 2, bytes: 8192 };
-  await connection.query('BEGIN READ ONLY', undefined, { ...small });
-  await connection.query("SET LOCAL statement_timeout = '15s'", undefined, { ...small });
-  await connection.query("SET LOCAL lock_timeout = '5s'", undefined, { ...small });
-  await connection.query("SET LOCAL idle_in_transaction_session_timeout = '20s'", undefined, { ...small });
-  await connection.query('SET LOCAL search_path = pg_catalog', undefined, { ...small });
+  await startPostgresDdl(connection, true);
   const { output } = await readPostgresStructureFacts(connection, table);
   const committed = await connection.query('COMMIT', undefined, { ...small });
   if (committed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL结构读取事务未完成');
@@ -155,6 +161,7 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
   const identity = JSON.parse(ids);
   const indexIds = catalogIds(identity.indexes, parsed.data.indexes);
   const keyIds = catalogIds(identity.keys, parsed.data.constraints.filter(key => key.kind === 'p' || key.kind === 'u'));
+  const checkIds = catalogIds(identity.checks, parsed.data.constraints.filter(key => key.kind === 'c'));
   const foreignIds = new Map<string, { oid: string; reference: string; index: string }>(Object.entries(identity.foreign));
   const foreign = parsed.data.constraints.filter(key => key.kind === 'f');
   if (foreignIds.size !== foreign.length || foreign.some(key => {
@@ -163,7 +170,7 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
   })) throw Error('PostgreSQL 外键身份回包不完整');
   const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ?
     { editStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex') } : {}) };
-  return { output, oid, indexIds, keyIds, foreignIds };
+  return { output, oid, indexIds, keyIds, foreignIds, checkIds };
 }
 
 /** 目录身份只接受与同一快照中的名称一一对应的 OID。 */

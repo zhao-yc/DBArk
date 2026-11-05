@@ -21,3 +21,5 @@
 .pg-column-edit pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pg-column-edit-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .pg-column-edit-drop { display: flex; align-items: baseline; gap: 6px; color: var(--warning); }
+
+.pg-column-edit textarea { display: block; width: 100%; margin-top: 4px; resize: vertical; font-family: monospace; }

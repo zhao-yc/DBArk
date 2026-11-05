@@ -8,6 +8,7 @@ import type { PostgresColumnChange } from '../../src/shared/postgresColumnEdit';
 import type { PostgresIndexChange } from '../../src/shared/postgresIndexEdit';
 import type { PostgresKeyChange } from '../../src/shared/postgresKeyEdit';
 import type { PostgresForeignChange, PostgresForeignCreation, PostgresForeignTargets } from '../../src/shared/postgresForeignKeyEdit';
+import type { PostgresCheckChange } from '../../src/shared/postgresCheckEdit';
 import { postgresIdentifier } from '../../src/shared/postgresSql';
 import { PostgresConnection } from '../../src/engine/postgres/connection';
 import { readPostgresForeignTargets } from '../../src/engine/postgres/foreignKeyEdit';
@@ -377,6 +378,77 @@ describe.skipIf(!enabled)('PostgreSQL 实库结构快照', () => {
       }
       expect((await applyingReference).outcome).toBe('rolledBack');
       expect((await structure(child)).constraints).toEqual([]);
+      // CHECK 的预览只解析。真实表达式使用副作用计数，验证预览和 NOT VALID 不扫描历史行。
+      const checkTarget = '"结构.甲"."CHECK目标"';
+      await client.query(`CREATE TABLE ${checkTarget} (amount int, note text);
+        INSERT INTO ${checkTarget} VALUES (-5, '旧值'), (7, '正常');
+        CREATE TABLE "结构.甲".check_audit (value int);
+        CREATE FUNCTION "结构.甲".observe_check(value int) RETURNS boolean LANGUAGE plpgsql VOLATILE AS $body$
+        BEGIN INSERT INTO "结构.甲".check_audit VALUES (value); RETURN value >= 0; END; $body$;`);
+      const checkScope = { ...scoped, table: checkTarget };
+      const checkPreview = async (changes: PostgresCheckChange[]) => engine.handle('postgres.checkEdit.preview', {
+        ...checkScope, editStamp: (await structure(checkTarget)).editStamp, changes,
+      });
+      const checkApply = (token: string, owner = checkScope.owner) => engine.handle('postgres.checkEdit.apply', { ...checkScope, token, owner });
+      const auditCount = async () => (await client.query('SELECT count(*)::int AS n FROM "结构.甲".check_audit')).rows[0].n;
+      const createCheck = { kind: 'create', name: '数值"检查', noInherit: true, notValid: true,
+        expression: '"结构.甲".observe_check(amount) AND note <> $literal$;) $literal$ -- 尾注释' } as const;
+      await expect(checkPreview([{ ...createCheck, expression: 'true) NOT VALID, ADD COLUMN injected int --' }])).rejects.toThrow('括号不平衡');
+      await expect(checkPreview([{ ...createCheck, expression: 'amount >= ' }])).rejects.toThrow('syntax error');
+      const checkDraft = await checkPreview([createCheck]);
+      expect(checkDraft.statements[0]).toContain('-- 尾注释\n) NO INHERIT NOT VALID');
+      expect((await structure(checkTarget)).constraints).toEqual([]);
+      expect(await auditCount()).toBe(0);
+      expect((await checkApply(checkDraft.token, '其他文档')).outcome).toBe('notSent');
+      expect((await checkApply(checkDraft.token)).outcome).toBe('committed');
+      expect((await checkApply(checkDraft.token)).outcome).toBe('notSent');
+      expect(await auditCount()).toBe(0);
+      expect((await structure(checkTarget)).constraints[0]).toMatchObject({ name: '数值"检查', validated: false,
+        check: { expression: expect.stringContaining('observe_check(amount)'), noInherit: true, enforced: true } });
+      await expect(client.query(`INSERT INTO ${checkTarget} VALUES (-1, '新坏值')`)).rejects.toMatchObject({ code: '23514' });
+      await client.query(`INSERT INTO ${checkTarget} VALUES (11, '新好值')`);
+      expect(await auditCount()).toBe(1);
+      const checkInvalid = await checkPreview([{ kind: 'rename', from: createCheck.name, name: '临时名称' },
+        { kind: 'validate', from: '临时名称' }]);
+      expect((await checkApply(checkInvalid.token)).outcome).toBe('rolledBack');
+      expect((await structure(checkTarget)).constraints[0]).toMatchObject({ name: createCheck.name, validated: false });
+      await client.query(`UPDATE ${checkTarget} SET amount = 5 WHERE amount = -5`);
+      await client.query(`COMMENT ON CONSTRAINT "数值""检查" ON ${checkTarget} IS '需要保留的注释'`);
+      const checkValid = await checkPreview([{ kind: 'validate', from: createCheck.name }]);
+      expect((await checkApply(checkValid.token)).outcome).toBe('committed');
+      const validatedCheck = await structure(checkTarget);
+      expect(validatedCheck.constraints[0].validated).toBe(true);
+      const replaceCheck = { kind: 'replace', from: createCheck.name, expression: 'amount > 100', notValid: false, noInherit: false } as const;
+      expect((await checkApply((await checkPreview([replaceCheck])).token)).outcome).toBe('rolledBack');
+      expect((await structure(checkTarget)).editStamp).toBe(validatedCheck.editStamp);
+      const newCheck = await checkPreview([{ ...replaceCheck, expression: 'amount >= 1 AND amount <= 20' }]);
+      expect((await checkApply(newCheck.token)).outcome).toBe('committed');
+      const finalCheck = await structure(checkTarget);
+      expect(finalCheck.constraints[0]).toMatchObject({ name: createCheck.name, validated: true,
+        check: { expression: expect.stringContaining('amount <= 20'), noInherit: false, comment: '需要保留的注释' } });
+      const staleCheck = await checkPreview([{ kind: 'drop', from: createCheck.name }]);
+      await client.query(`ALTER TABLE ${checkTarget} DROP CONSTRAINT "数值""检查", ADD CONSTRAINT "数值""检查" CHECK (amount >= 1 AND amount <= 20);
+        COMMENT ON CONSTRAINT "数值""检查" ON ${checkTarget} IS '需要保留的注释'`);
+      expect((await structure(checkTarget)).constraints).toEqual(finalCheck.constraints);
+      expect((await checkApply(staleCheck.token)).outcome).toBe('notSent');
+      expect((await checkApply((await checkPreview([{ kind: 'drop', from: createCheck.name }])).token)).outcome).toBe('committed');
+      expect((await structure(checkTarget)).constraints).toEqual([]);
+      const notEnforced = { ...createCheck, name: '暂不强制', expression: 'amount < 0', noInherit: false, notValid: false, notEnforced: true };
+      expect((await checkApply((await checkPreview([notEnforced])).token)).outcome).toBe('committed');
+      expect((await structure(checkTarget)).constraints[0]).toMatchObject({ name: '暂不强制', validated: false, check: { enforced: false } });
+      await expect(checkPreview([{ kind: 'validate', from: '暂不强制' }])).rejects.toThrow('不能验证');
+      await client.query(`INSERT INTO ${checkTarget} VALUES (12, '仍可写入')`);
+      await client.query('ALTER ROLE CURRENT_USER SET standard_conforming_strings TO off');
+      try {
+        const defaults = new PostgresConnection(profile, database);
+        try { await defaults.open(); expect(defaults.standardStrings).toBe(false); }
+        finally { await defaults.close(); }
+        const backslashCheck = { ...createCheck, name: '尾反斜杠', expression: "note <> '尾反斜杠\\'", notValid: false };
+        expect((await checkApply((await checkPreview([backslashCheck])).token)).outcome).toBe('committed');
+        await expect(client.query(`INSERT INTO ${checkTarget} VALUES (13, $1)`, ['尾反斜杠\\'])).rejects.toMatchObject({ code: '23514' });
+        const checkAgain = await checkPreview([{ kind: 'rename', from: '尾反斜杠', name: '反斜杠保留' }]);
+        expect((await checkApply(checkAgain.token)).outcome).toBe('committed');
+      } finally { await client.query('ALTER ROLE CURRENT_USER RESET standard_conforming_strings'); }
       expect((await client.query(`SELECT '"引用.目标".moved_reference'::regclass::oid::text AS id`)).rows[0].id).toBe(parentOid);
       await client.query(`DROP TABLE ${parent}; ALTER TABLE "引用.目标".moved_reference RENAME TO "含""引用"`);
       const immediateValidation = await foreignPreview([{ ...latest, notValid: false }]);
