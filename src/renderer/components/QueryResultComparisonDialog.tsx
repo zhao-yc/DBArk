@@ -3,10 +3,11 @@ import type { CellValue, QueryResult, ResultColumn } from '../../shared/contract
 import { pinLimits, type PinnedQueryResult } from '../queryPins';
 import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonValues, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonValue } from '../queryResultComparison';
 import { queryResultComparisonZh as text } from '../locales/queryResultComparison.zh-CN';
+import type { SortDialect } from '../queryResultSort';
 import { errorMessage } from '../lib';
 import { UsageHelp, ErrorBox, Modal  } from './ui';
 
-interface Props { pins: readonly PinnedQueryResult[]; owner: string; isCurrent(): boolean; onClose(): void; }
+interface Props { pins: readonly PinnedQueryResult[]; owner: string; dialect?: SortDialect; isCurrent(): boolean; onClose(): void; }
 type Draft = { left: string; right: string; keys: readonly string[] };
 type Source = { pin: PinnedQueryResult; id: string; label: string; result: QueryResult; columns: readonly ResultColumn[]; truncated: boolean };
 type Run = { draft: Draft; left: QueryResult; right: QueryResult; capture: QueryResultComparisonCapture; scan: QueryResultComparisonScan; timer?: ReturnType<typeof setTimeout> };
@@ -53,8 +54,8 @@ function valueText(value: CellValue | undefined): string {
 }
 
 /** 两份固定快照只读对比；必须显式选择匹配键，不重新查询或生成同步SQL。 */
-export function QueryResultComparisonDialog({ pins, owner, isCurrent, onClose }: Props) {
-  const origin = useRef({ pins, owner }).current, latest = useRef({ pins, owner, isCurrent }); latest.current = { pins, owner, isCurrent };
+export function QueryResultComparisonDialog({ pins, owner, dialect, isCurrent, onClose }: Props) {
+  const origin = useRef({ pins, owner, dialect }).current, latest = useRef({ pins, owner, dialect, isCurrent }); latest.current = { pins, owner, dialect, isCurrent };
   const [prepared] = useState(() => { try { return { sources: sources(pins), error: '' }; } catch (reason) { return { sources: [] as Source[], error: errorMessage(reason) }; } });
   const [draft, setDraft] = useState<Draft>(() => ({ left: prepared.sources[0]?.id ?? '', right: prepared.sources.at(-1)?.id ?? '', keys: [] }));
   const draftRef = useRef(draft), [view, setView] = useState<View>({ processed: 0, total: 0, error: prepared.error });
@@ -67,7 +68,7 @@ export function QueryResultComparisonDialog({ pins, owner, isCurrent, onClose }:
     if (!alive.current || invalid.current || closed.current) return false;
     let valid = false;
     try {
-      valid = latest.current.pins === origin.pins && latest.current.owner === origin.owner && latest.current.isCurrent() === true && own(pins, 'length') === prepared.sources.length && prepared.sources.every((source, index) => own(pins, String(index)) === source.pin && own(source.pin, 'id') === source.id && own(source.pin, 'label') === source.label && own(source.pin, 'result') === source.result);
+      valid = latest.current.pins === origin.pins && latest.current.owner === origin.owner && latest.current.dialect === origin.dialect && latest.current.isCurrent() === true && own(pins, 'length') === prepared.sources.length && prepared.sources.every((source, index) => own(pins, String(index)) === source.pin && own(source.pin, 'id') === source.id && own(source.pin, 'label') === source.label && own(source.pin, 'result') === source.result);
     } catch {}
     if (!valid) invalid.current = true;
     return valid;
@@ -92,7 +93,7 @@ export function QueryResultComparisonDialog({ pins, owner, isCurrent, onClose }:
     if (committed.current !== ticket || draftRef.current !== draft || !sourceCurrent()) return;
     if (!prepared.sources.some(source => source.id === next.left) || !prepared.sources.some(source => source.id === next.right) || next.keys.length > 8 || new Set(next.keys).size !== next.keys.length) return;
     const columns = prepared.sources.find(source => source.id === next.left)!.columns;
-    if (next.keys.some(key => !columns.some(column => column.key === key && !queryResultComparisonKeyReason(column)))) return;
+    if (next.keys.some(key => !columns.some(column => column.key === key && !queryResultComparisonKeyReason(column, dialect)))) return;
     cancelRun(); draftRef.current = next; setDraft(next); setView({ processed: 0, total: 0 }); setDetail(undefined); setFilter('differences'); setPage(1);
   }
   /** 单次明确开始才捕获两份真实结果；扫描中不显示部分计数或部分差异。 */
@@ -102,7 +103,7 @@ export function QueryResultComparisonDialog({ pins, owner, isCurrent, onClose }:
     if (!left || !right) return;
     try {
       cancelRun();
-      const capture = captureQueryResultComparison(left, right, draft.keys), run: Run = { draft, left, right, capture, scan: new QueryResultComparisonScan(capture) };
+      const capture = captureQueryResultComparison(left, right, draft.keys, dialect), run: Run = { draft, left, right, capture, scan: new QueryResultComparisonScan(capture) };
       last.current = run; active.current = run; setView({ run, processed: 0, total: capture.leftCount + capture.rightCount }); setDetail(undefined); setPage(1); setFilter('differences');
       /** 最终结果的私有快照与当前来源都通过复核后，才发布四计数和完整记录。 */
       function tick(): void {
@@ -146,10 +147,10 @@ export function QueryResultComparisonDialog({ pins, owner, isCurrent, onClose }:
   }
   const kindLabel = (kind: QueryResultComparisonRow['kind']) => text[kind];
   return <div data-query-result-comparison-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
-    <p>{text.notice}</p><UsageHelp><p>{columns.some(column => column.type === 'SQLITE') ? text.sqliteKeysHint : text.keysHint}</p><p>{text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
+    <p>{text.notice}</p><UsageHelp><p>{columns.some(column => column.type === 'SQLITE') ? text.sqliteKeysHint : dialect === 'postgresql' ? text.postgresKeysHint : text.keysHint}</p><p>{text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs"><label>{text.left}<select aria-label={text.left} value={draft.left} disabled={!valid} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ left: event.target.value, right: draft.right, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
       <label>{text.right}<select aria-label={text.right} value={draft.right} disabled={!valid} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ left: draft.left, right: event.target.value, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label></div>
-    <fieldset disabled={!valid}><legend>{text.keys}</legend>{columns.map(column => { const reason = queryResultComparisonKeyReason(column), checked = draft.keys.includes(column.key); return <label key={column.key} className="check" title={reason}><input type="checkbox" aria-label={text.key(column.key)} checked={checked} disabled={!valid || !!reason || !checked && draft.keys.length >= 8} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, keys: event.target.checked ? [...draft.keys, column.key] : draft.keys.filter(key => key !== column.key) }); }}/>{column.name || column.key} · {column.key}{reason && <span> · {reason}</span>}</label>; })}</fieldset>
+    <fieldset disabled={!valid}><legend>{text.keys}</legend>{columns.map(column => { const reason = queryResultComparisonKeyReason(column, dialect), checked = draft.keys.includes(column.key); return <label key={column.key} className="check" title={reason}><input type="checkbox" aria-label={text.key(column.key)} checked={checked} disabled={!valid || !!reason || !checked && draft.keys.length >= 8} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, keys: event.target.checked ? [...draft.keys, column.key] : draft.keys.filter(key => key !== column.key) }); }}/>{column.name || column.key} · {column.key}{reason && <span> · {reason}</span>}</label>; })}</fieldset>
     <p>{text.selectKeys}</p>{!valid && !closed.current && <ErrorBox message={text.stale}/>}<ErrorBox message={view.error}/>
     {running && valid && <p role="status">{text.scanning} {text.progress(view.processed, view.total)}</p>}
     {result && <section aria-label={text.rows}><div className="filter-inputs">{(['added', 'removed', 'changed', 'equal'] as const).map(kind => <label key={kind}>{text[kind]} <output aria-label={text[kind]}>{result[kind]}</output></label>)}</div>

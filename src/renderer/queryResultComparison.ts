@@ -1,5 +1,5 @@
 import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
-import { queryResultFilterKey, queryResultSortKind } from './queryResultSort';
+import { queryResultFilterKey, queryResultSortKind, type SortDialect } from './queryResultSort';
 import { queryResultComparisonZh as text } from './locales/queryResultComparison.zh-CN';
 import { bindSqliteResultStorage, copySqliteResultStorage, type SqliteResultStorageCode } from '../shared/sqliteResultStorage';
 
@@ -21,7 +21,7 @@ interface Source {
   raw: readonly (readonly CellValue[])[]; values: readonly (readonly CellValue[])[]; units: readonly number[]; truncated: boolean;
   sqlite?: { readonly codes: readonly string[]; current(): boolean };
 }
-interface Binding { left: Source; right: Source; metadata: readonly ResultColumn[]; keyIndices: readonly number[]; binaryPrototypes: WeakMap<object, object | null>; invalid: boolean; }
+interface Binding { left: Source; right: Source; metadata: readonly ResultColumn[]; keyIndices: readonly number[]; binaryPrototypes: WeakMap<object, object | null>; invalid: boolean; dialect?: SortDialect; }
 interface Owner { capture?: QueryResultComparisonCapture; active: boolean; }
 const bindings = new WeakMap<QueryResultComparisonCapture, Binding>();
 const rowOwners = new WeakMap<QueryResultComparisonRow, Owner>();
@@ -51,12 +51,13 @@ function metadata(column: ResultColumn): Readonly<ResultColumn> {
   return Object.freeze({ key, name, type });
 }
 /** 浮点和全部字节别名不能作键；分类沿原比较器，不从值外观猜测。 */
-export function queryResultComparisonKeyReason(column: ResultColumn): string | undefined {
+export function queryResultComparisonKeyReason(column: ResultColumn, dialect?: SortDialect): string | undefined {
   try {
-    const admitted = metadata(column), kind = queryResultSortKind(admitted.type);
+    const admitted = metadata(column), kind = queryResultSortKind(admitted.type, dialect);
     // SQLite只在开始时按完整类型帧准入，列声明本身不猜测逐格值或隐式转换。
-    if (admitted.type === 'SQLITE') return undefined;
-    return !kind || kind === 'float' || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(admitted.type.trim()) ? text.keyUnsupported : undefined;
+    if (admitted.type === 'SQLITE' && !dialect) return undefined;
+    return !kind || kind === 'float' || kind === 'postgresFloat' || /^(?:TINY_|MEDIUM_|LONG_)?BLOB(?:\b|$)/i.test(admitted.type.trim())
+      ? dialect === 'postgresql' ? text.postgresKeyUnsupported : text.keyUnsupported : undefined;
   } catch (reason) { return reason instanceof Error && reason.message === text.budget ? text.budget : text.identity; }
 }
 /** 二进制只按明确包装和base64原文比较，不解码，也不序列化未知对象。 */
@@ -80,7 +81,7 @@ function equal(left: CellValue, right: CellValue): boolean {
   return !!left && !!right && typeof left === 'object' && typeof right === 'object' && left.base64 === right.base64;
 }
 /** 捕获时先校结构与合计格数，再复制全部值，避免预算外的大表先分配单元格快照。 */
-export function captureQueryResultComparison(left: QueryResult, right: QueryResult, keys: readonly string[]): QueryResultComparisonCapture {
+export function captureQueryResultComparison(left: QueryResult, right: QueryResult, keys: readonly string[], dialect?: SortDialect): QueryResultComparisonCapture {
   const leftColumns = own(left, 'columns') as ResultColumn[], rightColumns = own(right, 'columns') as ResultColumn[];
   const leftRefs = array(leftColumns, queryResultComparisonLimits.columns, 1), rightRefs = array(rightColumns, queryResultComparisonLimits.columns, 1);
   const columns = leftRefs.map(metadata), rightMetadata = rightRefs.map(metadata);
@@ -91,7 +92,7 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
   if (keyRefs.some(key => typeof key !== 'string') || new Set(keyRefs).size !== keyRefs.length) throw Error(text.selectKeys);
   const keyIndices = keyRefs.map(key => columns.findIndex(column => column.key === key));
   if (keyIndices.some(index => index < 0)) throw Error(text.selectKeys);
-  for (const index of keyIndices) { const reason = queryResultComparisonKeyReason(columns[index]); if (reason) throw Error(reason); }
+  for (const index of keyIndices) { const reason = queryResultComparisonKeyReason(columns[index], dialect); if (reason) throw Error(reason); }
   const leftRows = own(left, 'rows') as DataRow[], rightRows = own(right, 'rows') as DataRow[];
   const leftRowRefs = array(leftRows, queryResultComparisonLimits.rows), rightRowRefs = array(rightRows, queryResultComparisonLimits.rows);
   if ((leftRowRefs.length + rightRowRefs.length) * columns.length > queryResultComparisonLimits.cells) throw Error(text.budget);
@@ -119,7 +120,7 @@ export function captureQueryResultComparison(left: QueryResult, right: QueryResu
     return { result, columns: columnArray, columnRefs: refs, rows, rowRefs, raw: Object.freeze(raw), values: Object.freeze(values), units: Object.freeze(rowUnits), truncated, sqlite: storage };
   }
   const capture = Object.freeze({ columns: Object.freeze(columns), keys: Object.freeze(keyRefs), leftCount: leftRowRefs.length, rightCount: rightRowRefs.length, leftTruncated: own(left, 'truncated') as boolean, rightTruncated: own(right, 'truncated') as boolean });
-  const binding: Binding = { left: source(left, leftColumns, leftRefs, leftRows, leftRowRefs, 'left'), right: source(right, rightColumns, rightRefs, rightRows, rightRowRefs, 'right'), metadata: columns, keyIndices: Object.freeze(keyIndices), binaryPrototypes: prototypes, invalid: false };
+  const binding: Binding = { left: source(left, leftColumns, leftRefs, leftRows, leftRowRefs, 'left'), right: source(right, rightColumns, rightRefs, rightRows, rightRowRefs, 'right'), metadata: columns, keyIndices: Object.freeze(keyIndices), binaryPrototypes: prototypes, invalid: false, dialect };
   bindings.set(capture, binding);
   if (!currentQueryResultComparison(capture, left, right)) throw Error(text.stale);
   return capture;
@@ -165,7 +166,9 @@ function key(source: Source, index: number, binding: Binding, side: 'left' | 'ri
     // SQLite匹配键按原存储类型和规范原值组成元组；包括REAL、完整BLOB及正负零，不走SQL隐式数值转换。
     if (source.sqlite) return [source.sqlite.codes[index][columnIndex], value && typeof value === 'object' ? value.base64 : value];
     try {
-      const parsed = queryResultFilterKey(binding.metadata[columnIndex], value);
+      const parsed = queryResultFilterKey(binding.metadata[columnIndex], value, binding.dialect);
+      // NUMERIC 的三个特殊值必须有独立身份，JSON 本身会把它们都编码为 null。
+      if (typeof parsed === 'number' && !Number.isFinite(parsed)) return ['special', String(parsed)];
       return parsed && typeof parsed === 'object' ? ['exact', parsed.negative, parsed.whole, parsed.fraction] : [typeof parsed, parsed];
     } catch { throw Error(text.keyInvalid(side)); }
   }));

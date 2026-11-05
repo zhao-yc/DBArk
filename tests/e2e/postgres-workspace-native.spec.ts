@@ -26,6 +26,7 @@ import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/ren
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultPresetsZh as presetsText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
+import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { gridRowHeightZh as heightText } from '../../src/renderer/locales/gridRowHeight.zh-CN';
 import { queryRowDetailsZh as detailText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
@@ -986,6 +987,48 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(resultGrid).toContainText('序列确认：3');
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforePinRead);
     await mark('固定完整原结果、导出原值，执行新查询后回看快照 SQL 并释放，事务及历史保持');
+
+    // 两次真实查询固定各自原值，使用相邻 NUMERIC 键核对四类差异和二进制明细。
+    await edit(`SELECT * FROM (VALUES
+      (1.00000000000000000001::numeric, '旧文本'::text, decode('00','hex')),
+      (1.00000000000000000002::numeric, '保留', NULL::bytea),
+      ('NaN'::numeric, '移除', NULL::bytea)) AS records("键", "内容", "字节");`);
+    await execute();
+    await button(zh.query.pinResult).click();
+    await expect(button(comparisonText.open)).toBeDisabled();
+    await edit(`SELECT * FROM (VALUES
+      ('Infinity'::numeric, '新增'::text, NULL::bytea),
+      (1.00000000000000000002::numeric, '保留', NULL::bytea),
+      (1.00000000000000000001::numeric, '新文本', decode('ff','hex'))) AS records("键", "内容", "字节");`);
+    await execute();
+    await button(zh.query.pinResult).click();
+    const historyBeforeComparison = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await button(comparisonText.open).click();
+    const resultComparison = page.getByRole('dialog', { name: comparisonText.title, exact: true });
+    const startComparison = resultComparison.getByRole('button', { name: comparisonText.start, exact: true });
+    await expect(startComparison).toBeDisabled();
+    await expect(resultComparison.getByRole('checkbox', { name: comparisonText.key('c2'), exact: true })).toBeDisabled();
+    await resultComparison.getByRole('checkbox', { name: comparisonText.key('c0'), exact: true }).check();
+    await startComparison.click();
+    for (const metric of [comparisonText.added, comparisonText.removed, comparisonText.changed, comparisonText.equal]) {
+      await expect(resultComparison.getByLabel(metric, { exact: true })).toHaveText('1');
+    }
+    await resultComparison.getByLabel(comparisonText.filter, { exact: true }).selectOption('changed');
+    await resultComparison.getByRole('button', { name: comparisonText.details(0), exact: true }).click();
+    const difference = resultComparison.getByRole('region', { name: comparisonText.detailsTitle, exact: true });
+    await expect(difference.getByLabel(comparisonText.leftValue + ' c0', { exact: true })).toContainText('1.00000000000000000001');
+    await expect(difference.getByLabel(comparisonText.leftValue + ' c1', { exact: true })).toContainText('旧文本');
+    await expect(difference.getByLabel(comparisonText.rightValue + ' c1', { exact: true })).toContainText('新文本');
+    await expect(difference.getByLabel(comparisonText.leftValue + ' c2', { exact: true })).toContainText('AA==');
+    await expect(difference.getByLabel(comparisonText.rightValue + ' c2', { exact: true })).toContainText('/w==');
+    await page.screenshot({ path: info.outputPath('PostgreSQL固定结果对比.png') });
+    await resultComparison.getByRole('button', { name: comparisonText.close, exact: true }).click();
+    await pinGroup.getByRole('button', { name: '释放 固定 2', exact: true }).click();
+    await expect(button(comparisonText.open)).toBeDisabled();
+    await pinGroup.getByRole('button', { name: '释放 固定 3', exact: true }).click();
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(historyBeforeComparison);
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    await mark('两份固定结果按精确 NUMERIC 对齐，四类差异各一行，可查文本与 BYTEA 原值，执行历史及事务保持');
     await button(postgresZh.rollback).click();
     await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
     await mark('查询结果的勾选 JSON、已返回 CSV 和 Excel 实际落盘，导出未推进原序列或改变事务');

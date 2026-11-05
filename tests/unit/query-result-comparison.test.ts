@@ -23,6 +23,28 @@ function fixture(left: QueryResult, right: QueryResult, keys: readonly string[] 
   return { left, right, capture, scan };
 }
 
+describe('PostgreSQL 固定结果匹配键', () => {
+  it('NUMERIC 末位精度、NaN 和正负无穷分别匹配，布尔可作复合键', () => {
+    const metadata = [{ key: 'n', name: '数值', type: 'NUMERIC' }, { key: 'b', name: '布尔', type: 'BOOLEAN' }];
+    const left = source([['1.00000000000000000001', 't'], ['1.00000000000000000002', 't'],
+      ['NaN', 'f'], ['Infinity', 'f'], ['-Infinity', 'f'], ['NaN', 't']], metadata);
+    const right = source([['NaN', 't'], ['-Infinity', 'f'], ['Infinity', 'f'], ['NaN', 'f'],
+      ['1.00000000000000000002', 't'], ['1.00000000000000000001', 't']], metadata);
+    const capture = captureQueryResultComparison(left, right, ['n', 'b'], 'postgresql');
+    expect(finish(new QueryResultComparisonScan(capture))).toMatchObject({
+      equal: 6, added: 0, removed: 0, changed: 0,
+      rows: [5, 4, 3, 2, 1, 0].map(rightIndex => ({ kind: 'equal', rightIndex })),
+    });
+  });
+
+  it.each(['REAL', 'DOUBLE PRECISION', 'BYTEA', 'TIMESTAMP'])('%s 可作为对比值但不作为 PostgreSQL 匹配键', type => {
+    const metadata = [{ key: 'id', name: '字段', type }];
+    expect(queryResultComparisonKeyReason(metadata[0], 'postgresql')).toBe(text.postgresKeyUnsupported);
+    expect(() => captureQueryResultComparison(source([], metadata), source([], metadata), ['id'], 'postgresql'))
+      .toThrow(text.postgresKeyUnsupported);
+  });
+});
+
 describe('固定结果的明确键与稳定完整差异', () => {
   it('左原序保留删除/变化/相同，再追加右侧新增原序，精确键不经Number', () => {
     const bytes = { type: 'binary' as const, base64: 'AAH/' };
