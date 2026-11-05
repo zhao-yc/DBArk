@@ -11,6 +11,7 @@ import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview } from '../../src/shared/postgresTable';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
+import { inspectPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
 
 const active = process.env.DBARK_POSTGRES_WORKSPACE_TEST === '1';
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
@@ -352,6 +353,68 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
           JOIN pg_catalog.pg_class c ON c.oid = p.tableoid ORDER BY p.id`)).rows).toEqual([
           { id: 1, note: '第一分区', relname: 'sql_leaf_a' }, { id: 11, note: '第二分区', relname: 'sql_leaf_b' },
         ]);
+
+        // 原生导入直接读取本地 UTF-8 字节，验证表头、手动映射和服务器回执。
+        const importTarget = '"浏览"."导入""原表"';
+        await client.query(`CREATE TABLE ${importTarget} (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          note text, amount numeric(40,18) CHECK (amount >= 0), raw bytea,
+          derived text GENERATED ALWAYS AS (coalesce(note,'空') || '已生成') STORED);`);
+        const importScope = { ...source, table: importTarget, tabId: randomUUID() };
+        const importPath = join(directory, '待导入.csv');
+        const exactAmount = '1234567890123456789012.123456789012345678';
+        /** 每次文件与表页重新核准，回执只对应本次导入。 */
+        const prepareImport = async (csv: string, columns = ['c1', 'c0', 'c2', 'c3'], scope = importScope) => {
+          await writeFile(importPath, csv);
+          const page = await read(scope);
+          expect(page.canImport).toBe(true);
+          return { ...scope, profile, taskId: randomUUID(), fileToken: randomUUID(), pageToken: page.exportToken,
+            source: await inspectPostgresCopySource(importPath, ';'), columns };
+        };
+        const nativeData = '\uFEFF"含\n换行";编号;金额;字节\n;9007199254740994;' + exactAmount + ';\\x00ff\n' +
+          '"";9007199254740995;2;\n' + '"多行;🙂\r\n""引号""\n\\.\n尾";9007199254740996;3;\\x0a\n';
+        const csvImport = await prepareImport(nativeData);
+        expect(csvImport.source.header).toEqual(['含\n换行', '编号', '金额', '字节']);
+        expect(await engine.handle('postgres.table.import', csvImport)).toMatchObject({ outcome: 'committed', affected: 3 });
+        const queryImported = `SELECT id::text, note, amount::text, encode(raw,'hex') AS raw, derived FROM ${importTarget} t ORDER BY t.id`;
+        const imported = (await client.query(queryImported)).rows;
+        expect(imported).toEqual([
+          { id: '9007199254740994', note: null, amount: exactAmount, raw: '00ff', derived: '空已生成' },
+          { id: '9007199254740995', note: '', amount: '2.000000000000000000', raw: null, derived: '已生成' },
+          { id: '9007199254740996', note: '多行;🙂\r\n"引号"\n\\.\n尾', amount: '3.000000000000000000', raw: '0a', derived: '多行;🙂\r\n"引号"\n\\.\n尾已生成' },
+        ]);
+        await expect(engine.handle('postgres.table.import', { ...csvImport, taskId: randomUUID() })).rejects.toThrow('快照');
+        const invalid = await prepareImport('id;amount\n44;4\n45;-1\n', ['c0', 'c2']);
+        expect(await engine.handle('postgres.table.import', invalid)).toMatchObject({ outcome: 'rolledBack', affected: 0 });
+        const changedFile = await prepareImport('id;note\n44;原文件\n', ['c0', 'c1']);
+        await writeFile(importPath, 'id;note\n44;替换值\n');
+        expect(await engine.handle('postgres.table.import', changedFile)).toMatchObject({ outcome: 'notSent', affected: 0 });
+        const markerFile = await prepareImport('note\n已读\n\\.\n被截断\n', ['c1']);
+        expect(await engine.handle('postgres.table.import', markerFile)).toMatchObject({ outcome: 'rolledBack', affected: 0,
+          message: expect.stringContaining('反斜线') });
+        expect((await client.query(queryImported)).rows).toEqual(imported);
+        await client.query(`CREATE FUNCTION "浏览".wait_copy_insert() RETURNS trigger LANGUAGE plpgsql AS $body$
+          BEGIN IF NEW.id = 47 THEN PERFORM pg_advisory_xact_lock(75694); END IF; RETURN NEW; END; $body$;
+          CREATE TRIGGER wait_copy_insert BEFORE INSERT ON ${importTarget} FOR EACH ROW EXECUTE FUNCTION "浏览".wait_copy_insert();`);
+        const cancelled = await prepareImport('id;note\n46;前一行\n47;等待取消\n', ['c0', 'c1']);
+        await client.query('SELECT pg_advisory_lock(75694)');
+        const importing = engine.handle('postgres.table.import', cancelled);
+        void importing.catch(() => {});
+        try {
+          await expect.poll(async () => (await client.query(`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE application_name='tabrelio' AND wait_event='advisory' AND query LIKE 'COPY % FROM STDIN%'`)).rows[0].n,
+          { timeout: 5000 }).toBe(1);
+          await engine.handle('query.cancel', { taskId: cancelled.taskId });
+          expect(await importing).toMatchObject({ outcome: 'unknown', affected: 0 });
+          expect((await client.query(queryImported)).rows).toEqual(imported);
+        } finally { await client.query('SELECT pg_advisory_unlock(75694)'); await Promise.allSettled([importing]); }
+        const changedTable = await prepareImport('id;note\n44;目标变化\n', ['c0', 'c1']);
+        await client.query(`ALTER TABLE ${importTarget} ADD COLUMN changed text`);
+        expect(await engine.handle('postgres.table.import', changedTable)).toMatchObject({ outcome: 'notSent', affected: 0 });
+        const partitionImport = await prepareImport('id;note\n2;复制甲\n12;复制乙\n', ['c0', 'c1'], partitionSource);
+        expect(await engine.handle('postgres.table.import', partitionImport)).toMatchObject({ outcome: 'committed', affected: 2 });
+        expect((await client.query(`SELECT p.id, c.relname FROM ${partitionTable} p
+          JOIN pg_catalog.pg_class c ON c.oid=p.tableoid WHERE p.id IN (2, 12) ORDER BY p.id`)).rows)
+          .toEqual([{ id: 2, relname: 'sql_leaf_a' }, { id: 12, relname: 'sql_leaf_b' }]);
       } finally { await rm(directory, { recursive: true, force: true }); }
     } finally {
       await engine.closeAll();

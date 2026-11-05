@@ -4,12 +4,13 @@ import { postgresIdentifier, postgresRelationName } from '../../shared/postgresS
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import {
-  isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableOutcome,
+  isPostgresSqlExportColumn, isPostgresSqlExportRelation, type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
+import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -21,6 +22,7 @@ interface Relation {
   keys: string[];
   fingerprint: string;
   capabilities: Capabilities;
+  canImport: boolean;
 }
 interface Original { tid: string; version: string; digest: string; }
 interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; }
@@ -37,6 +39,7 @@ interface Snapshot {
   writeEligible: boolean;
   preview?: { token: string; expires: number; writes: Write[] };
 }
+export type PostgresTableImportRequest = Scoped<PostgresTableImportInput> & { source: PostgresCopySource };
 const noWrites: Capabilities = { insert: false, update: false, delete: false };
 const small = () => ({ rows: 1024, bytes: 2 * 1024 * 1024 });
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -50,7 +53,8 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
            pg_catalog.has_table_privilege(c.oid, 'INSERT'), pg_catalog.has_table_privilege(c.oid, 'UPDATE'),
            pg_catalog.has_table_privilege(c.oid, 'DELETE'),
            (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND i.indisvalid),
-           CASE WHEN c.relkind IN ('v','m') THEN pg_catalog.pg_get_viewdef(c.oid, false) END
+           CASE WHEN c.relkind IN ('v','m') THEN pg_catalog.pg_get_viewdef(c.oid, false) END,
+           pg_catalog.row_security_active(c.oid)
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname::text = $1 AND c.relname::text = $2 AND c.relkind IN ('r','p','v','m','f')
       AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
@@ -84,6 +88,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
   return {
     sql: postgresIdentifier(schema) + '.' + postgresIdentifier(name), kind, columns, keys,
     fingerprint: digest([info, fields.rows]),
+    canImport: (kind === 'r' || kind === 'p') && info.c4 === 'f' && info.c5 === 't' && info.c10 === 'f',
     capabilities: {
       insert: editable && info.c5 === 't',
       update: editable && keys.length > 0 && info.c6 === 't',
@@ -193,7 +198,57 @@ export class PostgresTableWorkspace {
         columns: result.relation.columns, rows: result.rows, hasNext: result.hasNext, truncated: result.truncated,
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
         relationKind: result.relation.kind, capabilities, exportToken, ...(writeEligible ? { pageToken: exportToken } : {}),
+        ...(result.relation.canImport ? { canImport: true as const } : {}),
       };
+    } finally { this.active.delete(key); }
+  }
+
+  /** 消费原页及确认过的列映射；只有数据库确认 COMMIT 后才报告导入行数。 */
+  async importData(input: PostgresTableImportRequest, connect: Connect, check: () => void, commitStart: () => void): Promise<PostgresTableOutcome> {
+    const key = this.key(input);
+    if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
+    const snapshot = this.snapshot(input);
+    const selected = input.columns.map(key => snapshot.relation.columns.find(column => column.key === key));
+    if (!snapshot.relation.canImport || selected.length !== input.source.header.length ||
+        new Set(input.columns).size !== selected.length || selected.some(column => !column || !isPostgresSqlExportColumn(column)))
+      throw Error('目标表或列映射不可导入，请刷新表页并重新核对');
+    const projection = (selected as PostgresTableColumn[]).map(column => postgresIdentifier(column.name)).join(', ');
+    this.snapshots.delete(key);
+    this.active.add(key);
+    let receipt: PostgresTableOutcome | undefined;
+    try {
+      await connect(async connection => {
+        let sent = false;
+        try {
+          check();
+          await begin(connection);
+          const locked = await connection.query('LOCK TABLE ' + only(snapshot.relation) + ' IN ROW EXCLUSIVE MODE', undefined, small());
+          if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 未确认目标表锁');
+          const relation = await readRelation(connection, input.table);
+          if (relation.fingerprint !== snapshot.relation.fingerprint || !relation.canImport)
+            throw Error('目标表结构或写入权限已变化，请刷新表页');
+          await connection.query("SET LOCAL statement_timeout = '0'", undefined, small());
+          const command = 'COPY ' + relation.sql + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, HEADER true, ENCODING \'UTF8\', DELIMITER ' +
+            postgresDdlLiteral(input.source.delimiter) + ')';
+          const rows = await readPostgresCopySource(input.source, stream => {
+            check(); sent = true;
+            return connection.copyIn(command, stream);
+          });
+          check();
+          commitStart();
+          const completed = await connection.query('COMMIT', undefined, small());
+          if (completed.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen)
+            throw Error('PostgreSQL 未确认导入提交');
+          receipt = { outcome: 'committed', affected: rows, message: 'PostgreSQL 已提交导入，共 ' + rows + ' 行' };
+        } catch (reason) {
+          receipt = await this.rollbackWrite(connection, sent, reason);
+        }
+      }, true);
+      return receipt!;
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (receipt) return { ...receipt, message: receipt.message + '；连接收尾异常：' + message };
+      return { outcome: 'notSent', affected: 0, message };
     } finally { this.active.delete(key); }
   }
 
@@ -333,22 +388,26 @@ export class PostgresTableWorkspace {
       }
       return { outcome: 'committed', affected: writes.length, message: 'PostgreSQL已确认整批提交' };
     } catch (reason) {
-      const message = connection.error(reason).message;
-      if (!sent) return { outcome: 'notSent', affected: 0, message };
-      if (!connection.state().transactionKnown) return { outcome: 'unknown', affected: 0, message: '提交状态待核对：' + message };
-      try {
-        if (connection.state().transactionOpen) {
-          const rollback = await connection.query('ROLLBACK', undefined, small());
-          if (rollback.postgresCommand !== 'ROLLBACK') throw Error('未收到回滚确认');
-        }
-        if (!connection.state().transactionKnown || connection.state().transactionOpen) throw Error('回滚状态未知');
-        return { outcome: 'rolledBack', affected: 0, message: '整批已回滚：' + message };
-      } catch {
-        return { outcome: 'unknown', affected: 0, message: '事务终态待核对：' + message };
-      }
+      return this.rollbackWrite(connection, sent, reason);
     }
   }
 
+  /** 只依据原连接的事务状态及 ROLLBACK 回执区分已回滚和待核对。 */
+  private async rollbackWrite(connection: PostgresConnection, sent: boolean, reason: unknown): Promise<PostgresTableOutcome> {
+    const message = connection.error(reason).message;
+    if (!sent) return { outcome: 'notSent', affected: 0, message };
+    if (!connection.state().transactionKnown) return { outcome: 'unknown', affected: 0, message: '提交状态待核对：' + message };
+    try {
+      if (connection.state().transactionOpen) {
+        const rollback = await connection.query('ROLLBACK', undefined, small());
+        if (rollback.postgresCommand !== 'ROLLBACK') throw Error('未收到回滚确认');
+      }
+      if (!connection.state().transactionKnown || connection.state().transactionOpen) throw Error('回滚状态未知');
+      return { outcome: 'rolledBack', affected: 0, message: '整批已回滚：' + message };
+    } catch {
+      return { outcome: 'unknown', affected: 0, message: '事务终态待核对：' + message };
+    }
+  }
   /** 释放仅消费同一文档的原页令牌，旧标签销毁不影响后来读取的快照。 */
   release(input: Scoped<PostgresTableReleaseInput>): void {
     const key = this.key(input);

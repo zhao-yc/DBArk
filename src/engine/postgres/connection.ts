@@ -1,9 +1,10 @@
 import { Client, Query, types, type FieldDef, type QueryConfig, type ClientConfig } from 'pg';
-import { to as copyTo } from 'pg-copy-streams';
+import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
 import type { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { Client as SshClient, type ClientChannel } from 'ssh2';
-import { Duplex } from 'node:stream';
+import { Duplex, type Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import type { PostgresConnectionProfile, QueryResult, CellValue } from '../../shared/contracts';
 import { assertConnectionReady } from '../../shared/connectionTransfer';
@@ -429,6 +430,30 @@ export class PostgresConnection {
       this.abort();
       throw this.error(reason);
     } finally { cleanup(); }
+  }
+  /** COPY FROM 的流结束后仍复核服务器就绪；失败时等待原命令退出再允许回滚。 */
+  async copyIn(sql: string, source: Readable): Promise<number> {
+    this.check();
+    const client = this.client;
+    if (!client || this.broken || client.getTransactionStatus() !== 'T')
+      throw Error('PostgreSQL COPY 需要独占写入事务');
+    const wire = (client as unknown as { connection: PgWire }).connection;
+    const stream = copyFrom(sql);
+    stream.rowCount = -1;
+    let settle!: () => void;
+    const ready = new Promise<void>(resolve => { settle = resolve; });
+    wire.once('readyForQuery', settle);
+    client.once('end', settle);
+    try {
+      client.query(stream);
+      try { await pipeline(source, stream); } finally { await ready; }
+      if (this.broken || client.getTransactionStatus() !== 'T' || !Number.isSafeInteger(stream.rowCount) || stream.rowCount < 0)
+        throw Error('PostgreSQL 未确认 COPY 导入行数及事务状态');
+      return stream.rowCount;
+    } finally {
+      wire.removeListener('readyForQuery', settle);
+      client.removeListener('end', settle);
+    }
   }
   /** 正常结束原物理会话及SSH资源；观察超时保留资源，不能当作关闭成功。 */
   close(): Promise<void> {

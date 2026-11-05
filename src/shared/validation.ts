@@ -6,7 +6,7 @@ import { postgresColumnPreviewSchema, postgresColumnApplySchema } from './postgr
 import { postgresCompletionSchema } from './postgresCompletion';
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresStructureInputSchema } from './postgresStructure';
-import { postgresTableExportChooseSchema, postgresTableExportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema } from './postgresTable';
+import { postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema } from './postgresTable';
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
 import { sqliteIncomingInputSchema } from './sqliteIncoming';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema } from './sqliteTablePresets';
@@ -247,6 +247,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.foreignEdit.apply': postgresForeignApplySchema,
   'postgres.checkEdit.preview': postgresCheckPreviewSchema, 'postgres.checkEdit.apply': postgresCheckApplySchema,
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': postgresTableExportSchema,
+  'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.preview': postgresTablePreviewSchema,
   'postgres.table.apply': postgresTableApplySchema,

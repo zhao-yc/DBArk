@@ -1,0 +1,12 @@
+export const postgresTableImportZh = {
+  open: '导入 CSV', title: '导入 CSV 到 PostgreSQL 表', choose: '选择 CSV 文件',
+  note: '首行作为列名。按文件顺序逐列映射到目标字段，确认后追加数据。',
+  delimiter: 'CSV 分隔符', delimiterHint: '选择与源文件一致的分隔符。更改后请重新选择文件。',
+  nullNote: '使用 UTF-8。未加引号的空字段写为 NULL，两个双引号表示空字符串。映射标识列时保留文件中的值。',
+  columns: '列映射', target: (index: number) => '第 ' + (index + 1) + ' 列的目标字段',
+  unnamed: '空表头', select: '请选择目标字段', file: '源文件', bytes: '字节',
+  confirm: '确认追加并导入', close: '关闭', cancel: '取消导入',
+  running: '正在将 CSV 发送给 PostgreSQL', cancelling: '正在等待原导入事务结束',
+  stale: '原表页已变化，请刷新后重新选择文件。',
+  unknown: '未收到原导入回执。请刷新并核对数据库后再继续。',
+} as const;

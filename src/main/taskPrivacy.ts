@@ -12,6 +12,8 @@ import { sqliteTableEditMessages } from '../shared/sqliteTableEdit';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command === 'postgres.table.import') return event.status === 'completed' ? 'PostgreSQL 已确认导入提交。' :
+    event.status === 'running' ? '正在导入 PostgreSQL CSV。' : 'PostgreSQL 导入未确认提交，请在原窗口核对回执。';
   if (command === 'query.objectDefinition') return event.status === 'completed' ? '对象结构读取完成；定义正文和错误原文未保存。' : event.status === 'running' ? '正在读取对象结构；定义只留在当前窗口。' : '对象结构读取未完成；定义正文和错误原文未保存。';
   if (command === 'sqlite.incomingPage') return event.status === 'completed' ? 'SQLite关联子记录浏览完成；父键、子记录和错误原文未保存。' : event.status === 'running' ? '正在只读浏览SQLite关联子记录；关联值仅留在当前窗口。' : 'SQLite关联子记录浏览未完成；父键、子记录和错误原文未保存，请在原窗口核对。';
   if (command === 'sqlite.referencePage') return event.status === 'completed' ? 'SQLite外键浏览完成；关联值、父记录和错误原文未保存。' : event.status === 'running' ? '正在只读浏览SQLite父记录；关联值仅留在当前窗口。' : 'SQLite外键浏览未完成；关联值、父记录和错误原文未保存，请在原窗口核对。';

@@ -11,6 +11,7 @@ import { postgresForeignEditZh as fkText } from '../../src/renderer/locales/post
 import { postgresCheckEditZh as checkText } from '../../src/renderer/locales/postgresCheckEdit.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresTableExportZh as tableExportText } from '../../src/renderer/locales/postgresTableExport.zh-CN';
+import { postgresTableImportZh as tableImportText } from '../../src/renderer/locales/postgresTableImport.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
@@ -200,8 +201,47 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await tableButton(postgresTableZh.refresh).click();
     await expect(grid).toContainText('新增乙');
 
+    // 真实表页选择本机文件并手动映射不同名列，写入仅发生在显式确认后。
+    const importFile = info.outputPath('PostgreSQL导入源.csv');
+    await writeFile(importFile, '\uFEFF内容;编号\r\n"窗口;CSV";4\r\n', 'utf8');
+    await application.evaluate(({ BrowserWindow, dialog }, input) => {
+      const original = dialog.showOpenDialog;
+      let calls = 0;
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        const expected = BrowserWindow.getAllWindows().find(window => window.webContents.id === input.sender);
+        const options = args[1] as { title?: string; filters?: { extensions: string[] }[] };
+        if (!expected || args[0] !== expected || options.title !== input.title || options.filters?.[0].extensions[0] !== 'csv')
+          throw Error('PostgreSQL CSV 文件选择来源或格式不符');
+        calls++;
+        return { canceled: false, filePaths: [input.file] };
+      }) as typeof original;
+      Object.assign(globalThis, { finishPostgresTableImport: () => { dialog.showOpenDialog = original; return calls; } });
+    }, { sender: tableExportSender, title: '选择 PostgreSQL CSV 文件', file: importFile });
+    let importCalls: number;
+    try {
+      await tableButton(tableImportText.open).click();
+      const csv = page.getByRole('dialog', { name: tableImportText.title, exact: true });
+      const confirm = csv.getByRole('button', { name: tableImportText.confirm, exact: true });
+      await csv.getByLabel(tableImportText.delimiter, { exact: true }).selectOption(';');
+      await csv.getByRole('button', { name: tableImportText.choose, exact: true }).click();
+      await expect(csv.getByText('1. 内容', { exact: false })).toBeVisible();
+      await expect(confirm).toBeDisabled();
+      await csv.getByLabel(tableImportText.target(0), { exact: true }).selectOption({ label: 'note' });
+      await csv.getByLabel(tableImportText.target(1), { exact: true }).selectOption({ label: 'id' });
+      await expect(grid).not.toContainText('窗口;CSV');
+      await page.screenshot({ path: info.outputPath('PostgreSQL表页CSV导入确认.png') });
+      await confirm.click();
+      await expect(csv).toHaveCount(0);
+      await expect(grid).toContainText('窗口;CSV');
+      await expect(gridTab).toContainText('PostgreSQL 已提交导入，共 1 行');
+    } finally {
+      importCalls = await application.evaluate(() => (globalThis as unknown as { finishPostgresTableImport(): number }).finishPostgresTableImport());
+    }
+    expect(importCalls).toBe(1);
+    await mark('表页选择 CSV 和手动映射，确认后实际提交并刷新原表页');
+
     await editRecord('原值', '原生整批更新');
-    for (const note of ['新增甲', '新增乙']) {
+    for (const note of ['新增甲', '新增乙', '窗口;CSV']) {
       await grid.getByRole('gridcell', { name: note, exact: true }).click();
       await tableButton(postgresTableZh.remove).click();
     }

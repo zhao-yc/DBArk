@@ -1,5 +1,6 @@
 import { sameConnectionFamily } from '../shared/connectionDialect';
-import { postgresTableExportExtension } from '../shared/postgresTable';
+import { postgresTableExportExtension, type PostgresTableImportChooseInput } from '../shared/postgresTable';
+import { inspectPostgresCopySource, type PostgresCopySource } from '../engine/postgres/copyImportFile';
 import type { SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import { SqliteTableDraftFiles, bindSqliteTableDraft, assertSqliteTableDraftBinding } from './sqliteTableDraftFiles';
 import { tableDraftEndpointKey } from './tableDraftBinding';
@@ -752,6 +753,9 @@ async function runTableFilteredDelete(command: 'table.filteredDelete.preview' | 
 const postgresTableOwners = new WeakMap<object, string>();
 const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
 const postgresExportChoosing = new WeakSet<object>();
+const postgresImportChoosing = new WeakSet<object>();
+const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource; revision: number; expires: number }>();
+const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
@@ -824,6 +828,37 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         postgresExportFiles.set(document, { token, format: input.format, path: chosen.filePath, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(chosen.filePath) };
       } finally { postgresExportChoosing.delete(document); }
+    });
+  }
+  if (command === 'postgres.table.importChoose') {
+    columnsMain.assertCapturedOwner(columns);
+    const document = columns!.owner.document, revision = store.connectionRevision();
+    const target: PostgresTableImportChooseInput = input;
+    if (shuttingDown || !postgresTableOwners.has(document) || postgresImportChoosing.has(document))
+      throw Error('PostgreSQL 原表页或文件选择当前不可用');
+    postgresImportChoosing.add(document);
+    postgresImportFiles.delete(document);
+    return queryFileOperation(async () => {
+      /** 文件对话框和只读检查的回包只归原文档与连接修订。 */
+      const check = () => {
+        columnsMain.assertCapturedOwner(columns);
+        connectionConfig.assertAvailable(target.connectionId);
+        if (shuttingDown || revision !== store.connectionRevision() ||
+            store.connections().find(profile => profile.id === target.connectionId)?.dialect !== 'postgresql')
+          throw Error('PostgreSQL 导入的原连接已变化，请重新选择');
+      };
+      try {
+        check();
+        const chosen = await dialog.showOpenDialog(columns!.owner.window, { title: '选择 PostgreSQL CSV 文件',
+          properties: ['openFile'], filters: [{ name: 'CSV', extensions: ['csv', 'tsv'] }] });
+        check();
+        if (chosen.canceled || !chosen.filePaths[0]) return null;
+        const source = await inspectPostgresCopySource(chosen.filePaths[0], target.csvDelimiter);
+        check();
+        const token = randomUUID();
+        postgresImportFiles.set(document, { token, target, source, revision, expires: Date.now() + 5 * 60 * 1000 });
+        return { token, name: basename(source.path), header: source.header, bytes: source.bytes };
+      } finally { postgresImportChoosing.delete(document); }
     });
   }
   if (command === 'postgres.table.page' || command === 'postgres.table.preview' ||
@@ -1427,6 +1462,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if (tasks.get(input.taskId)?.kind === 'postgres.table.import') {
+        const postgresImporter = postgresImportTaskOwners.get(input.taskId);
+        if (!postgresImporter) return;
+        columnsMain.assertCapturedOwner(columns);
+        if (!columnsMain.sharesDocumentOwner(postgresImporter, columns!)) throw Error('取消请求与原 PostgreSQL 导入窗口不符');
+      }
       if (['sqlite.tableEdit.apply', 'sqliteDraftFiles.restore'].includes(tasks.get(input.taskId)?.kind ?? '') && sqliteEdits.owns(input.taskId)) return sqliteEdits.cancel(input.taskId, columns!);
       if (typeof historyDelete !== 'undefined' && historyDelete?.owns(input.taskId)) return historyDelete.cancel(input.taskId, columns!);
       if (['table.exportFiltered', 'sqlite.tableExport'].includes(tasks.get(input.taskId)?.kind ?? '') && tableFilteredExports.has(input.taskId)) return tableFilteredExports.cancel(input.taskId, columns!);
@@ -1615,6 +1656,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'files.createSqlite': return createSqliteFile(columns, input.connectionId);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
+    case 'postgres.table.import': {
+      columnsMain.assertCapturedOwner(columns);
+      const document = columns!.owner.document, owner = postgresTableOwners.get(document);
+      const file = postgresImportFiles.get(document), revision = store.connectionRevision();
+      if (shuttingDown || !owner || !file || file.token !== input.fileToken || file.revision !== revision || file.expires <= Date.now() ||
+          (['connectionId', 'database', 'table', 'tabId', 'pageToken'] as const).some(key => file.target[key] !== input[key]))
+        throw Error('PostgreSQL 导入的原表页或 CSV 文件选择已失效');
+      const profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect !== 'postgresql') throw Error('导入需要已保存的 PostgreSQL 连接');
+      postgresImportFiles.delete(document);
+      input = { ...input, profile, owner, source: file.source, connectionRevision: revision };
+      break;
+    }
     case 'postgres.table.export': {
       columnsMain.assertCapturedOwner(columns);
       const document = columns!.owner.document;
@@ -1673,6 +1727,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let sentToEngine = false;
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
   try {
+    if (command === 'postgres.table.import') postgresImportTaskOwners.set(taskId!, columns!);
     if (command === 'sqliteDraftFiles.restore') sqliteEditLease = sqliteEdits.begin(taskId!, columns!, sqlitePage!.check);
     if (sqliteApplySource) {
       sqliteClaim = sqliteEdits.claim(columns!, input.previewId);
@@ -1830,12 +1885,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       taskEvent({ taskId, status: 'completed', progress: 100, message: '服务器已确认目标事务提交，后续收尾异常；请查看提交记录' });
       return { affectedRows: confirmed.evidence.serverReportedRows, cleanupWarning: true, ...tableApplyReceipts.finish(taskId) };
     }
-    const message = command === 'postgres.table.export' ? (preparing.cancelled ? 'PostgreSQL 导出已取消' : 'PostgreSQL 导出未正常完成，请核对所选文件') :
+    const message = command === 'postgres.table.import' ? 'PostgreSQL 导入未确认提交，请在原窗口核对回执' :
+      command === 'postgres.table.export' ? (preparing.cancelled ? 'PostgreSQL 导出已取消' : 'PostgreSQL 导出未正常完成，请核对所选文件') :
       error instanceof Error ? error.message : '操作失败';
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableChecks' ? 'tableChecks' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId), ...(structurePurpose === 'tableChecks' ? tableChecksFailureProgress(sentToEngine && command === structurePrefix + 'apply', structureProgress.get(taskId)) : {}) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  } finally { if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
+  } finally { if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); if (command === 'postgres.table.import') postgresImportTaskOwners.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
 }
 
 /** 菜单模板只接纳固定命令，执行资格由当前文档的准确修订决定。 */
@@ -2124,7 +2180,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
-        if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
+        if (payload.command === 'app.menuState' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind === 'postgres.table.import') columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
             payload.command === 'postgres.completion' || payload.command === 'postgres.structure.read' || payload.command.startsWith('postgres.createTable.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') ||

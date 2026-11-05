@@ -22,6 +22,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.foreignEdit.targets': true, 'postgres.foreignEdit.preview': true, 'postgres.foreignEdit.apply': true,
   'postgres.checkEdit.preview': true, 'postgres.checkEdit.apply': true,
   'postgres.table.exportChoose': true, 'postgres.table.export': true,
+  'postgres.table.importChoose': true, 'postgres.table.import': true,
   'postgres.table.page': true, 'postgres.table.preview': true, 'postgres.table.apply': true, 'postgres.table.release': true,
   'sqlite.tablePage': true,
   'sqlite.relationships': true,

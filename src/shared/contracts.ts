@@ -289,6 +289,8 @@ export interface CommandMap {
   'postgres.checkEdit.apply': { input: import('./postgresCheckEdit').PostgresCheckApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.table.exportChoose': { input: import('./postgresTable').PostgresTableExportChooseInput; output: FileChoice | null };
   'postgres.table.export': { input: import('./postgresTable').PostgresTableExportInput; output: import('./postgresTable').PostgresTableExportOutput };
+  'postgres.table.importChoose': { input: import('./postgresTable').PostgresTableImportChooseInput; output: import('./postgresTable').PostgresTableImportChoice | null };
+  'postgres.table.import': { input: import('./postgresTable').PostgresTableImportInput; output: import('./postgresTable').PostgresTableOutcome };
   'postgres.table.page': { input: import('./postgresTable').PostgresTablePageInput; output: import('./postgresTable').PostgresTablePage };
   'postgres.table.preview': { input: import('./postgresTable').PostgresTablePreviewInput; output: import('./postgresTable').PostgresTablePreview };
   'postgres.table.apply': { input: import('./postgresTable').PostgresTableApplyInput; output: import('./postgresTable').PostgresTableOutcome };
