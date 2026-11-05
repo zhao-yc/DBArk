@@ -100,7 +100,7 @@ import { resultExcelZh } from './resultExcel.zh-CN';
 import { assertResultSqlData, resultSqlTargetSchema, resultSqlSelectionSchema } from './resultSql';
 import { resultSqlZh } from './resultSql.zh-CN';
 import { FILTER_LIMITS, validateFilterGroup, assertFilterGroupInput, filterGroupSchema, filterRuleSchema as filterRule, sortRulesSchema } from './filtering';
-import { tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, tablePresetApplySchema } from './tablePresets';
+import { tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, tablePresetApplySchema, postgresTablePresetListSchema, postgresTablePresetSaveSchema, postgresTablePresetSelectSchema } from './tablePresets';
 import { recordTemplateTargetSchema, recordTemplateSaveSchema, recordTemplateSelectSchema, recordTemplateRenameSchema } from './recordTemplates';
 import { queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema } from './queryResultPresets';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
@@ -276,6 +276,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': postgresTableExportSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
+  'postgres.table.presets.list': postgresTablePresetListSchema,
+  'postgres.table.presets.save': postgresTablePresetSaveSchema,
+  'postgres.table.presets.delete': postgresTablePresetSelectSchema,
+  'postgres.table.presets.read': postgresTablePresetSelectSchema,
   'postgres.table.preview': postgresTablePreviewSchema,
   'postgres.table.apply': postgresTableApplySchema,
   'postgres.table.release': postgresTableReleaseSchema,

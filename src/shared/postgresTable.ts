@@ -9,7 +9,7 @@ const relation = z.string().min(1).max(512).refine(value => !value.includes('\0'
 const token = z.uuid();
 const column = z.string().regex(/^c[0-9]{1,4}$/);
 const target = z.object({ connectionId: identity, database: identity, table: relation, tabId: identity }).strict();
-const quickFilter = z.object({ column: relation, text: z.string().max(4096).refine(value => !value.includes('\0')) }).strict();
+export const postgresQuickTableFilterSchema = z.object({ column: relation, text: z.string().max(4096).refine(value => !value.includes('\0')) }).strict();
 export const postgresAdvancedTableFilterSchema = z.object({
   rules: z.array(filterRuleSchema).min(1).max(FILTER_LIMITS.conditions),
   mode: z.enum(['all', 'any']),
@@ -24,7 +24,7 @@ export const postgresAdvancedTableFilterSchema = z.object({
   }
 });
 export type PostgresAdvancedTableFilter = z.infer<typeof postgresAdvancedTableFilterSchema>;
-export type PostgresTableFilter = z.infer<typeof quickFilter> | PostgresAdvancedTableFilter;
+export type PostgresTableFilter = z.infer<typeof postgresQuickTableFilterSchema> | PostgresAdvancedTableFilter;
 
 export function isPostgresTableFiltered(filter: PostgresTableFilter | undefined): boolean {
   return !!filter && ('rules' in filter ? filter.rules.some(rule => rule.enabled !== false) : !!filter.text);
@@ -45,7 +45,8 @@ export const postgresTablePageSchema = target.extend({
   offset: z.number().int().min(0).max(postgresTableLimits.offset),
   limit: z.number().int().min(1).max(postgresTableLimits.page),
   sort: postgresTableSortSchema,
-  filter: z.union([quickFilter, postgresAdvancedTableFilterSchema]).optional(),
+  filter: z.union([postgresQuickTableFilterSchema, postgresAdvancedTableFilterSchema]).optional(),
+  checkFilterColumns: z.literal(true).optional(),
   retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
     .refine(value => new Set(value).size === value.length, '保留的草稿原页不能重复').optional(),
 }).strict();

@@ -314,6 +314,10 @@ export interface CommandMap {
   'postgres.table.importChoose': { input: import('./postgresTable').PostgresTableImportChooseInput; output: import('./postgresTable').PostgresTableImportChoice | null };
   'postgres.table.import': { input: import('./postgresTable').PostgresTableImportInput; output: import('./postgresTable').PostgresTableOutcome };
   'postgres.table.page': { input: import('./postgresTable').PostgresTablePageInput; output: import('./postgresTable').PostgresTablePage };
+  'postgres.table.presets.list': { input: TablePresetTarget; output: TablePresetSnapshot };
+  'postgres.table.presets.save': { input: TablePresetSave; output: TablePresetSnapshot };
+  'postgres.table.presets.delete': { input: TablePresetSelect; output: TablePresetSnapshot };
+  'postgres.table.presets.read': { input: TablePresetSelect; output: TablePresetConfiguration };
   'postgres.table.preview': { input: import('./postgresTable').PostgresTablePreviewInput; output: import('./postgresTable').PostgresTablePreview };
   'postgres.table.apply': { input: import('./postgresTable').PostgresTableApplyInput; output: import('./postgresTable').PostgresTableOutcome };
   'postgres.table.release': { input: import('./postgresTable').PostgresTableReleaseInput; output: void };

@@ -290,7 +290,7 @@ const sqliteTableImports = new SqliteTableImportMain({
   save: task => store.saveTask(task), event: event => taskEvent(event),
 });
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
-type MainInvocation = ColumnsInvocation & { recordTemplatePublication?: () => void; sqliteValueOptionsPublication?: () => void; sqliteReadPublication?: () => void; objectDefinitionPublication?: (output?: unknown) => void; sqliteRelationshipsPublication?: () => void; sqlitePresetPublication?: () => void; tableChecksRequest?: TableChecksInvocation; databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
+type MainInvocation = ColumnsInvocation & { recordTemplatePublication?: () => void; sqliteValueOptionsPublication?: () => void; sqliteReadPublication?: () => void; objectDefinitionPublication?: (output?: unknown) => void; sqliteRelationshipsPublication?: () => void; sqlitePresetPublication?: () => void; postgresPresetPublication?: () => void; tableChecksRequest?: TableChecksInvocation; databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 数据库属性能力也绑定真实文档；连接修订只由Main捕获，不接受渲染进程注入。 */
 const databaseEncodingOwners = new DatabaseDefaultEncodingOwners({
   assert: owner => { columnsMain.assertCapturedOwner(owner); if ((owner as MainInvocation).databaseEncodingRevision !== store.connectionRevision()) throw Error('连接配置已变化，请重新读取数据库属性'); },
@@ -1331,6 +1331,28 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'table.presets.list':
       if(shuttingDown)throw Error('客户端正在退出，不能读取方案');
       return tablePresetSources.issue(columns,input,store.tablePresets(input));
+    case 'postgres.table.presets.list':
+    case 'postgres.table.presets.save':
+    case 'postgres.table.presets.delete':
+    case 'postgres.table.presets.read': {
+      const revision = store.connectionRevision();
+      const check = () => {
+        columnsMain.assertCapturedOwner(columns);
+        connectionConfig.assertAvailable(input.connectionId);
+        if (shuttingDown || revision !== store.connectionRevision()) throw Error('PostgreSQL 方案的窗口或连接已变化');
+      };
+      check();
+      if (command !== 'postgres.table.presets.list') tablePresetSources.assert(columns, input, true);
+      // 方案只读写本机配置，真实字段与行在随后正常表页读取中复核。
+      columns!.postgresPresetPublication = () => {
+        check();
+        if (command === 'postgres.table.presets.read') store.selectedTablePreset(input, true);
+      };
+      if (command === 'postgres.table.presets.read') return store.selectedTablePreset(input, true);
+      const snapshot = command === 'postgres.table.presets.save' ? store.saveTablePreset(input, true) :
+        command === 'postgres.table.presets.delete' ? store.deleteTablePreset(input, true) : store.tablePresets(input, true);
+      return tablePresetSources.issue(columns, input, snapshot, true);
+    }
     case 'table.presets.save':
       if(shuttingDown)throw Error('客户端正在退出，不能保存方案');
       tablePresetSources.assert(columns,input);
@@ -2198,6 +2220,7 @@ else {
           if (payload.command.startsWith('record.templates.')) { if (!columns?.recordTemplatePublication) throw Error('记录模板缺少原请求发布门'); columns.recordTemplatePublication(); }
           if (payload.command === 'query.objectDefinition') { if (!columns?.objectDefinitionPublication) throw Error('对象结构缺少原窗口发布门'); columns.objectDefinitionPublication(result); }
           if (payload.command.startsWith('sqlite.tablePresets.') || payload.command.startsWith('sqlite.tableLayout.')) { if (!columns?.sqlitePresetPublication) throw Error('SQLite方案缺少原请求发布门'); columns.sqlitePresetPublication(); }
+          if (payload.command.startsWith('postgres.table.presets.')) { if (!columns?.postgresPresetPublication) throw Error('PostgreSQL 方案缺少原请求发布门'); columns.postgresPresetPublication(); }
           if (payload.command === 'sqlite.relationships') { if (!columns?.sqliteRelationshipsPublication) throw Error('SQLite关系图缺少原窗口发布门'); columns.sqliteRelationshipsPublication(); }
           if (payload.command === 'sqlite.valueOptions') { if (!columns?.sqliteValueOptionsPublication) throw Error('SQLite不同值缺少原窗口发布门'); columns.sqliteValueOptionsPublication(); }
           if (payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage' || payload.command === 'sqlite.statistics' || payload.command === 'sqlite.countRows' || payload.command === 'sqlite.schemaScript') { if (!columns?.sqliteReadPublication) throw Error('SQLite只读操作缺少原窗口发布门'); columns.sqliteReadPublication(); }

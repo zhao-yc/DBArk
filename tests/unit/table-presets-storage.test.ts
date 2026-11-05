@@ -8,6 +8,7 @@ import initSqlJs from 'sql.js';
 import {LocalStore} from '../../src/main/storage';
 import {exportConnectionProfile,copyConnectionProfile} from '../../src/shared/connectionTransfer';
 import {tablePresetDocumentSchema,tablePresetSaveSchema,validateTablePresetBudget,validateTablePresetColumns,type TablePresetConfiguration,type TablePresetStoredSnapshot} from '../../src/shared/tablePresets';
+import { postgresTablePresetConfiguration, postgresTablePresetOptions } from '../../src/shared/tablePresets';
 const require=createRequire(import.meta.url),wasm=require.resolve('sql.js/dist/sql-wasm.wasm'),dirs:string[]=[];
 const protector={available:()=>true,encrypt:(value:string)=>'RAM密文:'+value,decrypt:(value:string)=>value.slice(6)};
 const target={connectionId:'ram-a',database:'库.__proto__',table:'表/constructor'};
@@ -17,6 +18,42 @@ const packet=(snapshot:TablePresetStoredSnapshot)=>({...target,source:snapshot.s
 async function fixture(){const dir=mkdtempSync(join(tmpdir(),'dbark-preset-'));dirs.push(dir);const file=join(dir,'local.sqlite'),store=await LocalStore.open(file,wasm,protector);store.saveConnection(profile);return {file,store};}
 afterEach(()=>{for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 describe('命名方案真实SQLite、CAS与原子持久化',()=>{
+ it('PostgreSQL 独立持久化快速筛选原文和高级条件组，按连接、数据库和 schema 隔离', async () => {
+  const { store, file } = await fixture();
+  const pg = { ...target, connectionId: 'ram-pg', table: '记录' };
+  store.saveConnection({ ...profile, id: pg.connectionId, dialect: 'postgresql', port: 5432 });
+  const check = (snapshot: TablePresetStoredSnapshot) => ({ ...packet(snapshot), ...pg });
+  const quick = { filter: { column: 'payload', text: " %_\\'  " }, sort: [{ column: 'payload', direction: 'DESC', nulls: 'LAST' }] } as const;
+  const quickConfig = postgresTablePresetConfiguration({ ...quick, sort: [...quick.sort] });
+  const advanced = postgresTablePresetConfiguration({ filter: { mode: 'all', rules: [
+   { column: 'payload', operator: '=', value: '9007199254740993' }, { column: 'nullable', operator: 'IS NULL', enabled: false },
+   { column: 'nullable', operator: '=', value: '' },
+  ], group: { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] } } });
+  expect(() => store.tablePresets(target, true)).toThrow('PostgreSQL 连接');
+  expect(() => store.saveTablePreset({ ...packet(store.tablePresets(target)), name: '越界', configuration: quickConfig })).toThrow();
+  const first = store.saveTablePreset({ ...check(store.tablePresets(pg, true)), name: '快速', configuration: quickConfig }, true);
+  expect(() => store.saveTablePreset({ ...check(first), name: '快速', configuration: advanced }, true)).toThrow('同名');
+  expect(() => store.saveTablePreset({ ...check(first), name: '混用', configuration: { ...advanced, quickFilter: quick.filter } }, true)).toThrow();
+  const second = store.saveTablePreset({ ...check(first), name: '组合', configuration: advanced }, true);
+  expect(() => store.selectedTablePreset({ ...check(first), id: first.entries[0].id }, true)).toThrow('变化');
+  expect(store.tablePresets(pg).entries).toEqual([]);
+  for (const other of [{ database: '其它库' }, { table: '"别的 schema"."记录"' }]) expect(store.tablePresets({ ...pg, ...other }, true).entries).toEqual([]);
+  store.close();
+  const reopened = await LocalStore.open(file, wasm, protector);
+  try {
+   const alias = { ...pg, table: '"public"."记录"' }, current = reopened.tablePresets(alias, true);
+   expect(current.entries).toEqual(second.entries);
+   expect(postgresTablePresetOptions(reopened.selectedTablePreset({ ...check(current), ...alias, id: first.entries[0].id }, true))).toEqual(quick);
+   expect(() => validateTablePresetColumns(advanced, ['payload'], true)).toThrow('字段已不存在');
+   const replaced = reopened.saveTablePreset({ ...check(current), name: '快速', replaceId: first.entries[0].id, configuration: advanced }, true);
+   expect(replaced.entries[0].configuration).toEqual(advanced);
+   const removed = reopened.deleteTablePreset({ ...check(replaced), id: first.entries[0].id }, true);
+   expect(removed.entries.map(entry => entry.name)).toEqual(['组合']);
+   reopened.deleteConnection(pg.connectionId);
+   reopened.saveConnection({ ...profile, id: pg.connectionId, dialect: 'postgresql', port: 5432 });
+   expect(reopened.tablePresets(pg, true).entries).toEqual([]);
+  } finally { reopened.close(); }
+ });
  it('NULL位置独立保存并在真实SQLite重开后完整恢复，旧默认规则不补字段',async()=>{
   const {file,store}=await fixture();
   const configuration:TablePresetConfiguration={...config,sort:[{column:'payload',direction:'DESC',nulls:'FIRST'},{column:'nullable',direction:'ASC',nulls:'LAST'}]};

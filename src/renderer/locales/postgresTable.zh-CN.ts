@@ -1,4 +1,5 @@
 export const postgresTableZh = {
+  presets: '命名方案',
   sortHint: '从上到下按优先级在数据库排序。应用后从第一页读取并保留当前筛选。有未提交的记录草稿时，先提交或放弃草稿。',
   activeSort: (count: number) => `已应用 ${count} 项排序`,
   relation: 'PostgreSQL 记录', refresh: '刷新记录', query: '打开查询草稿', first: '首页', previous: '上一页', next: '下一页',

@@ -105,13 +105,17 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
 
 /** 翻页、游标和 COPY 共用排序，显式规则优先，同值时沿用关系的分页键。 */
 function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter' | 'sort'>,
-  page?: Pick<PostgresTablePageInput, 'limit' | 'offset'>, columns = relation.columns, copy = false) {
+  page?: Pick<PostgresTablePageInput, 'limit' | 'offset' | 'checkFilterColumns'>, columns = relation.columns, copy = false) {
   const key = (id: string) => {
     const column = relation.columns.find(column => column.name === id);
     if (!column) throw Error('PostgreSQL排序或筛选列已变化');
     return postgresIdentifier(column.name);
   };
   const projection = columns.map(column => postgresIdentifier(column.name)).join(', ');
+  // 载入方案时连停用规则也要核对，避免方案套用到字段已删除或改名的关系上。
+  if (page?.checkFilterColumns && input.filter) {
+    for (const name of 'rules' in input.filter ? input.filter.rules.map(rule => rule.column) : [input.filter.column]) key(name);
+  }
   const ordered = postgresTableSortRules(input.sort).map(rule => ({ ...rule, column: key(rule.column) }));
   const tie = relation.keys.length ? relation.keys : relation.kind === 'r' ? ['ctid'] : relation.kind === 'p' ? ['tableoid', 'ctid'] : [];
   const ordering = [

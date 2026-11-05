@@ -43,6 +43,8 @@ import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type Work
 import { querySaveContentSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
 import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { tablePresetDocumentSchema, tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, validateTablePresetBudget, type TablePresetTarget, type TablePresetSource, type TablePresetStoredSnapshot as TablePresetSnapshot, type TablePresetSelect } from '../shared/tablePresets';
+import { postgresTablePresetDocumentSchema, postgresTablePresetListSchema, postgresTablePresetSaveSchema, postgresTablePresetSelectSchema, type TablePresetSave } from '../shared/tablePresets';
+import { postgresIdentifier, postgresRelationName } from '../shared/postgresSql';
 import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema, validateQueryResultPresetBudget, type QueryResultPresetSource, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue, type QueryResultPresetSelect, type QueryResultPresetSave, type QueryResultPresetRename } from '../shared/queryResultPresets';
 import { importPresetDocumentSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, importPresetText, type ImportPresetDocument, type ImportPresetSnapshot, type ImportPresetSaveInput, type ImportPresetDeleteInput } from '../shared/importPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
@@ -95,6 +97,9 @@ export class LocalStore {
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_presets'").length) {
       for (const document of this.records<unknown>('SELECT data FROM table_presets')) tablePresetDocumentSchema.parse(document);
     }
+    if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_presets_postgres'").length) {
+      for (const document of this.records<unknown>('SELECT data FROM table_presets_postgres')) postgresTablePresetDocumentSchema.parse(document);
+    }
     // 可选元数据也须先完整校验；坏文档不能被迁移或任务恢复写盘掩盖。
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='query_result_presets'").length) this.validateQueryResultPresetCollection();
     // 可选导入配置先校验原始字节和完整文档；未知版本不能被任何迁移写盘覆盖。
@@ -118,6 +123,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS table_preferences (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         CREATE TABLE IF NOT EXISTS table_apply_receipts (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_presets (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
+        CREATE TABLE IF NOT EXISTS table_presets_postgres (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
+        DELETE FROM table_presets_postgres WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=table_presets_postgres.connection_id);
         CREATE TABLE IF NOT EXISTS record_templates (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         DELETE FROM record_templates WHERE NOT EXISTS (SELECT 1 FROM connections WHERE connections.id=record_templates.connection_id);
         -- SQLite命名筛选为可选schema9元数据，与MySQL方案合同隔离。
@@ -461,62 +468,73 @@ export class LocalStore {
     }, assertCurrent); return result;
   }
   /** 来源只取主进程已保存的连接概要，不解密凭据；摘要不会持久化认证文件路径原文。 */
-  private tablePresetSource(target: TablePresetTarget): TablePresetSource {
+  private tablePresetSource(target: TablePresetTarget, postgres: boolean): TablePresetSource {
     const profile=this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?',[target.connectionId])[0];
     if(!profile)throw Error('方案连接已删除，请重新打开表页');
+    if (postgres && profile.dialect !== 'postgresql') throw Error('方案需要已保存的 PostgreSQL 连接');
     return {connectionRevision:this.connectionRevisionValue,connectionDigest:queryConnectionDigest(profile)};
   }
+  /** PostgreSQL 未限定名与其 public 限定名共享本机方案，分隔符按标识符原样保留。 */
+  private tablePresetTarget(raw: unknown, postgres: boolean): TablePresetTarget {
+    if (!postgres) return tablePresetListSchema.parse(raw);
+    const target = postgresTablePresetListSchema.parse(raw), { schema, name } = postgresRelationName(target.table);
+    return { ...target, table: postgresIdentifier(schema) + '.' + postgresIdentifier(name) };
+  }
   /** 精确主键读取；空表保留修订墓碑，删除后再创建不能让旧CAS复活。 */
-  tablePresets(raw: unknown): TablePresetSnapshot {
-    const target=tablePresetListSchema.parse(raw),source=this.tablePresetSource(target);
-    const value=this.records<unknown>('SELECT data FROM table_presets WHERE connection_id=? AND database_name=? AND table_name=?',[target.connectionId,target.database,target.table])[0];
-    return {...tablePresetDocumentSchema.parse(value??{version:1,revision:0,entries:[]}),source};
+  tablePresets(raw: unknown, postgres = false): TablePresetSnapshot {
+    const target = this.tablePresetTarget(raw, postgres), source = this.tablePresetSource(target, postgres);
+    const table = postgres ? 'table_presets_postgres' : 'table_presets';
+    const value = this.records<unknown>(`SELECT data FROM ${table} WHERE connection_id=? AND database_name=? AND table_name=?`, [target.connectionId,target.database,target.table])[0];
+    const schema = postgres ? postgresTablePresetDocumentSchema : tablePresetDocumentSchema;
+    return { ...schema.parse(value ?? { version: 1, revision: 0, entries: [] }), source };
   }
   /** 连接修订和来源必须与Main当前事实相同；调用方提供的摘要本身不代表可信。 */
-  private checkedTablePresets(input: TablePresetSelect | ReturnType<typeof tablePresetSaveSchema.parse>): TablePresetSnapshot {
-    const current=this.tablePresets({connectionId:input.connectionId,database:input.database,table:input.table});
+  private checkedTablePresets(input: TablePresetSelect | TablePresetSave, postgres: boolean): TablePresetSnapshot {
+    const current=this.tablePresets({connectionId:input.connectionId,database:input.database,table:input.table}, postgres);
     if(current.revision!==input.expectedRevision||current.source.connectionRevision!==input.source.connectionRevision||current.source.connectionDigest!==input.source.connectionDigest)throw Error('方案或连接配置已变化，请刷新后重试');
     return current;
   }
   /** CAS、全库数量/字节预算与原子落盘在同一同步事务执行，失败恢复内存及原文件。 */
-  private writeTablePresets(target:TablePresetTarget,document:TablePresetSnapshot):void {
-    const stored=tablePresetDocumentSchema.parse({version:1,revision:document.revision,entries:document.entries});
-    const statement=this.db.prepare('SELECT connection_id,database_name,table_name,data FROM table_presets WHERE NOT(connection_id=? AND database_name=? AND table_name=?)');
+  private writeTablePresets({ connectionId, database, table: name }: TablePresetTarget, document: TablePresetSnapshot, postgres: boolean): void {
+    const target = this.tablePresetTarget({ connectionId, database, table: name }, postgres);
+    const table = postgres ? 'table_presets_postgres' : 'table_presets', schema = postgres ? postgresTablePresetDocumentSchema : tablePresetDocumentSchema;
+    const stored=schema.parse({version:1,revision:document.revision,entries:document.entries});
+    const statement=this.db.prepare(`SELECT connection_id,database_name,table_name,data FROM ${table} WHERE NOT(connection_id=? AND database_name=? AND table_name=?)`);
     let targets=0,count=stored.entries.length,bytes=Buffer.byteLength(JSON.stringify(stored)+target.connectionId+target.database+target.table,'utf8');
     try {
       statement.bind([target.connectionId,target.database,target.table]);
       while(statement.step()){
-        const row=statement.get();targets++;const other=tablePresetDocumentSchema.parse(JSON.parse(String(row[3])));
+        const row=statement.get();targets++;const other=schema.parse(JSON.parse(String(row[3])));
         count+=other.entries.length;bytes+=row.reduce<number>((sum,value)=>sum+Buffer.byteLength(String(value),'utf8'),0);
       }
     } finally {statement.free();}
     validateTablePresetBudget(targets+1,count,bytes);
-    this.db.run('INSERT INTO table_presets VALUES (?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data',[target.connectionId,target.database,target.table,JSON.stringify(stored)]);
+    this.db.run(`INSERT INTO ${table} VALUES (?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data`,[target.connectionId,target.database,target.table,JSON.stringify(stored)]);
   }
   /** 新建不隐式覆盖同名项；覆盖必须携带明确replaceId及所见表级修订。 */
-  saveTablePreset(raw:unknown):TablePresetSnapshot {
-    const input=tablePresetSaveSchema.parse(raw);let result!:TablePresetSnapshot;
+  saveTablePreset(raw: unknown, postgres = false): TablePresetSnapshot {
+    const input=(postgres ? postgresTablePresetSaveSchema : tablePresetSaveSchema).parse(raw);let result!:TablePresetSnapshot;
     this.mutate(()=>{
-      const current=this.checkedTablePresets(input),same=current.entries.find(item=>item.name===input.name),replaced=current.entries.find(item=>item.id===input.replaceId);
+      const current=this.checkedTablePresets(input, postgres),same=current.entries.find(item=>item.name===input.name),replaced=current.entries.find(item=>item.id===input.replaceId);
       if(input.replaceId ? !replaced||replaced.name!==input.name : !!same)throw Error('同名方案已存在或已变化，请明确选择覆盖后重试');
       const entry={id:input.replaceId??randomUUID(),name:input.name,connectionDigest:current.source.connectionDigest,configuration:input.configuration};
       result={...current,revision:current.revision+1,entries:input.replaceId?current.entries.map(item=>item.id===input.replaceId?entry:item):[...current.entries,entry]};
-      this.writeTablePresets(input,result);
+      this.writeTablePresets(input,result,postgres);
     });
     return result;
   }
   /** 只删除显式选择且修订未变的一项，保留表级修订，不涉及数据库对象。 */
-  deleteTablePreset(raw:unknown):TablePresetSnapshot {
-    const input=tablePresetSelectSchema.parse(raw);let result!:TablePresetSnapshot;
+  deleteTablePreset(raw: unknown, postgres = false): TablePresetSnapshot {
+    const input=(postgres ? postgresTablePresetSelectSchema : tablePresetSelectSchema).parse(raw);let result!:TablePresetSnapshot;
     this.mutate(()=>{
-      const current=this.checkedTablePresets(input);
+      const current=this.checkedTablePresets(input, postgres);
       if(!current.entries.some(item=>item.id===input.id))throw Error('方案已删除，请刷新后重试');
-      result={...current,revision:current.revision+1,entries:current.entries.filter(item=>item.id!==input.id)};this.writeTablePresets(input,result);
+      result={...current,revision:current.revision+1,entries:current.entries.filter(item=>item.id!==input.id)};this.writeTablePresets(input,result,postgres);
     });return result;
   }
   /** 应用只返回完整已存方案，旧目标连接摘要不匹配时整份拒绝；不写SQL或保存自动状态。 */
-  selectedTablePreset(raw:unknown) {
-    const input=tablePresetSelectSchema.parse(raw),current=this.checkedTablePresets(input),entry=current.entries.find(item=>item.id===input.id);
+  selectedTablePreset(raw: unknown, postgres = false) {
+    const input=(postgres ? postgresTablePresetSelectSchema : tablePresetSelectSchema).parse(raw),current=this.checkedTablePresets(input, postgres),entry=current.entries.find(item=>item.id===input.id);
     if(!entry||entry.connectionDigest!==current.source.connectionDigest)throw Error('方案来源连接已失效，请重新显式保存或覆盖');
     return entry.configuration;
   }
@@ -721,6 +739,7 @@ export class LocalStore {
       this.db.run('DELETE FROM connections WHERE id=?', [id]); this.db.run('DELETE FROM secrets WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets WHERE connection_id=?', [id]);
+      this.db.run('DELETE FROM table_presets_postgres WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets_sqlite WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM record_templates WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_layouts_sqlite WHERE connection_id=?', [id]);

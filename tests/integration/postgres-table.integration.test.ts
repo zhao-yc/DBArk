@@ -74,6 +74,9 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       await expect(read({ limit: 1, offset: 1, retainPageTokens: [advancedFirst.pageToken],
         filter: { ...advancedFilter, rules: advancedFilter.rules.map(rule => ({ ...rule, enabled: false })) } })).rejects.toThrow('筛选或排序');
       await expect(read({ filter: { mode: 'all', rules: [{ column: '不存在', operator: '=', value: '1' }] } })).rejects.toThrow('排序或筛选列');
+      const retired = { mode: 'all', rules: [{ column: '不存在', operator: 'IS NULL', enabled: false }] };
+      expect((await read({ filter: retired })).rows.map(row => row.c0)).toEqual(['1', '2']);
+      await expect(read({ filter: retired, checkFilterColumns: true })).rejects.toThrow('排序或筛选列');
       await expect(read({ filter: { mode: 'all', rules: [{ column: 'id', operator: '1=1; DROP TABLE t', value: '1' }] } })).rejects.toThrow('操作符');
       const view = await read({ table: '"浏览"."只读"', tabId: randomUUID() });
       expect(view).toMatchObject({ relationKind: 'v', capabilities: { insert: false, update: false, delete: false } });

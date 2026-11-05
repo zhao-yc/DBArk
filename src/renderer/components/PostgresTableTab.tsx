@@ -15,7 +15,10 @@ import { postgresTableExportZh } from '../locales/postgresTableExport.zh-CN';
 import { PostgresTableImportDialog } from './PostgresTableImportDialog';
 import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
 import { TableSortPanel } from './TableSortPanel';
+import { TablePresetPanel } from './TablePresetPanel';
 import { tableSortZh } from '../locales/tableSort.zh-CN';
+import { tablePresetsZh } from '../locales/tablePresets.zh-CN';
+import { postgresTablePresetConfiguration, postgresTablePresetOptions, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { validateTableSort } from '../tableSort';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
@@ -89,6 +92,7 @@ function RecordForm({ page, row, initial, onSave, onClose }: {
 /** 浏览、选择、草稿及回执归属于同一标签及原页，隐藏标签保留本地工作。 */
 export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab; active: boolean; onInspect(): void }) {
   const limit = useWorkspace(state => state.settings.pageSize);
+  const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
   const [exportPage, setExportPage] = useState<PostgresTablePage>();
@@ -105,6 +109,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [filterText, setFilterText] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState(false);
   const [sortPageToken, setSortPageToken] = useState<string>();
+  const [presetPage, setPresetPage] = useState<{ token: string; connectionVersion: number }>();
   const [pageSize, setPageSize] = useState(options.limit);
   const lease = useRef<object | undefined>(undefined);
   const issued = useRef<string | undefined>(undefined);
@@ -113,7 +118,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const target: PostgresTableTarget = { connectionId: tab.connectionId, database: tab.database ?? 'postgres', table: tab.table ?? '', tabId: tab.id };
 
   /** 操作回包只能发布到原组件代次，加载或应用进行时由全局标签忙碌屏障保护。 */
-  async function run(action: (isCurrent: () => boolean) => Promise<void>, onError?: (reason: unknown) => void) {
+  async function run(action: (isCurrent: () => boolean) => Promise<unknown>, onError?: (reason: unknown) => void) {
     const life = lifetime.current;
     if (!life || lease.current) return;
     const owner = {}, job = acquireWorkspaceBusy(tab.id);
@@ -131,13 +136,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   /** 只发布完整回包，旧组件迟到的原页能力显式释放。 */
-  async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = []) {
+  async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = [], checkFilterColumns = false) {
     const result = await invoke('postgres.table.page', { ...target, ...next,
-      ...(retainPageTokens.length ? { retainPageTokens } : {}) });
+      ...(retainPageTokens.length ? { retainPageTokens } : {}), ...(checkFilterColumns ? { checkFilterColumns: true } : {}) });
     if (!isCurrent()) {
       const token = result.exportToken ?? result.pageToken;
       if (token) await invoke('postgres.table.release', { ...target, pageToken: token }).catch(() => {});
-      return;
+      return false;
     }
     issued.current = result.exportToken ?? result.pageToken;
     setPage(result);
@@ -146,6 +151,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     setRow(null);
     setRequiresRefresh(false);
     if (!result.columns.some(column => column.name === filterColumn)) setFilterColumn(result.columns[0]?.name ?? '');
+    return true;
   }
 
   /** 标签移除时只释放本代签发的表页令牌。 */
@@ -227,7 +233,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     });
   }
 
-  const blocked = busy || !!form || !!preview || !!exportPage || !!importPage || !!sortPageToken;
+  const blocked = busy || !!form || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage;
   const frozenPage = blocked || draft.length > 0;
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
@@ -241,6 +247,30 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   });
   const sortIsCurrent = () => !!lifetime.current && active && !!sortPageToken && issued.current === sortPageToken &&
     !lease.current && !useWorkspace.getState().dirtyTabs[tab.id];
+  const presetIsCurrent = () => {
+    const state = useWorkspace.getState();
+    return !!lifetime.current && active && !!presetPage && issued.current === presetPage.token && !lease.current &&
+      state.settings.activeTabId === tab.id && !state.dirtyTabs[tab.id] &&
+      (state.connectionVersions[tab.connectionId] ?? 0) === presetPage.connectionVersion;
+  };
+
+  /** 用正常分页执行方案，直到服务器成功回包才替换页、条件和排序。 */
+  async function applyPreset(configuration: TablePresetConfiguration): Promise<boolean> {
+    if (!presetIsCurrent()) return false;
+    let applied = false, failure: unknown;
+    const conditions = postgresTablePresetOptions(configuration);
+    await run(async isCurrent => {
+      applied = await read({ ...options, ...conditions, offset: 0 }, isCurrent, [], true);
+      if (!applied) return;
+      setAdvancedFilters(false);
+      setFilterText(configuration.quickFilter?.text ?? '');
+      if (configuration.quickFilter) setFilterColumn(configuration.quickFilter.column);
+      setMessage(tablePresetsZh.applied);
+      setPresetPage(undefined);
+    }, reason => { failure = reason; });
+    if (failure) throw failure;
+    return applied;
+  }
   const formKey = form?.row == null ? undefined : page?.rowKeys?.[form.row];
   const stagedChange = formKey ? draft.find(entry => entry.rowKey === formKey)?.change : undefined;
   return <div className="workspace-tab postgres-table-tab" aria-label={text.relation}>
@@ -284,6 +314,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         setAdvancedFilters(false); setFilterText(''); navigate({ ...firstPage, filter: undefined });
       }}>{text.clearFilter}</button>
       <button disabled={frozenPage || !page?.exportToken || !columnNames.length} onClick={() => setSortPageToken(page?.exportToken)}>{tableSortZh.entry}</button>
+      <button disabled={frozenPage || !page?.exportToken} onClick={() => {
+        if (page?.exportToken) setPresetPage({ token: page.exportToken, connectionVersion });
+      }}>{text.presets}</button>
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
       initial={appliedAdvanced} disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
@@ -332,6 +365,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
             navigate({ ...firstPage, sort });
             return true;
           }}/>
+      </div>
+    </Modal>}
+    {presetPage && <Modal title={text.presets} onClose={() => { if (!lease.current) setPresetPage(undefined); }} wide>
+      <div className="modal-content">
+        <TablePresetPanel postgres target={{ connectionId: target.connectionId, database: target.database, table: target.table }}
+          connectionVersion={connectionVersion} refreshVersion={0} columns={columnNames}
+          configuration={postgresTablePresetConfiguration(options)} disabled={!presetIsCurrent()}
+          beforeApply={presetIsCurrent} onApply={applyPreset}/>
       </div>
     </Modal>}
     {importPage && <PostgresTableImportDialog target={target} page={importPage}

@@ -19,6 +19,7 @@ import { postgresForeignEditZh as fkText } from '../../src/renderer/locales/post
 import { postgresCheckEditZh as checkText } from '../../src/renderer/locales/postgresCheckEdit.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { tableSortZh as tableSortText } from '../../src/renderer/locales/tableSort.zh-CN';
+import { tablePresetsZh as tablePresetText } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { postgresTableExportZh as tableExportText } from '../../src/renderer/locales/postgresTableExport.zh-CN';
 import { postgresTableImportZh as tableImportText } from '../../src/renderer/locales/postgresTableImport.zh-CN';
 import { csvImportHeaderZh } from '../../src/renderer/locales/csvImportHeader.zh-CN';
@@ -147,6 +148,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await add('2', '新增甲');
     await add('3', '新增乙');
     await expect(tableButton(tableSortText.entry)).toBeDisabled();
+    await expect(tableButton(postgresTableZh.presets)).toBeDisabled();
     await expect(grid).not.toContainText('新增甲');
     await commit();
     await expect(grid).toContainText('新增乙');
@@ -216,8 +218,57 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await tableButton(postgresTableZh.filter).click();
     await expect(grid).toContainText('新增甲');
     await expect(grid).not.toContainText('新增乙');
+    const tableIdHeader = grid.getByRole('columnheader').filter({ hasText: /^id/ });
+    await tableIdHeader.press('Enter');
+    await expect(gridTab.locator('.tab-status')).toContainText(postgresTableZh.activeSort(1));
     await tableButton(postgresTableZh.next).click();
     await expect(grid).toContainText('新增乙');
+
+    // 保存已应用的快速筛选和排序，不消费输入框中尚未应用的文字。
+    const quickInput = gridTab.getByLabel(postgresTableZh.filterText, { exact: true });
+    await quickInput.fill('没有应用的%');
+    const presetDialog = page.getByRole('dialog', { name: postgresTableZh.presets, exact: true });
+    const presetButton = (name: string) => presetDialog.getByRole('button', { name, exact: true });
+    const tablePresetName = presetDialog.getByLabel(tablePresetText.name, { exact: true });
+    const tablePresetChoice = presetDialog.getByLabel(tablePresetText.choose, { exact: true });
+    await tableButton(postgresTableZh.presets).click();
+    await tablePresetName.fill('新增记录浏览');
+    await presetButton(tablePresetText.save).click();
+    await expect(presetDialog.getByRole('status')).toHaveText(tablePresetText.saved);
+    await tablePresetChoice.selectOption({ label: '新增记录浏览' });
+    await page.screenshot({ path: info.outputPath('PostgreSQL表页命名方案.png') });
+    await page.keyboard.press('Escape');
+    await expect(grid).toContainText('新增乙');
+    await expect(quickInput).toHaveValue('没有应用的%');
+    await tableButton(postgresTableZh.clearFilter).click();
+    await expect(grid).toContainText('原值');
+    await tableIdHeader.press('Enter');
+    await expect(grid).toContainText('新增乙');
+    await tableButton(postgresTableZh.presets).click();
+    await tablePresetChoice.selectOption({ label: '新增记录浏览' });
+    await presetButton(tablePresetText.apply).click();
+    await expect(presetDialog).toHaveCount(0);
+    await expect(grid).toContainText('新增甲');
+    await expect(quickInput).toHaveValue('新增');
+    await expect(gridTab.getByRole('status')).toHaveText(tablePresetText.applied);
+    await tableButton(postgresTableZh.presets).click();
+    await tablePresetChoice.selectOption({ label: '新增记录浏览' });
+    await presetButton(tablePresetText.remove).click();
+    await presetButton(tablePresetText.cancelChange).click();
+    await expect(tablePresetChoice.locator('option')).toHaveCount(2);
+    await tablePresetName.fill('新增记录浏览');
+    await presetButton(tablePresetText.replace).click();
+    await presetButton(tablePresetText.confirmReplace).click();
+    await expect(presetDialog.getByRole('status')).toHaveText(tablePresetText.saved);
+    await presetButton(tablePresetText.remove).click();
+    await presetButton(tablePresetText.confirmRemove).click();
+    await expect(presetDialog.getByRole('status')).toHaveText(tablePresetText.deleted);
+    await expect(tablePresetChoice.locator('option')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await tableButton(postgresTableZh.next).click();
+    await expect(grid).toContainText('新增乙');
+    await mark('PostgreSQL 表页命名方案保存已应用的筛选与排序，恢复筛选原文和首页顺序，删除方案后仍按当前条件翻页');
+
     // 从第二页导出全部筛选记录，真实文件写入仍由原 Main 和 Engine 处理。
     const tableFile = info.outputPath('PostgreSQL原生导出.json');
     const tableSqlFile = info.outputPath('PostgreSQL原生数据.sql');

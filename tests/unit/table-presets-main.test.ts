@@ -29,6 +29,15 @@ describe('命名方案Main真实来源及只读字段核对',()=>{
   const f=ownership(),invocation=f.capture(),listed=f.sources.issue(invocation,target,snapshot),input={...target,source:listed.source,bindingToken:listed.bindingToken};f.navigate();
   expect(()=>f.sources.assert(f.capture(),input)).toThrow();expect(()=>f.owner.assertCapturedOwner(invocation)).toThrow();
  });
+ it('PostgreSQL 和 MySQL 方案能力不能跨命名空间使用', () => {
+  const f = ownership(), invocation = f.capture();
+  for (const postgres of [false, true]) {
+   const listed = f.sources.issue(invocation, target, snapshot, postgres);
+   const input = { ...target, source: listed.source, bindingToken: listed.bindingToken };
+   expect(() => f.sources.assert(f.capture(), input, postgres)).not.toThrow();
+   expect(() => f.sources.assert(f.capture(), input, !postgres)).toThrow('来源');
+  }
+ });
  it('带taskId调用原metadata端口，只返回整份方案；不调用表数据读取/执行接口',async()=>{
   const raw={...target,source:snapshot.source,expectedRevision:2,bindingToken:randomUUID(),id:randomUUID(),taskId:randomUUID()};
   const port={selected:vi.fn(()=>structuredClone(configuration)),assertCurrent:vi.fn(),metadata:vi.fn(async()=>({database:'db',name:'t',columns:[{name:'payload'}]} as any))};
