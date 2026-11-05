@@ -6,6 +6,7 @@ import {
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTableTarget,
 } from '../../shared/postgresTable';
 import { cellPreview, cellText, errorMessage, invoke } from '../lib';
+import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
 import { ResultsGrid } from './ResultsGrid';
@@ -77,7 +78,7 @@ function RecordForm({ page, row, initial, onSave, onClose }: {
 }
 
 /** 浏览、选择、草稿及回执归属于同一标签及原页，隐藏标签保留本地工作。 */
-export function PostgresTableTab({ tab, active }: { tab: WorkspaceTab; active: boolean }) {
+export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab; active: boolean; onInspect(): void }) {
   const limit = useWorkspace(state => state.settings.pageSize);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
@@ -214,6 +215,7 @@ export function PostgresTableTab({ tab, active }: { tab: WorkspaceTab; active: b
     <div className="context-bar"><strong>{tab.title}</strong><span>PostgreSQL / {target.database}</span></div>
     <div className="query-toolbar pg-table-toolbar">
       <button disabled={frozenPage} onClick={() => navigate({ ...options, limit: pageSize })}>{text.refresh}</button>
+      <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
       <button disabled={busy} onClick={() => useWorkspace.getState().openTab({
         kind: 'query', title: tab.title, connectionId: target.connectionId, database: target.database, sql: postgresRelationSelect(target.table),
       })}>{text.query}</button>

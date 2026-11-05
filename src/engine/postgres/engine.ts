@@ -16,6 +16,7 @@ import {
 } from '../../shared/postgresSql';
 import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace } from './tableWorkspace';
+import { readPostgresStructure } from './relationStructure';
 interface Session {
   id: string;
   connectionId: string;
@@ -338,6 +339,11 @@ export class PostgresEngine {
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */
   async handle(command: string, input: Input): Promise<any> {
     switch (command) {
+      case 'postgres.structure.read': {
+        const profile = input.profile as PostgresConnectionProfile | undefined;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的PostgreSQL结构连接');
+        return this.use(profile, input.database, connection => readPostgresStructure(connection, input.table));
+      }
       case 'postgres.table.page':
       case 'postgres.table.apply': {
         const profile = input.profile as PostgresConnectionProfile | undefined;

@@ -1,0 +1,16 @@
+export const postgresStructureZh = {
+  open: '查看结构', title: 'PostgreSQL 关系结构', refresh: '刷新结构', close: '关闭',
+  loading: '正在读取 PostgreSQL 目录', missing: '原连接已经变化，请重新打开结构',
+  sections: { columns: '字段', constraints: '约束', indexes: '索引', definition: '视图查询定义' },
+  kinds: { r: '普通表', p: '分区表', v: '视图', m: '物化视图', f: '外表' },
+  position: '序号', name: '名称', type: '类型', nullable: '允许 NULL', defaultExpression: '默认表达式',
+  generatedExpression: '生成表达式', identity: '标识列', collation: '排序规则', comment: '注释',
+  yes: '是', no: '否', empty: '暂无目录项', definition: '服务器定义', method: '索引方法', status: '状态',
+  constraint: '关联约束', unique: '唯一', primary: '主键', valid: '有效', invalid: '无效', notReady: '未就绪',
+  kindsOfConstraint: { p: '主键', f: '外键', u: '唯一', c: '检查', x: '排除', n: '非空' },
+  deferred: '初始延迟', deferrable: '可延迟', unvalidated: '未验证', inherited: '继承',
+  always: '始终生成', byDefault: '默认生成', stored: '存储生成列', virtual: '虚拟生成列',
+  partitionKey: '分区键', partitionBound: '分区边界', rowSecurity: '已启用行级安全', forceRowSecurity: '强制行级安全',
+  viewHint: '这是服务器还原的 SELECT。可打开为查询草稿，执行须在查询页明确操作。',
+  openDraft: '将定义打开为查询草稿',
+} as const;

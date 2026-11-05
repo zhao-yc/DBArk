@@ -2,12 +2,15 @@ import { test as base, expect } from '@playwright/test';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { postgresStructureZh } from '../../src/renderer/locales/postgresStructure.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryCloseZh } from '../../src/renderer/locales/queryClose.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
+import { clickSidebarAction } from './sidebar-menu';
+import { discardTestTab } from './query-close-ui';
 
 type Runtime = typeof import('./desktop-fixture');
 const enabled = !process.argv.includes('--list') && process.env.DBARK_POSTGRES_WORKSPACE_NATIVE === '1';
@@ -17,7 +20,7 @@ test.use({ trace: 'off', video: 'off', screenshot: 'off', ...(enabled ? { preser
 test.describe.configure({ timeout: 120000, retries: 0 });
 
 /** 仅由可核对的独占测试目标驱动真实表单、目录、编辑器与正常退出。 */
-test('PostgreSQL窗口表页、记录事务、查询、参数和正常退出', async ({}, info) => {
+test('PostgreSQL窗口表页、关系结构、查询和正常退出', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Runtime;
   const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '', user = process.env.DBARK_POSTGRES_TEST_USER;
   const password = process.env.DBARK_POSTGRES_TEST_PASSWORD ?? '', port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
@@ -141,6 +144,30 @@ test('PostgreSQL窗口表页、记录事务、查询、参数和正常退出', a
     await commit();
     await expect(grid).toContainText('原值');
     await mark('表页真实分页与筛选，预览前未写入，真实新增和整批更新删除，最终恢复原值');
+    // 同一表页查看原目录字段、约束和部分索引，并验证刷新。
+    await tableButton(postgresStructureZh.open).click();
+    const structure = page.getByRole('dialog', { name: postgresStructureZh.title, exact: true });
+    await expect(structure.getByRole('table')).toContainText('本轮字段注释');
+    await structure.getByRole('button', { name: postgresStructureZh.sections.constraints, exact: true }).click();
+    await expect(structure.getByRole('table')).toContainText('note_check');
+    await structure.getByRole('button', { name: postgresStructureZh.sections.indexes, exact: true }).click();
+    await expect(structure.getByRole('table')).toContainText('note_partial');
+    await expect(structure.getByRole('table')).toContainText('WHERE (note IS NOT NULL)');
+    await structure.getByRole('button', { name: postgresStructureZh.refresh, exact: true }).click();
+    await expect(structure.getByRole('table')).toContainText('note_partial');
+    await page.screenshot({ path: info.outputPath('PostgreSQL实际索引结构.png') });
+    await structure.locator('.modal-footer').getByRole('button', { name: postgresStructureZh.close, exact: true }).click();
+
+    const viewRow = page.locator('.object-row').filter({ hasText: '结构视图' });
+    await clickSidebarAction(viewRow, { name: postgresStructureZh.open + ' "回归"."结构视图"', exact: true }, undefined, check);
+    await structure.getByRole('button', { name: postgresStructureZh.sections.definition, exact: true }).click();
+    await expect(structure.locator('.monaco-editor .view-lines')).toContainText('"回归"."带""引号"');
+    await structure.getByRole('button', { name: postgresStructureZh.openDraft, exact: true }).click();
+    await expect(structure).toBeHidden();
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('"回归"."带""引号"');
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+    await discardTestTab(page, page.locator('.tab-strip .tab-close').last());
+    await mark('表页结构和右键视图定义均走真实只读目录，视图草稿未自动执行');
     await tableButton(postgresTableZh.query).click();
     await expect(tab().locator('.monaco-editor')).toBeVisible();
     await page.locator('.tab-strip .tab-close').first().click();

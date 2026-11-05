@@ -1,4 +1,5 @@
 import type { SqliteTableRebuildTarget } from '../../shared/sqliteTableRebuild';
+import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { sqliteTableRebuildZh } from '../locales/sqliteTableRebuild.zh-CN';
 import { sqliteObjectsZh } from '../locales/sqliteObjects.zh-CN';
 import type { SqliteObjectsAction, SqliteObjectsKind } from '../../shared/sqliteObjects';
@@ -62,6 +63,7 @@ export function sidebarObjectActions({ connectionId, database, object, onOpen, o
   const dialect = useWorkspace.getState().connections.find(profile => profile.id === connectionId)?.dialect;
   if (dialect === 'postgresql') return <>
     <button data-menu-group="open" aria-label={'打开记录 ' + object.name} onClick={onOpen}><FileCode2 size={12}/></button>
+    <button data-menu-group="structure" aria-label={postgresStructureZh.open + ' ' + object.name} onClick={() => onDdl(object)}><ListChecks size={12}/></button>
     <FavoriteButton menu target={{ connectionId, database, kind: object.kind, name: object.name }}/>
     {onRefresh && <button data-menu-group="refresh" aria-label={sidebarContextMenuZh.refreshObject(object.name)} onClick={onRefresh}><RefreshCw size={12}/></button>}
   </>;
