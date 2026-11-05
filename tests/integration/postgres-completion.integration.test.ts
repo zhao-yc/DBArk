@@ -32,6 +32,8 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       read({ ...target, kind: 'columns', prefix, relations: refs, sessionId });
     const routines = (prefix: string, routine: PostgresRoutineCompletionTarget, sessionId?: string) =>
       read({ ...target, kind: 'routines', prefix, routine, sessionId });
+    const signatures = (prefix: string, routine: PostgresRoutineCompletionTarget, sessionId?: string) =>
+      read({ ...target, kind: 'signatures', prefix, routine, sessionId });
     await client.connect();
     try {
       await client.query(`
@@ -55,6 +57,13 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         CREATE FUNCTION "补全.乙".tabrelio_fold(value text) RETURNS text LANGUAGE sql AS 'SELECT value';
         CREATE FUNCTION "补全.乙".tabrelio_rows(bound integer) RETURNS SETOF integer LANGUAGE sql AS 'SELECT generate_series(1, bound)';
         CREATE PROCEDURE "补全.乙".tabrelio_proc(value integer) LANGUAGE plpgsql AS 'BEGIN NULL; END';
+        CREATE FUNCTION "补全.乙"."TabrelioSig"(seed integer, label text DEFAULT 'a,b') RETURNS text LANGUAGE sql AS 'SELECT label';
+        CREATE FUNCTION "补全.乙"."TabrelioSig"(seed text, VARIADIC labels text[]) RETURNS text LANGUAGE sql AS 'SELECT seed';
+        CREATE FUNCTION "补全.乙".tabreliosig(seed int) RETURNS int LANGUAGE sql AS 'SELECT seed';
+        CREATE FUNCTION "补全.乙".tabrelio_out(seed integer, OUT answer bigint) LANGUAGE sql AS 'SELECT seed::bigint';
+        CREATE PROCEDURE "补全.乙".tabrelio_modes(IN first integer, OUT second integer, INOUT third bigint)
+          LANGUAGE plpgsql AS 'BEGIN second := first; END';
+        REVOKE EXECUTE ON FUNCTION "补全.乙"."TabrelioSig"(text, text[]) FROM PUBLIC;
         CREATE TABLE public.routine_side_effects (id integer);
         CREATE FUNCTION public.tabrelio_write() RETURNS integer LANGUAGE plpgsql AS
           'BEGIN INSERT INTO public.routine_side_effects VALUES (1); RETURN 1; END';
@@ -95,6 +104,26 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         { kind: 'routine', schema: '补全.乙', name: 'tabrelio_rows', arguments: 'bound integer', returns: 'SETOF integer', category: 'f' },
       ]);
       expect((await routines('tabrelio_write', { context: 'expression' })).items).toHaveLength(1);
+      const exact = { context: 'expression', schema: '补全.乙' } as const;
+      expect((await signatures('TabrelioSig', exact)).items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'TabrelioSig', parameters: [
+          { name: 'seed', type: 'integer', mode: 'i', optional: false }, { name: 'label', type: 'text', mode: 'i', optional: true },
+        ] }), expect.objectContaining({ name: 'TabrelioSig', parameters: [
+          { name: 'seed', type: 'text', mode: 'i', optional: false }, { name: 'labels', type: 'text[]', mode: 'v', optional: false },
+        ] }),
+      ]));
+      expect((await signatures('TabrelioSig', exact)).items).toHaveLength(2);
+      expect((await signatures('Tabrelio', exact)).items).toEqual([]);
+      expect((await signatures('tabrelio_out', exact)).items).toEqual([expect.objectContaining({ parameters: [
+        { name: 'seed', type: 'integer', mode: 'i', optional: false },
+      ] })]);
+      expect((await signatures('tabrelio_modes', { context: 'call', schema: '补全.乙' })).items).toEqual([expect.objectContaining({ parameters: [
+        { name: 'first', type: 'integer', mode: 'i', optional: false }, { name: 'second', type: 'integer', mode: 'o', optional: false },
+        { name: 'third', type: 'bigint', mode: 'b', optional: false },
+      ] })]);
+      expect((await signatures('percentile_cont', { context: 'expression', schema: 'pg_catalog' })).items)
+        .toEqual(expect.arrayContaining([expect.objectContaining({ directArguments: 1 })]));
+      expect((await signatures('tabrelio_write', { context: 'expression' })).items).toHaveLength(1);
       expect((await client.query('SELECT count(*)::int AS count FROM public.routine_side_effects')).rows).toEqual([{ count: 0 }]);
       await client.query('BEGIN; CREATE TEMP TABLE temp_completion (original int); INSERT INTO temp_completion VALUES (7)');
       expect((await relations('temp_completion')).items).toEqual([]);
@@ -145,6 +174,10 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         expect((await routines('tabrelio_fold', { context: 'expression' }, sessionId)).items).toEqual([
           expect.objectContaining({ schema: '补全.乙', arguments: 'value integer', returns: 'numeric' }),
         ]);
+        expect((await signatures('TabrelioSig', { context: 'expression' }, sessionId)).items).toEqual([
+          expect.objectContaining({ schema: '补全.乙', parameters: [expect.objectContaining({ name: 'seed', type: 'integer' }),
+            expect.objectContaining({ name: 'label', optional: true })] }),
+        ]);
         expect((await run('RESET ROLE')).failure).toBeUndefined();
         expect(await fields('public')).toEqual(['public_field']);
       }
@@ -165,6 +198,7 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       expect((await run('BEGIN; SET LOCAL search_path TO public')).transactionOpen).toBe(true);
       expect(await columns('', [{ name: 'duplicate_scope' }], sessionId)).toMatchObject({ deferred: 'transaction', items: [] });
       expect(await routines('tabrelio_fold', { context: 'expression' }, sessionId)).toMatchObject({ deferred: 'transaction', items: [] });
+      expect(await signatures('tabrelio_fold', { context: 'expression' }, sessionId)).toMatchObject({ deferred: 'transaction', items: [] });
       expect((await run('SELECT 1/0')).failure).toBeDefined();
       expect(await relations('duplicate', undefined, sessionId)).toMatchObject({ deferred: 'transaction' });
       expect(await engine.handle('query.sessionState', { sessionId })).toMatchObject({ transactionFailed: true, transactionOpen: true });

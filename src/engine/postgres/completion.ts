@@ -1,4 +1,5 @@
-import { postgresCompletionLimits, type PostgresCompletionInput, type PostgresCompletionItem, type PostgresCompletionResult } from '../../shared/postgresCompletion';
+import { postgresCompletionLimits, postgresRoutineParameterSchema, type PostgresCompletionInput, type PostgresCompletionItem,
+  type PostgresCompletionResult } from '../../shared/postgresCompletion';
 import type { PostgresConnection } from './connection';
 
 const eq = 'OPERATOR(pg_catalog.=)';
@@ -87,13 +88,14 @@ async function columns(connection: PostgresConnection, input: Extract<PostgresCo
 /** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */
 async function routines(connection: PostgresConnection, input: PostgresCompletionInput, session: boolean): Promise<PostgresCompletionResult> {
   const target = input.routine!;
-  const limit = input.kind === 'routines' ? postgresCompletionLimits.items : 40;
+  const exact = input.kind === 'signatures';
+  const limit = input.kind === 'routines' || exact ? postgresCompletionLimits.items : 40;
   const ownTemp = session ? `n.oid ${eq} pg_catalog.pg_my_temp_schema()` : 'false';
   const result = await connection.query(`
     WITH candidates AS MATERIALIZED (
       SELECT p.oid, p.proname::pg_catalog.text AS name, p.prokind::pg_catalog.text AS category,
         CASE WHEN ${ownTemp} THEN 'pg_temp' ELSE n.nspname::pg_catalog.text END AS schema,
-        p.proretset, p.pronargs
+        p.proretset, p.pronargs, p.proallargtypes, p.proargtypes, p.proargnames, p.proargmodes, p.pronargdefaults
       FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid ${eq} p.pronamespace
       WHERE (${ownTemp} OR n.nspname ${eq} 'pg_catalog' OR n.nspname OPERATOR(pg_catalog.!~) '^pg_')
         AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND pg_catalog.has_function_privilege(p.oid, 'EXECUTE')
@@ -101,18 +103,36 @@ async function routines(connection: PostgresConnection, input: PostgresCompletio
           WHEN $3::pg_catalog.text ${eq} 'from' THEN p.prokind ${eq} 'f' ELSE p.prokind ${ne} 'p' END)
         AND (CASE WHEN $2::pg_catalog.text IS NULL THEN pg_catalog.pg_function_is_visible(p.oid) AND NOT (${ownTemp})
           ELSE (CASE WHEN ${ownTemp} THEN 'pg_temp' ELSE n.nspname::pg_catalog.text END) ${eq} $2 END)
-        AND pg_catalog.strpos(pg_catalog.lower(p.proname::pg_catalog.text), pg_catalog.lower($1::pg_catalog.text)) ${eq} 1
+        AND (CASE WHEN $5::pg_catalog.bool THEN p.proname::pg_catalog.text ${eq} $1
+          ELSE pg_catalog.strpos(pg_catalog.lower(p.proname::pg_catalog.text), pg_catalog.lower($1::pg_catalog.text)) ${eq} 1 END)
       ORDER BY p.proname, p.proretset DESC, p.pronargs, p.oid LIMIT $4
     )
-    SELECT schema, name, category, pg_catalog.pg_get_function_identity_arguments(oid), pg_catalog.pg_get_function_result(oid)
-    FROM candidates ORDER BY name, proretset DESC, pronargs, oid
-  `, [input.prefix, target.schema ?? null, target.context, limit + 1], { rows: limit + 1, bytes: 256 * 1024 });
+    SELECT c.schema, c.name, c.category, pg_catalog.pg_get_function_identity_arguments(c.oid), pg_catalog.pg_get_function_result(c.oid),
+      CASE WHEN $5::pg_catalog.bool THEN (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+        'name', c.proargnames[a.position::pg_catalog.int4], 'type', pg_catalog.format_type(a.type, NULL),
+        'mode', COALESCE(c.proargmodes[a.position::pg_catalog.int4]::pg_catalog.text, 'i')) ORDER BY a.position), '[]')::pg_catalog.text
+        FROM pg_catalog.unnest(COALESCE(c.proallargtypes, c.proargtypes::pg_catalog.oid[])) WITH ORDINALITY AS a(type, position)) END,
+      c.pronargdefaults, c.pronargs,
+      CASE WHEN $5::pg_catalog.bool THEN (SELECT ag.aggnumdirectargs FROM pg_catalog.pg_aggregate ag
+        WHERE ag.aggfnoid::pg_catalog.oid ${eq} c.oid AND ag.aggkind::pg_catalog.text ${ne} 'n') END
+    FROM candidates c ORDER BY c.name, c.proretset DESC, c.pronargs, c.oid
+  `, [input.prefix, target.schema ?? null, target.context, limit + 1, exact], { rows: limit + 1, bytes: 256 * 1024 });
   const items: PostgresCompletionItem[] = [];
   for (const row of result.rows.slice(0, limit)) {
     const { c0: schema, c1: name, c2: category, c3: args, c4: returns } = row;
-    if (typeof schema === 'string' && typeof name === 'string' && typeof args === 'string' &&
-        (category === 'f' || category === 'p' || category === 'a' || category === 'w') && (returns === null || typeof returns === 'string'))
-      items.push({ kind: 'routine', schema, name, category, arguments: args, returns });
+    if (typeof schema !== 'string' || typeof name !== 'string' || typeof args !== 'string' ||
+        (category !== 'f' && category !== 'p' && category !== 'a' && category !== 'w') || (returns !== null && typeof returns !== 'string')) continue;
+    const item: Extract<PostgresCompletionItem, { kind: 'routine' }> = { kind: 'routine', schema, name, category, arguments: args, returns };
+    if (exact && typeof row.c5 === 'string') {
+      let inputIndex = 0;
+      const required = Number(row.c7) - Number(row.c6);
+      item.parameters = postgresRoutineParameterSchema.array().parse(JSON.parse(row.c5)).filter(parameter =>
+        parameter.mode !== 't' && (category === 'p' || parameter.mode !== 'o')).map(parameter => ({
+        ...parameter, optional: parameter.mode !== 'o' && inputIndex++ >= required,
+      }));
+      if (row.c8 !== null) item.directArguments = Number(row.c8);
+    }
+    items.push(item);
   }
   return { items, incomplete: result.truncated || result.rows.length > limit };
 }
@@ -121,7 +141,7 @@ async function routines(connection: PostgresConnection, input: PostgresCompletio
 export async function readPostgresCompletion(connection: PostgresConnection, input: PostgresCompletionInput, session = false): Promise<PostgresCompletionResult> {
   if (connection.database !== input.database) throw Error('PostgreSQL 补全目标数据库已变化');
   const query = async () => {
-    if (input.kind === 'routines') return routines(connection, input, session);
+    if (input.kind === 'routines' || input.kind === 'signatures') return routines(connection, input, session);
     const base = await (input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session));
     if (!input.routine) return base;
     const supplemental = await routines(connection, input, session);

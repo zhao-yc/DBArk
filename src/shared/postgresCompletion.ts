@@ -15,13 +15,19 @@ export const postgresCompletionSchema = z.discriminatedUnion('kind', [
   target.extend({ kind: z.literal('columns'), relations: z.array(postgresCompletionReferenceSchema).min(1).max(postgresCompletionLimits.relations),
     routine: routine.optional() }).strict(),
   target.extend({ kind: z.literal('routines'), routine }).strict(),
+  target.extend({ kind: z.literal('signatures'), prefix: name, routine }).strict(),
 ]);
 export type PostgresCompletionInput = z.infer<typeof postgresCompletionSchema>;
+export const postgresRoutineParameterSchema = z.object({
+  name: z.string().nullable(), type: z.string().min(1), mode: z.enum(['i', 'o', 'b', 'v', 't']),
+}).strict();
+export type PostgresRoutineParameter = z.infer<typeof postgresRoutineParameterSchema> & { optional: boolean };
 export type PostgresCompletionItem =
   | { kind: 'schema'; name: string }
   | { kind: 'table' | 'view'; schema: string; name: string }
   | { kind: 'column'; reference: number; name: string; type: string }
-  | { kind: 'routine'; schema: string; name: string; arguments: string; returns: string | null; category: 'f' | 'p' | 'a' | 'w' };
+  | { kind: 'routine'; schema: string; name: string; arguments: string; returns: string | null; category: 'f' | 'p' | 'a' | 'w';
+    parameters?: PostgresRoutineParameter[]; directArguments?: number };
 export interface PostgresCompletionResult {
   items: PostgresCompletionItem[];
   incomplete: boolean;

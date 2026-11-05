@@ -4,13 +4,27 @@ import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
 import { createPostgresCompletionProvider } from '../../src/renderer/postgresCompletionProvider';
 import { describe, expect, it } from 'vitest';
-import { analyzePostgresCompletion } from '../../src/renderer/postgresCompletionAnalysis';
+import { analyzePostgresCompletion, analyzePostgresSignature } from '../../src/renderer/postgresCompletionAnalysis';
 
 /** 测试使用竖线表示编辑器光标，其余 SQL 原样进入生产词法。 */
 function at(marked: string) {
   const offset = marked.indexOf('|');
   return analyzePostgresCompletion(marked.slice(0, offset) + marked.slice(offset + 1), offset);
 }
+
+it('参数定位识别最近调用、命名参数、数组和嵌套逗号', () => {
+  const signature = (marked: string) => analyzePostgresSignature(marked.replace('|', ''), marked.indexOf('|'));
+  expect(signature(`SELECT "工具"."Mix"(ARRAY[1, 2], nested('a,b', 4), "标记" => |)`)).toMatchObject({
+    name: 'Mix', routine: { context: 'expression', schema: '工具' }, argument: 2, named: '标记', previousNames: [],
+  });
+  expect(signature('CALL tool.PROC(z => 1, a := |)')).toMatchObject({ name: 'proc', routine: { context: 'call', schema: 'tool' },
+    argument: 1, named: 'a', previousNames: ['z'] });
+  expect(signature('SELECT outer_call(ROUND(|), 1)')).toMatchObject({ name: 'round', argument: 0 });
+  expect(signature('SELECT * FROM LATERAL tool.gen(|)')).toMatchObject({ routine: { context: 'from', schema: 'tool' } });
+  expect(signature('SELECT outer_call($tag$x,y|$tag$, 1)')).toMatchObject({ name: 'outer_call', argument: 0 });
+  for (const marked of ['CREATE FUNCTION public.f(|) RETURNS int', 'INSERT INTO public.t(|) VALUES (1)', 'SELECT 1; -- fake(|',
+    'SELECT f(1); SELECT (|)']) expect(signature(marked)).toBeUndefined();
+});
 
 describe('PostgreSQL 补全词法和关系作用域', () => {
   it('关系位置读取 schema，引用前缀和后半个词使用完整替换范围', () => {
@@ -117,8 +131,42 @@ function editor(marked: string, request: (input: PostgresCompletionInput) => Pro
     snippetRule: 4,
     status: () => {},
   });
-  return { provider, suggest: () => provider.provideCompletionItems(model, position, { triggerKind: 0 }, token) };
+  return { provider, suggest: () => provider.provideCompletionItems(model, position, { triggerKind: 0 }, token),
+    signature: () => provider.signatureHelp.provideSignatureHelp(model, position, token, { triggerKind: 1, isRetrigger: false }) };
 }
+
+it('签名按名称或位置高亮，精确请求受原标签失效约束', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const response: PostgresCompletionResult = { incomplete: false, items: [
+    { kind: 'routine', schema: '工具', name: 'Mix', arguments: '', returns: 'text', category: 'f', parameters: [
+      { name: 'first', type: 'integer', mode: 'i', optional: false }, { name: 'second', type: 'text', mode: 'i', optional: true },
+    ] }, { kind: 'routine', schema: '工具', name: 'Mix', arguments: '', returns: 'integer', category: 'f', parameters: [
+      { name: 'other', type: 'integer', mode: 'i', optional: false },
+    ] },
+  ] };
+  const named = editor('SELECT "工具"."Mix"(second => |)', async input => { inputs.push(input); return response; }, '原会话');
+  const pending: ((result: PostgresCompletionResult) => void)[] = [];
+  const old = editor('SELECT "工具"."Mix"(1, |)', () => new Promise(resolve => pending.push(resolve)));
+  try {
+    const current = (await named.signature())?.value;
+    expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', sessionId: '原会话', kind: 'signatures', prefix: 'Mix',
+      routine: { context: 'expression', schema: '工具' } }]);
+    expect(current).toMatchObject({ activeParameter: 1, signatures: [{ activeParameter: 1 }] });
+    const [signature] = current!.signatures;
+    const range = signature.parameters[1].label as [number, number];
+    expect(signature.label.slice(...range)).toBe('"second" text DEFAULT …');
+    const lookup = old.signature();
+    await expect.poll(() => pending.length).toBe(1);
+    const latest = old.signature();
+    expect(pending).toHaveLength(1);
+    pending[0](response);
+    expect(await lookup).toBeNull();
+    await expect.poll(() => pending.length).toBe(2);
+    old.provider.invalidate();
+    pending[1](response);
+    expect(await latest).toBeNull();
+  } finally { named.provider.dispose(); old.provider.dispose(); }
+});
 
 it('本地投影不读取目录，同名物理列不可取代 CTE，通配结果使用外层别名', async () => {
   const inputs: PostgresCompletionInput[] = [];

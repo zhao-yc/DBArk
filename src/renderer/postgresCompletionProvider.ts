@@ -2,7 +2,8 @@ import type * as monaco from 'monaco-editor';
 import type { PostgresCompletionInput, PostgresCompletionReference, PostgresCompletionResult } from '../shared/postgresCompletion';
 import { postgresCompletionLimits } from '../shared/postgresCompletion';
 import { postgresIdentifier } from '../shared/postgresSql';
-import { analyzePostgresCompletion } from './postgresCompletionAnalysis';
+import { analyzePostgresCompletion, analyzePostgresSignature } from './postgresCompletionAnalysis';
+import { postgresSignatureHelp } from './postgresSignatureHelp';
 
 export interface PostgresCompletionScope { tabId: string; connectionId: string; database: string; connectionVersion: number; sessionId?: string; }
 type Kind = 'schema' | 'table' | 'view' | 'column' | 'routine' | 'keyword';
@@ -35,11 +36,50 @@ export function createPostgresCompletionProvider(options: {
   kinds: Record<Kind, monaco.languages.CompletionItemKind>;
   snippetRule: monaco.languages.CompletionItemInsertTextRule;
   status(value: Status): void;
-}): monaco.languages.CompletionItemProvider & { invalidate(): void; dispose(): void } {
+}): monaco.languages.CompletionItemProvider & { signatureHelp: monaco.languages.SignatureHelpProvider; invalidate(): void; dispose(): void } {
   let active: AbortController | undefined;
   let inFlight: Promise<PostgresCompletionResult> | undefined;
+  let signatureGeneration = 0;
   let disposed = false;
+  const { connectionId, database, sessionId } = options.scope;
+  const target = { connectionId, database, ...(sessionId ? { sessionId } : {}) };
+
+  /** 两类提示共用原会话请求通道，过期请求在排队后也不能发出。 */
+  async function request(input: PostgresCompletionInput, current: () => boolean) {
+    while (inFlight && current()) await inFlight.catch(() => {});
+    if (!current()) return;
+    const pending = options.request(input);
+    inFlight = pending;
+    try { return await pending; }
+    finally { if (inFlight === pending) inFlight = undefined; }
+  }
+
+  const signatureHelp: monaco.languages.SignatureHelpProvider = {
+    signatureHelpTriggerCharacters: ['(', ','],
+    signatureHelpRetriggerCharacters: [',', ')', '>', '='],
+    async provideSignatureHelp(model, position, token) {
+      // 其他 SQL 模型也会调用全局注册的 provider，不能使原模型的在途提示失效。
+      if (disposed || options.model() !== model || !options.current() || model.isDisposed() || token.isCancellationRequested ||
+          model.getValueLength() > postgresCompletionLimits.source) return null;
+      const generation = ++signatureGeneration, version = model.getVersionId();
+      const current = () => {
+        const cursor = options.position();
+        return !disposed && signatureGeneration === generation && !token.isCancellationRequested &&
+          options.current() && options.model() === model && !model.isDisposed() && model.getVersionId() === version &&
+          cursor?.lineNumber === position.lineNumber && cursor.column === position.column;
+      };
+      const call = analyzePostgresSignature(model.getValue(), model.getOffsetAt(position));
+      if (!call) return null;
+      try {
+        const result = await request({ ...target, kind: 'signatures', prefix: call.name, routine: call.routine }, current);
+        if (!result || result.deferred || !current()) return null;
+        const value = postgresSignatureHelp(result.items, call);
+        return value ? { value, dispose() {} } : null;
+      } catch { return null; }
+    },
+  };
   return {
+    signatureHelp,
     triggerCharacters: ['.', '"'],
     /** 先校验本地词法，只向服务端发送目标和前缀。 */
     async provideCompletionItems(model, position, _context, token) {
@@ -84,8 +124,7 @@ export function createPostgresCompletionProvider(options: {
             }
           }
         }
-        const { connectionId, database, sessionId } = options.scope;
-        const base = { connectionId, database, prefix, ...(sessionId ? { sessionId } : {}), ...(routine ? { routine } : {}) };
+        const base = { ...target, prefix, ...(routine ? { routine } : {}) };
         // CTE 名称、别名和投影只在编辑器中使用，目录只接收实际物理目标。
         const input: PostgresCompletionInput | undefined = query?.kind === 'relations'
           ? { ...base, kind: 'relations', ...(query.schema ? { schema: query.schema } : {}) }
@@ -94,13 +133,8 @@ export function createPostgresCompletionProvider(options: {
         let result: PostgresCompletionResult = { items: [], incomplete: false };
         if (input) {
           await debounce(controller.signal, 100);
-          if (inFlight) await inFlight.catch(() => {});
-          if (!current()) return empty;
-          const pending = options.request(input);
-          inFlight = pending;
-          try { result = await pending; }
+          try { result = await request(input, current) ?? result; }
           catch { if (current()) options.status('unavailable'); }
-          finally { if (inFlight === pending) inFlight = undefined; }
           if (!current()) return empty;
         }
         const suggestions: monaco.languages.CompletionItem[] = [];
@@ -126,6 +160,7 @@ export function createPostgresCompletionProvider(options: {
             const name = postgresIdentifier(item.name);
             const insert = analysis.existingCall ? { insertText: name } : {
               insertText: name.replace(/[\\$}]/g, value => '\\' + value) + '($0)', insertTextRules: options.snippetRule,
+              command: { id: 'editor.action.triggerParameterHints', title: '' },
             };
             suggestions.push({ ...common, ...insert, sortText: '1' + common.sortText,
               label: { label: item.name, detail: '(' + item.arguments + ')', description: item.schema + (item.returns ? ' → ' + item.returns : '') } });
@@ -165,8 +200,8 @@ export function createPostgresCompletionProvider(options: {
       }
     },
     /** 标签切换即撤销本次请求，返回原标签也不会复活旧建议。 */
-    invalidate() { active?.abort(); },
+    invalidate() { active?.abort(); signatureGeneration++; },
     /** 卸载后只终止本地交付，原目录承诺仍由引擎按原连接收尾。 */
-    dispose() { disposed = true; active?.abort(); },
+    dispose() { disposed = true; active?.abort(); signatureGeneration++; },
   };
 }

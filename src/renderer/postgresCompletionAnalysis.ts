@@ -378,3 +378,41 @@ export function analyzePostgresCompletion(source: string, offset: number): Postg
   return { start, end, prefix, quoted, ...(parsed?.query ? { query: parsed.query } : {}),
     ...(routine ? { routine, existingCall: punct(next || undefined, '(') } : {}) };
 }
+
+/** 在最近的调用层定位当前实参，字面量、数组、子查询和嵌套调用内的逗号不计入外层。 */
+export function analyzePostgresSignature(source: string, offset: number) {
+  if (source.length > limits.source || offset < 0 || offset > source.length || source.includes('\0')) return;
+  const scanned = scanPostgresEditorTokens(source, limits.tokens);
+  const tokens = scanned?.filter(token => !(token.kind === 'blocked' && token.text === 'comment'));
+  if (!tokens) return;
+  const frames: { index: number; close: ')' | ']'; start: number; argument: number; previousNames: string[] }[] = [];
+  const namedAt = (start: number) => {
+    const operator = tokens[start + 1], last = tokens[start + 2];
+    return operator && last && operator.end === last.start && last.end <= offset &&
+      (punct(operator, '=') && punct(last, '>') || punct(operator, ':') && punct(last, '=')) ? identifier(tokens[start]) : undefined;
+  };
+  for (let i = 0; i < tokens.length && tokens[i].end <= offset; i++) {
+    const token = tokens[i], frame = frames.at(-1);
+    if (punct(token, '(') || punct(token, '[')) {
+      if (frames.length >= 24) return;
+      frames.push({ index: i, close: punct(token, '(') ? ')' : ']', start: i + 1, argument: 0, previousNames: [] });
+    } else if (punct(token, ')') || punct(token, ']')) {
+      if (frame && !punct(token, frame.close)) return;
+      frames.pop();
+    } else if (punct(token, ';')) frames.length = 0;
+    else if (frame?.close === ')' && punct(token, ',')) {
+      const name = namedAt(frame.start);
+      if (name) frame.previousNames.push(name);
+      frame.argument++;
+      frame.start = i + 1;
+    }
+  }
+  for (const frame of frames.reverse()) {
+    if (frame.close !== ')') continue;
+    const token = tokens[frame.index - 1], name = identifier(token);
+    if (!name || name.length > limits.name || stop.has(keyword(token))) continue;
+    const analysis = analyzePostgresCompletion(source, token.end);
+    if (!analysis?.routine || !analysis.existingCall) continue;
+    return { name, routine: analysis.routine, argument: frame.argument, named: namedAt(frame.start), previousNames: frame.previousNames };
+  }
+}

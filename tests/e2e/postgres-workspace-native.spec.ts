@@ -495,6 +495,9 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(routines.filter({ hasText: 'text' })).toHaveCount(1);
     await page.screenshot({ path: info.outputPath('PostgreSQL函数重载补全.png') });
     await page.keyboard.press('Enter');
+    const signatures = tab().locator('.parameter-hints-widget:visible');
+    const activeParameter = signatures.locator('.signature .parameter.active');
+    await expect(activeParameter).toContainText('值');
     await page.keyboard.insertText('7');
     await expect(tab().locator('.monaco-editor .view-lines')).toContainText('SELECT "回归"."窗口补全函数"(7)');
     await edit('SELECT * FROM "回归"."窗口表函');
@@ -507,8 +510,25 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(widget.locator('.monaco-list-row.focused')).toContainText('窗口补全过程');
     await page.keyboard.press('Enter');
     await expect(tab().locator('.monaco-editor .view-lines')).toContainText('CALL "回归"."窗口补全过程"()');
+    await expect(activeParameter).toHaveText('"值" integer');
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeCompletion);
     await mark('原生按键接纳函数重载、表函数和 CALL 过程，光标进入调用括号且没有执行历史');
+
+    await edit('SELECT "回归"."窗口参数提示"');
+    await page.keyboard.type('(');
+    await expect(activeParameter).toHaveText('"起点" integer');
+    await page.keyboard.type('1,');
+    await expect(activeParameter).toHaveText('"标签" text DEFAULT …');
+    await page.screenshot({ path: info.outputPath('PostgreSQL调用参数提示.png') });
+    const signatureShortcut = (process.platform === 'darwin' ? 'Meta' : 'Control') + '+Shift+Space';
+    await edit('SELECT "回归"."窗口参数提示"(greatest(1, 2), ');
+    await page.keyboard.press(signatureShortcut);
+    await expect(activeParameter).toHaveText('"标签" text DEFAULT …');
+    await edit('SELECT "回归"."窗口参数提示"("标签" => \'x\', "起点" => ');
+    await page.keyboard.press(signatureShortcut);
+    await expect(activeParameter).toHaveText('"起点" integer');
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeCompletion);
+    await mark('原生括号、逗号和快捷键参数提示高亮位置或命名参数，嵌套逗号与执行历史保持');
 
     // 通过原标签执行临时表与 search_path 设置，再在同一标签请求目录。
     await edit('CREATE TEMP TABLE temp_scope_native ("会话值" int); INSERT INTO temp_scope_native VALUES (7); SET search_path TO "回归", public; SELECT "会话值" FROM temp_scope_native;');

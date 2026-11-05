@@ -264,12 +264,13 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     });
     statusRef.current?.('idle');
     const registration = monaco.languages.registerCompletionItemProvider('sql', provider);
+    const signatureRegistration = monaco.languages.registerSignatureHelpProvider('sql', provider.signatureHelp);
     const stop = useWorkspace.subscribe((next, previous) => {
       if (next.settings.activeTabId !== previous.settings.activeTabId ||
           next.activeJobs[original.tabId] !== previous.activeJobs[original.tabId] ||
           next.connectionVersions[original.connectionId] !== previous.connectionVersions[original.connectionId]) provider.invalidate();
     });
-    return () => { stop(); registration.dispose(); provider.dispose(); };
+    return () => { stop(); registration.dispose(); signatureRegistration.dispose(); provider.dispose(); };
   }, [requestedDialect, readOnly, contentReady, postgresCompletion?.tabId, postgresCompletion?.connectionId,
     postgresCompletion?.database, postgresCompletion?.connectionVersion, postgresCompletion?.sessionId]);
   useEffect(() => {
