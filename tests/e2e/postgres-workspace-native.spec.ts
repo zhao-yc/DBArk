@@ -1576,6 +1576,41 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(gridTab).toContainText(refreshText.empty);
     await page.locator('.tab-strip .tab-close').click();
     await mark('物化视图从未填充到普通和并发刷新，再明确清除；结构状态及打开的记录页一致');
+    const seedMaterialized = materializedRow('物化快照');
+    const renamedMaterialized = materializedRow('窗口物化已改名');
+    await seedMaterialized.locator('.tree-label').click();
+    await expect(gridTab).toContainText(refreshText.empty);
+    const renameMaterialized = await openViewManager();
+    await renameMaterialized.getByRole('textbox', { name: viewManageText.name, exact: true }).fill('窗口物化已改名');
+    await renameMaterialized.getByRole('button', { name: viewManageText.preview, exact: true }).click();
+    await expect(renameMaterialized.locator('pre')).toContainText('ALTER MATERIALIZED VIEW "回归"."物化快照" RENAME TO "窗口物化已改名"');
+    await expect(seedMaterialized).toBeVisible();
+    await renameMaterialized.getByRole('button', { name: viewManageText.confirmRename, exact: true }).click();
+    await expect(structure).toHaveCount(0);
+    await expect(renamedMaterialized).toBeVisible();
+    await expect(seedMaterialized).toHaveCount(0);
+    await expect(gridTab.locator('.context-bar')).toContainText('"回归"."窗口物化已改名"');
+    await expect(gridTab).toContainText(refreshText.empty);
+    await tableButton(postgresStructureZh.open).click();
+    await structure.getByRole('button', { name: postgresStructureZh.sections.indexes, exact: true }).click();
+    await expect(structure.getByRole('table')).toContainText('物化唯一索引');
+    await closeMaterializedStructure();
+    await mark('物化视图改名后目录和记录页切换，索引及原填充状态一致');
+
+    const removeMaterialized = await openViewManager();
+    await removeMaterialized.getByRole('combobox', { name: viewManageText.operation, exact: true }).selectOption('drop');
+    await removeMaterialized.getByRole('button', { name: viewManageText.preview, exact: true }).click();
+    await expect(removeMaterialized.locator('pre')).toContainText('DROP MATERIALIZED VIEW "回归"."窗口物化已改名" RESTRICT');
+    const confirmMaterializedDrop = removeMaterialized.getByRole('button', { name: viewManageText.confirmDrop, exact: true });
+    await expect(confirmMaterializedDrop).toBeDisabled();
+    await removeMaterialized.getByRole('checkbox', { name: viewManageText.acknowledge, exact: true }).check();
+    await page.screenshot({ path: info.outputPath('PostgreSQL管理物化视图.png') });
+    await confirmMaterializedDrop.click();
+    await expect(structure).toHaveCount(0);
+    await expect(renamedMaterialized).toHaveCount(0);
+    await expect(page.locator('.tab-strip .tab-close')).toHaveCount(0);
+    await mark('原生窗口确认受限删除物化视图，目录和打开的记录页一并更新');
+
 
     const offlineBefore = await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}),
       history: await window.dbark.invoke('history.list', {}) }));

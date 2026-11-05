@@ -13,7 +13,9 @@ export function PostgresViewManagePanel(props: PostgresStructureEditProps) {
   const dropping = action === 'drop';
   const { preview, setPreview, acceptDrop, setAcceptDrop, busy, unknown, error, setError, submit } =
     usePostgresStructureEdit(props, dropping || !!name, dropping, async () => {
-      const base = { ...target, stamp: original.viewEditStamp };
+      const base = original.kind === 'm'
+        ? { ...target, stamp: original.materializedManageStamp, relationKind: 'materialized' }
+        : { ...target, stamp: original.viewEditStamp };
       const input = postgresViewManagePreviewSchema.parse(dropping ? { ...base, action } : { ...base, action, name });
       return invoke('postgres.viewManage.preview', input);
     }, token => invoke('postgres.viewManage.apply', { connectionId: target.connectionId, database: target.database, token }));
@@ -21,7 +23,7 @@ export function PostgresViewManagePanel(props: PostgresStructureEditProps) {
   return <section aria-label={text.title} className="pg-column-edit">
     <h3>{text.title}</h3>
     <ErrorBox message={[unknown && text.unknown, error].filter(Boolean).join(' ')}/>
-    <p>{dropping ? text.dropHint : text.renameHint}</p>
+    <p>{dropping ? original.kind === 'm' ? text.materializedDropHint : text.dropHint : text.renameHint}</p>
     {preview ? <>
       <pre aria-label={text.sql} tabIndex={0}>{preview.statements.join(';\n') + ';'}</pre>
       {dropping && <label className="pg-column-edit-drop">

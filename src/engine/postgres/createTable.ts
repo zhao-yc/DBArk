@@ -84,10 +84,11 @@ async function preflight(connection: PostgresConnection, input: PostgresCreateTa
 }
 
 /** 同 schema 的操作仅锁原视图，避免 LOCK TABLE 递归锁底层关系。 */
-function viewGuard(schema: string, name: string, table: string, stamp: string): Pick<Plan, 'guard' | 'preflight' | 'protocol'> {
+function viewGuard(schema: string, name: string, table: string, stamp: string, kind: 'v' | 'm' = 'v'): Pick<Plan, 'guard' | 'preflight' | 'protocol'> {
   return {
-    guard: { sql: 'ALTER VIEW ' + table + ' SET SCHEMA ' + postgresIdentifier(schema), stamp },
-    preflight: async connection => (await readPostgresViewFacts(connection, schema, name)).stamp,
+    guard: { sql: 'ALTER ' + (kind === 'm' ? 'MATERIALIZED VIEW ' : 'VIEW ') + table +
+      ' SET SCHEMA ' + postgresIdentifier(schema), stamp },
+    preflight: async connection => (await readPostgresViewFacts(connection, schema, name, kind)).stamp,
     protocol: 'extended',
   };
 }
@@ -199,33 +200,36 @@ export class PostgresCreateTableWorkspace {
   /** 重命名与受限删除绑定原视图身份，并在提交前复核实际目录。 */
   async prepareViewManage(input: Scoped<PostgresViewManageInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
     return this.prepareRelation(input, 'viewManage', connect, () => {
-      const { connectionId, database, table, stamp, action } = input;
-      const target = { connectionId, database, table, stamp, action };
+      const { connectionId, database, table, stamp, action, relationKind } = input;
+      const target = { connectionId, database, table, stamp, action, relationKind };
       const draft = postgresViewManagePreviewSchema.parse(input.action === 'rename' ? { ...target, name: input.name } : target);
       const { schema, name } = postgresRelationName(draft.table);
       const prefix = postgresIdentifier(schema) + '.';
       const qualified = prefix + postgresIdentifier(name);
+      const kind = draft.relationKind === 'materialized' ? 'm' : 'v';
+      const sqlType = kind === 'm' ? 'MATERIALIZED VIEW ' : 'VIEW ';
+      const label = kind === 'm' ? '物化视图' : '视图';
       return async connection => {
-        const original = await readPostgresViewFacts(connection, schema, name);
+        const original = await readPostgresViewFacts(connection, schema, name, kind);
         if (original.stamp !== draft.stamp) throw Error('原视图已变化，请刷新结构后继续');
-        const guard = viewGuard(schema, name, qualified, original.stamp);
+        const guard = viewGuard(schema, name, qualified, original.stamp, kind);
         if (draft.action === 'rename') {
           if (draft.name === name) throw Error('请输入不同的视图名称');
-          await preflight(connection, { connectionId, database, schema }, draft.name, [], '视图');
+          await preflight(connection, { connectionId, database, schema }, draft.name, [], label);
           const identifier = postgresIdentifier(draft.name);
           return {
-            ...guard, table: prefix + identifier, success: 'PostgreSQL 视图已确认重命名',
-            statements: ['ALTER VIEW ' + qualified + ' RENAME TO ' + identifier],
+            ...guard, table: prefix + identifier, success: 'PostgreSQL ' + label + '已确认重命名',
+            statements: ['ALTER ' + sqlType + qualified + ' RENAME TO ' + identifier],
             async verify(current) {
-              const actual = await readPostgresViewFacts(current, schema, draft.name);
+              const actual = await readPostgresViewFacts(current, schema, draft.name, kind);
               if (actual.preserved !== original.preserved || actual.revision !== original.revision)
                 throw Error('重命名后的视图身份、定义或属性与原视图不同，未提交');
             },
           };
         }
         return {
-          ...guard, table: qualified, success: 'PostgreSQL 视图已确认删除',
-          statements: ['DROP VIEW ' + qualified + ' RESTRICT'],
+          ...guard, table: qualified, success: 'PostgreSQL ' + label + '已确认删除',
+          statements: ['DROP ' + sqlType + qualified + ' RESTRICT'],
           async verify(current) {
             const result = await current.query(`SELECT EXISTS (
               SELECT FROM pg_catalog.pg_class c

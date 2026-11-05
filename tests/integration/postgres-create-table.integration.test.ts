@@ -317,6 +317,7 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         const delegateState = await engine.handle('postgres.structure.read', delegated);
         expect(delegateState.materialized?.stamp).toEqual(expect.any(String));
         expect(delegateState.indexEditStamp).toBeUndefined();
+        expect(delegateState.materializedManageStamp).toBeUndefined();
         await expect(engine.handle('postgres.indexEdit.preview', {
           ...delegated, editStamp: (await readSnapshot()).indexEditStamp, changes: [uniqueKey],
         })).rejects.toThrow('原结构已变化');
@@ -328,6 +329,36 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
         await expect(engine.handle('postgres.structure.read', delegated)).rejects.toThrow('没有读取结构的权限');
       }
 
+      // 改名保留物化视图、已填充数据及索引；依赖阻止删除。
+      const manageSnapshot = async (table: string, change: { action: 'drop' } | { action: 'rename'; name: string }) => {
+        const structure = postgresStructureResultSchema.parse(await engine.handle('postgres.structure.read', { ...target, table }));
+        return engine.handle('postgres.viewManage.preview', { ...target, table, stamp: structure.materializedManageStamp,
+          relationKind: 'materialized', ...change });
+      };
+      const snapshotDependent = '"生成.甲"."物化依赖"';
+      await client.query(`CREATE VIEW ${snapshotDependent} AS SELECT * FROM ${snapshot}`);
+      const blockedSnapshot = await manageSnapshot(snapshot, { action: 'drop' });
+      expect(blockedSnapshot.statements.at(-1)).toBe('DROP MATERIALIZED VIEW ' + snapshot + ' RESTRICT');
+      expect(await applyManage(blockedSnapshot.token)).toMatchObject({ outcome: 'rolledBack' });
+      expect(await state()).toEqual({ ...unpopulated, relispopulated: true });
+      const beforeRenameSnapshot = await readSnapshot();
+      expect(beforeRenameSnapshot.viewEditStamp).toBeUndefined();
+      await expect(engine.handle('postgres.viewManage.preview', { ...target, table: snapshot,
+        stamp: beforeRenameSnapshot.materializedManageStamp, action: 'drop' })).rejects.toThrow('视图不存在');
+      await expect(manageSnapshot(snapshot, { action: 'rename', name: '原表' })).rejects.toThrow('同名关系');
+      const renamedSnapshot = '"生成.甲"."快照""归档"';
+      const snapshotRename = await manageSnapshot(snapshot, { action: 'rename', name: '快照"归档' });
+      expect(snapshotRename.statements.at(-1)).toContain('RENAME TO "快照""归档"');
+      expect(await indexOid(renamedSnapshot)).toBeNull();
+      expect(await applyManage(snapshotRename.token)).toMatchObject({ outcome: 'committed', table: renamedSnapshot });
+      await expect(applyManage(snapshotRename.token)).rejects.toThrow('预览已失效');
+      expect(await indexOid(snapshot)).toBeNull();
+      expect(await indexOid(renamedSnapshot)).toBe(unpopulated.oid);
+      expect(await indexOid('"生成.甲"."窗口可刷新唯一"')).toBe(createdOid);
+      expect((await client.query(`SELECT "代码" AS note FROM ${snapshotDependent}`)).rows).toEqual([{ note: '刷新后的值' }]);
+      const returned = await manageSnapshot(renamedSnapshot, { action: 'rename', name: '缓存"视图' });
+      expect(await applyManage(returned.token)).toMatchObject({ outcome: 'committed', table: snapshot });
+      await client.query('DROP VIEW ' + snapshotDependent);
       const dropIndex = await indexPreview([{ kind: 'drop', from: '窗口可刷新唯一' }]);
       expect(dropIndex.statements.at(-1)).toBe('DROP INDEX "生成.甲"."窗口可刷新唯一" RESTRICT');
       expect(await indexApply(dropIndex.token)).toMatchObject({ outcome: 'committed' });
@@ -340,11 +371,19 @@ describe.skipIf(!enabled)('PostgreSQL 实库图形化建表', () => {
       expect(await state()).toEqual(unpopulated);
       await expect(client.query(`SELECT * FROM ${snapshot}`)).rejects.toMatchObject({ code: '55000' });
       const staleRefresh = await refresh('data');
+      const staleSnapshotDrop = await manageSnapshot(snapshot, { action: 'drop' });
       await client.query(`ALTER MATERIALIZED VIEW ${snapshot} RENAME TO 缓存旧名;
         CREATE SEQUENCE "生成.甲".刷新副作用;
         CREATE MATERIALIZED VIEW ${snapshot} AS SELECT pg_catalog.nextval('"生成.甲".刷新副作用') AS id WITH NO DATA`);
       expect(await applyRefresh(staleRefresh.token)).toMatchObject({ outcome: 'notSent' });
       expect((await client.query('SELECT is_called FROM "生成.甲".刷新副作用')).rows).toEqual([{ is_called: false }]);
+      expect(await applyManage(staleSnapshotDrop.token)).toMatchObject({ outcome: 'rolledBack', message: expect.stringContaining('原视图已变化') });
+      const oldSnapshot = '"生成.甲"."缓存旧名"';
+      const dropSnapshot = await manageSnapshot(oldSnapshot, { action: 'drop' });
+      expect(await applyManage(dropSnapshot.token)).toMatchObject({ outcome: 'committed', table: oldSnapshot });
+      expect(await indexOid(oldSnapshot)).toBeNull();
+      expect(await indexOid('"生成.甲"."缓存表达式"')).toBeNull();
+      expect(await indexOid(snapshot)).toEqual(expect.any(String));
 
       const closed = await prepare({ table: '关闭' });
       await engine.handle('connections.close', { id });

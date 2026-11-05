@@ -21,7 +21,10 @@ export const postgresEditViewPreviewSchema = postgresStructureInputSchema.extend
 }).strict();
 export type PostgresEditViewInput = z.infer<typeof postgresEditViewPreviewSchema>;
 
-const viewManageTarget = postgresStructureInputSchema.extend({ stamp: z.string().regex(/^[a-f0-9]{64}$/) });
+const viewManageTarget = postgresStructureInputSchema.extend({
+  stamp: z.string().regex(/^[a-f0-9]{64}$/),
+  relationKind: z.literal('materialized').optional(),
+});
 export const postgresViewManagePreviewSchema = z.discriminatedUnion('action', [
   viewManageTarget.extend({ action: z.literal('rename'), name: postgresNewIdentifier }).strict(),
   viewManageTarget.extend({ action: z.literal('drop') }).strict(),

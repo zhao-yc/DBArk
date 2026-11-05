@@ -97,8 +97,9 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
   const sections: Section[] = output?.viewDefinition ? ['columns', 'constraints', 'indexes', 'definition'] : ['columns', 'constraints', 'indexes'];
   const EditPanel = editing && editors[editing].Panel;
   const indexStamp = output && postgresIndexEditStamp(output);
+  const manageStamp = output?.materializedManageStamp ?? output?.viewEditStamp;
   const editStamp = editing === 'indexes' ? indexStamp : editing === 'materialized' ? output?.materialized?.stamp :
-    editing === 'definition' || editing === 'manage' ? output?.viewEditStamp : output?.editStamp;
+    editing === 'manage' ? manageStamp : editing === 'definition' ? output?.viewEditStamp : output?.editStamp;
   return <Modal title={text.title} wide onClose={() => { if (!editing) onClose(); }}>
     <div className="modal-content pg-structure-content">
       <div className="pg-structure-caption"><strong>{table}</strong><span>{database}</span>{output && <span>{text.kinds[output.kind]}</span>}</div>
@@ -165,7 +166,7 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
         <><button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>
           <button onClick={() => setEditing('check')}>{editors.check.label}</button></>}
       {output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
-      {output?.viewEditStamp && !editing && <button onClick={() => setEditing('manage')}>{postgresViewManageZh.title}</button>}
+      {manageStamp && !editing && <button onClick={() => setEditing('manage')}>{postgresViewManageZh.title}</button>}
       {section === 'definition' && output?.viewEditStamp && !editing && <button onClick={() => setEditing('definition')}>
         {postgresViewEditZh.title}
       </button>}

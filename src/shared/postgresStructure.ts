@@ -74,6 +74,7 @@ export const postgresStructureResultSchema = z.object({
     populated: z.boolean(), uniqueIndex: z.boolean(), stamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   }).strict().optional(),
   indexEditStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  materializedManageStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   viewEditStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   editStamp: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();

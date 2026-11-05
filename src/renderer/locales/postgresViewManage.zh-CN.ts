@@ -5,6 +5,7 @@ export const postgresViewManageZh = {
   drop: '删除视图',
   name: '新视图名',
   renameHint: '在同一 schema 内重命名，保留视图及其数据库依赖。',
+  materializedDropHint: '删除物化视图会移除其数据和索引。若存在阻止删除的依赖，PostgreSQL 将回滚。',
   dropHint: '删除由 PostgreSQL 检查依赖。存在阻止删除的对象时，事务将回滚。',
   preview: '预览视图操作',
   sql: '视图操作 SQL',

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { postgresRelationName } from '../../shared/postgresSql';
 import { postgresStructureResultSchema, type PostgresStructureResult } from '../../shared/postgresStructure';
 import type { PostgresConnection } from './connection';
-import { postgresEditableViewSql, postgresViewFactsSql, postgresViewStamp } from './viewDefinition';
+import { postgresEditableViewSql, postgresManageableMaterializedSql, postgresViewFactsSql, postgresViewStamp } from './viewDefinition';
 import { parsePostgresMaterializedFacts, postgresMaterializedCanRefreshSql, postgresMaterializedFactsSql } from './materializedView';
 import { startPostgresDdl } from './createTable';
 
@@ -13,8 +13,7 @@ WITH target AS MATERIALIZED (
          c.relrowsecurity, c.relforcerowsecurity, n.nspname,
          CASE WHEN ${postgresEditableViewSql} THEN (${postgresViewFactsSql})::text END AS view_edit,
          CASE WHEN c.relkind = 'm' THEN (${postgresMaterializedFactsSql})::text END AS materialized,
-         c.relkind = 'm' AND c.relpersistence = 'p' AND pg_catalog.pg_has_role(c.relowner, 'USAGE')
-           AND pg_catalog.has_schema_privilege(n.oid, 'CREATE') AS materialized_index_edit,
+         CASE WHEN ${postgresManageableMaterializedSql} THEN (${postgresViewFactsSql})::text END AS materialized_manage,
          c.relkind = 'r' AND c.relpersistence IN ('p', 'u') AND NOT c.relispartition
            AND pg_catalog.pg_has_role(c.relowner, 'USAGE')
            AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid) AS editable
@@ -138,7 +137,7 @@ SELECT pg_catalog.jsonb_build_object(
       pg_catalog.jsonb_build_object('oid', oid::text, 'reference', confrelid::text, 'index', conindid::text)) FROM (
       SELECT c.conname, c.oid, c.confrelid, c.conindid FROM pg_catalog.pg_constraint c
       WHERE c.conrelid = t.oid AND c.contype = 'f' ORDER BY c.oid LIMIT 2001
-    ) foreign_ids), '{}'::jsonb)), t.view_edit, t.materialized, t.materialized_index_edit
+    ) foreign_ids), '{}'::jsonb)), t.view_edit, t.materialized, t.materialized_manage
 FROM target t
 `;
 
@@ -164,7 +163,7 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
   if (!parsed.success || parsed.data.database !== connection.database || parsed.data.schema !== schema || parsed.data.name !== name) {
     throw Error('PostgreSQL结构回包不完整或目标已经变化');
   }
-  const { c0: raw, c1: oid, c2: editable, c3: ids, c4: viewEdit, c5: materialized, c6: indexEditable } = result.rows[0] as { c0: string; c1: string; c2: string; c3: string; c4: string | null; c5: string | null; c6: string };
+  const { c0: raw, c1: oid, c2: editable, c3: ids, c4: viewEdit, c5: materialized, c6: materializedManage } = result.rows[0] as { c0: string; c1: string; c2: string; c3: string; c4: string | null; c5: string | null; c6: string | null };
   const identity = JSON.parse(ids);
   const indexIds = catalogIds(identity.indexes, parsed.data.indexes);
   const keyIds = catalogIds(identity.keys, parsed.data.constraints.filter(key => key.kind === 'p' || key.kind === 'u'));
@@ -177,8 +176,9 @@ export async function readPostgresStructureFacts(connection: PostgresConnection,
   })) throw Error('PostgreSQL 外键身份回包不完整');
   const output: PostgresStructureResult = { ...parsed.data, ...(editable === 't' ?
     { editStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids).digest('hex') } : {}),
-    ...(indexEditable === 't' && materialized ?
-      { indexEditStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids + '\0' + materialized).digest('hex') } : {}),
+    ...(materializedManage && materialized ?
+      { indexEditStamp: createHash('sha256').update(oid + '\0' + raw + '\0' + ids + '\0' + materialized).digest('hex'),
+        materializedManageStamp: postgresViewStamp(materializedManage) } : {}),
     ...(viewEdit ? { viewEditStamp: postgresViewStamp(viewEdit) } : {}),
     ...(materialized ? { materialized: parsePostgresMaterializedFacts(materialized).state } : {}) };
   return { output, oid, indexIds, keyIds, foreignIds, checkIds };
