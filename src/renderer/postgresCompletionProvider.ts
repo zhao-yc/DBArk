@@ -5,7 +5,7 @@ import { postgresIdentifier } from '../shared/postgresSql';
 import { analyzePostgresCompletion } from './postgresCompletionAnalysis';
 
 export interface PostgresCompletionScope { tabId: string; connectionId: string; database: string; connectionVersion: number; sessionId?: string; }
-type Kind = 'schema' | 'table' | 'view' | 'column' | 'keyword';
+type Kind = 'schema' | 'table' | 'view' | 'column' | 'routine' | 'keyword';
 type Status = 'idle' | 'partial' | 'unavailable' | 'limited' | 'sessionUnknown';
 const keywords = ['SELECT','FROM','JOIN','LEFT JOIN','RIGHT JOIN','INNER JOIN','WHERE','GROUP BY','ORDER BY',
   'HAVING','LIMIT','OFFSET','INSERT INTO','VALUES','UPDATE','SET','DELETE FROM','RETURNING','ON CONFLICT',
@@ -33,6 +33,7 @@ export function createPostgresCompletionProvider(options: {
   current(): boolean;
   request(input: PostgresCompletionInput): Promise<PostgresCompletionResult>;
   kinds: Record<Kind, monaco.languages.CompletionItemKind>;
+  snippetRule: monaco.languages.CompletionItemInsertTextRule;
   status(value: Status): void;
 }): monaco.languages.CompletionItemProvider & { invalidate(): void; dispose(): void } {
   let active: AbortController | undefined;
@@ -62,7 +63,7 @@ export function createPostgresCompletionProvider(options: {
         const source = model.getValue();
         const analysis = analyzePostgresCompletion(source, model.getOffsetAt(position));
         if (!analysis) return empty;
-        const { query, prefix, quoted } = analysis;
+        const { query, prefix, quoted, routine } = analysis;
         const start = model.getPositionAt(analysis.start), end = model.getPositionAt(analysis.end);
         if (start.lineNumber !== end.lineNumber) return empty;
         const range = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
@@ -84,12 +85,12 @@ export function createPostgresCompletionProvider(options: {
           }
         }
         const { connectionId, database, sessionId } = options.scope;
-        const base = { connectionId, database, prefix, ...(sessionId ? { sessionId } : {}) };
+        const base = { connectionId, database, prefix, ...(sessionId ? { sessionId } : {}), ...(routine ? { routine } : {}) };
         // CTE 名称、别名和投影只在编辑器中使用，目录只接收实际物理目标。
         const input: PostgresCompletionInput | undefined = query?.kind === 'relations'
           ? { ...base, kind: 'relations', ...(query.schema ? { schema: query.schema } : {}) }
           : references.length > 0 && references.length <= postgresCompletionLimits.relations
-            ? { ...base, kind: 'columns', relations: references } : undefined;
+            ? { ...base, kind: 'columns', relations: references } : routine ? { ...base, kind: 'routines', routine } : undefined;
         let result: PostgresCompletionResult = { items: [], incomplete: false };
         if (input) {
           await debounce(controller.signal, 100);
@@ -121,6 +122,13 @@ export function createPostgresCompletionProvider(options: {
               insertText: (query.schema ? '' : postgresIdentifier(item.schema) + '.') + postgresIdentifier(item.name) });
           } else if (item.kind === 'column' && origins[item.reference] !== undefined) {
             localColumns.push({ reference: origins[item.reference], name: item.name, type: item.type });
+          } else if (item.kind === 'routine' && routine) {
+            const name = postgresIdentifier(item.name);
+            const insert = analysis.existingCall ? { insertText: name } : {
+              insertText: name.replace(/[\\$}]/g, value => '\\' + value) + '($0)', insertTextRules: options.snippetRule,
+            };
+            suggestions.push({ ...common, ...insert, sortText: '1' + common.sortText,
+              label: { label: item.name, detail: '(' + item.arguments + ')', description: item.schema + (item.returns ? ' → ' + item.returns : '') } });
           }
         }
         if (query?.kind === 'columns') {
@@ -141,7 +149,7 @@ export function createPostgresCompletionProvider(options: {
           }
         }
         const hasDot = source.slice(0, analysis.start).trimEnd().endsWith('.');
-        if (!quoted && !hasDot && query?.kind !== 'relations') {
+        if (!quoted && !hasDot && query?.kind !== 'relations' && routine?.context !== 'call' && routine?.context !== 'from') {
           for (const label of keywords.filter(word => word.startsWith(prefix.toUpperCase()))) {
             suggestions.push({ label, kind: options.kinds.keyword, insertText: label, range, sortText: '9' + label });
           }
@@ -149,7 +157,7 @@ export function createPostgresCompletionProvider(options: {
         if (result.deferred === 'transaction') options.status('sessionUnknown');
         else if (result.deferred === 'busy') options.status('unavailable');
         else if (result.incomplete || suggestions.length > postgresCompletionLimits.items) options.status('partial');
-        return { suggestions: suggestions.slice(0, postgresCompletionLimits.items), incomplete: !!query };
+        return { suggestions: suggestions.slice(0, postgresCompletionLimits.items), incomplete: !!query || !!routine };
       } finally {
         cancel.dispose();
         change.dispose();

@@ -84,10 +84,51 @@ async function columns(connection: PostgresConnection, input: Extract<PostgresCo
   return { items, incomplete: result.truncated || result.rows.length === rowLimit };
 }
 
+/** 查实际可执行的重载。原会话由 PostgreSQL 解析 search_path，同名不同签名仍保留。 */
+async function routines(connection: PostgresConnection, input: PostgresCompletionInput, session: boolean): Promise<PostgresCompletionResult> {
+  const target = input.routine!;
+  const limit = input.kind === 'routines' ? postgresCompletionLimits.items : 40;
+  const ownTemp = session ? `n.oid ${eq} pg_catalog.pg_my_temp_schema()` : 'false';
+  const result = await connection.query(`
+    WITH candidates AS MATERIALIZED (
+      SELECT p.oid, p.proname::pg_catalog.text AS name, p.prokind::pg_catalog.text AS category,
+        CASE WHEN ${ownTemp} THEN 'pg_temp' ELSE n.nspname::pg_catalog.text END AS schema,
+        p.proretset, p.pronargs
+      FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid ${eq} p.pronamespace
+      WHERE (${ownTemp} OR n.nspname ${eq} 'pg_catalog' OR n.nspname OPERATOR(pg_catalog.!~) '^pg_')
+        AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND pg_catalog.has_function_privilege(p.oid, 'EXECUTE')
+        AND (CASE WHEN $3::pg_catalog.text ${eq} 'call' THEN p.prokind ${eq} 'p'
+          WHEN $3::pg_catalog.text ${eq} 'from' THEN p.prokind ${eq} 'f' ELSE p.prokind ${ne} 'p' END)
+        AND (CASE WHEN $2::pg_catalog.text IS NULL THEN pg_catalog.pg_function_is_visible(p.oid) AND NOT (${ownTemp})
+          ELSE (CASE WHEN ${ownTemp} THEN 'pg_temp' ELSE n.nspname::pg_catalog.text END) ${eq} $2 END)
+        AND pg_catalog.strpos(pg_catalog.lower(p.proname::pg_catalog.text), pg_catalog.lower($1::pg_catalog.text)) ${eq} 1
+      ORDER BY p.proname, p.proretset DESC, p.pronargs, p.oid LIMIT $4
+    )
+    SELECT schema, name, category, pg_catalog.pg_get_function_identity_arguments(oid), pg_catalog.pg_get_function_result(oid)
+    FROM candidates ORDER BY name, proretset DESC, pronargs, oid
+  `, [input.prefix, target.schema ?? null, target.context, limit + 1], { rows: limit + 1, bytes: 256 * 1024 });
+  const items: PostgresCompletionItem[] = [];
+  for (const row of result.rows.slice(0, limit)) {
+    const { c0: schema, c1: name, c2: category, c3: args, c4: returns } = row;
+    if (typeof schema === 'string' && typeof name === 'string' && typeof args === 'string' &&
+        (category === 'f' || category === 'p' || category === 'a' || category === 'w') && (returns === null || typeof returns === 'string'))
+      items.push({ kind: 'routine', schema, name, category, arguments: args, returns });
+  }
+  return { items, incomplete: result.truncated || result.rows.length > limit };
+}
+
 /** 原会话空闲时用自有只读事务限定超时，完成后以实际回滚及 ReadyForQuery 确认收尾。 */
 export async function readPostgresCompletion(connection: PostgresConnection, input: PostgresCompletionInput, session = false): Promise<PostgresCompletionResult> {
   if (connection.database !== input.database) throw Error('PostgreSQL 补全目标数据库已变化');
-  const query = () => input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session);
+  const query = async () => {
+    if (input.kind === 'routines') return routines(connection, input, session);
+    const base = await (input.kind === 'relations' ? relations(connection, input, session) : columns(connection, input, session));
+    if (!input.routine) return base;
+    const supplemental = await routines(connection, input, session);
+    const capacity = postgresCompletionLimits.items - supplemental.items.length;
+    return { items: [...base.items.slice(0, capacity), ...supplemental.items],
+      incomplete: base.incomplete || supplemental.incomplete || base.items.length > capacity };
+  };
   const control = (sql: string) => connection.query(sql, undefined, commandBudget());
   if (!session) {
     await control("SET statement_timeout = '2s'");

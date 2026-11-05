@@ -3,7 +3,7 @@ import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile, QueryOutcome } from '../../src/shared/contracts';
-import type { PostgresCompletionInput, PostgresCompletionResult } from '../../src/shared/postgresCompletion';
+import type { PostgresCompletionInput, PostgresCompletionResult, PostgresRoutineCompletionTarget } from '../../src/shared/postgresCompletion';
 
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
 const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
@@ -30,6 +30,8 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
     const relations = (prefix: string, schema?: string, sessionId?: string) => read({ ...target, kind: 'relations', prefix, schema, sessionId });
     const columns = (prefix: string, refs: { schema?: string; name: string }[], sessionId?: string) =>
       read({ ...target, kind: 'columns', prefix, relations: refs, sessionId });
+    const routines = (prefix: string, routine: PostgresRoutineCompletionTarget, sessionId?: string) =>
+      read({ ...target, kind: 'routines', prefix, routine, sessionId });
     await client.connect();
     try {
       await client.query(`
@@ -41,12 +43,22 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         CREATE TABLE "补全.乙"."订""单" (other text);
         CREATE VIEW "补全.甲"."订阅" AS SELECT "品名" FROM "补全.甲"."订""单";
         CREATE TABLE "隐藏".secret (private_column text);
+        CREATE FUNCTION "隐藏".tabrelio_hidden() RETURNS integer LANGUAGE sql AS 'SELECT 1';
         REVOKE USAGE ON SCHEMA "隐藏" FROM CURRENT_USER;
         CREATE TABLE public.unique_scope (only_field integer);
         CREATE TABLE public.duplicate_scope (public_field integer);
         CREATE TABLE "补全.乙".duplicate_scope (other_field text);
-        CREATE TABLE public.r_literal (id int);
+        CREATE TABLE public.r_literal (round_hint int);
         CREATE TABLE public.rXliteral (id int);
+        CREATE FUNCTION public.tabrelio_fold(value integer) RETURNS bigint LANGUAGE sql AS 'SELECT value::bigint';
+        CREATE FUNCTION "补全.乙".tabrelio_fold(value integer) RETURNS numeric LANGUAGE sql AS 'SELECT value::numeric';
+        CREATE FUNCTION "补全.乙".tabrelio_fold(value text) RETURNS text LANGUAGE sql AS 'SELECT value';
+        CREATE FUNCTION "补全.乙".tabrelio_rows(bound integer) RETURNS SETOF integer LANGUAGE sql AS 'SELECT generate_series(1, bound)';
+        CREATE PROCEDURE "补全.乙".tabrelio_proc(value integer) LANGUAGE plpgsql AS 'BEGIN NULL; END';
+        CREATE TABLE public.routine_side_effects (id integer);
+        CREATE FUNCTION public.tabrelio_write() RETURNS integer LANGUAGE plpgsql AS
+          'BEGIN INSERT INTO public.routine_side_effects VALUES (1); RETURN 1; END';
+        REVOKE EXECUTE ON FUNCTION "补全.乙".tabrelio_fold(text) FROM PUBLIC;
       `);
       // 中文排序由服务器区域设置决定，集合必须精确相同。
       expect(new Set((await relations('补全')).items.map(item => JSON.stringify(item)))).toEqual(new Set([
@@ -65,6 +77,25 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       expect((await columns('gone', [{ schema: '补全.甲', name: '订"单' }])).items).toEqual([]);
       expect((await columns('', [{ name: 'unique_scope' }])).items).toEqual([{ kind: 'column', reference: 0, name: 'only_field', type: 'integer' }]);
       expect((await columns('', [{ name: 'duplicate_scope' }])).items).toEqual([]);
+      expect((await routines('tabrelio_fold', { context: 'expression' })).items).toEqual([
+        { kind: 'routine', schema: 'public', name: 'tabrelio_fold', arguments: 'value integer', returns: 'bigint', category: 'f' },
+      ]);
+      expect((await routines('tabrelio_hidden', { context: 'expression', schema: '隐藏' })).items).toEqual([]);
+      expect((await routines('count', { context: 'expression', schema: 'pg_catalog' })).items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'count', schema: 'pg_catalog', returns: 'bigint', category: 'a' }),
+      ]));
+      expect((await routines('row_number', { context: 'expression' })).items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'row_number', returns: 'bigint', category: 'w' }),
+      ]));
+      expect((await routines('tabrelio_proc', { context: 'call', schema: '补全.乙' })).items).toEqual([
+        { kind: 'routine', schema: '补全.乙', name: 'tabrelio_proc', arguments: 'IN value integer', returns: null, category: 'p' },
+      ]);
+      expect((await routines('tabrelio_proc', { context: 'expression', schema: '补全.乙' })).items).toEqual([]);
+      expect((await routines('tabrelio_rows', { context: 'from', schema: '补全.乙' })).items).toEqual([
+        { kind: 'routine', schema: '补全.乙', name: 'tabrelio_rows', arguments: 'bound integer', returns: 'SETOF integer', category: 'f' },
+      ]);
+      expect((await routines('tabrelio_write', { context: 'expression' })).items).toHaveLength(1);
+      expect((await client.query('SELECT count(*)::int AS count FROM public.routine_side_effects')).rows).toEqual([{ count: 0 }]);
       await client.query('BEGIN; CREATE TEMP TABLE temp_completion (original int); INSERT INTO temp_completion VALUES (7)');
       expect((await relations('temp_completion')).items).toEqual([]);
       expect((await client.query('SELECT original FROM temp_completion')).rows).toEqual([{ original: 7 }]);
@@ -81,6 +112,16 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         SET statement_timeout TO '800ms'; SET lock_timeout TO '250ms'`)).failure).toBeUndefined();
       expect(await fields()).toEqual(['other_field']);
       expect(await fields(undefined, other)).toEqual(['public_field']);
+      expect((await routines('tabrelio_fold', { context: 'expression' }, sessionId)).items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ schema: '补全.乙', arguments: 'value integer', returns: 'numeric' }),
+        expect.objectContaining({ schema: '补全.乙', arguments: 'value text', returns: 'text' }),
+      ]));
+      expect((await routines('tabrelio_fold', { context: 'expression' }, sessionId)).items).toHaveLength(2);
+      expect((await routines('tabrelio_fold', { context: 'expression' }, other)).items).toHaveLength(1);
+      expect((await read({ ...target, kind: 'columns', sessionId, prefix: 'rou', relations: [{ schema: 'public', name: 'r_literal' }],
+        routine: { context: 'expression' } })).items).toEqual(expect.arrayContaining([
+        { kind: 'column', reference: 0, name: 'round_hint', type: 'integer' }, expect.objectContaining({ kind: 'routine', name: 'round' }),
+      ]));
       expect((await run('CREATE TEMP TABLE duplicate_scope (temp_field bigint); INSERT INTO duplicate_scope VALUES (7)')).failure).toBeUndefined();
       expect(await fields()).toEqual(['temp_field']);
       expect(await fields('pg_temp')).toEqual(['temp_field']);
@@ -101,6 +142,9 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
         expect((await run(`SET ROLE "${limited}"; SET search_path TO "补全.乙", public, pg_catalog`)).failure).toBeUndefined();
         expect(await fields('补全.乙')).toEqual(['other_field']);
         expect(await fields('public')).toEqual([]);
+        expect((await routines('tabrelio_fold', { context: 'expression' }, sessionId)).items).toEqual([
+          expect.objectContaining({ schema: '补全.乙', arguments: 'value integer', returns: 'numeric' }),
+        ]);
         expect((await run('RESET ROLE')).failure).toBeUndefined();
         expect(await fields('public')).toEqual(['public_field']);
       }
@@ -120,6 +164,7 @@ describe.skipIf(!enabled)('PostgreSQL 实库补全目录', () => {
       await expect(read({ ...target, database: 'postgres', kind: 'relations', prefix: '', sessionId })).rejects.toThrow('原会话');
       expect((await run('BEGIN; SET LOCAL search_path TO public')).transactionOpen).toBe(true);
       expect(await columns('', [{ name: 'duplicate_scope' }], sessionId)).toMatchObject({ deferred: 'transaction', items: [] });
+      expect(await routines('tabrelio_fold', { context: 'expression' }, sessionId)).toMatchObject({ deferred: 'transaction', items: [] });
       expect((await run('SELECT 1/0')).failure).toBeDefined();
       expect(await relations('duplicate', undefined, sessionId)).toMatchObject({ deferred: 'transaction' });
       expect(await engine.handle('query.sessionState', { sessionId })).toMatchObject({ transactionFailed: true, transactionOpen: true });

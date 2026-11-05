@@ -83,6 +83,18 @@ describe('PostgreSQL 补全词法和关系作用域', () => {
     expect(at('WITH RECURSIVE t AS (SELECT 1 AS step UNION ALL SELECT t.| + 1 FROM t) SELECT * FROM t')?.query)
       .toMatchObject({ relations: [{ name: 't', projection: { names: ['step'], stars: [] } }] });
   });
+  it('识别函数表达式、FROM 和 CALL，避开别名、列清单、赋值左侧和类型转换', () => {
+    expect(at('SELECT "工具.甲"."混|合"(/* 间隔 */ 1)')).toMatchObject({ routine: { context: 'expression', schema: '工具.甲' }, existingCall: true });
+    expect(at('SELECT * FROM LATERAL tool.gen|')).toMatchObject({ routine: { context: 'from', schema: 'tool' } });
+    expect(at('CALL tool.bac|')).toMatchObject({ routine: { context: 'call', schema: 'tool' } });
+    expect(at('CALL proc(upper(lo|))')?.routine).toEqual({ context: 'expression' });
+    expect(at('SELECT 1 UNION ALL SELECT cou|')?.routine).toEqual({ context: 'expression' });
+    expect(at('UPDATE t SET n=rou|')?.routine).toEqual({ context: 'expression' });
+    for (const text of ['SELECT t.no| FROM s.t', 'INSERT INTO s.t (na|) VALUES (1)', 'UPDATE t SET a=1, na|',
+      'SELECT * FROM a JOIN b USING (na|)', 'SELECT 1::te|', 'SELECT * FROM ONLY s.t|', 'DELETE FROM s.ta|']) {
+      expect(at(text)?.routine).toBeUndefined();
+    }
+  });
 });
 
 /** 通过生产 provider 检查请求内容和插入文字。 */
@@ -101,7 +113,8 @@ function editor(marked: string, request: (input: PostgresCompletionInput) => Pro
     scope: { tabId: '原页', connectionId: '原连接', database: '原库', connectionVersion: 1, sessionId },
     model: () => model, position: () => position, current: () => true,
     request,
-    kinds: { schema: 1, table: 1, view: 1, column: 1, keyword: 1 },
+    kinds: { schema: 1, table: 1, view: 1, column: 1, keyword: 1, routine: 1 },
+    snippetRule: 4,
     status: () => {},
   });
   return { provider, suggest: () => provider.provideCompletionItems(model, position, { triggerKind: 0 }, token) };
@@ -121,7 +134,7 @@ it('本地投影不读取目录，同名物理列不可取代 CTE，通配结果
     expect(inputs).toEqual([]);
     expect((await star.suggest())?.suggestions).toMatchObject([{ insertText: '"d"."note"', detail: 'text' }]);
     expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', prefix: 'no',
-      kind: 'columns', relations: [{ schema: 'real', name: 'orders' }, { name: 'other' }] }]);
+      kind: 'columns', routine: { context: 'expression' }, relations: [{ schema: 'real', name: 'orders' }, { name: 'other' }] }]);
     expect((await duplicate.suggest())?.suggestions).toEqual([]);
   } finally {
     local.provider.dispose();
@@ -155,8 +168,28 @@ it('物理目录延后时保留本地 CTE 候选，并且只投递原会话', as
   try {
     expect((await suggest())?.suggestions).toMatchObject([{ insertText: '"x"' }]);
     expect(inputs).toEqual([{ connectionId: '原连接', database: '原库', prefix: 'x',
-      kind: 'relations', sessionId: '原会话' }]);
+      kind: 'relations', routine: { context: 'from' }, sessionId: '原会话' }]);
   } finally { provider.dispose(); }
+});
+
+it('按原会话请求重载，安全插入调用括号且保留现有括号', async () => {
+  const inputs: PostgresCompletionInput[] = [];
+  const request = async (input: PostgresCompletionInput): Promise<PostgresCompletionResult> => {
+    inputs.push(input);
+    return { incomplete: false, items: [{ kind: 'routine', schema: '工具', name: '算$"法', category: 'f', arguments: 'value integer', returns: 'bigint' },
+      { kind: 'routine', schema: '工具', name: '算$"法', category: 'f', arguments: 'value text', returns: 'text' }] };
+  };
+  const fresh = editor('SELECT "工具".算|', request, '原会话');
+  const existing = editor('SELECT "工具".算| /* 注释 */ (1)', request, '原会话');
+  try {
+    expect((await fresh.suggest())?.suggestions).toMatchObject([
+      { label: { label: '算$"法', detail: '(value integer)', description: '工具 → bigint' }, insertText: '"算\\$""法"($0)', insertTextRules: 4 },
+      { label: { detail: '(value text)' } },
+    ]);
+    expect(inputs[0]).toEqual({ connectionId: '原连接', database: '原库', sessionId: '原会话', prefix: '算', kind: 'routines',
+      routine: { context: 'expression', schema: '工具' } });
+    expect((await existing.suggest())?.suggestions).toMatchObject([{ insertText: '"算$""法"' }, { insertText: '"算$""法"' }]);
+  } finally { fresh.provider.dispose(); existing.provider.dispose(); }
 });
 
 it('目录失败只回滚自己的读取事务，回滚失效时封住原会话', async () => {

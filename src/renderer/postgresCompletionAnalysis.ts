@@ -1,4 +1,4 @@
-import { postgresCompletionLimits as limits, type PostgresCompletionReference } from '../shared/postgresCompletion';
+import { postgresCompletionLimits as limits, type PostgresCompletionReference, type PostgresRoutineCompletionTarget } from '../shared/postgresCompletion';
 import { scanPostgresEditorTokens, type PostgresEditorToken } from '../shared/postgresSql';
 
 type Group = { kind: 'group'; start: number; end: number; closed: boolean; closing: ')' | ']'; parts: Part[] };
@@ -14,6 +14,8 @@ export interface PostgresCompletionAnalysis {
   prefix: string;
   quoted: boolean;
   query?: Query;
+  routine?: PostgresRoutineCompletionTarget;
+  existingCall?: boolean;
 }
 const entries = new Set(['FROM', 'JOIN', 'UPDATE', 'INTO']);
 const endsFrom = new Set(['WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'FETCH', 'RETURNING',
@@ -22,7 +24,10 @@ const setOperators = new Set(['UNION', 'EXCEPT', 'INTERSECT']);
 const stop = new Set([...entries, ...endsFrom, ...setOperators, 'ON', 'USING', 'CROSS', 'LEFT', 'RIGHT',
   'INNER', 'OUTER', 'FULL', 'NATURAL', 'AS', 'WITH', 'SELECT', 'TABLESAMPLE', 'OVERRIDING',
   'CONFLICT', 'DO', 'NULLS', 'DISTINCT', 'LATERAL', 'ONLY', 'END', 'COLLATE', 'TRUE', 'FALSE', 'NULL']);
-const commands = new Set(['SELECT', 'UPDATE', 'INSERT', 'DELETE', 'VALUES', 'WITH']);
+const commands = new Set(['SELECT', 'UPDATE', 'INSERT', 'DELETE', 'VALUES', 'WITH', 'CALL']);
+const expressionEntries = new Set(['SELECT', 'WHERE', 'HAVING', 'ON', 'RETURNING', 'VALUES', 'WHEN', 'THEN', 'ELSE',
+  'AND', 'OR', 'NOT', 'BY', 'DISTINCT', 'ALL']);
+const expressionOperators = new Set(['(', '[', ',', '=', '+', '-', '*', '/', '%', '<', '>', '|', '&', '^', '~']);
 const unknown: Projection = { names: [], stars: [], exact: false };
 
 /** PostgreSQL 未引用标识符折叠 ASCII 大写字母，引用名称保留原大小写。 */
@@ -103,7 +108,32 @@ interface QueryContext {
   start: number;
   left: PostgresEditorToken[];
 }
-interface Parsed { projection: Projection; query?: Query; }
+interface Parsed { projection: Projection; query?: Query; routine?: PostgresRoutineCompletionTarget; }
+
+/** 只接受一个 schema 限定符，关系别名和赋值左侧继续由字段补全处理。 */
+function expressionRoutine(main: Part[], left: PostgresEditorToken[], cursorGroup: Part | undefined,
+  refs: PostgresCompletionRelation[][]): PostgresRoutineCompletionTarget | undefined {
+  const dotted = punct(left.at(-1), '.');
+  const schema = dotted ? identifier(left.at(-2)) : undefined;
+  if (dotted && (!schema || refs.some(level => level.some(ref => (ref.alias ?? ref.name) === schema)))) return;
+  const before = left.at(dotted ? -3 : -1);
+  if (!before || !(expressionEntries.has(keyword(before)) || (before.kind === 'punct' && expressionOperators.has(before.text)))) return;
+  const command = keyword(main[0]);
+  if (cursorGroup) {
+    const index = main.indexOf(cursorGroup);
+    if (keyword(main[index - 1]) === 'USING' || (command === 'INSERT' &&
+        !main.slice(0, index).some(part => ['VALUES', 'SELECT', 'RETURNING'].includes(keyword(part))))) return;
+  } else if (command === 'UPDATE') {
+    const preceding = main.filter(part => part.end <= before.end);
+    const set = preceding.findIndex(part => keyword(part) === 'SET');
+    if (set >= 0 && !preceding.slice(set + 1).some(part => ['WHERE', 'RETURNING', 'FROM'].includes(keyword(part)))) {
+      const reversed = preceding.slice(set + 1).reverse();
+      const separator = reversed.findIndex(part => punct(part, ','));
+      if (!reversed.slice(0, separator < 0 ? undefined : separator).some(part => punct(part, '='))) return;
+    }
+  }
+  return { context: 'expression', ...(schema ? { schema } : {}) };
+}
 
 /** 收集确定的投影名称，并将单源通配符的目录读取留给现有只读接口。 */
 function project(parts: Part[], refs: PostgresCompletionRelation[]): Projection {
@@ -229,7 +259,7 @@ function parseQuery(parts: Part[], inherited: Scope, outer: PostgresCompletionRe
   const main = parts.slice(start);
   const firstSet = main.findIndex(part => setOperators.has(keyword(part)));
   if (firstSet >= 0) {
-    let output = unknown, branchStart = 0, query: Query | undefined;
+    let output = unknown, branchStart = 0, query: Query | undefined, routine: PostgresRoutineCompletionTarget | undefined;
     for (let i = 0; i <= main.length; i++) {
       if (i < main.length && !setOperators.has(keyword(main[i]))) continue;
       const branch = main.slice(branchStart, i);
@@ -241,11 +271,11 @@ function parseQuery(parts: Part[], inherited: Scope, outer: PostgresCompletionRe
       const parsed = parseQuery(order >= 0 ? branch.slice(0, order) : branch, scope, outer, inOrder ? undefined : active);
       if (branchStart === 0) output = parsed.projection;
       if (inOrder) query = columns([{ name: '', projection: output }], [], active.left);
-      else if (active) query = parsed.query;
+      else if (active) { query = parsed.query; routine = parsed.routine; }
       if (['ALL', 'DISTINCT'].includes(keyword(main[i + 1]))) i++;
       branchStart = i + 1;
     }
-    return { projection: output, query };
+    return { projection: output, query, routine };
   }
 
   const refs: PostgresCompletionRelation[] = [];
@@ -312,14 +342,21 @@ function parseQuery(parts: Part[], inherited: Scope, outer: PostgresCompletionRe
     const dotted = punct(left.at(-1), '.');
     const qualifier = dotted ? identifier(left.at(-2)) : undefined;
     let before = left.at(dotted ? -3 : -1);
-    if (keyword(before) === 'ONLY') before = left.at(dotted ? -4 : -2);
+    const modifier = keyword(before);
+    if (modifier === 'ONLY' || modifier === 'LATERAL') before = left.at(dotted ? -4 : -2);
     const position = main.findIndex(part => part === before);
+    if (position === 0 && keyword(before) === 'CALL' && (!dotted || qualifier))
+      return { projection, routine: { context: 'call', ...(qualifier ? { schema: qualifier } : {}) } };
     if (position >= 0 && (!dotted || qualifier) && (relationEntry(main, position) || commas.has(position))) {
       const ctes = qualifier || writeTarget(main, position) ? [] : [...scope.keys()].slice(0, limits.items);
-      return { projection, query: { kind: 'relations', ...(qualifier ? { schema: qualifier } : {}), ...(ctes.length ? { ctes } : {}) } };
+      const routine: PostgresRoutineCompletionTarget | undefined = modifier !== 'ONLY' && !writeTarget(main, position)
+        ? { context: 'from', ...(qualifier ? { schema: qualifier } : {}) } : undefined;
+      return { projection, query: modifier === 'LATERAL' ? undefined :
+        { kind: 'relations', ...(qualifier ? { schema: qualifier } : {}), ...(ctes.length ? { ctes } : {}) }, routine };
     }
   }
-  return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(refs, outer, left) };
+  return { projection, query: keyword(left.at(-1)) === 'AS' ? undefined : columns(refs, outer, left),
+    routine: expressionRoutine(main, left, cursorGroup, [refs, ...outer]) };
 }
 
 /** 定位当前标识符，屏蔽注释、字符串和参数，再解析当前语句的查询作用域。 */
@@ -335,6 +372,9 @@ export function analyzePostgresCompletion(source: string, offset: number): Postg
   if (prefix.length > limits.name) return;
   const parts = groupStatement(all, offset, source.length);
   const left = all.filter(token => token !== target && token.end <= start && !(token.kind === 'blocked' && token.text === 'comment'));
-  const query = parts && parseQuery(parts, new Map(), [], { offset, start, left }).query;
-  return { start, end, prefix, quoted, ...(query ? { query } : {}) };
+  const parsed = parts && parseQuery(parts, new Map(), [], { offset, start, left });
+  const routine = parsed?.routine && (prefix || parsed.routine.schema) ? parsed.routine : undefined;
+  const next = routine && all.find(token => token !== target && token.start >= end && !(token.kind === 'blocked' && token.text === 'comment'));
+  return { start, end, prefix, quoted, ...(parsed?.query ? { query: parsed.query } : {}),
+    ...(routine ? { routine, existingCall: punct(next || undefined, '(') } : {}) };
 }

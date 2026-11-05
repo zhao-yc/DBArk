@@ -258,7 +258,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       },
       request: input => invoke('postgres.completion', input),
       kinds: { schema: monaco.languages.CompletionItemKind.Module, table: completionKinds.table, view: completionKinds.view,
-        column: completionKinds.column, keyword: completionKinds.keyword },
+        column: completionKinds.column, keyword: completionKinds.keyword, routine: monaco.languages.CompletionItemKind.Function },
+      snippetRule: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
       status: status => statusRef.current?.(status),
     });
     statusRef.current?.('idle');

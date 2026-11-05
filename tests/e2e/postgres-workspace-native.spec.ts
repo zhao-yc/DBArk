@@ -487,6 +487,29 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeCompletion);
     await mark('真实按键验证 schema、带引号关系、查询别名、CTE 和派生表字段补全，目录读取没有写入执行历史');
 
+    await edit('SELECT "回归"."窗口补全函');
+    await page.keyboard.press('Control+Space');
+    const routines = widget.locator('.monaco-list-row').filter({ hasText: '窗口补全函数' });
+    await expect(routines).toHaveCount(2);
+    await expect(routines.filter({ hasText: 'integer' })).toHaveCount(1);
+    await expect(routines.filter({ hasText: 'text' })).toHaveCount(1);
+    await page.screenshot({ path: info.outputPath('PostgreSQL函数重载补全.png') });
+    await page.keyboard.press('Enter');
+    await page.keyboard.insertText('7');
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('SELECT "回归"."窗口补全函数"(7)');
+    await edit('SELECT * FROM "回归"."窗口表函');
+    await page.keyboard.press('Control+Space');
+    await expect(widget.locator('.monaco-list-row.focused')).toContainText('SETOF integer');
+    await page.keyboard.press('Enter');
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('FROM "回归"."窗口表函数"()');
+    await edit('CALL "回归"."窗口补全过');
+    await page.keyboard.press('Control+Space');
+    await expect(widget.locator('.monaco-list-row.focused')).toContainText('窗口补全过程');
+    await page.keyboard.press('Enter');
+    await expect(tab().locator('.monaco-editor .view-lines')).toContainText('CALL "回归"."窗口补全过程"()');
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeCompletion);
+    await mark('原生按键接纳函数重载、表函数和 CALL 过程，光标进入调用括号且没有执行历史');
+
     // 通过原标签执行临时表与 search_path 设置，再在同一标签请求目录。
     await edit('CREATE TEMP TABLE temp_scope_native ("会话值" int); INSERT INTO temp_scope_native VALUES (7); SET search_path TO "回归", public; SELECT "会话值" FROM temp_scope_native;');
     await execute();
