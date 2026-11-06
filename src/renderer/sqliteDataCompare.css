@@ -1,0 +1,8 @@
+.sqlite-data-compare{display:grid;gap:12px;max-height:72vh;overflow:auto}
+.sqlite-data-compare-pair,.sqlite-data-compare-filter{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.sqlite-data-compare-endpoint,.sqlite-data-compare-filter{min-width:0;border:1px solid var(--line-soft);padding:8px}
+.sqlite-data-compare table{width:100%;table-layout:fixed;border-collapse:collapse}
+.sqlite-data-compare th,.sqlite-data-compare td{padding:6px;border-bottom:1px solid var(--line-soft);text-align:left;overflow-wrap:anywhere}
+.sqlite-data-compare pre{max-height:170px;overflow:auto;margin:0;white-space:pre-wrap}
+.sqlite-data-compare-key{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sqlite-data-compare-pager{display:flex;align-items:center;gap:10px;justify-content:center}

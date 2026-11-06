@@ -260,3 +260,72 @@ describe('SQLite原工作区运行时与真实磁盘utility路由', () => {
     await app.request('connections.close', { id: profile.id }); await processes[0].exited; expect(processes[0].kills).toBe(1); expect(app.ownsConnection(profile.id)).toBe(false);
   });
 });
+
+describe('SQLite 数据比较真实快照', () => {
+  const endpoint = (profile: SqliteConnectionProfile, table: string) => ({ connectionId: profile.id, table, database: 'main' as const });
+  function seed(profile: SqliteConnectionProfile, sql: string) {
+    const db = new DatabaseSync(profile.sqlite.filePath!);
+    try { db.exec(sql); } finally { db.close(); }
+  }
+  function compare(app: SqliteRuntime, source: ReturnType<typeof endpoint>, target: ReturnType<typeof endpoint>,
+    filters: import('../../src/shared/sqliteTableBrowse').SqliteTableFilter[] = [], controller = new AbortController()) {
+    return app.request('sqlite.compareData', { source: { source, target, filters, mode: 'and', taskId: 'compare-fixture' }, signal: controller.signal, assertOwner() {} });
+  }
+
+  it('跨文件复合主键比较全部真实差异，精确保留64位整数、BLOB、NULL及数值存储类型', async () => {
+    const a = fixture('left'), b = fixture('right'), { runtime: app } = runtime([a, b]);
+    seed(a, `CREATE TABLE ledger(tenant TEXT, id INTEGER, value, PRIMARY KEY(tenant,id)) WITHOUT ROWID;
+      INSERT INTO ledger VALUES ('a',9223372036854775807,1),('b',2,X'00FF80'),('c',3,NULL),('q',9,'文本');`);
+    seed(b, `CREATE TABLE ledger(value, id INTEGER, tenant TEXT, PRIMARY KEY(id,tenant)) WITHOUT ROWID;
+      INSERT INTO ledger VALUES (1.0,9223372036854775807,'a'),(X'00FF81',2,'b'),(NULL,4,'d'),('文本',9,'q');`);
+    const result = await compare(app, endpoint(a, 'ledger'), endpoint(b, 'ledger'));
+    expect(result).toMatchObject({ snapshot: 'two-files', keyColumns: ['tenant','id'], sourceRows: 4, targetRows: 4, equal: 1,
+      counts: { 'source-only': 1, 'target-only': 1, different: 2 } });
+    expect(result.differences[0]).toEqual({ kind: 'different', key: ['a', { type: 'integer', value: '9223372036854775807' }],
+      cells: [{ column: 2, source: { type: 'integer', value: '1' }, target: { type: 'real', value: '1' } }] });
+    expect(result.differences[1].cells).toEqual([{ column: 2, source: { type: 'binary', base64: 'AP+A' }, target: { type: 'binary', base64: 'AP+B' } }]);
+    expect(result.differences[2].cells[2]).toEqual({ column: 2, source: null });
+    expect(result.differences[3].cells[0]).toEqual({ column: 0, target: 'd' });
+    expect(await Promise.all(processes.map(item => item.exited))).toEqual([{ code: 0, signal: null }, { code: 0, signal: null }]);
+    expect(processes.every(item => item.sent.some(message => message.kind === 'open' && message.options.readOnly))).toBe(true);
+    expect(diskValue(a, 'SELECT count(*) FROM ledger')).toBe(4);
+    expect(diskValue(b, 'SELECT count(*) FROM ledger')).toBe(4);
+  });
+
+  it('同文件同快照及同一有类型筛选，不把另一侧未匹配的数据纳入范围', async () => {
+    const a = fixture(), { runtime: app } = runtime([a]);
+    seed(a, `CREATE TABLE a(id INTEGER PRIMARY KEY, note); CREATE TABLE b(id INTEGER PRIMARY KEY, note);
+      INSERT INTO a VALUES(1,'same'),(2,'left'); INSERT INTO b VALUES(1,'same'),(3,'right');`);
+    const result = await compare(app, endpoint(a, 'a'), endpoint(a, 'b'), [{ column: 'note', operator: 'eq', value: { kind: 'text', value: 'same' } }]);
+    expect(result).toMatchObject({ snapshot: 'one-file', sourceRows: 1, targetRows: 1, equal: 1, differences: [] });
+    expect(processes).toHaveLength(1);
+    expect(await processes[0].exited).toEqual({ code: 0, signal: null });
+  });
+
+  it('拒绝无主键、NULL 主键及 10,000 行之外的部分结果', async () => {
+    const a = fixture(), { runtime: app } = runtime([a]);
+    seed(a, `CREATE TABLE a(id INT PRIMARY KEY, note);
+      CREATE TABLE no_key(id INT, note);
+      CREATE TABLE b(id INT PRIMARY KEY, note);
+      INSERT INTO b VALUES(NULL, '不可匹配');`);
+    await expect(compare(app, endpoint(a, 'a'), endpoint(a, 'no_key'))).rejects.toThrow('显式主键');
+    await expect(compare(app, endpoint(a, 'a'), endpoint(a, 'b'))).rejects.toThrow('NULL 主键');
+    seed(a, 'WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10001) INSERT INTO a SELECT i,NULL FROM n');
+    await expect(compare(app, endpoint(a, 'a'), endpoint(a, 'b'))).rejects.toThrow('10,000 行');
+    expect(await Promise.all(processes.map(item => item.exited))).toHaveLength(3);
+  });
+
+  it('读取开始后取消，只终止本次只读操作并收束原驱动', async () => {
+    const a = fixture(), controller = new AbortController();
+    seed(a, 'CREATE TABLE a(id INTEGER PRIMARY KEY, note); CREATE TABLE b(id INTEGER PRIMARY KEY, note);');
+    const { runtime: app } = runtime([a], { create: () => transport((message, forward) => {
+      if (message.kind === 'statement' && message.sql.includes('pragma_table_list')) controller.abort(Error('本例取消'));
+      forward();
+    }) });
+    await expect(compare(app, endpoint(a, 'a'), endpoint(a, 'b'), [], controller)).rejects.toThrow();
+    expect(processes).toHaveLength(1);
+    expect(processes[0].sent.some(message => message.kind === 'cancel')).toBe(true);
+    await processes[0].exited;
+    expect(diskValue(a, 'SELECT count(*) FROM a')).toBe(0);
+  });
+});

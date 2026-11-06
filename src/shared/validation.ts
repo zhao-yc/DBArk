@@ -1,3 +1,4 @@
+import { sqliteDataCompareSchema } from './sqliteDataCompare';
 import { postgresRoutineCreateSchema, postgresRoutineDependencySchema, postgresRoutineManageSchema,
   postgresRoutineOwnerTargetsSchema, postgresRoutineReadSchema } from './postgresRoutine';
 import { postgresSequenceCreateSchema, postgresSequenceManageSchema, postgresSequenceReadSchema, postgresSequenceTargetsSchema } from './postgresSequence';
@@ -304,6 +305,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tablePage': sqliteTablePageSchema,
   'sqlite.valueOptions': sqliteValueOptionsInputSchema,
   'sqlite.statistics': sqliteStatisticsInputSchema,
+  'sqlite.compareData': sqliteDataCompareSchema,
+  'sqlite.compareData.cancel': z.object({ taskId: id }).strict(),
   'sqlite.schemaScript': sqliteSchemaScriptSchema,
   'sqlite.countRows': sqliteRowCountInputSchema,
   'sqlite.relationships': sqliteRelationshipsInputSchema,

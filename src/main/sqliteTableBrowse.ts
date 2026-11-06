@@ -72,6 +72,8 @@ async function rows(driver: SqliteDriverSession, sql: string, parameters: Sqlite
   return values;
 }
 
+export { rows as readSqliteTableRows };
+
 /** 关联范围必须在同一物理事务中核目录；无关联的既有读取不增加目录IO。 */
 export async function verifySqliteTableScope(driver: SqliteDriverSession, input: { table: string; relation?: import('../shared/sqliteTableBrowse').SqliteTableRelation }, control: SqliteTableBrowseControl): Promise<void> {
   if (input.relation) { const { verifySqliteTableRelation } = await import('./sqliteTableRelation'); await verifySqliteTableRelation(driver, input.table, input.relation, control); }

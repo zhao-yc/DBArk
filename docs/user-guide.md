@@ -1,5 +1,7 @@
 # 使用指南
 
+从「工具」选择「比较 SQLite 表数据」，可按主键核对同库或跨文件普通表，按差异类型翻页并查看左右字段原值。[SQLite 数据比较](development/sqlite-data-compare-20261106.md)
+
 从「工具」打开 MySQL 或 MariaDB 的 tabrelio 数据库备份归档，查看清单与摘要，再将原始 SQL 导出到新文件。[归档检查与 SQL 导出](development/database-backup-archive-sql-20261106.md)
 
 SQLite 连接行的操作菜单提供「备份 SQLite 整库」。侧栏标题旁的「从 SQLite 备份恢复」先选择备份，再将其恢复为新文件。恢复后可在新建连接时选择该文件。[SQLite 备份与恢复](development/sqlite-database-backup-20261106.md)

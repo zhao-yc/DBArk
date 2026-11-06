@@ -339,6 +339,8 @@ export interface CommandMap {
   'sqlite.tablePage': { input: import('./sqliteTableBrowse').SqliteTablePageInput; output: import('./sqliteTableBrowse').SqliteTablePage };
   'sqlite.valueOptions': { input: import('./sqliteValueOptions').SqliteValueOptionsInput; output: import('./sqliteValueOptions').SqliteValueOptionsOutput };
   'sqlite.statistics': { input: import('./sqliteStatistics').SqliteStatisticsInput; output: import('./sqliteStatistics').SqliteStatisticsOutput };
+  'sqlite.compareData': { input: import('./sqliteDataCompare').SqliteDataCompareInput; output: import('./sqliteDataCompare').SqliteDataCompareOutput };
+  'sqlite.compareData.cancel': { input: { taskId: string }; output: void };
   'sqlite.schemaScript': { input: import('./sqliteSchemaScript').SqliteSchemaScriptInput; output: import('./sqliteSchemaScript').SqliteSchemaScriptOutput };
   'sqlite.countRows': { input: import('./sqliteStatistics').SqliteRowCountInput; output: import('./sqliteStatistics').SqliteRowCountOutput };
   'sqlite.incomingPage': { input: import('./sqliteIncoming').SqliteIncomingInput; output: import('./sqliteIncoming').SqliteIncomingOutput };

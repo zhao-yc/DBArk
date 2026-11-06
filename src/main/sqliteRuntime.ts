@@ -1,3 +1,5 @@
+import { compareSqliteTables } from './sqliteDataCompare';
+import { sqliteDataCompareSchema, type SqliteDataCompareOutput } from '../shared/sqliteDataCompare';
 import { parseSqliteTableDraft, type SqliteTableDraftDocument, type SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import { sqliteIncomingInputSchema, sqliteIncomingLimits, type SqliteIncomingInput, type SqliteIncomingOutput } from '../shared/sqliteIncoming';
 import { readSqliteIncoming } from './sqliteIncoming';
@@ -241,6 +243,27 @@ export class SqliteRuntime {
       this.assertTarget(connection, this.profile(this.options.resolveProfile(input.connectionId), input.connectionId));
     };
     return this.track(connection, () => this.short(connection, profile, driver => action(driver, check), true));
+  }
+  /** 两端复用原连接生命周期和短读关闭。仅对本次独占驱动投递取消。 */
+  private compareData(raw: unknown, signal: AbortSignal, owner: () => void): Promise<SqliteDataCompareOutput> {
+    const input = sqliteDataCompareSchema.parse(raw);
+    const watch = async <T>(driver: SqliteDriverSession, action: () => Promise<T>) => {
+      const cancel = () => { void driver.cancel().catch(() => {}); };
+      signal.addEventListener('abort', cancel, { once: true });
+      try { signal.throwIfAborted(); return await action(); }
+      finally { signal.removeEventListener('abort', cancel); }
+    };
+    return this.metadata(input.source, (left, checkLeft) => watch(left, async () => {
+      const check = () => { signal.throwIfAborted(); owner(); checkLeft(); };
+      check();
+      if (input.source.connectionId === input.target.connectionId) return compareSqliteTables(left, left, input, check);
+      return this.metadata(input.target, (right, checkRight) => watch(right, () => {
+        const a = left.identity, b = right.identity;
+        if (!a || !b) throw Error('无法确认 SQLite 两侧的文件身份');
+        if (a.device === b.device && a.inode === b.inode) throw Error('两条连接指向同一个 SQLite 文件，请用同一条连接选择两张表');
+        return compareSqliteTables(left, right, input, () => { check(); checkRight(); });
+      }));
+    })) as Promise<SqliteDataCompareOutput>;
   }
   /** 补全只保留有界活动请求；会话分支串行借用原driver，独立分支只读打开并确认原exit。 */
   private completion(source: unknown): Promise<SqliteCompletionOutput> {
@@ -1214,6 +1237,7 @@ export class SqliteRuntime {
         catch (reason) { if (!task.session.driver.isUsable && !task.session.driver.isClosed) this.block(task.session.connection, reason); throw reason; }
         return;
       }
+      case 'sqlite.compareData': return this.compareData(input.source, input.signal, input.assertOwner);
       case 'sqlite.tablePage': return this.tablePage(input);
       case 'sqlite.valueOptions': return this.valueOptions(input);
       case 'sqlite.statistics': return this.statistics(input);

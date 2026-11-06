@@ -1,3 +1,4 @@
+import { sqliteDataCompareLimits, sqliteDataCompareZh, type SqliteDataCompareInput } from '../shared/sqliteDataCompare';
 import { sameConnectionFamily } from '../shared/connectionDialect';
 import { postgresTableExportExtension, type PostgresTableImportChooseInput } from '../shared/postgresTable';
 import { inspectPostgresCopySource, type PostgresCopySource } from '../engine/postgres/copyImportFile';
@@ -151,6 +152,7 @@ const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatem
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
+let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
 let sqliteCopyTask: { id: string; owner: MainInvocation; abort: AbortController } | undefined;
 let binaryCellFileActive = false;
 const exportReservations = new ExportReservations();
@@ -845,6 +847,31 @@ const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
 const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
+
+/** 比较只接受保存的两端连接和固定筛选。关闭、改配置或原文档撤销后不发布差异。 */
+async function compareSqliteData(input: SqliteDataCompareInput, owner: MainInvocation | undefined) {
+  columnsMain.assertCapturedOwner(owner);
+  if (sqliteComparison) throw Error('已有 SQLite 数据比较正在运行');
+  const revision = store.connectionRevision(), controller = new AbortController();
+  const assertOwner = () => {
+    columnsMain.assertCapturedOwner(owner);
+    if (shuttingDown || revision !== store.connectionRevision()) throw Error('SQLite 比较的原窗口或连接已变化');
+    connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId);
+    controller.signal.throwIfAborted();
+  };
+  assertOwner();
+  sqliteComparison = { owner: owner!, id: input.taskId, controller };
+  const timer = setTimeout(() => controller.abort(Error(sqliteDataCompareZh.timeout)), sqliteDataCompareLimits.timeoutMs);
+  timer.unref();
+  try {
+    const output = await broker.request('sqlite.compareData', { source: input, signal: controller.signal, assertOwner });
+    assertOwner();
+    return output;
+  } catch (reason) {
+    if (controller.signal.aborted && !(reason instanceof AggregateError)) controller.signal.throwIfAborted();
+    throw reason;
+  } finally { clearTimeout(timer); sqliteComparison = undefined; }
+}
 
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
@@ -1849,6 +1876,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
+    case 'sqlite.compareData': return compareSqliteData(input, columns);
+    case 'sqlite.compareData.cancel':
+      columnsMain.assertCapturedOwner(columns);
+      if (sqliteComparison && sqliteComparison.id === input.taskId && columnsMain.sharesDocumentOwner(sqliteComparison.owner, columns!))
+        sqliteComparison.controller.abort(Error(sqliteDataCompareZh.cancelled));
+      return;
     case 'backupArchive.open': return queryFileOperation(() => backupArchiveFiles.open(columns!, input.operationId));
     case 'backupArchive.exportSql': return queryFileOperation(() => backupArchiveFiles.export(columns!, input.operationId, input.token));
     case 'backupArchive.cancel': columnsMain.assertCapturedOwner(columns); return backupArchiveFiles.cancel(columns!, input.operationId);
@@ -2401,7 +2434,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
-        if (payload.command.startsWith('backupArchive.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('backupArchive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel') columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind === 'postgres.table.import') columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||

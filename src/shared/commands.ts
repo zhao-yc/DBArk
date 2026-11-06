@@ -50,6 +50,7 @@ export const publicCommands: Record<Command, true> = {
   'sqlite.incomingPage': true,
   'sqlite.valueOptions': true,
   'sqlite.statistics': true,
+  'sqlite.compareData': true, 'sqlite.compareData.cancel': true,
   'sqlite.schemaScript': true,
   'sqlite.countRows': true,
   'sqlite.tableExport': true,
