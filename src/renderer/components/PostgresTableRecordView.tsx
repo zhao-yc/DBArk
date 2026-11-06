@@ -4,6 +4,7 @@ import { errorMessage } from '../lib';
 import { postgresRecordViewZh as text } from '../locales/postgresRecordView.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { PostgresRecordFields, type PostgresRecordValues } from './PostgresRecordFields';
+import type { PostgresReferenceSource } from './PostgresReferencePicker';
 import { Empty, ErrorBox } from './ui';
 
 export type PostgresRecordMove = 'first' | 'previous' | 'next' | 'last';
@@ -17,8 +18,9 @@ function equalFields(left: PostgresRecordValues, right: PostgresRecordValues): b
 }
 
 /** 行输入只属于原页及原行。换行或跨页时通过 key 更换输入组件，字段导航偏好保留。 */
-function RecordInput({ page, row, columns, draft, editable, onDirty, onStage }: {
+function RecordInput({ page, row, columns, draft, editable, reference, onDirty, onStage }: {
   page: PostgresTablePage; row: number; columns: PostgresTableColumn[]; draft?: RecordDraft; editable: boolean;
+  reference?: PostgresReferenceSource;
   onDirty(dirty: boolean): void; onStage(fields: PostgresTableField[]): void;
 }) {
   const saved = useMemo<PostgresRecordValues>(() => new Map(draft?.kind === 'update'
@@ -60,12 +62,13 @@ function RecordInput({ page, row, columns, draft, editable, onDirty, onStage }: 
     </div>}
     <ErrorBox message={error}/>
     {columns.length ? <PostgresRecordFields columns={columns} original={page.rows[row]} fields={input ?? saved}
-      editable={editable || !!input || draft?.kind === 'update'} disabled={!editable} inspect onChange={changeInput}/> : <Empty title={text.noFields}/>}
+      editable={editable || !!input || draft?.kind === 'update'} disabled={!editable} inspect reference={reference} onChange={changeInput}/> : <Empty title={text.noFields}/>}
   </>;
 }
 
-export function PostgresTableRecordView({ page, row, offset, visible, draft, editable, moves, onMove, onDirty, onStage }: {
+export function PostgresTableRecordView({ page, row, offset, visible, draft, editable, reference, moves, onMove, onDirty, onStage }: {
   page: PostgresTablePage; row: number | null; offset: number; visible: PostgresTableColumn[]; draft?: RecordDraft; editable: boolean;
+  reference?: PostgresReferenceSource;
   moves: Record<PostgresRecordMove, boolean>; onMove(move: PostgresRecordMove): void;
   onDirty(row: number, dirty: boolean): void; onStage(row: number, fields: PostgresTableField[]): void;
 }) {
@@ -94,7 +97,7 @@ export function PostgresTableRecordView({ page, row, offset, visible, draft, edi
       }}>{column.name}</button>)}</nav>}
       <div className="pg-record-content" ref={fieldArea}>
         <RecordInput key={page.exportToken + ':' + row} page={page} row={row} columns={columns} draft={draft}
-          editable={editable} onDirty={dirty => onDirty(row, dirty)} onStage={fields => onStage(row, fields)}/>
+          editable={editable} reference={reference} onDirty={dirty => onDirty(row, dirty)} onStage={fields => onStage(row, fields)}/>
       </div>
     </div>}
   </section>;

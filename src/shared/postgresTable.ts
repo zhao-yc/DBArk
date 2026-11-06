@@ -95,6 +95,24 @@ export const postgresTablePreviewSchema = target.extend({
 });
 export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
+export const postgresTableReferenceLimits = { page: 40, offset: 100_000, search: 256, constraints: 128, columns: 16 } as const;
+export const postgresTableReferenceSchema = postgresTableReleaseSchema.extend({
+  lookup: z.object({
+    id: z.string().regex(/^[1-9][0-9]{0,9}$/),
+    stamp: z.string().regex(/^[0-9a-f]{64}$/),
+    search: z.string().max(postgresTableReferenceLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
+    offset: z.number().int().min(0).max(postgresTableReferenceLimits.offset),
+  }).strict().optional(),
+}).strict();
+export type PostgresTableReferenceInput = z.infer<typeof postgresTableReferenceSchema>;
+export interface PostgresTableReference {
+  id: string; stamp: string; name: string; schema: string; table: string;
+  pairs: { local: string; localName: string; remote: string; binary: boolean }[];
+}
+export interface PostgresTableReferenceResult {
+  choices: PostgresTableReference[];
+  page?: { columns: ResultColumn[]; rows: DataRow[]; hasNext: boolean };
+}
 const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy']);
 
 /** 原生 COPY 使用 CSV 扩展名，文件能力仍按具体导出格式绑定。 */

@@ -712,6 +712,7 @@ export class PostgresEngine {
         return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
       case 'postgres.table.page':
+      case 'postgres.table.references':
       case 'postgres.table.apply':
       case 'postgres.table.import':
       case 'postgres.table.export': {
@@ -722,6 +723,7 @@ export class PostgresEngine {
           this.use(profile, input.database, action, false, false, writing);
         if (command === 'postgres.table.export') return this.exportTable(input as PostgresTableExportRequest, profile);
         if (command === 'postgres.table.import') return this.importTable(input as PostgresTableImportRequest, profile);
+        if (command === 'postgres.table.references') return this.tables.references(input as Parameters<PostgresTableWorkspace['references']>[0], connect);
         return command === 'postgres.table.page' ? this.tables.page(input as Parameters<PostgresTableWorkspace['page']>[0], connect) : this.tables.apply(input as Parameters<PostgresTableWorkspace['apply']>[0], connect);
       }
       case 'postgres.table.preview':

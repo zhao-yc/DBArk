@@ -4,6 +4,8 @@ import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn
 import { cellPreview, cellText, errorMessage, ownCell } from '../lib';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { postgresRecordViewZh as viewText } from '../locales/postgresRecordView.zh-CN';
+import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
+import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
 import { ErrorBox, Modal } from './ui';
 
 export type PostgresEditableRecord = Extract<PostgresTableChange, { kind: 'insert' | 'update' }>;
@@ -11,11 +13,13 @@ export type PostgresRecordValues = Map<string, PostgresTableField['value']>;
 type Mode = PostgresTableField['value']['mode'] | 'unchanged';
 
 /** 网格弹窗和记录视图共用字段模式，分别管理自己的输入和暂存。 */
-export function PostgresRecordFields({ columns, original, fields, editable, disabled, inspect, onChange }: {
+export function PostgresRecordFields({ columns, original, fields, editable, disabled, inspect, reference, onChange }: {
   columns: readonly PostgresTableColumn[]; original?: DataRow; fields: PostgresRecordValues; editable: boolean; disabled?: boolean; inspect?: boolean;
+  reference?: PostgresReferenceSource;
   onChange(change: (current: PostgresRecordValues) => PostgresRecordValues): void;
 }) {
   const [expanded, setExpanded] = useState<string>();
+  const [pickReference, setPickReference] = useState(false);
 
   function changeMode(column: string, mode: Mode) {
     onChange(previous => {
@@ -31,7 +35,15 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
     });
   }
 
-  return <>{columns.map(column => {
+  return <>{editable && reference && <div className="pg-record-reference">
+    <button type="button" disabled={disabled} aria-expanded={pickReference} onClick={() => setPickReference(value => !value)}>{referenceText.open}</button>
+    {pickReference && <PostgresReferencePicker key={reference.input.pageToken} source={reference} onClose={() => setPickReference(false)}
+      onChoose={selected => onChange(previous => {
+        const next = new Map(previous);
+        for (const field of selected) next.set(field.column, field.value);
+        return next;
+      })}/>}
+  </div>}{columns.map(column => {
     const value = fields.get(column.key);
     const originalValue = original && ownCell(original, column.key);
     const summary = inspect && originalValue === null ? viewText.null : inspect && originalValue === '' ? viewText.empty : cellPreview(originalValue);
@@ -62,8 +74,9 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
   })}</>;
 }
 
-export function PostgresRecordForm({ page, row, initial, onSave, onClose }: {
+export function PostgresRecordForm({ page, row, initial, reference, onSave, onClose }: {
   page: PostgresTablePage; row: number | null; initial?: PostgresEditableRecord;
+  reference?: PostgresReferenceSource;
   onSave(change: PostgresEditableRecord): void; onClose(): void;
 }) {
   const [fields, setFields] = useState<PostgresRecordValues>(() => new Map(initial?.fields.map(field => [field.column, field.value])));
@@ -79,7 +92,7 @@ export function PostgresRecordForm({ page, row, initial, onSave, onClose }: {
 
   return <Modal title={row === null ? text.add : text.edit} onClose={onClose} wide>
     <div className="modal-content pg-record-form">
-      <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable onChange={setFields}/>
+      <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference} onChange={setFields}/>
       <ErrorBox message={error}/>
     </div>
     <footer className="modal-footer"><button onClick={onClose}>{text.cancel}</button><button className="primary" onClick={submit}>{text.stage}</button></footer>

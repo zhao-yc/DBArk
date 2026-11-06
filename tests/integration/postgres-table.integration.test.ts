@@ -9,7 +9,7 @@ import { from as copyFrom } from 'pg-copy-streams';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
-import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview } from '../../src/shared/postgresTable';
+import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult } from '../../src/shared/postgresTable';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { inspectPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
 
@@ -57,6 +57,43 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       const first = await read();
       expect(first).toMatchObject({ hasNext: true, truncated: false, order: 'primary', capabilities: { insert: true, update: true, delete: true } });
       expect(first.rows[0]).toMatchObject({ c0: '1', c2: '1234567890123456789012.123456789012345678', c3: { base64: 'AP8=' }, c4: '原一-生成' });
+      const reference = { table: '"浏览"."引用记录"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE "浏览"."父""表" (code bigint, label text, description text, PRIMARY KEY(code,label));
+        INSERT INTO "浏览"."父""表" SELECT 9007199254740992 + i, '组' || i,
+          CASE WHEN i=42 THEN '字面_%命中' ELSE '说明' || i END FROM generate_series(1,42) i;
+        CREATE TABLE ${reference.table} (id bigint PRIMARY KEY, local_label text, local_code bigint,
+          CONSTRAINT "反序复合外键" FOREIGN KEY(local_code,local_label) REFERENCES "浏览"."父""表"(code,label));
+        INSERT INTO ${reference.table} VALUES (1,'组1',9007199254740993);`);
+      const referencePage = await read(reference);
+      const references = (extra: Record<string, unknown> = {}): Promise<PostgresTableReferenceResult> =>
+        engine.handle('postgres.table.references', { ...target, ...reference, profile, pageToken: referencePage.pageToken, ...extra });
+      const referenceDirectory = await references();
+      expect(referenceDirectory.choices).toHaveLength(1);
+      const choice = referenceDirectory.choices[0];
+      expect(choice.pairs.map(pair => [pair.local, pair.remote])).toEqual([['c2', 'code'], ['c1', 'label']]);
+      const lookup = { id: choice.id, stamp: choice.stamp, search: '', offset: 0 };
+      expect((await references({ lookup })).page).toMatchObject({ hasNext: true });
+      const filtered = await references({ lookup: { ...lookup, search: '_%' } });
+      expect(filtered.page?.rows).toEqual([{ c0: '9007199254741034', c1: '组42', c2: '字面_%命中' }]);
+      expect((await references({ lookup: { ...lookup, offset: 40 } })).page?.rows).toHaveLength(2);
+      await expect(references({ owner: randomUUID(), lookup })).rejects.toThrow('快照');
+      await expect(references({ lookup: { ...lookup, stamp: '0'.repeat(64) } })).rejects.toThrow('原外键');
+      const limitedUser = process.env.DBARK_POSTGRES_COMPLETION_ROLE;
+      if (limitedUser !== database + '_limited') throw Error('缺少本轮独占的列权限测试账号');
+      await client.query(`GRANT USAGE ON SCHEMA "浏览" TO "${limitedUser}";
+        GRANT SELECT, UPDATE ON ${reference.table} TO "${limitedUser}";
+        GRANT SELECT(code,label) ON "浏览"."父""表" TO "${limitedUser}"`);
+      const limitedProfile = { ...profile, id: randomUUID(), user: limitedUser };
+      const limitedTarget = { ...target, ...reference, tabId: randomUUID(), profile: limitedProfile, connectionId: limitedProfile.id };
+      const limitedPage = await read(limitedTarget);
+      const limitedResult: PostgresTableReferenceResult = await engine.handle('postgres.table.references',
+        { ...limitedTarget, pageToken: limitedPage.pageToken, lookup });
+      expect(limitedResult.page?.columns.map(column => column.name)).toEqual(['code', 'label']);
+      await client.query(`REVOKE SELECT(label) ON "浏览"."父""表" FROM "${limitedUser}"`);
+      await expect(engine.handle('postgres.table.references',
+        { ...limitedTarget, pageToken: limitedPage.pageToken, lookup })).rejects.toThrow('读取权限');
+      await read(reference);
+      await expect(references({ lookup })).rejects.toThrow('快照');
       expect((await read({ offset: 2 })).rows.map(row => row.c0)).toEqual(['3']);
       expect((await read({ sort: { column: 'id', direction: 'desc' } })).rows.map(row => row.c0)).toEqual(['3', '2']);
       expect((await read({ filter: { column: 'note', text: "原三';--" } })).rows).toEqual([]);

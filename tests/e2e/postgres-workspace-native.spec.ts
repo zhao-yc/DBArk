@@ -8,6 +8,7 @@ import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipb
 import { postgresGridPasteZh as gridPasteText } from '../../src/renderer/locales/postgresGridPaste.zh-CN';
 import { postgresTableFindZh as tableFindText } from '../../src/renderer/locales/postgresTableFind.zh-CN';
 import { postgresRecordViewZh as pgRecordViewText } from '../../src/renderer/locales/postgresRecordView.zh-CN';
+import { postgresReferencePickerZh as referencePickerText } from '../../src/renderer/locales/postgresReferencePicker.zh-CN';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -98,6 +99,18 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) || user !== database || !/^[a-f0-9]{64}$/.test(password) ||
       !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('只允许本轮专用角色及SSH回环实库');
     await mark('已捕获独占窗口归属');
+    const referenceFixture = new Client({ host: '127.0.0.1', port, database, user, password, ssl: false, connectionTimeoutMillis: 1500 });
+    await referenceFixture.connect();
+    try {
+      await referenceFixture.query(`
+        CREATE SCHEMA "候选数据";
+        CREATE TABLE "候选数据"."外键选值父" (code bigint, label text, detail text, PRIMARY KEY(code,label));
+        INSERT INTO "候选数据"."外键选值父" VALUES (9007199254740993,'原组','原说明'),(9007199254740994,'新组','独立搜索命中');
+        CREATE TABLE "回归"."外键选值子" (id bigint PRIMARY KEY, local_label text, local_code bigint,
+          CONSTRAINT "窗口外键选值" FOREIGN KEY(local_code,local_label) REFERENCES "候选数据"."外键选值父"(code,label));
+        INSERT INTO "回归"."外键选值子" VALUES (1,'原组',9007199254740993)
+      `);
+    } finally { await referenceFixture.end(); }
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click();
     const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     const title = '本轮 PostgreSQL 实库';
@@ -154,6 +167,42 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await expect(tableButton(postgresTableZh.refresh)).toBeEnabled();
       check();
     };
+
+    await page.locator('.object-row .tree-label').filter({ hasText: '外键选值子' }).click();
+    await expect(grid).toContainText('原组');
+    await tableButton(postgresTableZh.add).click();
+    const referenceAdd = page.getByRole('dialog', { name: postgresTableZh.add, exact: true });
+    const picker = page.getByRole('region', { name: referencePickerText.title, exact: true });
+    await referenceAdd.getByRole('button', { name: referencePickerText.open, exact: true }).click();
+    await picker.getByRole('row').filter({ hasText: '原说明' }).getByRole('button', { name: referencePickerText.use }).click();
+    await expect(referenceAdd.getByLabel('local_code ' + postgresTableZh.value, { exact: true })).toHaveValue('9007199254740993');
+    await referenceAdd.getByRole('button', { name: postgresTableZh.cancel, exact: true }).click();
+    await tableButton(pgRecordViewText.view).click();
+    const referenceForm = gridTab.getByRole('region', { name: pgRecordViewText.title, exact: true });
+    await referenceForm.getByRole('button', { name: referencePickerText.open, exact: true }).click();
+    const referenceSearch = picker.getByRole('searchbox', { name: referencePickerText.query, exact: true });
+    await referenceSearch.fill('独立搜索');
+    await referenceSearch.press('Enter');
+    await expect(picker.getByRole('row').filter({ hasText: '独立搜索命中' })).toBeVisible();
+    await expect(picker.getByRole('row').filter({ hasText: '原说明' })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('PostgreSQL外键选值.png') });
+    await picker.getByRole('button', { name: referencePickerText.use, exact: true }).click();
+    await expect(referenceForm.getByLabel('local_code ' + postgresTableZh.value, { exact: true })).toHaveValue('9007199254740994');
+    await expect(referenceForm.getByLabel('local_label ' + postgresTableZh.value, { exact: true })).toHaveValue('新组');
+    await referenceForm.getByRole('button', { name: pgRecordViewText.stage, exact: true }).click();
+    const referenceReadback = new Client({ host: '127.0.0.1', port, database, user, password, ssl: false, connectionTimeoutMillis: 1500 });
+    try {
+      await referenceReadback.connect();
+      const readReference = async () => (await referenceReadback.query('SELECT local_code::text AS code, local_label AS label FROM "回归"."外键选值子"')).rows;
+      expect(await readReference()).toEqual([{ code: '9007199254740993', label: '原组' }]);
+      await commit();
+      expect(await readReference()).toEqual([{ code: '9007199254740994', label: '新组' }]);
+    } finally { await referenceReadback.end(); }
+    await table.click();
+    const referenceTab = page.locator('.tab-strip .workspace-tab-button').filter({ hasText: '外键选值子' });
+    await referenceTab.locator('.tab-close').click();
+    await expect(referenceTab).toHaveCount(0);
+    await mark('PostgreSQL 外键选值支持新增表单和记录视图，跨 schema 搜索说明列并整组带回复合键，精确回读提交前后');
 
     const inlineCell = (name: string) => grid.getByRole('gridcell', { name, exact: true });
     const inline = (column: string) => page.getByRole('region', { name: postgresTableZh.cellEdit(column), exact: true });

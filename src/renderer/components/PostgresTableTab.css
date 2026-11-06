@@ -47,6 +47,14 @@
 .pg-record-view .pg-record-inputs select { width: min(170px, 45%); }
 .pg-record-original { overflow-wrap: anywhere; }
 .pg-record-original button { margin-left: 8px; }
+.pg-record-reference { margin: 8px 0; }
+.pg-reference-picker { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius); padding: 0 8px; }
+.pg-reference-picker .pg-table-controls { padding-inline: 0; }
+.pg-reference-picker :is(select, input[type="search"]) { width: min(220px, 100%); }
+.pg-reference-candidates { overflow: auto; max-height: min(32vh, 280px); }
+.pg-reference-candidates table { border-collapse: collapse; width: 100%; }
+.pg-reference-candidates :is(th, td) { padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+.pg-reference-candidates th { position: sticky; top: 0; background: var(--surface); }
 .pg-record-pending { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; background: var(--surface); }
 .pg-find-host { display: contents; }
 .pg-table-find { flex: none; max-height: 50%; overflow: auto; border-bottom: 1px solid var(--line-soft); }

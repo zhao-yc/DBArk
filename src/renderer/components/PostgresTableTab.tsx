@@ -21,6 +21,7 @@ import { PostgresTableCellFilterMenu } from './PostgresTableCellFilterMenu';
 import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
 import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
 import { PostgresRecordForm } from './PostgresRecordFields';
+import type { PostgresReferenceSource } from './PostgresReferencePicker';
 import { PostgresTableRecordView, type PostgresRecordMove } from './PostgresTableRecordView';
 import { postgresRecordViewZh as recordText } from '../locales/postgresRecordView.zh-CN';
 import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
@@ -515,6 +516,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const recordEditable = active && recordView && !modalBlocked && !requiresRefresh && pageConnectionVersion === connectionVersion &&
     !!page?.capabilities.update && !!page.pageToken && !!viewKey && viewDraft?.kind !== 'delete';
+  /** 候选只附着在当前可写表单，连接或原表页变化后不能继续填入。 */
+  function referenceSource(allowed: boolean, current: () => boolean): PostgresReferenceSource | undefined {
+    if (!allowed || !page?.pageToken) return;
+    const input = { ...target, pageToken: page.pageToken };
+    return { input, current: () => issued.current === input.pageToken && layoutScope.current.current() &&
+      !lease.current && !requiresRefresh && current() };
+  }
   const recordIndex = row ?? -1, recordCount = page?.rows.length ?? 0;
   const canMoveRecord = active && recordView && !pagingBlocked && !requiresRefresh && recordIndex >= 0 && recordIndex < recordCount;
   const moves: Record<PostgresRecordMove, boolean> = {
@@ -654,7 +662,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     <div className="pg-table-grid" inert={!!inlineEdit}>
       {page && recordView && <PostgresTableRecordView page={page} row={row} offset={options.offset} visible={gridLayout.columns}
         draft={viewDraft?.kind === 'update' || viewDraft?.kind === 'delete' ? viewDraft : undefined}
-        editable={recordEditable} moves={moves} onMove={moveRecord} onDirty={changeRecordInput} onStage={stageRecordView}/>}
+        editable={recordEditable} reference={referenceSource(recordEditable, recordViewCurrent)}
+        moves={moves} onMove={moveRecord} onDirty={changeRecordInput} onStage={stageRecordView}/>}
       {page ? <div className="pg-record-grid-host" hidden={recordView}><PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
         rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent}
         anchor={() => findAnchor.current?.scope === cellScope ? findAnchor.current.value : undefined}
@@ -745,6 +754,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       }}/>}
     {form && page && <PostgresRecordForm page={page} row={form.row}
       initial={stagedChange?.kind === 'update' ? stagedChange : undefined}
+      reference={referenceSource(active && stagedChange?.kind !== 'delete' &&
+        (form.row === null ? page.capabilities.insert : page.capabilities.update), () => !!form)}
       onSave={stage} onClose={() => setForm(undefined)}/>}
     {preview && <Modal title={text.preview} onClose={() => { if (!busy) setPreview(undefined); }} wide>
       <div className="modal-content pg-table-preview">

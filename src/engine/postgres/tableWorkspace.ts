@@ -8,16 +8,19 @@ import {
   type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
+  type PostgresTableReferenceInput, type PostgresTableReferenceResult,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
 import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
 import { postgresTableCondition } from './tableFilter';
+import { readPostgresTableReferences } from './tableReferences';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
 type Capabilities = PostgresTablePage['capabilities'];
 interface Relation {
+  oid: string;
   sql: string;
   kind: PostgresTablePage['relationKind'];
   columns: PostgresTableColumn[];
@@ -92,7 +95,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
   const kind = info.c2 as Relation['kind'];
   const editable = kind === 'r' && info.c3 === 'f' && info.c4 === 'f';
   return {
-    sql: postgresIdentifier(schema) + '.' + postgresIdentifier(name), kind, columns, keys,
+    oid: info.c0, sql: postgresIdentifier(schema) + '.' + postgresIdentifier(name), kind, columns, keys,
     fingerprint: digest([info, fields.rows]),
     canImport: (kind === 'r' || kind === 'p') && info.c4 === 'f' && info.c5 === 't' && info.c10 === 'f',
     capabilities: {
@@ -286,6 +289,23 @@ export class PostgresTableWorkspace {
         scope.database !== input.database || scope.table !== input.table) throw Error('PostgreSQL表页快照已过期或来源变化，请刷新');
     if (writing && !snapshot.writeEligible) throw Error('原表页没有记录修改能力，请刷新');
     return snapshot;
+  }
+
+  /** 外键目录和候选只读，返回前再次核对当前页，不能借已经翻走的表页回包。 */
+  async references(input: Scoped<PostgresTableReferenceInput>, connect: Connect): Promise<PostgresTableReferenceResult> {
+    const original = this.snapshot(input, true);
+    if (!original.relation.capabilities.insert && !original.relation.capabilities.update) throw Error('原表页不支持写入外键字段');
+    const result = await connect(async connection => {
+      await begin(connection, 'page');
+      const relation = await readRelation(connection, input.table);
+      if (relation.fingerprint !== original.relation.fingerprint) throw Error('原表页结构或权限已变化，请刷新');
+      const references = await readPostgresTableReferences(connection, relation.oid, relation.columns, input.lookup);
+      const reply = await connection.query('COMMIT', undefined, small());
+      if (reply.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 外键候选读取未完成');
+      return references;
+    });
+    if (this.snapshot(input, true) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开选值');
+    return result;
   }
 
   /** 先声明游标锁住并复核关系。原生 COPY 使用同一事务中的单条 SELECT 快照。 */
