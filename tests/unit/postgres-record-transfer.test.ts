@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTableColumn, PostgresTablePage } from '../../src/shared/postgresTable';
-import { capturePostgresQueryTransfer, capturePostgresRecordTransfer, defaultPostgresTransferMapping, postgresTransferChanges, samePostgresTransferTable } from '../../src/renderer/postgresRecordTransfer';
+import { capturePostgresQueryTransfer, capturePostgresRecordTransfer, captureSqliteQueryTransfer, defaultPostgresTransferMapping, postgresTransferChanges, samePostgresTransferTable } from '../../src/renderer/postgresRecordTransfer';
+import { ResultExportSelection } from '../../src/renderer/resultExport';
 
 const relation = { connectionId: '源连接', database: '源库', table: '"样本"."记录"', label: '来源' };
 const note: PostgresTableColumn = { key: 'c0', name: '原备注', type: 'text', nullable: true, generated: false, defaultValue: false, primary: false, binary: false };
@@ -20,6 +21,50 @@ const target: PostgresTablePage = {
 const capture = () => capturePostgresRecordTransfer(relation, source, source.columns, new Set([1, 0]));
 
 describe('PostgreSQL 跨库记录草稿', () => {
+  it('SQLite 类型随勾选行及可见列投影，整数原文、BLOB 与文本分别映射', () => {
+    const columns = ['整数', '隐藏', '字节', '原备注'].map((name, index) => ({ key: 'c' + index, name, type: 'SQLITE' }));
+    const result = { columns, rows: [
+      { c0: '9223372036854775807', c1: '隐', c2: { type: 'binary' as const, base64: 'AP8=' }, c3: '0007' },
+      { c0: '-9223372036854775808', c1: '隐', c2: null, c3: '' },
+      { c0: '7', c1: '隐', c2: '42', c3: '未勾选' },
+    ], sqliteStorage: { version: 1 as const, rows: ['itbt', 'itnt', 'itit'] }, truncated: false, elapsedMs: 0, statement: '' };
+    const selection = new ResultExportSelection(), visible = [columns[2], columns[3], columns[0]];
+    const binding = selection.bind(result, [], visible)!;
+    expect(selection.select(binding, { scope: binding, rows: result.rows, columns: visible, indices: new Set([1, 0]) })).toBe(true);
+    const selected = selection.sqliteSnapshot(binding);
+    expect(selected.sqliteStorage?.rows).toEqual(['bti', 'nti']);
+    const snapshot = captureSqliteQueryTransfer({ ...relation, title: '源', result: 1 }, selected);
+    expect(snapshot.columns.map(column => [column.name, column.type, column.automaticType])).toEqual([
+      ['字节', 'BLOB / NULL', 'bytea'], ['原备注', 'TEXT', 'text'], ['整数', 'INTEGER', 'bigint'],
+    ]);
+    const destinations = [{ ...bytes, key: 'c0' }, { ...note, key: 'c1' }, { ...id, key: 'c2', name: '整数', sequenceDefault: undefined }];
+    const mapping = defaultPostgresTransferMapping(snapshot, destinations);
+    expect(postgresTransferChanges(snapshot, { ...target, columns: destinations }, mapping)).toEqual([
+      { kind: 'insert', fields: [{ column: 'c0', value: { mode: 'binary', value: '00ff' } }, { column: 'c1', value: { mode: 'text', value: '0007' } },
+        { column: 'c2', value: { mode: 'text', value: '9223372036854775807' } }] },
+      { kind: 'insert', fields: [{ column: 'c0', value: { mode: 'null' } }, { column: 'c1', value: { mode: 'text', value: '' } },
+        { column: 'c2', value: { mode: 'text', value: '-9223372036854775808' } }] },
+    ]);
+    result.sqliteStorage.rows[0] = 'ttbt';
+    expect(() => selection.sqliteSnapshot(binding)).toThrow();
+  });
+
+  it('SQLite 缺少存储证据拒绝，混合 BLOB 和标量不可映射，全 NULL 可映射到 BYTEA', () => {
+    const columns = ['混合', '全空'].map((name, index) => ({ key: 'c' + index, name, type: 'SQLITE' }));
+    const rows = [{ c0: '7', c1: null }, { c0: { type: 'binary' as const, base64: '' }, c1: null }];
+    const source = { ...relation, title: 'SQLite 查询', result: 1 };
+    const selected = { columns, rows, truncated: true, elapsedMs: 0, statement: '' };
+    expect(() => captureSqliteQueryTransfer(source, selected)).toThrow();
+    expect(() => captureSqliteQueryTransfer(source, { ...selected, sqliteStorage: { version: 1, rows: ['tn', 'tn'] } })).toThrow();
+    const snapshot = captureSqliteQueryTransfer(source, { ...selected, sqliteStorage: { version: 1, rows: ['in', 'bn'] } });
+    const destination = { ...target, columns: [bytes] };
+    expect(snapshot.columns[0].mixedBinary).toBe(true);
+    expect(() => postgresTransferChanges(snapshot, destination, new Map([[bytes.key, 'c0']]))).toThrow('不匹配');
+    expect(postgresTransferChanges(snapshot, destination, new Map([[bytes.key, 'c1']]))).toEqual(
+      rows.map(() => ({ kind: 'insert', fields: [{ column: bytes.key, value: { mode: 'null' } }] })),
+    );
+  });
+
   it('查询结果保留显示顺序、二进制类型及截断状态，重复别名不自动匹配', () => {
     const columns = [
       { key: 'c0', name: '备注', type: 'TEXT' },

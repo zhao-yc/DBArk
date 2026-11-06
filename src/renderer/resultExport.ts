@@ -36,7 +36,7 @@ function selectionCell(row: QueryResult['rows'][number], key: string): CellValue
 /** 勾选只属于一个准确结果和显示代次；失效后旧网格回调不能重新领取新结果。 */
 export class ResultExportSelection {
   private binding?: ResultSelectionBinding;
-  private selection?: { binding: ResultSelectionBinding; indices: number[]; data: ResultExportData; sourceValues: CellValue[][] };
+  private selection?: { binding: ResultSelectionBinding; indices: number[]; data: ResultExportData; sourceValues: CellValue[][]; sqliteCodes?: string[] };
   /** 新执行或显式切换在setState之前撤销，不能等待effect清空。 */
   invalidate(): void { this.binding = undefined; this.selection = undefined; }
   /** 渲染时同步比对实际对象、数组与元数据；A→B→A也获得新的绑定。 */
@@ -86,7 +86,9 @@ export class ResultExportSelection {
     } catch (reason) { this.invalidate(); throw reason; }
     const data = projectQueryResultRows(binding.result,binding.visibleColumns,indices);
     validateResultExportData(data);
-    this.selection = { binding, indices, data: structuredClone(data), sourceValues };
+    const sqliteRows = binding.result.sqliteStorage?.rows;
+    this.selection = { binding, indices, data: structuredClone(data), sourceValues,
+      sqliteCodes: sqliteRows && indices.map(index => sqliteRows[index]) };
     return true;
   }
   /** 全结果也在打开时冻结当前可见列；不得复用可变原结果引用。 */
@@ -111,5 +113,21 @@ export class ResultExportSelection {
     if (!this.count(binding) || !this.selection) throw Error(zh.resultExport.selectionInvalid);
     const data = structuredClone(this.selection.data);
     return { ...data, columns: data.columns.map(column => ({ ...column, type: '' })), elapsedMs: 0, statement: '' };
+  }
+
+  /** 跨引擎暂存要求选中单元格的 SQLite 原存储类，按同一可见列和行位置投影。 */
+  sqliteSnapshot(binding: ResultSelectionBinding | undefined): QueryResult {
+    if (!this.current(binding) || !this.selection || this.selection.binding !== binding) throw Error(zh.resultExport.selectionInvalid);
+    const storage = binding.result.sqliteStorage;
+    if (storage?.version !== 1 || storage.rows.length !== binding.rows.length) throw Error(zh.resultExport.selectionInvalid);
+    const snapshot = this.snapshot(binding);
+    const positions = binding.visibleColumns.map(column => binding.columns.indexOf(column));
+    const rows = this.selection.indices.map((index, position) => {
+      const codes = storage.rows[index];
+      if (typeof codes !== 'string' || codes.length !== binding.columns.length || codes !== this.selection?.sqliteCodes?.[position])
+        throw Error(zh.resultExport.selectionInvalid);
+      return positions.map(position => codes[position]).join('');
+    });
+    return { ...snapshot, columns: binding.visibleColumns.map(column => ({ ...column })), sqliteStorage: { version: 1, rows } };
   }
 }

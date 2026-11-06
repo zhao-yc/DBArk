@@ -138,7 +138,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [pasteScope, setPasteScope] = useState<object>();
   const transfer = usePostgresRecordTransfer(state => state.snapshot);
   const [transferIntent, setTransferIntent] = useState<{ snapshot: PostgresRecordTransfer; scope: object }>();
-  const connectionName = useWorkspace(state => state.connections.find(item => item.id === tab.connectionId)?.name);
+  const connectionCatalog = useWorkspace(state => state.connections);
+  const pageCatalog = useRef<typeof connectionCatalog>(undefined);
+  const connectionName = connectionCatalog.find(item => item.id === tab.connectionId)?.name;
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
   const findAnchor = useRef<{ scope: object; value?: GridFindTarget }>(undefined);
@@ -238,6 +240,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       return false;
     }
     issued.current = result.exportToken ?? result.pageToken;
+    pageCatalog.current = connectionCatalog;
     if (retained) history.retain(retained);
     else history.reset(draftRef.current);
     if (presetLayout) layout.applyPreset(presetLayout, result.columns.map(column => column.name));
@@ -706,6 +709,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 目标页、会话快照及活动标签都核对后才加入一组可撤销的新增草稿。 */
   function stageTransfer(mapping: ReadonlyMap<string, string>) {
+    if (pageCatalog.current !== useWorkspace.getState().connections) throw Error(transferText.refreshTarget);
     if (!transferIntent || !page?.pageToken || issued.current !== page.pageToken || transferIntent.scope !== cellScope ||
         transferIntent.snapshot !== usePostgresRecordTransfer.getState().snapshot || !layoutScope.current.current() ||
         recordInput.current || lease.current || samePostgresTransferTable(transferIntent.snapshot.source, transferTable)) throw Error(transferText.stale);
@@ -1108,8 +1112,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         setPasteScope(cellScope);
       }}>{pasteText.append}</button>
       <button disabled={!canReceiveTransfer} onClick={() => {
-        if (canReceiveTransfer && transfer && page?.pageToken === issued.current && layoutScope.current.current() && !lease.current && !recordInput.current)
+        if (canReceiveTransfer && transfer && page?.pageToken === issued.current && layoutScope.current.current() && !lease.current && !recordInput.current) {
+          // 新增或编辑任意连接会使引擎的旧页修订失效，先刷新，避免消费暂存后才发现草稿无法预览。
+          if (pageCatalog.current !== useWorkspace.getState().connections) { setError(transferText.refreshTarget); return; }
           setTransferIntent({ snapshot: transfer, scope: cellScope });
+        }
       }}>{transfer && 'title' in transfer.source ? transferText.openQuery : transferText.open}</button>
       {transfer && <button disabled={blocked || !active} onClick={() => {
         if (layoutScope.current.current() && usePostgresRecordTransfer.getState().snapshot === transfer)

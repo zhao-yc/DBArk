@@ -1,11 +1,15 @@
 import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { expect, test as base } from '@playwright/test';
 import { Client } from 'pg';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresRecordTransferZh as transferText } from '../../src/renderer/locales/postgresRecordTransfer.zh-CN';
+import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
+import { sidebarMenuItem } from './sidebar-menu';
 
 type Runtime = typeof import('./desktop-fixture');
 const enabled = !process.argv.includes('--list') && process.env.DBARK_POSTGRES_RECORD_TRANSFER_NATIVE === '1';
@@ -47,7 +51,7 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
     await target.query(`CREATE SCHEMA "迁移回归";
       CREATE TABLE "迁移回归"."目标表" (
         id bigint GENERATED ALWAYS AS IDENTITY (START WITH 9007199254740993) PRIMARY KEY,
-        memo text NOT NULL, amount numeric(40,18), raw bytea, missing text DEFAULT '数据库默认',
+        memo text NOT NULL, amount numeric(40,18), raw bytea, missing text DEFAULT '数据库默认', exact_integer bigint,
         derived text GENERATED ALWAYS AS (memo || '-生成') STORED
       )`);
     const readTarget = async () => (await target.query(`SELECT id::text, memo, amount::text, encode(raw,'hex') AS raw,
@@ -162,6 +166,79 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
     expect(await readSequence()).toEqual([{ value: '3' }]);
     expect(runtime.pageErrors).toEqual([]);
     await mark('暂存查询勾选行，重复别名按列位置手动映射，确认后准确新增两行且原 SQL 未重跑');
+    await expect(tab.getByRole('gridcell', { name: '第二行-查询', exact: true })).toBeVisible();
+    await expect(button(tableText.refresh)).toBeEnabled();
+
+    const sqlitePath = join(directory, 'transfer-source.sqlite');
+    const sqliteFile = new DatabaseSync(sqlitePath);
+    try {
+      sqliteFile.exec(`CREATE TABLE transfer_source(memo TEXT, exact_integer INTEGER, precise TEXT, raw BLOB, missing TEXT, mixed);
+        INSERT INTO transfer_source VALUES
+        ('SQLite甲', 9223372036854775807, '9007199254740993.000000000000000001', X'00FF', NULL, X'AA'),
+        ('SQLite乙', -9223372036854775808, '0.000000000000000001', X'', '', 7),
+        ('SQLite不选', 0, '0', NULL, '保留', 8)`);
+    } finally { sqliteFile.close(); }
+    await application.evaluate(({ dialog }, file) => {
+      const original = dialog.showOpenDialog;
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        dialog.showOpenDialog = original;
+        const options = args.at(-1) as Electron.OpenDialogOptions;
+        if (!options.properties?.includes('openFile')) throw Error('拒绝与本例无关的文件对话框');
+        return { canceled: false, filePaths: [file] };
+      }) as typeof dialog.showOpenDialog;
+    }, sqlitePath);
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click();
+    await form.getByLabel(zh.connections.text006, { exact: true }).fill('跨引擎 SQLite 只读源');
+    await form.getByRole('combobox').selectOption('sqlite');
+    await expect(form.getByRole('checkbox', { name: sqliteZh.readOnly, exact: true })).toBeChecked();
+    await form.getByRole('button', { name: sqliteZh.choose, exact: true }).click();
+    await expect(form.locator('input[readonly]')).toHaveValue('transfer-source.sqlite');
+    await form.getByRole('button', { name: zh.connections.text036, exact: true }).click();
+    await expect(form).toBeHidden();
+    const sqliteNode = page.locator('.connection-node').filter({ hasText: '跨引擎 SQLite 只读源' });
+    await sqliteNode.locator('.connection-row .tree-label').click();
+    await sqliteNode.locator('.database-row .tree-label').getByText('main', { exact: true }).click();
+    const object = sqliteNode.locator('.object-row').filter({ hasText: 'transfer_source' });
+    await object.locator('.tree-label').click();
+    await (await sidebarMenuItem(object, { name: sqliteZh.selectQuery + ' transfer_source', exact: true }, check)).click();
+    const sqliteQuery = page.locator('.query-tab:not(.postgres-query):visible');
+    await sqliteQuery.locator('.monaco-editor').getByRole('textbox').focus();
+    await page.keyboard.press((process.platform === 'darwin' ? 'Meta' : 'Control') + '+A');
+    await page.keyboard.insertText('SELECT memo, exact_integer, precise, raw, missing, mixed FROM transfer_source ORDER BY rowid');
+    await (await navigationMenuItem(sqliteQuery, { name: zh.query.text011, exact: true }, check)).click();
+    for (const name of ['SQLite乙', 'SQLite甲']) {
+      await sqliteQuery.getByRole('row').filter({ has: page.getByRole('gridcell', { name, exact: true }) }).getByRole('checkbox').check();
+    }
+    await (await navigationMenuItem(sqliteQuery, { name: transferText.sqliteCapture, exact: true }, check)).click();
+    await page.locator('.tab-select').getByText('"迁移回归"."目标表"', { exact: true }).click();
+    await button(transferText.openQuery).click();
+    await expect(tab.getByRole('alert')).toContainText(transferText.refreshTarget);
+    await button(tableText.refresh).click();
+    await expect(button(transferText.openQuery)).toBeEnabled();
+    await button(transferText.openQuery).click();
+    await expect(dialog).toContainText(transferText.sqliteSource);
+    await expect(dialog).toContainText('mixed (BLOB / INTEGER)');
+    await expect(dialog.getByRole('button', { name: transferText.remove('exact_integer'), exact: true })).toBeVisible();
+    await addMapping('amount (numeric(40,18))', 'precise (TEXT) · 第 3 列');
+    await page.screenshot({ path: info.outputPath('SQLite到PostgreSQL字段映射.png') });
+    await stage.click();
+    await expect(dialog).toHaveCount(0);
+    await button(tableText.preview).click();
+    await expect(review).toContainText('9223372036854775807');
+    expect(await readTarget()).toHaveLength(4);
+    await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(tab.getByRole('status')).toContainText('已确认整批提交');
+    expect((await readTarget()).slice(4)).toEqual([
+      { id: '9007199254740997', memo: 'SQLite甲', amount: '9007199254740993.000000000000000001', raw: '00ff', missing: null, derived: 'SQLite甲-生成' },
+      { id: '9007199254740998', memo: 'SQLite乙', amount: '0.000000000000000001', raw: '', missing: '', derived: 'SQLite乙-生成' },
+    ]);
+    expect((await target.query('SELECT exact_integer::text AS value FROM "迁移回归"."目标表" WHERE exact_integer IS NOT NULL ORDER BY id')).rows)
+      .toEqual([{ value: '9223372036854775807' }, { value: '-9223372036854775808' }]);
+    const sqliteCheck = new DatabaseSync(sqlitePath, { readOnly: true });
+    try { expect(sqliteCheck.prepare('SELECT count(*) AS total FROM transfer_source').get()?.total).toBe(3); }
+    finally { sqliteCheck.close(); }
+    expect(runtime.pageErrors).toEqual([]);
+    await mark('SQLite 只读查询按逐格类型跨引擎映射，确认后精确写入两条且源库保持');
     await runtime.confirmOwnedDesktopExit(info);
     await mark('窗口正常退出');
   } catch (error) {

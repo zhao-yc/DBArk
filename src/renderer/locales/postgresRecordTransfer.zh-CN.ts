@@ -1,6 +1,8 @@
 export const postgresRecordTransferZh = {
   capture: '暂存勾选记录以跨库复制', open: '从另一张表复制记录', title: '跨库复制 PostgreSQL 记录',
   queryCapture: '暂存勾选结果以跨库复制', openQuery: '从查询结果复制记录',
+  sqliteCapture: '暂存勾选结果到 PostgreSQL', sqliteSource: 'SQLite 查询结果',
+  mixedBinary: (columns: string) => `以下来源列同时含 BLOB 和标量，无法统一映射。可跳过，或筛选为同一存储类型后重新暂存。 ${columns}`,
   queryResult: (title: string, result: number) => `${title} · 结果集 ${result}`,
   queryColumn: (position: number) => `第 ${position} 列`,
   truncated: '源结果已截断。此批只包含已返回且勾选的记录。',
@@ -14,6 +16,7 @@ export const postgresRecordTransferZh = {
   mappingHint: '唯一同名且同类型的字段已匹配。重复字段名须手动选择。生成列无法指定，未映射列由目标库使用默认值。',
   staged: (count: number) => `已加入 ${count} 条跨库新增草稿，请预览后确认提交。`,
   stale: '跨库暂存或目标表页已变化，请重新打开。',
+  refreshTarget: '连接配置已变化，请刷新 PostgreSQL 目标表后再复制。已暂存记录仍保留。',
   limits: '单次最多 100 行、200 个可见源字段和 1 MiB。请选择较少的行或隐藏无需复制的列。',
   invalid: (name: string) => `来源字段 ${name} 的原值不完整。`,
   required: (name: string) => `目标字段 ${name} 为必填且没有默认值，请映射来源字段。`,

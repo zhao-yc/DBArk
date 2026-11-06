@@ -22,11 +22,14 @@ export function PostgresRecordTransferDialog({ snapshot, target, columns, onStag
   const selectedSource = sources.find(column => column.key === sourceKey) ?? sources[0];
   const display = (source: PostgresTransferSource) => `${source.label} / ${source.database} / ${'table' in source ? source.table : text.queryResult(source.title, source.result)}`;
   const field = (column: PostgresTransferColumn) => `${column.name} (${column.type})${column.position ? ' · ' + text.queryColumn(column.position) : ''}`;
+  const mixed = snapshot.columns.filter(column => column.mixedBinary).map(field).join('、');
   return <Modal title={text.title} onClose={onClose} wide>
     <div className="modal-content pg-record-form">
       <p>{text.notice}</p>
-      <dl><dt>{text.source}</dt><dd>{display(snapshot.source)}</dd><dt>{text.target}</dt><dd>{display(target)}</dd></dl>
+      <dl><dt>{'dialect' in snapshot.source && snapshot.source.dialect === 'sqlite' ? text.sqliteSource : text.source}</dt>
+        <dd>{display(snapshot.source)}</dd><dt>{text.target}</dt><dd>{display(target)}</dd></dl>
       {'truncated' in snapshot.source && snapshot.source.truncated && <p className="warning-text">{text.truncated}</p>}
+      {mixed && <p className="warning-text">{text.mixedBinary(mixed)}</p>}
       <p>{text.rows(snapshot.rows.length)} · {text.mappingHint}</p>
       {!!mapping.size && <div className="table-statistics-results"><table>
         <thead><tr><th>{text.sourceColumn}</th><th>{text.targetColumn}</th><th/></tr></thead>
