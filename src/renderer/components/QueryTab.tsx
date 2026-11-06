@@ -1544,7 +1544,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         ? captureSqliteQueryTransfer({ ...source, database: 'main' }, resultSelection.sqliteSnapshot(selectionBinding))
         : captureMysqlQueryTransfer(source, connection.dialect, resultSelection.snapshot(selectionBinding), selectionBinding.visibleColumns);
       usePostgresRecordTransfer.setState({ snapshot });
-      useWorkspace.getState().notify(transferText.queryCapturedToEither(snapshot.rows.length));
+      useWorkspace.getState().notify(connection.dialect === 'sqlite'
+        ? transferText.queryCapturedToNetwork(snapshot.rows.length) : transferText.queryCapturedToEither(snapshot.rows.length));
     } catch (reason) { setError(errorMessage(reason)); }
   }
 

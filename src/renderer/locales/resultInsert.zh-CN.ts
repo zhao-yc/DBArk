@@ -1,5 +1,10 @@
 export const resultInsertZh = {
   open: '写入已有表', selected: '写入勾选行', title: '将已返回结果追加到已有表',
+  transferEntry: '从暂存查询结果复制记录', transferTitle: '将暂存查询结果追加到当前表',
+  transferSource: (engine: string, label: string, database: string | undefined, title: string, result: number) =>
+    [engine, label, database, `${title} · 结果集 ${result}`].filter(Boolean).join(' / '),
+  transferExactText: '含负零、无穷大或 NaN 的数值字段只可映射到文本列，或跳过该字段。',
+  transferTimeZone: '请明确填写解释目标 TIMESTAMP 的数值时区偏移，例如 +00:00。复制沿用日期时间原文，保留目标可接受的精度。',
   scope: '只写入打开时已返回、已过滤排序后的可见字段和行；不会重跑原查询，不包含尚未返回的数据。',
   source: (rows: number, columns: number, selected: boolean) => `${selected ? '勾选' : '当前视图'}快照：${rows} 行 × ${columns} 列`,
   truncated: '源结果已截断：仅处理这些已经返回的行，不能视为原查询全部数据。',

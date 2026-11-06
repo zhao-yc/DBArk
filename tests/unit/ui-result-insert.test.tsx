@@ -10,7 +10,7 @@ import { ResultInsertSourceIntent } from '../../src/renderer/resultInsertUi';
 import { resultInsertZh as text } from '../../src/renderer/locales/resultInsert.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
-import type { ResultInsertServices } from '../../src/renderer/components/ResultInsertDialog';
+import type { FixedResultInsertTarget, ResultInsertServices } from '../../src/renderer/components/ResultInsertDialog';
 const grid = vi.hoisted(() => ({ props: null as any }));
 /** 仅用无布局网格端口接收父组件公开props；排序、筛选、选择、源租约和store均为生产实现。 */
 vi.mock('../../src/renderer/components/ResultsGrid', () => ({ ResultsGrid(props: any) { grid.props = props; return <div role="grid"/>; } }));
@@ -41,12 +41,12 @@ beforeAll(async () => {
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; if ((window as any).dbark) await flush(); delete (window as any).dbark; doc.body.textContent = ''; vi.restoreAllMocks(); });
 afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 function seed() { store.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 50, activeTabId: 'source', tabs: [{ id: 'source', kind: 'query', connectionId: 'source', title: '原查询', sql: 'SELECT 保留原稿', databaseContext: { state: 'known', database: null } }] }, connections: ['source', 'target'].map(id => ({ id, name: id === 'source' ? '原连接' : '目标连接', group: '', color: '', dialect: 'mysql' as const, host: 'offline.invalid', port: 1, user: 'ram' })), connectionVersions: { source: 1, target: 1 }, activeJobs: {}, dirtyTabs: {}, tasks: [], notice: undefined }); }
-async function mountDialog(overrides: Partial<ResultInsertServices> = {}) {
+async function mountDialog(overrides: Partial<ResultInsertServices> = {}, fixed?: FixedResultInsertTarget) {
   seed(); const listeners = new Set<(event: TaskEvent) => void>(), source = data(), intent = new ResultInsertSourceIntent(source, false, randomUUID(), () => true);
   const preview = vi.fn(async (input: ResultInsertPreviewInput) => output(input)), apply = vi.fn(async (input: Parameters<ResultInsertServices['apply']>[0]) => ({ target: { connectionId: input.connectionId, database: 'db', table: 'dest' }, rows: 3, outcome: 'committed' as const, commitAcknowledged: true as const })), release = vi.fn(async (_input: Parameters<ResultInsertServices['release']>[0]) => undefined), cancel = vi.fn(async (_id: string) => undefined);
   const services: ResultInsertServices = { open: vi.fn(async () => undefined), databases: vi.fn(async () => ['db']), objects: vi.fn(async () => [{ name: 'dest', kind: 'table' as const }, { name: 'excluded_view', kind: 'view' as const }]), metadata: vi.fn(async () => info()), preview, apply, release, cancel, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); }, ...overrides };
   const onActivity = vi.fn(), onClose = vi.fn(), onCommitted = vi.fn(), onCleanupError = vi.fn(), host = doc.createElement('div'); doc.body.appendChild(host); root = createRoot(host as unknown as Element);
-  await act(async () => root!.render(<Dialog intent={intent} initialConnectionId="target" services={services} onActivity={onActivity} onClose={onClose} onCommitted={onCommitted} onCleanupError={onCleanupError}/>));
+  await act(async () => root!.render(<Dialog intent={intent} initialConnectionId="target" fixed={fixed} services={services} onActivity={onActivity} onClose={onClose} onCommitted={onCommitted} onCleanupError={onCleanupError}/>));
   return { source, intent, services, preview, apply, release, cancel, onActivity, onClose, onCommitted, onCleanupError, async emit(value: ResultInsertProgress) { const input = (services.apply as typeof apply).mock.calls[0]?.[0]; expect(input).toBeDefined(); await act(async () => { for (const listener of listeners) listener({ taskId: input.taskId, status: 'running', progress: 60, message: 'RAM阶段', resultInsert: value }); }); } };
 }
 function button(label: string): MemoryNode { const node = (navigationMenuRamButton(doc, label) ?? doc.querySelectorAll('button').find(node => node.getAttribute('aria-label') === label || node.textContent === label || label === zh.query.text010 && node.textContent.startsWith(label))); expect(node, label).toBeDefined(); return node!; }
@@ -59,6 +59,23 @@ async function targetReady() { await click(text.databases); await select(text.da
 function callback(node: MemoryNode): () => void { const key = Object.keys(node).find(key => key.startsWith('__reactProps$')); if (!key) throw Error('缺少实际React回调'); return Reflect.get(node, key).onClick; }
 
 describe('结果插入独立Dialog真实React RAM（无网络/SQL/文件/剪贴板）', () => {
+  it('锁定当前表，仅允许特殊数值映射文本列，明确时区后预览', async () => {
+    const target = { connectionId: 'target', database: 'db', table: 'dest' };
+    const f = await mountDialog({}, { target, connectionName: '目标连接', sourceLabel: 'SQLite / 查询结果', textOnly: new Set(['amount']) });
+    expect(doc.body.textContent).toContain(text.target('db', 'dest'));
+    expect(doc.querySelectorAll('select')).toHaveLength(0);
+    expect(f.services.open).not.toHaveBeenCalled();
+    await click(text.metadata);
+    expect(f.services.metadata).toHaveBeenCalledExactlyOnceWith(target);
+    expect(field(text.mappingColumn('amount'), 'select').querySelectorAll('option').map(option => option.value)).toEqual(['', 'note']);
+    await select(text.mappingColumn('amount'), 'note');
+    await click(text.preview);
+    expect(f.preview).not.toHaveBeenCalled();
+    await input(text.timeZone, '+00:00');
+    await click(text.preview);
+    expect(f.preview.mock.calls[0][0]).toMatchObject({ ...target, timeZone: '+00:00' });
+    expect(f.preview.mock.calls[0][0].mapping).toContainEqual({ source: 'amount', target: 'note' });
+  });
   it('打开零读取，目录分层明确选择，重复标题按位置/key区分且生成列不映射', async () => {
     const f = await mountDialog(); expect(f.services.open).not.toHaveBeenCalled(); expect(f.preview).not.toHaveBeenCalled(); expect(doc.body.textContent).toContain(text.truncated); await targetReady();
     expect(field(text.mappingColumn('id'), 'select').value).toBe('id'); expect(field(text.mappingColumn('a'), 'select').value).toBe(''); expect(field(text.mappingColumn('b'), 'select').value).toBe(''); expect(doc.body.textContent).toContain(text.sourceColumn(3, '重复标题', 'a')); expect(doc.body.textContent).toContain(text.sourceColumn(4, '重复标题', 'b'));

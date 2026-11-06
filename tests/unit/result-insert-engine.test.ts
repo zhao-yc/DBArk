@@ -83,6 +83,14 @@ beforeEach(() => metadata.read.mockReset());
 afterEach(() => { for (const tasks of owners) tasks.close(); owners.clear(); vi.useRealTimers(); });
 
 describe('结果插入的共享边界及完整预检', () => {
+  it('读取真实目标类型后拒绝将标记的精确文本写入数值列', async () => {
+    const { f, tasks } = fixture(), input = request({ textOnlySources: ['s1'] });
+    input.data.rows[0].s1 = '-0';
+    await expect(tasks.preview(input, 1)).rejects.toThrow('只可映射到文本列');
+    expect(f.inserted).toBe(0);
+    expect(resultInsertPreviewInputSchema.safeParse({ ...input, textOnlySources: ['missing'] }).success).toBe(false);
+    expect(resultInsertPreviewInputSchema.safeParse({ ...input, textOnlySources: ['s1', 's1'] }).success).toBe(false);
+  });
   it('沿原结果预算支持重复显示标题、typed二进制和原精确文本，拒绝SQL/空行/坏形状', () => {
     expect(resultInsertPreviewInputSchema.parse(request()).data).toEqual(data());
     for (const patch of [{ data: { ...data(), rows: [] } }, { sql: 'SELECT 禁止源SQL' }, { mapping: [{ source: 's0', target: 'id' }, { source: 's1', target: 'id' }] }, { timeZone: 'SYSTEM' }]) expect(() => resultInsertPreviewInputSchema.parse({ ...request(), ...patch })).toThrow();

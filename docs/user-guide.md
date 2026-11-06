@@ -312,6 +312,8 @@ PostgreSQL 查询结果暂存后，也可从 SQLite 可写表的「更多」菜�
 
 MySQL 和 MariaDB 查询结果暂存后，也可在可写 SQLite 表的「更多」菜单选择对应来源，核对字段映射并暂存，最后预览并确认提交。详见[MySQL 和 MariaDB 到 SQLite 的记录复制](development/mysql-sqlite-record-transfer-20261106.md)。
 
+从 PostgreSQL 或 SQLite 查询暂存勾选结果后，打开 MySQL 或 MariaDB 的 InnoDB 目标表，在「更多」菜单点「从暂存查询结果复制记录」。窗口锁定当前表。读取目标结构、核对字段映射和时区后预览，再输入完整库名和表名确认整批追加。详见[查询结果复制到 MySQL／MariaDB](development/query-network-record-transfer-20261106.md)。
+
 PostgreSQL 查询结果可点击支持排序的列头切换升序、降序和原返回顺序，也可用「多列排序」指定优先级和 NULL 位置。排序作用于当前已返回行，导出按当前显示顺序写入。详见[PostgreSQL 查询结果排序](development/postgres-query-result-sort-20261105.md)。
 
 在 PostgreSQL 查询结果区点「筛选已返回结果」，可以组合条件、从结果选值或手动填写比较值。应用和清除筛选都会保留当前排序。导出按筛选后的显示范围和顺序写入。详见[PostgreSQL 查询结果筛选](development/postgres-query-result-filter-20261105.md)。

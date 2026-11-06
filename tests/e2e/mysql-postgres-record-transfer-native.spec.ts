@@ -12,7 +12,11 @@ import { sqliteTableEditZh as sqliteEditText } from '../../src/renderer/locales/
 import { sqliteRecordTransferZh as sqliteTransferText } from '../../src/renderer/locales/sqliteRecordTransfer.zh-CN';
 import { sqliteTableClipboardZh as clipboardText } from '../../src/renderer/locales/sqliteTableClipboard.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
-import { clickSidebarAction } from './sidebar-menu';
+import { clickSidebarAction, sidebarMenuItem } from './sidebar-menu';
+import { resultInsertZh as insertText } from '../../src/renderer/locales/resultInsert.zh-CN';
+import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
+import { tableToolbarZh } from '../../src/renderer/locales/tableToolbar.zh-CN';
+import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 
 type Runtime = typeof import('./desktop-fixture');
 const enabled = !process.argv.includes('--list') && process.env.DBARK_NETWORK_POSTGRES_TRANSFER_NATIVE === '1';
@@ -204,6 +208,78 @@ test('网络查询结果跨引擎生成 PostgreSQL 与 SQLite 草稿并保留原
     ]);
     expect(runtime.pageErrors).toEqual([]);
     await mark('SQLite 暂存及预览零写入，确认后独立读回精确值和存储类型');
+    await expect(sqliteReview).toBeHidden();
+
+    const replaceAndCapture = async (queryPane: ReturnType<typeof page.locator>, sql: string, execute: string) => {
+      await queryPane.locator('.monaco-editor').getByRole('textbox').focus();
+      await page.keyboard.press((process.platform === 'darwin' ? 'Meta' : 'Control') + '+A');
+      await page.keyboard.insertText(sql);
+      await (await navigationMenuItem(queryPane, { name: execute, exact: true }, check)).click();
+      for (const name of ['复制乙', '复制甲'])
+        await queryPane.getByRole('row').filter({ has: page.getByRole('gridcell', { name, exact: true }) }).getByRole('checkbox').check();
+      await (await navigationMenuItem(queryPane, { name: transferText.queryCapture, exact: true }, check)).click();
+    };
+    const appendToNetwork = async (tableName: 'reverse_pg' | 'reverse_sqlite', from: 'PostgreSQL' | 'SQLite', special: string | null) => {
+      const object = page.locator('.connection-node').filter({ hasText: sourceTitle }).locator('.object-row')
+        .filter({ has: page.getByText(tableName, { exact: true }) });
+      await object.locator('.tree-label').dblclick();
+      const networkTable = page.locator('.table-tab:visible');
+      try {
+        await expect(networkTable.locator('.context-bar').getByText(tableName, { exact: true })).toBeVisible();
+        await expect(networkTable.getByRole('button', { name: zh.common.add, exact: true })).toBeEnabled();
+      } finally {
+        await writeFile(info.outputPath(from + '-目标表页.txt'), await networkTable.ariaSnapshot());
+      }
+      await networkTable.getByRole('button', { name: '更多', exact: true }).click();
+      await page.getByRole('menuitem', { name: tableToolbarZh.transfer, exact: true }).click();
+      await page.getByRole('menuitem', { name: insertText.transferEntry, exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: insertText.transferTitle, exact: true });
+      await expect(dialog).toContainText(from);
+      await expect(dialog).toContainText(insertText.target(origin.database, tableName));
+      await expect(dialog.getByLabel(insertText.table, { exact: true })).toHaveCount(0);
+      await dialog.getByRole('button', { name: insertText.metadata, exact: true }).click();
+      await expect(dialog.getByRole('region', { name: insertText.mapping, exact: true })).toBeVisible();
+      if (from === 'SQLite') {
+        await expect(dialog).toContainText(insertText.transferExactText);
+        const specialMapping = dialog.getByLabel(insertText.mappingColumn('c5'), { exact: true });
+        await expect(specialMapping).toHaveValue('special');
+        await expect(specialMapping.getByRole('option', { name: 'lossy', exact: true })).toHaveCount(0);
+      }
+      await dialog.getByLabel(insertText.timeZone, { exact: true }).fill('+00:00');
+      await dialog.getByRole('button', { name: insertText.preview, exact: true }).click();
+      const sql = dialog.getByLabel(insertText.sql, { exact: true });
+      try { await expect(sql).toContainText(Buffer.from('18446744073709551615', 'utf8').toString('hex')); }
+      finally { await writeFile(info.outputPath(from + '-目标预览.txt'), await dialog.ariaSnapshot()); }
+      const read = async () => (await reader.query(`SELECT memo, CAST(exact_unsigned AS CHAR) AS exact_unsigned,
+        CAST(amount AS CHAR) AS amount, HEX(payload) AS payload, note_text, special FROM ${tableName} ORDER BY id`))[0];
+      expect(await read()).toEqual([]);
+      await page.screenshot({ path: info.outputPath(from + '-' + dialect + '-字段映射.png') });
+      await dialog.getByLabel(insertText.confirmation, { exact: true }).fill(origin.database + '.' + tableName);
+      await dialog.getByRole('checkbox', { name: insertText.acknowledge, exact: true }).check();
+      await dialog.getByRole('button', { name: insertText.apply, exact: true }).click();
+      await expect(dialog.getByRole('status')).toContainText(insertText.committed(2));
+      const expected = [
+        { memo: '复制甲', exact_unsigned: '18446744073709551615', amount: '9007199254740993.00000000000000000001', payload: '00FF', note_text: null, special },
+        { memo: '复制乙', exact_unsigned: '0', amount: '0.00000000000000000001', payload: '', note_text: '', special },
+      ];
+      expect(await read()).toEqual(expected);
+      await writeFile(info.outputPath(from + '-目标独立读回.json'), JSON.stringify(await read(), null, 2));
+      await dialog.getByRole('button', { name: insertText.close, exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(networkTable.getByRole('grid', { name: tableGridZh.grid, exact: true }).getByText('复制乙', { exact: true })).toBeVisible();
+      await mark(from + ' 到 ' + engine + '，锁定当前表，预览零写入，提交后独立读回');
+    };
+    await page.locator('.tab-select').getByText('"public"."transfer_target"', { exact: true }).click();
+    await button(tableText.query).click();
+    await replaceAndCapture(page.locator('.postgres-query:visible'), 'SELECT memo, exact_unsigned, amount, payload, note_text FROM public.transfer_target ORDER BY id', postgresZh.execute);
+    await appendToNetwork('reverse_pg', 'PostgreSQL', null);
+
+    const sqliteSourceObject = page.locator('.connection-node').filter({ hasText: sqliteTitle }).locator('.object-row')
+      .filter({ has: page.getByText('transfer_target', { exact: true }) });
+    await (await sidebarMenuItem(sqliteSourceObject, { name: sqliteZh.selectQuery + ' transfer_target', exact: true }, check)).click();
+    await replaceAndCapture(page.locator('.query-tab:not(.postgres-query):visible'),
+      'SELECT memo, exact_unsigned, amount, payload, note_text, -0.0 AS special FROM transfer_target ORDER BY id', zh.query.text011);
+    await appendToNetwork('reverse_sqlite', 'SQLite', '-0');
     await runtime.confirmOwnedDesktopExit(info);
     await mark('窗口正常退出');
   } catch (error) {

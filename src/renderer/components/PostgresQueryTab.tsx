@@ -1178,7 +1178,7 @@ export function PostgresQueryTab({
         title: tab.title, result: selected + 1,
       }, resultSelection.snapshot(binding), binding.visibleColumns);
       usePostgresRecordTransfer.setState({ snapshot });
-      workspace.notify(transferText.queryCapturedToEither(snapshot.rows.length));
+      workspace.notify(transferText.queryCapturedToNetwork(snapshot.rows.length));
     } catch (reason) { setError(errorMessage(reason)); }
   }
   return (

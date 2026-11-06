@@ -16,6 +16,7 @@ export const resultInsertText = Object.freeze({
   triggers: '目标存在触发器或无法确认外部副作用，不能承诺整批事务回滚',
   closed: '结果插入任务正在关闭，不能新建或应用预览',
   timeZone: '请选择明确的数值时区偏移（-13:59～+14:00），服务器还会核验支持范围',
+  exactText: '含负零、无穷大或 NaN 的数值字段只可映射到文本列，或跳过该字段。',
 });
 const unicode = (value: string) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 const name = z.string().min(1).max(64).refine(value => !value.includes('\0') && unicode(value), resultInsertText.invalid);
@@ -56,7 +57,18 @@ export function assertResultInsertData(value: unknown): asserts value is ResultE
 const data = z.unknown().transform((value, context): ResultExportData => {
   try { assertResultInsertData(value); return value; } catch { context.addIssue({ code: 'custom', message: resultInsertText.invalid }); return z.NEVER; }
 });
-export const resultInsertPreviewInputSchema = resultInsertTargetSchema.extend({ taskId, data, mapping: mappings, timeZone: resultInsertTimeZoneSchema }).strict();
+export const resultInsertPreviewInputSchema = resultInsertTargetSchema.extend({
+  taskId, data, mapping: mappings, timeZone: resultInsertTimeZoneSchema,
+  textOnlySources: z.array(resultInsertMappingSchema.shape.source).min(1).max(resultInsertLimits.columns).optional(),
+}).strict().refine(input => {
+  if (!input.textOnlySources) return true;
+  const keys = new Set(input.data.columns.map(column => column.key));
+  return new Set(input.textOnlySources).size === input.textOnlySources.length && input.textOnlySources.every(key => keys.has(key));
+}, resultInsertText.mapping);
+/** 特殊数值按原文写入时只允许明确的字符型目标，排除 JSON 和会解释数值的类型。 */
+export function resultInsertExactTextType(type: string): boolean {
+  return /^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT)\b/i.test(type);
+}
 export type ResultInsertPreviewInput = z.infer<typeof resultInsertPreviewInputSchema>;
 export const resultInsertApplyInputSchema = z.object({ connectionId, taskId, previewToken: z.string().uuid(), confirmation: z.string().min(3).max(129), acknowledged: z.literal(true) }).strict();
 export type ResultInsertApplyInput = z.infer<typeof resultInsertApplyInputSchema>;

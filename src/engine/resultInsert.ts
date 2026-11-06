@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ResultSetHeader } from 'mysql2';
 import type { EventEmitter } from 'node:events';
 import type { ColumnInfo, ResultExportData, TableInfo } from '../shared/contracts';
-import { resultInsertApplyInputSchema, resultInsertConfirmation, resultInsertLimits as limits, resultInsertPreviewInputSchema, resultInsertReleaseInputSchema, resultInsertText as text, type ResultInsertApplyInput, type ResultInsertApplyOutput, type ResultInsertMapping, type ResultInsertPreviewInput, type ResultInsertPreviewOutput, type ResultInsertProgress, type ResultInsertReleaseInput, type ResultInsertTarget } from '../shared/resultInsert';
+import { resultInsertApplyInputSchema, resultInsertConfirmation, resultInsertExactTextType, resultInsertLimits as limits, resultInsertPreviewInputSchema, resultInsertReleaseInputSchema, resultInsertText as text, type ResultInsertApplyInput, type ResultInsertApplyOutput, type ResultInsertMapping, type ResultInsertPreviewInput, type ResultInsertPreviewOutput, type ResultInsertProgress, type ResultInsertReleaseInput, type ResultInsertTarget } from '../shared/resultInsert';
 import { readControlledTimestampDefault, type TableDefinitionContext } from '../shared/tableColumnPatches';
 import { readIncomingReferenceTable, incomingReferenceSourceDigest } from './incomingReferences';
 import { validateLosslessImport } from './losslessImport';
@@ -16,7 +16,7 @@ export interface ResultInsertHost {
 interface TargetRead { source: TableInfo; definitionDigest: string; serverIdentity: string; context: TableDefinitionContext; }
 interface Preview {
   token: string; target: ResultInsertTarget; revision: number; generation: number; expires: number; bytes: number;
-  data: ResultExportData; mapping: ResultInsertMapping[]; timeZone: string; read?: TargetRead; applying: boolean; pending: boolean; revoked: boolean; timer?: ReturnType<typeof setTimeout>;
+  data: ResultExportData; mapping: ResultInsertMapping[]; textOnlySources: ReadonlySet<string>; timeZone: string; read?: TargetRead; applying: boolean; pending: boolean; revoked: boolean; timer?: ReturnType<typeof setTimeout>;
 }
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const literal = (value: string) => `_utf8mb4 X'${Buffer.from(value, 'utf8').toString('hex')}'`;
@@ -95,12 +95,14 @@ async function readTarget(context: StructureTaskContext, target: ResultInsertTar
   return { source, definitionDigest, serverIdentity: before, context: definitionContext };
 }
 /** 所有映射和全部行必须先过类型守卫；未知空间/插件类型不能落入无检查分支。 */
-export function validateResultInsertRows(source: TableInfo, data: ResultExportData, mapping: ResultInsertMapping[], dialect: 'mysql' | 'mariadb', definitionContext: TableDefinitionContext): ColumnInfo[] {
+export function validateResultInsertRows(source: TableInfo, data: ResultExportData, mapping: ResultInsertMapping[], dialect: 'mysql' | 'mariadb', definitionContext: TableDefinitionContext, textOnlySources?: ReadonlySet<string>): ColumnInfo[] {
   const keys = new Set(data.columns.map(column => column.key)), targets = new Set<string>(), parsed = parseTableColumnDefinition(source.ddl, definitionContext);
   if (parsed.columns.length !== source.columns.length || parsed.columns.some((column, index) => column.name !== source.columns[index].name)) throw Error(text.changed);
   const columns = mapping.map(item => {
     const column = source.columns.find(column => column.name === item.target);
     if (!keys.has(item.source) || !column || column.generated || targets.has(item.target)) throw Error(text.mapping);
+    // 目标字段可能在界面读结构后改型，必须用本次服务器定义复核精确文本约束。
+    if (textOnlySources?.has(item.source) && !resultInsertExactTextType(column.type)) throw Error(text.exactText);
     targets.add(item.target);
     if (!/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|BOOL|BOOLEAN|DECIMAL|NUMERIC|FIXED|FLOAT|DOUBLE|REAL|BIT|DATE|YEAR|TIME|DATETIME|TIMESTAMP|CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|BINARY|VARBINARY|TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|JSON|ENUM|SET)\b/i.test(column.type)) throw Error(text.unsupported);
     return column;
@@ -200,15 +202,15 @@ export class ResultInsertTasks {
   /** 全部行校验和真实元数据前后核验完成且资源已关闭后才发布预览。 */
   async preview(raw: ResultInsertPreviewInput, revision: number): Promise<ResultInsertPreviewOutput> {
     const input = resultInsertPreviewInputSchema.parse(raw); version(revision); this.prune();
-    const bytes = reservedBytes(input.data, input.mapping);
+    const bytes = reservedBytes(input.data, input.mapping) + Buffer.byteLength(JSON.stringify(input.textOnlySources ?? []));
     if (this.entries.size >= limits.previews || bytes + [...this.entries.values()].reduce((sum, item) => sum + item.bytes, 0) > limits.retainedBytes) throw Error(text.budget);
     const token = randomUUID(), target = { connectionId: input.connectionId, database: input.database, table: input.table };
-    const entry: Preview = { token, target, revision, generation: this.generations.get(input.connectionId) ?? 0, expires: this.time() + limits.lifetimeMs, bytes, data: freezeData(input.data), mapping: input.mapping.map(item => Object.freeze({ ...item })), timeZone: input.timeZone, applying: false, pending: true, revoked: false };
+    const entry: Preview = { token, target, revision, generation: this.generations.get(input.connectionId) ?? 0, expires: this.time() + limits.lifetimeMs, bytes, data: freezeData(input.data), mapping: input.mapping.map(item => Object.freeze({ ...item })), textOnlySources: new Set(input.textOnlySources), timeZone: input.timeZone, applying: false, pending: true, revoked: false };
     this.entries.set(token, entry); const state = resultInsertProgress(entry.data.rows.length);
     try {
       const result = await this.host.run(target, input.taskId, async context => {
         this.current(entry); state.phase = 'validating'; context.report(); const read = await readTarget(context, target);
-        const columns = validateResultInsertRows(read.source, entry.data, entry.mapping, read.context.dialect, read.context); this.current(entry);
+        const columns = validateResultInsertRows(read.source, entry.data, entry.mapping, read.context.dialect, read.context, entry.textOnlySources); this.current(entry);
         const sample: string[] = []; let shownRows = 0, sampleBytes = 0;
         for (const row of entry.data.rows.slice(0, limits.shownRows)) {
           const statement = resultInsertStatement(target, columns, entry.mapping, row), text = inlineParameters(statement.sql, entry.mapping.map(item => row[item.source])) + ';';
@@ -247,7 +249,7 @@ export class ResultInsertTasks {
           await structureTaskQuery(context, `SELECT 1 FROM ${qualified(entry.target.database, entry.target.table)} LIMIT 0`); transaction(context);
           const read = await readTarget(context, entry.target); transaction(context);
           if (read.definitionDigest !== entry.read!.definitionDigest || read.serverIdentity !== entry.read!.serverIdentity) throw Error(text.changed);
-          state.phase = 'validating'; context.report(); const columns = validateResultInsertRows(read.source, entry.data, entry.mapping, read.context.dialect, read.context);
+          state.phase = 'validating'; context.report(); const columns = validateResultInsertRows(read.source, entry.data, entry.mapping, read.context.dialect, read.context, entry.textOnlySources);
           this.current(entry); transaction(context); state.transactionProtected = true;
           for (const row of entry.data.rows) {
             this.current(entry); transaction(context); context.checkCancelled(); state.phase = 'inserting';

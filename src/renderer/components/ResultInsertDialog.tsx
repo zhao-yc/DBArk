@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DatabaseObject, TableInfo, TaskEvent } from '../../shared/contracts';
-import { resultInsertConfirmation, resultInsertPreviewInputSchema, resultInsertReleaseInputSchema, resultInsertTimeZoneSchema, type ResultInsertApplyInput, type ResultInsertApplyOutput, type ResultInsertMapping, type ResultInsertPreviewInput, type ResultInsertPreviewOutput, type ResultInsertProgress, type ResultInsertTarget } from '../../shared/resultInsert';
+import { resultInsertConfirmation, resultInsertExactTextType, resultInsertPreviewInputSchema, resultInsertReleaseInputSchema, resultInsertTimeZoneSchema, type ResultInsertApplyInput, type ResultInsertApplyOutput, type ResultInsertMapping, type ResultInsertPreviewInput, type ResultInsertPreviewOutput, type ResultInsertProgress, type ResultInsertTarget } from '../../shared/resultInsert';
 import { ResultInsertSourceIntent, checkResultInsertApplied, checkResultInsertMapping, checkResultInsertPreview, mergeResultInsertProgress, resultInsertWritableColumns, suggestResultInsertMapping } from '../resultInsertUi';
 import { resultInsertZh as text } from '../locales/resultInsert.zh-CN';
 import { tableRowTransferZh } from '../locales/tableRowTransfer.zh-CN';
@@ -21,23 +21,30 @@ const services: ResultInsertServices = {
   open: id => invoke('connections.open', { id }), databases: connectionId => invoke('metadata.databases', { connectionId }), objects: input => invoke('metadata.objects', input), metadata: input => invoke('metadata.table', input),
   preview: input => invoke('result.insertPreview', input), apply: input => invoke('result.insertApply', input), release: input => invoke('result.insertRelease', input), cancel: taskId => invoke('query.cancel', { taskId }), subscribe: listener => window.dbark.onTask(listener),
 };
-interface Props { intent: ResultInsertSourceIntent; initialConnectionId?: string; sourceMode?: 'query' | 'table-selection'; services?: ResultInsertServices; onActivity(delta: 1 | -1): void; onClose(): void; onCommitted(output: ResultInsertApplyOutput): void; onCleanupError(message: string): void; }
+export interface FixedResultInsertTarget {
+  target: ResultInsertTarget;
+  connectionName: string;
+  sourceLabel: string;
+  textOnly: ReadonlySet<string>;
+}
+interface Props { fixed?: FixedResultInsertTarget; intent: ResultInsertSourceIntent; initialConnectionId?: string; sourceMode?: 'query' | 'table-selection'; services?: ResultInsertServices; onActivity(delta: 1 | -1): void; onClose(): void; onCommitted(output: ResultInsertApplyOutput): void; onCleanupError(message: string): void; }
 interface Draft { connectionId: string; database: string; table: string; timeZone: string; mapping: ResultInsertMapping[]; databases: string[]; tables: string[]; info?: TableInfo; }
 interface Operation { kind: 'catalogue' | 'preview' | 'apply'; revision: number; promise: Promise<void>; taskId?: string; cancel?: Promise<void>; cancelled: boolean; dispatched?: boolean; progress?: ResultInsertProgress; preview?: ResultInsertPreviewOutput; }
 
 /** 结果写入是独立用途；目标每层显式读取，预览与一次提交均不重放原查询。 */
-export function ResultInsertDialog({ intent, initialConnectionId = '', sourceMode = 'query', services: port = services, ...callbacks }: Props) {
-  const owner = useRef({ intent, port, callbacks, sourceMode }).current;
-  const sourceText = owner.sourceMode === 'table-selection' ? tableRowTransferZh : text;
+export function ResultInsertDialog({ intent, initialConnectionId = '', sourceMode = 'query', fixed, services: port = services, ...callbacks }: Props) {
+  const owner = useRef({ intent, port, callbacks, sourceMode, fixed }).current;
+  const sourceText = owner.sourceMode === 'table-selection' && !owner.fixed ? tableRowTransferZh : text;
   const profiles = useWorkspace(state => state.connections), connections = profiles.filter(profile => profile.dialect === 'mysql' || profile.dialect === 'mariadb');
-  const [draft, setDraft] = useState<Draft>({ connectionId: initialConnectionId, database: '', table: '', timeZone: sourceMode === 'table-selection' ? '' : '+00:00', mapping: [], databases: [], tables: [], }), live = useRef(draft); live.current = draft;
+  const [draft, setDraft] = useState<Draft>({ ...(fixed?.target ?? { connectionId: initialConnectionId, database: '', table: '' }),
+    timeZone: sourceMode === 'table-selection' || fixed ? '' : '+00:00', mapping: [], databases: [], tables: [] }), live = useRef(draft); live.current = draft;
   const [preview, setPreview] = useState<ResultInsertPreviewOutput>(), previewRef = useRef<ResultInsertPreviewOutput | undefined>(undefined);
   const [confirmation, setConfirmation] = useState(''), [acknowledged, setAcknowledged] = useState(false), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [error, setError] = useState(''), [stale, setStale] = useState(false), [progress, setProgress] = useState<ResultInsertProgress>(), [done, setDone] = useState<ResultInsertApplyOutput>(), [clock, setClock] = useState(Date.now());
   const mounted = useRef(true), closed = useRef(false), invalid = useRef(false), consumed = useRef(false), revision = useRef(0), committed = useRef<object | undefined>(undefined), operation = useRef<Operation | undefined>(undefined);
   const targetOwner = useRef<{ connectionId: string; profile: unknown; version: number } | undefined>(undefined), releases = useRef(new Map<string, { connectionId: string; previewToken: string }>()), releasing = useRef(new Map<string, Promise<void>>());
   const ticket = {};
   useLayoutEffect(() => { committed.current = ticket; return () => { if (committed.current === ticket) committed.current = undefined; }; });
-  if (intent !== owner.intent || port !== owner.port || sourceMode !== owner.sourceMode) invalid.current = true;
+  if (intent !== owner.intent || port !== owner.port || sourceMode !== owner.sourceMode || fixed !== owner.fixed) invalid.current = true;
   function replace(value: Draft): void { live.current = value; setDraft(value); }
   function cleanup(reason: unknown): void { try { owner.callbacks.onCleanupError(errorMessage(reason)); } catch {} }
   /** 源租约只单向撤销；旧渲染、其它模态或后继窗口不能接管原任务。 */
@@ -45,6 +52,13 @@ export function ResultInsertDialog({ intent, initialConnectionId = '', sourceMod
   function editable(): boolean { return committed.current === ticket && live.current === draft && !operation.current && !consumed.current && current(); }
   function valid(active: Operation): boolean { return operation.current === active && active.revision === revision.current && !active.cancelled && current(); }
   function target(value = live.current): ResultInsertTarget { return { connectionId: value.connectionId, database: value.database, table: value.table }; }
+  function textDestinations(info: TableInfo | undefined): ReadonlySet<string> {
+    return new Set(owner.fixed?.textOnly.size ? info?.columns.filter(column =>
+      resultInsertExactTextType(column.type)).map(column => column.name) : []);
+  }
+  function acceptsMapping(destinations: ReadonlySet<string>, source: string, destination: string): boolean {
+    return !owner.fixed?.textOnly.has(source) || destinations.has(destination);
+  }
   /** 每个原令牌独立收尾；失败保留责任，下一次预览及关闭都先等待它。 */
   async function release(value: { connectionId: string; previewToken: string }): Promise<void> {
     const key = value.connectionId + ':' + value.previewToken; releases.current.set(key, value);
@@ -93,14 +107,20 @@ export function ResultInsertDialog({ intent, initialConnectionId = '', sourceMod
       await owner.port.open(chosen.connectionId); if (!valid(active)) return;
       if (kind === 'databases') { const databases = await owner.port.databases(chosen.connectionId); if (valid(active)) replace({ ...chosen, databases: [...databases], database: '', table: '', tables: [], info: undefined, mapping: [] }); }
       else if (kind === 'tables') { const objects = await owner.port.objects({ connectionId: chosen.connectionId, database: chosen.database }); if (valid(active)) replace({ ...chosen, tables: objects.filter(item => item.kind === 'table').map(item => item.name), table: '', info: undefined, mapping: [] }); }
-      else { const info = await owner.port.metadata(target(chosen)); if (!valid(active)) return; if (info.database !== chosen.database || info.name !== chosen.table || info.objectKind !== 'table') throw Error(text.invalid); resultInsertWritableColumns(info); replace({ ...chosen, info: structuredClone(info), mapping: suggestResultInsertMapping(owner.intent.data, info) }); }
+      else { const info = await owner.port.metadata(target(chosen)); if (!valid(active)) return; if (info.database !== chosen.database || info.name !== chosen.table || info.objectKind !== 'table') throw Error(text.invalid); resultInsertWritableColumns(info); const destinations = textDestinations(info); replace({ ...chosen, info: structuredClone(info), mapping: suggestResultInsertMapping(owner.intent.data, info).filter(item => acceptsMapping(destinations, item.source, item.target)) }); }
     });
   }
   /** 原请求含完整typed快照；所有回包先与原目标、映射、时区、总行数一一回证。 */
   function prepare(): void {
     if (!editable() || !draft.info || !targetOwner.current) return;
     let input: ResultInsertPreviewInput;
-    try { if (!resultInsertTimeZoneSchema.safeParse(draft.timeZone).success) throw Error(text.timeZoneInvalid); input = resultInsertPreviewInputSchema.parse({ ...target(), taskId: uid(), data: owner.intent.data, mapping: checkResultInsertMapping(owner.intent.data, draft.info, draft.mapping), timeZone: draft.timeZone }); }
+    try {
+      if (!resultInsertTimeZoneSchema.safeParse(draft.timeZone).success) throw Error(text.timeZoneInvalid);
+      const mapping = checkResultInsertMapping(owner.intent.data, draft.info, draft.mapping);
+      if (mapping.some(item => !acceptsMapping(exactTextTargets, item.source, item.target))) throw Error(text.transferExactText);
+      input = resultInsertPreviewInputSchema.parse({ ...target(), taskId: uid(), data: owner.intent.data, mapping, timeZone: draft.timeZone,
+        ...(owner.fixed?.textOnly.size ? { textOnlySources: [...owner.fixed.textOnly] } : {}) });
+    }
     catch (reason) { setError(errorMessage(reason)); return; }
     revokePreview(); setProgress(undefined);
     start('preview', async active => {
@@ -164,13 +184,17 @@ export function ResultInsertDialog({ intent, initialConnectionId = '', sourceMod
   }, []);
   const disabled = busy || closing || stale || invalid.current || consumed.current, expired = !!preview && Date.parse(preview.expiresAt) <= clock;
   const writable = draft.info ? resultInsertWritableColumns(draft.info) : [];
-  return <Modal title={sourceText.title} wide onClose={close}><div className="modal-content" data-result-insert-owner={owner.intent.owner} aria-busy={busy || closing}>
+  const exactTextTargets = textDestinations(draft.info);
+  return <Modal title={owner.fixed ? text.transferTitle : sourceText.title} wide onClose={close}><div className="modal-content" data-result-insert-owner={owner.intent.owner} aria-busy={busy || closing}>
     <p>{text.source(owner.intent.data.rows.length, owner.intent.data.columns.length, owner.intent.selected)}</p><UsageHelp><p>{sourceText.scope}</p><p>{text.mappingHint}</p><p>{text.previewScope}</p></UsageHelp>{owner.intent.data.truncated && <p className="warning-text">{text.truncated}</p>}
-    <div className="form-grid"><Field label={text.connection}><select aria-label={text.connection} disabled={disabled} value={draft.connectionId} onChange={event => change({ ...draft, connectionId: event.target.value, database: '', table: '', databases: [], tables: [], info: undefined, mapping: [] }, true)}><option value="">{text.choose}</option>{connections.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></Field><button disabled={disabled || !draft.connectionId} onClick={() => catalogue('databases')}>{text.databases}</button>
+    {owner.fixed ? <div><p>{owner.fixed.sourceLabel}</p><p>{owner.fixed.connectionName} / {text.target(draft.database, draft.table)}</p>
+      <button disabled={disabled} onClick={() => catalogue('metadata')}>{text.metadata}</button>
+      {owner.fixed.textOnly.size > 0 && <p className="warning-text">{text.transferExactText}</p>}</div>
+    : <div className="form-grid"><Field label={text.connection}><select aria-label={text.connection} disabled={disabled} value={draft.connectionId} onChange={event => change({ ...draft, connectionId: event.target.value, database: '', table: '', databases: [], tables: [], info: undefined, mapping: [] }, true)}><option value="">{text.choose}</option>{connections.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></Field><button disabled={disabled || !draft.connectionId} onClick={() => catalogue('databases')}>{text.databases}</button>
       <Field label={text.database}><select aria-label={text.database} disabled={disabled} value={draft.database} onChange={event => change({ ...draft, database: event.target.value, table: '', tables: [], info: undefined, mapping: [] })}><option value="">{text.choose}</option>{draft.databases.map(name => <option key={name} value={name}>{name}</option>)}</select></Field><button disabled={disabled || !draft.database} onClick={() => catalogue('tables')}>{text.tables}</button>
-      <Field label={text.table}><select aria-label={text.table} disabled={disabled} value={draft.table} onChange={event => change({ ...draft, table: event.target.value, info: undefined, mapping: [] })}><option value="">{text.choose}</option>{draft.tables.map(name => <option key={name} value={name}>{name}</option>)}</select></Field><button disabled={disabled || !draft.table} onClick={() => catalogue('metadata')}>{text.metadata}</button></div>
-    <Field label={text.timeZone}><input aria-label={text.timeZone} value={draft.timeZone} maxLength={6} disabled={disabled} onChange={event => change({ ...draft, timeZone: event.target.value })}/></Field><p className="warning-text">{sourceText.timeZoneHint}</p>
-    {draft.info && <section aria-label={text.mapping}><strong>{text.mapping}</strong>{owner.intent.data.columns.map((column, index) => <Field key={column.key} label={text.sourceColumn(index + 1, column.name, column.key)}><select aria-label={text.mappingColumn(column.key)} value={draft.mapping.find(item => item.source === column.key)?.target ?? ''} disabled={disabled} onChange={event => change({ ...draft, mapping: [...draft.mapping.filter(item => item.source !== column.key), ...(event.target.value ? [{ source: column.key, target: event.target.value }] : [])] })}><option value="">{text.skip}</option>{writable.map(name => <option key={name} value={name} disabled={draft.mapping.some(item => item.target === name && item.source !== column.key)}>{name}</option>)}</select></Field>)}</section>}
+      <Field label={text.table}><select aria-label={text.table} disabled={disabled} value={draft.table} onChange={event => change({ ...draft, table: event.target.value, info: undefined, mapping: [] })}><option value="">{text.choose}</option>{draft.tables.map(name => <option key={name} value={name}>{name}</option>)}</select></Field><button disabled={disabled || !draft.table} onClick={() => catalogue('metadata')}>{text.metadata}</button></div>}
+    <Field label={text.timeZone}><input aria-label={text.timeZone} value={draft.timeZone} maxLength={6} disabled={disabled} onChange={event => change({ ...draft, timeZone: event.target.value })}/></Field><p className="warning-text">{owner.fixed ? text.transferTimeZone : sourceText.timeZoneHint}</p>
+    {draft.info && <section aria-label={text.mapping}><strong>{text.mapping}</strong>{owner.intent.data.columns.map((column, index) => <Field key={column.key} label={text.sourceColumn(index + 1, column.name, column.key)}><select aria-label={text.mappingColumn(column.key)} value={draft.mapping.find(item => item.source === column.key)?.target ?? ''} disabled={disabled} onChange={event => change({ ...draft, mapping: [...draft.mapping.filter(item => item.source !== column.key), ...(event.target.value ? [{ source: column.key, target: event.target.value }] : [])] })}><option value="">{text.skip}</option>{writable.filter(name => acceptsMapping(exactTextTargets, column.key, name)).map(name => <option key={name} value={name} disabled={draft.mapping.some(item => item.target === name && item.source !== column.key)}>{name}</option>)}</select></Field>)}</section>}
     {busy && <Spinner text={operation.current?.kind === 'apply' ? text.applying : operation.current?.kind === 'preview' ? text.previewing : text.loading}/>}{closing && <p>{text.closing}</p>}{progress?.commitMayHaveBeenSent && !progress.commitAcknowledged && <p className="warning-text">{text.committing}</p>}
     {preview && <section><strong>{text.target(preview.target.database, preview.target.table)}</strong><p>{text.sample(preview.shownRows, preview.rows)}</p><ul>{preview.mapping.map(item => <li key={item.source}>{text.sourceColumn(owner.intent.data.columns.findIndex(column => column.key === item.source) + 1, owner.intent.data.columns.find(column => column.key === item.source)?.name ?? '', item.source)} → {item.target}</li>)}</ul>{preview.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}<pre className="sql-preview" aria-label={text.sql}>{preview.sql}</pre><Field label={text.confirmation}><textarea rows={2} aria-label={text.confirmation} value={confirmation} disabled={disabled || expired} onChange={event => { if (editable()) setConfirmation(event.target.value); }}/></Field><label><input type="checkbox" aria-label={text.acknowledge} checked={acknowledged} disabled={disabled || expired} onChange={event => { if (editable()) setAcknowledged(event.target.checked); }}/>{text.acknowledge}</label></section>}
     {done && <p className="success-box" role="status">{text.committed(done.rows)}</p>}<ErrorBox message={stale || invalid.current ? text.stale : error || (expired && !consumed.current ? text.expired : '')}/>{consumed.current && !done && !busy && <p className="warning-text">{text.consumed}</p>}
