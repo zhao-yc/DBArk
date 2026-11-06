@@ -1,6 +1,7 @@
 import { tableSortRuleSummary } from '../tableSort';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TableInfo } from '../../shared/contracts';
+import { postgresTableSortRules } from '../../shared/postgresTable';
 import { buildTableQueryTemplate, tableQueryTemplateColumns, tableQueryTemplateKinds, type TableQueryTemplateKind, type TableQueryTemplateOptions } from '../tableQueryTemplate';
 import { tableQueryTemplateZh as templateText } from '../locales/tableQueryTemplate.zh-CN';
 import { tableFilteredSelectZh as filteredText } from '../locales/tableFilteredSelect.zh-CN';
@@ -29,7 +30,14 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
   onOpen(sql: string, kind: TableQueryTemplateKind, options?: TableQueryTemplateOptions): boolean; onClose(): void;
 } & ({ info: TableInfo; readScope?: TableFilteredSelectScope; postgres?: never } |
      { postgres: PostgresTemplateSource; info?: never; readScope?: never })) {
-  const text = readScope ? { ...templateText, title: filteredText.title, hint: filteredText.hint, preview: filteredText.preview, selectHint: filteredText.scope(limit), columns: filteredText.columns, filterColumns: filteredText.filterColumns, changed: filteredText.changed }
+  const postgresScope = postgres?.readScope;
+  const filtered = !!(readScope || postgresScope);
+  const pgAdvanced = postgresScope?.filter && 'rules' in postgresScope.filter ? postgresScope.filter : undefined;
+  const pgQuick = postgresScope?.filter && 'text' in postgresScope.filter ? postgresScope.filter : undefined;
+  const filters = readScope?.filters ?? pgAdvanced?.rules ?? [];
+  const filterGroup = readScope?.filterGroup ?? pgAdvanced?.group;
+  const sort = readScope?.sort ?? postgresTableSortRules(postgresScope?.sort);
+  const text = filtered ? { ...templateText, title: filteredText.title, hint: filteredText.hint, preview: filteredText.preview, selectHint: filteredText.scope(limit), columns: filteredText.columns, filterColumns: filteredText.filterColumns, changed: filteredText.changed }
     : postgres ? { ...templateText, title: templateText.postgresTitle, insertColumnsHint: templateText.postgresInsertHint, updateColumnsHint: templateText.postgresUpdateHint }
       : templateText;
   const origin = useRef({ info, postgres, limit, readScope }).current;
@@ -38,7 +46,7 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
   // 新模式绑定最初只读范围；父props先改再恢复也不能复用旧预览。旧模板保持原合同。
   if ((origin.readScope || readScope) && (origin.info !== info || origin.limit !== limit || origin.readScope !== readScope)) invalid.current = true;
   if ((origin.postgres || postgres) && (origin.postgres !== postgres || origin.limit !== limit)) invalid.current = true;
-  if (readScope) { try { if (!isCurrent()) invalid.current = true; } catch { invalid.current = true; } }
+  if (filtered) { try { if (!isCurrent()) invalid.current = true; } catch { invalid.current = true; } }
   const { kind, columns, search } = selection;
   useLayoutEffect(() => { live.current = ticket; return () => { if (live.current === ticket) live.current = null; }; });
   const candidates = useMemo(() => {
@@ -48,7 +56,7 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
   const preview = useMemo(() => {
     // 默认字段及其顺序完全一致时保持旧调用合同；显式选择的只读快照同时供预览和打开使用。
     const defaults = columns.length === candidates.columns.length && columns.every((name, index) => name === candidates.columns[index]);
-    const options = !readScope && (kind === 'DELETE' || defaults) ? undefined : Object.freeze({ columns: Object.freeze([...columns]) });
+    const options = !filtered && (kind === 'DELETE' || defaults) ? undefined : Object.freeze({ columns: Object.freeze([...columns]) });
     try {
       const value = postgres ? buildPostgresTableQueryTemplate(postgres, kind, limit, options)
         : readScope ? buildFilteredTableSelect({ info: info!, ...readScope, columns: [...columns], limit })
@@ -56,7 +64,7 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
       return { value, options, error: '' };
     }
     catch (reason) { return { value: undefined, options, error: reason instanceof Error ? reason.message : text.invalid }; }
-  }, [info, kind, limit, columns, candidates, readScope, postgres]);
+  }, [info, kind, limit, columns, candidates, readScope, postgres, filtered]);
   const selected = useMemo(() => new Map(columns.map((name, index) => [name, index])), [columns]);
   const visible = useMemo(() => [...columns, ...candidates.columns.filter(name => !selected.has(name))].filter(name => name.toLocaleLowerCase().includes(search.toLocaleLowerCase())), [columns, candidates, selected, search]);
   const totalPages = Math.max(1, Math.ceil(visible.length / columnsPerPage)), page = Math.min(selection.page, totalPages);
@@ -77,7 +85,7 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
   }
   /** 切换模板一次性恢复该类型默认列和第一页，不把另一模板的写列资格沿用过来。 */
   function changeKind(value: string): void {
-    if (readScope) return;
+    if (filtered) return;
     if (!tableQueryTemplateKinds.includes(value as TableQueryTemplateKind)) return;
     const nextKind = value as TableQueryTemplateKind;
     revise({ kind: nextKind, columns: defaultColumns(info, postgres, nextKind), search: '', page: 1 });
@@ -107,10 +115,24 @@ export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isC
     } catch (reason) { consumed.current = false; setError(reason instanceof Error ? reason.message : text.changed); }
   }
 
-  return <Modal title={text.title} wide onClose={close}><div className="modal-content" {...(readScope ? { 'data-table-filtered-select-dialog': true } : {})}>
+  return <Modal title={text.title} wide onClose={close}><div className="modal-content" {...(filtered ? { 'data-table-filtered-select-dialog': true } : {})}>
     <UsageHelp><p>{text.hint}</p><p>{text.columnsHint}</p>{kind === 'INSERT' && <p>{text.insertColumnsHint}</p>}{kind === 'UPDATE' && <p>{text.updateColumnsHint}</p>}</UsageHelp>
-    {!readScope && <Field label={text.kind}><select aria-label={text.kind} value={kind} onChange={event => changeKind(event.target.value)}>{tableQueryTemplateKinds.map(value => <option key={value} value={value}>{value}</option>)}</select></Field>}
-    {readScope && <><p>{filteredText.independent}</p><section aria-label={filteredText.conditions}><strong>{filteredText.conditions}</strong>{readScope.filters.length ? <ul>{readScope.filters.map((rule, index) => <li key={index}>{rule.enabled === false ? filteredText.disabledRule : ''}{filterRuleSummary(rule)}</li>)}</ul> : <p>{filteredText.noConditions}</p>}{readScope.filterGroup && <p>{tableFilterGroupSummary(readScope.filterGroup)}</p>}</section><section aria-label={filteredText.sorts}><strong>{filteredText.sorts}</strong>{readScope.sort.length ? <ol>{readScope.sort.map((rule, index) => <li key={index}>{tableSortRuleSummary(rule)}</li>)}</ol> : <p>{filteredText.noSorts}</p>}</section></>}
+    {!filtered && <Field label={text.kind}><select aria-label={text.kind} value={kind} onChange={event => changeKind(event.target.value)}>{tableQueryTemplateKinds.map(value => <option key={value} value={value}>{value}</option>)}</select></Field>}
+    {filtered && <>
+      <p>{filteredText.independent}</p>
+      {postgresScope && <p>{filteredText.postgresLiteralNotice}</p>}
+      <section aria-label={filteredText.conditions}>
+        <strong>{filteredText.conditions}</strong>
+        {pgQuick?.text ? <p>{filteredText.postgresQuick(pgQuick.column, pgQuick.text)}</p>
+          : filters.length ? <ul>{filters.map((rule, index) => <li key={index}>{rule.enabled === false ? filteredText.disabledRule : ''}{filterRuleSummary(rule)}</li>)}</ul>
+            : <p>{filteredText.noConditions}</p>}
+        {filterGroup && <p>{tableFilterGroupSummary(filterGroup)}</p>}
+      </section>
+      <section aria-label={filteredText.sorts}>
+        <strong>{filteredText.sorts}</strong>
+        {sort.length ? <ol>{sort.map((rule, index) => <li key={index}>{tableSortRuleSummary(rule)}</li>)}</ol> : <p>{filteredText.noSorts}</p>}
+      </section>
+    </>}
     {kind !== 'DELETE' && !candidates.error && <section aria-label={text.columns} style={{ marginTop: 16 }}>
       <strong>{text.columns}</strong>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>

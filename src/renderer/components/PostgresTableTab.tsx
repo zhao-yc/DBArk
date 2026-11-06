@@ -76,6 +76,7 @@ import { TableQueryTemplateDialog } from './TableQueryTemplateDialog';
 import { buildPostgresTableQueryTemplate, type PostgresTemplateSource } from '../postgresTableQueryTemplate';
 import type { TableQueryTemplateKind, TableQueryTemplateOptions } from '../tableQueryTemplate';
 import { tableQueryTemplateZh as sqlTemplateText } from '../locales/tableQueryTemplate.zh-CN';
+import { tableFilteredSelectZh as filteredSelectText } from '../locales/tableFilteredSelect.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -404,11 +405,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const canGenerateQuery = active && !blocked && !requiresRefresh && !!page?.exportToken && pageConnectionVersion === connectionVersion;
 
   /** 生成模板只读取本页目录，不读取或复制当前记录及待提交的值。 */
-  function openQueryTemplate() {
+  function openQueryTemplate(filtered = false) {
     if (!canGenerateQuery || !page || issued.current !== page.exportToken || queryTemplateOwner.current ||
         !layoutScope.current.current() || lease.current || recordInput.current ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
-    const intent = { page, table: target.table, tab, connectionVersion, limit: resultLimit };
+    const intent: QueryTemplateIntent = { page, table: target.table, tab, connectionVersion, limit: resultLimit,
+      ...(filtered ? { readScope: structuredClone({ filter: options.filter, sort: options.sort }) } : {}) };
     closeCellMenu(cellMenuOwner.current, false);
     queryTemplateOwner.current = intent;
     setQueryTemplate(intent);
@@ -440,7 +442,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     if (state.settings.tabs.length >= 100) throw Error(sqlTemplateText.tabs);
     if (buildPostgresTableQueryTemplate(intent, kind, intent.limit, selection).sql !== sql) throw Error(sqlTemplateText.changed);
     closeQueryTemplate(intent);
-    state.openTab({ kind: 'query', title: sqlTemplateText.queryTitle(intent.table, kind), connectionId: intent.tab.connectionId,
+    state.openTab({ kind: 'query', title: intent.readScope ? filteredSelectText.queryTitle(intent.table) : sqlTemplateText.queryTitle(intent.table, kind), connectionId: intent.tab.connectionId,
       database: intent.tab.database ?? 'postgres', sql });
     return true;
   }
@@ -1002,7 +1004,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <button disabled={busy} onClick={() => useWorkspace.getState().openTab({
         kind: 'query', title: tab.title, connectionId: target.connectionId, database: target.database, sql: postgresRelationSelect(target.table),
       })}>{text.query}</button>
-      <button disabled={!canGenerateQuery} onClick={openQueryTemplate}>{sqlTemplateText.entry}</button>
+      <button disabled={!canGenerateQuery} onClick={() => openQueryTemplate()}>{sqlTemplateText.entry}</button>
+      <button disabled={!canGenerateQuery} onClick={() => openQueryTemplate(true)}>{filteredSelectText.entry}</button>
       <button disabled={!writable || !page?.capabilities.insert} onClick={() => setForm({ row: null })}>{text.add}</button>
       <button disabled={!canDuplicate} onClick={openDuplicate}>{duplicateText.action}</button>
       <button disabled={!canUseTemplates} onClick={openRecordTemplates}>{templateText.open}</button>

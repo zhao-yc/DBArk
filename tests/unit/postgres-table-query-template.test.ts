@@ -51,3 +51,31 @@ it('只有已确认可写表生成 DML，缺键、可空键、视图和宽表预
   expect(() => buildPostgresTableQueryTemplate(wide, 'INSERT', 100)).toThrow(/200/);
   expect(buildPostgresTableQueryTemplate(wide, 'INSERT', 100, { columns: ['列200'] }).parameters).toBe(1);
 });
+
+it('当前筛选 SQL 保留字面子串、分组、NULL 顺序及目录主键补序', () => {
+  const pageWithKey = { ...page, primaryKey: ['复合键', '主"键'] };
+  const filtered = {
+    ...source, page: pageWithKey,
+    readScope: {
+      filter: { rules: [
+        { column: '金额', operator: 'BETWEEN' as const, values: ['0.001', '9223372036854775807.25'] },
+        { column: '带;$88"列', operator: '=' as const, value: "值'\\; SELECT 1" },
+        { column: '生成', operator: 'IS NULL' as const, enabled: false },
+      ], mode: 'all' as const, group: { mode: 'all' as const, children: [0, { mode: 'any' as const, children: [1, 2] }] } },
+      sort: [{ column: '金额', direction: 'DESC' as const, nulls: 'LAST' as const }],
+    },
+  };
+  const query = buildPostgresTableQueryTemplate(filtered, 'SELECT', 50, { columns: ['金额'] });
+  expect(query.sql).toContain(`"金额" BETWEEN E'0.001' AND E'9223372036854775807.25'`);
+  expect(query.sql).toContain(`"带;$88""列" = E'值''\\\\; SELECT 1'`);
+  expect(query.sql).toContain('ORDER BY "金额" DESC NULLS LAST, "复合键", "主""键"\nLIMIT 50;');
+  expect(query.sql).not.toContain('"生成" IS NULL');
+  expect(query.sql).not.toContain('OFFSET');
+  expect(splitPostgresSql(query.sql, false).map(statement => statement.parameters)).toEqual([[]]);
+  const quick = { ...filtered, readScope: { filter: { column: '金额', text: '_%' } } };
+  expect(buildPostgresTableQueryTemplate(quick, 'SELECT', 50).sql).toContain(`pg_catalog.strpos("金额"::text, E'_%') > 0`);
+  expect(() => buildPostgresTableQueryTemplate(filtered, 'DELETE', 50)).toThrow();
+  expect(() => buildPostgresTableQueryTemplate({ ...filtered, page }, 'SELECT', 50)).toThrow();
+  const unknown = { ...filtered, readScope: { ...filtered.readScope, sort: [{ column: '失效字段', direction: 'ASC' as const }] } };
+  expect(() => buildPostgresTableQueryTemplate(unknown, 'SELECT', 50)).toThrow();
+});

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
-import type { PostgresTablePage } from '../../src/shared/postgresTable';
+import type { PostgresTablePage, PostgresTablePageInput } from '../../src/shared/postgresTable';
 import type { QueryParameter } from '../../src/shared/queryParameters';
 import { buildPostgresTableQueryTemplate } from '../../src/renderer/postgresTableQueryTemplate';
 
@@ -86,6 +86,26 @@ describe.skipIf(!enabled)('PostgreSQL真实连接、查询、事务及取消', (
     expect((await execute(`SELECT a::text, note FROM ${templateTable} ORDER BY a`)).results[0].rows).toEqual([
       { c0: '9007199254740993', c1: '子原值' }, { c0: '9007199254740994', c1: '新增值' },
     ]);
+    expect((await execute(`INSERT INTO ${templateTable} VALUES
+      (9007199254740995,'甲',NULL),(9007199254740996,'甲','新增\\_%;值'),(9007199254740997,'乙','新增值')`)).failure).toBeUndefined();
+    const filter: PostgresTablePageInput['filter'] = { mode: 'any', rules: [
+      { column: 'note', operator: 'IS NULL' },
+      { column: 'note', operator: 'IN', values: ['新增\\_%;值', '新增值'] },
+      { column: 'a', operator: '=', value: '9007199254740993', enabled: false },
+    ], group: { mode: 'any', children: [0, { mode: 'all', children: [1, 2] }] } };
+    const sort: PostgresTablePageInput['sort'] = [{ column: 'note', direction: 'ASC', nulls: 'FIRST' }];
+    const readFiltered = (offset: number, limit: number): Promise<PostgresTablePage> => call('postgres.table.page', { connectionId: id,
+      profile, database, table: templateTable, tabId: randomUUID(), owner: randomUUID(), connectionRevision: 1, offset, limit, filter, sort });
+    const fullFiltered = await readFiltered(0, 10), secondFiltered = await readFiltered(1, 1);
+    expect(secondFiltered.primaryKey).toEqual(['b', 'a']);
+    const filteredSql = buildPostgresTableQueryTemplate({ table: templateTable, page: secondFiltered, readScope: { filter, sort } },
+      'SELECT', 10, { columns: ['note', 'a'] }).sql;
+    expect((await execute('SET standard_conforming_strings=off')).failure).toBeUndefined();
+    const standaloneFiltered = await execute(filteredSql);
+    expect((await execute('RESET standard_conforming_strings')).failure).toBeUndefined();
+    expect(standaloneFiltered.failure).toBeUndefined();
+    expect(standaloneFiltered.results[0].rows).toEqual(fullFiltered.rows.map(row => ({ c0: row.c2, c1: row.c0 })));
+    expect(standaloneFiltered.results[0].rows).toHaveLength(4);
     const mode = await execute(String.raw`SET standard_conforming_strings=off; SELECT 'a\';b', $标签$含;号$标签$; RESET standard_conforming_strings;`);
     expect(mode.failure).toBeUndefined();
     expect(mode.results[1].rows[0]).toEqual({ c0: "a';b", c1: '含;号' });

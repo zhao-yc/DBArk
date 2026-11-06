@@ -14,6 +14,7 @@ import { decodePostgresDraft } from '../../src/shared/postgresTableDraft';
 import { cellClipboardType, decodeClipboard } from '../../src/renderer/gridClipboard';
 import { binaryCellZh } from '../../src/renderer/locales/binaryCell.zh-CN';
 import { tableQueryTemplateZh as sqlTemplateText } from '../../src/renderer/locales/tableQueryTemplate.zh-CN';
+import { tableFilteredSelectZh as filteredSelectText } from '../../src/renderer/locales/tableFilteredSelect.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 type Runtime = typeof import('./desktop-fixture');
@@ -575,6 +576,36 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await draft.getByRole('button', { name: tableText.undo, exact: true }).click();
     expect(await readTemplateRows()).toEqual(beforeSql);
     await mark('四类 SQL 可预览，按所选列生成位置参数并打开独立查询，原表草稿保持且零写库');
+
+    await tab.getByLabel(tableText.filterColumn, { exact: true }).selectOption('note');
+    const quickFilter = tab.getByLabel(tableText.filterText, { exact: true });
+    await quickFilter.fill('文件恢复');
+    await button(tableText.filter).click();
+    await expect(tab.getByText(tableText.currentPage(1), { exact: true })).toBeVisible();
+    await button(tableText.next).click();
+    await expect(tab.getByText(tableText.currentPage(2), { exact: true })).toBeVisible();
+    await expect(grid.getByRole('gridcell', { name: '文件恢复乙', exact: true })).toBeVisible();
+    await quickFilter.fill('尚未应用的输入');
+    await addDraft('尚未提交的值');
+    await button(filteredSelectText.entry).click();
+    const filteredDialog = page.getByRole('dialog', { name: filteredSelectText.title, exact: true });
+    const filteredPreview = filteredDialog.getByLabel(filteredSelectText.preview, { exact: true });
+    await expect(filteredDialog).toContainText(filteredSelectText.postgresLiteralNotice);
+    await filteredDialog.getByRole('button', { name: sqlTemplateText.clearColumns, exact: true }).click();
+    await filteredDialog.getByRole('checkbox', { name: sqlTemplateText.chooseColumn('note'), exact: true }).check();
+    await expect(filteredPreview).toContainText(`pg_catalog.strpos("note"::text, E'文件恢复') > 0`);
+    await expect(filteredPreview).toContainText('ORDER BY "id"');
+    for (const excluded of ['OFFSET', '尚未应用的输入', '尚未提交的值']) await expect(filteredPreview).not.toContainText(excluded);
+    await filteredPreview.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('PostgreSQL当前筛选SELECT.png') });
+    await filteredDialog.getByRole('button', { name: sqlTemplateText.open, exact: true }).click();
+    await expect(page.locator('.postgres-query:visible .monaco-editor .view-lines')).toContainText(`pg_catalog.strpos("note"::text, E'文件恢复') > 0`);
+    await page.locator('.tab-select').getByText('"回归"."模板.""记录"', { exact: true }).click();
+    await expect(quickFilter).toHaveValue('尚未应用的输入');
+    await expect(draft).toContainText('尚未提交的值');
+    await draft.getByRole('button', { name: tableText.undo, exact: true }).click();
+    expect(await readTemplateRows()).toEqual(beforeSql);
+    await mark('从第二页仅用已应用筛选与补序生成 SELECT，独立查询打开且原未应用输入和草稿保持');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

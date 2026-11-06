@@ -254,6 +254,7 @@ export interface PostgresTablePage {
   canImport?: true;
   canBrowseReferences?: true;
   columns: PostgresTableColumn[];
+  primaryKey?: string[];
   rows: DataRow[];
   rowKeys?: string[];
   capabilities: { insert: boolean; update: boolean; delete: boolean };

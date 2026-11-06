@@ -9,4 +9,7 @@ export const tableFilteredSelectZh = {
   invalid: '未能确认当前已载入页及完整已应用条件，未生成 SELECT。',
   tabs: '查询标签已达100个，请先关闭部分标签。',
   queryTitle: (table: string) => `${table} · 筛选 SELECT`,
+  postgresComment: '-- PostgreSQL 当前筛选 SELECT。请核对范围后执行。',
+  postgresQuick: (column: string, value: string) => `${column} 包含原文 ${JSON.stringify(value)}`,
+  postgresLiteralNotice: '已应用的筛选值会写入查询正文。保存或分享草稿时请核对这些值。',
 } as const;

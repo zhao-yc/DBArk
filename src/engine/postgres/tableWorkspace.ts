@@ -16,7 +16,7 @@ import {
 import type { PostgresConnection } from './connection';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
 import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
-import { postgresTableCondition } from './tableFilter';
+import { postgresTableCondition, postgresTableReadOrder } from '../../shared/postgresTableReadSql';
 import { readPostgresTableReferences, type PostgresReferenceSourceRow, type PostgresReferenceRowVersion } from './tableReferences';
 import { readPostgresColumnStatistics } from './tableStatistics';
 import {
@@ -124,7 +124,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
   }));
   const keys = fields.rows.map((field, index) => ({ index, position: Number(field.c7) }))
     .filter(item => item.position > 0).sort((a, b) => a.position - b.position)
-    .map(item => postgresIdentifier(columns[item.index].name));
+    .map(item => columns[item.index].name);
   const kind = info.c2 as Relation['kind'];
   const editable = kind === 'r' && info.c3 === 'f' && info.c4 === 'f';
   return {
@@ -155,12 +155,7 @@ function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter
   if (page?.checkFilterColumns && input.filter) {
     for (const name of 'rules' in input.filter ? input.filter.rules.map(rule => rule.column) : [input.filter.column]) key(name);
   }
-  const ordered = postgresTableSortRules(input.sort).map(rule => ({ ...rule, column: key(rule.column) }));
-  const tie = relation.keys.length ? relation.keys : relation.kind === 'r' ? ['ctid'] : relation.kind === 'p' ? ['tableoid', 'ctid'] : [];
-  const ordering = [
-    ...ordered.map(rule => `${rule.column} ${rule.direction}${rule.nulls ? ` NULLS ${rule.nulls}` : ''}`),
-    ...tie.filter(item => !ordered.some(rule => rule.column === item)),
-  ];
+  const ordering = postgresTableReadOrder(input.sort, relation.kind, relation.keys, key);
   const args: unknown[] = page ? [page.limit + 1, page.offset] : [];
   // COPY 流使用简单协议，其筛选值使用与会话转义设置无关的显式字面量。
   const condition = postgresTableCondition(input.filter, key, value => copy ? postgresDdlLiteral(value) : '$' + args.push(value));
@@ -344,6 +339,7 @@ export class PostgresTableWorkspace {
       const page: PostgresTablePage = {
         columns: result.relation.columns, rows: result.rows, hasNext: result.hasNext, truncated: result.truncated,
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
+        ...(result.relation.keys.length ? { primaryKey: result.relation.keys } : {}),
         relationKind: result.relation.kind, capabilities, exportToken, ...(writeEligible ? { pageToken: exportToken } : {}),
         ...(retainedHistoryPageTokens.length ? { retainedHistoryPageTokens } : {}),
         ...(result.counted ? { counted: { matchingRows: result.counted.matchingRows, offset: result.counted.offset } } : {}),
