@@ -18,7 +18,7 @@ export const postgresTableZh = {
     checked: (count: number, maximum: number) => `已勾选 ${count} / ${maximum} 项`,
   },
   invalidFilter: '筛选条件无效', activeAdvancedFilter: (count: number) => '已应用高级条件 ' + count + ' 项',
-  add: '新增记录', edit: '编辑所选记录', remove: '删除所选记录', stage: '加入草稿',
+  add: '新增记录', edit: '编辑所选记录', remove: '删除当前记录', stage: '加入草稿',
   cellEdit: (column: string) => '编辑单元格 ' + column,
   cellEditHint: '双击、按 F2 或直接输入可编辑普通单元格。',
   cellEditExpired: '原表页、连接或单元格已变化，请取消后重新选择。',

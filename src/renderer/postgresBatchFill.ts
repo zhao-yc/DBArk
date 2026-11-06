@@ -2,6 +2,7 @@ import type { CellValue } from '../shared/contracts';
 import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField, type PostgresTablePage } from '../shared/postgresTable';
 import { cellText, ownCell } from './lib';
 import { postgresBatchFillZh as text } from './locales/postgresBatchFill.zh-CN';
+import { postgresBatchRows } from './postgresBatchSelection';
 
 export function postgresBatchFillColumn(column: PostgresTableColumn): boolean {
   return !column.primary && !column.generated;
@@ -21,8 +22,8 @@ function equal(value: Value, previous: Value | undefined, original: CellValue): 
 /** 以明确的勾选行、原行键和可见列构造整批草稿。其它字段及已暂存行版本由原工作区保留。 */
 export function postgresBatchFillChanges(page: PostgresTablePage, visible: readonly PostgresTableColumn[],
   selected: ReadonlySet<number>, fields: readonly PostgresTableField[], prior: (key: string) => PostgresTableChange | undefined): PostgresTableChange[] {
-  if (!page.pageToken || !page.capabilities.update || page.truncated || !selected.size || selected.size > postgresTableLimits.changes)
-    throw Error(text.rows);
+  if (!page.capabilities.update) throw Error(text.rows);
+  const rows = postgresBatchRows(page, selected, prior);
   const seen = new Set<string>();
   if (!fields.length || fields.length > postgresTableLimits.fields) throw Error(text.fields);
   for (const { column: key, value } of fields) {
@@ -34,13 +35,8 @@ export function postgresBatchFillChanges(page: PostgresTablePage, visible: reado
       throw Error(text.invalid);
     seen.add(key);
   }
-  const rowKeys = new Set<string>(), result: PostgresTableChange[] = [];
-  for (const row of [...selected].sort((a, b) => a - b)) {
-    const key = page.rowKeys?.[row], original = page.rows[row];
-    if (!Number.isSafeInteger(row) || !original || !key || rowKeys.has(key)) throw Error(text.rows);
-    rowKeys.add(key);
-    const previous = prior(key);
-    if (previous?.kind === 'delete') throw Error(text.rows);
+  const result: PostgresTableChange[] = [];
+  for (const { index: row, original, previous } of rows) {
     const previousFields = previous?.kind === 'update' ? previous.fields : [];
     const changed = fields.filter(field => {
       const raw = ownCell(original, field.column);

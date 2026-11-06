@@ -420,6 +420,24 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
     await expect(tableCell('新增甲')).toBeVisible();
     await expect(tableCell('新增乙')).toBeVisible();
     await mark('PostgreSQL 网格勾选批量填充原记录，整批暂存及撤销保持服务器原值');
+    const deleteChecked = tableButton('删除勾选记录');
+    await editRecord('新增甲', '待恢复草稿');
+    await deleteChecked.click();
+    const deleteReview = page.getByRole('dialog', { name: '确认 PostgreSQL 删除勾选记录', exact: true });
+    await expect(deleteReview).toContainText('其中 1 条已有更新草稿');
+    await expect(deleteReview.getByRole('cell', { name: 'id = 2', exact: true })).toBeVisible();
+    await expect(deleteReview.getByRole('cell', { name: 'id = 3', exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath('PostgreSQL删除勾选记录.png') });
+    await deleteReview.getByRole('button', { name: postgresTableZh.cancel, exact: true }).click();
+    await expect(recordDraft).toContainText('note=待恢复草稿');
+    await deleteChecked.click();
+    await deleteReview.getByRole('button', { name: '暂存整批删除', exact: true }).click();
+    await expect(recordDraft.getByText(/^删除 ·/)).toHaveCount(2);
+    await expect(recordDraft).not.toContainText('待恢复草稿');
+    await recordDraft.getByRole('button', { name: '撤销整批删除', exact: true }).click();
+    await expect(recordDraft).toContainText('note=待恢复草稿');
+    await tableButton(postgresTableZh.discard).click();
+    await mark('PostgreSQL 删除勾选记录核对原主键，取消及撤销恢复原更新草稿');
 
     const formSize = gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true });
     const originalFormSize = await formSize.inputValue();

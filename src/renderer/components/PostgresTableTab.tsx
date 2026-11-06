@@ -51,6 +51,9 @@ import { PostgresColumnStatisticsDialog } from './PostgresColumnStatisticsDialog
 import { PostgresBatchFillDialog } from './PostgresBatchFillDialog';
 import { postgresBatchFillChanges, postgresBatchFillColumn } from '../postgresBatchFill';
 import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
+import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
+import { postgresBatchDeletePlan, type PostgresBatchDeletePlan } from '../postgresBatchDelete';
+import { postgresBatchDeleteZh as deleteText } from '../locales/postgresBatchDelete.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -58,10 +61,10 @@ type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 
 type PageMovement = { recordEdge?: 'last'; navigation?: PostgresTablePageInput['navigation'] };
 type PageRead = PageMovement & { retainPageTokens?: string[]; checkFilterColumns?: true; presetLayout?: TablePreferences };
 type DraftEntry = { change: PostgresTableChange & { pageToken: string }; rowKey?: string; offset: number };
-interface BatchFill {
+type BatchSelection = {
   scope: object; page: PostgresTablePage; selected: ReadonlySet<number>;
   originalDraft: DraftEntry[]; gridCurrent(): boolean;
-}
+} & ({ kind: 'fill' } | { kind: 'delete'; plan: PostgresBatchDeletePlan });
 interface InlineEdit {
   scope: object; cell: QueryResultCopyCell; column: PostgresTableColumn; rowKey: string;
   anchor: HTMLElement; originalText: string; initial: PostgresInlineCellValue; typed?: string;
@@ -84,9 +87,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [gridReturn, setGridReturn] = useState<{ page: PostgresTablePage; position: GridFindTarget }>();
   const [draft, setDraft] = useState<DraftEntry[]>([]);
   const draftRef = useRef(draft);
-  const [batchFill, setBatchFill] = useState<BatchFill>();
-  const batchOwner = useRef<BatchFill>(undefined);
-  const [batchUndo, setBatchUndo] = useState<{ before: DraftEntry[]; after: DraftEntry[] }>();
+  const [batch, setBatch] = useState<BatchSelection>();
+  const batchOwner = useRef<BatchSelection>(undefined);
+  const [batchUndo, setBatchUndo] = useState<{ kind: BatchSelection['kind']; before: DraftEntry[]; after: DraftEntry[] }>();
   const [pasteScope, setPasteScope] = useState<object>();
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
@@ -300,7 +303,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batchFill || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -375,21 +378,23 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     } catch { /* 原值失效时保留当前条件。 */ }
   }
 
-  const canEditGrid = !recordView && active && writable && !!page?.capabilities.update && pageConnectionVersion === connectionVersion;
+  const canChangeGrid = !recordView && active && writable && pageConnectionVersion === connectionVersion;
+  const canEditGrid = canChangeGrid && !!page?.capabilities.update;
   const fillColumns = gridLayout.columns.filter(postgresBatchFillColumn);
 
-  function closeBatchFill(intent: BatchFill) {
+  function closeBatch(intent: BatchSelection) {
     if (batchOwner.current !== intent) return;
     batchOwner.current = undefined;
-    setBatchFill(undefined);
+    setBatch(undefined);
   }
 
   useLayoutEffect(() => {
-    if (batchFill && (!active || batchFill.scope !== cellScope || !layoutScope.current.current())) closeBatchFill(batchFill);
-  }, [active, cellScope, batchFill]);
+    if (batch && (!active || batch.scope !== cellScope || !layoutScope.current.current())) closeBatch(batch);
+  }, [active, cellScope, batch]);
 
-  function canBatchFill(selected: ReadonlySet<number>): boolean {
-    return canEditGrid && !!fillColumns.length && !!selected.size && selected.size <= postgresTableLimits.changes &&
+  function canBatch(kind: BatchSelection['kind'], selected: ReadonlySet<number>): boolean {
+    const permitted = kind === 'fill' ? canEditGrid && !!fillColumns.length : canChangeGrid && !!page?.capabilities.delete;
+    return permitted && !!selected.size && selected.size <= postgresTableLimits.changes &&
       [...selected].every(row => {
         const key = page?.rowKeys?.[row];
         return !!key && !draft.some(entry => entry.rowKey === key && entry.change.kind === 'delete');
@@ -397,30 +402,36 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   /** 窗口绑定已勾选的网格代次、原表页与完整草稿，确认前没有数据库请求。 */
-  function openBatchFill(selected: ReadonlySet<number>, gridCurrent: () => boolean) {
-    if (!page?.pageToken || !canBatchFill(selected) || !gridCurrent() || batchOwner.current ||
+  function openBatch(kind: BatchSelection['kind'], selected: ReadonlySet<number>, gridCurrent: () => boolean) {
+    if (!page?.pageToken || !canBatch(kind, selected) || !gridCurrent() || batchOwner.current ||
         !layoutScope.current.current() || lease.current || inlineOwner.current || recordInput.current ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
-    const intent = { scope: cellScope, page, selected, originalDraft: draftRef.current, gridCurrent };
-    closeCellMenu(cellMenuOwner.current, false);
-    batchOwner.current = intent;
-    setBatchFill(intent);
+    const source = { scope: cellScope, page, selected, originalDraft: draftRef.current, gridCurrent };
+    try {
+      const intent: BatchSelection = kind === 'delete'
+        ? { ...source, kind, plan: postgresBatchDeletePlan(page, selected, key => source.originalDraft.find(entry => entry.rowKey === key)?.change) }
+        : { ...source, kind };
+      closeCellMenu(cellMenuOwner.current, false);
+      batchOwner.current = intent;
+      setBatch(intent);
+    } catch (reason) { setError(errorMessage(reason)); }
   }
 
-  function stageBatchFill(intent: BatchFill, fields: PostgresTableField[]) {
+  function stageBatch(intent: BatchSelection, fields: PostgresTableField[] = []) {
+    const batchText = intent.kind === 'delete' ? deleteText : fillText;
     if (batchOwner.current !== intent || intent.page !== page || cellScope !== intent.scope ||
         !intent.gridCurrent() || issued.current !== intent.page.pageToken || !layoutScope.current.current() ||
-        lease.current || requiresRefresh || draftRef.current !== intent.originalDraft) throw Error(fillText.stale);
+        lease.current || requiresRefresh || draftRef.current !== intent.originalDraft) throw Error(batchText.stale);
     const before = draftRef.current;
-    const changes = postgresBatchFillChanges(intent.page, gridLayout.columns, intent.selected, fields,
-      key => before.find(entry => entry.rowKey === key)?.change);
+    const changes = intent.kind === 'delete' ? intent.plan.changes : postgresBatchFillChanges(
+      intent.page, gridLayout.columns, intent.selected, fields, key => before.find(entry => entry.rowKey === key)?.change);
     if (changes.length) {
-      if (!stageChanges(changes)) throw Error(fillText.stale);
-      setBatchUndo({ before, after: draftRef.current });
+      if (!stageChanges(changes)) throw Error(batchText.stale);
+      setBatchUndo({ kind: intent.kind, before, after: draftRef.current });
     }
-    closeBatchFill(intent);
+    closeBatch(intent);
     setError('');
-    setMessage(changes.length ? fillText.staged(changes.length) : fillText.unchanged);
+    setMessage(changes.length ? batchText.staged(changes.length) : fillText.unchanged);
   }
   const canFind = !recordView && active && !!page?.exportToken && !blocked && !requiresRefresh && pageConnectionVersion === connectionVersion;
   const findScope = useMemo(() => ({}), [cellScope, draft]);
@@ -786,10 +797,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump
-        renderRowSelectionAction={page.capabilities.update && fillColumns.length ? (selected, current) =>
-          <div className="pg-table-controls pg-batch-fill-actions">
-            <button type="button" title={fillText.rows} disabled={!canBatchFill(selected)}
-              onClick={() => openBatchFill(selected, current)}>{fillText.action}</button>
+        renderRowSelectionAction={page.capabilities.delete || page.capabilities.update && fillColumns.length ? (selected, current) =>
+          <div className="pg-table-controls pg-batch-actions">
+            {!!fillColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('fill', selected)}
+              onClick={() => openBatch('fill', selected, current)}>{fillText.action}</button>}
+            {page.capabilities.delete && <button type="button" title={fillText.rows} disabled={!canBatch('delete', selected)}
+              onClick={() => openBatch('delete', selected, current)}>{deleteText.action}</button>}
             {!!selected.size && <span>{fillText.count(selected.size)}</span>}
           </div> : undefined}
         onActiveRowIndexChange={recordView ? undefined : setRow}
@@ -820,13 +833,15 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       onStage={value => stageInlineEdit(inlineEdit, value)} onCancel={() => closeInlineEdit(inlineEdit)}/>}
     {pasteScope && <PostgresGridPasteDialog columns={gridLayout.columns} onClose={() => closePasteAppend(pasteScope)}
       onStage={(start, source) => stageGridPaste(start, source, undefined, pasteScope)}/>}
-    {batchFill && <PostgresBatchFillDialog columns={fillColumns} count={batchFill.selected.size}
-      onStage={fields => stageBatchFill(batchFill, fields)} onClose={() => closeBatchFill(batchFill)}/>}
+    {batch?.kind === 'fill' && <PostgresBatchFillDialog columns={fillColumns} count={batch.selected.size}
+      onStage={fields => stageBatch(batch, fields)} onClose={() => closeBatch(batch)}/>}
+    {batch?.kind === 'delete' && <PostgresBatchDeleteDialog plan={batch.plan} offset={options.offset}
+      onStage={() => stageBatch(batch)} onClose={() => closeBatch(batch)}/>}
     {draft.length > 0 && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong><button disabled={blocked} onClick={() => { setChanges([]); setMessage(''); }}>{text.discard}</button>
       {batchUndo && <button disabled={blocked || requiresRefresh} onClick={() => {
         if (draftRef.current === batchUndo.after) { setChanges(batchUndo.before); setMessage(''); }
-      }}>{fillText.undo}</button>}
+      }}>{batchUndo.kind === 'delete' ? deleteText.undo : fillText.undo}</button>}
       <ol>{draft.map(({ change, offset }, index) => <li key={index}>
         <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</span>
         {change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {

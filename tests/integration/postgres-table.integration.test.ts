@@ -12,6 +12,7 @@ import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult, PostgresTableValues } from '../../src/shared/postgresTable';
 import { appendPostgresValueFilter } from '../../src/renderer/postgresTableValues';
 import { postgresBatchFillChanges } from '../../src/renderer/postgresBatchFill';
+import { postgresBatchDeletePlan } from '../../src/renderer/postgresBatchDelete';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { inspectPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
 
@@ -221,6 +222,31 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         { id: '9007199254740993', note: null, flag: '默认值', raw: '00ff' }, unchangedFill[1],
         { id: '9007199254740995', note: null, flag: '默认值', raw: '00ff' },
       ]);
+      const batchDelete = { table: '"浏览"."勾选删除"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE ${batchDelete.table} (id bigint, label text, note text, PRIMARY KEY(id,label));
+        INSERT INTO ${batchDelete.table} VALUES (9007199254740993,'组一','保留一'),
+          (9007199254740994,'组二','保留二'),(9007199254740995,'组三','保留三');
+        CREATE TABLE "浏览"."删除限制" (id bigint, label text, FOREIGN KEY(id,label) REFERENCES ${batchDelete.table});
+        INSERT INTO "浏览"."删除限制" VALUES (9007199254740995,'组三');`);
+      const deleteRows = () => client.query(`SELECT id::text, label, note FROM ${batchDelete.table} ORDER BY id`).then(result => result.rows);
+      const originalDeleteRows = await deleteRows();
+      const deletePage = await read({ ...batchDelete, limit: 3 });
+      const selectedDelete = new Set([2, 0]);
+      const deletePlan = postgresBatchDeletePlan(deletePage, selectedDelete, () => undefined);
+      expect(deletePlan.rows).toEqual([0, 2].map(index => ({ index, key: [
+        { name: 'id', value: originalDeleteRows[index].id }, { name: 'label', value: originalDeleteRows[index].label },
+      ] })));
+      const deletePreview = await preview(deletePage, deletePlan.changes, batchDelete);
+      expect(deletePreview.counts).toEqual({ insert: 0, update: 0, delete: 2 });
+      expect(await deleteRows()).toEqual(originalDeleteRows);
+      expect(await apply(deletePage, deletePreview, batchDelete)).toMatchObject({ outcome: 'rolledBack', affected: 0 });
+      expect(await deleteRows()).toEqual(originalDeleteRows);
+      await client.query('DELETE FROM "浏览"."删除限制"');
+      const deleteRetry = await read({ ...batchDelete, limit: 3 });
+      const deleteRetryPlan = postgresBatchDeletePlan(deleteRetry, selectedDelete, () => undefined);
+      expect(await apply(deleteRetry, await preview(deleteRetry, deleteRetryPlan.changes, batchDelete), batchDelete))
+        .toMatchObject({ outcome: 'committed', affected: 2 });
+      expect(await deleteRows()).toEqual([originalDeleteRows[1]]);
       const cross = { table: '"浏览"."跨页编辑"', tabId: randomUUID() };
       await client.query(`CREATE TABLE ${cross.table} (id bigint PRIMARY KEY, note text CHECK (note <> '拒绝'));
         INSERT INTO ${cross.table} VALUES (1,'原甲'),(2,'原乙'),(3,'原丙')`);
