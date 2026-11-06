@@ -466,6 +466,80 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     expect(await readTemplateRows()).toEqual(beforeDelete);
     await mark('待删除行原位划线并可撤销，数据库未提前删除');
 
+    const add = page.getByRole('dialog', { name: tableText.add, exact: true });
+    const precision = '90071992547409931234.012345678901234567';
+    const addDraft = async (note: string, first = false) => {
+      await button(tableText.add).click();
+      await mode(add, 'note').selectOption('text');
+      await value(add, 'note').fill(note);
+      if (first) {
+        await mode(add, 'raw').selectOption('binary');
+        await value(add, 'raw').fill('00ff');
+        await mode(add, 'amount').selectOption('text');
+        await value(add, 'amount').fill(precision);
+        await mode(add, 'nullable_text').selectOption('null');
+      }
+      await add.getByRole('button', { name: tableText.stage, exact: true }).click();
+    };
+    await addDraft('第一条待改', true);
+    await button(tableText.next).click();
+    await expect(tab.getByText(tableText.currentPage(3), { exact: true })).toBeVisible();
+    await addDraft('第二条保持');
+    const editInsert = page.getByRole('dialog', { name: tableText.editInsertDraft, exact: true });
+    const draftEditButton = (name: string) => draft.getByRole('listitem').filter({ hasText: 'note=' + name })
+      .getByRole('button', { name: tableText.editInsertDraft, exact: true });
+    const saveEdit = editInsert.getByRole('button', { name: tableText.saveInsertDraft, exact: true });
+    await draftEditButton('第一条待改').click();
+    await expect(value(editInsert, 'amount')).toHaveValue(precision);
+    await expect(value(editInsert, 'raw')).toHaveValue('00ff');
+    await value(editInsert, 'note').fill('取消后放弃的修改');
+    await editInsert.getByRole('button', { name: tableText.cancel, exact: true }).click();
+    await expect(draft).toContainText('第一条待改');
+    await expect(draft).not.toContainText('取消后放弃的修改');
+    await draftEditButton('第一条待改').click();
+    await saveEdit.click();
+    await expect(undo).toHaveText(historyText.undo + ' (2)');
+    expect(await readTemplateRows()).toEqual(beforeDelete);
+    await mark('翻页后按原草稿预填精确值，取消与原样保存都保留两条草稿和历史');
+
+    await draftEditButton('第一条待改').click();
+    await value(editInsert, 'note').fill('第一条已修正');
+    await value(editInsert, 'raw').fill('f');
+    await saveEdit.click();
+    await expect(editInsert.getByRole('alert')).toBeVisible();
+    await expect(value(editInsert, 'note')).toHaveValue('第一条已修正');
+    await expect(draft).toContainText('第一条待改');
+    await value(editInsert, 'raw').fill('00fe');
+    await mode(editInsert, 'fallback').selectOption('default');
+    await saveEdit.click();
+    await expect(draft.getByRole('listitem').first()).toContainText('第一条已修正');
+    await expect(draft.getByRole('listitem').last()).toContainText('第二条保持');
+    await expect(draft).toContainText(tableText.changes(2));
+    await undo.click();
+    await expect(draft.getByRole('listitem').first()).toContainText('第一条待改');
+    await redo.click();
+    await expect(draft.getByRole('listitem').first()).toContainText('第一条已修正');
+    await draftEditButton('第一条已修正').click();
+    await expect(mode(editInsert, 'nullable_text')).toHaveValue('null');
+    await expect(mode(editInsert, 'fallback')).toHaveValue('default');
+    await expect(value(editInsert, 'raw')).toHaveValue('00fe');
+    expect((await value(editInsert, 'note').boundingBox())?.width ?? 0).toBeGreaterThan(200);
+    await page.screenshot({ path: info.outputPath('PostgreSQL编辑新增草稿.png') });
+    await editInsert.getByRole('button', { name: tableText.cancel, exact: true }).click();
+    expect(await readTemplateRows()).toEqual(beforeDelete);
+    await mark('无效字节拒绝并保留原草稿，修正后原位替换，支持一步撤销和重做');
+
+    await button(tableText.preview).click();
+    await expect(review).toContainText('INSERT INTO');
+    expect(await readTemplateRows()).toEqual(beforeDelete);
+    await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(tab.getByText(/已确认整批提交/)).toBeVisible();
+    expect(await readTemplateRows()).toEqual([...beforeDelete,
+      { id: '9007199254740996', legacy: '4', note: '第一条已修正', amount: precision, raw: '00fe', nullable_text: null, fallback: '数据库默认', tag: '第一条已修正-生成' },
+      { id: '9007199254740997', legacy: '5', note: '第二条保持', amount: null, raw: null, nullable_text: '数据库默认', fallback: '数据库默认', tag: '第二条保持-生成' },
+    ]);
+    await mark('明确提交后按原顺序新增两条，精确值、字节和默认值独立读回');
+
     check();
     expect(runtime.pageErrors).toEqual([]);
     await reader.end();

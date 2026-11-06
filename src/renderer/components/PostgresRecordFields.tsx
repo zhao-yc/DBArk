@@ -14,10 +14,11 @@ export type PostgresRecordValues = Map<string, PostgresTableField['value']>;
 type Mode = PostgresTableField['value']['mode'] | 'unchanged';
 
 /** 网格弹窗和记录视图共用字段模式，分别管理自己的输入和暂存。 */
-export function PostgresRecordFields({ columns, original, fields, editable, disabled, inspect, reference, batch, onChange }: {
+export function PostgresRecordFields({ columns, original, fields, editable, disabled, inspect, reference, batch, explicitDefault, onChange }: {
   columns: readonly PostgresTableColumn[]; original?: DataRow; fields: PostgresRecordValues; editable: boolean; disabled?: boolean; inspect?: boolean;
   reference?: PostgresReferenceSource;
   batch?: true;
+  explicitDefault?: boolean;
   onChange(change: (current: PostgresRecordValues) => PostgresRecordValues): void;
 }) {
   const [expanded, setExpanded] = useState<string>();
@@ -60,11 +61,11 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
       {inspect && expanded === column.key && <textarea readOnly aria-label={viewText.raw(column.name)} rows={3} value={cellText(originalValue)}/>}
       {column.generated ? <span className="muted">{text.generated}</span> : editable && <div className="pg-record-inputs">
         <select aria-label={column.name + ' ' + text.valueMode} value={value?.mode ?? 'unchanged'} disabled={disabled} onChange={event => changeMode(column.key, event.target.value as Mode)}>
-          <option value="unchanged">{original || batch ? text.unchanged : text.default}</option>
+          <option value="unchanged">{original || batch ? text.unchanged : explicitDefault ? text.omitInsertField : text.default}</option>
           <option value="text">{text.text}</option>
           {column.binary && <option value="binary">{text.hex}</option>}
           {column.nullable && <option value="null">{text.null}</option>}
-          {(original || batch) && <option value="default">{text.default}</option>}
+          {(original || batch || explicitDefault) && <option value="default">{text.default}</option>}
         </select>
         {value && 'value' in value && <textarea aria-label={column.name + ' ' + text.value} value={value.value}
           maxLength={postgresTableLimits.value} readOnly={disabled} rows={2} onChange={event => {
@@ -76,10 +77,11 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
   })}</>;
 }
 
-export function PostgresRecordForm({ page, row, initial, reference, duplicate, onSave, onClose }: {
+export function PostgresRecordForm({ page, row, initial, reference, duplicate, editingDraft, onSave, onClose }: {
   page: PostgresTablePage; row: number | null; initial?: PostgresEditableRecord;
   reference?: PostgresReferenceSource;
   duplicate?: { rowNumber: number; omitted: readonly string[] };
+  editingDraft?: boolean;
   onSave(change: PostgresEditableRecord): void; onClose(): void;
 }) {
   const [fields, setFields] = useState<PostgresRecordValues>(() => new Map(initial?.fields.map(field => [field.column, field.value])));
@@ -93,15 +95,16 @@ export function PostgresRecordForm({ page, row, initial, reference, duplicate, o
     catch (reason) { setError(errorMessage(reason)); }
   }
 
-  return <Modal title={duplicate ? duplicateText.title : row === null ? text.add : text.edit} onClose={onClose} wide>
+  return <Modal title={editingDraft ? text.editInsertDraft : duplicate ? duplicateText.title : row === null ? text.add : text.edit} onClose={onClose} wide>
     <div className={duplicate ? 'modal-content pg-record-form pg-record-duplicate' : 'modal-content pg-record-form'}>
       {duplicate && <>
         <p>{duplicateText.source(duplicate.rowNumber)} {duplicateText.notice}</p>
         {!!duplicate.omitted.length && <p>{duplicateText.omitted(duplicate.omitted.join('、'))}</p>}
       </>}
-      <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference} onChange={setFields}/>
+      <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference}
+        explicitDefault={editingDraft} onChange={setFields}/>
       <ErrorBox message={error}/>
     </div>
-    <footer className="modal-footer"><button onClick={onClose}>{text.cancel}</button><button className="primary" onClick={submit}>{text.stage}</button></footer>
+    <footer className="modal-footer"><button onClick={onClose}>{text.cancel}</button><button className="primary" onClick={submit}>{editingDraft ? text.saveInsertDraft : text.stage}</button></footer>
   </Modal>;
 }

@@ -52,7 +52,7 @@ import type { PostgresColumnReadSource } from '../postgresColumnRead';
 import { PostgresColumnStatisticsDialog } from './PostgresColumnStatisticsDialog';
 import { PostgresBatchFillDialog } from './PostgresBatchFillDialog';
 import { postgresBatchFillChanges } from '../postgresBatchFill';
-import { postgresBatchEditableColumn, postgresBatchRows, type PostgresBatchRow } from '../postgresBatchSelection';
+import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, type PostgresBatchRow } from '../postgresBatchSelection';
 import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
 import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
 import { postgresBatchDeletePlan, type PostgresBatchDeletePlan } from '../postgresBatchDelete';
@@ -92,6 +92,10 @@ type TemplateDialog = {
 type DuplicateSource = {
   page: PostgresTablePage; scope: object; row: number; rowNumber: number; originalDraft: DraftEntry[];
 } & ReturnType<typeof postgresRecordDuplicatePlan>;
+type InsertDraftSource = {
+  page: PostgresTablePage; originalDraft: DraftEntry[]; entry: DraftEntry;
+  change: Extract<DraftEntry['change'], { kind: 'insert' }>;
+};
 interface InlineEdit {
   scope: object; cell: QueryResultCopyCell; column: PostgresTableColumn; rowKey: string;
   anchor: HTMLElement; originalText: string; initial: PostgresInlineCellValue; typed?: string;
@@ -122,8 +126,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
   const findAnchor = useRef<{ scope: object; value?: GridFindTarget }>(undefined);
-  const [form, setForm] = useState<{ row: number | null; duplicate?: DuplicateSource }>();
+  const [form, setForm] = useState<{ row: number | null; duplicate?: DuplicateSource; insertion?: InsertDraftSource }>();
   const duplicateOwner = useRef<DuplicateSource>(undefined);
+  const insertDraftOwner = useRef<InsertDraftSource>(undefined);
   const [templateDialog, setTemplateDialog] = useState<TemplateDialog>();
   const templateOwner = useRef<RecordTemplateLease>(undefined);
   const [preview, setPreview] = useState<PostgresTablePreview>();
@@ -265,7 +270,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || columnDialog || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || columnDialog || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const pins = keepDraft ? history.pins() : {};
     void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
@@ -285,10 +290,17 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     publishChanges(next);
   }
 
+  /** 任何暂存入口都按完整账本核对原页数量、字段和总大小。 */
+  function validateChanges(next: DraftEntry[], pageToken: string) {
+    if (!next.length) return;
+    const checked = postgresTablePreviewSchema.safeParse({ ...target, pageToken, changes: next.map(item => item.change) });
+    if (!checked.success) throw Error(checked.error.issues[0]?.message ?? text.noChange);
+  }
+
   /** 单格和矩形共用一次整批校验，重编同一主键时继续使用首次暂存的原行版本。 */
   function stageChanges(changes: readonly PostgresTableChange[],
     { owner, remove, group }: { owner?: InlineEdit; remove?: ReadonlySet<string>; group?: PostgresDraftGroup } = {}) {
-    if (!page?.pageToken || requiresRefresh || lease.current || inlineOwner.current !== owner) return false;
+    if (!page?.pageToken || requiresRefresh || lease.current || insertDraftOwner.current || inlineOwner.current !== owner) return false;
     const next = draftRef.current.filter(entry => !entry.rowKey || !remove?.has(entry.rowKey));
     for (const change of changes) {
       const rowKey = change.kind === 'insert' ? undefined : page.rowKeys?.[change.row];
@@ -299,10 +311,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         ? { ...prior, change: { ...change, row: prior.change.row, pageToken: prior.change.pageToken } }
         : { change: { ...change, pageToken: page.pageToken }, rowKey, offset: options.offset });
     }
-    if (next.length) {
-      const checked = postgresTablePreviewSchema.safeParse({ ...target, pageToken: page.pageToken, changes: next.map(item => item.change) });
-      if (!checked.success) throw Error(checked.error.issues[0]?.message ?? text.noChange);
-    }
+    validateChanges(next, page.pageToken);
     setChanges(next, group);
     return true;
   }
@@ -339,7 +348,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh || draftFile || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
+    if (!pageToken || !draft.length || requiresRefresh || draftFile || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -390,7 +399,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 只在当前表页的草稿账本移动，不执行查询或提交，也不接管输入控件的撤销。 */
   function moveDraftHistory(direction: 'undo' | 'redo') {
     if (!historyEnabled || issued.current !== page?.pageToken || !layoutScope.current.current() ||
-        draftRef.current !== draft || lease.current || batchOwner.current || templateOwner.current ||
+        draftRef.current !== draft || lease.current || insertDraftOwner.current || batchOwner.current || templateOwner.current ||
         inlineOwner.current || pasteOwner.current || recordInput.current ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const next = history.move(direction);
@@ -714,6 +723,55 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const viewDraft = viewKey ? draft.find(entry => entry.rowKey === viewKey)?.change : undefined;
   const canDuplicate = active && writable && pageConnectionVersion === connectionVersion && !!page?.capabilities.insert &&
     !page.truncated && row !== null && !!page.rows[row] && viewDraft?.kind !== 'delete';
+  const canEditInsertDraft = active && writable && pageConnectionVersion === connectionVersion && !!page?.capabilities.insert;
+
+  /** 只绑定当前清单中准确的一项，跨页时仍使用它首次暂存的原页和顺序。 */
+  function openInsertDraft(entry: DraftEntry) {
+    if (!canEditInsertDraft || !page?.pageToken || issued.current !== page.pageToken || entry.change.kind !== 'insert' ||
+        !layoutScope.current.current() || insertDraftOwner.current || duplicateOwner.current || batchOwner.current ||
+        templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current ||
+        draftRef.current !== draft || !draft.includes(entry) || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const source = { page, entry, change: entry.change, originalDraft: draft };
+    closeCellMenu(cellMenuOwner.current, false);
+    insertDraftOwner.current = source;
+    setForm({ row: null, insertion: source });
+  }
+
+  function closeInsertDraft(source: InsertDraftSource) {
+    if (insertDraftOwner.current !== source) return;
+    insertDraftOwner.current = undefined;
+    setForm(undefined);
+  }
+
+  function insertDraftCurrent(source: InsertDraftSource) {
+    return insertDraftOwner.current === source && page === source.page && issued.current === source.page.pageToken &&
+      draftRef.current === source.originalDraft && layoutScope.current.current() && !requiresRefresh && !lease.current;
+  }
+
+  useLayoutEffect(() => {
+    const source = insertDraftOwner.current;
+    if (source && !insertDraftCurrent(source)) closeInsertDraft(source);
+  }, [active, page, draft, connectionVersion, requiresRefresh]);
+
+  /** 编辑直接替换原新增草稿。预算失败时保留旧草稿和表单输入，取消也不改变账本。 */
+  function stageInsertDraft(source: InsertDraftSource, change: PostgresTableChange) {
+    const pageToken = page?.pageToken;
+    if (!pageToken || change.kind !== 'insert' || !insertDraftCurrent(source)) throw Error(text.insertDraftStale);
+    const before = new Map(source.change.fields.map(field => [field.column, field.value]));
+    const changed = before.size !== change.fields.length || change.fields.some(field => {
+      const value = before.get(field.column);
+      return !value || !postgresBatchValueEqual(field.value, value, null);
+    });
+    if (changed) {
+      const next = source.originalDraft.map(entry => entry === source.entry
+        ? { ...entry, change: { ...change, pageToken: source.change.pageToken } } : entry);
+      validateChanges(next, pageToken);
+      setChanges(next);
+      setError('');
+      setMessage(text.insertDraftSaved);
+    }
+    closeInsertDraft(source);
+  }
 
   function closeDuplicate(source: DuplicateSource) {
     if (duplicateOwner.current !== source) return;
@@ -1076,15 +1134,19 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
           setMessage('');
         }}>{text.discard}</button>}
       {historyStatus.undoGroup && <button disabled={!historyEnabled} onClick={() => moveDraftHistory('undo')}>{batchLabels[historyStatus.undoGroup].undo}</button>}
-      <ol>{draft.map(({ change, offset }, index) => <li key={index}>
-        <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</span>
-        {change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {
-          const name = page?.columns.find(column => column.key === field.column)?.name;
-          const value = 'value' in field.value ? cellPreview(field.value.value) : field.value.mode.toUpperCase();
-          return name + '=' + value;
-        }).join('，')}</span>}
-        <button disabled={blocked || requiresRefresh} onClick={() => { setChanges(draft.filter((_, other) => index !== other)); setMessage(''); }}>{text.undo}</button>
-      </li>)}</ol>
+      <ol>{draft.map((entry, index) => {
+        const { change, offset } = entry;
+        return <li key={index}>
+          <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</span>
+          {change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {
+            const name = page?.columns.find(column => column.key === field.column)?.name;
+            const value = 'value' in field.value ? cellPreview(field.value.value) : field.value.mode.toUpperCase();
+            return name + '=' + value;
+          }).join('，')}</span>}
+          {change.kind === 'insert' && <button disabled={!canEditInsertDraft} onClick={() => openInsertDraft(entry)}>{text.editInsertDraft}</button>}
+          <button disabled={blocked || requiresRefresh} onClick={() => { setChanges(draft.filter((_, other) => index !== other)); setMessage(''); }}>{text.undo}</button>
+        </li>;
+      })}</ol>
     </div>}
     {draftFile && <Modal title={draftFilesText[draftFile]} onClose={() => { if (!lease.current) setDraftFile(undefined); }}>
       <div className="modal-content"><p>{draftFile === 'save' ? draftFilesText.saveHelp : draftFilesText.restoreHelp}</p></div>
@@ -1143,11 +1205,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     </Modal>}
     {form && page && <PostgresRecordForm page={page} row={form.row}
       duplicate={form.duplicate}
-      initial={form.duplicate ? { kind: 'insert', fields: form.duplicate.fields } : stagedChange?.kind === 'update' ? stagedChange : undefined}
+      editingDraft={!!form.insertion}
+      initial={form.insertion?.change ?? (form.duplicate ? { kind: 'insert', fields: form.duplicate.fields } : stagedChange?.kind === 'update' ? stagedChange : undefined)}
       reference={referenceSource(active && stagedChange?.kind !== 'delete' &&
-        (form.row === null ? page.capabilities.insert : page.capabilities.update), () => form.duplicate ? duplicateCurrent(form.duplicate) : !!form)}
-      onSave={change => form.duplicate ? stageDuplicate(form.duplicate, change) : stage(change)}
-      onClose={() => form.duplicate ? closeDuplicate(form.duplicate) : setForm(undefined)}/>}
+        (form.row === null ? page.capabilities.insert : page.capabilities.update),
+        () => form.insertion ? insertDraftCurrent(form.insertion) : form.duplicate ? duplicateCurrent(form.duplicate) : !!form)}
+      onSave={change => form.insertion ? stageInsertDraft(form.insertion, change) : form.duplicate ? stageDuplicate(form.duplicate, change) : stage(change)}
+      onClose={() => form.insertion ? closeInsertDraft(form.insertion) : form.duplicate ? closeDuplicate(form.duplicate) : setForm(undefined)}/>}
     {preview && <Modal title={text.preview} onClose={() => { if (!busy) setPreview(undefined); }} wide>
       <div className="modal-content pg-table-preview">
         <p>{text.previewHint}</p>
