@@ -1,5 +1,7 @@
 # PostgreSQL 整库备份
 
+备份格式还可选择[PostgreSQL 自定义归档](postgres-custom-archive-20261107.md)。以下步骤以纯文本 SQL 为例。
+
 1. 在「工具 → PostgreSQL 整库备份」选择已保存的连接和来源数据库。
 2. 点击「选择 PostgreSQL pg_dump」，指定本机可信的 PostgreSQL 安装中的原生工具。macOS 选择 `pg_dump`，Windows 选择 `pg_dump.exe`。支持 14 或更新版本，推荐使用与来源数据库相同主版本的工具。
 3. 默认保留对象所有者和授权。迁往角色配置不同的服务器时，可勾选「省略所有者和授权」。

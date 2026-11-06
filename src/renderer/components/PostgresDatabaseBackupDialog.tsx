@@ -13,6 +13,7 @@ export function PostgresDatabaseBackupDialog({ connections, onClose }: {
   const [connectionId, setConnection] = useState(connections.length === 1 ? connections[0].id : '');
   const [database, setDatabase] = useState('');
   const [databases, setDatabases] = useState<string[]>([]);
+  const [format, setFormat] = useState<'sql' | 'custom'>('sql');
   const [portable, setPortable] = useState(false);
   const [tool, setTool] = useState<FileChoice | null>(null), [file, setFile] = useState<FileChoice | null>(null);
   const [result, setResult] = useState<PostgresDatabaseBackupResult>();
@@ -41,7 +42,7 @@ export function PostgresDatabaseBackupDialog({ connections, onClose }: {
         setTool(null);
         setTool(await invoke('postgres.backup.chooseDumpTool', {}));
       } else if (tool) {
-        setFile(await invoke('postgres.backup.chooseDatabaseFile', { connectionId, database, portable, toolToken: tool.token }));
+        setFile(await invoke('postgres.backup.chooseDatabaseFile', { connectionId, database, format, portable, toolToken: tool.token }));
       }
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setBusy(false); occupied.current = false; }
@@ -53,7 +54,7 @@ export function PostgresDatabaseBackupDialog({ connections, onClose }: {
     setTask(id);
     resetFile();
     try {
-      setResult(await invoke('postgres.backup.database', { connectionId, database, portable, toolToken: tool.token, fileToken: file.token, taskId: id }));
+      setResult(await invoke('postgres.backup.database', { connectionId, database, format, portable, toolToken: tool.token, fileToken: file.token, taskId: id }));
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setTask(undefined); setCancelling(false); occupied.current = false; }
   }
@@ -77,11 +78,16 @@ export function PostgresDatabaseBackupDialog({ connections, onClose }: {
           if (event.target.value === database) return;
           setDatabase(event.target.value); resetFile();
         }}><option value="">—</option>{databases.map(item => <option key={item}>{item}</option>)}</select></Field>
+        <Field label={text.format}><select aria-label={text.format} value={format} onChange={event => {
+          const value = event.target.value === 'custom' ? 'custom' : 'sql';
+          if (value === format) return;
+          setFormat(value); setPortable(false); resetFile();
+        }}><option value="sql">{text.sql}</option><option value="custom">{text.custom}</option></select></Field>
       </fieldset>
-      <label className="check"><input type="checkbox" checked={portable} disabled={locked} onChange={event => {
+      {format === 'sql' && <label className="check"><input type="checkbox" checked={portable} disabled={locked} onChange={event => {
         setPortable(event.target.checked); resetFile();
-      }}/>{text.portable}</label>
-      <p>{text.portableHint}</p>
+      }}/>{text.portable}</label>}
+      <p>{format === 'sql' ? text.portableHint : text.customHint}</p>
       <div>
         <button disabled={locked} onClick={() => void choose('tool')}>{text.tool}</button>
         {tool && <span> · {tool.name}</span>}

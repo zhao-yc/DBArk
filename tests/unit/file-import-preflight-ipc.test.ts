@@ -109,7 +109,7 @@ function harness() {
   const columnsMain = { hasUnpublished: () => false, capture: vi.fn(), assertCapturedOwner: vi.fn() };
   const owners = () => ({ has: () => false, drain: vi.fn(async () => undefined), observe: vi.fn(), invalidateConnection: vi.fn() });
   const context = createContext({
-    sqliteCopyTask: undefined, closeSqliteDatabaseCopies: emptySqliteCreateCleanup(), closeSqliteDatabaseCreates: emptySqliteCreateCleanup(),
+    sqliteCopyTask: undefined, postgresArchiveFiles: { cancelAll: vi.fn() }, closeSqliteDatabaseCopies: emptySqliteCreateCleanup(), closeSqliteDatabaseCreates: emptySqliteCreateCleanup(),
     sqliteTableRebuild: emptySqliteTableRebuildMain(), sqliteObjects: emptySqliteObjectsMain(), sqliteTableMaintenance: emptySqliteTableMaintenanceMain(), sqliteTableRename: emptySqliteTableRenameMain(), sqliteColumns: emptySqliteColumnsMain(), sqliteIndexes: emptySqliteIndexesMain(), sqliteTableCreates: emptySqliteTableCreateMain(), sqliteTableImports: emptySqliteTableImportMain(),
     Error, Date, Map, Set, Promise, console, setTimeout, clearTimeout, resolveFileToken, persistedTaskMessage, validateMainCommand: validateCommand,
     tasks, files, broker, store, window: { webContents, isDestroyed: () => false }, rendererURL: 'RAM:预检', columnsMain,

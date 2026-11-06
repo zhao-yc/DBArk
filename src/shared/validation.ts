@@ -1,6 +1,7 @@
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
 import { postgresSqlFileChooseSchema, postgresSqlFileExecuteSchema } from './postgresSqlFile';
 import { postgresDatabaseBackupChooseSchema, postgresDatabaseBackupExecuteSchema, postgresDatabaseBackupToolSchema } from './postgresDatabaseBackup';
+import { postgresArchiveCancelSchema, postgresArchiveChooseSchema, postgresArchiveExportSchema, postgresArchiveListSchema } from './postgresArchive';
 import { postgresDataCompareCatalogueSchema, postgresDataCompareSchema, postgresDataSyncPreviewSchema, postgresDataSyncApplySchema } from './postgresDataCompare';
 import { sqliteDataCompareSchema, sqliteDataSyncPreviewSchema } from './sqliteDataCompare';
 import { postgresRoutineCreateSchema, postgresRoutineDependencySchema, postgresRoutineManageSchema,
@@ -559,6 +560,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'backupArchive.inspectSql': z.object({ operationId: id, token: id }).strict(),
   'backupArchive.auditTarget': z.object({ operationId: id, token: id, connectionId: id }).strict(),
   'backupArchive.cancel': z.object({ operationId: id }).strict(),
+  'postgres.archive.choose': postgresArchiveChooseSchema,
+  'postgres.archive.list': postgresArchiveListSchema,
+  'postgres.archive.exportSql': postgresArchiveExportSchema,
+  'postgres.archive.cancel': postgresArchiveCancelSchema,
   'files.createSqlite': z.object({ connectionId: id }).strict(),
   'files.path': z.object({ token: id }).strict(),
   'excel.sheets': z.object({ fileToken: id, taskId: id }).strict(),

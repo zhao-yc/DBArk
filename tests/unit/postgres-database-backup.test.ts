@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { inspectPostgresDumpTool } from '../../src/engine/postgres/databaseBackup';
+import { inspectPostgresNativeTool } from '../../src/engine/postgres/nativeTool';
 import { postgresDatabaseBackupExecuteSchema, postgresDatabaseBackupToolSchema } from '../../src/shared/postgresDatabaseBackup';
 
 it('备份 IPC 只接受来源和能力令牌，拒绝命令行、工具路径和凭据注入', () => {
@@ -19,11 +19,11 @@ it('只选择对应系统的 pg_dump 普通文件，并观察工具文件修改�
   try {
     const tool = join(directory, process.platform === 'win32' ? 'pg_dump.exe' : 'pg_dump');
     await writeFile(tool, '版本甲', { mode: 0o700 });
-    const original = await inspectPostgresDumpTool(tool);
+    const original = await inspectPostgresNativeTool(tool, 'pg_dump');
     await writeFile(tool, '版本乙文件已变');
-    expect((await inspectPostgresDumpTool(tool)).version).not.toBe(original.version);
+    expect((await inspectPostgresNativeTool(tool, 'pg_dump')).version).not.toBe(original.version);
     const other = join(directory, 'other.exe');
     await writeFile(other, '其它文件', { mode: 0o700 });
-    await expect(inspectPostgresDumpTool(other)).rejects.toThrow('pg_dump');
+    await expect(inspectPostgresNativeTool(other, 'pg_dump')).rejects.toThrow('pg_dump');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

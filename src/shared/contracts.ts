@@ -443,6 +443,10 @@ export interface CommandMap {
   'backupArchive.inspectSql': { input: { operationId: string; token: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupSqlInventory };
   'backupArchive.auditTarget': { input: { operationId: string; token: string; connectionId: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupRestoreTargetAudit };
   'backupArchive.cancel': { input: { operationId: string }; output: void };
+  'postgres.archive.choose': { input: { kind: 'tool' | 'source' }; output: FileChoice | null };
+  'postgres.archive.list': { input: import('./postgresArchive').PostgresArchiveListInput; output: import('./postgresArchive').PostgresArchiveListing };
+  'postgres.archive.exportSql': { input: import('./postgresArchive').PostgresArchiveExportInput; output: import('./postgresArchive').PostgresArchiveSqlExport | null };
+  'postgres.archive.cancel': { input: { operationId: string }; output: void };
   'files.createSqlite': { input: { connectionId: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
   'excel.sheets': { input: { fileToken: string; taskId: string }; output: ExcelSheet[] };

@@ -1,90 +1,18 @@
-import { spawn } from 'node:child_process';
 import { createPrivateKey, randomUUID } from 'node:crypto';
-import { constants, type BigIntStats } from 'node:fs';
-import { access, lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, isIP, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { basename, isAbsolute, join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { getCACertificates } from 'node:tls';
-import type { PostgresDatabaseBackupInput, PostgresDatabaseBackupResult } from '../../shared/postgresDatabaseBackup';
+import { isPostgresCustomArchiveDestination, type PostgresDatabaseBackupInput, type PostgresDatabaseBackupResult } from '../../shared/postgresDatabaseBackup';
 import { postgresSqlFileLimits } from '../../shared/postgresSqlFile';
 import { AtomicFile, privateAtomicFileIO } from '../atomicFile';
 import type { PostgresConnection } from './connection';
+import { postgresToolEnvironment, readPostgresToolVersion, runPostgresNativeTool, type PostgresNativeTool } from './nativeTool';
 
-export interface PostgresDumpTool { path: string; version: string }
-export type PostgresDatabaseBackupRequest = PostgresDatabaseBackupInput & { filePath: string; tool: PostgresDumpTool };
+export type PostgresDatabaseBackupRequest = PostgresDatabaseBackupInput & { filePath: string; tool: PostgresNativeTool<'pg_dump'> };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>) => Promise<T>;
-
-function toolVersion(stat: BigIntStats) {
-  if (!stat.isFile() || !stat.size) throw Error('请选择 PostgreSQL 安装中的 pg_dump 可执行文件');
-  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode].join(':');
-}
-
-/** 系统选择器授权实际文件。记录文件身份，禁止选中后用另一个程序替换。 */
-export async function inspectPostgresDumpTool(selected: string): Promise<PostgresDumpTool> {
-  const path = await realpath(selected);
-  const name = process.platform === 'win32' ? 'pg_dump.exe' : 'pg_dump';
-  if (!isAbsolute(selected) || basename(path).toLowerCase() !== name) throw Error('请选择 PostgreSQL 安装中的 pg_dump 可执行文件');
-  await access(path, constants.X_OK);
-  return { path, version: toolVersion(await lstat(path, { bigint: true })) };
-}
-
-async function assertTool(tool: PostgresDumpTool) {
-  if (tool.version !== (await inspectPostgresDumpTool(tool.path)).version) throw Error('pg_dump 在选择后发生变化，请重新选择');
-}
-
-/** 仅启动选定的原生工具，不经 shell。取消时结束子进程并等待实际 close，避免遗留数据库任务。 */
-async function runDump(tool: PostgresDumpTool, args: readonly string[], env: NodeJS.ProcessEnv, signal: AbortSignal,
-  write: (chunk: Buffer) => Promise<void>): Promise<string> {
-  signal.throwIfAborted();
-  await assertTool(tool);
-  signal.throwIfAborted();
-  const child = spawn(tool.path, args, { env, cwd: tmpdir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  let launchError: Error | undefined, killTimer: ReturnType<typeof setTimeout> | undefined;
-  child.on('error', error => { launchError = error; });
-  const terminal = new Promise<number | null>(resolve => child.once('close', resolve));
-  const stderr: Buffer[] = [];
-  let available = 4096;
-  child.stderr.on('data', (chunk: Buffer) => {
-    const keep = Math.min(available, chunk.length);
-    if (keep) { stderr.push(Buffer.from(chunk.subarray(0, keep))); available -= keep; }
-  });
-  const stop = () => {
-    if (!child.pid || child.exitCode !== null || child.signalCode !== null || killTimer) return;
-    child.kill('SIGTERM');
-    killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 3000);
-  };
-  signal.addEventListener('abort', stop, { once: true });
-  try {
-    for await (const chunk of child.stdout) {
-      signal.throwIfAborted();
-      await write(chunk as Buffer);
-    }
-    const status = await terminal;
-    signal.throwIfAborted();
-    const detail = Buffer.concat(stderr).toString('utf8').trim();
-    if (launchError || status !== 0) throw Error('pg_dump 未正常完成' + (detail ? '\n' + detail : ''));
-    await assertTool(tool);
-    return detail;
-  } catch (error) {
-    stop();
-    await terminal;
-    throw error;
-  } finally {
-    if (killTimer) clearTimeout(killTimer);
-    signal.removeEventListener('abort', stop);
-  }
-}
-
-function cleanEnvironment(): NodeJS.ProcessEnv {
-  // 固定 libpq 参数。宿主 PG* 配置、加载器注入变量和凭据环境变量不传给子进程。
-  const env: NodeJS.ProcessEnv = { LC_ALL: 'C' };
-  for (const name of ['SystemRoot', 'WINDIR', 'SystemDrive', 'TEMP', 'TMP', 'TMPDIR']) {
-    if (process.env[name] !== undefined) env[name] = process.env[name];
-  }
-  return env;
-}
 
 /** 已核验的 SSH 会话额外开启一个单次使用的回环端口，libpq 仍对数据库服务器完成独立 TLS。 */
 async function dumpTunnel(connection: PostgresConnection) {
@@ -134,7 +62,7 @@ async function dumpEnvironment(connection: PostgresConnection, directory: string
   await writeFile(passfile, '*:*:*:*:' + escaped + '\n', { flag: 'wx', mode: 0o600 });
   const unused = join(directory, 'unused');
   const env: NodeJS.ProcessEnv = {
-    ...cleanEnvironment(), PGHOST: profile.host, PGPORT: String(tunnel?.port ?? profile.port),
+    ...postgresToolEnvironment(), PGHOST: profile.host, PGPORT: String(tunnel?.port ?? profile.port),
     PGUSER: profile.user, PGCONNECT_TIMEOUT: '15', PGPASSFILE: passfile, PGGSSENCMODE: 'disable',
     PGAPPNAME: applicationName, PGSSLMODE: 'disable', PGSSLROOTCERT: unused, PGSSLCERT: unused, PGSSLKEY: unused,
     ...(tunnel ? { PGHOSTADDR: '127.0.0.1' } : {}),
@@ -186,20 +114,17 @@ async function stopDumpBackend(connection: PostgresConnection, applicationName: 
   throw Error('PostgreSQL 整库备份的原后端退出尚未确认');
 }
 
-/** 原会话导出只读快照，pg_dump 必须从同一数据库导入；子进程和原会话结束后才发布完整 SQL。 */
+/** 原会话导出只读快照，pg_dump 必须从同一数据库导入；子进程和原会话结束后才发布完整备份。 */
 export async function exportPostgresDatabaseBackup(input: PostgresDatabaseBackupRequest, connect: Connect,
   signal: AbortSignal, protect: () => void): Promise<PostgresDatabaseBackupResult> {
-  if (!isAbsolute(input.filePath) || !/\.sql$/i.test(input.filePath)) throw Error('请选择 SQL 备份文件路径');
+  const custom = input.format === 'custom';
+  if (!isAbsolute(input.filePath) || !(custom ? isPostgresCustomArchiveDestination(input.filePath) : /\.sql$/i.test(input.filePath)))
+    throw Error('请选择与备份格式匹配的文件路径');
+  if (input.tool.kind !== 'pg_dump' || custom && input.portable) throw Error('PostgreSQL 整库备份参数不匹配');
   let file: AtomicFile | undefined;
   const check = () => signal.throwIfAborted();
   try {
-    let toolVersionText = '';
-    await runDump(input.tool, ['--version'], cleanEnvironment(), signal, async chunk => {
-      toolVersionText += chunk.toString('utf8');
-      if (toolVersionText.length > 1024) throw Error('无法确认 pg_dump 版本');
-    });
-    const toolVersion = /^pg_dump \(PostgreSQL\) (\d+\.\d+(?:\.\d+)?)(?: [^\r\n]*)?$/.exec(toolVersionText.trim())?.[1];
-    if (!toolVersion || Number(toolVersion.split('.')[0]) < 14) throw Error('请选择 PostgreSQL 14 或更新版本的原生 pg_dump');
+    const toolVersion = await readPostgresToolVersion(input.tool, signal);
     const warning = await connect(async connection => {
       check();
       if ((await connection.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', undefined, queryBudget())).postgresCommand !== 'BEGIN')
@@ -216,12 +141,17 @@ export async function exportPostgresDatabaseBackup(input: PostgresDatabaseBackup
       try {
         tunnel = await dumpTunnel(connection);
         const env = await dumpEnvironment(connection, directory, applicationName, tunnel);
+        let magic = '';
         try {
-          detail = await runDump(input.tool, [
-            '--format=plain', '--encoding=UTF8', '--no-password', '--snapshot=' + snapshot,
+          detail = await runPostgresNativeTool(input.tool, [
+            custom ? '--format=custom' : '--format=plain', '--encoding=UTF8', '--no-password', '--snapshot=' + snapshot,
             '--dbname=dbname=' + quoteConnectionValue(input.database),
             ...(input.portable ? ['--no-owner', '--no-privileges'] : []),
-          ], env, signal, chunk => staged.writeBytes(chunk));
+          ], env, signal, chunk => {
+            if (custom && magic.length < 5) magic += chunk.toString('latin1', 0, 5 - magic.length);
+            return staged.writeBytes(chunk);
+          });
+          if (custom && magic !== 'PGDMP') throw Error('pg_dump 输出未包含 PostgreSQL 自定义归档标记');
         } catch (reason) {
           await stopDumpBackend(connection, applicationName);
           throw reason;

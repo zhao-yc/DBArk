@@ -9,8 +9,11 @@ import { postgresTableExportExtension, type PostgresTableImportChooseInput } fro
 import { inspectPostgresCopySource, type PostgresCopySource } from '../engine/postgres/copyImportFile';
 import { inspectPostgresSqlFile, type PostgresSqlFileSource } from '../engine/postgres/sqlFile';
 import { postgresSqlFileTitle } from '../shared/postgresSqlFile';
-import { postgresDatabaseBackupPickToolTitle, postgresDatabaseBackupTitle, type PostgresDatabaseBackupChooseInput } from '../shared/postgresDatabaseBackup';
-import { inspectPostgresDumpTool, type PostgresDumpTool } from '../engine/postgres/databaseBackup';
+import { isPostgresCustomArchiveDestination, postgresCustomArchiveExtensions, postgresDatabaseBackupPickToolTitle,
+  postgresDatabaseBackupTitle, type PostgresDatabaseBackupChooseInput } from '../shared/postgresDatabaseBackup';
+import { inspectPostgresNativeTool, type PostgresNativeTool } from '../engine/postgres/nativeTool';
+import { postgresArchiveOpenTitle, postgresArchiveSaveTitle, postgresArchiveToolTitle } from '../shared/postgresArchive';
+import { PostgresArchiveFiles } from './postgresArchiveFiles';
 import type { SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import { SqliteTableDraftFiles, bindSqliteTableDraft, assertSqliteTableDraftBinding } from './sqliteTableDraftFiles';
 import { tableDraftEndpointKey } from './tableDraftBinding';
@@ -198,6 +201,24 @@ const backupArchiveFiles = new DatabaseBackupArchiveFiles<ColumnsInvocation>({
     }
     const chosen = await dialog.showSaveDialog(owner.owner.window, { title: text.export, defaultPath: text.defaultName, filters: [{ name: text.sqlType, extensions: ['sql'] }] });
     return chosen.canceled ? undefined : chosen.filePath;
+  },
+  reserve: path => exportReservations.acquire(path),
+  assertDestination: path => assertSqliteExportDestination(path, store.connections()),
+});
+const postgresArchiveFiles = new PostgresArchiveFiles<ColumnsInvocation>({
+  document: owner => owner.owner.document,
+  assert: owner => columnsMain.assertCapturedOwner(owner),
+  pick: async (owner, kind, suggestedName) => {
+    if (kind === 'export') {
+      const chosen = await dialog.showSaveDialog(owner.owner.window, { title: postgresArchiveSaveTitle,
+        defaultPath: suggestedName, filters: [{ name: 'SQL', extensions: ['sql'] }] });
+      return chosen.canceled ? undefined : chosen.filePath;
+    }
+    const filters = kind === 'source' ? [{ name: 'PostgreSQL 自定义归档', extensions: [...postgresCustomArchiveExtensions] },
+      { name: '所有文件', extensions: ['*'] }] : process.platform === 'win32' ? [{ name: 'pg_restore', extensions: ['exe'] }] : undefined;
+    const chosen = await dialog.showOpenDialog(owner.owner.window, { title: kind === 'source' ? postgresArchiveOpenTitle : postgresArchiveToolTitle,
+      properties: ['openFile'], filters });
+    return chosen.canceled ? undefined : chosen.filePaths[0];
   },
   reserve: path => exportReservations.acquire(path),
   assertDestination: path => assertSqliteExportDestination(path, store.connections()),
@@ -862,7 +883,7 @@ const postgresTableOwners = new WeakMap<object, string>();
 const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
 const postgresSqlFileSources = new WeakMap<object, { token: string; connectionId: string; database: string; newDatabase?: string; revision: number; source: PostgresSqlFileSource; expires: number }>();
 const postgresSqlFileChoosing = new WeakSet<object>();
-const postgresDumpTools = new WeakMap<object, { token: string; tool: PostgresDumpTool }>();
+const postgresDumpTools = new WeakMap<object, { token: string; tool: PostgresNativeTool<'pg_dump'> }>();
 const postgresDatabaseBackupFiles = new WeakMap<object, PostgresDatabaseBackupChooseInput & {
   path: string; token: string; revision: number; expires: number;
 }>();
@@ -1144,7 +1165,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
             properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: 'pg_dump', extensions: ['exe'] }] } : {}) });
           check();
           if (chosen.canceled || !chosen.filePaths[0]) return null;
-          const tool = await inspectPostgresDumpTool(chosen.filePaths[0]);
+          const tool = await inspectPostgresNativeTool(chosen.filePaths[0], 'pg_dump');
           check();
           const token = randomUUID();
           postgresDumpTools.set(document, { token, tool });
@@ -1156,14 +1177,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         connectionConfig.assertAvailable(target.connectionId);
         if (store.resolveConnection(target.connectionId).dialect !== 'postgresql') throw Error('整库备份需要已保存的 PostgreSQL 连接');
         const name = target.database.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 120);
+        const custom = target.format === 'custom';
         const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: postgresDatabaseBackupTitle,
-          defaultPath: name + '-整库备份.sql', filters: [{ name: 'SQL', extensions: ['sql'] }] });
+          defaultPath: name + (custom ? '-整库备份.dump' : '-整库备份.sql'),
+          filters: custom ? [{ name: 'PostgreSQL 自定义归档', extensions: [...postgresCustomArchiveExtensions] }] : [{ name: 'SQL', extensions: ['sql'] }] });
         check();
         connectionConfig.assertAvailable(target.connectionId);
         if (revision !== store.connectionRevision() || postgresDumpTools.get(document) !== tool)
           throw Error('PostgreSQL 整库备份目标已变化');
         if (chosen.canceled || !chosen.filePath) return null;
-        if (!/\.sql$/i.test(chosen.filePath)) throw Error('请选择 .sql 备份文件');
+        if (!(custom ? isPostgresCustomArchiveDestination(chosen.filePath) : /\.sql$/i.test(chosen.filePath)))
+          throw Error('请选择与备份格式匹配的文件');
         const token = randomUUID();
         postgresDatabaseBackupFiles.set(document, { ...target, path: chosen.filePath, token, revision, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(chosen.filePath) };
@@ -2189,6 +2213,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       return result;
     }
     case 'backupArchive.cancel': columnsMain.assertCapturedOwner(columns); return backupArchiveFiles.cancel(columns!, input.operationId);
+    case 'postgres.archive.choose':
+    case 'postgres.archive.list':
+    case 'postgres.archive.exportSql':
+      if (shuttingDown) throw Error('客户端正在退出，不能开始 PostgreSQL 归档操作');
+      if (command === 'postgres.archive.choose') return queryFileOperation(() => postgresArchiveFiles.choose(columns!, input.kind));
+      if (command === 'postgres.archive.list') return queryFileOperation(() => postgresArchiveFiles.list(columns!, input));
+      return queryFileOperation(() => postgresArchiveFiles.exportSql(columns!, input));
+    case 'postgres.archive.cancel': return postgresArchiveFiles.cancel(columns!, input.operationId);
     case 'sqlite.databaseCopy': return copySqliteFile(input, columns);
     case 'files.createSqlite': return createSqliteFile(columns, input.connectionId);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
@@ -2224,7 +2256,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const selected = postgresDatabaseBackupFiles.get(document), tool = postgresDumpTools.get(document);
       if (shuttingDown || !selected || !tool || tool.token !== input.toolToken || selected.token !== input.fileToken ||
           selected.toolToken !== input.toolToken || selected.connectionId !== input.connectionId || selected.database !== input.database ||
-          selected.portable !== input.portable || selected.revision !== store.connectionRevision() || selected.expires <= Date.now())
+          selected.portable !== input.portable || selected.format !== input.format ||
+          selected.revision !== store.connectionRevision() || selected.expires <= Date.now())
         throw Error('PostgreSQL 整库备份的文件、工具或目标已变化，请重新选择');
       const profile = store.resolveConnection(input.connectionId);
       if (profile.dialect !== 'postgresql') throw Error('整库备份需要已保存的 PostgreSQL 连接');
@@ -2541,6 +2574,7 @@ app.on('before-quit', event => {
     await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
     await cancelFileImportPreflights();
     sqliteCopyTask?.abort.abort();
+    postgresArchiveFiles.cancelAll();
     await Promise.allSettled([...queryFileOperations]);
     await closeSqliteDatabaseCopies();
     await closeSqliteDatabaseCreates();
@@ -2569,6 +2603,7 @@ app.on('before-quit', event => {
       await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
       await cancelFileImportPreflights();
       sqliteCopyTask?.abort.abort();
+      postgresArchiveFiles.cancelAll();
       await Promise.allSettled([...queryFileOperations]);
       try { await closeSqliteDatabaseCopies(); await closeSqliteDatabaseCreates(); }
       catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : 'SQLite新建文件资源尚未确认释放'); return; }
@@ -2770,7 +2805,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
-        if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') ||
             payload.command === 'query.cancel' && (['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||

@@ -8,3 +8,5 @@
 .database-backup-table-picker button{margin-right:8px}
 .database-backup-table-list{max-height:260px;overflow:auto}
 .database-backup-content .database-backup-table-list label{display:flex;flex-direction:row;align-items:center;min-width:0;margin:4px 0;overflow-wrap:anywhere}
+
+.database-backup-native-list{max-height:36vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:0}
