@@ -27,7 +27,9 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(windows.find('backup-archive')).toMatchObject({ label: '打开数据库备份归档', enabled: false });
     expect(windows.find('postgres-table-backup')).toMatchObject({ label: 'PostgreSQL 多表备份', enabled: false });
     expect(windows.find('postgres-database-backup')).toMatchObject({ label: 'PostgreSQL 整库备份', enabled: false });
-    const knownBackups = /"label":"(?:打开数据库备份归档|PostgreSQL 多表备份|PostgreSQL 整库备份)"/g;
+    expect(windows.find('mysql-database-backup')).toMatchObject({ label: 'MySQL／MariaDB 整库备份', enabled: false });
+    expect(fixture('darwin').find('mysql-database-backup')).toMatchObject({ label: 'MySQL／MariaDB 整库备份', enabled: false });
+    const knownBackups = /"label":"(?:打开数据库备份归档|PostgreSQL 多表备份|PostgreSQL 整库备份|MySQL／MariaDB 整库备份)"/g;
     expect(JSON.stringify(windows.current()).replace(knownBackups, '')).not.toMatch(/BI|自动运行|用户管理|模型|备份/);
     const edit = windows.current().find(item => item.label === '编辑')!.submenu as MenuItemConstructorOptions[];
     expect(edit.filter(item => item.role).map(item => item.role)).toEqual(['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);

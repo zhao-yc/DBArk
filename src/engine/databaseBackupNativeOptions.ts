@@ -71,6 +71,11 @@ function optionValue(value: string): string {
   const escapes: Record<string, string> = { '\\': '\\\\', '"': '\\"', "'": "\\'", '\b': '\\b', '\t': '\\t', '\n': '\\n', '\r': '\\r', ' ': '\\s' };
   return '"' + value.replace(/[\\"'\b\t\n\r ]/gu, char => escapes[char]) + '"';
 }
+/** 原生工具只从私有选项文件读取身份，复用原工具的字符串转义。 */
+export function mysqlDumpOptionFile(user: string, password: string): string {
+  return `[client]\nuser=${optionValue(credential(user, false))}\npassword=${optionValue(credential(password, true))}\n`;
+}
+
 /** 当前只支持规范ASCII本地盘路径，不归一化后悄悄换绑，不接UNC/设备/ADS/相对路径。 */
 function controlledPath(value: unknown): string {
   if (typeof value !== 'string' || value.length > 240 || !/^[A-Za-z]:\\/u.test(value) || /[^\x20-\x7e]/u.test(value) || value !== win32.normalize(value)) throw invalid();
@@ -112,7 +117,7 @@ function build(input: DatabaseBackupNativeInput, operation: 'dump' | 'restore'):
     '--batch', '--binary-mode', '--skip-reconnect', '--skip-auto-rehash', '--local-infile=0',
     '--skip-system-command', '--commands=OFF', `--database=${db}`,
   ];
-  const clientOptions = new DatabaseBackupNativeClientOptions(`[client]\nuser=${optionValue(user)}\npassword=${optionValue(password)}\n`);
+  const clientOptions = new DatabaseBackupNativeClientOptions(mysqlDumpOptionFile(user, password));
   return Object.freeze({
     policy: databaseBackupNativeProfile.policy, toolId: databaseBackupNativeProfile.id, defaultsFileToken: defaults.token,
     launch: Object.freeze({ executable: win32.join(directory, 'bin', operation === 'dump' ? 'mysqldump.exe' : 'mysql.exe'), argv: Object.freeze([...common, ...args]), shell: false as const, windowsVerbatimArguments: false as const, env: Object.freeze({}), stdin: operation === 'dump' ? 'closed' as const : 'archive-dump-bytes' as const, stdout: operation === 'dump' ? 'dump-bytes' as const : 'bounded-diagnostics' as const }),

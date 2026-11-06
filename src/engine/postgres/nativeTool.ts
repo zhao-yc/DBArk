@@ -1,7 +1,6 @@
-import { spawn } from 'node:child_process';
+import { runNativeProcess } from '../nativeProcess';
 import { constants, type BigIntStats } from 'node:fs';
 import { access, lstat, realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, isAbsolute } from 'node:path';
 
 type ToolKind = 'pg_dump' | 'pg_restore';
@@ -32,41 +31,9 @@ export async function runPostgresNativeTool(tool: PostgresNativeTool, args: read
   signal.throwIfAborted();
   await assertTool(tool);
   signal.throwIfAborted();
-  const child = spawn(tool.path, args, { env, cwd: tmpdir(), windowsHide: true, stdio: [inputFd ?? 'ignore', 'pipe', 'pipe'] });
-  let launchError: Error | undefined, killTimer: ReturnType<typeof setTimeout> | undefined;
-  child.on('error', error => { launchError = error; });
-  const terminal = new Promise<number | null>(resolve => child.once('close', resolve));
-  const stderr: Buffer[] = [];
-  let available = 4096;
-  child.stderr!.on('data', (chunk: Buffer) => {
-    const keep = Math.min(available, chunk.length);
-    if (keep) { stderr.push(Buffer.from(chunk.subarray(0, keep))); available -= keep; }
-  });
-  const stop = () => {
-    if (!child.pid || child.exitCode !== null || child.signalCode !== null || killTimer) return;
-    child.kill('SIGTERM');
-    killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 3000);
-  };
-  signal.addEventListener('abort', stop, { once: true });
-  try {
-    for await (const chunk of child.stdout!) {
-      signal.throwIfAborted();
-      await write(chunk as Buffer);
-    }
-    const status = await terminal;
-    signal.throwIfAborted();
-    const detail = Buffer.concat(stderr).toString('utf8').trim();
-    if (launchError || status !== 0) throw Error(tool.kind + ' 未正常完成' + (detail ? '\n' + detail : ''));
-    await assertTool(tool);
-    return detail;
-  } catch (error) {
-    stop();
-    await terminal;
-    throw error;
-  } finally {
-    if (killTimer) clearTimeout(killTimer);
-    signal.removeEventListener('abort', stop);
-  }
+  const detail = await runNativeProcess(tool.path, tool.kind, args, env, signal, write, inputFd, true);
+  await assertTool(tool);
+  return detail;
 }
 
 export function postgresToolEnvironment(): NodeJS.ProcessEnv {

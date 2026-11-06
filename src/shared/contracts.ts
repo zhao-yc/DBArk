@@ -317,6 +317,9 @@ export interface CommandMap {
   'postgres.backup.chooseDumpTool': { input: Record<string, never>; output: FileChoice | null };
   'postgres.backup.chooseDatabaseFile': { input: import('./postgresDatabaseBackup').PostgresDatabaseBackupChooseInput; output: FileChoice | null };
   'postgres.backup.database': { input: import('./postgresDatabaseBackup').PostgresDatabaseBackupInput; output: import('./postgresDatabaseBackup').PostgresDatabaseBackupResult };
+  'mysql.backup.chooseTool': { input: Record<string, never>; output: FileChoice | null };
+  'mysql.backup.chooseFile': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupChooseInput; output: FileChoice | null };
+  'mysql.backup.database': { input: import('./mysqlDatabaseBackup').MysqlDatabaseBackupInput; output: import('./mysqlDatabaseBackup').MysqlDatabaseBackupResult };
   'mysql.sqlFile.choose': { input: import('./mysqlSqlFile').MysqlSqlFileChooseInput; output: import('./mysqlSqlFile').MysqlSqlFileChoice | null };
   'mysql.sqlFile.execute': { input: import('./mysqlSqlFile').MysqlSqlFileExecuteInput; output: import('./sqlFileImport').FileImportResult };
   'postgres.sqlFile.choose': { input: import('./postgresSqlFile').PostgresSqlFileChooseInput; output: import('./postgresSqlFile').PostgresSqlFileChoice | null };

@@ -53,7 +53,7 @@ function name(value: unknown): string { if (typeof value !== 'string') throw Err
 /** 只从未引用词识别语法；字符串、注释与包含关键字的名称不能伪造权限或依赖。 */
 function word(token: TableDefinitionToken | undefined): string { return token?.kind === 'word' ? token.value.toUpperCase() : ''; }
 /** 仅采信本账号直接全局授权。审计可剥离 MariaDB 的标准密码哈希后缀，源备份维持原证明门槛。 */
-export function databaseBackupGlobalGrants(rows: readonly Row[], currentUser: string, family: 'mysql' | 'mariadb', context: TableDefinitionContext, allowMariaPasswordSuffix = false): { known: boolean; privileges: Set<string> } {
+export function databaseBackupGlobalGrants(rows: readonly Row[], currentUser: string, family: 'mysql' | 'mariadb', context: TableDefinitionContext, allowMariaPasswordSuffix = false, allowScopedGrants = false): { known: boolean; privileges: Set<string> } {
   const privileges = new Set<string>(); let known = rows.length > 0;
   for (const row of rows) {
     const values = Object.values(row); if (values.length !== 1 || typeof values[0] !== 'string') { known = false; continue; }
@@ -64,11 +64,21 @@ export function databaseBackupGlobalGrants(rows: readonly Row[], currentUser: st
     const account = tokens.slice(to + 1), isAccount = (token: TableDefinitionToken | undefined) => token && ['identifier', 'string', 'word'].includes(token.kind);
     if (allowMariaPasswordSuffix && family === 'mariadb' && word(account[3]) === 'IDENTIFIED' &&
       word(account[4]) === 'BY' && word(account[5]) === 'PASSWORD' && account[6]?.kind === 'string') account.splice(3, 4);
+    // MariaDB 把简单的传输认证条件追加在账号后，限制登录方式但不撤销对象授权。
+    if (allowScopedGrants && family === 'mariadb' && word(account[3]) === 'REQUIRE' &&
+      ['SSL', 'X509', 'NONE'].includes(word(account[4]))) account.splice(3, 2);
     if (!isAccount(account[0]) || account[1]?.value !== '@' || !isAccount(account[2]) || `${account[0].value}@${account[2].value}` !== currentUser || account.length !== 3 && !(account.length === 6 && word(account[3]) === 'WITH' && word(account[4]) === 'GRANT' && word(account[5]) === 'OPTION')) { known = false; continue; }
     const scope = tokens.slice(on + 1, to);
     // PROXY 只增加其它身份切换能力，不作为备份权限证据；仍严格核本账号和完整语法。
     if (on === 2 && word(tokens[1]) === 'PROXY' && scope.length === 3 && isAccount(scope[0]) && scope[1]?.value === '@' && isAccount(scope[2])) continue;
-    if (scope.length !== 3 || scope.map(token => token.value).join('') !== '*.*' || scope.some(token => token.kind !== 'symbol')) { known = false; continue; }
+    if (scope.length !== 3 || scope.map(token => token.value).join('') !== '*.*' || scope.some(token => token.kind !== 'symbol')) {
+      const object = ['TABLE', 'PROCEDURE', 'FUNCTION'].includes(word(scope[0])) ? scope.slice(1) : scope;
+      // 例程创建者可能另外拥有单例程授权。已确认的附加授权不计入全局证明，REVOKE 和角色仍在前置门拒绝。
+      if (!allowScopedGrants || object.length !== 3 || !isAccount(object[0]) ||
+        object[1]?.kind !== 'symbol' || object[1].value !== '.' ||
+        !isAccount(object[2]) && !(object[2]?.kind === 'symbol' && object[2].value === '*')) known = false;
+      continue;
+    }
     const parts: string[] = []; let part: string[] = [];
     for (const token of tokens.slice(1, on)) { if (token.kind === 'symbol' && token.value === ',') { parts.push(part.join(' ')); part = []; } else if (token.kind === 'word') part.push(token.value.toUpperCase()); else known = false; }
     parts.push(part.join(' '));

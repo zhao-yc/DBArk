@@ -1,3 +1,4 @@
+import { createMysqlDatabaseBackup } from './mysqlDatabaseBackup';
 import { readMysqlSqlFile, type MysqlSqlFileSource } from './mysqlSqlFile';
 import { PostgresEngine } from './postgres/engine';
 import { TableCopyDataTasks } from './tableCopyDataTasks';
@@ -138,8 +139,8 @@ interface RunningTask {
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
-interface IndependentTask { commitProtected?: () => boolean; connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
-interface IndependentFileFinalizer<T> { commit(check: () => void, start: () => void): Promise<T>; dispose(): Promise<void>; committed(): boolean; }
+interface IndependentTask { externalAbort?: () => void; commitProtected?: () => boolean; connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
+interface IndependentFileFinalizer<T> { abort?(): void; commit(check: () => void, start: () => void): Promise<T>; dispose(): Promise<void>; committed(): boolean; }
 type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
@@ -326,6 +327,15 @@ export class Engine {
         this.copySourceProfile(input);
         return this.withCopySourceTask(input.connectionId, randomUUID(),
           context => mysqlCompareCatalogue(context, input.database), '读取比较目录', 'no-default-database');
+      }
+      case 'mysql.backup.database': {
+        const profile = input.profile;
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId ||
+          input.acknowledgeSnapshot !== true || !input.tool) throw Error('缺少可信的整库备份来源或工具');
+        this.copySourceProfile(input);
+        const job = createMysqlDatabaseBackup({ database: input.database, filePath: input.filePath, tool: input.tool });
+        return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => job.stage({ managed, ...control }),
+          undefined, '备份整库 SQL', 'no-default-database', undefined, false, job);
       }
       case 'mysql.sqlFile.execute': {
         const profile = input.profile;
@@ -1015,7 +1025,7 @@ export class Engine {
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
-      const task: IndependentTask = { commitProtected: dataWrite?.commitProtected, connectionId, controller, done, resources, structureTask: Boolean(options || strictRead), generation: 0, ...(fileFinalizer ? { fileFinalization: true } : {}) };
+      const task: IndependentTask = { commitProtected: dataWrite?.commitProtected, connectionId, controller, done, resources, structureTask: Boolean(options || strictRead), generation: 0, ...(fileFinalizer ? { fileFinalization: true, externalAbort: fileFinalizer.abort } : {}) };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseDefaultEncoding' ? { databaseDefaultEncoding: { ...options.progress } } : options.purpose === 'databaseDrop' ? { databaseDrop: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableChecks' ? { tableChecks: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
@@ -1330,6 +1340,9 @@ export class Engine {
       if (independent.commitProtected?.()) { await independent.done; return; }
       if (independent.actionSettled) { if (independent.fileFinalization && !independent.fileCommitStarted) independent.cancelRequested = true; await independent.done; return; }
       independent.cancelRequested = true;
+      independent.externalAbort?.();
+      // 原生工具阶段没有待取消的驱动命令。保留来源连接供任务自行复核和收尾。
+      if (independent.externalAbort && independent.managed && !independent.commandInFlight) { await independent.done; return; }
       this.dataSearches.interrupt(id);
       if (!independent.cancelPending) {
         const managed = independent.managed;
@@ -1339,7 +1352,7 @@ export class Engine {
           const threadId = managed.connection.threadId;
           const generation = independent.generation, terminal = independent.commandTerminal;
           try {
-            control = await connect(managed.profile, undefined, undefined, receipt => independent.resources?.capture(receipt));
+            control = await connect(managed.profile, independent.externalAbort ? null : undefined, undefined, receipt => independent.resources?.capture(receipt));
             independent.resources?.capture(control.resources);
             if (this.independentTasks.get(id) !== independent || independent.managed !== managed || managed.connection.threadId !== threadId || managed.broken || independent.generation !== generation) throw new Error('独立任务连接或命令代次已变化，不能发送取消命令');
             if (!Number.isSafeInteger(threadId) || (threadId ?? 0) < 1) throw new Error('无法确认独立任务连接编号');

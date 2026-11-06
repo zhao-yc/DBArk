@@ -1,3 +1,4 @@
+import { MysqlDatabaseBackupDialog } from './components/MysqlDatabaseBackupDialog';
 import { MysqlSqlFileDialog } from './components/MysqlSqlFileDialog';
 import { ServerDataCompareDialog } from './components/ServerDataCompareDialog';
 import { SqliteDataCompareDialog } from './components/SqliteDataCompareDialog';
@@ -213,6 +214,7 @@ function WorkspaceApp() {
   const [editorFontPreferences, setEditorFontPreferences] = useState(false);
   const [explainSnapshot, setExplainSnapshot] = useState(false);
   const [resultSnapshot, setResultSnapshot] = useState(false);
+  const [mysqlDatabaseBackup, setMysqlDatabaseBackup] = useState(false);
   const [mysqlSqlFile, setMysqlSqlFile] = useState(false);
   const [backupArchive, setBackupArchive] = useState(false);
   const [postgresBackup, setPostgresBackup] = useState(false);
@@ -1007,6 +1009,10 @@ function WorkspaceApp() {
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       workbenchNavigation.invalidate(); setPostgresBackup(true);
     }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
+    'mysql-database-backup': handler(() => {
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      workbenchNavigation.invalidate(); setMysqlDatabaseBackup(true);
+    }, networkConnections.some(profile => !profile.pendingFiles?.length && !profile.ssh?.enabled)),
     'mysql-sql-file': handler(() => {
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       workbenchNavigation.invalidate(); setMysqlSqlFile(true);
@@ -1172,6 +1178,8 @@ function WorkspaceApp() {
     {serverDataCompare && <ServerDataCompareDialog dialect={serverDataCompare} connections={connections.filter(profile => !profile.pendingFiles?.length &&
       (serverDataCompare === 'postgres' ? profile.dialect === 'postgresql' : profile.dialect === 'mysql' || profile.dialect === 'mariadb'))} onClose={() => setServerDataCompare(undefined)}/>}
     {sqliteDataCompare && <SqliteDataCompareDialog connections={connections.filter(profile => profile.dialect === 'sqlite' && !!profile.sqlite.filePath && !profile.pendingFiles?.length)} onClose={() => setSqliteDataCompare(false)}/>}
+    {mysqlDatabaseBackup && <MysqlDatabaseBackupDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length && !profile.ssh?.enabled)}
+      onClose={() => setMysqlDatabaseBackup(false)}/>}
     {mysqlSqlFile && <MysqlSqlFileDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)}
       onRefresh={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}
       onClose={() => setMysqlSqlFile(false)}/>}
