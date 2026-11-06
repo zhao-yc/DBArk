@@ -49,6 +49,8 @@ import { explainLimits } from '../../shared/explain';
 import { serverMonitorSignalSchema, validateServerMonitorInput, type ServerMonitorInput, type ServerMonitorSignalInput,
   type ServerMonitorSignalResult } from '../../shared/serverMonitor';
 import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
+import { StructureSearches } from '../structureSearch';
+import { readPostgresStructureSearchPage } from './structureSearch';
 interface Session {
   id: string;
   connectionId: string;
@@ -148,7 +150,7 @@ export class PostgresEngine {
   private readonly leases = new Set<Lease>();
   private readonly closing = new Set<string>();
   private stopping = false;
-  constructor(private readonly emit: (event: TaskEvent) => void) {}
+  constructor(private readonly emit: (event: TaskEvent) => void, private readonly structureSearches = new StructureSearches()) {}
   ownsTask(id: string) {
     return this.tasks.has(id) || this.transfers.has(id) || this.completedTasks.has(id);
   }
@@ -320,44 +322,50 @@ export class PostgresEngine {
     return task.cancelPending;
   }
 
-  /** 监控独占短连接。建连阶段中止原传输，读取阶段按原后端身份取消并等待原资源结束。 */
+  /** 短读独占连接。建连阶段中止原传输，读取阶段按原后端身份取消并等待原资源结束。 */
   private async monitor(input: ServerMonitorInput, profile: PostgresConnectionProfile) {
     validateServerMonitorInput(input);
-    if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
-      throw Error('PostgreSQL 监控任务已存在、连接关闭中或已达并发上限');
+    return this.trackedRead(input.taskId, profile, '监控', (read, check) =>
+      read(undefined, managed => readPostgresServerMonitor(managed, input, check)));
+  }
+
+  private async trackedRead<T>(taskId: string, profile: PostgresConnectionProfile, label: string,
+    operation: (read: <R>(database: string | undefined, action: (managed: PostgresConnection) => Promise<R>) => Promise<R>,
+      check: () => void) => Promise<T>): Promise<T> {
+    if (this.stopping || this.closing.has(profile.id) || this.ownsTask(taskId) || this.transfers.size >= 32)
+      throw Error('PostgreSQL ' + label + '任务已存在、连接关闭中或已达并发上限');
     let opening: PostgresConnection | undefined, timedOut = false;
     const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true,
       processAbort: () => opening?.abort() };
     const check = () => {
-      if (timedOut) throw Error('PostgreSQL 监控读取超时');
-      if (task.cancelled) throw Error('PostgreSQL 监控读取已取消');
+      if (timedOut) throw Error('PostgreSQL ' + label + '读取超时');
+      if (task.cancelled) throw Error('PostgreSQL ' + label + '读取已取消');
     };
-    this.transfers.set(input.taskId, task);
+    this.transfers.set(taskId, task);
     const timer = setTimeout(() => { timedOut = true; this.cancelTransfer(task); }, 30_000);
     timer.unref();
-    const done = task.done = this.use(profile, undefined, async managed => {
-      opening = undefined;
-      check();
-      task.connection = managed; task.commandActive = true;
-      try { return await readPostgresServerMonitor(managed, input, check); }
-      finally {
-        task.commandActive = false;
-        await task.cancelPending;
-      }
-    }, false, false, false, managed => { opening = managed; });
+    const read = <R>(database: string | undefined, action: (managed: PostgresConnection) => Promise<R>) =>
+      this.use(profile, database, async managed => {
+        opening = undefined;
+        check();
+        task.connection = managed; task.commandActive = true;
+        try { return await action(managed); }
+        finally { task.commandActive = false; await task.cancelPending; }
+      }, false, false, false, managed => { opening = managed; });
+    const done = task.done = operation(read, check);
     try {
-      this.emit({ taskId: input.taskId, status: 'running', progress: 0, message: '正在读取 PostgreSQL 监控' });
+      this.emit({ taskId, status: 'running', progress: 0, message: '正在读取 PostgreSQL ' + label });
       const result = await done;
       check();
-      this.emit({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 监控快照读取完成' });
+      this.emit({ taskId, status: 'completed', progress: 100, message: 'PostgreSQL ' + label + '读取完成' });
       return result;
     } catch (reason) {
-      this.emit({ taskId: input.taskId, status: task.cancelled && !timedOut ? 'cancelled' : 'failed', progress: 0, message: 'PostgreSQL 监控读取未完成' });
+      this.emit({ taskId, status: task.cancelled && !timedOut ? 'cancelled' : 'failed', progress: 0, message: 'PostgreSQL ' + label + '读取未完成' });
       throw reason;
     } finally {
       clearTimeout(timer);
-      this.transfers.delete(input.taskId);
-      this.rememberCompleted(input.taskId);
+      this.transfers.delete(taskId);
+      this.rememberCompleted(taskId);
     }
   }
 
@@ -715,6 +723,7 @@ export class PostgresEngine {
   private async closeConnection(id: string): Promise<void> {
     if (this.closing.has(id)) throw Error('PostgreSQL连接正在关闭');
     this.closing.add(id);
+    this.structureSearches.releaseConnection(id);
     this.invalidateSync(id);
     try {
       const transfers = [...this.transfers.values()].filter(task => (task.connectionId === id || task.otherConnectionId === id));
@@ -759,6 +768,7 @@ export class PostgresEngine {
       throw Error('该PostgreSQL连接仍有会话或未确认资源，请先关闭标签并显式断开');
     if (changed) {
       this.invalidateSync(input.id);
+      this.structureSearches.releaseConnection(input.id);
       this.tables.clear(input.id);
       this.creations.clear(input.id);
       this.columnEdits.clear(input.id);
@@ -1171,6 +1181,14 @@ export class PostgresEngine {
         const { profile, ...request } = input;
         if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId) throw Error('监控需要准确的已保存 PostgreSQL 连接');
         return this.monitor(request as ServerMonitorInput, profile);
+      }
+      case 'search.structure': case 'search.structureContinue': {
+        const { profile, ...request } = input;
+        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId) throw Error('结构搜索需要准确的已保存 PostgreSQL 连接');
+        const search = (state: import('../structureSearch').StructureSearchState) =>
+          this.trackedRead(request.taskId, profile, '结构搜索', (read, check) => readPostgresStructureSearchPage(state, read, check));
+        return command === 'search.structure' ? this.structureSearches.startPage(request, 'postgresql', search)
+          : this.structureSearches.nextPage(request, 'postgresql', search);
       }
       case 'serverMonitor.signal': {
         const { profile, signalTarget, ...request } = input;

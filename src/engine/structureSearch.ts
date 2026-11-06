@@ -8,7 +8,8 @@ import type {StructureTaskContext} from './structureDefinition';
 import {readDefinitionSearchPage} from './definitionSearch';
 
 interface Position{object:string;name:string}
-interface SearchState{input:StructureSearchInput;scope:number;total:number;after?:Position;scannedDefinitions?:number}
+export interface StructureSearchState{input:StructureSearchInput;scope:number;total:number;after?:Position;scannedDefinitions?:number}
+type SearchState = StructureSearchState;
 interface CursorState{state:SearchState;expires:number}
 type Control=Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>;
 type Run=<T>(action:(managed:ManagedConnection,control:Control)=>Promise<T>)=>Promise<T>;
@@ -45,7 +46,7 @@ async function readPage(state:SearchState,managed:ManagedConnection,control:Cont
   let queries=0,bytes=0;
   while(state.scope<page.scopeCount&&page.hits.length<structureSearchLimits.pageHits&&state.total<input.maxResults&&queries<structureSearchLimits.pageQueries){
     control.checkCancelled();
-    const database=input.databases[Math.floor(state.scope/input.kinds.length)],kind=input.kinds[state.scope%input.kinds.length];
+    const database=input.databases[Math.floor(state.scope/input.kinds.length)],kind=input.kinds[state.scope%input.kinds.length] as StructureSearchKind;
     const take=Math.min(structureSearchLimits.pageHits-page.hits.length,input.maxResults-state.total),query=structureSearchQuery(kind,database,input.pattern,take,state.after);
     queries++;
     let rows:Record<string,unknown>[];
@@ -74,29 +75,50 @@ async function readPage(state:SearchState,managed:ManagedConnection,control:Cont
 /** 服务端随机续页句柄绑定连接；每次只消费一次，过期/关闭/改目标后不能复用。 */
 export class StructureSearches{
   private readonly cursors=new Map<string,CursorState>();
-  private active=0;
+  private readonly active = new Set<{ connectionId: string; invalidated: boolean }>();
   /** 时钟只控制小型续页状态的到期，不延长实际数据库任务生命周期。 */
   constructor(private readonly now:()=>number=Date.now){}
   /** 到期清理只丢弃小型目录位置，不存在后台连接或后台继续扫描。 */
   private prune(){for(const [cursor,value]of this.cursors)if(value.expires<=this.now())this.cursors.delete(cursor);}
   /** 配置保存、断连和退出时统一使该目标的继续搜索失效。 */
-  releaseConnection(connectionId:string){for(const [cursor,value]of this.cursors)if(value.state.input.connectionId===connectionId)this.cursors.delete(cursor);}
+  releaseConnection(connectionId:string){
+    for(const [cursor,value]of this.cursors)if(value.state.input.connectionId===connectionId)this.cursors.delete(cursor);
+    for(const read of this.active)if(read.connectionId===connectionId)read.invalidated=true;
+  }
   /** 仅释放属于请求连接的句柄，不允许跨连接清除另一个搜索。 */
   release(raw:unknown){const input=structureSearchReleaseSchema.parse(raw),entry=this.cursors.get(input.cursor);if(entry&&entry.state.input.connectionId!==input.connectionId)throw Error('搜索不属于当前连接');this.cursors.delete(input.cursor);}
   /** 在任务连接真正关闭后才发布下一页句柄，取消/错误不保留可继续状态。 */
-  private async run(state:SearchState,run:Run):Promise<StructureSearchPage>{
-    this.prune();if(this.cursors.size+this.active>=structureSearchLimits.cursors)throw Error('搜索已达上限，请关闭旧搜索后重试');
-    this.active++;
+  private async run(state:SearchState,read:(state:SearchState)=>Promise<StructureSearchPage>):Promise<StructureSearchPage>{
+    this.prune();if(this.cursors.size+this.active.size>=structureSearchLimits.cursors)throw Error('搜索已达上限，请关闭旧搜索后重试');
+    const pending = { connectionId: state.input.connectionId, invalidated: false };
+    this.active.add(pending);
     try{
-      const page=await run((managed,control)=>readPage(state,managed,control));
+      const page=await read(state);
+      // 断开可能发生在短连接收尾与游标发布之间。原连接回包不能在断开后重新生成续页。
+      if (pending.invalidated) throw Error('搜索连接已断开或变化，请重新搜索');
       if(!page.limitReached&&!page.stoppedOnError&&state.scope<page.scopeCount){const cursor=randomUUID(),expires=this.now()+structureSearchLimits.cursorMs;this.cursors.set(cursor,{state,expires});page.cursor=cursor;page.expiresAt=new Date(expires).toISOString();}
       // 定义位置、摘要、对象名及续页元数据共同占128KiB；失败不泄漏已生成的游标。
-      if(state.input.searchIn==='definition'&&Buffer.byteLength(JSON.stringify(page))>structureSearchLimits.pageBytes){if(page.cursor)this.cursors.delete(page.cursor);throw Error('定义搜索批次及元数据超过128KiB');}
+      if((state.input.searchIn==='definition'||state.input.dialect==='postgresql')&&Buffer.byteLength(JSON.stringify(page))>structureSearchLimits.pageBytes){if(page.cursor)this.cursors.delete(page.cursor);throw Error('结构搜索批次及元数据超过128KiB');}
       return page;
-    }finally{this.active--;}
+    }finally{this.active.delete(pending);}
   }
   /** 初始范围复制后保存在引擎，客户端后续不能偷偷修改搜索条件或定位键。 */
-  start(raw:unknown,run:Run){const input=structureSearchInputSchema.parse(raw);return this.run({input,scope:0,total:0},run);}
+  start(raw:unknown,run:Run){return this.startPage(raw, undefined, state=>run((managed,control)=>readPage(state,managed,control)));}
   /** 先核对归属再消费；同时重复点击只能让一个请求获得此页。 */
-  next(raw:unknown,run:Run){this.prune();const input=structureSearchContinueSchema.parse(raw),entry=this.cursors.get(input.cursor);if(!entry)throw Error('搜索已过期或已继续，请重新搜索');if(entry.state.input.connectionId!==input.connectionId)throw Error('搜索不属于当前连接');this.cursors.delete(input.cursor);return this.run(entry.state,run);}
+  next(raw:unknown,run:Run){return this.nextPage(raw, undefined, state=>run((managed,control)=>readPage(state,managed,control)));}
+
+  startPage(raw:unknown,dialect:StructureSearchInput['dialect'],read:(state:SearchState)=>Promise<StructureSearchPage>){
+    const input=structureSearchInputSchema.parse(raw);
+    if(input.dialect!==dialect)throw Error('搜索方言与保存的连接不匹配');
+    return this.run({input,scope:0,total:0},read);
+  }
+
+  nextPage(raw:unknown,dialect:StructureSearchInput['dialect'],read:(state:SearchState)=>Promise<StructureSearchPage>){
+    this.prune();
+    const input=structureSearchContinueSchema.parse(raw),entry=this.cursors.get(input.cursor);
+    if(!entry)throw Error('搜索已过期或已继续，请重新搜索');
+    if(entry.state.input.connectionId!==input.connectionId||entry.state.input.dialect!==dialect)throw Error('搜索不属于当前连接');
+    this.cursors.delete(input.cursor);
+    return this.run(entry.state,read);
+  }
 }

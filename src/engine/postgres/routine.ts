@@ -9,12 +9,13 @@ import { startPostgresDdl } from './createTable';
 import { postgresOwnerTargets } from './ownerTargets';
 
 // 只用输入类型向量区分重载，参数名称、默认值和 OUT 字段的变化不改变身份。
-const signature = `pg_catalog.format('"%s"."%s"(%s)', pg_catalog.replace(n.nspname::text, '"', '""'),
+export const postgresRoutineSignatureSql = `pg_catalog.format('"%s"."%s"(%s)', pg_catalog.replace(n.nspname::text, '"', '""'),
   pg_catalog.replace(p.proname::text, '"', '""'), pg_catalog.oidvectortypes(p.proargtypes))`;
 const source = `FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace`;
-const visible = `p.prokind IN ('f', 'p', 'w') AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+export const postgresRoutineVisibleSql = `p.prokind IN ('f', 'p', 'w') AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
   AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND (pg_catalog.has_function_privilege(p.oid, 'EXECUTE')
     OR pg_catalog.pg_has_role(p.proowner, 'USAGE'))`;
+const signature = postgresRoutineSignatureSql, visible = postgresRoutineVisibleSql;
 
 /** 固定 search_path 生成可重复解析的签名，保留非系统类型的完整限定名。 */
 export async function readPostgresRoutineCatalog(connection: PostgresConnection): Promise<DatabaseObject[]> {

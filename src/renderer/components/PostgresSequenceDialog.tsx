@@ -18,8 +18,8 @@ type SequenceAction = 'edit' | 'rename' | 'drop' | 'ownership';
 type OwnershipAction = 'bind' | 'detach' | 'owner';
 
 /** 详情绑定原数据库目录；连接版本变化后废弃旧的读取回包。 */
-export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManaged }: {
-  target: PostgresSequenceReadInput; onClose(): void; onDirtyChange(value: boolean): void;
+export function PostgresSequenceDialog({ target, readOnly, onClose, onDirtyChange, onManaged }: {
+  target: PostgresSequenceReadInput; readOnly?: boolean; onClose(): void; onDirtyChange(value: boolean): void;
   onManaged(action: SequenceOperation, name: string, version: number, message: string): void;
 }) {
   const { connectionId, database, table } = target;
@@ -70,7 +70,7 @@ export function PostgresSequenceDialog({ target, onClose, onDirtyChange, onManag
     </div>
     <footer className="modal-footer"><button disabled={!current} onClick={() => setAttempt(value => value + 1)}>{zh.common.refresh}</button>
       {info && <button onClick={() => setDependencies(true)}>{postgresDependenciesZh.open}</button>}
-      {info?.canManage && <>
+      {!readOnly && info?.canManage && <>
         <button onClick={() => setManage({ action: 'edit', info, version })}>{text.edit}</button>
         <button onClick={() => setManage({ action: 'rename', info, version })}>{text.rename}</button>
         {!info.ownedBy?.identity && <button onClick={() => setManage({ action: 'ownership', info, version })}>{text.ownership}</button>}

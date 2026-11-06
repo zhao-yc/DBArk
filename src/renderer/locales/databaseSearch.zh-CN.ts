@@ -1,13 +1,14 @@
 /** 全库搜索文案集中存放，名称和完整定义模式明确区分范围及预算。 */
 export const databaseSearchZh={
-  entry:'全库搜索',title:'全库搜索：结构名称',connection:'连接',databases:'数据库范围（每行一个）',
+  entry:'全库搜索',title:'全库搜索：结构名称',connection:'连接',chooseConnection:'请选择连接',databases:'数据库范围（每行一个）',
   dataMode:'搜索数据',savedQueries:'搜索保存查询',
   searchIn:'搜索内容',names:'结构名称',definitions:'定义正文',definitionsTitle:'全库搜索：定义正文',wholeDefinition:'整个定义相等',definitionLocation:'命中位置',
   definitionHint:'搜索当前账号可见对象的 SHOW CREATE 定义，最多 2 MiB／对象，每页最多检查10个对象；不读取表数据。不可读或超限对象计为失败。',
   definitionMatch:(characters:number)=>`定义正文（${characters}字符）`,definitionCount:(count:number)=>` 已检查定义 ${count}。`,definitionsDone:'已完成所选可见对象的定义搜索。',
   databaseHint:'搜索当前账号可见的结构名称，最多 32 个数据库，不读取表数据。',
+  postgresHint:'搜索最多 32 个 PostgreSQL 数据库的用户架构。每批至多读取一个数据库，页间关闭搜索连接。',
   pattern:'搜索文字',mode:'匹配方式',modes:{contains:'包含文字',whole:'完整名称',prefix:'前缀',regexp:'服务器正则'},
-  kinds:{table:'表',view:'视图',column:'字段',index:'索引',primaryKey:'主键',foreignKey:'外键',procedure:'存储过程',function:'函数',trigger:'触发器',event:'事件'},
+  kinds:{table:'表',view:'视图',column:'字段',index:'索引',primaryKey:'主键',foreignKey:'外键',uniqueKey:'唯一约束',check:'CHECK 约束',sequence:'序列',procedure:'存储过程',function:'函数',trigger:'触发器',event:'事件'},
   caseSensitive:'区分大小写',ruleHint:'匹配遵循数据库的大小写和正则规则；普通文字模式中 % 和 _ 按原文搜索。',
   limit:'命中上限',onError:'遇到错误',stop:'停止搜索',continueOnError:'记录错误并继续',start:'开始搜索',next:'继续搜索',cancel:'取消当前批次',close:'关闭',
   opening:'正在搜索并等待连接释放…',closing:'正在取消并清理…',empty:'尚无命中',emptyHint:'选择范围并开始搜索；有未扫描范围时可继续搜索。',

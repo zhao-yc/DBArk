@@ -108,7 +108,9 @@ export class PostgresConnection {
     ])
       if (secret) message = message.replaceAll(secret, '[已隐藏]');
     const safe = Error(message.slice(0, 8192));
-    // 仅保留真实服务端 ERROR 的 SQLSTATE，以区分提交被服务器拒绝与连接断开。
+    // 建连时仅标记目标库不存在或未授权。传输错误仍不能充当服务端语句回执。
+    if (reason instanceof DatabaseError && reason.severity === 'FATAL' && ['3D000', '42501'].includes(reason.code ?? ''))
+      return Object.assign(safe, { postgresDatabaseUnavailable: true });
     return reason instanceof DatabaseError && reason.severity === 'ERROR' && /^[0-9A-Z]{5}$/.test(reason.code ?? '')
       ? Object.assign(safe, { postgresSqlState: reason.code }) : safe;
   }

@@ -7,6 +7,7 @@
 .pg-structure-table th, .pg-structure-table td { padding: 8px; vertical-align: top; border-bottom: 1px solid var(--line); }
 .pg-structure-table thead th { position: sticky; top: 0; background: var(--surface); white-space: nowrap; z-index: 1; }
 .pg-structure-table tbody th { text-align: left; overflow-wrap: anywhere; }
+.pg-structure-table tr[aria-current='true'] { outline: 1px solid var(--accent); outline-offset: -1px; scroll-margin-top: 36px; }
 .pg-structure-table code, .pg-structure-comment { white-space: pre-wrap; overflow-wrap: anywhere; }
 .pg-structure-table td small { display: block; }
 

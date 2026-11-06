@@ -28,6 +28,7 @@ import { Empty, ErrorBox, Modal, Spinner } from './ui';
 import './PostgresStructureDialog.css';
 
 type Section = keyof typeof text.sections;
+export interface PostgresStructureSearchFocus { section: Section; name?: string; }
 const editors = {
   materialized: { Panel: PostgresMaterializedRefreshPanel, label: refreshText.title },
   manage: { Panel: PostgresViewManagePanel, label: postgresViewManageZh.title },
@@ -48,25 +49,27 @@ function CatalogTable({ headers, children, empty }: { headers: readonly string[]
 }
 
 /** 在原窗口、连接修订和关系目标下读取结构，刷新、关闭及切换来源废弃迟到回包。 */
-export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdited, onManaged }: {
-  target: PostgresStructureInput; onClose(): void; onDirtyChange(value: boolean): void;
+export function PostgresStructureDialog({ target, readOnly, searchFocus, onClose, onDirtyChange, onEdited, onManaged }: {
+  target: PostgresStructureInput; readOnly?: boolean; searchFocus?: PostgresStructureSearchFocus; onClose(): void; onDirtyChange(value: boolean): void;
   onManaged(target: PostgresStructureInput, message: string, unknown: boolean, version: number, destination?: string): void;
   onEdited(target: PostgresStructureInput, message: string, unknown: boolean, version: number): void;
 }) {
   const version = useWorkspace(state => state.connectionVersions[target.connectionId] ?? 0);
   const dialect = useWorkspace(state => state.connections.find(profile => profile.id === target.connectionId)?.dialect);
-  const [section, setSection] = useState<Section>('columns');
+  const [section, setSection] = useState<Section>(searchFocus?.section ?? 'columns');
   const [attempt, setAttempt] = useState(0);
   const [editing, setEditing] = useState<keyof typeof editors>();
   const [dependencies, setDependencies] = useState(false);
   const [view, setView] = useState<{ key: string; output?: PostgresStructureResult; error?: string }>();
   const owner = useRef<object | undefined>(undefined);
+  const matched = useRef<HTMLTableRowElement>(null);
   const { connectionId, database, table } = target;
   const scope = JSON.stringify([connectionId, database, table, version, attempt]);
   const currentView = view?.key === scope && dialect === 'postgresql' ? view : undefined;
   const output = currentView?.output;
   const busy = !currentView && dialect === 'postgresql';
   useEffect(() => { setEditing(undefined); }, [scope]);
+  useEffect(() => { if (output && section === searchFocus?.section) matched.current?.scrollIntoView?.({ block: 'nearest' }); }, [output, section, searchFocus]);
 
   useEffect(() => {
     if (dialect !== 'postgresql') return;
@@ -134,7 +137,8 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
         </nav>
         {section === 'columns' && <CatalogTable empty={!output.columns.length} headers={[
           text.position, text.name, text.type, text.nullable, text.defaultExpression, text.generatedExpression, text.identity, text.collation, text.comment,
-        ]}>{output.columns.map(column => <tr key={column.position}>
+        ]}>{output.columns.map(column => <tr key={column.position}
+          {...(searchFocus?.section === section && searchFocus.name === column.name ? { ref: matched, 'aria-current': true } : {})}>
           <td>{column.position}</td><th scope="row">{column.name}</th><td><code>{column.type}</code></td>
           <td>{column.nullable ? text.yes : text.no}</td><td><code>{column.defaultExpression ?? '—'}</code></td>
           <td><code>{column.generationExpression ?? '—'}</code>{column.generation && <small>{column.generation === 's' ? text.stored : text.virtual}</small>}</td>
@@ -142,14 +146,16 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
           <td>{column.collation ?? '—'}</td><td>{column.comment ?? '—'}</td>
         </tr>)}</CatalogTable>}
         {section === 'constraints' && <CatalogTable empty={!output.constraints.length} headers={[text.name, text.type, text.definition, text.status]}>
-          {output.constraints.map((constraint, index) => <tr key={index}>
+          {output.constraints.map((constraint, index) => <tr key={index}
+            {...(searchFocus?.section === section && searchFocus.name === constraint.name ? { ref: matched, 'aria-current': true } : {})}>
             <th scope="row">{constraint.name}</th><td>{text.kindsOfConstraint[constraint.kind]}</td><td><code>{constraint.definition}</code></td>
             <td>{[constraint.deferrable && text.deferrable, constraint.initiallyDeferred && text.deferred,
               !constraint.validated && text.unvalidated, (constraint.foreign?.enforced === false || constraint.check?.enforced === false) && postgresForeignEditZh.unenforced, constraint.inherited && text.inherited].filter(Boolean).join(' · ') || '—'}</td>
           </tr>)}
         </CatalogTable>}
         {section === 'indexes' && <CatalogTable empty={!output.indexes.length} headers={[text.name, text.method, text.definition, text.constraint, text.status]}>
-          {output.indexes.map(index => <tr key={index.name}>
+          {output.indexes.map(index => <tr key={index.name}
+            {...(searchFocus?.section === section && searchFocus.name === index.name ? { ref: matched, 'aria-current': true } : {})}>
             <th scope="row">{index.name}</th><td>{index.method}</td><td><code>{index.definition}</code></td><td>{index.constraint ?? '—'}</td>
             <td>{[index.primary && text.primary, index.unique && text.unique, index.replicaIdentity && postgresIndexEditZh.replicaIdentity,
               index.valid ? text.valid : text.invalid,
@@ -164,15 +170,15 @@ export function PostgresStructureDialog({ target, onClose, onDirtyChange, onEdit
     <footer className="modal-footer">
       <button disabled={!!editing || busy || dialect !== 'postgresql'} onClick={() => { owner.current = undefined; setAttempt(value => value + 1); }}>{text.refresh}</button>
       {output && !editing && <button onClick={() => setDependencies(true)}>{postgresDependenciesZh.open}</button>}
-      {(section === 'indexes' ? indexStamp : output?.editStamp) && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
+      {!readOnly && (section === 'indexes' ? indexStamp : output?.editStamp) && !editing && section !== 'definition' && <button onClick={() => setEditing(section)}>
         {editors[section].label}
       </button>}
-      {output?.editStamp && !editing && section === 'constraints' &&
+      {!readOnly && output?.editStamp && !editing && section === 'constraints' &&
         <><button onClick={() => setEditing('foreign')}>{editors.foreign.label}</button>
           <button onClick={() => setEditing('check')}>{editors.check.label}</button></>}
-      {output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
-      {manageStamp && !editing && <button onClick={() => setEditing('manage')}>{postgresViewManageZh.title}</button>}
-      {section === 'definition' && output?.viewEditStamp && !editing && <button onClick={() => setEditing('definition')}>
+      {!readOnly && output?.materialized?.stamp && !editing && <button onClick={() => setEditing('materialized')}>{refreshText.title}</button>}
+      {!readOnly && manageStamp && !editing && <button onClick={() => setEditing('manage')}>{postgresViewManageZh.title}</button>}
+      {!readOnly && section === 'definition' && output?.viewEditStamp && !editing && <button onClick={() => setEditing('definition')}>
         {postgresViewEditZh.title}
       </button>}
       {section === 'definition' && output?.viewDefinition && !editing && <button onClick={openDraft}>{text.openDraft}</button>}
