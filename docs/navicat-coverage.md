@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量：[PostgreSQL 复制勾选记录](development/postgres-batch-duplicate-20261106.md)支持按原页批量生成独立副本、逐条复核、整批暂存与撤销，沿用预览和原事务。D02、D04 和 R01 仍为部分覆盖，暂不发布。
+
 2026-11-06 源码增量：[PostgreSQL 复制当前记录](development/postgres-record-duplicate-20261106.md)从网格或记录表单复制原值及已暂存值，按目录省略生成列和序列默认列，沿原新增草稿及事务提交。D02、D04 和 R01 仍为部分覆盖，暂不发布。
 
 2026-11-06 源码增量：[PostgreSQL 逐条编辑勾选记录](development/postgres-batch-edit-20261106.md)支持当前页记录独立输入、原字段草稿撤回、整批暂存及撤销，沿用原行版本和单事务。D02、D04 和 R01 仍为部分覆盖，暂不发布。

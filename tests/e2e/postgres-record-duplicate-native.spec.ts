@@ -4,6 +4,8 @@ import { writeFile } from 'node:fs/promises';
 import { postgresRecordDuplicateZh as text } from '../../src/renderer/locales/postgresRecordDuplicate.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresRecordViewZh as viewText } from '../../src/renderer/locales/postgresRecordView.zh-CN';
+import { postgresBatchDuplicateZh as batchText } from '../../src/renderer/locales/postgresBatchDuplicate.zh-CN';
+import { postgresBatchEditZh as editText } from '../../src/renderer/locales/postgresBatchEdit.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -109,6 +111,49 @@ test('PostgreSQL 复制当前记录、暂存及准确提交', async ({}, info) =
       id: '9007199254740994', legacy: '2', code: '副本编号', note: '复制自草稿', raw: '00ff', tag: '复制自草稿-生成',
     }]);
     await mark('明确提交后仅新增副本，独立读回原记录及生成字段');
+    const originalPair = await readRows();
+    await button(viewText.grid).click();
+    for (const code of ['原编号', '副本编号']) await grid.getByRole('row')
+      .filter({ has: page.getByRole('gridcell', { name: code, exact: true }) }).getByRole('checkbox').check();
+    const batch = page.getByRole('dialog', { name: batchText.title, exact: true });
+    const openBatch = () => button(batchText.action).click();
+    const choose = (index: number) => batch.getByRole('button', { name: editText.record(index), exact: true }).click();
+    await openBatch();
+    await value(batch, 'code').fill('取消副本');
+    await batch.getByRole('button', { name: tableText.cancel, exact: true }).click();
+    await expect(draft).toHaveCount(0);
+    expect(await readRows()).toEqual(originalPair);
+    await mark('勾选复制取消后零草稿，原记录保持');
+
+    const editCopies = async () => {
+      await openBatch();
+      await expect(value(batch, 'code')).toHaveValue('原编号');
+      await value(batch, 'code').fill('批量甲');
+      await choose(2);
+      await expect(value(batch, 'code')).toHaveValue('副本编号');
+      await value(batch, 'code').fill('批量乙');
+      await choose(1);
+      await expect(value(batch, 'code')).toHaveValue('批量甲');
+    };
+    await editCopies();
+    await page.screenshot({ path: info.outputPath('PostgreSQL复制勾选记录.png') });
+    await batch.getByRole('button', { name: batchText.stage, exact: true }).click();
+    await expect(draft).toContainText(tableText.changes(2));
+    await draft.getByRole('button', { name: batchText.undo, exact: true }).click();
+    await expect(draft).toHaveCount(0);
+    await mark('批量副本分别编辑唯一字段，整批暂存和撤销');
+
+    await editCopies();
+    await batch.getByRole('button', { name: batchText.stage, exact: true }).click();
+    await button(tableText.preview).click();
+    expect(await readRows()).toEqual(originalPair);
+    await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(grid.getByRole('gridcell', { name: '批量乙', exact: true })).toBeVisible();
+    expect(await readRows()).toEqual([...originalPair,
+      { ...originalPair[0], id: '9007199254740995', legacy: '3', code: '批量甲' },
+      { ...originalPair[1], id: '9007199254740996', legacy: '4', code: '批量乙' },
+    ]);
+    await mark('确认后整批仅新增两个副本，独立读回精确主键和原记录');
     check();
     expect(runtime.pageErrors).toEqual([]);
     await reader.end();

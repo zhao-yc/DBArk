@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTablePage } from '../../src/shared/postgresTable';
-import { postgresRecordDuplicatePlan } from '../../src/renderer/postgresRecordDuplicate';
+import { postgresBatchDuplicateChanges, postgresBatchDuplicatePlan, postgresRecordDuplicatePlan } from '../../src/renderer/postgresRecordDuplicate';
 
 const page: PostgresTablePage = {
   columns: ['id', 'serial', 'generated', 'empty', 'bytes', 'note'].map((name, index) => ({
@@ -33,5 +33,20 @@ describe('PostgreSQL 复制当前记录', () => {
     expect(() => postgresRecordDuplicatePlan({ ...page, rows: [{}] }, 0)).toThrow('不完整');
     expect(() => postgresRecordDuplicatePlan({ ...page, rows: [{ ...page.rows[0], c4: { type: 'binary', base64: 'A'.repeat(90_000) } }] }, 0))
       .toThrow('超出暂存范围');
+  });
+
+  it('无行键也按原页顺序复制，单个副本的默认值选择不改变其他副本', () => {
+    const source = { ...page, rowKeys: undefined, rows: [page.rows[0], { ...page.rows[0], c0: '9007199254740994' }] };
+    const plan = postgresBatchDuplicatePlan(source, new Set([1, 0]), () => undefined);
+    const changes = postgresBatchDuplicateChanges(source, plan, new Map([[1, new Map()]]));
+    expect(changes).toEqual([{ kind: 'insert', fields: postgresRecordDuplicatePlan(source, 0).fields }, { kind: 'insert', fields: [] }]);
+    expect(() => postgresBatchDuplicateChanges(source, plan, new Map([[2, new Map()]]))).toThrow('已变化');
+    expect(() => postgresBatchDuplicateChanges({ ...source, rows: source.rows.map(row => ({ ...row })) }, plan, new Map())).toThrow('已变化');
+  });
+
+  it('任何一条已标记删除的记录都会拒绝整个复制计划', () => {
+    const source = { ...page, rowKeys: ['一', '二'], rows: [page.rows[0], { ...page.rows[0], c0: '2' }] };
+    expect(() => postgresBatchDuplicatePlan(source, new Set([0, 1]), key => key === '二' ? { kind: 'delete', row: 1 } : undefined))
+      .toThrow('已变化');
   });
 });

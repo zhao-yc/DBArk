@@ -58,8 +58,9 @@ import { postgresBatchDeleteZh as deleteText } from '../locales/postgresBatchDel
 import { PostgresBatchEditDialog } from './PostgresBatchEditDialog';
 import { postgresBatchEditPlan, type PostgresBatchEditInput } from '../postgresBatchEdit';
 import { postgresBatchEditZh as batchEditText } from '../locales/postgresBatchEdit.zh-CN';
-import { postgresRecordDuplicatePlan } from '../postgresRecordDuplicate';
+import { postgresBatchDuplicateChanges, postgresBatchDuplicatePlan, postgresRecordDuplicatePlan } from '../postgresRecordDuplicate';
 import { postgresRecordDuplicateZh as duplicateText } from '../locales/postgresRecordDuplicate.zh-CN';
+import { postgresBatchDuplicateZh as batchDuplicateText } from '../locales/postgresBatchDuplicate.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -70,8 +71,9 @@ type DraftEntry = { change: PostgresTableChange & { pageToken: string }; rowKey?
 type BatchSelection = {
   scope: object; page: PostgresTablePage; selected: ReadonlySet<number>;
   originalDraft: DraftEntry[]; gridCurrent(): boolean;
-} & ({ kind: 'fill' } | { kind: 'delete'; plan: PostgresBatchDeletePlan } | { kind: 'edit'; rows: PostgresBatchRow[] });
-const batchLabels = { fill: fillText, delete: deleteText, edit: batchEditText };
+} & ({ kind: 'fill' } | { kind: 'delete'; plan: PostgresBatchDeletePlan } | { kind: 'edit'; rows: PostgresBatchRow[] } |
+  { kind: 'duplicate'; plan: ReturnType<typeof postgresBatchDuplicatePlan> });
+const batchLabels = { fill: fillText, delete: deleteText, edit: batchEditText, duplicate: batchDuplicateText };
 type DuplicateSource = {
   page: PostgresTablePage; scope: object; row: number; rowNumber: number; originalDraft: DraftEntry[];
 } & ReturnType<typeof postgresRecordDuplicatePlan>;
@@ -409,12 +411,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }, [active, cellScope, batch]);
 
   function canBatch(kind: BatchSelection['kind'], selected: ReadonlySet<number>): boolean {
-    const permitted = kind === 'delete' ? canChangeGrid && !!page?.capabilities.delete :
+    const permitted = kind === 'duplicate' ? canChangeGrid && !!page?.capabilities.insert && !page.truncated :
+      kind === 'delete' ? canChangeGrid && !!page?.capabilities.delete :
       canEditGrid && (kind === 'fill' ? !!fillColumns.length : !!editColumns.length);
     return permitted && !!selected.size && selected.size <= postgresTableLimits.changes &&
       [...selected].every(row => {
         const key = page?.rowKeys?.[row];
-        return !!key && !draft.some(entry => entry.rowKey === key && entry.change.kind === 'delete');
+        return !!page?.rows[row] && (kind === 'duplicate' || !!key) &&
+          (!key || !draft.some(entry => entry.rowKey === key && entry.change.kind === 'delete'));
       });
   }
 
@@ -428,7 +432,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     try {
       const intent: BatchSelection = kind === 'delete'
         ? { ...source, kind, plan: postgresBatchDeletePlan(page, selected, prior) }
-        : kind === 'edit' ? { ...source, kind, rows: postgresBatchRows(page, selected, prior) } : { ...source, kind };
+        : kind === 'edit' ? { ...source, kind, rows: postgresBatchRows(page, selected, prior) }
+          : kind === 'duplicate' ? { ...source, kind, plan: postgresBatchDuplicatePlan(page, selected, prior) } : { ...source, kind };
       closeCellMenu(cellMenuOwner.current, false);
       batchOwner.current = intent;
       setBatch(intent);
@@ -857,12 +862,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump
-        renderRowSelectionAction={page.capabilities.delete || page.capabilities.update && editColumns.length ? (selected, current) =>
+        renderRowSelectionAction={page.capabilities.insert || page.capabilities.delete || page.capabilities.update && editColumns.length ? (selected, current) =>
           <div className="pg-table-controls pg-batch-actions">
             {!!fillColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('fill', selected)}
               onClick={() => openBatch('fill', selected, current)}>{fillText.action}</button>}
             {!!editColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('edit', selected)}
               onClick={() => openBatch('edit', selected, current)}>{batchEditText.action}</button>}
+            {page.capabilities.insert && <button type="button" title={fillText.rows} disabled={!canBatch('duplicate', selected)}
+              onClick={() => openBatch('duplicate', selected, current)}>{batchDuplicateText.action}</button>}
             {page.capabilities.delete && <button type="button" title={fillText.rows} disabled={!canBatch('delete', selected)}
               onClick={() => openBatch('delete', selected, current)}>{deleteText.action}</button>}
             {!!selected.size && <span>{fillText.count(selected.size)}</span>}
@@ -905,6 +912,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     {batch?.kind === 'edit' && <PostgresBatchEditDialog rows={batch.rows} columns={editColumns}
       primary={batch.page.columns.filter(column => column.primary)} offset={options.offset}
       onStage={(inputs: PostgresBatchEditInput) => stageBatch(batch, () => postgresBatchEditPlan(batch.page, batch.rows, inputs))}
+      onClose={() => closeBatch(batch)}/>}
+    {batch?.kind === 'duplicate' && <PostgresBatchEditDialog rows={batch.plan.rows} duplicate={batch.plan}
+      columns={batch.page.columns.filter(column => !column.generated)} primary={batch.page.columns.filter(column => column.primary)}
+      offset={options.offset}
+      onStage={inputs => stageBatch(batch, () => ({ changes: postgresBatchDuplicateChanges(batch.page, batch.plan, inputs) }))}
       onClose={() => closeBatch(batch)}/>}
     {(draft.length > 0 || batchUndo) && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong>{draft.length > 0 &&
