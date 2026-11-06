@@ -54,6 +54,8 @@ import { EngineBroker } from './broker';
 import { SqliteConnectionFiles } from './sqliteConnectionFiles';
 import { closeSqliteDatabaseCreates, createSqliteDatabaseFile } from './sqliteDatabaseCreate';
 import { assertSqliteExportDestination } from './sqliteExportDestination';
+import { DatabaseBackupArchiveFiles } from './databaseBackupArchiveFiles';
+import { databaseBackupArchiveZh } from '../shared/databaseBackupArchiveFiles';
 import { sqliteBackupFileIdentity } from '../engine/sqlite/backup';
 import { closeSqliteDatabaseCopies, publishSqliteDatabaseCopy } from './sqliteDatabaseBackup';
 import { sqliteDatabaseCopyZh, type SqliteDatabaseCopyInput } from '../shared/sqliteDatabaseBackup';
@@ -166,6 +168,21 @@ const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 // 字段令牌只绑定真实IPC文档；回收仍使用原引擎精确release，不扩其他结构业务。
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
+const backupArchiveFiles = new DatabaseBackupArchiveFiles<ColumnsInvocation>({
+  assert: owner => { columnsMain.assertCapturedOwner(owner); if (shuttingDown) throw Error('客户端正在退出，备份归档操作已停止'); },
+  same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
+  choose: async (owner, action) => {
+    const text = databaseBackupArchiveZh;
+    if (action === 'open') {
+      const chosen = await dialog.showOpenDialog(owner.owner.window, { title: text.select, properties: ['openFile'], filters: [{ name: text.fileType, extensions: ['zip'] }] });
+      return chosen.canceled ? undefined : chosen.filePaths[0];
+    }
+    const chosen = await dialog.showSaveDialog(owner.owner.window, { title: text.export, defaultPath: text.defaultName, filters: [{ name: text.sqlType, extensions: ['sql'] }] });
+    return chosen.canceled ? undefined : chosen.filePath;
+  },
+  reserve: path => exportReservations.acquire(path),
+  assertDestination: path => assertSqliteExportDestination(path, store.connections()),
+});
 const sqliteFiles = new SqliteConnectionFiles<ColumnsInvocation>({ assert: owner => { columnsMain.assertCapturedOwner(owner); if (shuttingDown) throw Error('客户端正在退出，不能选择SQLite数据库文件'); }, same: (left, right) => columnsMain.sharesDocumentOwner(left, right) });
 const tableChecksMain = new TableChecksMainCapabilities(structureTokens, { assertOwner: owner => columnsMain.assertCapturedOwner(owner), sameOwner: (left, right) => columnsMain.sharesDocumentOwner(left, right), revision: () => store.connectionRevision(), available: id => connectionConfig.assertAvailable(id), closing: () => shuttingDown, release: input => broker.request('schema.tableChecks.release', input) });
 // 系统输入只进入单槽队列；原连接和对象由正式元数据服务核验，不执行链接中的 SQL。
@@ -1832,6 +1849,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
+    case 'backupArchive.open': return queryFileOperation(() => backupArchiveFiles.open(columns!, input.operationId));
+    case 'backupArchive.exportSql': return queryFileOperation(() => backupArchiveFiles.export(columns!, input.operationId, input.token));
+    case 'backupArchive.cancel': columnsMain.assertCapturedOwner(columns); return backupArchiveFiles.cancel(columns!, input.operationId);
     case 'sqlite.databaseCopy': return copySqliteFile(input, columns);
     case 'files.createSqlite': return createSqliteFile(columns, input.connectionId);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
@@ -2381,6 +2401,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
+        if (payload.command.startsWith('backupArchive.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind === 'postgres.table.import') columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||

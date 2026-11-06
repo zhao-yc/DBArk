@@ -216,8 +216,8 @@ async function directoryEntries(size: bigint, read: (offset: bigint, length: num
   return { entries, directoryOffset: offset };
 }
 
-/** 严格inspect只读取和散列原字节，不extract或解释SQL；完整性不等于来源可信、锁/资源已证或恢复已验。 */
-export async function inspectDatabaseBackupArchive(reader: DatabaseBackupArchiveReader, checkCancelled: () => void = () => { }): Promise<{ manifest: DatabaseBackupArchiveManifest; dump: DatabaseBackupArchiveDump; archive: { bytes: string; sha256: string }; integrity: 'valid'; restoreVerified: false }> {
+/** 校验时可把原始 SQL 片段写入调用方的私有暂存。只有完整结果返回后才能发布文件。 */
+export async function inspectDatabaseBackupArchive(reader: DatabaseBackupArchiveReader, checkCancelled: () => void = () => { }, stagedDump?: DatabaseBackupArchiveSink): Promise<{ manifest: DatabaseBackupArchiveManifest; dump: DatabaseBackupArchiveDump; archive: { bytes: string; sha256: string }; integrity: 'valid'; restoreVerified: false }> {
 
   checkCancelled();
   const size = reader.size;
@@ -240,6 +240,7 @@ export async function inspectDatabaseBackupArchive(reader: DatabaseBackupArchive
       hash.update(chunk);
       archiveHash.update(chunk);
       if (entry.name === names[1]) manifestParts.push(chunk);
+      else if (stagedDump) { await stagedDump.writeBytes(chunk); checkCancelled(); }
       remaining -= BigInt(length);
       at += BigInt(length);
     }

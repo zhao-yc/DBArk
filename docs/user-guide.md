@@ -1,5 +1,7 @@
 # 使用指南
 
+从「工具」打开 MySQL 或 MariaDB 的 tabrelio 数据库备份归档，查看清单与摘要，再将原始 SQL 导出到新文件。[归档检查与 SQL 导出](development/database-backup-archive-sql-20261106.md)
+
 SQLite 连接行的操作菜单提供「备份 SQLite 整库」。侧栏标题旁的「从 SQLite 备份恢复」先选择备份，再将其恢复为新文件。恢复后可在新建连接时选择该文件。[SQLite 备份与恢复](development/sqlite-database-backup-20261106.md)
 
 在受支持的 MySQL 或 MariaDB 普通表页或对象菜单选择「复制表结构」或「复制表结构及数据」。选择同一连接中的目标数据库，填写新表名并预览。跨库可使用来源表名。提交前输入准确的 `目标库.新表名` 并勾选确认项。目标同名对象会拦截，数据复制失败时可能保留已创建的空表。版本和使用范围见[MySQL 跨库整表复制](development/mysql-cross-database-table-copy-20261106.md)及[MariaDB 整表复制](development/mariadb-table-copy-20261106.md)。

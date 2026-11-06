@@ -1,3 +1,4 @@
+import { DatabaseBackupArchiveDialog } from './components/DatabaseBackupArchiveDialog';
 import { PostgresCreateRoutineDialog } from './components/PostgresCreateRoutineDialog';
 import { PostgresRoutineDialog } from './components/PostgresRoutineDialog';
 import { PostgresCreateSequenceDialog, PostgresSequenceDialog } from './components/PostgresSequenceDialog';
@@ -204,6 +205,7 @@ function WorkspaceApp() {
   const [editorFontPreferences, setEditorFontPreferences] = useState(false);
   const [explainSnapshot, setExplainSnapshot] = useState(false);
   const [resultSnapshot, setResultSnapshot] = useState(false);
+  const [backupArchive, setBackupArchive] = useState(false);
   const [routineInvocationTarget, setRoutineInvocationTarget] = useState<RoutineInvocationTarget | null>(null);
   const routineInvocationTargetRef = useRef(routineInvocationTarget); routineInvocationTargetRef.current = routineInvocationTarget;
   const [tabSearch, setTabSearch] = useState<{ id: string; registry: OpenTabSearchRegistry } | null>(null);
@@ -969,6 +971,10 @@ function WorkspaceApp() {
     // 全库搜索仍提供离线保存查询入口；数据库搜索由弹窗内的真实连接能力限制。
     'schema-compare': handler(() => setSchemaCompare(true), !!networkConnections.length), 'structure-search': handler(() => setStructureSearch(true)),
     'server-monitor': handler(() => setServerMonitor(true), !sqliteObjects && !!networkConnections.length),
+    'backup-archive': handler(() => {
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      workbenchNavigation.invalidate(); setBackupArchive(true);
+    }),
     'explain-snapshot': handler(openExplainSnapshot), 'result-snapshot': handler(openResultSnapshot),
     'task-center': handler(() => setTasks(true)), 'tab-search': handler(openTabSearch),
     'close-tab': handler(() => { if (activeTab) closeTab(activeTab.id); }, !!activeTab && !state.activeJobs[activeTab.id]),
@@ -1115,6 +1121,7 @@ function WorkspaceApp() {
     {editorIndentPreferences && <EditorIndentPreferencesDialog onClose={() => { workbenchNavigation.invalidate(); setEditorIndentPreferences(false); }}/>}
     {navigationHelp && <Modal title={navigationHelp === 'usage' ? navigationZh.helpTitle : navigationZh.shortcutsTitle} onClose={() => setNavigationHelp(null)}><div className="modal-content">{navigationHelp === 'usage' ? navigationZh.help.map(line => <p key={line}>{line}</p>) : <table><tbody>{navigationZh.shortcuts.map(([label, keys]) => <tr key={label}><td>{label}</td><td><kbd>{keys}</kbd></td></tr>)}</tbody></table>}</div></Modal>}
     {explainSnapshot && <ExplainSnapshotDialog onClose={closeExplainSnapshot}/>}
+    {backupArchive && <DatabaseBackupArchiveDialog onClose={() => setBackupArchive(false)}/>}
     {resultSnapshot && <QueryResultSnapshotDialog onClose={closeResultSnapshot}/>}
     {routineInvocationTarget && <RoutineInvocationDialog target={routineInvocationTarget} onClose={() => closeRoutineInvocation(routineInvocationTarget)} onOpenGeneratedQuery={sql => finishRoutineInvocation(routineInvocationTarget, sql)}/>}
     {tabSearch && <OpenTabSearchDialog key={tabSearch.id} registry={tabSearch.registry} onClose={() => closeTabSearch(tabSearch)} onActivate={entry => activateSearchedTab(tabSearch, entry)}/>}

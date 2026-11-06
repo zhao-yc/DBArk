@@ -21,8 +21,8 @@ export interface AtomicFileIO {
 /** 同一原句柄及目录项必须具有相同身份、字节数和修改代次，拒绝符号链接与被替换的暂存。 */
 function fileIdentity(value:BigIntStats):string{if(!value.isFile()||value.isSymbolicLink())throw Error(stagedText.identity);return [value.dev,value.ino,value.size,value.mtimeNs,value.ctimeNs].join(':');}
 /** 原句柄固定dev/ino；只有本适配器成功写入才更新大小/时间代次，不从路径重新认领文件。 */
-async function openNativeFile(path:string):Promise<WritableFile>{
-  const file=await open(path,'wx');
+async function openNativeFile(path:string, mode?:number):Promise<WritableFile>{
+  const file=await open(path,'wx',mode);
   let expected:string;
   try{expected=fileIdentity(await file.stat({bigint:true}));}
   catch(error){await file.close();throw error;}
@@ -65,6 +65,8 @@ async function openNativeFile(path:string):Promise<WritableFile>{
   };
 }
 export const nativeAtomicFileIO: AtomicFileIO = {open:openNativeFile,identity:async path=>fileIdentity(await lstat(path,{bigint:true})),parentIdentity:async path=>{const value=await lstat(await realpath(dirname(resolve(path))),{bigint:true});if(!value.isDirectory())throw Error(stagedText.targetIdentity);return[value.dev,value.ino].join(':');},rename,remove:path=>rm(path,{force:true})};
+/** 在 POSIX 上将暂存文件权限限制为当前用户。Windows 继承用户选定目录的 ACL。 */
+export const privateAtomicFileIO: AtomicFileIO = { ...nativeAtomicFileIO, open: path => openNativeFile(path, 0o600) };
 const activeTargets = new Set<string>();
 const targetReservations = new WeakMap<AtomicFileTargetReservation,{key:string;claimed:boolean;released:boolean}>();
 
