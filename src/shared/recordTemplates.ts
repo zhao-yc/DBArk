@@ -25,13 +25,16 @@ const mysqlValue = z.discriminatedUnion('kind', [
   // 数字用可逆词法文本存盘，特别保留JSON本身无法保存的负零；字符串大数始终仍为text。
   z.object({ kind: z.literal('number'), value: z.string().max(100).refine(value => value === '-0' || Number.isFinite(Number(value)) && String(Number(value)) === value, '模板数字必须可无损往返') }).strict(),
 ]);
+const postgresValue = mysqlValue.refine(value => value.kind === 'null' || value.kind === 'binary' ||
+  value.kind === 'text' && !value.value.includes('\0'), 'PostgreSQL 模板值必须是文本、二进制或 NULL');
+const dialect = z.enum(['mysql', 'sqlite', 'postgresql']);
+const dialectValue = { mysql: mysqlValue, sqlite: sqliteEditValueSchema, postgresql: postgresValue };
 export const recordTemplateTargetSchema = z.object({ connectionId: z.string().min(1).max(200), database: identifier, table: identifier }).strict();
 const field = z.object({ name: identifier, signature: z.string().min(1).max(8192).refine(unicode), value: z.union([mysqlValue, sqliteEditValueSchema]) }).strict();
-const contentShape = z.object({ version: z.literal(1), dialect: z.enum(['mysql', 'sqlite']), fields: z.array(field).min(1).max(recordTemplateLimits.fields) }).strict().superRefine((value, context) => {
+const contentShape = z.object({ version: z.literal(1), dialect, fields: z.array(field).min(1).max(recordTemplateLimits.fields) }).strict().superRefine((value, context) => {
   if (new Set(value.fields.map(field => field.name)).size !== value.fields.length) context.addIssue({ code: 'custom', message: '模板字段不能重复' });
   for (const field of value.fields) {
-    const schema = value.dialect === 'mysql' ? mysqlValue : sqliteEditValueSchema;
-    if (!schema.safeParse(field.value).success) context.addIssue({ code: 'custom', message: '模板字段类型与数据库驱动不匹配' });
+    if (!dialectValue[value.dialect].safeParse(field.value).success) context.addIssue({ code: 'custom', message: '模板字段类型与数据库驱动不匹配' });
     if ('value' in field.value && typeof field.value.value === 'string' && !unicode(field.value.value)) context.addIssue({ code: 'custom', message: '模板值包含不完整Unicode' });
   }
   if (new TextEncoder().encode(JSON.stringify(value)).byteLength > recordTemplateLimits.entryBytes) context.addIssue({ code: 'custom', message: '单项记录模板超过512 KiB上限' });
@@ -67,12 +70,12 @@ const entry = z.object({ id: z.string().uuid(), name: label, connectionDigest: d
 export const recordTemplateDocumentSchema = z.object({ version: z.literal(1), target: recordTemplateTargetSchema, revision, entries: z.array(entry).max(recordTemplateLimits.perTarget) }).strict().superRefine((value, context) => {
   if (new Set(value.entries.map(item => item.id)).size !== value.entries.length || new Set(value.entries.map(item => item.name)).size !== value.entries.length) context.addIssue({ code: 'custom', message: '记录模板名称或编号重复' });
 });
-export const recordTemplateSourceSchema = z.object({ connectionRevision: revision, connectionDigest: digest, dialect: z.enum(['mysql', 'sqlite']) }).strict();
+export const recordTemplateSourceSchema = z.object({ connectionRevision: revision, connectionDigest: digest, dialect }).strict();
 const checked = recordTemplateTargetSchema.extend({ expectedRevision: revision, source: recordTemplateSourceSchema, bindingToken: z.string().uuid() }).strict();
 export const recordTemplateSaveSchema = checked.extend({ name: label, content: recordTemplateContentSchema, replaceId: z.string().uuid().optional() }).strict();
 export const recordTemplateSelectSchema = checked.extend({ id: z.string().uuid() }).strict();
 export const recordTemplateRenameSchema = recordTemplateSelectSchema.extend({ name: label }).strict();
-export const recordTemplateSnapshotSchema = z.object({ target: recordTemplateTargetSchema, revision, source: recordTemplateSourceSchema, bindingToken: z.string().uuid(), entries: z.array(z.object({ id: z.string().uuid(), name: label, dialect: z.enum(['mysql', 'sqlite']), columns: z.array(identifier).max(recordTemplateLimits.fields), sourceCurrent: z.boolean() }).strict()).max(recordTemplateLimits.perTarget) }).strict();
+export const recordTemplateSnapshotSchema = z.object({ target: recordTemplateTargetSchema, revision, source: recordTemplateSourceSchema, bindingToken: z.string().uuid(), entries: z.array(z.object({ id: z.string().uuid(), name: label, dialect, columns: z.array(identifier).max(recordTemplateLimits.fields), sourceCurrent: z.boolean() }).strict()).max(recordTemplateLimits.perTarget) }).strict();
 export type RecordTemplateTarget = z.infer<typeof recordTemplateTargetSchema>;
 export type RecordTemplateContent = z.infer<typeof recordTemplateContentSchema>;
 export type RecordTemplateField = RecordTemplateContent['fields'][number];

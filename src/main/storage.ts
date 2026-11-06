@@ -359,8 +359,14 @@ export class LocalStore {
     return new RecordTemplateStorage(this.db, {
       source: (target: RecordTemplateTarget): RecordTemplateSource => {
         const profile = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [target.connectionId])[0];
-        if (!profile || !['mysql', 'mariadb', 'sqlite'].includes(profile.dialect) || profile.dialect === 'sqlite' && target.database !== 'main') throw Error('记录模板连接已删除、驱动或目标库无效');
-        return { connectionRevision: this.connectionRevisionValue, connectionDigest: queryConnectionDigest(profile), dialect: profile.dialect === 'sqlite' ? 'sqlite' : 'mysql' };
+        if (!profile || !['mysql', 'mariadb', 'sqlite', 'postgresql'].includes(profile.dialect) || profile.dialect === 'sqlite' && target.database !== 'main') throw Error('记录模板连接已删除、驱动或目标库无效');
+        if (profile.dialect === 'postgresql') {
+          // 统一目录复合名，旧式 public 别名与目录入口不会产生两份模板。
+          const { schema, name } = postgresRelationName(target.table);
+          if (target.table !== postgresIdentifier(schema) + '.' + postgresIdentifier(name)) throw Error('记录模板需要完整的 PostgreSQL 架构和关系名');
+        }
+        const dialect = profile.dialect === 'sqlite' || profile.dialect === 'postgresql' ? profile.dialect : 'mysql';
+        return { connectionRevision: this.connectionRevisionValue, connectionDigest: queryConnectionDigest(profile), dialect };
       },
       mutate: (action, assertCurrent) => this.mutate(action, assertCurrent),
     });

@@ -1,6 +1,10 @@
 import type { CellValue, DataRow, TableInfo } from '../shared/contracts';
+import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField, type PostgresTablePage } from '../shared/postgresTable';
 import type { SqliteEditColumn, SqliteOriginalValue } from '../shared/sqliteTableEdit';
 import { recordTemplateContentSchema, recordTemplateLimits as limits, type RecordTemplateContent, type RecordTemplateField } from '../shared/recordTemplates';
+import { binaryByteLength, binaryCellFromHex } from './binaryCell';
+import { cellText, ownCell } from './lib';
+import { postgresBatchValueValid } from './postgresBatchSelection';
 import { recordValueSummary } from './recordViews';
 import { recordTemplatesZh as text } from './locales/recordTemplates.zh-CN';
 
@@ -14,6 +18,12 @@ export function mysqlTemplateColumns(info: TableInfo): RecordTemplateColumn[] {
 /** SQLite保留声明类型与动态值类型，生成列始终没有模板写入资格。 */
 export function sqliteTemplateColumns(columns: readonly SqliteEditColumn[]): RecordTemplateColumn[] {
   return columns.filter(column => !column.generated).map(column => ({ name: column.name, signature: JSON.stringify([column.declaredType, column.nullable, column.hasDefault]) }));
+}
+/** 新增时让数据库分配标识及序列值，生成列也不进入模板字段清单。 */
+export function postgresTemplateColumns(columns: readonly PostgresTableColumn[]): RecordTemplateColumn[] {
+  return columns.filter(column => !column.generated && !column.identityAlways && !column.sequenceDefault).map(column => ({
+    name: column.name, signature: JSON.stringify([column.type, column.nullable, column.defaultValue, column.primary, column.binary]),
+  }));
 }
 /** 精确字符串不解析；有限数字和负零用显式number标签往返，BLOB保留原base64。 */
 function mysqlValue(value: CellValue): RecordTemplateField['value'] {
@@ -49,6 +59,31 @@ export function mysqlTemplateCandidate(data: DataRow, info: TableInfo): RecordTe
 export function sqliteTemplateCandidate(values: readonly (SqliteOriginalValue | undefined)[], columns: readonly SqliteEditColumn[]): RecordTemplateCandidate {
   return candidate('sqlite', sqliteTemplateColumns(columns), name => values[columns.findIndex(column => column.name === name)]);
 }
+/** 保留 PostgreSQL 协议文本和二进制。暂存的 DEFAULT 省略，未暂存的列从原行取值。 */
+export function postgresTemplateCandidate(page: PostgresTablePage, index: number, prior?: PostgresTableChange): RecordTemplateCandidate | undefined {
+  const row = page.rows[index];
+  if (!row || prior?.kind === 'delete') return undefined;
+  const columns = new Map(page.columns.map(column => [column.name, column]));
+  const staged = new Map(prior?.kind === 'update' ? prior.fields.map(field => [field.column, field.value]) : []);
+  return candidate('postgresql', postgresTemplateColumns(page.columns), name => {
+    const column = columns.get(name)!;
+    const value = staged.get(column.key);
+    if (value) {
+      if (value.mode === 'default') return undefined;
+      if (!postgresBatchValueValid(column, value)) throw Error(text.postgresValueInvalid(name));
+      if (value.mode === 'null') return { kind: 'null' };
+      if (value.mode === 'text') return { kind: 'text', value: value.value };
+      return { kind: 'binary', value: binaryCellFromHex(value.value).base64 };
+    }
+    const raw = ownCell(row, column.key);
+    if (raw === undefined) return undefined;
+    if (raw === null && column.nullable) return { kind: 'null' };
+    if (typeof raw === 'string') return { kind: 'text', value: raw };
+    if (raw && typeof raw === 'object' && column.binary && binaryByteLength(raw)! * 2 <= postgresTableLimits.value)
+      return { kind: 'binary', value: raw.base64 };
+    throw Error(text.postgresValueInvalid(name));
+  });
+}
 /** 用户选择的字段整体通过当前元数据；任何缺列、变型或跨驱动均拒绝，不删列凑成可用模板。 */
 export function validateRecordTemplate(raw: unknown, dialect: RecordTemplateContent['dialect'], columns: readonly RecordTemplateColumn[]): RecordTemplateContent {
   const content = recordTemplateContentSchema.parse(raw), current = new Map(columns.map(column => [column.name, column.signature]));
@@ -77,6 +112,27 @@ export function mysqlTemplateRows(raw: unknown, info: TableInfo, count: number):
 export function sqliteTemplateRows(raw: unknown, columns: readonly SqliteEditColumn[], count: number): (SqliteOriginalValue | undefined)[][] {
   const content = validateRecordTemplate(raw, 'sqlite', sqliteTemplateColumns(columns)), fields = new Map(content.fields.map(field => [field.name, field.value]));
   return Array.from({ length: copies(content, count) }, () => columns.map(column => fields.has(column.name) ? structuredClone(fields.get(column.name)) as SqliteOriginalValue : undefined));
+}
+/** 当前目录映射回原页字段键，整批验证后只交付现有账本可接受的新增草稿。 */
+export function postgresTemplateRows(raw: unknown, columns: readonly PostgresTableColumn[], count: number): PostgresTableChange[] {
+  const content = validateRecordTemplate(raw, 'postgresql', postgresTemplateColumns(columns));
+  const length = copies(content, count);
+  const current = new Map(columns.map(column => [column.name, column]));
+  if (content.fields.length > postgresTableLimits.fields) throw Error(text.batchLimit);
+  const fields = content.fields.map(({ name, value }): PostgresTableField => {
+    const column = current.get(name)!;
+    let input: PostgresTableField['value'];
+    if (value.kind === 'null') input = { mode: 'null' };
+    else if (value.kind === 'text') input = { mode: 'text', value: value.value };
+    else if (value.kind === 'binary') {
+      const binary = { type: 'binary' as const, base64: value.value };
+      if (!column.binary || binaryByteLength(binary)! * 2 > postgresTableLimits.value) throw Error(text.postgresValueInvalid(name));
+      input = { mode: 'binary', value: cellText(binary).slice(2) };
+    } else throw Error(text.postgresValueInvalid(name));
+    if (!postgresBatchValueValid(column, input)) throw Error(text.postgresValueInvalid(name));
+    return { column: column.key, value: input };
+  });
+  return Array.from({ length }, () => ({ kind: 'insert', fields: structuredClone(fields) }));
 }
 /** 预览明确区分动态类型、空串、NULL、负零与二进制，不把记录值当HTML显示。 */
 export function recordTemplateValueSummary(value: RecordTemplateField['value']): string {

@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ColumnWidths } from 'react-data-grid';
 import type { TablePreferences } from '../../shared/tablePreferences';
 import { exactTableLayoutProjection, postgresLayoutSchemas, type PostgresLayoutTarget } from '../../shared/sqliteTableLayout';
-import { postgresRelationSelect } from '../../shared/postgresSql';
+import { postgresIdentifier, postgresRelationName, postgresRelationSelect } from '../../shared/postgresSql';
+import type { RecordTemplateContent, RecordTemplateTarget } from '../../shared/recordTemplates';
 import { isPostgresPresetTabId, postgresPresetIdFromTab } from '../../shared/postgresPresetTab';
 import {
   isPostgresTableFiltered, postgresTableLimits, postgresTablePageOffset, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTableTarget,
 } from '../../shared/postgresTable';
-import { cellPreview, cellText, errorMessage, invoke, ownCell } from '../lib';
+import { cellPreview, cellText, errorMessage, invoke, ownCell, uid } from '../lib';
 import { postgresStructureZh } from '../locales/postgresStructure.zh-CN';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceTab } from '../store';
@@ -62,6 +63,9 @@ import { postgresBatchEditZh as batchEditText } from '../locales/postgresBatchEd
 import { postgresBatchDuplicateChanges, postgresBatchDuplicatePlan, postgresRecordDuplicatePlan } from '../postgresRecordDuplicate';
 import { postgresRecordDuplicateZh as duplicateText } from '../locales/postgresRecordDuplicate.zh-CN';
 import { postgresBatchDuplicateZh as batchDuplicateText } from '../locales/postgresBatchDuplicate.zh-CN';
+import { RecordTemplatesDialog } from './RecordTemplatesDialog';
+import { RecordTemplateLease, postgresTemplateCandidate, postgresTemplateColumns, postgresTemplateRows } from '../recordTemplates';
+import { recordTemplatesZh as templateText } from '../locales/recordTemplates.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -74,7 +78,11 @@ type BatchSelection = {
   originalDraft: DraftEntry[]; gridCurrent(): boolean;
 } & ({ kind: 'fill' } | { kind: 'delete'; plan: PostgresBatchDeletePlan } | { kind: 'edit'; rows: PostgresBatchRow[] } |
   { kind: 'duplicate'; plan: ReturnType<typeof postgresBatchDuplicatePlan> });
-const batchLabels = { fill: fillText, delete: deleteText, edit: batchEditText, duplicate: batchDuplicateText };
+const batchLabels = { fill: fillText, delete: deleteText, edit: batchEditText, duplicate: batchDuplicateText, template: templateText };
+type TemplateDialog = {
+  lease: RecordTemplateLease; target: RecordTemplateTarget; page: PostgresTablePage; originalDraft: DraftEntry[];
+  columns: ReturnType<typeof postgresTemplateColumns>; candidate?: ReturnType<typeof postgresTemplateCandidate>;
+};
 type DuplicateSource = {
   page: PostgresTablePage; scope: object; row: number; rowNumber: number; originalDraft: DraftEntry[];
 } & ReturnType<typeof postgresRecordDuplicatePlan>;
@@ -102,13 +110,15 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const draftRef = useRef(draft);
   const [batch, setBatch] = useState<BatchSelection>();
   const batchOwner = useRef<BatchSelection>(undefined);
-  const [batchUndo, setBatchUndo] = useState<{ kind: BatchSelection['kind']; before: DraftEntry[]; after: DraftEntry[] }>();
+  const [batchUndo, setBatchUndo] = useState<{ kind: keyof typeof batchLabels; before: DraftEntry[]; after: DraftEntry[] }>();
   const [pasteScope, setPasteScope] = useState<object>();
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
   const findAnchor = useRef<{ scope: object; value?: GridFindTarget }>(undefined);
   const [form, setForm] = useState<{ row: number | null; duplicate?: DuplicateSource }>();
   const duplicateOwner = useRef<DuplicateSource>(undefined);
+  const [templateDialog, setTemplateDialog] = useState<TemplateDialog>();
+  const templateOwner = useRef<RecordTemplateLease>(undefined);
   const [preview, setPreview] = useState<PostgresTablePreview>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -246,7 +256,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || columnDialog || batchOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || columnDialog || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const retainPageTokens = [...new Set(draft.map(entry => entry.change.pageToken))];
     void run(isCurrent => read(next, isCurrent, { ...movement, ...(retainPageTokens.length ? { retainPageTokens } : {}) }));
@@ -289,7 +299,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh || batchOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
+    if (!pageToken || !draft.length || requiresRefresh || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -326,7 +336,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -678,6 +688,47 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     setMessage(duplicateText.staged);
   }
 
+  const canUseTemplates = active && writable && pageConnectionVersion === connectionVersion && !!page?.capabilities.insert && !page.truncated;
+  function closeRecordTemplates(owner: RecordTemplateLease) {
+    if (templateOwner.current !== owner) return;
+    owner.invalidate();
+    templateOwner.current = undefined;
+    setTemplateDialog(undefined);
+  }
+  useLayoutEffect(() => {
+    // 选择、列布局或原页切换后立即撤权，避免迟到的弹窗回包重新接管。
+    const owner = templateOwner.current;
+    if (owner) closeRecordTemplates(owner);
+  }, [active, cellScope, row]);
+
+  /** 管理器绑定当前原页和草稿代次，同一表从目录或旧式别名打开时共用模板。 */
+  function openRecordTemplates() {
+    if (!canUseTemplates || !page?.pageToken || issued.current !== page.pageToken || !layoutScope.current.current() ||
+        templateOwner.current || duplicateOwner.current || batchOwner.current || inlineOwner.current || pasteOwner.current ||
+        recordInput.current || lease.current || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const originalDraft = draftRef.current;
+    const prior = viewKey ? originalDraft.find(entry => entry.rowKey === viewKey)?.change : undefined;
+    const { schema, name } = postgresRelationName(target.table);
+    const owner: RecordTemplateLease = new RecordTemplateLease(uid(), () => templateOwner.current === owner && issued.current === page.pageToken &&
+      layoutScope.current.key === layoutKey && layoutScope.current.current() && !lease.current && !recordInput.current &&
+      draftRef.current === originalDraft && !useWorkspace.getState().activeJobs[tab.id]);
+    closeCellMenu(cellMenuOwner.current, false);
+    templateOwner.current = owner;
+    setTemplateDialog({ lease: owner, target: { ...layoutTarget, table: postgresIdentifier(schema) + '.' + postgresIdentifier(name) },
+      page, originalDraft, columns: postgresTemplateColumns(page.columns),
+      candidate: row === null ? undefined : postgresTemplateCandidate(page, row, prior) });
+  }
+
+  /** 用原页账本一次性接收全部副本，撤销时恢复应用前的整份草稿。 */
+  function stageRecordTemplate(intent: TemplateDialog, content: RecordTemplateContent, count: number) {
+    if (intent.page !== page || !intent.lease.current()) throw Error(templateText.stale);
+    if (!stageChanges(postgresTemplateRows(content, intent.page.columns, count))) throw Error(templateText.stale);
+    setBatchUndo({ kind: 'template', before: intent.originalDraft, after: draftRef.current });
+    closeRecordTemplates(intent.lease);
+    setError('');
+    setMessage(templateText.staged(count));
+  }
+
   function recordViewCurrent(): boolean {
     return !!(recordView && page?.exportToken && issued.current === page.exportToken && !modalBlocked && !requiresRefresh &&
       layoutScope.current.current() && !lease.current && !inlineOwner.current && !pasteOwner.current &&
@@ -778,6 +829,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       })}>{text.query}</button>
       <button disabled={!writable || !page?.capabilities.insert} onClick={() => setForm({ row: null })}>{text.add}</button>
       <button disabled={!canDuplicate} onClick={openDuplicate}>{duplicateText.action}</button>
+      <button disabled={!canUseTemplates} onClick={openRecordTemplates}>{templateText.open}</button>
       <button disabled={!canPasteAppend} onClick={() => {
         if (!canPasteAppend || lease.current || inlineOwner.current || !layoutScope.current.current() ||
           document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
@@ -937,6 +989,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       offset={options.offset}
       onStage={inputs => stageBatch(batch, () => ({ changes: postgresBatchDuplicateChanges(batch.page, batch.plan, inputs) }))}
       onClose={() => closeBatch(batch)}/>}
+    {templateDialog && <RecordTemplatesDialog key={templateDialog.lease.id} lease={templateDialog.lease}
+      target={templateDialog.target} dialect="postgresql" columns={templateDialog.columns} candidate={templateDialog.candidate}
+      onStage={(content, count) => stageRecordTemplate(templateDialog, content, count)} onClose={() => closeRecordTemplates(templateDialog.lease)}/>}
     {(draft.length > 0 || batchUndo) && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong>{draft.length > 0 &&
         <button disabled={blocked} onClick={() => { setChanges([]); setMessage(''); }}>{text.discard}</button>}

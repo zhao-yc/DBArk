@@ -34,6 +34,31 @@ it('真实配置库保存重开，列表不包含原值，显式读取保留type
   store!.close(); store = await LocalStore.open(file, wasm, protector); const current = store.recordTemplates(target);
   expect(store.readRecordTemplate({ ...packet(current), id: saved.entries[0].id })).toEqual(content); expect(protector.decrypt).not.toHaveBeenCalled();
 });
+it('PostgreSQL 本机模板冷重开保留精确值，按架构和库隔离，原连接变更后不可读取', async () => {
+  const pg = { id: 'pg-template', name: '合成 PostgreSQL', group: '', color: '', dialect: 'postgresql' as const,
+    host: '127.0.0.1', port: 5432, user: 'local', database: '测试库' };
+  const relation = { connectionId: pg.id, database: '测试库', table: '"a.b"."带""引号"' };
+  const pgContent: RecordTemplateContent = { version: 1, dialect: 'postgresql', fields: [
+    { name: '大数', signature: '["numeric",true,false,false,false]', value: { kind: 'text', value: '9223372036854775807.0001' } },
+    { name: '字节', signature: '["bytea",true,false,false,true]', value: { kind: 'binary', value: 'AP8=' } },
+  ] };
+  store!.saveConnection(pg);
+  const initial = store!.recordTemplates(relation);
+  expect(initial.source.dialect).toBe('postgresql');
+  expect(() => store!.recordTemplates({ ...relation, table: '带"引号' })).toThrow(/完整/);
+  expect(() => store!.saveRecordTemplate({ ...packet(initial), name: '错误驱动', content })).toThrow(/驱动/);
+  const saved = store!.saveRecordTemplate({ ...packet(initial), name: '精确字段', content: pgContent });
+  const id = saved.entries[0].id;
+  store!.close(); store = await LocalStore.open(file, wasm, protector);
+  expect(store.readRecordTemplate({ ...packet(store.recordTemplates(relation)), id })).toEqual(pgContent);
+  expect(store.recordTemplates({ ...relation, table: '"另一个"."带""引号"' }).entries).toEqual([]);
+  expect(store.recordTemplates({ ...relation, database: '另一测试库' }).entries).toEqual([]);
+  store.saveConnection({ ...pg, port: 5433 });
+  const changed = store.recordTemplates(relation);
+  expect(changed.entries[0].sourceCurrent).toBe(false);
+  expect(() => store!.readRecordTemplate({ ...packet(changed), id })).toThrow(/来源/);
+  expect(protector.decrypt).not.toHaveBeenCalled();
+});
 it('覆盖、改名、删除均有持久CAS，旧回包及同名覆盖不能偷偷写盘', () => {
   const initial = store!.recordTemplates(target), saved = store!.saveRecordTemplate({ ...packet(initial), name: '一', content }), id = saved.entries[0].id, bytes = readFileSync(file);
   expect(() => store!.saveRecordTemplate({ ...packet(initial), name: '二', content })).toThrow(/变化/); expect(readFileSync(file)).toEqual(bytes);
