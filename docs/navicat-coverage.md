@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 独立关联页可编辑选中的现有记录，沿用普通表单、暂存、SQL 预览和事务确认。目标行、源记录及外键在提交前复核。D02、D04、D05 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 编辑关联记录](development/postgres-related-edit-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 父子记录弹窗可打开独立关联表页，继续按原外键范围读取。子记录页保留已应用的搜索，并支持分页及查看字段原值。D05 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 独立关联表页](development/postgres-related-table-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 表页可以从父记录查看入向外键关联的子记录，按约束搜索、翻页和展开原值。查询受列权限和行级策略约束。D05 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 查看子记录](development/postgres-browse-children-20261106.md)

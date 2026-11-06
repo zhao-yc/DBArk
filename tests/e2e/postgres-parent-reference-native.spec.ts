@@ -45,7 +45,7 @@ test('PostgreSQL 从当前记录双向查看复合外键关联', async ({}, info
       CREATE TABLE "回归"."引用父档案" (id int PRIMARY KEY, parent_code bigint, parent_label text,
         FOREIGN KEY (parent_code,parent_label) REFERENCES "回归"."父档案" (code,label));
       INSERT INTO "回归"."引用父档案" VALUES (1,9007199254740993,'甲'),(2,NULL,NULL);
-      CREATE TABLE "回归"."订单明细" (id int PRIMARY KEY, parent_code bigint, parent_label text, memo text, payload bytea,
+      CREATE TABLE "回归"."订单明细" (id int PRIMARY KEY, parent_code bigint, parent_label text, memo text CHECK (memo <> '拒绝'), payload bytea,
         CONSTRAINT "订单归属" FOREIGN KEY (parent_code,parent_label) REFERENCES "回归"."父档案" (code,label));
       INSERT INTO "回归"."订单明细" SELECT i, 9007199254740993, '甲',
         CASE WHEN i=43 THEN '字面_%' || repeat('长说明',150) ELSE '明细' || i END, decode('00ff','hex')
@@ -186,6 +186,35 @@ test('PostgreSQL 从当前记录双向查看复合外键关联', async ({}, info
     await expect(relatedTab.getByRole('grid')).not.toContainText('不属于甲');
     await page.screenshot({ path: info.outputPath('PostgreSQL独立关联表页.png') });
     await mark('独立子表页继承搜索，关闭源页后仍能在原外键范围准确翻页');
+
+    await relatedTab.getByRole('gridcell', { name: '明细42', exact: true }).click();
+    await relatedTab.getByRole('button', { name: tableText.edit, exact: true }).click();
+    await edit.getByLabel('memo ' + tableText.valueMode, { exact: true }).selectOption('text');
+    await edit.getByLabel('memo ' + tableText.value, { exact: true }).fill('拒绝');
+    await edit.getByRole('button', { name: tableText.stage, exact: true }).click();
+    await relatedTab.getByRole('button', { name: tableText.preview, exact: true }).click();
+    const preview = page.getByRole('dialog', { name: tableText.preview, exact: true });
+    const lastRows = async () => (await reader!.query('SELECT id, memo FROM "回归"."订单明细" WHERE id IN (41,42,44) ORDER BY id')).rows;
+    const originals42 = [{ id: 41, memo: '明细41' }, { id: 42, memo: '明细42' }, { id: 44, memo: '不属于甲' }];
+    await preview.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(relatedTab.getByText(tableText.retryAfterRollback, { exact: false })).toBeVisible();
+    await expect(relatedTab.getByLabel(tableText.draft, { exact: true })).toContainText('memo=拒绝');
+    expect(await lastRows()).toEqual(originals42);
+    await relatedTab.getByRole('button', { name: tableText.edit, exact: true }).click();
+    await expect(edit.getByLabel('memo ' + tableText.value, { exact: true })).toHaveValue('拒绝');
+    await mark('关联记录约束失败后确认回滚，原行保持且草稿可继续编辑');
+    await edit.getByLabel('memo ' + tableText.value, { exact: true }).fill('关联页已改42');
+    await edit.getByRole('button', { name: tableText.stage, exact: true }).click();
+    await relatedTab.getByRole('button', { name: tableText.preview, exact: true }).click();
+    await expect(preview.getByText('关联页已改42', { exact: true })).toBeVisible();
+    await expect(preview.getByText(/暂存时第 42 行.*id=42/)).toBeVisible();
+    await expect(preview.locator('pre')).toContainText('UPDATE ONLY "回归"."订单明细"');
+    expect(await lastRows()).toEqual(originals42);
+    await page.screenshot({ path: info.outputPath('PostgreSQL关联记录修改预览.png') });
+    await preview.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(relatedTab.getByRole('gridcell', { name: '关联页已改42', exact: true })).toBeVisible();
+    expect(await lastRows()).toEqual([{ id: 41, memo: '明细41' }, { id: 42, memo: '关联页已改42' }, { id: 44, memo: '不属于甲' }]);
+    await mark('关联页选中记录经表单、暂存和独立预览，确认后只更新目标行并保留筛选和页码');
 
     await page.locator('.object-row').getByRole('button', { name: '"回归"."订单明细"', exact: true }).click();
     await expect(tabButton('"回归"."订单明细"')).toBeVisible();

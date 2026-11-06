@@ -165,6 +165,8 @@ export interface PostgresRelatedRows { columns: ResultColumn[]; rows: DataRow[];
 const relatedTarget = target.extend({ tabId: relatedTabId });
 export const postgresRelatedTableSchema = z.discriminatedUnion('operation', [
   relatedTarget.extend({ operation: z.literal('page'), offset: referenceOffset, search: referenceSearch.optional() }).strict(),
+  relatedTarget.extend({ operation: z.literal('edit'), pageToken: token, row: z.number().int().min(0)
+    .max(postgresTableReferenceLimits.page - 1) }).strict(),
   relatedTarget.extend({ operation: z.literal('close') }).strict(),
 ]);
 export type PostgresRelatedTableInput = z.infer<typeof postgresRelatedTableSchema>;
@@ -174,6 +176,7 @@ export interface PostgresRelatedTablePage {
   constraint: string;
   offset: number;
   search: string;
+  editToken?: string;
 }
 const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy']);
 

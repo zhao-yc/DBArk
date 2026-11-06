@@ -85,5 +85,11 @@ describe('PostgreSQL 外键选值', () => {
     expect(postgresRelatedTableSchema.safeParse(request).success).toBe(true);
     expect(postgresRelatedTableSchema.safeParse({ ...request, tabId: '普通表页' }).success).toBe(false);
     expect(postgresRelatedTableSchema.safeParse({ ...request, sql: 'SELECT 1' }).success).toBe(false);
+    const edit = { ...input, tabId: relatedTabId, operation: 'edit', row: 39 };
+    const editRequest = { connectionId: edit.connectionId, database: edit.database, table: edit.table, tabId: edit.tabId,
+      operation: edit.operation, pageToken: edit.pageToken, row: edit.row };
+    expect(postgresRelatedTableSchema.safeParse(editRequest).success).toBe(true);
+    expect(postgresRelatedTableSchema.safeParse({ ...editRequest, row: 40 }).success).toBe(false);
+    expect(postgresRelatedTableSchema.safeParse({ ...editRequest, fields: [] }).success).toBe(false);
   });
 });

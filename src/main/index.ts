@@ -897,7 +897,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           await broker.request('postgres.table.related', { connectionId, database, connectionRevision, owner,
             ...result.opened, operation: 'close' }).catch(() => {});
         }
-        const pageToken = command === 'postgres.table.references' || command === 'postgres.table.related' || command === 'postgres.table.values' || command === 'postgres.table.statistics' ? undefined :
+        const pageToken = command === 'postgres.table.related' ? result?.pageToken :
+          command === 'postgres.table.references' || command === 'postgres.table.values' || command === 'postgres.table.statistics' ? undefined :
           command === 'postgres.table.page' ? result?.exportToken ?? result?.pageToken : input.pageToken;
         if (pageToken) {
           const { connectionId, database, table, tabId, connectionRevision } = request;

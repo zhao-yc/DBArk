@@ -1,6 +1,6 @@
 # PostgreSQL 独立关联表页
 
-在 PostgreSQL 父记录或子记录弹窗中点击「在关联表页打开」。父记录标签定位到一条引用记录。子记录标签沿原外键约束读取子表，继承已应用的搜索，可清空搜索并继续翻页。标签使用只读网格，可展开单条完整字段值。[Navicat 数据编辑器的外键导航](https://www.navicat.com/en/products/data-editor-for-rdbms?product=navicat-for-oracle#foreign-key-navigation)
+在 PostgreSQL 父记录或子记录弹窗中点击「在关联表页打开」。父记录标签定位到一条引用记录。子记录标签沿原外键约束读取子表，继承已应用的搜索，可清空搜索并继续翻页。标签可展开单条完整字段值，后续增加了[编辑选中的关联记录](postgres-related-edit-20261106.md)。[Navicat 数据编辑器的外键导航](https://www.navicat.com/en/products/data-editor-for-rdbms?product=navicat-for-oracle#foreign-key-navigation)
 
 关联页与普通表页可以同时打开。关闭源标签后，关联页仍可重新读取。每次刷新都会复核连接、原行、约束和读取权限。源行被外部改动、应用会话结束或关联页打开满 30 分钟后，需要从源记录重新打开。关联键值和搜索条件仅在会话内保存。子记录每页最多 40 条，宽表按当前账号可读字段和读取预算展示。
 

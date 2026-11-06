@@ -21,7 +21,7 @@ export const postgresReferencePickerZh = {
   openRelated: '在关联表页打开',
   relatedTitle: (table: string) => `关联 · ${table}`,
   relatedTab: 'PostgreSQL 关联表页',
-  relatedHint: '只读关联范围 · 独立标签',
+  relatedHint: '关联范围 · 独立标签',
   relatedExpired: '关联表页已失效，请从源记录重新打开。',
   relatedTabsFull: '标签已达到 100 个，请先关闭不需要的标签。',
   relatedRefresh: '刷新关联记录',

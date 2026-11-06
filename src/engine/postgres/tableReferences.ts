@@ -13,6 +13,7 @@ const catalogRecord = z.object({
     collation: z.string().nullable(), collationSchema: z.string().nullable() })).min(1).max(32),
 });
 export type PostgresReferenceSourceRow = { incoming: boolean; sql: string; name: string; oid: string; tableOid: string; tid: string; version: string };
+export type PostgresReferenceRowVersion = Pick<PostgresReferenceSourceRow, 'tableOid' | 'tid' | 'version'>;
 
 /** 与 PostgreSQL 的外键检查一样，按目录使用对应操作符、输入类型及父键排序规则。 */
 function foreignKeyComparison(pair: z.infer<typeof catalogRecord>['pairs'][number]): string {
@@ -29,7 +30,8 @@ function foreignKeyComparison(pair: z.infer<typeof catalogRecord>['pairs'][numbe
 
 /** 按约束序号绑定两边字段，仅返回当前账号可以读取整组引用键的约束。 */
 export async function readPostgresTableReferences(connection: PostgresConnection, source: string, columns: readonly PostgresTableColumn[],
-  lookup: PostgresTableReferenceInput['lookup'], sourceRow?: PostgresReferenceSourceRow, fullColumns = false): Promise<PostgresTableReferenceResult> {
+  lookup: PostgresTableReferenceInput['lookup'], sourceRow?: PostgresReferenceSourceRow, fullColumns = false,
+  captureVersions = false): Promise<PostgresTableReferenceResult & { versions?: PostgresReferenceRowVersion[] }> {
   const incoming = sourceRow?.incoming === true;
   // 从分区查看时沿声明式分区链查找外键，排除已标记分离的分区与约束副本。
   const ancestors = incoming ? `WITH RECURSIVE ancestors(oid) AS (
@@ -121,8 +123,11 @@ export async function readPostgresTableReferences(connection: PostgresConnection
     : targetColumns.map(expression => `CAST(${expression} AS text) COLLATE pg_catalog."C" NULLS FIRST`).join(', ');
   const incomingFilter = targetColumns.map(expression =>
     `pg_catalog.strpos(pg_catalog.lower(${expression}::text), pg_catalog.lower($8::text)) > 0`).join(' OR ');
+  // 仅供引擎建立原行快照，物理定位信息从不通过 IPC 返回。
+  const versionProjection = captureVersions ? `, pg_catalog.json_build_array(
+    ${targetAlias}.ctid::text, ${targetAlias}.xmin::text, ${targetAlias}.tableoid::oid::text)::text` : '';
   const result = sourceRow ? await connection.query(`
-    SELECT ${targetColumns.join(', ')}
+    SELECT ${targetColumns.join(', ')}${versionProjection}
     FROM ${sourceRow.sql} AS ${sourceAlias} JOIN ${selected.kind === 'r' ? 'ONLY ' : ''}${relation} AS ${targetAlias}
       ON ${selected.pairs.map(foreignKeyComparison).join(' AND ')}
     WHERE ${sourceAlias}.ctid = $1::tid AND ${sourceAlias}.xmin = $2::xid AND ${sourceAlias}.tableoid = $3::oid
@@ -141,8 +146,18 @@ export async function readPostgresTableReferences(connection: PostgresConnection
   if (identity.rows[0]?.c0 !== selected.target) throw Error('被引用关系已变化，请重新打开外键记录');
   if (sourceRow && !incoming && (result.truncated || result.rows.length > 1)) throw Error('引用记录无法唯一定位或超过读取预算');
   if (result.truncated) throw Error('记录超过显示预算，请缩小搜索范围');
-  return { choices, page: {
+  const rows = result.rows.slice(0, limits.page);
+  const marker = 'c' + metadata.length;
+  const versions = captureVersions ? rows.map(row => {
+    const value = row[marker];
+    const [tid, version, tableOid] = typeof value === 'string' ? JSON.parse(value) : [];
+    if (typeof tid !== 'string' || typeof version !== 'string' || typeof tableOid !== 'string')
+      throw Error('关联目标的原行身份回包不完整');
+    delete row[marker];
+    return { tid, version, tableOid };
+  }) : undefined;
+  return { choices, ...(versions ? { versions } : {}), page: {
     columns: metadata.map((column, index) => ({ ...column, key: 'c' + index })),
-    rows: result.rows.slice(0, limits.page), hasNext: result.rows.length > limits.page,
+    rows, hasNext: result.rows.length > limits.page,
   } };
 }

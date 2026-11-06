@@ -84,6 +84,8 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         .toEqual([{ c0: '9007199254740993', c1: '组1', c2: '说明1' }]);
       const readRelated = (opened: NonNullable<PostgresTableReferenceResult['opened']>, extra = {}): Promise<PostgresRelatedTablePage> =>
         engine.handle('postgres.table.related', { ...target, ...opened, profile, operation: 'page', offset: 0, ...extra });
+      const editRelated = (opened: NonNullable<PostgresTableReferenceResult['opened']>, page: PostgresRelatedTablePage, row = 0): Promise<PostgresTablePage> =>
+        engine.handle('postgres.table.related', { ...target, ...opened, profile, operation: 'edit', row, pageToken: page.editToken });
       const parentOpen = (await references({ lookup, parentRow: 0, relatedTabId: postgresRelatedTabPrefix + randomUUID() })).opened!;
       expect(parentOpen.table).toBe('"浏览"."父""表"');
       const relatedParent = await readRelated(parentOpen);
@@ -92,6 +94,16 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       await expect(read({ ...parentOpen })).rejects.toThrow('原外键范围');
       await expect(readRelated(parentOpen, { owner: randomUUID() })).rejects.toThrow('已失效');
       await expect(readRelated(parentOpen, { connectionRevision: 2 })).rejects.toThrow('已失效');
+      expect(relatedParent.editToken).toBeDefined();
+      await expect(editRelated(parentOpen, relatedParent, 1)).rejects.toThrow('已过期');
+      const parentEdit = await editRelated(parentOpen, relatedParent);
+      expect(parentEdit.capabilities).toEqual({ insert: false, update: true, delete: false });
+      await expect(preview(parentEdit, [{ kind: 'delete', row: 0 }], parentOpen)).rejects.toThrow('不支持');
+      await expect(engine.handle('postgres.table.values', { ...target, ...parentOpen, profile, pageToken: parentEdit.pageToken, column: 'c0', search: '' }))
+        .rejects.toThrow('只可用于原记录修改');
+      const parentChange = await preview(parentEdit, [{ kind: 'update', row: 0, fields: [field('c2', '父记录已改')] }], parentOpen);
+      expect(await apply(parentEdit, parentChange, parentOpen)).toMatchObject({ outcome: 'committed', affected: 1 });
+      expect((await readRelated(parentOpen)).page.rows).toEqual([{ c0: '9007199254740993', c1: '组1', c2: '父记录已改' }]);
       await engine.handle('postgres.table.related', { ...target, ...parentOpen, operation: 'close' });
       await expect(readRelated(parentOpen)).rejects.toThrow('已失效');
       const filtered = await references({ lookup: { ...lookup, search: '_%' } });
@@ -163,9 +175,10 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect((await parentBrowse(1, readOnlySource)(byParent)).page?.rows).toEqual([]);
       await client.query(`INSERT INTO ${partitioned.table} (id,n,raw)
         SELECT id, 1, decode('00ff','hex') FROM generate_series(4,45) id;
-        CREATE TABLE "浏览"."另一引用" (num bigint, raw bytea, note text, ${Array.from({ length: 18 }, (_, i) => '"说明' + i + '" text').join(', ')},
+        CREATE TABLE "浏览"."另一引用" (num bigint, raw bytea, note text CHECK (note <> '拒绝'), ${Array.from({ length: 18 }, (_, i) => '"说明' + i + '" text').join(', ')},
+          id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           FOREIGN KEY (num,raw) REFERENCES "浏览"."复合父键" (num,raw));
-        INSERT INTO "浏览"."另一引用" VALUES (1,decode('00ff','hex'),'字面_%');`);
+        INSERT INTO "浏览"."另一引用" (num,raw,note) VALUES (1,decode('00ff','hex'),'字面_%'),(2,decode('00ff','hex'),'另一条');`);
       const inboundRoot = { table: '"浏览"."复合父键"', tabId: randomUUID() };
       const inboundLeaf = { table: '"浏览"."复合父甲"', tabId: randomUUID() };
       const inboundRootPage = await read(inboundRoot), inboundLeafPage = await read(inboundLeaf);
@@ -203,6 +216,18 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(widePage.page.rows[0]?.c2).toBe('字面_%');
       const relatedTail = await readRelated(multiOpen, { offset: 40 });
       expect(relatedTail.page.rows).toEqual(rest.rows);
+      expect(relatedTail.editToken).toBeUndefined();
+      const childEdit = await editRelated(wideOpen, widePage);
+      const noteDraft = (note: string): PostgresTableChange => ({ kind: 'update', row: 0, fields: [field('c2', note)] });
+      const badChild = await preview(childEdit, [noteDraft('拒绝')], wideOpen);
+      expect(await apply(childEdit, badChild, wideOpen)).toMatchObject({ outcome: 'rolledBack', draftsRetained: true });
+      await expect(apply(childEdit, badChild, wideOpen)).rejects.toThrow('预览已失效');
+      const fixedChild = await preview(childEdit, [noteDraft('修正_%')], wideOpen);
+      expect(await apply(childEdit, fixedChild, wideOpen)).toMatchObject({ outcome: 'committed', affected: 1 });
+      const childRows = () => client.query('SELECT note FROM "浏览"."另一引用" ORDER BY id').then(result => result.rows);
+      expect(await childRows()).toEqual([{ note: '修正_%' }, { note: '另一条' }]);
+      const finalChildPage = await readRelated(wideOpen), finalChildEdit = await editRelated(wideOpen, finalChildPage);
+      const staleChild = await preview(finalChildEdit, [noteDraft('失效修改')], wideOpen);
       await expect(readRelated(multiOpen, { table: inboundLeaf.table })).rejects.toThrow('已失效');
       await client.query(`GRANT SELECT ON "浏览"."复合父甲" TO "${limitedUser}";
         REVOKE SELECT ON ${partitioned.table} FROM "${limitedUser}";
@@ -222,6 +247,8 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       await client.query('UPDATE "浏览"."复合父键" SET label = \'外部变动\' WHERE num = 1');
       await expect(children(inboundLeaf, inboundLeafPage, { lookup: inboundLookup })).rejects.toThrow('原记录已变化');
       await expect(readRelated(multiOpen)).rejects.toThrow('原记录已变化');
+      expect(await apply(finalChildEdit, staleChild, wideOpen)).toMatchObject({ outcome: 'notSent' });
+      expect(await childRows()).toEqual([{ note: '修正_%' }, { note: '另一条' }]);
       await client.query(`UPDATE ${partitioned.table} SET n=2 WHERE id=1`);
       await expect(parentBrowse(0)(byParent)).rejects.toThrow('原记录已变化');
 
