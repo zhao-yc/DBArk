@@ -5,7 +5,7 @@ import {
   postgresDataSyncLimits, postgresDataSyncZh as sync, type PostgresDataSyncPreview,
   type PostgresDataCompareEndpoint as Endpoint, type PostgresDataCompareKind, type PostgresDataCompareOutput, type PostgresDataCompareRow,
 } from '../../shared/postgresDataCompare';
-import { mysqlDataCompareSchema, mysqlDataCompareZh } from '../../shared/mysqlDataCompare';
+import { mysqlDataCompareSchema, mysqlDataCompareZh, mysqlDataSyncZh } from '../../shared/mysqlDataCompare';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteDataCompare.css';
@@ -87,7 +87,10 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
   const syncing = useRef(false);
   const task = useRef<{ id: string; cancelled: boolean } | undefined>(undefined);
   const detail = useRef<HTMLDivElement>(null);
+  const review = useRef<HTMLFieldSetElement>(null);
   useEffect(() => { if (selected) detail.current?.scrollIntoView({ block: 'nearest' }); }, [selected]);
+  // 用户可能从长列表底部打开预览，先让操作清单和准确目标进入可视区。
+  useEffect(() => { if (preview) review.current?.scrollIntoView({ block: 'center' }); }, [preview]);
   const clear = () => {
     setReport(undefined); setError(''); setKind('all'); setPage(0); setSelected(undefined);
     setMarked(new Set()); setPreview(undefined); setConfirmation(''); setSyncStatus('');
@@ -120,7 +123,7 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
     if (!report?.syncSnapshotId || !marked.size || task.current || syncing.current) return;
     const selected = report.differences.flatMap((row, index) => marked.has(row) ? [index] : []);
     syncing.current = true; setSyncBusy(true); setError(''); setConfirmation('');
-    try { setPreview(await invoke('postgres.compareData.syncPreview', { snapshotId: report.syncSnapshotId, selected })); }
+    try { setPreview(await invoke(postgres ? 'postgres.compareData.syncPreview' : 'mysql.compareData.syncPreview', { snapshotId: report.syncSnapshotId, selected })); }
     catch (reason) { setError(errorMessage(reason)); }
     finally { syncing.current = false; setSyncBusy(false); }
   }
@@ -128,7 +131,7 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
     if (!report?.syncSnapshotId || !preview || confirmation !== preview.confirmation || syncing.current) return;
     syncing.current = true; setSyncBusy(true);
     try {
-      const result = await invoke('postgres.compareData.syncApply', {
+      const result = await invoke(postgres ? 'postgres.compareData.syncApply' : 'mysql.compareData.syncApply', {
         snapshotId: report.syncSnapshotId, previewId: preview.previewId, taskId: uid(), confirmation,
       });
       clear();
@@ -157,9 +160,9 @@ export function ServerDataCompareDialog({ connections, onClose, dialect }: { con
       {report && <>
         <p>{report.sharedSnapshot ? text.shared : text.split}</p>
         <p role="status">{text.key}　{report.keyColumns.join('，')}　{[[text.sourceRows, report.sourceRows], [text.targetRows, report.targetRows], [text.equal, report.equal], ...kinds.map(item => [text[item], report.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
-        {report.syncSnapshotId ? <p>{sync.scope}　{sync.count(marked.size)}</p> :
-          postgres && report.differences.length > 0 && <p>{sync.unavailable}</p>}
-        {preview && <fieldset disabled={syncBusy}>
+        {report.syncSnapshotId ? <p>{postgres ? sync.scope : mysqlDataSyncZh.scope}　{sync.count(marked.size)}</p> :
+          report.differences.length > 0 && <p>{postgres ? sync.unavailable : mysqlDataSyncZh.unavailable}</p>}
+        {preview && <fieldset ref={review} disabled={syncBusy}>
           <legend>{sync.preview}</legend>
           <p>{connections.find(item => item.id === target.connectionId)?.name}　{preview.confirmation}</p>
           <p>{sync.insert} {preview.counts.insert} · {sync.update} {preview.counts.update} · {sync.delete} {preview.counts.delete}</p>

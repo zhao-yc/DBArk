@@ -1,4 +1,4 @@
-import { mysqlDataCompareZh } from '../shared/mysqlDataCompare';
+import { mysqlDataCompareZh, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
   type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
 import { buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync';
@@ -157,7 +157,7 @@ const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatem
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
-let postgresSyncTarget: { snapshotId: string; owner: MainInvocation; revision: number; expires: number; target: PostgresDataCompareInput['target'] } | undefined;
+let networkSyncTarget: { dialect: 'postgres' | 'mysql'; snapshotId: string; owner: MainInvocation; revision: number; expires: number; target: PostgresDataCompareInput['target'] } | undefined;
 let networkDataComparison: { owner: MainInvocation; id: string; cancelled: boolean; done: Promise<unknown> } | undefined;
 let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
 interface SqliteSynchronization {
@@ -861,7 +861,7 @@ const postgresImportChoosing = new WeakSet<object>();
 const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 
-function postgresCompareOwner(owner: MainInvocation): string {
+function networkCompareOwner(owner: MainInvocation): string {
   const document = owner.owner.document;
   let id = postgresTableOwners.get(document);
   if (!id) { id = randomUUID(); postgresTableOwners.set(document, id); }
@@ -887,16 +887,16 @@ async function compareNetworkData(command: 'mysql.compareData' | 'postgres.compa
   if (!accepts(sourceProfile) || !accepts(targetProfile)) throw Error('两侧须选择此比较工具支持的已保存连接');
   tasks.set(input.taskId, { id: input.taskId, kind: command, status: 'running', progress: 0,
     message: text.running, startedAt: new Date().toISOString() });
-  if (postgres) postgresSyncTarget = undefined;
+  networkSyncTarget = undefined;
   const done = broker.request(command, { ...input, sourceProfile, targetProfile,
-    ...(postgres ? { owner: postgresCompareOwner(owner!), connectionRevision: revision } : {}) });
+    owner: networkCompareOwner(owner!), connectionRevision: revision });
   const record = { owner: owner!, id: input.taskId, cancelled: false, done };
   networkDataComparison = record;
   try {
     const result = await done;
     if (record.cancelled) throw Error(text.cancelled);
     check();
-    if (postgres && result.syncSnapshotId) postgresSyncTarget = { snapshotId: result.syncSnapshotId, owner: owner!, revision,
+    if (result.syncSnapshotId) networkSyncTarget = { dialect: postgres ? 'postgres' : 'mysql', snapshotId: result.syncSnapshotId, owner: owner!, revision,
       expires: Date.now() + postgresDataSyncLimits.lifetimeMs, target: input.target };
     taskEvent({ taskId: input.taskId, status: 'completed', progress: 100, message: '表数据比较完成' });
     return result;
@@ -908,36 +908,38 @@ async function compareNetworkData(command: 'mysql.compareData' | 'postgres.compa
 }
 
 /** 只有比较结果的原文档可以预览或写入。写操作入队前固定目标和连接修订。 */
-function postgresSyncScope(snapshotId: string, owner: MainInvocation | undefined) {
+function networkSyncScope(dialect: 'postgres' | 'mysql', snapshotId: string, owner: MainInvocation | undefined) {
   columnsMain.assertCapturedOwner(owner);
-  const record = postgresSyncTarget;
-  if (!record || record.snapshotId !== snapshotId || record.revision !== store.connectionRevision() ||
+  const record = networkSyncTarget;
+  if (!record || record.dialect !== dialect || record.snapshotId !== snapshotId || record.revision !== store.connectionRevision() ||
       record.expires <= Date.now() || networkDataComparison || shuttingDown || !columnsMain.sharesDocumentOwner(record.owner, owner!))
-    throw Error(postgresDataSyncZh.stale);
+    throw Error(dialect === 'postgres' ? postgresDataSyncZh.stale : mysqlDataSyncZh.stale);
   connectionConfig.assertAvailable(record.target.connectionId);
-  return { target: record.target, owner: postgresCompareOwner(owner!), connectionRevision: record.revision };
+  return { target: record.target, owner: networkCompareOwner(owner!), connectionRevision: record.revision };
 }
 
-function previewPostgresSync(input: PostgresDataSyncPreviewInput, owner: MainInvocation | undefined) {
-  return broker.request('postgres.compareData.syncPreview', { ...input, ...postgresSyncScope(input.snapshotId, owner) });
+function previewNetworkSync(dialect: 'postgres' | 'mysql', input: PostgresDataSyncPreviewInput, owner: MainInvocation | undefined) {
+  return broker.request(dialect + '.compareData.syncPreview', { ...input, ...networkSyncScope(dialect, input.snapshotId, owner) });
 }
 
-async function applyPostgresSync(input: PostgresDataSyncApplyInput, owner: MainInvocation | undefined) {
-  const scope = postgresSyncScope(input.snapshotId, owner);
-  if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('PostgreSQL 任务编号已使用');
+async function applyNetworkSync(dialect: 'postgres' | 'mysql', input: PostgresDataSyncApplyInput, owner: MainInvocation | undefined) {
+  const scope = networkSyncScope(dialect, input.snapshotId, owner);
+  if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('同步任务编号已使用');
   const targetProfile = store.resolveConnection(scope.target.connectionId);
-  if (targetProfile.dialect !== 'postgresql') throw Error(postgresDataSyncZh.stale);
-  postgresSyncTarget = undefined;
-  tasks.set(input.taskId, { id: input.taskId, kind: 'postgres.compareData.syncApply', status: 'running', progress: 0,
+  if (dialect === 'postgres' ? targetProfile.dialect !== 'postgresql' : !['mysql', 'mariadb'].includes(targetProfile.dialect))
+    throw Error(dialect === 'postgres' ? postgresDataSyncZh.stale : mysqlDataSyncZh.stale);
+  networkSyncTarget = undefined;
+  const command = dialect + '.compareData.syncApply';
+  tasks.set(input.taskId, { id: input.taskId, kind: command, status: 'running', progress: 0,
     message: postgresDataSyncZh.working, startedAt: new Date().toISOString() });
   try {
-    const result = await broker.request('postgres.compareData.syncApply', { ...input, ...scope, targetProfile });
+    const result = await broker.request(command, { ...input, ...scope, targetProfile });
     const committed = result.outcome === 'committed';
     taskEvent({ taskId: input.taskId, status: committed ? 'completed' : 'failed', progress: committed ? 100 : 0,
-      message: committed ? 'PostgreSQL 差异同步已确认提交' : result.outcome === 'unknown' ? 'PostgreSQL 差异同步终态待核对' : 'PostgreSQL 差异同步未提交' });
+      message: committed ? '差异同步已确认提交' : result.outcome === 'unknown' ? '差异同步终态待核对' : '差异同步未提交' });
     return result;
   } catch (reason) {
-    taskEvent({ taskId: input.taskId, status: 'failed', progress: 0, message: 'PostgreSQL 同步未取得完整回执，请核对右侧数据库' });
+    taskEvent({ taskId: input.taskId, status: 'failed', progress: 0, message: '同步未取得完整回执，请核对右侧数据库' });
     throw reason;
   }
 }
@@ -2042,8 +2044,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
     case 'mysql.compareData':
     case 'postgres.compareData': return compareNetworkData(command, input, columns);
-    case 'postgres.compareData.syncPreview': return previewPostgresSync(input, columns);
-    case 'postgres.compareData.syncApply': return applyPostgresSync(input, columns);
+    case 'mysql.compareData.syncPreview': return previewNetworkSync('mysql', input, columns);
+    case 'mysql.compareData.syncApply': return applyNetworkSync('mysql', input, columns);
+    case 'postgres.compareData.syncPreview': return previewNetworkSync('postgres', input, columns);
+    case 'postgres.compareData.syncApply': return applyNetworkSync('postgres', input, columns);
     case 'mysql.compareData.cancel':
     case 'postgres.compareData.cancel': return cancelNetworkCompare(input.taskId, columns);
     case 'mysql.compareData.catalogue':

@@ -13,3 +13,9 @@ export const mysqlDataCompareZh = {
   cancelled: 'MySQL／MariaDB 数据比较已取消',
   timeout: 'MySQL／MariaDB 数据比较超时，请缩小筛选范围',
 } as const;
+
+export const mysqlDataSyncZh = {
+  scope: '同步只修改所选右侧行，使用本次比较时的左侧原值。显式插入标识值可能推进右侧自增计数。',
+  unavailable: '同步需要完整比较，并且右侧连接必须能够核实目标表和触发器目录。',
+  stale: 'MySQL／MariaDB 差异或同步预览已失效，请重新比较',
+} as const;

@@ -38,7 +38,11 @@ export async function configureTableFilteredDeleteForeignKeys(context: Structure
 }
 /** 每次完整目录校验同时确认实际约束生效，RESTRICT不能被连接默认值绕过。 */
 async function assertTableFilteredDeleteForeignKeys(context: StructureTaskContext): Promise<void> {
-  const rows = (await structureTaskQuery<Record<string, unknown>[]>(context, 'SELECT CAST(@@SESSION.foreign_key_checks AS CHAR) AS foreignKeyChecks')).rows;
+  // MariaDB 直接转字符得到 ON/OFF，先做数值转换，再沿同一严格校验确认实际为 1。
+  const sql = context.managed.status.dialect === 'mariadb'
+    ? 'SELECT CAST((@@SESSION.foreign_key_checks+0) AS CHAR) AS foreignKeyChecks'
+    : 'SELECT CAST(@@SESSION.foreign_key_checks AS CHAR) AS foreignKeyChecks';
+  const rows = (await structureTaskQuery<Record<string, unknown>[]>(context, sql)).rows;
   if (!Array.isArray(rows) || rows.length !== 1 || !rows[0] || Reflect.ownKeys(rows[0]).length !== 1 || rows[0].foreignKeyChecks !== '1') throw Error(text.dependencies);
 }
 /** 按精确父库表读取全部反向规则；有限上限只用于拒绝，绝不截断后继续删除。 */
@@ -59,9 +63,9 @@ export function validateTableFilteredDeleteDependencies(value: unknown, target: 
   });
 }
 /** 原读取函数继续核完整DDL及触发器；本用途额外核跨库可见性和前后相同的反向外键目录。 */
-export async function readTableFilteredDeleteTarget(context: StructureTaskContext, target: TableFilteredDeleteTarget) {
+export async function readTableFilteredDeleteTarget(context: StructureTaskContext, target: TableFilteredDeleteTarget, verifiedBase?: Awaited<ReturnType<typeof readBaseTarget>>) {
   await assertTableFilteredDeleteForeignKeys(context);
-  const base = await readBaseTarget(context, target);
+  const base = verifiedBase ?? await readBaseTarget(context, target);
   const grants = (await structureTaskQuery<Record<string, unknown>[]>(context, 'SHOW GRANTS')).rows;
   if (!Array.isArray(grants) || grants.length > 256 || Buffer.byteLength(JSON.stringify(grants)) > 512 * 1024) throw Error(text.dependencies);
   const grantTexts = grants.map(row => { const values = Object.values(row); if (values.length !== 1 || typeof values[0] !== 'string') throw Error(text.dependencies); return values[0]; });

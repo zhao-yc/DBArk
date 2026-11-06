@@ -309,6 +309,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.statistics': sqliteStatisticsInputSchema,
   'postgres.compareData.syncPreview': postgresDataSyncPreviewSchema,
   'postgres.compareData.syncApply': postgresDataSyncApplySchema,
+  'mysql.compareData.syncPreview': postgresDataSyncPreviewSchema,
+  'mysql.compareData.syncApply': postgresDataSyncApplySchema,
   'mysql.compareData': mysqlDataCompareSchema,
   'mysql.compareData.catalogue': postgresDataCompareCatalogueSchema,
   'mysql.compareData.cancel': z.object({ taskId: z.uuid() }).strict(),

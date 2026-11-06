@@ -20,6 +20,7 @@ import type { TableApplyEvidence } from '../shared/tableApplyReceipt';
 import type { TableApplyBinding } from '../shared/tableApplyReceipt';
 import { randomUUID } from 'node:crypto';
 import { SchemaCompareTasks } from './schemaCompareTasks';
+import type { MysqlPageParameters } from './mysqlDataSync';
 import { MysqlDataCompareTasks, mysqlCompareCatalogue } from './mysqlDataCompare';
 import { mysqlDataCompareSchema } from '../shared/mysqlDataCompare';
 import { readSchemaComparisonTarget } from './schemaCompare';
@@ -197,9 +198,9 @@ export class Engine {
     // 删除在独立用途和目标执行锁中运行；提交可能发送后只等待原ACK，不重放或KILL。
     this.tableFilteredDeletes = new TableFilteredDeleteTasks({ run: (target, taskId, action, progress, execution, finalize) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '删除全部筛选匹配行' : '快照全部筛选匹配行', true, () => ({ tableFilteredDelete: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined, finalize), stop: taskId => this.stopIndependentRead(taskId) });
     this.mysqlDataComparisons = new MysqlDataCompareTasks({
-      run: (connectionId, taskId, action) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({
+      run: (connectionId, taskId, action, write) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({
         managed, ...control, page: (sql, params) => this.readPage(managed, sql, 1, 10000, true, true, params),
-      }), undefined, '只读表数据比较', true, undefined, true),
+      }), undefined, write ? '按所选差异同步' : '只读表数据比较', true, undefined, true, undefined, write),
       cancel: taskId => this.cancelTask(taskId),
     }, emit);
     this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
@@ -301,8 +302,20 @@ export class Engine {
         return this.withConnectionUse(request.source.connectionId, () => this.withConnectionUse(request.target.connectionId, () => {
           this.copySourceProfile({ connectionId: request.source.connectionId, profile: input.sourceProfile });
           this.copySourceProfile({ connectionId: request.target.connectionId, profile: input.targetProfile });
-          return this.mysqlDataComparisons.compare(request);
+          const scope = typeof input.owner === 'string' && Number.isSafeInteger(input.connectionRevision)
+            ? { owner: input.owner, connectionRevision: input.connectionRevision } : undefined;
+          return this.mysqlDataComparisons.compare(request, scope);
         }));
+      }
+      case 'mysql.compareData.syncPreview':
+      case 'mysql.compareData.syncApply': {
+        const { owner, connectionRevision, target, targetProfile, ...request } = input;
+        if (typeof owner !== 'string' || !Number.isSafeInteger(connectionRevision)) throw Error('同步缺少可信文档及连接修订');
+        if (command === 'mysql.compareData.syncPreview') return this.mysqlDataComparisons.preview(request, { owner, connectionRevision });
+        if (!target || (targetProfile?.dialect !== 'mysql' && targetProfile?.dialect !== 'mariadb') || targetProfile.id !== target.connectionId)
+          throw Error('同步缺少可信右侧连接配置');
+        this.copySourceProfile({ connectionId: target.connectionId, profile: targetProfile });
+        return this.mysqlDataComparisons.apply(request, { owner, connectionRevision }, target);
       }
       case 'mysql.compareData.catalogue': {
         const profile = input.profile;
@@ -1046,7 +1059,7 @@ export class Engine {
   }
 
   /** 普通表页与关联表页共用流式预算和按真实字段名序列化的规则。 */
-  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false, waitTerminal = false, compareParams?: string[]) {
+  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false, waitTerminal = false, compareParams?: MysqlPageParameters) {
     if (managed.signal?.aborted) throw new Error('任务已取消');
     // 文本协议会截短 FLOAT 的有效位，二进制协议保留相邻 FLOAT/DOUBLE 候选的真实值。
     const query = binaryRows ? managed.connection.execute({ sql, rowsAsArray: true, ...(compareParams ? { values: compareParams } : {}) }) : managed.connection.query({ sql, rowsAsArray: true });

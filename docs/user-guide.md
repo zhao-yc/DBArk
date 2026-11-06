@@ -1,5 +1,7 @@
 # 使用指南
 
+对支持写入的 MySQL／MariaDB InnoDB 表做完整比较后，可以勾选差异，预览并确认同步到右侧。[MySQL／MariaDB 差异同步](development/mysql-data-sync-20261107.md)
+
 从「工具」选择「比较 MySQL／MariaDB 表数据」，可按主键核对同连接或跨连接的 InnoDB 表，查看分类型的差异及逐列原值。[MySQL／MariaDB 表数据比较](development/mysql-data-compare-20261107.md)
 
 对支持写入的 PostgreSQL 普通表做完整比较后，可以跨页勾选差异，预览并确认同步到右侧。[PostgreSQL 差异同步](development/postgres-data-sync-20261107.md)

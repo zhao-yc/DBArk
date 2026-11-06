@@ -341,6 +341,8 @@ export interface CommandMap {
   'sqlite.statistics': { input: import('./sqliteStatistics').SqliteStatisticsInput; output: import('./sqliteStatistics').SqliteStatisticsOutput };
   'postgres.compareData.syncPreview': { input: import('./postgresDataCompare').PostgresDataSyncPreviewInput; output: import('./postgresDataCompare').PostgresDataSyncPreview };
   'postgres.compareData.syncApply': { input: import('./postgresDataCompare').PostgresDataSyncApplyInput; output: import('./postgresTable').PostgresTableOutcome };
+  'mysql.compareData.syncPreview': { input: import('./postgresDataCompare').PostgresDataSyncPreviewInput; output: import('./postgresDataCompare').PostgresDataSyncPreview };
+  'mysql.compareData.syncApply': { input: import('./postgresDataCompare').PostgresDataSyncApplyInput; output: import('./postgresTable').PostgresTableOutcome };
   'mysql.compareData': { input: import('./postgresDataCompare').PostgresDataCompareInput; output: import('./postgresDataCompare').PostgresDataCompareOutput };
   'mysql.compareData.catalogue': { input: import('./postgresDataCompare').PostgresDataCompareCatalogueInput; output: string[] };
   'mysql.compareData.cancel': { input: { taskId: string }; output: void };

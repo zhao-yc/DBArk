@@ -1,24 +1,29 @@
 import { randomUUID } from 'node:crypto';
-import type { DataRow, TaskEvent } from '../shared/contracts';
-import { mysqlDataCompareSchema, mysqlDataCompareZh as text } from '../shared/mysqlDataCompare';
-import { postgresDataCompareLimits as limits, type PostgresDataCompareEndpoint as Endpoint, type PostgresDataCompareInput as Input } from '../shared/postgresDataCompare';
+import type { TaskEvent } from '../shared/contracts';
+import { mysqlDataCompareSchema, mysqlDataCompareZh as text, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
+import { postgresDataCompareLimits as limits, postgresDataSyncLimits as syncLimits,
+  postgresDataSyncPreviewSchema, postgresDataSyncApplySchema, type PostgresDataSyncPreview, type PostgresDataCompareEndpoint as Endpoint, type PostgresDataCompareInput as Input } from '../shared/postgresDataCompare';
 import { execute, type ManagedConnection } from './connection';
 import { identifier, qualified } from './sql';
 import { compareTableData, type TableDataSnapshot } from './tableDataDifferences';
+import { applyMysqlDataSync, mysqlSyncSupported, readMysqlSyncTarget, type MysqlSyncContext, type MysqlSyncEvidence, type MysqlSyncRow, type MysqlSyncTarget } from './mysqlDataSync';
 
 interface QueryContext {
   managed: ManagedConnection;
   checkCancelled(): void;
   commandStarted(): () => void;
 }
-interface Context extends QueryContext {
-  page(sql: string, params: string[]): Promise<{ rows: DataRow[]; columns: { name: string }[]; hasMore: boolean }>;
+type Context = MysqlSyncContext;
+type Scope = { owner: string; connectionRevision: number };
+interface SyncRecord extends Scope {
+  id: string; expires: number; source: Endpoint; target: Endpoint; evidence: MysqlSyncEvidence;
+  preview?: { report: PostgresDataSyncPreview; rows: MysqlSyncRow[] };
 }
 interface Work {
   input: Input; childId?: string; stop?: Promise<void>; cancelled: boolean; timedOut: boolean; done: Promise<void>;
 }
 interface Host {
-  run<T>(connectionId: string, taskId: string, action: (context: Context) => Promise<T>): Promise<T>;
+  run<T>(connectionId: string, taskId: string, action: (context: Context) => Promise<T>, write?: { target: Endpoint; commitProtected(): boolean }): Promise<T>;
   cancel(taskId: string): Promise<void>;
 }
 const scope = ' WHERE BINARY TABLE_SCHEMA = BINARY ? AND BINARY TABLE_NAME = BINARY ?';
@@ -97,16 +102,19 @@ async function readTable(context: Context, target: Endpoint, filter: Input['filt
 
 /** 每个配置使用独占读连接。同一配置的两库可共享一个 InnoDB 读视图。 */
 export class MysqlDataCompareTasks {
+  private sync?: SyncRecord;
   private readonly active = new Map<string, Work>();
   constructor(private readonly host: Host, private readonly emit: (event: TaskEvent) => void) {}
   has(id: string) { return this.active.has(id); }
 
-  async compare(raw: Input) {
+  async compare(raw: Input, scope?: Scope) {
     const input = mysqlDataCompareSchema.parse(raw);
     if (this.active.has(input.taskId) || this.active.size >= 4) throw Error('MySQL／MariaDB 比较任务繁忙或编号重复');
     let finish!: () => void;
     const work: Work = { input, cancelled: false, timedOut: false, done: new Promise<void>(resolve => { finish = resolve; }) };
+    this.sync = undefined;
     this.active.set(input.taskId, work);
+    let metadata: MysqlSyncTarget | undefined;
     const check = () => { if (work.cancelled) throw Error(work.timedOut ? text.timeout : text.cancelled); };
     const read = async (targets: Endpoint[]) => {
       check();
@@ -117,7 +125,18 @@ export class MysqlDataCompareTasks {
           await query(context, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
           await query(context, 'START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
           const snapshots: TableDataSnapshot[] = [];
-          for (const target of targets) { check(); snapshots.push(await readTable(context, target, input.filter)); }
+          for (const target of targets) {
+            check();
+            const snapshot = await readTable(context, target, input.filter);
+            snapshots.push(snapshot);
+            if (scope && target === input.target && !input.filter?.text) {
+              // 无法证明写入权限或结构时仍保留只读比较。取消不得从这个分支降级成成功。
+              try {
+                const candidate = await readMysqlSyncTarget(context, target);
+                if (mysqlSyncSupported(candidate.source, snapshot.columns.map(column => column.name), snapshot.keys)) metadata = candidate;
+              } catch { context.checkCancelled(); }
+            }
+          }
           await query(context, 'COMMIT');
           return snapshots;
         });
@@ -134,12 +153,59 @@ export class MysqlDataCompareTasks {
       const [left, right] = shared ? await read([input.source, input.target]) :
         [(await read([input.source]))[0], (await read([input.target]))[0]];
       check();
-      return compareTableData(left, right, shared, 'MySQL／MariaDB');
+      const rows: MysqlSyncRow[] = [];
+      const result = compareTableData(left, right, shared, 'MySQL／MariaDB',
+        metadata ? (after, before) => { rows.push({ before, after }); } : undefined);
+      if (!scope || !metadata || !rows.length) return result;
+      const id = randomUUID();
+      this.sync = { ...scope, id, expires: Date.now() + syncLimits.lifetimeMs, source: input.source, target: input.target,
+        evidence: { metadata, columns: right.columns.map(column => column.name), rows } };
+      setTimeout(() => { if (this.sync?.id === id) this.sync = undefined; }, syncLimits.lifetimeMs).unref();
+      return { ...result, syncSnapshotId: id };
     } catch (reason) {
       await work.stop;
       check();
       throw reason;
     } finally { clearTimeout(timer); this.active.delete(input.taskId); finish(); }
+  }
+
+  private requireSync(scope: Scope, id: string) {
+    const record = this.sync;
+    if (!record || record.id !== id || record.owner !== scope.owner || record.connectionRevision !== scope.connectionRevision ||
+        record.expires <= Date.now() || this.active.size) throw Error(mysqlDataSyncZh.stale);
+    return record;
+  }
+
+  preview(raw: unknown, scope: Scope): PostgresDataSyncPreview {
+    const input = postgresDataSyncPreviewSchema.parse(raw), record = this.requireSync(scope, input.snapshotId);
+    record.preview = undefined;
+    const rows = input.selected.map(index => record.evidence.rows[index]);
+    if (rows.some(row => !row) || Buffer.byteLength(JSON.stringify(rows)) > syncLimits.bytes)
+      throw Error('同步选择无效或超过 1 MiB，请减少所选行');
+    const counts = { insert: 0, update: 0, delete: 0 };
+    for (const row of rows) counts[!row.before ? 'insert' : !row.after ? 'delete' : 'update']++;
+    const report = { previewId: randomUUID(), confirmation: qualified(record.target.database, record.target.table), counts };
+    record.preview = { report, rows };
+    return report;
+  }
+
+  /** 只领取一次原预览。任务登记保护提交边界，连接断开等待实际事务终态。 */
+  async apply(raw: unknown, scope: Scope, target: Endpoint) {
+    const input = postgresDataSyncApplySchema.parse(raw), record = this.requireSync(scope, input.snapshotId);
+    const preview = record.preview;
+    if (!preview || preview.report.previewId !== input.previewId || preview.report.confirmation !== input.confirmation ||
+        JSON.stringify(record.target) !== JSON.stringify(target)) throw Error(mysqlDataSyncZh.stale);
+    this.sync = undefined;
+    let committing = false, receipt: Awaited<ReturnType<typeof applyMysqlDataSync>> | undefined;
+    try {
+      await this.host.run(target.connectionId, input.taskId, async context => {
+        receipt = await applyMysqlDataSync(context, target, record.evidence, preview.rows, () => { committing = true; });
+      }, { target, commitProtected: () => committing });
+      return receipt!;
+    } catch (reason) {
+      if (receipt) return { ...receipt, message: receipt.message + '，连接收尾异常，请核对资源' };
+      throw reason;
+    }
   }
 
   async cancel(id: string) {
@@ -152,6 +218,7 @@ export class MysqlDataCompareTasks {
   }
 
   async close(connectionId?: string) {
+    if (!connectionId || this.sync && [this.sync.source.connectionId, this.sync.target.connectionId].includes(connectionId)) this.sync = undefined;
     const results = await Promise.allSettled([...this.active].filter(([, work]) => !connectionId ||
       [work.input.source.connectionId, work.input.target.connectionId].includes(connectionId)).map(([id]) => this.cancel(id)));
     const failed = results.find(result => result.status === 'rejected');
