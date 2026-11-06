@@ -11,9 +11,9 @@ interface Snapshot extends TableCopyDataRead { id: string; target: TableCopyData
 interface Preview { snapshot: Snapshot; destination: TableCopyDataTarget; destinationStamp?: string; mode: typeof tableCopyDataMode; newName: string; createSql: string; insertSql: string; sql: string; bytes: number; expires: number; }
 const progress = (): TableCopyDataProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, dataSubmitted: false, insertCompleted: false, commitSubmitted: false, dataCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 const warnings = [
-  '仅准确MySQL 8.4.11同一连接的普通InnoDB表；不复制生成列、外键、触发器、视图依赖、授权或跨连接数据。',
+  '仅开放已核 MySQL 8.4.11 和 MariaDB 11.4.13 同一连接的普通 InnoDB 表；不复制生成列、外键、触发器、视图依赖、授权或跨连接数据。',
   'CREATE LIKE与数据事务分开，整体不是原子操作。失败或取消可能留下空表；提交结果未知可能已有数据，不自动重放、覆盖或补DROP。',
-  '预览只读元数据，不读行、不固定数据快照。执行使用READ COMMITTED，INSERT SELECT读取该语句执行时可见的已提交数据；源读不加行锁，目标行仍加锁并消耗空间、日志和IO。',
+  '预览只读元数据，不读行、不固定数据快照。执行使用READ COMMITTED，INSERT SELECT读取该语句执行时可见的已提交数据；目标行锁、空间、日志和IO可能影响服务器。',
   '请在维护窗口暂停两端写入及并行DDL；建表与取得事务元数据锁之间存在外部窗口，身份重核不能消除该窗口。',
   '所有普通列含自增值由服务器直接传递，NO_AUTO_VALUE_ON_ZERO保留0；不继承源表下一自增计数，目标下一值由服务器按复制数据决定。未提供逐行校验或跨端验收结论。',
 ];
@@ -34,7 +34,7 @@ export class TableCopyDataTasks {
     const result = await this.host.run(input.connectionId, input.taskId, async context => {
       state.phase = 'reading'; context.report(); const target = { connectionId: input.connectionId, database: input.database, table: input.table }, read = await readTableCopyData(context, target);
       snapshot = { ...read, id: randomUUID(), target, revision: version, expires: this.now() + structureCacheLimits.ttlMs }; this.cache.capacity(snapshot.bytes, 'snapshot');
-      return { mode: tableCopyDataMode, target, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: tableCommentHash(read.source), sourceDdl: read.source, tableId: read.tableId, serverVersion: read.serverVersion, writable: !read.reasons.length && !!read.tableId && !!read.serverUuid, reasons: read.reasons, warnings: [...warnings] };
+      return { mode: tableCopyDataMode, target, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: tableCommentHash(read.source), sourceDdl: read.source, tableId: read.tableId, serverVersion: read.serverVersion, writable: !read.reasons.length && !!read.tableId && !!read.serverInstance, reasons: read.reasons, warnings: [...warnings] };
     }, { label: '读取结构及数据复制来源', purpose: 'tableCopyData', progress: state });
     this.snapshots.set(snapshot.id, snapshot); return result;
   }

@@ -15,7 +15,8 @@ export function planTableCopyData(read: TableCopyDataRead, target: TableCopyData
 /** 保留空表用途全部身份与依赖守卫，再收窄准确版本和数据用途权限；角色/部分撤销不推测。 */
 export async function readTableCopyData(context: StructureTaskContext, target: TableCopyDataTarget): Promise<TableCopyDataRead> {
   const read = await readTableCopyStructure(context, target), reasons = [...read.reasons]; let dataCapability = '';
-  if (context.managed.status.dialect !== 'mysql' || read.serverVersion !== '8.4.11') reasons.push('数据复制首片仅支持准确MySQL 8.4.11普通InnoDB表');
+  if (read.serverProfileId !== 'mariadb-11.4.13-like-v1' && (context.managed.status.dialect !== 'mysql' || read.serverVersion !== '8.4.11'))
+    reasons.push('数据复制仅支持已核 MySQL 8.4.11 和 MariaDB 11.4.13 普通 InnoDB 表');
   if (read.generatedPlan?.columns.length) reasons.push('生成列的数据复制语义尚未验收，当前只读');
   try {
     const facts = (await structureTaskQuery<Record<string, unknown>[]>(context, 'SELECT @@SESSION.transaction_isolation AS isolation, @@SESSION.binlog_format AS binlogFormat, @@GLOBAL.log_bin AS logBin')).rows;

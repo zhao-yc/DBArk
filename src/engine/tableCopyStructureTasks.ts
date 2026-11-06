@@ -28,7 +28,7 @@ export class TableCopyStructureTasks {
     const result = await this.host.run(input.connectionId, input.taskId, async context => {
       state.phase = 'reading'; context.report(); const target = { connectionId: input.connectionId, database: input.database, table: input.table }, read = await readTableCopyStructure(context, target);
       snapshot = { ...read, id: randomUUID(), target, revision: version, expires: this.now() + structureCacheLimits.ttlMs }; this.cache.capacity(snapshot.bytes, 'snapshot');
-      return { target, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: tableCommentHash(read.source), sourceDdl: read.source, tableId: read.tableId, serverVersion: read.serverVersion, writable: !read.reasons.length && !!read.tableId && !!read.serverUuid, reasons: read.reasons, warnings: [...warnings], ...(read.autoIncrementPlan ? { autoIncrement: structuredClone(read.autoIncrementPlan) } : {}), ...(read.generatedPlan ? { generatedColumns: structuredClone(read.generatedPlan.columns) } : {}) };
+      return { target, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: tableCommentHash(read.source), sourceDdl: read.source, tableId: read.tableId, serverVersion: read.serverVersion, writable: !read.reasons.length && !!read.tableId && !!read.serverInstance, reasons: read.reasons, warnings: [...warnings], ...(read.autoIncrementPlan ? { autoIncrement: structuredClone(read.autoIncrementPlan) } : {}), ...(read.generatedPlan ? { generatedColumns: structuredClone(read.generatedPlan.columns) } : {}) };
     }, { label: '读取复制表结构来源', purpose: 'tableCopyStructure', progress: state });
     this.snapshots.set(snapshot.id, snapshot); return result;
   }

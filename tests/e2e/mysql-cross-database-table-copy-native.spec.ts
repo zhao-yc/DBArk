@@ -23,7 +23,8 @@ test('在实际窗口选择另一个库，确认空表及同名数据副本并�
   const { page, application } = runtime.ownedDesktopResources(info), directory = runtime.dataDir, observations: string[] = [];
   const mark = async (step: string) => { observations.push(step); await writeFile(info.outputPath('原生验收.json'), JSON.stringify({ platform: process.platform, directory, observations }, null, 2)); };
   const own = () => { if (runtime.ownedDesktopResources(info).page !== page || info.retry || info.config.workers !== 1) throw Error('本例原生窗口归属已变化'); };
-  const source = user + '_src', target = user + '_dst', title = 'MySQL 跨库整表验收';
+  const maria = process.env.DBARK_COPY_DIALECT === 'mariadb', vendor = maria ? 'MariaDB' : 'MySQL';
+  const source = user + '_src', target = user + '_dst', title = vendor + ' 跨库整表验收';
   const observer = await mysql.createConnection({ host: '127.0.0.1', port, user, password });
   const exists = async (name: string) => (await observer.query<RowDataPacket[]>('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [target, name]))[0].length;
   const rows = async (database: string) => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id,CAST(amount AS CHAR) AS amount,HEX(payload) AS payload,note FROM ${database}.orders ORDER BY orders.id`))[0];
@@ -31,6 +32,7 @@ test('在实际窗口选择另一个库，确认空表及同名数据副本并�
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, own)).click();
     const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     await form.getByLabel(zh.connections.text006, { exact: true }).fill(title);
+    if (maria) await form.getByRole('combobox').selectOption('mariadb');
     await form.getByLabel(zh.connections.text010, { exact: true }).fill(String(port));
     await form.getByLabel(zh.common.user, { exact: true }).fill(user);
     await form.getByLabel(zh.connections.text011, { exact: true }).fill(password);
@@ -69,14 +71,14 @@ test('在实际窗口选择另一个库，确认空表及同名数据副本并�
     await copy.getByRole('button', { name: data.preview, exact: true }).click();
     await expect(copy).toContainText(target + '.orders');
     expect(await exists('orders')).toBe(0);
-    await page.screenshot({ path: info.outputPath('MySQL跨库整表复制预览.png') });
+    await page.screenshot({ path: info.outputPath(vendor + '跨库整表复制预览.png') });
     for (const label of [data.ackImplicit, data.ackScope, data.ackWindow, data.ackSnapshot, data.ackRetain]) await copy.getByRole('checkbox', { name: label, exact: true }).check();
     const submit = copy.getByRole('button', { name: data.apply, exact: true });
     await copy.getByLabel(data.confirmation, { exact: true }).fill(source + '.orders'); await expect(submit).toBeDisabled();
     await copy.getByLabel(data.confirmation, { exact: true }).fill(target + '.orders');
     await submit.click(); await expect(copy.locator('.table-copy-data-outcome')).toHaveText(data.succeeded, { timeout: 30000 });
     const copied = await rows(target); expect(copied).toEqual(await rows(source)); expect(copied).toHaveLength(3);
-    await writeFile(info.outputPath('MySQL跨库整表独立读回.json'), JSON.stringify(copied, null, 2));
+    await writeFile(info.outputPath(vendor + '跨库整表独立读回.json'), JSON.stringify(copied, null, 2));
     await copy.getByRole('button', { name: data.close, exact: true }).click(); await expect(copy).toBeHidden();
     await expect(node.locator('.object-row').getByText('orders', { exact: true })).toHaveCount(2);
     expect(runtime.pageErrors).toEqual([]);

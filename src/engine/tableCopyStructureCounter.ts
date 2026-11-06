@@ -8,7 +8,7 @@ import type { TableCopyStructureCounterPlan } from '../shared/tableCopyStructure
 import type { TableAutoIncrementPolicy } from '../shared/tableAutoIncrement';
 import type { TableCommentRead } from './tableCommentRead';
 import { readTableRename } from './tableRenameRead';
-import { readTableAutoIncrementPolicy } from './tableAutoIncrementCapabilities';
+import { readTableAutoIncrementNativeCounter, readTableAutoIncrementPolicy } from './tableAutoIncrementCapabilities';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { tableCopyStructureServerProfile } from '../shared/tableCopyStructureProfiles';
 
@@ -59,14 +59,18 @@ export function tableCopyStructureObservedCounter(value: unknown, definition: Ta
   if (definition.declaredValue !== undefined && definition.declaredValue !== observed) throw Error('原定义与准确目录计数不同，可能有并发写入；未发送DDL');
   return observed;
 }
-/** 已核MySQL8补丁版本的独立结构连接重读准确计数，不借自增修改任务要求ALTER，也不读取业务MAX。 */
+/** MySQL 绕过统计缓存，MariaDB 用原生状态前后夹读。两者均不借用 ALTER 或业务 MAX。 */
 export async function readTableCopyStructureCounter(context: StructureTaskContext, target: TableCopyStructureTarget, initial: TableCommentRead): Promise<{ read: TableCommentRead; plan: TableCopyStructureCounterPlan; policy: TableAutoIncrementPolicy }> {
   // 第二道版本门在任何SQL前拒绝未证明版本，调用方误放宽版本也不能外推计数规则。
   const profile = tableCopyStructureServerProfile(context.managed.status.dialect, context.managed.status.version);
   if (!profile.canWrite || profile.expectedNewCounter === null) throw Error(profile.readonlyReason);
-  await structureTaskQuery(context, 'SET SESSION information_schema_stats_expiry = 0');
-  const expiry = (await structureTaskQuery<{ expiry: string }[]>(context, 'SELECT CAST(@@SESSION.information_schema_stats_expiry AS CHAR) AS expiry')).rows;
-  if (expiry.length !== 1 || expiry[0].expiry !== '0') throw Error('无法证明自增目录已绕过统计缓存，当前只读');
+  let nativeBefore: string | undefined;
+  if (profile.id === 'mariadb-11.4.13-like-v1') nativeBefore = await readTableAutoIncrementNativeCounter(context, target);
+  else {
+    await structureTaskQuery(context, 'SET SESSION information_schema_stats_expiry = 0');
+    const expiry = (await structureTaskQuery<{ expiry: string }[]>(context, 'SELECT CAST(@@SESSION.information_schema_stats_expiry AS CHAR) AS expiry')).rows;
+    if (expiry.length !== 1 || expiry[0].expiry !== '0') throw Error('无法证明自增目录已绕过统计缓存，当前只读');
+  }
   const fresh = await readTableRename(context, target, undefined, 'verify');
   if (initial.identity !== fresh.identity || initial.tableId !== fresh.tableId) throw Error('准确计数重读期间源物理身份变化，当前只读');
   // 首次规范化前的模式仍须保留，不能由第二次读取掩盖隐藏定义的原模式。
@@ -80,6 +84,7 @@ export async function readTableCopyStructureCounter(context: StructureTaskContex
   const actual = auto[0], canonical = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
   if (columns.length !== document.columns.length || columns.some((column, index) => column.name !== document.columns[index].name) || auto.length !== 1 || actual.name !== definition.column.name || typeof actual.columnType !== 'string' || typeof actual.dataType !== 'string' || actual.columnType.split(/[ (]/)[0].toLowerCase() !== actual.dataType.toLowerCase() || canonical(actual.columnType) !== canonical(definition.column.type) || tableAutoIncrementMaximum(actual.columnType) !== definition.column.maximum) throw Error('完整目录与自增列属性或类型不一致，当前只读');
   const policy = await readTableAutoIncrementPolicy(context);
-  // Root对8.4.11与8.0.46分别独占实测，Linux/默认步长偏移下新计数均为1；不外推其它版本或策略。
+  if (nativeBefore !== undefined && (observed !== nativeBefore || await readTableAutoIncrementNativeCounter(context, target) !== nativeBefore))
+    throw Error('MariaDB 原生表状态和完整目录的自增值不一致，请暂停写入后重新预览');
   return { read, plan: { column: definition.column, sourceValue: observed, expectedNewValue: profile.expectedNewCounter }, policy };
 }

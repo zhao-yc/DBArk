@@ -16,6 +16,12 @@ describe('复制结构准确版本合同：8.0.46独占证据激活阶段', () =
     expect(tableCopyStructureServerProfile('mariadb', '8.0.46').canWrite).toBe(false);
     expect(() => assertTableCopyStructureUnchanged({ serverProfileId: 'mysql-8.4.11-like-v1' } as TableCopyStructureRead, { serverProfileId: 'mysql-8.0.46-like-v1' } as TableCopyStructureRead)).toThrow('合同已变化');
   });
+  it('MariaDB 仅识别已验的 11.4.13，不把相邻补丁或 MySQL 的版本视为本方言能力', () => {
+    expect(tableCopyStructureServerProfile('mariadb', '11.4.13-MariaDB-ubu2404')).toMatchObject({ id: 'mariadb-11.4.13-like-v1', canWrite: true, expectedNewCounter: '1' });
+    expect(tableCopyStructureServerProfile('mariadb', '11.4.12-MariaDB').canWrite).toBe(false);
+    expect(tableCopyStructureServerProfile('mariadb', '10.11.19-MariaDB').canWrite).toBe(false);
+    expect(tableCopyStructureServerProfile('mysql', '11.4.13-MariaDB').canWrite).toBe(false);
+  });
   it.each(['8.0.45', '8.0.47', '5.7.44'])('计数读取内层门在%s的任何SQL前拒绝，不构造预期1', async version => {
     const query = vi.fn(), started = vi.fn();
     const context = { managed: { status: { dialect: 'mysql', version }, connection: { query } }, checkCancelled: vi.fn(), report: vi.fn(), commandStarted: started } as unknown as StructureTaskContext;
