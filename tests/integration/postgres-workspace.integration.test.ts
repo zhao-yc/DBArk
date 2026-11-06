@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
+import type { PostgresTablePage } from '../../src/shared/postgresTable';
+import type { QueryParameter } from '../../src/shared/queryParameters';
+import { buildPostgresTableQueryTemplate } from '../../src/renderer/postgresTableQueryTemplate';
 
 const enabled = process.env.DBARK_POSTGRES_WORKSPACE_TEST === '1';
 const database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
@@ -52,6 +55,37 @@ describe.skipIf(!enabled)('PostgreSQL真实连接、查询、事务及取消', (
     expect(parameterized.failure).toBeUndefined();
     expect(parameterized.results[0].rows[0]).toEqual({ c0: "x'; DROP TABLE t; --", c1: { type: 'binary', base64: 'AP8=' },
       c2: { type: 'binary', base64: 'AP8=' }, c3: '$3' });
+    const templateTable = '"回归"."SQL模板""父"';
+    const templateChild = '"回归"."SQL模板子"';
+    expect((await execute(`
+      CREATE TABLE ${templateTable} (a bigint, b text, note text, PRIMARY KEY (b,a));
+      CREATE TABLE ${templateChild} () INHERITS (${templateTable});
+      INSERT INTO ${templateTable} VALUES (9007199254740993,'键','父原值');
+      INSERT INTO ${templateChild} VALUES (9007199254740993,'键','子原值');
+    `)).failure).toBeUndefined();
+    const templatePage: PostgresTablePage = await call('postgres.table.page', { connectionId: id, profile, database,
+      table: templateTable, tabId: randomUUID(), owner: randomUUID(), connectionRevision: 1, offset: 0, limit: 10 });
+    const templateSource = { table: templateTable, page: templatePage };
+    const selectTemplate = buildPostgresTableQueryTemplate(templateSource, 'SELECT', 10, { columns: ['note'] }).sql;
+    expect((await execute(selectTemplate)).results[0].rows).toEqual([{ c0: '父原值' }]);
+    const parameter = (index: number, type: QueryParameter['type'], value: string): QueryParameter => ({ name: 'p' + index, type, value });
+    const useTemplate = async (sql: string, parameters: QueryParameter[]) => {
+      expect(await call('query.parameterNames', { sessionId, sql })).toMatchObject({ names: parameters.map(item => item.name) });
+      const outcome: QueryOutcome = await call('query.executeParameterized', { sessionId, taskId: randomUUID(), sql, maxRows: 10, parameters });
+      expect(outcome.failure).toBeUndefined();
+    };
+    const insertTemplate = buildPostgresTableQueryTemplate(templateSource, 'INSERT', 10, { columns: ['a', 'b', 'note'] }).sql;
+    await useTemplate(insertTemplate, [parameter(1, 'integer', '9007199254740994'), parameter(2, 'text', '另键'), parameter(3, 'text', '新增值')]);
+    const updateTemplate = buildPostgresTableQueryTemplate(templateSource, 'UPDATE', 10, { columns: ['note'] }).sql;
+    await useTemplate(updateTemplate, [parameter(1, 'text', "更新'; --"), parameter(2, 'integer', '9007199254740993'), parameter(3, 'text', '键')]);
+    expect((await execute(`SELECT a::text, note FROM ${templateTable} ORDER BY note`)).results[0].rows).toEqual(expect.arrayContaining([
+      { c0: '9007199254740993', c1: "更新'; --" }, { c0: '9007199254740993', c1: '子原值' }, { c0: '9007199254740994', c1: '新增值' },
+    ]));
+    const deleteTemplate = buildPostgresTableQueryTemplate(templateSource, 'DELETE', 10).sql;
+    await useTemplate(deleteTemplate, [parameter(1, 'integer', '9007199254740993'), parameter(2, 'text', '键')]);
+    expect((await execute(`SELECT a::text, note FROM ${templateTable} ORDER BY a`)).results[0].rows).toEqual([
+      { c0: '9007199254740993', c1: '子原值' }, { c0: '9007199254740994', c1: '新增值' },
+    ]);
     const mode = await execute(String.raw`SET standard_conforming_strings=off; SELECT 'a\';b', $标签$含;号$标签$; RESET standard_conforming_strings;`);
     expect(mode.failure).toBeUndefined();
     expect(mode.results[1].rows[0]).toEqual({ c0: "a';b", c1: '含;号' });

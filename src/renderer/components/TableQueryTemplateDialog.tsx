@@ -9,41 +9,54 @@ import type { TableFilteredSelectScope } from '../tableFilteredSelectUi';
 import { filterRuleSummary } from '../tableFilters';
 import { tableFilterGroupSummary } from '../tableFilterGroups';
 import { ErrorBox, Field, Modal, UsageHelp } from './ui';
+import { buildPostgresTableQueryTemplate, postgresTableTemplateColumns, type PostgresTemplateSource } from '../postgresTableQueryTemplate';
 
 const columnsPerPage = 50;
 interface Selection { kind: TableQueryTemplateKind; columns: readonly string[]; search: string; page: number; }
 
 /** 无法准入的类型仍可切换以显示模型错误；不能自行猜测另一组可写字段。 */
-function defaultColumns(info: TableInfo, kind: TableQueryTemplateKind): string[] {
-  try { return tableQueryTemplateColumns(info, kind); } catch { return []; }
+function templateColumns(info: TableInfo | undefined, postgres: PostgresTemplateSource | undefined, kind: TableQueryTemplateKind): string[] {
+  return postgres ? postgresTableTemplateColumns(postgres, kind) : tableQueryTemplateColumns(info!, kind);
+}
+
+function defaultColumns(info: TableInfo | undefined, postgres: PostgresTemplateSource | undefined, kind: TableQueryTemplateKind): string[] {
+  try { return templateColumns(info, postgres, kind); } catch { return []; }
 }
 
 /** 只预览当前结构的SQL，动作保留单次身份；不会读取数据库或操作原表页草稿。 */
-export function TableQueryTemplateDialog({ info, limit, readScope, isCurrent, onOpen, onClose }: {
-  info: TableInfo; limit: number; isCurrent(): boolean;
-  readScope?: TableFilteredSelectScope;
+export function TableQueryTemplateDialog({ info, postgres, limit, readScope, isCurrent, onOpen, onClose }: {
+  limit: number; isCurrent(): boolean;
   onOpen(sql: string, kind: TableQueryTemplateKind, options?: TableQueryTemplateOptions): boolean; onClose(): void;
-}) {
-  const text = readScope ? { ...templateText, title: filteredText.title, hint: filteredText.hint, preview: filteredText.preview, selectHint: filteredText.scope(limit), columns: filteredText.columns, filterColumns: filteredText.filterColumns, changed: filteredText.changed } : templateText;
-  const origin = useRef({ info, limit, readScope }).current;
-  const [selection, setSelection] = useState<Selection>(() => ({ kind: 'SELECT', columns: readScope ? info.columns.map(column => column.name) : defaultColumns(info, 'SELECT'), search: '', page: 1 })), [error, setError] = useState('');
+} & ({ info: TableInfo; readScope?: TableFilteredSelectScope; postgres?: never } |
+     { postgres: PostgresTemplateSource; info?: never; readScope?: never })) {
+  const text = readScope ? { ...templateText, title: filteredText.title, hint: filteredText.hint, preview: filteredText.preview, selectHint: filteredText.scope(limit), columns: filteredText.columns, filterColumns: filteredText.filterColumns, changed: filteredText.changed }
+    : postgres ? { ...templateText, title: templateText.postgresTitle, insertColumnsHint: templateText.postgresInsertHint, updateColumnsHint: templateText.postgresUpdateHint }
+      : templateText;
+  const origin = useRef({ info, postgres, limit, readScope }).current;
+  const [selection, setSelection] = useState<Selection>(() => ({ kind: 'SELECT', columns: readScope ? info!.columns.map(column => column.name) : defaultColumns(info, postgres, 'SELECT'), search: '', page: 1 })), [error, setError] = useState('');
   const selectionRef = useRef(selection), live = useRef<object | null>(null), consumed = useRef(false), invalid = useRef(false), ticket = {};
   // 新模式绑定最初只读范围；父props先改再恢复也不能复用旧预览。旧模板保持原合同。
   if ((origin.readScope || readScope) && (origin.info !== info || origin.limit !== limit || origin.readScope !== readScope)) invalid.current = true;
+  if ((origin.postgres || postgres) && (origin.postgres !== postgres || origin.limit !== limit)) invalid.current = true;
   if (readScope) { try { if (!isCurrent()) invalid.current = true; } catch { invalid.current = true; } }
   const { kind, columns, search } = selection;
   useLayoutEffect(() => { live.current = ticket; return () => { if (live.current === ticket) live.current = null; }; });
   const candidates = useMemo(() => {
-    try { return { columns: readScope ? info.columns.map(column => column.name) : tableQueryTemplateColumns(info, kind), error: '' }; }
+    try { return { columns: readScope ? info!.columns.map(column => column.name) : templateColumns(info, postgres, kind), error: '' }; }
     catch (reason) { return { columns: [] as string[], error: reason instanceof Error ? reason.message : text.invalid }; }
-  }, [info, kind, readScope]);
+  }, [info, kind, readScope, postgres]);
   const preview = useMemo(() => {
     // 默认字段及其顺序完全一致时保持旧调用合同；显式选择的只读快照同时供预览和打开使用。
     const defaults = columns.length === candidates.columns.length && columns.every((name, index) => name === candidates.columns[index]);
     const options = !readScope && (kind === 'DELETE' || defaults) ? undefined : Object.freeze({ columns: Object.freeze([...columns]) });
-    try { return { value: readScope ? buildFilteredTableSelect({ info, ...readScope, columns: [...columns], limit }) : buildTableQueryTemplate(info, kind, limit, options), options, error: '' }; }
+    try {
+      const value = postgres ? buildPostgresTableQueryTemplate(postgres, kind, limit, options)
+        : readScope ? buildFilteredTableSelect({ info: info!, ...readScope, columns: [...columns], limit })
+          : buildTableQueryTemplate(info!, kind, limit, options);
+      return { value, options, error: '' };
+    }
     catch (reason) { return { value: undefined, options, error: reason instanceof Error ? reason.message : text.invalid }; }
-  }, [info, kind, limit, columns, candidates, readScope]);
+  }, [info, kind, limit, columns, candidates, readScope, postgres]);
   const selected = useMemo(() => new Map(columns.map((name, index) => [name, index])), [columns]);
   const visible = useMemo(() => [...columns, ...candidates.columns.filter(name => !selected.has(name))].filter(name => name.toLocaleLowerCase().includes(search.toLocaleLowerCase())), [columns, candidates, selected, search]);
   const totalPages = Math.max(1, Math.ceil(visible.length / columnsPerPage)), page = Math.min(selection.page, totalPages);
@@ -67,7 +80,7 @@ export function TableQueryTemplateDialog({ info, limit, readScope, isCurrent, on
     if (readScope) return;
     if (!tableQueryTemplateKinds.includes(value as TableQueryTemplateKind)) return;
     const nextKind = value as TableQueryTemplateKind;
-    revise({ kind: nextKind, columns: defaultColumns(info, nextKind), search: '', page: 1 });
+    revise({ kind: nextKind, columns: defaultColumns(info, postgres, nextKind), search: '', page: 1 });
   }
   /** 勾选追加到完整输出顺序末尾，取消只移除这一列；搜索不参与SQL字段准入。 */
   function choose(name: string, checked: boolean): void {
@@ -125,6 +138,6 @@ export function TableQueryTemplateDialog({ info, limit, readScope, isCurrent, on
       </div>
     </section>}
     {preview.value && <><p>{preview.value.parameters ? text.parameters(preview.value.parameters) : kind === 'SELECT' ? text.selectHint : text.noParameters}</p><pre className="sql-preview" aria-label={text.preview}>{preview.value.sql}</pre></>}
-    <ErrorBox message={error || (readScope && invalid.current ? text.changed : preview.error)}/>
-  </div><footer className="modal-footer"><button onClick={close}>{text.close}</button><span className="grow"/><button className="primary" disabled={!preview.value || !!error || !!readScope && invalid.current} onClick={open}>{text.open}</button></footer></Modal>;
+    <ErrorBox message={error || ((readScope || postgres) && invalid.current ? text.changed : preview.error)}/>
+  </div><footer className="modal-footer"><button onClick={close}>{text.close}</button><span className="grow"/><button className="primary" disabled={!preview.value || !!error || !!(readScope || postgres) && invalid.current} onClick={open}>{text.open}</button></footer></Modal>;
 }

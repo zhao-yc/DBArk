@@ -40,7 +40,7 @@ function candidateColumns(metadata: ReturnType<typeof source>, kind: TableQueryT
 export function tableQueryTemplateColumns(info: TableInfo, kind: TableQueryTemplateKind): string[] { return candidateColumns(source(info), kind); }
 
 /** 显式选列严格校验全部输入，保留请求顺序，不把非法列静默过滤成另一条SQL。 */
-function selectedColumns(candidates: string[], kind: TableQueryTemplateKind, options: TableQueryTemplateOptions | undefined): readonly string[] {
+export function selectedTemplateColumns(candidates: string[], kind: TableQueryTemplateKind, options: TableQueryTemplateOptions | undefined): readonly string[] {
   if (options === undefined) return candidates;
   if (kind === 'DELETE' || options === null || typeof options !== 'object' || Array.isArray(options) || Reflect.ownKeys(options).length !== 1 || !Object.hasOwn(options, 'columns')) throw Error(text.invalid);
   const descriptor = Object.getOwnPropertyDescriptor(options, 'columns');
@@ -64,7 +64,7 @@ function selectedColumns(candidates: string[], kind: TableQueryTemplateKind, opt
 export function buildTableQueryTemplate(info: TableInfo, kind: TableQueryTemplateKind, resultLimit: number, options?: TableQueryTemplateOptions): { sql: string; parameters: number } {
   const metadata = source(info), target = quote(metadata.database) + '.' + quote(metadata.name);
   if (!tableQueryTemplateKinds.includes(kind) || !Number.isSafeInteger(resultLimit) || resultLimit < 1 || resultLimit > 100000) throw Error(text.invalid);
-  const selected = selectedColumns(candidateColumns(metadata, kind), kind, options);
+  const selected = selectedTemplateColumns(candidateColumns(metadata, kind), kind, options);
   let body: string, parameters = 0;
   if (kind === 'SELECT') { if (!selected.length) throw Error(text.fieldRequired); body = `SELECT\n${selected.map(name => '  ' + quote(name)).join(',\n')}\nFROM ${target}\nLIMIT ${resultLimit};`; }
   else {

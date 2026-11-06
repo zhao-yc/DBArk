@@ -13,6 +13,7 @@ import { postgresDraftFilesZh as draftFilesText } from '../../src/renderer/local
 import { decodePostgresDraft } from '../../src/shared/postgresTableDraft';
 import { cellClipboardType, decodeClipboard } from '../../src/renderer/gridClipboard';
 import { binaryCellZh } from '../../src/renderer/locales/binaryCell.zh-CN';
+import { tableQueryTemplateZh as sqlTemplateText } from '../../src/renderer/locales/tableQueryTemplate.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 type Runtime = typeof import('./desktop-fixture');
@@ -539,6 +540,41 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
       { id: '9007199254740997', legacy: '5', note: '第二条保持', amount: null, raw: null, nullable_text: '数据库默认', fallback: '数据库默认', tag: '第二条保持-生成' },
     ]);
     await mark('明确提交后按原顺序新增两条，精确值、字节和默认值独立读回');
+
+    const beforeSql = await readTemplateRows();
+    await addDraft('待提交值不进入查询模板');
+    await button(sqlTemplateText.entry).click();
+    const sqlTemplate = page.getByRole('dialog', { name: sqlTemplateText.postgresTitle, exact: true });
+    const sqlPreview = sqlTemplate.getByLabel(sqlTemplateText.preview, { exact: true });
+    const kind = sqlTemplate.getByRole('combobox', { name: sqlTemplateText.kind, exact: true });
+    const sqlButton = (name: string) => sqlTemplate.getByRole('button', { name, exact: true });
+    await expect(sqlPreview).toContainText('LIMIT 1000;');
+    await kind.selectOption('INSERT');
+    await expect(sqlTemplate.getByRole('checkbox', { name: sqlTemplateText.chooseColumn('id'), exact: true })).toHaveCount(0);
+    await expect(sqlTemplate.getByRole('checkbox', { name: sqlTemplateText.chooseColumn('legacy'), exact: true })).toHaveCount(0);
+    await sqlButton(sqlTemplateText.clearColumns).click();
+    await expect(sqlPreview).toContainText('DEFAULT VALUES;');
+    await kind.selectOption('DELETE');
+    await expect(sqlPreview).toContainText('DELETE FROM ONLY "回归"."模板.""记录"');
+    await expect(sqlPreview).toContainText('"id" = $1;');
+    await kind.selectOption('UPDATE');
+    await sqlButton(sqlTemplateText.clearColumns).click();
+    await sqlTemplate.getByRole('checkbox', { name: sqlTemplateText.chooseColumn('note'), exact: true }).check();
+    await expect(sqlPreview).toContainText('UPDATE ONLY "回归"."模板.""记录"');
+    await expect(sqlPreview).toContainText('"note" = $1');
+    await expect(sqlPreview).toContainText('"id" = $2;');
+    await expect(sqlPreview).not.toContainText('待提交值不进入查询模板');
+    await page.screenshot({ path: info.outputPath('PostgreSQL表查询SQL模板.png') });
+    await sqlButton(sqlTemplateText.open).click();
+    const generatedQuery = page.locator('.postgres-query:visible');
+    await expect(generatedQuery.locator('.monaco-editor .view-lines')).toContainText('UPDATE ONLY "回归"."模板.""记录"');
+    await expect(generatedQuery.locator('.monaco-editor .view-lines')).toContainText('"id" = $2;');
+    await expect(page.locator('.tab-select').getByText(sqlTemplateText.queryTitle('"回归"."模板.""记录"', 'UPDATE'), { exact: true })).toBeVisible();
+    await page.locator('.tab-select').getByText('"回归"."模板.""记录"', { exact: true }).click();
+    await expect(draft).toContainText('待提交值不进入查询模板');
+    await draft.getByRole('button', { name: tableText.undo, exact: true }).click();
+    expect(await readTemplateRows()).toEqual(beforeSql);
+    await mark('四类 SQL 可预览，按所选列生成位置参数并打开独立查询，原表草稿保持且零写库');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

@@ -72,6 +72,10 @@ import { draftHistoryZh as draftHistoryText } from '../locales/draftHistory.zh-C
 import { tableCellKeyIsComposing } from '../tableCellKeyboard';
 import { postgresDraftFilesZh as draftFilesText } from '../locales/postgresDraftFiles.zh-CN';
 import { postgresDraftGrid } from '../postgresDraftGrid';
+import { TableQueryTemplateDialog } from './TableQueryTemplateDialog';
+import { buildPostgresTableQueryTemplate, type PostgresTemplateSource } from '../postgresTableQueryTemplate';
+import type { TableQueryTemplateKind, TableQueryTemplateOptions } from '../tableQueryTemplate';
+import { tableQueryTemplateZh as sqlTemplateText } from '../locales/tableQueryTemplate.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -79,6 +83,7 @@ type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 
 type PageMovement = { recordEdge?: 'last'; navigation?: PostgresTablePageInput['navigation'] };
 type PageRead = PageMovement & Pick<PostgresTablePageInput, 'retainPageTokens' | 'retainHistoryPageTokens'> &
   { keepHistory?: boolean; checkFilterColumns?: true; presetLayout?: TablePreferences };
+type QueryTemplateIntent = PostgresTemplateSource & { tab: WorkspaceTab; limit: number; connectionVersion: number };
 type BatchSelection = {
   scope: object; page: PostgresTablePage; selected: ReadonlySet<number>;
   originalDraft: DraftEntry[]; gridCurrent(): boolean;
@@ -104,6 +109,7 @@ interface InlineEdit {
 /** 浏览、选择、草稿及回执归属于同一标签及原页，隐藏标签保留本地工作。 */
 export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab; active: boolean; onInspect(): void }) {
   const limit = useWorkspace(state => state.settings.pageSize);
+  const resultLimit = useWorkspace(state => state.settings.resultLimit);
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const workspaceBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
@@ -122,6 +128,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const batchOwner = useRef<BatchSelection>(undefined);
   const [history] = useState(() => new PostgresDraftHistory());
   const [draftFile, setDraftFile] = useState<'save' | 'restore'>();
+  const [queryTemplate, setQueryTemplate] = useState<QueryTemplateIntent>();
+  const queryTemplateOwner = useRef<QueryTemplateIntent>(undefined);
   const [pasteScope, setPasteScope] = useState<object>();
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
@@ -270,7 +278,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || columnDialog || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const pins = keepDraft ? history.pins() : {};
     void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
@@ -348,7 +356,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh || draftFile || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
+    if (!pageToken || !draft.length || requiresRefresh || draftFile || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -388,18 +396,61 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!draftFile || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
+  const canGenerateQuery = active && !blocked && !requiresRefresh && !!page?.exportToken && pageConnectionVersion === connectionVersion;
+
+  /** 生成模板只读取本页目录，不读取或复制当前记录及待提交的值。 */
+  function openQueryTemplate() {
+    if (!canGenerateQuery || !page || issued.current !== page.exportToken || queryTemplateOwner.current ||
+        !layoutScope.current.current() || lease.current || recordInput.current ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const intent = { page, table: target.table, tab, connectionVersion, limit: resultLimit };
+    closeCellMenu(cellMenuOwner.current, false);
+    queryTemplateOwner.current = intent;
+    setQueryTemplate(intent);
+  }
+
+  function queryTemplateCurrent(intent: QueryTemplateIntent) {
+    const state = useWorkspace.getState();
+    return queryTemplateOwner.current === intent && page === intent.page && issued.current === intent.page.exportToken &&
+      state.settings.tabs.find(item => item.id === intent.tab.id) === intent.tab &&
+      (state.connectionVersions[intent.tab.connectionId] ?? 0) === intent.connectionVersion &&
+      state.settings.resultLimit === intent.limit && !state.activeJobs[intent.tab.id] && layoutScope.current.current() && !lease.current;
+  }
+
+  function closeQueryTemplate(intent: QueryTemplateIntent) {
+    if (queryTemplateOwner.current !== intent) return;
+    queryTemplateOwner.current = undefined;
+    setQueryTemplate(undefined);
+  }
+
+  useLayoutEffect(() => {
+    const intent = queryTemplateOwner.current;
+    if (intent && !queryTemplateCurrent(intent)) closeQueryTemplate(intent);
+  }, [active, page, connectionVersion, resultLimit, tab]);
+
+  /** 只将重新核对的 SQL 和原连接库送入独立查询标签。 */
+  function openGeneratedQuery(intent: QueryTemplateIntent, sql: string, kind: TableQueryTemplateKind, selection?: TableQueryTemplateOptions) {
+    if (!queryTemplateCurrent(intent)) return false;
+    const state = useWorkspace.getState();
+    if (state.settings.tabs.length >= 100) throw Error(sqlTemplateText.tabs);
+    if (buildPostgresTableQueryTemplate(intent, kind, intent.limit, selection).sql !== sql) throw Error(sqlTemplateText.changed);
+    closeQueryTemplate(intent);
+    state.openTab({ kind: 'query', title: sqlTemplateText.queryTitle(intent.table, kind), connectionId: intent.tab.connectionId,
+      database: intent.tab.database ?? 'postgres', sql });
+    return true;
+  }
   const historyStatus = history.status;
   const historyEnabled = active && writable && pageConnectionVersion === connectionVersion;
 
   /** 只在当前表页的草稿账本移动，不执行查询或提交，也不接管输入控件的撤销。 */
   function moveDraftHistory(direction: 'undo' | 'redo') {
     if (!historyEnabled || issued.current !== page?.pageToken || !layoutScope.current.current() ||
-        draftRef.current !== draft || lease.current || insertDraftOwner.current || batchOwner.current || templateOwner.current ||
+        draftRef.current !== draft || lease.current || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current ||
         inlineOwner.current || pasteOwner.current || recordInput.current ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     const next = history.move(direction);
@@ -951,6 +1002,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <button disabled={busy} onClick={() => useWorkspace.getState().openTab({
         kind: 'query', title: tab.title, connectionId: target.connectionId, database: target.database, sql: postgresRelationSelect(target.table),
       })}>{text.query}</button>
+      <button disabled={!canGenerateQuery} onClick={openQueryTemplate}>{sqlTemplateText.entry}</button>
       <button disabled={!writable || !page?.capabilities.insert} onClick={() => setForm({ row: null })}>{text.add}</button>
       <button disabled={!canDuplicate} onClick={openDuplicate}>{duplicateText.action}</button>
       <button disabled={!canUseTemplates} onClick={openRecordTemplates}>{templateText.open}</button>
@@ -1148,6 +1200,10 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         </li>;
       })}</ol>
     </div>}
+    {queryTemplate && <TableQueryTemplateDialog postgres={queryTemplate} limit={queryTemplate.limit}
+      isCurrent={() => queryTemplateCurrent(queryTemplate)}
+      onOpen={(sql, kind, selection) => openGeneratedQuery(queryTemplate, sql, kind, selection)}
+      onClose={() => closeQueryTemplate(queryTemplate)}/>}
     {draftFile && <Modal title={draftFilesText[draftFile]} onClose={() => { if (!lease.current) setDraftFile(undefined); }}>
       <div className="modal-content"><p>{draftFile === 'save' ? draftFilesText.saveHelp : draftFilesText.restoreHelp}</p></div>
       <footer className="modal-footer"><button disabled={busy} onClick={() => setDraftFile(undefined)}>{text.cancel}</button>

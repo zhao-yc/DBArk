@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 表页可按目录选列生成 SELECT、INSERT、UPDATE 和 DELETE 草稿。写模板保留位置参数，UPDATE 和 DELETE 使用完整主键并限定原表。D02 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 表页 SQL 模板](development/postgres-table-sql-templates-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 可在草稿列表中直接编辑已暂存的新增记录，跨页保留原归属、操作顺序和整批预算。修改支持撤销重做，写库沿原事务。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 编辑新增草稿](development/postgres-edit-insert-drafts-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 网格直接显示已暂存字段值、DEFAULT 和待删除行，复制使用当前显示的完整值。跨页、撤销和重做按原记录身份匹配。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 网格草稿值](development/postgres-grid-draft-values-20261106.md)
