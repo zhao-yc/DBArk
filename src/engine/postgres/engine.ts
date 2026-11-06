@@ -713,6 +713,7 @@ export class PostgresEngine {
       }
       case 'postgres.table.related':
       case 'postgres.table.page':
+      case 'postgres.table.draft.restoreVerified':
       case 'postgres.table.values':
       case 'postgres.table.statistics':
       case 'postgres.table.references':
@@ -726,6 +727,8 @@ export class PostgresEngine {
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的PostgreSQL表页连接及原文档');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.table.draft.restoreVerified')
+          return this.tables.restoreDraft(input as Parameters<PostgresTableWorkspace['restoreDraft']>[0], connect);
         if (command === 'postgres.table.related') return input.operation === 'edit'
           ? this.tables.relatedEdit(input as Parameters<PostgresTableWorkspace['relatedEdit']>[0], connect)
           : this.tables.relatedPage(input as Parameters<PostgresTableWorkspace['relatedPage']>[0], connect);
@@ -739,6 +742,8 @@ export class PostgresEngine {
       case 'postgres.table.preview':
         if (this.stopping || this.closing.has(input.connectionId)) throw Error('PostgreSQL连接正在关闭');
         return this.tables.preview(input as Parameters<PostgresTableWorkspace['preview']>[0]);
+      case 'postgres.table.draft.capture':
+        return this.tables.captureDraft(input as Parameters<PostgresTableWorkspace['captureDraft']>[0]);
       case 'postgres.table.release':
         return this.tables.release(input as Parameters<PostgresTableWorkspace['release']>[0]);
       case 'connections.test':

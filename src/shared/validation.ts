@@ -276,6 +276,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': postgresTableExportSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
+  'postgres.table.draft.save': postgresTablePreviewSchema,
+  'postgres.table.draft.restore': postgresTableReleaseSchema,
   'postgres.table.values': postgresTableValuesSchema,
   'postgres.table.statistics': postgresTableColumnReadSchema,
   'postgres.table.references': postgresTableReferenceSchema,

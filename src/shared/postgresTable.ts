@@ -45,11 +45,14 @@ export function postgresTableSortRules(sort: PostgresTablePageInput['sort']): So
 }
 
 /** 筛选值与排序方向使用独立结构，标识符只从已读的列目录解析。 */
-export const postgresTablePageSchema = target.extend({
+export const postgresTableBrowseSchema = z.object({
   offset: z.number().int().min(0).max(postgresTableLimits.offset),
   limit: z.number().int().min(1).max(postgresTableLimits.page),
   sort: postgresTableSortSchema,
   filter: z.union([postgresQuickTableFilterSchema, postgresAdvancedTableFilterSchema]).optional(),
+}).strict();
+export const postgresTablePageSchema = target.extend({
+  ...postgresTableBrowseSchema.shape,
   checkFilterColumns: z.literal(true).optional(),
   navigation: z.enum(['count', 'last']).optional(),
   retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
@@ -92,7 +95,7 @@ const fieldValue = z.discriminatedUnion('mode', [
 ]);
 const field = z.object({ column, value: fieldValue }).strict();
 const row = z.number().int().min(0).max(postgresTableLimits.page - 1);
-const change = z.discriminatedUnion('kind', [
+export const postgresTableChangeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('insert'), pageToken: token.optional(), fields: z.array(field).max(postgresTableLimits.fields) }).strict(),
   z.object({ kind: z.literal('update'), pageToken: token.optional(), row, fields: z.array(field).min(1).max(postgresTableLimits.fields) }).strict(),
   z.object({ kind: z.literal('delete'), pageToken: token.optional(), row }).strict(),
@@ -100,7 +103,7 @@ const change = z.discriminatedUnion('kind', [
 
 /** 预览限制原页数量、每页原行和整批值预算，跨页重复原行由引擎按身份复核。 */
 export const postgresTablePreviewSchema = target.extend({
-  pageToken: token, changes: z.array(change).min(1).max(postgresTableLimits.changes),
+  pageToken: token, changes: z.array(postgresTableChangeSchema).min(1).max(postgresTableLimits.changes),
 }).strict().superRefine((input, context) => {
   let size = 0;
   const usedRows = new Set<string>();
@@ -229,7 +232,7 @@ export interface PostgresTableImportChoice {
 }
 export type PostgresTableTarget = z.infer<typeof target>;
 export type PostgresTablePageInput = z.infer<typeof postgresTablePageSchema>;
-export type PostgresTableChange = z.infer<typeof change>;
+export type PostgresTableChange = z.infer<typeof postgresTableChangeSchema>;
 export type PostgresTableField = z.infer<typeof field>;
 export type PostgresTablePreviewInput = z.infer<typeof postgresTablePreviewSchema>;
 export type PostgresTableApplyInput = z.infer<typeof postgresTableApplySchema>;

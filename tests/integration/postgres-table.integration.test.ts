@@ -11,6 +11,7 @@ import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import { postgresRelatedTabPrefix } from '../../src/shared/postgresRelatedTab';
 import type { PostgresRelatedTablePage, PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult, PostgresTableValues } from '../../src/shared/postgresTable';
+import { decodePostgresDraft, encodePostgresDraft, type PostgresDraftDocument, type PostgresDraftRestored } from '../../src/shared/postgresTableDraft';
 import { appendPostgresValueFilter } from '../../src/renderer/postgresTableValues';
 import { postgresBatchFillChanges } from '../../src/renderer/postgresBatchFill';
 import { postgresBatchDeletePlan } from '../../src/renderer/postgresBatchDelete';
@@ -518,6 +519,45 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(await crossRows()).toEqual([{ id: '1', note: '已改甲' }, { id: '2', note: '外部变动' }, { id: '3', note: '原丙' }]);
       expect(await apply(rollbackB, repaired, cross)).toMatchObject({ outcome: 'committed', affected: 2 });
       expect(await crossRows()).toEqual([{ id: '1', note: '应回滚' }, { id: '2', note: '修正乙' }, { id: '3', note: '原丙' }]);
+
+      const draftScope = { table: '"浏览"."持久草稿"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE ${draftScope.table} (id bigint PRIMARY KEY, note text);
+        INSERT INTO ${draftScope.table} VALUES (1,'原甲'),(2,'原乙'),(3,'原丙')`);
+      const draftFilter = { column: 'note', text: '原' };
+      const firstDraftPage = await read({ ...draftScope, limit: 1, filter: draftFilter });
+      const secondDraftPage = await read({ ...draftScope, limit: 1, offset: 2, filter: draftFilter, retainPageTokens: [pin(firstDraftPage)] });
+      const captured: PostgresDraftDocument = await engine.handle('postgres.table.draft.capture', {
+        ...target, ...draftScope, pageToken: pin(secondDraftPage), endpoint: 'a'.repeat(64),
+        changes: [update(firstDraftPage, '恢复甲'), { kind: 'delete', row: 0, pageToken: pin(secondDraftPage) },
+          { kind: 'insert', fields: [field('c0', '9223372036854775807'), field('c1', '恢复新增')] }],
+      });
+      expect(captured.groups).toEqual([{ offset: 0, limit: 1 }, { offset: 2, limit: 1 }]);
+      expect(captured.view).toMatchObject({ offset: 2, limit: 1, filter: draftFilter });
+      const document = decodePostgresDraft(encodePostgresDraft(captured));
+      const reopened = { ...draftScope, tabId: randomUUID() };
+      const freshDraftPage = await read(reopened);
+      const restore = (file = document, scope = reopened): Promise<Omit<PostgresDraftRestored, 'name'>> =>
+        engine.handle('postgres.table.draft.restoreVerified', { ...target, ...scope, profile, pageToken: pin(freshDraftPage), document: file });
+      await expect(restore(document, draftScope)).rejects.toThrow('快照');
+      await expect(restore({ ...document, relation: '0'.repeat(64) })).rejects.toThrow('结构或权限');
+      const staleOriginal = structuredClone(document);
+      staleOriginal.entries[1].original!.digest = '0'.repeat(64);
+      await expect(restore(staleOriginal)).rejects.toThrow('原记录已变化');
+      const restored = await restore();
+      expect(restored.page.rows[0]).toEqual({ c0: '3', c1: '原丙' });
+      expect(restored.entries.map(entry => [entry.offset, entry.change.kind])).toEqual([[0, 'update'], [2, 'delete'], [2, 'insert']]);
+      expect(restored.entries.map(entry => entry.change.pageToken)).not.toContain(firstDraftPage.pageToken);
+      const restoredChanges = restored.entries.map(entry => entry.change);
+      const capturedAgain = await engine.handle('postgres.table.draft.capture', { ...target, ...reopened,
+        pageToken: restored.page.pageToken, endpoint: document.endpoint, changes: restoredChanges });
+      expect(capturedAgain).toEqual(document);
+      const afterRestoreNavigation = await read({ ...reopened, offset: 1, limit: 1, filter: draftFilter,
+        retainPageTokens: [...new Set(restoredChanges.map(change => change.pageToken))] });
+      const restoredPreview = await preview(afterRestoreNavigation, restoredChanges, reopened);
+      const draftRows = () => client.query(`SELECT id::text, note FROM ${draftScope.table} ORDER BY id`).then(result => result.rows);
+      expect(await draftRows()).toEqual([{ id: '1', note: '原甲' }, { id: '2', note: '原乙' }, { id: '3', note: '原丙' }]);
+      expect(await apply(afterRestoreNavigation, restoredPreview, reopened)).toMatchObject({ outcome: 'committed', affected: 3 });
+      expect(await draftRows()).toEqual([{ id: '1', note: '恢复甲' }, { id: '2', note: '原乙' }, { id: '9223372036854775807', note: '恢复新增' }]);
 
       const deferred = { table: '"浏览"."延迟约束"', tabId: randomUUID() };
       await client.query(`CREATE TABLE ${deferred.table} (id bigint PRIMARY KEY, code text UNIQUE DEFERRABLE INITIALLY DEFERRED);

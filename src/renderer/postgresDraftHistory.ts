@@ -1,11 +1,8 @@
-import { postgresTableLimits, type PostgresTableChange } from '../shared/postgresTable';
+import { postgresTableLimits } from '../shared/postgresTable';
+import type { PostgresDraftEntry } from '../shared/postgresTableDraft';
 import { draftHistoryLimits } from './draftHistory';
 
-export type PostgresDraftEntry = {
-  change: PostgresTableChange & { pageToken: string };
-  rowKey?: string;
-  offset: number;
-};
+export type { PostgresDraftEntry } from '../shared/postgresTableDraft';
 export type PostgresDraftGroup = 'fill' | 'delete' | 'edit' | 'duplicate' | 'template';
 interface HistoryState {
   entries: PostgresDraftEntry[];

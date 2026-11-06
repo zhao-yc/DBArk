@@ -29,7 +29,9 @@ import { QueryFileSources } from './queryFileSources';
 import { DatabaseDefaultEncodingOwners, type DatabaseEncodingOwnerCommand } from './databaseDefaultEncodingOwners';
 import { ExplainSnapshotFiles } from './explainSnapshotFiles';
 import { QueryResultSnapshotFiles, queryResultSnapshotFileMessages } from './queryResultSnapshotFiles';
-import { TableDraftFiles, tableDraftFileMessages } from './tableDraftFiles';
+import { BoundedDraftFiles, TableDraftFiles, tableDraftFileMessages } from './tableDraftFiles';
+import { queryConnectionDigest } from './queryBinding';
+import { decodePostgresDraft, encodePostgresDraft, postgresDraftBytes, type PostgresDraftDocument, type PostgresDraftRestored } from '../shared/postgresTableDraft';
 import { bindTableDraft, assertTableDraftBinding } from './tableDraftBinding';
 import { explainSnapshotZh } from '../shared/explainSnapshot.zh-CN';
 import { ResultSqlPreviews } from './resultSqlPreviews';
@@ -123,6 +125,7 @@ let queryFileSources: QueryFileSources;
 let explainSnapshotFiles: ExplainSnapshotFiles;
 let queryResultSnapshotFiles: QueryResultSnapshotFiles;
 let tableDraftFiles: TableDraftFiles;
+let postgresDraftFiles: BoundedDraftFiles<PostgresDraftDocument>;
 let sqliteDraftFiles: SqliteTableDraftFiles;
 let savedQuerySearches:SavedQuerySearches;
 let savedQueryPages:SavedQueryPages;
@@ -868,6 +871,46 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         postgresImportFiles.set(document, { token, target, source, revision, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited };
       } finally { postgresImportChoosing.delete(document); }
+    });
+  }
+  // 原生文件路径仅由 Main 取得。引擎捕获原页，恢复前重新核对连接绑定及窗口归属。
+  if (command === 'postgres.table.draft.save' || command === 'postgres.table.draft.restore') {
+    columnsMain.assertCapturedOwner(columns);
+    const { connectionId, database, table, tabId, pageToken } = input;
+    const document = columns!.owner.document;
+    const tableOwner = postgresTableOwners.get(document);
+    const connectionRevision = store.connectionRevision();
+    const profile = store.connections().find(item => item.id === connectionId);
+    if (!tableOwner || profile?.dialect !== 'postgresql') throw Error('PostgreSQL 草稿需要已打开的普通表页');
+    const endpoint = queryConnectionDigest(profile);
+    const owner = { assertCurrent: () => {
+      columnsMain.assertCapturedOwner(columns);
+      connectionConfig.assertAvailable(connectionId);
+      if (shuttingDown || connectionRevision !== store.connectionRevision()) throw Error('PostgreSQL 草稿的窗口或连接已变化');
+    } };
+    const scope = { connectionId, database, table, tabId, owner: tableOwner, connectionRevision };
+    return queryFileOperation(async () => {
+      owner.assertCurrent();
+      if (command === 'postgres.table.draft.save') {
+        const file = await broker.request('postgres.table.draft.capture', { ...scope, pageToken, changes: input.changes, endpoint }) as PostgresDraftDocument;
+        owner.assertCurrent();
+        const result = await postgresDraftFiles.save(file, owner);
+        if (result) columns!.snapshotSaved = true;
+        return result;
+      }
+      const selected = await postgresDraftFiles.open(owner);
+      if (!selected) return null;
+      const file = selected.document;
+      if (file.endpoint !== endpoint || file.target.connectionId !== connectionId || file.target.database !== database || file.target.table !== table)
+        throw Error('PostgreSQL 草稿不属于当前连接、数据库或表');
+      const result = await broker.request('postgres.table.draft.restoreVerified', { ...scope, pageToken, document: file,
+        profile: store.resolveConnection(connectionId) }) as Omit<PostgresDraftRestored, 'name'>;
+      try { owner.assertCurrent(); }
+      catch (error) {
+        if (result.page.exportToken) await broker.request('postgres.table.release', { ...scope, pageToken: result.page.exportToken }).catch(() => {});
+        throw error;
+      }
+      return { ...result, name: selected.name };
     });
   }
   if (command === 'postgres.table.page' || command === 'postgres.table.preview' || command === 'postgres.table.references' || command === 'postgres.table.related' ||
@@ -2173,6 +2216,24 @@ else {
       if (mode === 'open') { const selected = await dialog.showOpenDialog(ownerWindow, { title: '打开SQLite草稿', properties: ['openFile'], filters }); return selected.canceled ? undefined : selected.filePaths[0]; }
       const selected = await dialog.showSaveDialog(ownerWindow, { title: '保存SQLite草稿', defaultPath: 'SQLite草稿.sqlite-draft', filters }); return selected.canceled ? undefined : selected.filePath;
     } });
+    postgresDraftFiles = new BoundedDraftFiles({
+      reserve: path => exportReservations.acquire(path),
+      validateDestination: path => {
+        if (!path.toLowerCase().endsWith('.pg-draft')) throw Error('请使用 .pg-draft 文件扩展名');
+        return assertSqliteExportDestination(path, store.connections());
+      },
+      choose: async mode => {
+        const ownerWindow = window;
+        if (!ownerWindow) throw Error('PostgreSQL 草稿所属窗口已关闭');
+        const filters = [{ name: productName + ' PostgreSQL 草稿', extensions: ['pg-draft'] }];
+        if (mode === 'open') {
+          const result = await dialog.showOpenDialog(ownerWindow, { title: '打开 PostgreSQL 草稿', properties: ['openFile'], filters });
+          return result.canceled ? undefined : result.filePaths[0];
+        }
+        const result = await dialog.showSaveDialog(ownerWindow, { title: '保存 PostgreSQL 草稿', defaultPath: 'PostgreSQL草稿.pg-draft', filters });
+        return result.canceled ? undefined : result.filePath;
+      },
+    }, { bytes: postgresDraftBytes, encode: encodePostgresDraft, decode: decodePostgresDraft });
     explainSnapshotFiles = new ExplainSnapshotFiles({ reserve: path => exportReservations.acquire(path), choose: async mode => {
       const ownerWindow = window;
       if (!ownerWindow) throw Error(explainSnapshotZh.stale);
@@ -2299,6 +2360,18 @@ else {
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           if (payload.command.startsWith('queryFileSources.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
+          if (payload.command === 'postgres.table.draft.save' || payload.command === 'postgres.table.draft.restore') {
+            try { columnsMain.assertCapturedOwner(columns); }
+            catch (error) {
+              const restored = payload.command === 'postgres.table.draft.restore' ? result as PostgresDraftRestored | null : null;
+              const owner = columns && postgresTableOwners.get(columns.owner.document);
+              if (owner && restored?.page.exportToken) await broker.request('postgres.table.release', {
+                ...(input as object), owner, connectionRevision: store.connectionRevision(), pageToken: restored.page.exportToken,
+              }).catch(() => {});
+              if (columns?.snapshotSaved) throw Error(tableDraftFileMessages.unknownWrite);
+              throw error;
+            }
+          }
           if (payload.command === 'query.objectDefinition'||payload.command === 'sqlite.incomingPage'||payload.command === 'sqlite.referencePage'||payload.command === 'sqlite.relationships'||payload.command === 'sqlite.valueOptions'||payload.command === 'sqlite.statistics'||payload.command === 'sqlite.countRows'||payload.command === 'sqlite.schemaScript'||payload.command.startsWith('explainFiles.') || payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
             const restored = payload.command === 'sqliteDraftFiles.restore' ? result as SqliteDraftRestored : undefined;
             if (restored) { sqliteEdits.observe(); await sqliteEdits.rejectRestored(restored).catch(() => {}); }

@@ -1,6 +1,6 @@
 import { test as base, expect } from '@playwright/test';
 import { Client } from 'pg';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { postgresRecordDuplicateZh as text } from '../../src/renderer/locales/postgresRecordDuplicate.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresRecordViewZh as viewText } from '../../src/renderer/locales/postgresRecordView.zh-CN';
@@ -8,7 +8,9 @@ import { postgresBatchDuplicateZh as batchText } from '../../src/renderer/locale
 import { postgresBatchEditZh as editText } from '../../src/renderer/locales/postgresBatchEdit.zh-CN';
 import { recordTemplatesZh as templateText } from '../../src/renderer/locales/recordTemplates.zh-CN';
 import { draftHistoryZh as historyText } from '../../src/renderer/locales/draftHistory.zh-CN';
-import { zh } from '../../src/renderer/locales/zh-CN';
+import { formatText, zh } from '../../src/renderer/locales/zh-CN';
+import { postgresDraftFilesZh as draftFilesText } from '../../src/renderer/locales/postgresDraftFiles.zh-CN';
+import { decodePostgresDraft } from '../../src/shared/postgresTableDraft';
 import { navigationMenuItem } from './navigation-menu';
 
 type Runtime = typeof import('./desktop-fixture');
@@ -18,7 +20,7 @@ test.skip(!enabled, '仅使用本轮隔离 PostgreSQL 实库');
 test.use({ trace: 'off', video: 'off', screenshot: 'off', ...(enabled ? { preserveOnUnconfirmedExit: true } : {}) });
 test.describe.configure({ timeout: 120000, retries: 0 });
 
-test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿历史', async ({}, info) => {
+test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Runtime;
   const { page, application } = runtime.ownedDesktopResources(info);
   const directory = runtime.dataDir, pid = application.process().pid;
@@ -324,6 +326,104 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿历史
       beforeHistory[2],
     ]);
     await mark('明确提交只更新两个原页目标，第三行保持，提交后清空撤销和重做');
+
+    const beforeFile = await readTemplateRows();
+    await button(tableText.first).click();
+    await expect(tab.getByText(tableText.currentPage(1), { exact: true })).toBeVisible();
+    await stageNote('跨页草稿甲', '文件恢复甲');
+    await button(tableText.next).click();
+    await expect(tab.getByText(tableText.currentPage(2), { exact: true })).toBeVisible();
+    await stageNote('跨页草稿乙', '文件恢复乙', true);
+    const draftPath = info.outputPath('跨页记录.pg-draft');
+    const nativeWindow = await application.browserWindow(page);
+    const sender = await nativeWindow.evaluate(browserWindow => browserWindow.webContents.id);
+    await nativeWindow.dispose();
+    await application.evaluate(({ BrowserWindow, dialog }, input) => {
+      const originalSave = dialog.showSaveDialog, originalOpen = dialog.showOpenDialog, calls: string[] = [];
+      const valid = (args: unknown[], mode: 'save' | 'open') => {
+        const owner = BrowserWindow.getAllWindows().find(window => window.webContents.id === input.sender);
+        const options = args[1] as { title?: string; filters?: { extensions: string[] }[] };
+        if (!owner || args[0] !== owner || options.filters?.[0].extensions[0] !== 'pg-draft' ||
+            options.title !== (mode === 'save' ? '保存 PostgreSQL 草稿' : '打开 PostgreSQL 草稿'))
+          throw Error('原生 PostgreSQL 草稿选择的归属或格式不符');
+        calls.push(mode);
+      };
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        valid(args, 'save'); return { canceled: false, filePath: input.draftPath };
+      }) as typeof originalSave;
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        valid(args, 'open'); return { canceled: false, filePaths: [input.draftPath] };
+      }) as typeof originalOpen;
+      Object.assign(globalThis, { finishPostgresDraft: () => {
+        dialog.showSaveDialog = originalSave; dialog.showOpenDialog = originalOpen; return calls;
+      } });
+    }, { sender, draftPath });
+    const draftDialog = (mode: 'save' | 'restore') => page.getByRole('dialog', { name: draftFilesText[mode], exact: true });
+    const restoreFile = async () => {
+      await button(draftFilesText.restore).click();
+      await draftDialog('restore').getByRole('button', { name: draftFilesText.chooseRestore, exact: true }).click();
+      await expect(draftDialog('restore')).toBeHidden();
+    };
+    let chooserCalls: string[];
+    try {
+      await button(draftFilesText.save).click();
+      await expect(draftDialog('save')).toContainText(draftFilesText.saveHelp);
+      await draftDialog('save').getByRole('button', { name: draftFilesText.chooseSave, exact: true }).click();
+      await expect(tab.getByText(draftFilesText.saved('跨页记录.pg-draft'), { exact: true })).toBeVisible();
+      const raw = await readFile(draftPath, 'utf8'), stored = decodePostgresDraft(raw);
+      expect(stored.groups).toEqual([{ offset: 0, limit: 1 }, { offset: 1, limit: 1 }]);
+      expect(stored.view).toMatchObject({ offset: 1, limit: 1 });
+      expect(raw).not.toContain('pageToken');
+      expect(raw).not.toContain(password);
+      expect(await readTemplateRows()).toEqual(beforeFile);
+      await mark('真实 Main 保存两个原页的文件，未保存令牌或密码，数据库零写入');
+
+      const tableName = '"回归"."模板.""记录"';
+      const close = page.getByRole('button', { name: formatText(zh.app.text012, tableName), exact: true });
+      await page.evaluate(expected => {
+        const original = window.confirm;
+        // 只回答本例准确的关页确认，立即恢复原浏览器函数。
+        window.confirm = message => {
+          window.confirm = original;
+          if (message !== expected) throw Error('关闭草稿确认来源不符');
+          document.documentElement.dataset.postgresDraftClose = 'accepted';
+          return true;
+        };
+      }, zh.app.text002);
+      await close.click();
+      await expect(close).toHaveCount(0);
+      await expect(page.locator('html')).toHaveAttribute('data-postgres-draft-close', 'accepted');
+      await page.locator('.object-row').getByRole('button', { name: tableName, exact: true }).click();
+      await expect(button(draftFilesText.restore)).toBeEnabled();
+      await expect(draft).toHaveCount(0);
+      await restoreFile();
+      await expect(tab.getByText(draftFilesText.restored('跨页记录.pg-draft', 2), { exact: true })).toBeVisible();
+      await expect(tab.getByText(tableText.currentPage(2), { exact: true })).toBeVisible();
+      await expect(draft).toContainText('文件恢复甲');
+      await expect(draft).toContainText('文件恢复乙');
+      await page.screenshot({ path: info.outputPath('PostgreSQL跨页草稿文件恢复.png') });
+      await button(tableText.preview).click();
+      await expect(review).toContainText('UPDATE');
+      expect(await readTemplateRows()).toEqual(beforeFile);
+      await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+      await expect(tab.getByText(/已确认整批提交/)).toBeVisible();
+      const finalFile = await readTemplateRows();
+      expect(finalFile).toEqual([
+        { ...beforeFile[0], note: '文件恢复甲', tag: '文件恢复甲-生成' },
+        { ...beforeFile[1], note: '文件恢复乙', tag: '文件恢复乙-生成' },
+        beforeFile[2],
+      ]);
+      await mark('关闭原标签后从文件恢复两页及活动页，预览保持原值，确认后只更新两条记录');
+
+      await restoreFile();
+      await expect(tab.getByRole('alert')).toContainText('原记录已变化');
+      await expect(draft).toHaveCount(0);
+      expect(await readTemplateRows()).toEqual(finalFile);
+      await mark('重复打开已过期的文件时原行核对失败，当前页保持且没有部分恢复');
+    } finally {
+      chooserCalls = await application.evaluate(() => (globalThis as typeof globalThis & { finishPostgresDraft(): string[] }).finishPostgresDraft());
+    }
+    expect(chooserCalls).toEqual(['save', 'open', 'open']);
 
     check();
     expect(runtime.pageErrors).toEqual([]);

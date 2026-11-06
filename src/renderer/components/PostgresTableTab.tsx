@@ -70,6 +70,7 @@ import { PostgresDraftHistory, type PostgresDraftEntry as DraftEntry, type Postg
 import { draftHistoryKey } from '../draftHistory';
 import { draftHistoryZh as draftHistoryText } from '../locales/draftHistory.zh-CN';
 import { tableCellKeyIsComposing } from '../tableCellKeyboard';
+import { postgresDraftFilesZh as draftFilesText } from '../locales/postgresDraftFiles.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -115,6 +116,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [batch, setBatch] = useState<BatchSelection>();
   const batchOwner = useRef<BatchSelection>(undefined);
   const [history] = useState(() => new PostgresDraftHistory());
+  const [draftFile, setDraftFile] = useState<'save' | 'restore'>();
   const [pasteScope, setPasteScope] = useState<object>();
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
@@ -262,7 +264,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || columnDialog || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || columnDialog || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const pins = keepDraft ? history.pins() : {};
     void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
@@ -308,10 +310,35 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     if (stageChanges([change], { owner })) setForm(undefined);
   }
 
+  /** 文件恢复由引擎完整核对后交付新页和整批草稿，保存仍保留现有编辑和历史。 */
+  function transferDraftFile() {
+    const mode = draftFile, pageToken = page?.pageToken, original = draftRef.current;
+    if (!mode || !pageToken || issued.current !== pageToken || !layoutScope.current.current() || lease.current ||
+        requiresRefresh || (mode === 'save' ? !original.length : !!original.length)) return;
+    void run(async isCurrent => {
+      if (mode === 'save') {
+        const result = await invoke('postgres.table.draft.save', { ...target, pageToken, changes: original.map(entry => entry.change) });
+        if (result && isCurrent()) setMessage(draftFilesText.saved(result.name));
+      } else {
+        const result = await invoke('postgres.table.draft.restore', { ...target, pageToken });
+        if (result && await publishPage(result.page, result.view, isCurrent) && isCurrent()) {
+          const filter = result.view.filter;
+          const quick = filter && 'text' in filter ? filter : undefined;
+          setFilterColumn(quick?.column ?? result.page.columns[0]?.name ?? '');
+          setFilterText(quick?.text ?? '');
+          closeAdvancedFilters();
+          setChanges(result.entries);
+          setMessage(draftFilesText.restored(result.name, result.entries.length));
+        }
+      }
+      if (isCurrent()) setDraftFile(undefined);
+    }, () => setDraftFile(undefined));
+  }
+
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
+    if (!pageToken || !draft.length || requiresRefresh || draftFile || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -351,7 +378,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!draftFile || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -867,6 +894,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <button disabled={!writable || !page?.capabilities.insert} onClick={() => setForm({ row: null })}>{text.add}</button>
       <button disabled={!canDuplicate} onClick={openDuplicate}>{duplicateText.action}</button>
       <button disabled={!canUseTemplates} onClick={openRecordTemplates}>{templateText.open}</button>
+      <button disabled={!active || !writable || !draft.length} onClick={() => setDraftFile('save')}>{draftFilesText.save}</button>
+      <button disabled={!active || !writable || !!draft.length} onClick={() => setDraftFile('restore')}>{draftFilesText.restore}</button>
       <button disabled={!canPasteAppend} onClick={() => {
         if (!canPasteAppend || lease.current || inlineOwner.current || !layoutScope.current.current() ||
           document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
@@ -1053,6 +1082,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         <button disabled={blocked || requiresRefresh} onClick={() => { setChanges(draft.filter((_, other) => index !== other)); setMessage(''); }}>{text.undo}</button>
       </li>)}</ol>
     </div>}
+    {draftFile && <Modal title={draftFilesText[draftFile]} onClose={() => { if (!lease.current) setDraftFile(undefined); }}>
+      <div className="modal-content"><p>{draftFile === 'save' ? draftFilesText.saveHelp : draftFilesText.restoreHelp}</p></div>
+      <footer className="modal-footer"><button disabled={busy} onClick={() => setDraftFile(undefined)}>{text.cancel}</button>
+        <button className="primary" disabled={busy} onClick={transferDraftFile}>{draftFile === 'save' ? draftFilesText.chooseSave : draftFilesText.chooseRestore}</button></footer>
+    </Modal>}
     {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
       isCurrent={() => !!lifetime.current && !!exportPage.exportToken && issued.current === exportPage.exportToken &&
         !recordDirty.current} onClose={() => setExportPage(undefined)}/>}
