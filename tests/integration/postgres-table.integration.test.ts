@@ -64,10 +64,10 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(first).toMatchObject({ hasNext: true, truncated: false, order: 'primary', capabilities: { insert: true, update: true, delete: true } });
       expect(first.rows[0]).toMatchObject({ c0: '1', c2: '1234567890123456789012.123456789012345678', c3: { base64: 'AP8=' }, c4: '原一-生成' });
       const reference = { table: '"浏览"."引用记录"', tabId: randomUUID() };
-      await client.query(`CREATE TABLE "浏览"."父""表" (code bigint, label text, description text, PRIMARY KEY(code,label));
+      await client.query(`CREATE TABLE "浏览"."父""表" (code bigint, label text COLLATE pg_catalog."C", description text, PRIMARY KEY(code,label));
         INSERT INTO "浏览"."父""表" SELECT 9007199254740992 + i, '组' || i,
           CASE WHEN i=42 THEN '字面_%命中' ELSE '说明' || i END FROM generate_series(1,42) i;
-        CREATE TABLE ${reference.table} (id bigint PRIMARY KEY, local_label text, local_code bigint,
+        CREATE TABLE ${reference.table} (id bigint PRIMARY KEY, local_label text COLLATE pg_catalog."POSIX", local_code bigint,
           CONSTRAINT "反序复合外键" FOREIGN KEY(local_code,local_label) REFERENCES "浏览"."父""表"(code,label));
         INSERT INTO ${reference.table} VALUES (1,'组1',9007199254740993);`);
       const referencePage = await read(reference);
@@ -79,6 +79,8 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(choice.pairs.map(pair => [pair.local, pair.remote])).toEqual([['c2', 'code'], ['c1', 'label']]);
       const lookup = { id: choice.id, stamp: choice.stamp, search: '', offset: 0 };
       expect((await references({ lookup })).page).toMatchObject({ hasNext: true });
+      expect((await references({ lookup, parentRow: 0 })).page?.rows)
+        .toEqual([{ c0: '9007199254740993', c1: '组1', c2: '说明1' }]);
       const filtered = await references({ lookup: { ...lookup, search: '_%' } });
       expect(filtered.page?.rows).toEqual([{ c0: '9007199254741034', c1: '组42', c2: '字面_%命中' }]);
       expect((await references({ lookup: { ...lookup, offset: 40 } })).page?.rows).toHaveLength(2);
@@ -100,6 +102,52 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         { ...limitedTarget, pageToken: limitedPage.pageToken, lookup })).rejects.toThrow('读取权限');
       await read(reference);
       await expect(references({ lookup })).rejects.toThrow('快照');
+
+      const partitioned = { table: '"浏览"."分区外键"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE "浏览"."复合父键" (num bigint, raw bytea, label text, secret text, PRIMARY KEY (num,raw));
+        INSERT INTO "浏览"."复合父键" VALUES (1,decode('00ff','hex'),'父甲','私有甲'),(2,decode('00ff','hex'),'父乙','私有乙');
+        CREATE TABLE ${partitioned.table} (id int, n smallint, generated smallint GENERATED ALWAYS AS (n) STORED, raw bytea,
+          FOREIGN KEY (generated,raw) REFERENCES "浏览"."复合父键" (num,raw)) PARTITION BY LIST (id);
+        CREATE TABLE "浏览"."分区甲" PARTITION OF ${partitioned.table} FOR VALUES IN (1);
+        CREATE TABLE "浏览"."分区乙" PARTITION OF ${partitioned.table} FOR VALUES IN (2,3);
+        INSERT INTO ${partitioned.table} (id,n,raw) VALUES (1,1,decode('00ff','hex')),(2,2,decode('00ff','hex')),(3,NULL,decode('00ff','hex'));
+        GRANT SELECT ON ${partitioned.table} TO "${limitedUser}";
+        GRANT SELECT(num,raw,label) ON "浏览"."复合父键" TO "${limitedUser}";
+        ALTER TABLE "浏览"."复合父键" ENABLE ROW LEVEL SECURITY;
+        CREATE POLICY "隐藏父乙" ON "浏览"."复合父键" FOR SELECT TO "${limitedUser}" USING (num <> 2);`);
+      const parentPage = await read({ ...partitioned, limit: 3, sort: { column: 'id', direction: 'asc' } });
+      expect(parentPage).toMatchObject({ canBrowseReferences: true, relationKind: 'p' });
+      const identities = (await client.query(`SELECT ctid::text, xmin::text, tableoid::oid::text
+        FROM ${partitioned.table} WHERE id IN (1,2) ORDER BY id`)).rows;
+      expect(identities[0].ctid).toBe(identities[1].ctid);
+      expect(identities[0].xmin).toBe(identities[1].xmin);
+      expect(identities[0].tableoid).not.toBe(identities[1].tableoid);
+      const parentBrowse = (parentRow: number, source = { ...partitioned, pageToken: parentPage.exportToken }) => {
+        const request = { ...target, ...source, profile: 'profile' in source ? source.profile : profile, parentRow };
+        return async (lookup?: { id: string; stamp: string; search: string; offset: number }): Promise<PostgresTableReferenceResult> =>
+          engine.handle('postgres.table.references', { ...request, ...(lookup ? { lookup } : {}) });
+      };
+      const [parentKey] = (await parentBrowse(0)()).choices;
+      expect(parentKey.pairs.map(pair => [pair.localName, pair.remote])).toEqual([['generated','num'], ['raw','raw']]);
+      const byParent = { id: parentKey.id, stamp: parentKey.stamp, search: '', offset: 0 };
+      expect((await parentBrowse(0)(byParent)).page?.rows).toEqual([
+        { c0: '1', c1: { type: 'binary', base64: 'AP8=' }, c2: '父甲', c3: '私有甲' },
+      ]);
+      expect((await parentBrowse(1)(byParent)).page?.rows[0]?.c0).toBe('2');
+      expect((await parentBrowse(2)(byParent)).page?.rows).toEqual([]);
+      await expect(parentBrowse(3)()).rejects.toThrow('不可定位');
+      const limitedChild = { ...limitedTarget, ...partitioned, tabId: randomUUID() };
+      const limitedChildPage = await read({ ...limitedChild, limit: 3, sort: { column: 'id', direction: 'asc' } });
+      expect(limitedChildPage.canBrowseReferences).toBe(true);
+      expect(limitedChildPage.pageToken).toBeUndefined();
+      const readOnlySource = { ...limitedChild, pageToken: limitedChildPage.exportToken };
+      const visibleParent = (await parentBrowse(0, readOnlySource)(byParent)).page;
+      expect(visibleParent?.columns.map(column => column.name)).toEqual(['num','raw','label']);
+      expect(visibleParent?.rows[0]?.c2).toBe('父甲');
+      expect((await parentBrowse(1, readOnlySource)(byParent)).page?.rows).toEqual([]);
+      await client.query(`UPDATE ${partitioned.table} SET n=2 WHERE id=1`);
+      await expect(parentBrowse(0)(byParent)).rejects.toThrow('原记录已变化');
+
       expect((await read({ offset: 2 })).rows.map(row => row.c0)).toEqual(['3']);
       expect((await read({ sort: { column: 'id', direction: 'desc' } })).rows.map(row => row.c0)).toEqual(['3', '2']);
       expect((await read({ filter: { column: 'note', text: "原三';--" } })).rows).toEqual([]);

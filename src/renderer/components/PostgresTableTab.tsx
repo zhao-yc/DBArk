@@ -21,7 +21,8 @@ import { PostgresTableCellFilterMenu } from './PostgresTableCellFilterMenu';
 import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
 import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
 import { PostgresRecordForm } from './PostgresRecordFields';
-import type { PostgresReferenceSource } from './PostgresReferencePicker';
+import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
+import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { PostgresTableRecordView, type PostgresRecordMove } from './PostgresTableRecordView';
 import { postgresRecordViewZh as recordText } from '../locales/postgresRecordView.zh-CN';
 import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
@@ -113,6 +114,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [requiresRefresh, setRequiresRefresh] = useState(false);
+  const [parentReference, setParentReference] = useState<PostgresReferenceSource>();
   const [filterColumn, setFilterColumn] = useState('');
   const [filterText, setFilterText] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState(false);
@@ -324,7 +326,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!parentReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -691,6 +693,17 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     return { input, current: () => issued.current === input.pageToken && layoutScope.current.current() &&
       !lease.current && !requiresRefresh && current() };
   }
+  const canBrowseParent = active && !blocked && !requiresRefresh && pageConnectionVersion === connectionVersion &&
+    !!page?.canBrowseReferences && row !== null && !!page.rows[row];
+
+  /** 浏览绑定当前已读取的原行，允许保留同页或其他页的草稿。 */
+  function openParent() {
+    const pageToken = page?.exportToken;
+    if (!canBrowseParent || row === null || !pageToken || issued.current !== pageToken ||
+        lease.current || !layoutScope.current.current()) return;
+    setParentReference({ input: { ...target, pageToken, parentRow: row },
+      current: () => issued.current === pageToken && layoutScope.current.current() && !lease.current });
+  }
   const recordIndex = row ?? -1, recordCount = page?.rows.length ?? 0;
   const canMoveRecord = active && recordView && !pagingBlocked && !requiresRefresh && recordIndex >= 0 && recordIndex < recordCount;
   const moves: Record<PostgresRecordMove, boolean> = {
@@ -753,6 +766,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         ? <button disabled={blocked} onClick={() => void run(openPresetPage)}>{tablePresetsZh.treeRetry}</button>
         : <button disabled={frozenPage} onClick={() => navigate({ ...options, limit: pageSize })}>{text.refresh}</button>}
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
+      <button disabled={!canBrowseParent} onClick={openParent}>{referenceText.browse}</button>
       <button disabled={!canReadStatistics} onClick={() => openColumnReader('statistics')}>{postgresColumnStatisticsZh.title}</button>
       <button disabled={frozenPage || requiresRefresh || !page?.exportToken}
         onClick={() => setExportPage(page)}>{postgresTableExportZh.open}</button>
@@ -976,6 +990,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         setImportPage(undefined); setRequiresRefresh(true); setMessage(outcome);
         if (committed) void run(isCurrent => read(options, isCurrent));
       }}/>}
+    {parentReference && <Modal title={referenceText.browseTitle} onClose={() => setParentReference(undefined)} wide>
+      <div className="modal-content"><PostgresReferencePicker source={parentReference} onClose={() => setParentReference(undefined)}/></div>
+    </Modal>}
     {form && page && <PostgresRecordForm page={page} row={form.row}
       duplicate={form.duplicate}
       initial={form.duplicate ? { kind: 'insert', fields: form.duplicate.fields } : stagedChange?.kind === 'update' ? stagedChange : undefined}

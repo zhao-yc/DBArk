@@ -57,6 +57,10 @@
 .pg-reference-candidates table { border-collapse: collapse; width: 100%; }
 .pg-reference-candidates :is(th, td) { padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
 .pg-reference-candidates th { position: sticky; top: 0; background: var(--surface); }
+.pg-reference-record table { table-layout: fixed; }
+.pg-reference-record th { position: static; vertical-align: top; width: clamp(6rem, 20%, 14rem); }
+.pg-reference-record button { margin-inline-start: 8px; }
+.pg-reference-record textarea { display: block; width: 100%; margin-top: 4px; }
 .pg-value-options table { width: 100%; table-layout: fixed; }
 .pg-value-options :is(th, td):last-child { width: 12ch; }
 .pg-value-options label span { min-width: 0; overflow-wrap: anywhere; }

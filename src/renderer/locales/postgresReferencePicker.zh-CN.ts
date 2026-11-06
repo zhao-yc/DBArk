@@ -1,5 +1,11 @@
 export const postgresReferencePickerZh = {
   open: '选择外键记录',
+  browse: '查看引用记录',
+  browseTitle: 'PostgreSQL 引用记录',
+  browseHint: '按当前行在数据库中的原值查找。已暂存的外键值仍保留在草稿中。',
+  parentTable: '引用表',
+  emptyBrowseKeys: '当前表没有可读取的外键。',
+  emptyParent: '没有可见的引用记录。请核对外键值和目标表的读取权限。',
   title: 'PostgreSQL 外键选值',
   close: '关闭外键选值',
   constraint: '外键约束',

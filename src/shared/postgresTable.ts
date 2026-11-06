@@ -133,13 +133,15 @@ export interface PostgresTableValues {
 
 export const postgresTableReferenceLimits = { page: 40, offset: 100_000, search: 256, constraints: 128, columns: 16 } as const;
 export const postgresTableReferenceSchema = postgresTableReleaseSchema.extend({
+  parentRow: z.number().int().min(0).max(postgresTableLimits.page - 1).optional(),
   lookup: z.object({
     id: z.string().regex(/^[1-9][0-9]{0,9}$/),
     stamp: z.string().regex(/^[0-9a-f]{64}$/),
     search: z.string().max(postgresTableReferenceLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
     offset: z.number().int().min(0).max(postgresTableReferenceLimits.offset),
   }).strict().optional(),
-}).strict();
+}).strict().refine(input => input.parentRow === undefined || !input.lookup ||
+  (input.lookup.search === '' && input.lookup.offset === 0));
 export type PostgresTableReferenceInput = z.infer<typeof postgresTableReferenceSchema>;
 export interface PostgresTableReference {
   id: string; stamp: string; name: string; schema: string; table: string;
@@ -213,6 +215,7 @@ export interface PostgresTablePage {
   pageToken?: string;
   exportToken?: string;
   canImport?: true;
+  canBrowseReferences?: true;
   columns: PostgresTableColumn[];
   rows: DataRow[];
   rowKeys?: string[];

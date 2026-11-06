@@ -30,8 +30,9 @@ interface Relation {
   fingerprint: string;
   capabilities: Capabilities;
   canImport: boolean;
+  canReadSystemColumns: boolean;
 }
-interface Original { tid: string; version: string; digest: string; key: string; }
+interface Original { tid: string; version: string; tableOid: string; digest: string; key: string; }
 interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; }
 type ExportSource = { kind: 'copy'; write: (sink: (chunk: Buffer) => Promise<void>) => Promise<number> } |
   { kind: 'cursor'; columns: PostgresTableColumn[]; rows: AsyncIterable<CellValue[]>;
@@ -68,7 +69,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
            pg_catalog.has_table_privilege(c.oid, 'DELETE'),
            (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND i.indisvalid),
            CASE WHEN c.relkind IN ('v','m') THEN pg_catalog.pg_get_viewdef(c.oid, false) END,
-           pg_catalog.row_security_active(c.oid), c.relispopulated
+           pg_catalog.row_security_active(c.oid), c.relispopulated, pg_catalog.has_table_privilege(c.oid, 'SELECT')
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname::text = $1 AND c.relname::text = $2 AND c.relkind IN ('r','p','v','m','f')
       AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
@@ -113,6 +114,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
     oid: info.c0, sql: postgresIdentifier(schema) + '.' + postgresIdentifier(name), kind, columns, keys,
     fingerprint: digest([info, fields.rows]),
     canImport: (kind === 'r' || kind === 'p') && info.c4 === 'f' && info.c5 === 't' && info.c10 === 'f',
+    canReadSystemColumns: (kind === 'r' || kind === 'p') && info.c12 === 't',
     capabilities: {
       insert: editable && info.c5 === 't',
       update: editable && keys.length > 0 && info.c6 === 't',
@@ -145,8 +147,9 @@ function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter
   const args: unknown[] = page ? [page.limit + 1, page.offset] : [];
   // COPY 流使用简单协议，其筛选值使用与会话转义设置无关的显式字面量。
   const condition = postgresTableCondition(input.filter, key, value => copy ? postgresDdlLiteral(value) : '$' + args.push(value));
-  const withOriginal = !!page && (relation.capabilities.update || relation.capabilities.delete);
-  const markers = withOriginal ? ', ctid::text, xmin::text' : '';
+  const withOriginal = !!page && (relation.canReadSystemColumns || relation.capabilities.update || relation.capabilities.delete);
+  // 分区的物理行号可能相同，同时保留真实分区 OID。三项身份打包成一列，保留宽表预算。
+  const markers = withOriginal ? ', pg_catalog.json_build_array(ctid::text, xmin::text, tableoid::oid::text)::text' : '';
   return { sql: 'SELECT ' + projection + markers + ' FROM ' + only(relation) + (condition ? ' WHERE ' + condition : '') +
     (ordering.length ? ' ORDER BY ' + ordering.join(', ') : '') + (page ? ' LIMIT $1 OFFSET $2' : ''), args, withOriginal };
 }
@@ -222,9 +225,11 @@ export class PostgresTableWorkspace {
         for (const raw of records.rows.slice(0, input.limit)) {
           const row = Object.fromEntries(relation.columns.map(column => [column.key, raw[column.key]]));
           if (withOriginal) {
-            const tid = raw['c' + relation.columns.length], version = raw['c' + (relation.columns.length + 1)];
-            if (typeof tid !== 'string' || typeof version !== 'string') throw Error('PostgreSQL原行身份回包不完整');
-            originals.push({ tid, version, digest: digest(row),
+            const marker = raw['c' + relation.columns.length];
+            const [tid, version, tableOid] = typeof marker === 'string' ? JSON.parse(marker) : [];
+            if (typeof tid !== 'string' || typeof version !== 'string' || typeof tableOid !== 'string')
+              throw Error('PostgreSQL原行身份回包不完整');
+            originals.push({ tid, version, tableOid, digest: digest(row),
               key: digest([relation.fingerprint, keyColumns.map(column => row[column.key])]) });
           }
           rows.push(row);
@@ -245,7 +250,7 @@ export class PostgresTableWorkspace {
       const current: Snapshot = {
         token: exportToken, scope: { owner, tabId, connectionRevision, connectionId, database, table },
         expires: now + 30 * 60 * 1000, relation: retained.values().next().value?.relation ?? result.relation,
-        rows: result.originals, options, writeEligible,
+        rows: result.truncated ? [] : result.originals, options, writeEligible,
       };
       this.snapshots.set(key, { current, retained });
       return {
@@ -253,7 +258,9 @@ export class PostgresTableWorkspace {
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
         relationKind: result.relation.kind, capabilities, exportToken, ...(writeEligible ? { pageToken: exportToken } : {}),
         ...(result.counted ? { counted: { matchingRows: result.counted.matchingRows, offset: result.counted.offset } } : {}),
-        ...(writeEligible && result.originals.length ? { rowKeys: result.originals.map(row => row.key) } : {}),
+        ...(result.originals.length && (capabilities.update || capabilities.delete)
+          ? { rowKeys: result.originals.map(row => row.key) } : {}),
+        ...(!result.truncated && result.originals.length ? { canBrowseReferences: true as const } : {}),
         ...(result.relation.canImport ? { canImport: true as const } : {}),
       };
     } finally { this.active.delete(key); }
@@ -327,18 +334,35 @@ export class PostgresTableWorkspace {
   async references(input: Scoped<PostgresTableReferenceInput>, connect: Connect): Promise<PostgresTableReferenceResult> {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
-    const original = this.snapshot(input, true);
-    if (!original.relation.capabilities.insert && !original.relation.capabilities.update) throw Error('原表页不支持写入外键字段');
+    const browsing = input.parentRow !== undefined;
+    const original = this.snapshot(input, !browsing);
+    const source = input.parentRow === undefined ? undefined : original.rows[input.parentRow];
+    if (browsing && !source) throw Error('原记录不可定位，请刷新表页');
+    if (!browsing && !original.relation.capabilities.insert && !original.relation.capabilities.update)
+      throw Error('原表页不支持写入外键字段');
     const result = await connect(async connection => {
       await begin(connection, 'page');
       const relation = await readRelation(connection, input.table);
       if (relation.fingerprint !== original.relation.fingerprint) throw Error('原表页结构或权限已变化，请刷新');
-      const references = await readPostgresTableReferences(connection, relation.oid, relation.columns, input.lookup);
+      // 在同一快照内核对磁盘原行，之后按数据库自己的外键比较规则查询父记录。
+      const child = source && { sql: only(relation), tid: source.tid, version: source.version, tableOid: source.tableOid,
+        oid: relation.oid, name: relation.sql };
+      if (source && child && input.lookup) {
+        const args: unknown[] = [];
+        const predicate = rowPredicate(args, source);
+        const projection = relation.columns.map(column => postgresIdentifier(column.name)).join(', ');
+        const row = await connection.query('SELECT ' + projection + ' FROM ' + child.sql + ' WHERE ' + predicate +
+          ' AND tableoid = $3::oid AND pg_catalog.to_regclass($4)::oid = $5::oid',
+        [...args, child.tableOid, child.name, child.oid], { rows: 2, bytes: 8 * 1024 * 1024 });
+        if (row.truncated || row.rows.length !== 1 || digest(row.rows[0]) !== source.digest)
+          throw Error('原记录已变化，请刷新后查看引用记录');
+      }
+      const references = await readPostgresTableReferences(connection, relation.oid, relation.columns, input.lookup, child);
       const reply = await connection.query('COMMIT', undefined, small());
       if (reply.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 外键候选读取未完成');
       return references;
     });
-    if (this.active.has(key) || this.snapshot(input, true) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开选值');
+    if (this.active.has(key) || this.snapshot(input, !browsing) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开外键记录');
     return result;
   }
 

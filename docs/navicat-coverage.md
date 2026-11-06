@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 表页可从网格或记录表单只读查看当前行引用的父记录，支持复合键、只读账号、分区表及原值展开。D05 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 查看引用记录](development/postgres-browse-parent-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 表页确认整批回滚后保留有效的跨页草稿，可修正并生成新的单次提交预览。提交结果待核对时保持编辑锁定。D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 回滚后修正草稿](development/postgres-rollback-recovery-20261106.md)
 
 2026-11-06 源码增量：[PostgreSQL 复制勾选记录](development/postgres-batch-duplicate-20261106.md)支持按原页批量生成独立副本、逐条复核、整批暂存与撤销，沿用预览和原事务。D02、D04 和 R01 仍为部分覆盖，暂不发布。

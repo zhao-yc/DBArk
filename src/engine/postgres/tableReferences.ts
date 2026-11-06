@@ -6,18 +6,33 @@ import type { PostgresConnection } from './connection';
 
 const oid = z.string().regex(/^[1-9][0-9]{0,9}$/);
 const catalogRecord = z.object({
-  id: oid, target: oid, name: z.string(), schema: z.string(), table: z.string(),
+  id: oid, target: oid, name: z.string(), schema: z.string(), table: z.string(), kind: z.enum(['r', 'p']),
   pairs: z.array(z.object({ local: z.string(), remote: z.string(), type: z.string(), localAttnum: z.number(), remoteAttnum: z.number(),
-    localType: oid, remoteType: oid })).min(1).max(32),
+    localType: oid, remoteType: oid, operator: z.string(), operatorSchema: z.string(),
+    parentCast: z.string().nullable(), childCast: z.string().nullable(),
+    collation: z.string().nullable(), collationSchema: z.string().nullable() })).min(1).max(32),
 });
-const budget = { rows: limits.constraints + 1, bytes: 2 * 1024 * 1024 };
+type ChildRow = { sql: string; name: string; oid: string; tableOid: string; tid: string; version: string };
+
+/** 与 PostgreSQL 的外键检查一样，按目录使用对应操作符、输入类型及父键排序规则。 */
+function parentComparison(pair: z.infer<typeof catalogRecord>['pairs'][number]): string {
+  if (!/^[+*/<>=~!@#%^&|`?\-]+$/.test(pair.operator) || pair.operator.includes('--') || pair.operator.includes('/*'))
+    throw Error('外键比较操作符无法安全读取');
+  const parent = 'p.' + postgresIdentifier(pair.remote), child = 'src.' + postgresIdentifier(pair.local);
+  const left = pair.parentCast ? 'CAST(' + parent + ' AS ' + pair.parentCast + ')' : parent;
+  const right = pair.childCast ? 'CAST(' + child + ' AS ' + pair.childCast + ')' : child;
+  const collate = pair.collation && pair.collationSchema
+    ? ' COLLATE ' + postgresIdentifier(pair.collationSchema) + '.' + postgresIdentifier(pair.collation) : '';
+  return child + ' IS NOT NULL AND (' + left + collate + ') OPERATOR(' +
+    postgresIdentifier(pair.operatorSchema) + '.' + pair.operator + ') ' + right;
+}
 
 /** 按约束序号绑定两边字段，仅返回当前账号可以读取整组引用键的约束。 */
 export async function readPostgresTableReferences(connection: PostgresConnection, source: string, columns: readonly PostgresTableColumn[],
-  lookup: PostgresTableReferenceInput['lookup']): Promise<PostgresTableReferenceResult> {
+  lookup: PostgresTableReferenceInput['lookup'], child?: ChildRow): Promise<PostgresTableReferenceResult> {
   const catalog = await connection.query(`
     SELECT pg_catalog.jsonb_build_object('id', f.oid::text, 'target', r.oid::text, 'name', f.conname,
-      'schema', n.nspname, 'table', r.relname, 'pairs', mapped.pairs)
+      'schema', n.nspname, 'table', r.relname, 'kind', r.relkind, 'pairs', mapped.pairs)
     FROM pg_catalog.pg_constraint f
     JOIN pg_catalog.pg_class r ON r.oid = f.confrelid
     JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
@@ -26,25 +41,35 @@ export async function readPostgresTableReferences(connection: PostgresConnection
         pg_catalog.bool_and(pg_catalog.has_column_privilege(r.oid, ra.attnum, 'SELECT')) AS readable,
         pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
           'local', la.attname, 'remote', ra.attname, 'type', pg_catalog.format_type(ra.atttypid, ra.atttypmod),
-          'localAttnum', la.attnum, 'remoteAttnum', ra.attnum, 'localType', la.atttypid::text, 'remoteType', ra.atttypid::text
+          'localAttnum', la.attnum, 'remoteAttnum', ra.attnum, 'localType', la.atttypid::text, 'remoteType', ra.atttypid::text,
+          'operator', op.oprname, 'operatorSchema', op_ns.nspname,
+          'parentCast', CASE WHEN ra.atttypid <> op.oprleft AND lt.typtype <> 'p' THEN pg_catalog.format_type(op.oprleft, NULL) END,
+          'childCast', CASE WHEN la.atttypid <> op.oprright AND rt.typtype <> 'p' THEN pg_catalog.format_type(op.oprright, NULL) END,
+          'collation', co.collname, 'collationSchema', co_ns.nspname
         ) ORDER BY k.pos) AS pairs
       FROM pg_catalog.unnest(f.conkey) WITH ORDINALITY AS k(local_num, pos)
       JOIN pg_catalog.pg_attribute la ON la.attrelid = f.conrelid AND la.attnum = k.local_num AND NOT la.attisdropped
       JOIN pg_catalog.pg_attribute ra ON ra.attrelid = f.confrelid AND ra.attnum = f.confkey[k.pos::int] AND NOT ra.attisdropped
+      JOIN pg_catalog.pg_operator op ON op.oid = f.conpfeqop[k.pos::int]
+      JOIN pg_catalog.pg_namespace op_ns ON op_ns.oid = op.oprnamespace
+      JOIN pg_catalog.pg_type lt ON lt.oid = op.oprleft
+      JOIN pg_catalog.pg_type rt ON rt.oid = op.oprright
+      LEFT JOIN pg_catalog.pg_collation co ON co.oid = ra.attcollation AND ra.attcollation <> la.attcollation
+      LEFT JOIN pg_catalog.pg_namespace co_ns ON co_ns.oid = co.collnamespace
     ) mapped
     WHERE f.conrelid = $1::oid AND f.contype = 'f' AND r.relkind IN ('r','p')
       AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_' AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
       AND COALESCE((pg_catalog.to_jsonb(f)->>'conperiod')::boolean, false) = false
       AND mapped.readable AND mapped.size = pg_catalog.cardinality(f.conkey) AND mapped.size BETWEEN 1 AND 32
     ORDER BY f.conname, f.oid LIMIT $2
-  `, [source, limits.constraints + 1], budget);
+  `, [source, limits.constraints + 1], { rows: limits.constraints + 1, bytes: 2 * 1024 * 1024 });
   if (catalog.truncated || catalog.rows.length > limits.constraints) throw Error('外键目录超过可浏览上限');
   const choices: PostgresTableReference[] = [];
   let selected: z.infer<typeof catalogRecord> | undefined;
   for (const row of catalog.rows) {
     const raw = String(row.c0), item = catalogRecord.parse(JSON.parse(raw));
     const pairs = item.pairs.flatMap(pair => {
-      const local = columns.find(column => column.name === pair.local && !column.generated);
+      const local = columns.find(column => column.name === pair.local && (child || !column.generated));
       return local ? [{ local: local.key, localName: local.name, remote: pair.remote, binary: local.binary }] : [];
     });
     if (pairs.length !== item.pairs.length) continue;
@@ -53,7 +78,7 @@ export async function readPostgresTableReferences(connection: PostgresConnection
     if (lookup?.id === item.id && lookup.stamp === stamp) selected = item;
   }
   if (!lookup) return { choices };
-  if (!selected) throw Error('原外键、引用列或读取权限已变化，请重新打开选值');
+  if (!selected) throw Error('原外键、引用列或读取权限已变化，请重新打开外键记录');
 
   const relation = postgresIdentifier(selected.schema) + '.' + postgresIdentifier(selected.table);
   const keyNames = selected.pairs.map(pair => pair.remote);
@@ -73,7 +98,15 @@ export async function readPostgresTableReferences(connection: PostgresConnection
   const projection = expressions.map((expression, index) => index < keys.length ? expression : `pg_catalog.left(${expression}::text, 400)`);
   const filter = expressions.map(expression => `pg_catalog.strpos(pg_catalog.lower(${expression}::text), pg_catalog.lower($1::text)) > 0`).join(' OR ');
   // 只允许目录产生标识符；实际名称再次解析为原 OID，避免并发改名使本次查询指向别的关系。
-  const result = await connection.query(`
+  const result = child ? await connection.query(`
+    SELECT ${expressions.map(expression => 'p.' + expression).join(', ')}
+    FROM ${child.sql} AS src JOIN ${selected.kind === 'r' ? 'ONLY ' : ''}${relation} AS p
+      ON ${selected.pairs.map(parentComparison).join(' AND ')}
+    WHERE src.ctid = $1::tid AND src.xmin = $2::xid AND src.tableoid = $3::oid
+      AND pg_catalog.to_regclass($4)::oid = $5::oid AND pg_catalog.to_regclass($6)::oid = $7::oid
+    LIMIT 2
+  `, [child.tid, child.version, child.tableOid, child.name, child.oid, relation, selected.target], { rows: 2, bytes: 2 * 1024 * 1024 })
+    : await connection.query(`
     SELECT ${projection.join(', ')} FROM ${relation}
     WHERE pg_catalog.to_regclass($3)::oid = $4::oid
       AND ${keys.map(key => `${key} IS NOT NULL`).join(' AND ')}
@@ -81,7 +114,8 @@ export async function readPostgresTableReferences(connection: PostgresConnection
     ORDER BY ${keys.join(', ')} LIMIT ${limits.page + 1} OFFSET $2
   `, [lookup.search, lookup.offset, relation, selected.target], { rows: limits.page + 1, bytes: 2 * 1024 * 1024 });
   const identity = await connection.query('SELECT pg_catalog.to_regclass($1)::oid::text', [relation], { rows: 1, bytes: 8192 });
-  if (identity.rows[0]?.c0 !== selected.target) throw Error('被引用关系已变化，请重新打开选值');
+  if (identity.rows[0]?.c0 !== selected.target) throw Error('被引用关系已变化，请重新打开外键记录');
+  if (child && (result.truncated || result.rows.length > 1)) throw Error('引用记录无法唯一定位或超过读取预算');
   if (result.truncated) throw Error('候选记录超过显示预算，请缩小搜索范围');
   return { choices, page: {
     columns: metadata.map((column, index) => ({ ...column, key: 'c' + index })),
