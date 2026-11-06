@@ -1,4 +1,6 @@
-import { sqliteDataCompareLimits, sqliteDataCompareZh, type SqliteDataCompareInput } from '../shared/sqliteDataCompare';
+import { buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync';
+import type { SqliteEditClaim } from './sqliteTableEdit';
+import { sqliteDataCompareLimits, sqliteDataCompareZh, sqliteDataSyncLimits, sqliteDataSyncZh, type SqliteDataCompareInput, type SqliteDataSyncPreviewInput } from '../shared/sqliteDataCompare';
 import { sameConnectionFamily } from '../shared/connectionDialect';
 import { postgresTableExportExtension, type PostgresTableImportChooseInput } from '../shared/postgresTable';
 import { inspectPostgresCopySource, type PostgresCopySource } from '../engine/postgres/copyImportFile';
@@ -153,6 +155,12 @@ const files = new Map<string, { path: string; purpose: string; format?: string }
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
 let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
+interface SqliteSynchronization {
+  id: string; owner: MainInvocation; expires: number; revision: number; evidence: SqliteSyncEvidence;
+  preview?: { id: string; claim: SqliteEditClaim };
+}
+let sqliteSynchronization: SqliteSynchronization | undefined;
+
 let sqliteCopyTask: { id: string; owner: MainInvocation; abort: AbortController } | undefined;
 let binaryCellFileActive = false;
 const exportReservations = new ExportReservations();
@@ -860,17 +868,76 @@ async function compareSqliteData(input: SqliteDataCompareInput, owner: MainInvoc
     controller.signal.throwIfAborted();
   };
   assertOwner();
+  sqliteSynchronization = undefined;
   sqliteComparison = { owner: owner!, id: input.taskId, controller };
   const timer = setTimeout(() => controller.abort(Error(sqliteDataCompareZh.timeout)), sqliteDataCompareLimits.timeoutMs);
   timer.unref();
   try {
-    const output = await broker.request('sqlite.compareData', { source: input, signal: controller.signal, assertOwner });
+    const profile = store.connections().find(value => value.id === input.target.connectionId);
+    let evidence: SqliteSyncEvidence | undefined;
+    const capture = profile?.dialect === 'sqlite' && !profile.sqlite.readOnly ? (value: SqliteSyncEvidence) => { evidence = value; } : undefined;
+    const output = await broker.request('sqlite.compareData', { source: input, signal: controller.signal, assertOwner, capture });
     assertOwner();
-    return output;
+    if (!evidence) return output;
+    const record = { id: randomUUID(), owner: owner!, expires: Date.now() + sqliteDataSyncLimits.lifetimeMs, revision, evidence };
+    sqliteSynchronization = record;
+    const snapshotId = record.id;
+    setTimeout(() => { if (sqliteSynchronization?.id === snapshotId) sqliteSynchronization = undefined; }, sqliteDataSyncLimits.lifetimeMs).unref();
+    return { ...output, syncSnapshotId: snapshotId };
   } catch (reason) {
     if (controller.signal.aborted && !(reason instanceof AggregateError)) controller.signal.throwIfAborted();
     throw reason;
   } finally { clearTimeout(timer); sqliteComparison = undefined; }
+}
+
+function assertSqliteSyncOwner(record: SqliteSynchronization | undefined, owner: MainInvocation | undefined): asserts record is SqliteSynchronization {
+  columnsMain.assertCapturedOwner(owner);
+  if (!record || shuttingDown || record.revision !== store.connectionRevision() || record.expires <= Date.now() || !columnsMain.sharesDocumentOwner(record.owner, owner!))
+    throw Error(sqliteDataSyncZh.stale);
+  connectionConfig.assertAvailable(record.evidence.target.connectionId);
+}
+
+/** 预览的行值来自比较快照。提交领取一次预览并沿现有 SQLite 写回执登记。 */
+function previewSqliteSync(input: SqliteDataSyncPreviewInput, owner: MainInvocation | undefined) {
+  const record = sqliteSynchronization;
+  assertSqliteSyncOwner(record, owner);
+  if (record.id !== input.snapshotId) throw Error(sqliteDataSyncZh.stale);
+  record.preview = undefined;
+  const profile = store.resolveConnection(record.evidence.target.connectionId);
+  if (profile.dialect !== 'sqlite') throw Error(sqliteDataSyncZh.stale);
+  const claim = buildSqliteSyncClaim(record.evidence, input.selected, profile);
+  const id = randomUUID();
+  record.preview = { id, claim };
+  return { previewId: id, confirmation: claim.confirmation, counts: claim.counts };
+}
+
+async function applySqliteSync(input: import('../shared/sqliteTableEdit').SqliteTableEditApplyInput, owner: MainInvocation | undefined) {
+  const record = sqliteSynchronization;
+  assertSqliteSyncOwner(record, owner);
+  const preview = record.preview;
+  if (!preview || preview.id !== input.previewId || preview.claim.confirmation !== input.confirmation) throw Error(sqliteDataSyncZh.stale);
+  if (tasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('SQLite 任务编号已使用');
+  const { claim } = preview;
+  sqliteSynchronization = undefined;
+  const assertCurrent = () => assertSqliteSyncOwner(record, owner);
+  const startedAt = new Date().toISOString();
+  const task: TaskRecord = { id: input.taskId, kind: 'sqlite.tableEdit.apply', status: 'running', progress: 0, message: sqliteDataSyncZh.working, startedAt };
+  tasks.set(task.id, task);
+  try {
+    const write = sqliteWrites.begin(task.id, claim.snapshot.target, claim.statements.length);
+    const result = sqliteWrites.outcome(task.id, await broker.request('sqlite.compareSync.apply', {
+      claim, request: { ...input, operationId: write.operationId, recordWriteFact: write.record, assertCurrent }
+    }));
+    try { taskEvent({ taskId: task.id, status: result.outcome === 'committed' ? 'completed' : 'failed', progress: result.outcome === 'committed' ? 100 : 0, message: result.message }); }
+    catch { result.cleanupWarning = true; }
+    return result;
+  } catch (error) {
+    const committed = sqliteWrites.committed(task.id);
+    if (committed) return { operationId: committed.operationId, target: committed.target, counts: claim.counts, fact: committed,
+      outcome: 'committed', message: 'SQLite 同步已提交，附加回执未完整，请刷新右侧核对', cleanupWarning: true };
+    taskEvent({ taskId: task.id, status: 'failed', progress: 0, message: 'SQLite 同步未取得完整回执，请核对右侧数据库' });
+    throw error;
+  }
 }
 
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
@@ -1876,6 +1943,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
+    case 'sqlite.compareSync.preview': return previewSqliteSync(input, columns);
+    case 'sqlite.compareSync.apply': return applySqliteSync(input, columns);
     case 'sqlite.compareData': return compareSqliteData(input, columns);
     case 'sqlite.compareData.cancel':
       columnsMain.assertCapturedOwner(columns);
@@ -2434,7 +2503,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
-        if (payload.command.startsWith('backupArchive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel') columns = columnsMain.capture(event);
+        if (payload.command.startsWith('backupArchive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind === 'postgres.table.import') columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||

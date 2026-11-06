@@ -1,3 +1,4 @@
+import type { SqliteSyncEvidence } from './sqliteDataSync';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteDataCompareLimits as limits, type SqliteDataCompareInput, type SqliteDataCompareOutput, type SqliteDataCompareRow, type SqliteDataCompareEndpoint } from '../shared/sqliteDataCompare';
@@ -16,7 +17,7 @@ async function describe(driver: SqliteDriverSession, table: string, control: Sql
   const key = catalogue.xinfo.map(row => ({ name: row[1] as string, order: integer(row[5]) }))
     .filter(column => column.order > 0).sort((left, right) => left.order - right.order);
   if (!key.length || key.some((column, index) => column.order !== index + 1)) throw Error('两侧普通表均须有完整的显式主键');
-  return { columns: catalogue.columns, key: key.map(column => column.name) };
+  return { ...catalogue, key: key.map(column => column.name) };
 }
 
 /** 主键和值按原生存储类型比较。文本、二进制和64位整数不经隐式数值转换。 */
@@ -48,7 +49,7 @@ async function data(driver: SqliteDriverSession, target: SqliteDataCompareEndpoi
 }
 
 /** 左右目录先固定快照，再读取各自完整范围。收尾由原 SqliteRuntime 关闭准确驱动。 */
-export async function compareSqliteTables(left: SqliteDriverSession, right: SqliteDriverSession, input: SqliteDataCompareInput, check: () => void): Promise<SqliteDataCompareOutput> {
+export async function compareSqliteTables(left: SqliteDriverSession, right: SqliteDriverSession, input: SqliteDataCompareInput, check: () => void, capture?: (evidence: SqliteSyncEvidence) => void): Promise<SqliteDataCompareOutput> {
   const control = { check, beginCleanup() {}, cleanupFailed() {} };
   const oneFile = left === right;
   if (oneFile && input.source.table === input.target.table) throw Error('请选择两张不同的表');
@@ -64,6 +65,10 @@ export async function compareSqliteTables(left: SqliteDriverSession, right: Sqli
   const a = await data(left, input.source, source, columns, source.key, input, control);
   const b = await data(right, input.target, target, columns, source.key, input, control);
   const differences: SqliteDataCompareRow[] = [];
+  const syncRows: SqliteSyncEvidence['rows'] = [];
+  const identity = right.identity;
+  const sync = !!capture && identity && !input.filters.some(filter => filter.enabled !== false) && !target.columns.some(column => column.generated);
+
   const counts = { 'source-only': 0, 'target-only': 0, different: 0 };
   let equal = 0, bytes = 0;
   const add = (row: SqliteDataCompareRow) => {
@@ -72,6 +77,7 @@ export async function compareSqliteTables(left: SqliteDriverSession, right: Sqli
     differences.push(row); counts[row.kind]++;
   };
   for (const id of [...new Set([...a.keys(), ...b.keys()])].sort()) {
+    const count = differences.length;
     const before = a.get(id), after = b.get(id);
     if (!before && after) add({ kind: 'target-only', key: after.key, cells: after.values.map((target, column) => ({ column, target })) });
     else if (before && !after) add({ kind: 'source-only', key: before.key, cells: before.values.map((source, column) => ({ column, source })) });
@@ -79,6 +85,12 @@ export async function compareSqliteTables(left: SqliteDriverSession, right: Sqli
       const cells = before.values.flatMap((source, column) => sameValue(source, after.values[column]) ? [] : [{ column, source, target: after.values[column] }]);
       if (cells.length) add({ kind: 'different', key: before.key, cells }); else equal++;
     }
+    if (sync && differences.length > count) syncRows.push({ key: differences[count].key, before: after?.values, after: before?.values });
+  }
+  if (sync && syncRows.length) {
+    const version = await readSqliteTableRows(right, 'PRAGMA main.schema_version', [], 1, control);
+    if (!version[0]?.[0] || typeof version[0][0] !== 'object' || version[0][0].type !== 'integer') throw Error('SQLite 同步目录版本无效');
+    capture!({ target: input.target, identity, catalogue: target, schemaVersion: version[0][0].value, columns, keyColumns: source.key, rows: syncRows });
   }
   return { snapshot: oneFile ? 'one-file' : 'two-files', columns, keyColumns: source.key, sourceRows: a.size, targetRows: b.size, equal, counts, differences };
 }

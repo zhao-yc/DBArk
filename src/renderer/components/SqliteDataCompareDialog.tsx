@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SqliteValue } from '../../engine/sqlite/protocol';
-import { sqliteDataCompareLimits as limits, sqliteDataCompareZh as text, type SqliteDataCompareKind, type SqliteDataCompareOutput, type SqliteDataCompareRow } from '../../shared/sqliteDataCompare';
+import { sqliteDataCompareLimits as limits, sqliteDataCompareZh as text, sqliteDataSyncLimits, sqliteDataSyncZh as syncText, type SqliteDataSyncPreview, type SqliteDataCompareKind, type SqliteDataCompareOutput, type SqliteDataCompareRow } from '../../shared/sqliteDataCompare';
 import type { SqliteTableFilter } from '../../shared/sqliteTableBrowse';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteDataCompare.css';
 
 const kinds = ['source-only', 'target-only', 'different'] as const;
+const syncActions = { 'source-only': syncText.insert, 'target-only': syncText.delete, different: syncText.update };
 type Selection = { connectionId: string; table: string };
 type Connection = { id: string; name: string };
 
@@ -58,14 +59,21 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
   const [output, setOutput] = useState<SqliteDataCompareOutput>(), [kind, setKind] = useState<SqliteDataCompareKind | 'all'>('all');
   const [page, setPage] = useState(0), [selected, setSelected] = useState<SqliteDataCompareRow>();
   const running = useRef<string | undefined>(undefined);
+  const [marked, setMarked] = useState<Set<SqliteDataCompareRow>>(() => new Set());
+  const [preview, setPreview] = useState<SqliteDataSyncPreview>(), [confirmation, setConfirmation] = useState('');
+  const [syncBusy, setSyncBusy] = useState(false), [syncStatus, setSyncStatus] = useState('');
+  const syncRunning = useRef(false);
   const detail = useRef<HTMLDivElement>(null);
   // 展开原值时将详情滚入当前对话框，避免按钮有回执却被长列表挡住。
   useEffect(() => { if (selected) detail.current?.scrollIntoView({ block: 'nearest' }); }, [selected]);
-  const clear = () => { setOutput(undefined); setError(''); setPage(0); setSelected(undefined); };
+  const clear = () => {
+    setOutput(undefined); setError(''); setPage(0); setSelected(undefined);
+    setMarked(new Set()); setPreview(undefined); setConfirmation(''); setSyncStatus('');
+  };
   const available = (side: Selection) => !!side.table && connections.some(profile => profile.id === side.connectionId);
   const ready = available(source) && available(target) && (source.connectionId !== target.connectionId || source.table !== target.table);
   async function compare() {
-    if (running.current || !ready) return;
+    if (running.current || syncRunning.current || !ready) return;
     const taskId = uid();
     const filters: SqliteTableFilter[] = filter.column ? [{ column: filter.column, operator: 'eq', value: { kind: filter.kind, value: filter.value } }] : [];
     running.current = taskId; setBusy(true); clear(); setKind('all');
@@ -74,15 +82,34 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
     finally { running.current = undefined; setBusy(false); }
   }
   const visible = output?.differences.filter(row => kind === 'all' || row.kind === kind) ?? [];
-  const close = () => { if (!running.current) onClose(); };
+  const close = () => { if (!running.current && !syncRunning.current) onClose(); };
+  async function previewSync() {
+    if (!output?.syncSnapshotId || !marked.size || running.current || syncRunning.current) return;
+    const selected = output.differences.flatMap((row, index) => marked.has(row) ? [index] : []);
+    syncRunning.current = true; setSyncBusy(true); setError(''); setConfirmation('');
+    try { setPreview(await invoke('sqlite.compareSync.preview', { snapshotId: output.syncSnapshotId, selected })); }
+    catch (reason) { setError(errorMessage(reason)); }
+    finally { syncRunning.current = false; setSyncBusy(false); }
+  }
+  async function applySync() {
+    if (!preview || confirmation !== preview.confirmation || syncRunning.current) return;
+    syncRunning.current = true; setSyncBusy(true);
+    try {
+      const result = await invoke('sqlite.compareSync.apply', { previewId: preview.previewId, confirmation, taskId: uid() });
+      clear();
+      if (result.outcome === 'committed') setSyncStatus(result.message); else setError(result.message);
+    } catch (reason) { clear(); setError(errorMessage(reason)); }
+    finally { syncRunning.current = false; setSyncBusy(false); }
+  }
+  const locked = busy || syncBusy || !!preview;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
       <div className="sqlite-data-compare-pair">
-        <CompareEndpoint label={text.source} connections={connections} disabled={busy} selection={source} onError={setError} change={next => { setSource(next); clear(); }}/>
-        <CompareEndpoint label={text.target} connections={connections} disabled={busy} selection={target} onError={setError} change={next => { setTarget(next); clear(); }}/>
+        <CompareEndpoint label={text.source} connections={connections} disabled={locked} selection={source} onError={setError} change={next => { setSource(next); clear(); }}/>
+        <CompareEndpoint label={text.target} connections={connections} disabled={locked} selection={target} onError={setError} change={next => { setTarget(next); clear(); }}/>
       </div>
-      <fieldset disabled={busy} className="sqlite-data-compare-filter">
+      <fieldset disabled={locked} className="sqlite-data-compare-filter">
         <legend>{text.filter}</legend>
         <Field label={text.filterColumn}><input aria-label={text.filterColumn} value={filter.column} maxLength={512} onChange={event => { setFilter({ ...filter, column: event.target.value }); clear(); }}/></Field>
         <Field label={text.filterType}><select aria-label={text.filterType} value={filter.kind} onChange={event => { setFilter({ ...filter, kind: event.target.value as typeof filter.kind }); clear(); }}>
@@ -91,14 +118,32 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
       </fieldset>
       <ErrorBox message={error}/>
       {busy && <p role="status">{text.running}</p>}
+      {syncBusy && <p role="status">{syncText.working}</p>}
+      {syncStatus && <p role="status">{syncStatus}</p>}
       {output && <>
         <p>{output.snapshot === 'one-file' ? text.singleSnapshot : text.splitSnapshot}</p>
         <p role="status">{text.keys}　{output.keyColumns.join('，')}　{[[text.sourceRows, output.sourceRows], [text.targetRows, output.targetRows], [text.equal, output.equal], ...kinds.map(item => [text[item], output.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
-        <Field label={text.kind}><select aria-label={text.kind} value={kind} onChange={event => { setKind(event.target.value as typeof kind); setPage(0); setSelected(undefined); }}>
+        {output.syncSnapshotId ? <p>{syncText.scope}　{syncText.count(marked.size)}</p> :
+          output.differences.length > 0 && <p>{syncText.unavailable}</p>}
+        {preview && <fieldset disabled={syncBusy}>
+          <legend>{syncText.preview}</legend>
+          <p>{connections.find(item => item.id === target.connectionId)?.name}　{preview.confirmation}</p>
+          <p>{syncText.insert} {preview.counts.insert} · {syncText.update} {preview.counts.update} · {syncText.delete} {preview.counts.delete}</p>
+          <div className="sqlite-data-sync-preview-rows">
+            <ul>{[...marked].map((row, index) => <li key={index}>{syncActions[row.kind]}　{keyLabel(row)}</li>)}</ul>
+          </div>
+          <Field label={syncText.confirm}><input aria-label={syncText.confirm} value={confirmation} onChange={event => setConfirmation(event.target.value)}/></Field>
+        </fieldset>}
+        <Field label={text.kind}><select aria-label={text.kind} disabled={locked} value={kind} onChange={event => { setKind(event.target.value as typeof kind); setPage(0); setSelected(undefined); }}>
           <option value="all">{text.all}</option>{kinds.map(item => <option value={item} key={item}>{text[item]}</option>)}</select></Field>
         {visible.length ? <>
-          <table><thead><tr><th>{text.kind}</th><th>{text.keys}</th><th>{text.detail}</th></tr></thead>
+          <table><thead><tr>{output.syncSnapshotId && <th>{syncText.select}</th>}<th>{text.kind}</th><th>{text.keys}</th><th>{text.detail}</th></tr></thead>
             <tbody>{visible.slice(page * limits.page, (page + 1) * limits.page).map((row, index) => <tr key={index}>
+              {output.syncSnapshotId && <td><input type="checkbox" aria-label={syncText.select + ' ' + keyLabel(row)}
+                checked={marked.has(row)} disabled={locked || (!marked.has(row) && marked.size >= sqliteDataSyncLimits.selected)} onChange={event => {
+                  const checked = event.target.checked;
+                  setMarked(previous => { const next = new Set(previous); if (checked) next.add(row); else next.delete(row); return next; });
+                }}/></td>}
               <td>{text[row.kind]}</td><td className="sqlite-data-compare-key">{keyLabel(row)}</td>
               <td><button onClick={() => setSelected(row)}>{text.detail}</button></td>
             </tr>)}</tbody></table>
@@ -110,9 +155,13 @@ export function SqliteDataCompareDialog({ connections, onClose }: { connections:
         </> : <p>{text.noDiff}</p>}
       </>}
     </div>
-    <footer className="modal-footer"><button className="primary" disabled={!ready || busy} onClick={() => void compare()}>{text.run}</button>
+    <footer className="modal-footer"><button className="primary" disabled={!ready || locked} onClick={() => void compare()}>{text.run}</button>
       {busy && <button onClick={() => {
         if (running.current) void invoke('sqlite.compareData.cancel', { taskId: running.current }).catch(reason => setError(errorMessage(reason)));
-      }}>{text.cancel}</button>}<span className="grow"/><button disabled={busy} onClick={close}>{text.close}</button></footer>
+      }}>{text.cancel}</button>}{preview ? <>
+        <button disabled={syncBusy} onClick={() => { setPreview(undefined); setConfirmation(''); }}>{syncText.back}</button>
+        <button className="danger" disabled={syncBusy || confirmation !== preview.confirmation} onClick={() => void applySync()}>{syncText.apply}</button>
+      </> : output?.syncSnapshotId && <button disabled={locked || !marked.size} onClick={() => void previewSync()}>{syncText.preview}</button>}
+      <span className="grow"/><button disabled={busy || syncBusy} onClick={close}>{text.close}</button></footer>
   </Modal>;
 }

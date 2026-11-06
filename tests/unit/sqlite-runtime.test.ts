@@ -1,3 +1,4 @@
+import { buildSqliteSyncClaim, type SqliteSyncEvidence } from '../../src/main/sqliteDataSync';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -327,5 +328,74 @@ describe('SQLite 数据比较真实快照', () => {
     expect(processes[0].sent.some(message => message.kind === 'cancel')).toBe(true);
     await processes[0].exited;
     expect(diskValue(a, 'SELECT count(*) FROM a')).toBe(0);
+  });
+});
+
+describe('SQLite 差异同步事务', () => {
+  function seed(profile: SqliteConnectionProfile, sql: string) {
+    const db = new DatabaseSync(profile.sqlite.filePath!);
+    try { db.exec(sql); } finally { db.close(); }
+  }
+  async function capture(app: SqliteRuntime, left: SqliteConnectionProfile, right: SqliteConnectionProfile, leftTable = 'ledger', rightTable = 'ledger') {
+    let evidence: SqliteSyncEvidence | undefined;
+    await app.request('sqlite.compareData', {
+      source: { source: { connectionId: left.id, table: leftTable, database: 'main' }, target: { connectionId: right.id, table: rightTable, database: 'main' },
+        filters: [], mode: 'and', taskId: 'sync-read' },
+      signal: new AbortController().signal, assertOwner() {}, capture(value: SqliteSyncEvidence) { evidence = value; }
+    });
+    if (!evidence) throw Error('缺少比较快照');
+    return evidence;
+  }
+  function apply(app: SqliteRuntime, claim: ReturnType<typeof buildSqliteSyncClaim>, taskId: string) {
+    return app.request('sqlite.compareSync.apply', {
+      claim, request: { taskId, previewId: 'sync-plan', confirmation: claim.confirmation, operationId: 'sync-operation',
+        assertCurrent() {}, recordWriteFact() {} }
+    });
+  }
+
+  it('跨文件在同一事务中提交所选插入、更新、删除，保留未选行与左侧原值', async () => {
+    const a = fixture('left'), b = fixture('right'), { runtime: app } = runtime([a, b]);
+    seed(a, "CREATE TABLE ledger(id INTEGER PRIMARY KEY, v); INSERT INTO ledger VALUES(1,X'00FF80'),(2,'新值'),(4,NULL);");
+    seed(b, "CREATE TABLE ledger(id INTEGER PRIMARY KEY, v); INSERT INTO ledger VALUES(2,'旧值'),(3,'待删'),(4,'未选');");
+    const evidence = await capture(app, a, b);
+    const claim = buildSqliteSyncClaim(evidence, [0, 1, 2], b);
+    expect(claim.counts).toEqual({ insert: 1, update: 1, delete: 1 });
+    expect(diskValue(b, 'SELECT v FROM ledger WHERE id=2')).toBe('旧值');
+    expect(await apply(app, claim, 'sync-apply')).toMatchObject({ outcome: 'committed', fact: { commitAcknowledged: true, appliedRows: 3 } });
+    expect(diskValue(b, 'SELECT hex(v) FROM ledger WHERE id=1')).toBe('00FF80');
+    expect(diskValue(b, 'SELECT v FROM ledger WHERE id=2')).toBe('新值');
+    expect(diskValue(b, 'SELECT count(*) FROM ledger WHERE id=3')).toBe(0);
+    expect(diskValue(b, 'SELECT v FROM ledger WHERE id=4')).toBe('未选');
+    expect(diskValue(a, 'SELECT count(*) FROM ledger')).toBe(3);
+  });
+
+  it('目标旧值变化时回滚前面已经执行的修改', async () => {
+    const a = fixture(), { runtime: app } = runtime([a]);
+    seed(a, "CREATE TABLE a(id INTEGER PRIMARY KEY, v); CREATE TABLE b(id INTEGER PRIMARY KEY, v); INSERT INTO a VALUES(1,'待插'),(2,'新值'); INSERT INTO b VALUES(2,'旧值');");
+    const claim = buildSqliteSyncClaim(await capture(app, a, a, 'a', 'b'), [0, 1], a);
+    seed(a, "UPDATE b SET v='并发变更' WHERE id=2");
+    expect(await apply(app, claim, 'stale-apply')).toMatchObject({ outcome: 'rolled-back', fact: { rollbackAcknowledged: true, appliedRows: 1 } });
+    expect(diskValue(a, 'SELECT count(*) FROM b')).toBe(1);
+    expect(diskValue(a, 'SELECT v FROM b WHERE id=2')).toBe('并发变更');
+  });
+
+  it('目标亲和性改变原值以及唯一约束的 REPLACE 冲突均整批回滚', async () => {
+    const a = fixture(), { runtime: app } = runtime([a]);
+    seed(a, "CREATE TABLE a(id INTEGER PRIMARY KEY, v); CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT UNIQUE ON CONFLICT REPLACE); INSERT INTO a VALUES(1,8),(2,'保留'); INSERT INTO b VALUES(3,'保留');");
+    const evidence = await capture(app, a, a, 'a', 'b');
+    const affinity = await apply(app, buildSqliteSyncClaim(evidence, [0], a), 'affinity');
+    expect(affinity.outcome).toBe('rolled-back'); expect(affinity.message).toContain('原值复核不一致');
+    const conflict = await apply(app, buildSqliteSyncClaim(evidence, [1], a), 'replace');
+    expect(conflict.outcome).toBe('rolled-back');
+    expect(diskValue(a, 'SELECT group_concat(id) FROM b')).toBe('3');
+  });
+
+  it('即使是空表，目标触发器也不能随同步执行', async () => {
+    const a = fixture(), { runtime: app } = runtime([a]);
+    seed(a, "CREATE TABLE a(id INTEGER PRIMARY KEY, v); CREATE TABLE b(id INTEGER PRIMARY KEY, v); CREATE TRIGGER bx AFTER INSERT ON b BEGIN DELETE FROM a; END; INSERT INTO a VALUES(1, '左侧');");
+    const result = await apply(app, buildSqliteSyncClaim(await capture(app, a, a, 'a', 'b'), [0], a), 'trigger');
+    expect(result.outcome).toBe('rolled-back'); expect(result.message).toContain('有触发器');
+    expect(diskValue(a, 'SELECT count(*) FROM a')).toBe(1);
+    expect(diskValue(a, 'SELECT count(*) FROM b')).toBe(0);
   });
 });

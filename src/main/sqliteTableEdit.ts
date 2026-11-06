@@ -31,7 +31,7 @@ interface Snapshot {
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
 }
 interface Statement { sql: string; parameters: SqliteValue[]; row?: number; source?: number; kind: SqliteTableChange['kind']; }
-export interface SqliteEditClaim { snapshot: Snapshot; sources?: Snapshot[]; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; }
+export interface SqliteEditClaim { snapshot: Snapshot; sources?: Snapshot[]; statements: Statement[]; counts: SqliteTableEditCounts; confirmation: string; synchronization?: (SqliteValue[] | undefined)[]; }
 interface Preview extends SqliteEditClaim { id: string; expires: number; bytes: number; }
 export interface SqliteEditApplyRequest extends SqliteTableEditApplyInput {
   operationId: string; assertCurrent(): void; recordWriteFact(fact: SqliteWriteFact): void;
@@ -79,7 +79,7 @@ function parameter(value: SqliteEditValue): SqliteValue {
   const number = Number(value.value); return { type: 'real', value: Object.is(number, -0) ? '-0' : String(number) };
 }
 /** 精确locator使用原存储类型和可靠键的实际collation，不被列默认collation扩大匹配范围。 */
-function locate(snapshot: Pick<Snapshot, 'locator' | 'locators'>, row: number): { sql: string; parameters: SqliteValue[] } {
+export function sqliteEditLocator(snapshot: Pick<Snapshot, 'locator' | 'locators'>, row: number): { sql: string; parameters: SqliteValue[] } {
   const values = snapshot.locators[row]; if (!values) throw Error(text.stale);
   const names = snapshot.locator.rowid ? [snapshot.locator.rowid] : snapshot.locator.columns;
   const parameters: SqliteValue[] = [], sql = names.map((name, index) => {
@@ -88,6 +88,7 @@ function locate(snapshot: Pick<Snapshot, 'locator' | 'locators'>, row: number): 
   }).join(' AND ');
   return { sql, parameters };
 }
+const locate = sqliteEditLocator;
 /** 显示SQL只由已验证计划和SQLite字面量组成，不作为apply执行输入。 */
 function display(statement: Statement): string {
   let index = 0, result = '', quoted = '';
@@ -297,6 +298,14 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
     const catalogue = await readSqliteTableCatalogue(driver, snapshot.target.table, control);
     if (integer(schema[0]?.[0]) !== snapshot.schemaVersion || catalogue.schemaKey !== snapshot.catalogue.schemaKey || !equal(catalogue.xinfo, snapshot.catalogue.xinfo)) throw Error('SQLite表结构已变化，请重新读取原页');
     await verifySqliteTableScope(driver, { table: snapshot.target.table, relation: snapshot.relation }, control);
+    if (claim.synchronization) {
+      const table = snapshot.target.table;
+      const effects = await read(driver, `SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='trigger' AND tbl_name=? COLLATE NOCASE),
+        EXISTS(SELECT 1 FROM main.sqlite_schema m JOIN pragma_foreign_key_list(m.name,'main') f
+          WHERE m.type='table' AND f."table"=? COLLATE NOCASE)`, [table, table], control, 1);
+      if (effects.length !== 1 || effects[0].length !== 2 || effects[0].some(value => integer(value) !== '0'))
+        throw Error('右侧表有触发器或被外键引用，本次同步未写入');
+    }
     record('writing');
     for (const statement of claim.statements) {
       control.check();
@@ -311,6 +320,14 @@ export async function applySqliteTableEdit(driver: SqliteDriverSession, claim: S
       control.check(); await driver.execute(statement.sql, { parameters: statement.parameters });
       const changed = await read(driver, 'SELECT changes()', [], control, 1); if (integer(changed[0]?.[0]) !== '1') throw Error('SQLite顶层修改行数不是1，整批必须回滚');
       appliedRows++; record('writing');
+    }
+    if (claim.synchronization) {
+      const fields = snapshot.columns.map(column => projection(quote(column.name))).join(', ');
+      for (const [row, expected] of claim.synchronization.entries()) {
+        const where = locate(snapshot, row);
+        const actual = await read(driver, 'SELECT ' + fields + ' FROM "main".' + quote(snapshot.target.table) + ' WHERE ' + where.sql + ' LIMIT 2', where.parameters, control, 2);
+        if (!equal(actual, expected === undefined ? [] : [expected])) throw Error('同步后原值复核不一致，整批回滚');
+      }
     }
     await assertSnapshotFile(snapshot, control); control.check(); record('commit-pending'); control.check(); control.beginCommit(); commitSent = true;
     await driver.execute('COMMIT'); committed = true;

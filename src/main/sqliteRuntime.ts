@@ -1,3 +1,4 @@
+import type { SqliteSyncEvidence } from './sqliteDataSync';
 import { compareSqliteTables } from './sqliteDataCompare';
 import { sqliteDataCompareSchema, type SqliteDataCompareOutput } from '../shared/sqliteDataCompare';
 import { parseSqliteTableDraft, type SqliteTableDraftDocument, type SqliteDraftRestored } from '../shared/sqliteTableDraft';
@@ -245,7 +246,7 @@ export class SqliteRuntime {
     return this.track(connection, () => this.short(connection, profile, driver => action(driver, check), true));
   }
   /** 两端复用原连接生命周期和短读关闭。仅对本次独占驱动投递取消。 */
-  private compareData(raw: unknown, signal: AbortSignal, owner: () => void): Promise<SqliteDataCompareOutput> {
+  private compareData(raw: unknown, signal: AbortSignal, owner: () => void, capture?: (evidence: SqliteSyncEvidence) => void): Promise<SqliteDataCompareOutput> {
     const input = sqliteDataCompareSchema.parse(raw);
     const watch = async <T>(driver: SqliteDriverSession, action: () => Promise<T>) => {
       const cancel = () => { void driver.cancel().catch(() => {}); };
@@ -256,12 +257,12 @@ export class SqliteRuntime {
     return this.metadata(input.source, (left, checkLeft) => watch(left, async () => {
       const check = () => { signal.throwIfAborted(); owner(); checkLeft(); };
       check();
-      if (input.source.connectionId === input.target.connectionId) return compareSqliteTables(left, left, input, check);
+      if (input.source.connectionId === input.target.connectionId) return compareSqliteTables(left, left, input, check, capture);
       return this.metadata(input.target, (right, checkRight) => watch(right, () => {
         const a = left.identity, b = right.identity;
         if (!a || !b) throw Error('无法确认 SQLite 两侧的文件身份');
         if (a.device === b.device && a.inode === b.inode) throw Error('两条连接指向同一个 SQLite 文件，请用同一条连接选择两张表');
-        return compareSqliteTables(left, right, input, () => { check(); checkRight(); });
+        return compareSqliteTables(left, right, input, () => { check(); checkRight(); }, capture);
       }));
     })) as Promise<SqliteDataCompareOutput>;
   }
@@ -636,14 +637,14 @@ export class SqliteRuntime {
   }
 
   /** 已领取写预览的生命周期与准确driver归同一任务，COMMIT边界后不以取消/断连强杀原进程。 */
-  private tableEditApply(source: unknown): Promise<SqliteTableEditOutcome> {
+  private tableEditApply(source: unknown, synchronization?: SqliteEditClaim): Promise<SqliteTableEditOutcome> {
     const input = source as SqliteEditApplyRequest;
     if (!input || typeof input.operationId !== 'string' || !input.operationId || typeof input.assertCurrent !== 'function' || typeof input.recordWriteFact !== 'function') return Promise.reject(Error('SQLite表格写入缺少Main同步提交事实能力'));
     if (this.tasks.has(input.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
     const { operationId: _operation, assertCurrent: _assert, recordWriteFact: _record, ...publicInput } = input;
-    const claim = this.edits.claim(publicInput), connection = this.connections.get(claim.snapshot.target.connectionId);
+    const claim = synchronization ?? this.edits.claim(publicInput), connection = this.connections.get(claim.snapshot.target.connectionId);
     if (!connection) {
-      const outcome = sqliteEditNotSent(claim, input, 'SQLite原连接已关闭'); this.edits.settle(claim, outcome.outcome); this.tasks.set(input.taskId, { kind: 'edit-finished' });
+      const outcome = sqliteEditNotSent(claim, input, 'SQLite原连接已关闭'); if (!synchronization) this.edits.settle(claim, outcome.outcome); this.tasks.set(input.taskId, { kind: 'edit-finished' });
       try { this.options.emit({ taskId: input.taskId, status: 'failed', progress: 0, message: outcome.message }); } catch { /* 原not-sent事实不被通知异常覆盖。 */ }
       return Promise.resolve(outcome);
     }
@@ -665,7 +666,7 @@ export class SqliteRuntime {
       this.editCheck(task);
       outcome = await applySqliteTableEdit(task.driver, task.claim, task.input, { check: () => this.editCheck(task), beginCommit: () => { this.editCheck(task); task.committing = true; }, beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; } });
     } catch (reason) { outcome = sqliteEditNotSent(task.claim, task.input, reason instanceof Error ? reason.message : 'SQLite修改未发送'); }
-    this.edits.settle(task.claim, outcome.outcome);
+    if (!task.claim.synchronization) this.edits.settle(task.claim, outcome.outcome);
     if (task.driver) {
       task.cleaning = true;
       try { await task.driver.close(); }
@@ -1237,7 +1238,10 @@ export class SqliteRuntime {
         catch (reason) { if (!task.session.driver.isUsable && !task.session.driver.isClosed) this.block(task.session.connection, reason); throw reason; }
         return;
       }
-      case 'sqlite.compareData': return this.compareData(input.source, input.signal, input.assertOwner);
+      case 'sqlite.compareData': return this.compareData(input.source, input.signal, input.assertOwner, input.capture);
+      case 'sqlite.compareSync.apply':
+        if (!input.claim?.synchronization) throw Error('SQLite 同步缺少准确的比较预览');
+        return this.tableEditApply(input.request, input.claim);
       case 'sqlite.tablePage': return this.tablePage(input);
       case 'sqlite.valueOptions': return this.valueOptions(input);
       case 'sqlite.statistics': return this.statistics(input);

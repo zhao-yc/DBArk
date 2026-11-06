@@ -5,12 +5,12 @@ import { confirmOwnedDesktopExit, dataDir, expect, ownedDesktopResources, pageEr
 import { navigationMenuItem } from './navigation-menu';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
-import { sqliteDataCompareZh as text } from '../../src/shared/sqliteDataCompare';
+import { sqliteDataCompareZh as text, sqliteDataSyncZh as sync } from '../../src/shared/sqliteDataCompare';
 
 test.skip(process.env.DBARK_SQLITE_DATA_COMPARE_NATIVE !== '1', '须显式启用 SQLite 数据比较专项');
 test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' });
 
-test('在真实窗口比较同库及跨文件表，并按差异类型翻页和查看精确字段', async ({}, info) => {
+test('在真实窗口比较同库及跨文件表，并按差异类型翻页、预览及同步所选行', async ({}, info) => {
   if (!['darwin', 'win32'].includes(process.platform) || info.config.workers !== 1 || info.retry ||
       process.env.DBARK_INTEGRATION_ENABLED !== '0' || ['DBARK_EXECUTABLE_PATH', 'DBARK_DEV_URL', 'DBARK_USER_DATA'].some(key => process.env[key]))
     throw Error('只允许隔离的源码 Electron SQLite 比较专项');
@@ -46,6 +46,7 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页和�
       await form.locator('select').selectOption('sqlite');
       await form.getByRole('button', { name: sqliteZh.choose, exact: true }).click();
       await expect(form.locator('input[readonly]')).toHaveValue(basename(path));
+      if (path === right) await form.getByRole('checkbox', { name: sqliteZh.readOnly, exact: true }).uncheck();
       await form.getByRole('button', { name: zh.connections.text036, exact: true }).click();
       await expect(form).toBeHidden();
     };
@@ -90,6 +91,39 @@ test('在真实窗口比较同库及跨文件表，并按差异类型翻页和�
       try { expect(db.prepare('SELECT hex(value) AS value FROM ledger WHERE id=9223372036854775807').get()?.value).toBe(expected); }
       finally { db.close(); }
     }
+    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toHaveCount(0);
+    await modal.getByLabel(text.filterColumn, { exact: true }).clear();
+    await run.click();
+    await expect(modal.getByRole('status')).toContainText('字段值不同 27');
+    for (const type of ['source-only', 'target-only']) {
+      await modal.getByLabel(text.kind, { exact: true }).selectOption(type);
+      await modal.getByRole('checkbox').check();
+    }
+    await modal.getByLabel(text.kind, { exact: true }).selectOption('different');
+    await modal.getByRole('button', { name: text.next, exact: true }).click();
+    await precise.getByRole('checkbox').check();
+    await modal.getByRole('button', { name: sync.preview, exact: true }).click();
+    await expect(modal.getByText('插入 1 · 更新 1 · 删除 1', { exact: true })).toBeVisible();
+    const review = modal.getByRole('group', { name: sync.preview, exact: true });
+    await expect(review.getByRole('listitem')).toHaveText(['插入　INTEGER 101', '删除　INTEGER 102', '更新　INTEGER 9223372036854775807']);
+    const apply = modal.getByRole('button', { name: sync.apply, exact: true });
+    await modal.getByLabel(sync.confirm, { exact: true }).fill('main.mirror');
+    await expect(apply).toBeDisabled();
+    await modal.getByLabel(sync.confirm, { exact: true }).fill('main.ledger');
+    await expect(apply).toBeEnabled();
+    await modal.getByLabel(sync.confirm, { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('SQLite差异同步预览.png') });
+    await apply.click();
+    await expect(modal.getByRole('status').filter({ hasText: '已确认提交' })).toBeVisible();
+    const targetDb = new DatabaseSync(right, { readOnly: true });
+    try {
+      expect(targetDb.prepare('SELECT note FROM ledger WHERE id=101').get()?.note).toBe('仅左');
+      expect(targetDb.prepare('SELECT note FROM ledger WHERE id=102').get()).toBeUndefined();
+      expect(targetDb.prepare('SELECT hex(value) AS value FROM ledger WHERE id=9223372036854775807').get()?.value).toBe('00FF80');
+      expect(targetDb.prepare('SELECT note FROM ledger WHERE id=1').get()?.note).toBe('目标');
+    } finally { targetDb.close(); }
+    await run.click();
+    await expect(modal.getByRole('status')).toContainText('相同 2 · 仅左侧 0 · 仅右侧 0 · 字段值不同 26');
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();
     await confirmOwnedDesktopExit(info);

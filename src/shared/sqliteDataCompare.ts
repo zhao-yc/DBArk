@@ -22,6 +22,7 @@ export interface SqliteDataCompareRow {
 }
 export interface SqliteDataCompareOutput {
   snapshot: 'one-file' | 'two-files';
+  syncSnapshotId?: string;
   keyColumns: string[];
   columns: string[];
   sourceRows: number;
@@ -45,4 +46,24 @@ export const sqliteDataCompareZh = {
   splitSnapshot: '两个文件分别建立读取快照。若比较期间有写入，两侧快照可能处于不同时间点。',
   all: '全部差异', noDiff: '没有符合当前筛选的差异', kind: '差异类型', detail: '查看字段差异',
   prev: '上一页', next: '下一页', field: '字段', absent: '无此行',
+} as const;
+
+export const sqliteDataSyncLimits = { selected: 100, bytes: 1024 * 1024, lifetimeMs: 5 * 60_000 } as const;
+export const sqliteDataSyncPreviewSchema = z.object({
+  snapshotId: fields.taskId, selected: z.array(z.number().int().min(0).max(sqliteDataCompareLimits.rows * 2 - 1)).min(1).max(sqliteDataSyncLimits.selected),
+}).strict().refine(value => new Set(value.selected).size === value.selected.length, '同步选择不能重复');
+export type SqliteDataSyncPreviewInput = z.infer<typeof sqliteDataSyncPreviewSchema>;
+export interface SqliteDataSyncPreview {
+  previewId: string; confirmation: string;
+  counts: import('./sqliteTableEdit').SqliteTableEditCounts;
+}
+
+export const sqliteDataSyncZh = {
+  select: '选择同步差异', count: (value: number) => `已选 ${value} 行`,
+  preview: '预览同步到右侧', apply: '确认同步到右侧', back: '返回差异列表',
+  confirm: '输入准确的右侧目标', working: '正在同步到右侧',
+  insert: '插入', update: '更新', delete: '删除',
+  scope: '只修改所选右侧行。左侧使用本次比较时的快照值，右侧原值变化会使整批回滚。右侧有触发器或被外键引用时会在写入前拦截。',
+  unavailable: '筛选比较、只读连接及含生成列的右侧表可查看差异。同步请使用支持写入的完整比较。',
+  stale: 'SQLite 差异或同步预览已失效，请重新比较',
 } as const;
