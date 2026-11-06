@@ -10,22 +10,26 @@ export interface ServerMonitorSummary { version: string; versionComment: string;
 export interface ServerMonitorSession { id: string; user: string | null; host: string | null; database: string | null; command: string | null; seconds: string | null; state: string | null; sql: string | null; sqlLength: string | null; sqlTruncated: boolean; waitEvent?: string | null; }
 export type ServerMonitorSection<T> = { status: 'available'; value: T } | { status: 'unavailable'; reason: string };
 export interface ServerMonitorSnapshot {
-  dialect?: 'postgresql';
+  dialect?: 'mysql' | 'mariadb' | 'postgresql';
   startedAt: string; completedAt: string;
   summary: ServerMonitorSection<ServerMonitorSummary>;
   globalStatus: ServerMonitorSection<{ name: ServerMonitorCounterName; value: string }[]>;
   statisticsReset?: string | null;
-  signal?: { token: string; targets: { pid: string; canCancel: boolean }[] };
+  signal?: { token: string; targets: { pid: string; canCancel: boolean; canTerminate?: false }[] };
   sessions: ServerMonitorSection<{ rows: ServerMonitorSession[]; limit: number; truncated: boolean; visibility: 'account-visible-unconfirmed' }>;
   bytes: number;
 }
 
 const monitorId = z.string().min(1).max(200).refine(value => !!value.trim() && !value.includes('\0'));
-const monitorPid = z.string().regex(/^[1-9]\d{0,9}$/).refine(value => Number(value) <= 2_147_483_647);
+/** 连接 ID 和语句 ID 保留十进制字符串，避免经过 JS number 丢失精度。 */
+export function isServerMonitorNumericId(value: unknown): value is string {
+  return typeof value === 'string' && /^[1-9]\d{0,19}$/.test(value) && BigInt(value) <= 18_446_744_073_709_551_615n;
+}
+const monitorPid = z.string().refine(isServerMonitorNumericId);
 export const serverMonitorSignalSchema = z.object({
   connectionId: monitorId, taskId: monitorId, token: z.uuid(), pid: monitorPid,
   action: z.enum(['cancel-query', 'terminate-session']), confirmedPid: monitorPid,
-}).strict().refine(input => input.pid === input.confirmedPid, '请输入准确的会话 PID');
+}).strict().refine(input => input.pid === input.confirmedPid, '请输入准确的目标会话 ID');
 export type ServerMonitorSignalInput = z.infer<typeof serverMonitorSignalSchema>;
 export type ServerMonitorSignalAction = ServerMonitorSignalInput['action'];
 export type ServerMonitorSignalResult = (

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { ManagedConnection } from '../../src/engine/connection';
@@ -73,6 +74,36 @@ describe('服务器监控正式命令接线', () => {
     let cancelled = false; const cancellation = value.handle('query.cancel', { taskId: 'read' }).then(() => { cancelled = true; });
     await vi.waitFor(() => expect(ports.execute).toHaveBeenCalledWith(control, 'KILL CONNECTION 42')); expect(cancelled).toBe(false); expect(control.close).not.toHaveBeenCalled();
     complete(Object.assign(Error('RAM读取终包'), { errno: 1317 })); await cancellation; expect(await read).toBeInstanceOf(Error); expect(dedicated.connection.query).toHaveBeenCalledOnce(); expect(control.close).toHaveBeenCalledWith({ strict: true }); expect(dedicated.close).toHaveBeenCalledWith({ strict: true });
+  });
+  it('会话信号发送后，取消等待原回执及严格收尾，不另建连接或再发 KILL', async () => {
+    const { value, events } = engine();
+    const target = { dialect: 'mysql', pid: '17', user: 'owner', host: '127.0.0.1:13306',
+      database: null, instance: 'a'.repeat(64), threadId: '91' };
+    let reply: QueryCallback | undefined, observed = false;
+    const dedicated = managed(undefined, (sql, callback) => {
+      if (sql === 'KILL CONNECTION 17') reply = callback;
+      else if (sql.includes('performance_schema.global_status')) callback(null, [{ instance: target.instance }]);
+      else if (sql.includes('performance_schema.threads')) callback(null, observed ? [] :
+        [{ id: target.pid, user: target.user, host: target.host, databaseName: null, threadId: target.threadId }]);
+      else callback(Error('夹具拒绝固定范围外 SQL'));
+      return true;
+    });
+    ports.connect.mockResolvedValueOnce(dedicated);
+    const signal = value.handle('serverMonitor.signal', { connectionId: profile.id, profile, signalTarget: target,
+      taskId: 'signal', pid: target.pid, confirmedPid: target.pid, token: randomUUID(), action: 'terminate-session' });
+    await vi.waitFor(() => expect(reply).toBeTypeOf('function'));
+    let cancelled = false;
+    const cancellation = value.handle('query.cancel', { taskId: 'signal' }).then(() => { cancelled = true; });
+    await Promise.resolve();
+    expect(cancelled).toBe(false);
+    observed = true;
+    reply!(null, { fieldCount: 0, affectedRows: 0 });
+    await expect(signal).resolves.toEqual({ status: 'accepted', observation: 'ended' });
+    await cancellation;
+    expect(ports.connect).toHaveBeenCalledExactlyOnceWith(profile, null, expect.any(AbortSignal), expect.any(Function));
+    expect(ports.execute).not.toHaveBeenCalled();
+    expect(dedicated.close).toHaveBeenCalledWith({ strict: true });
+    expect(events.at(-1)).toMatchObject({ taskId: 'signal', status: 'completed' });
   });
   it.each(['running', 'completed', 'failed', 'cancelled'] as const)('%s持久摘要不包含会话SQL、账号或错误原文', status => {
     const secret = 'RAM账号和SQL敏感内容'; const text = persistedTaskMessage('serverMonitor.read', { taskId: 'read', status, progress: 0, message: secret }); expect(text).not.toContain(secret); expect(text).toContain('监控');

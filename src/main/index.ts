@@ -1961,8 +1961,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       columnsMain.assertCapturedOwner(columns);
       if (tableValueOptionsClosing.has(input.connectionId)) throw Error('监控连接正在关闭');
       const profile = store.resolveConnection(input.connectionId);
-      if (profile.dialect !== 'postgresql') throw Error('会话操作需要已保存的 PostgreSQL 连接');
+      if (profile.dialect === 'sqlite') throw Error('会话操作需要已保存的服务器连接');
       const signalTarget = monitorSignals.claim(columns!.owner.document, store.connectionRevision(), input);
+      if ((profile.dialect === 'postgresql') !== (signalTarget.dialect === 'postgresql'))
+        throw Error('会话操作的服务器类型已变化，请重新刷新');
       input = { ...input, profile, signalTarget };
       break;
     }

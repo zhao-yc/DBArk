@@ -37,6 +37,8 @@ export function ServerMonitorDialog(props: ServerMonitorDialogProps) {
   };
   const sameTarget = view.target?.connectionId === connectionId && view.target.connectionRevision === connectionRevision;
   const snapshot = sameTarget ? view.snapshot : undefined, busy = !sameTarget || view.busy;
+  const postgres = snapshot?.dialect === 'postgresql';
+  const idLabel = postgres ? t.signal.pidLabel : t.signal.connectionIdLabel;
   const signal = services.signal ? snapshot?.signal : undefined;
   const selected = intent && signal?.token === intent.token ? intent : undefined;
   const chooseSignal = (row: ServerMonitorSession, action: ServerMonitorSignalAction) => {
@@ -48,11 +50,15 @@ export function ServerMonitorDialog(props: ServerMonitorDialogProps) {
   const sendSignal = async () => {
     if (!selected || !services.signal || signalActive.current || busy || closing || confirmedPid !== selected.row.id) return;
     const original = epoch.current;
-    const targetLabel = `${t.signal[selected.action]} · PID ${selected.row.id} · `;
+    const targetLabel = `${t.signal[selected.action]} · ${idLabel} ${selected.row.id} · `;
     signalActive.current = true; setSignalling(true); setIntent(undefined);
     try {
       const result = await services.signal({ connectionId, taskId: uid(), token: selected.token, pid: selected.row.id, action: selected.action, confirmedPid });
-      const message = result.status === 'accepted' ? result.observation === 'unknown' ? t.signal.acceptedUnknown : t.signal[result.observation] : t.signal[result.status];
+      let message: string;
+      if (result.status !== 'accepted') message = t.signal[result.status];
+      else if (result.observation === 'unknown') message = t.signal.acceptedUnknown;
+      else if (result.observation === 'ended' && !postgres) message = t.signal.noLongerVisible;
+      else message = t.signal[result.observation];
       if (original === epoch.current) setSignalMessage(targetLabel + message + (result.cleanupUnconfirmed ? t.signal.cleanup : ''));
     } catch (reason) { if (original === epoch.current) setSignalMessage(targetLabel + errorMessage(reason)); }
     finally {
@@ -60,7 +66,6 @@ export function ServerMonitorDialog(props: ServerMonitorDialogProps) {
       if (original === epoch.current) void controller.refresh();
     }
   };
-  const postgres = snapshot?.dialect === 'postgresql';
   const names = postgres ? postgresMonitorStatusNames : serverMonitorStatusNames;
   const counters = { ...t.counters, ...t.postgres.counters };
   const fields = postgres ? { ...t.fields, hostname: t.postgres.host, connectionId: t.postgres.connectionId, database: t.postgres.database } : t.fields;
@@ -73,16 +78,18 @@ export function ServerMonitorDialog(props: ServerMonitorDialogProps) {
         <label><input type="checkbox" checked={sameTarget && view.automatic} disabled={view.waiting || closing || !sameTarget || signalling || !!selected} onChange={event => controller.setAutomatic(event.target.checked)} />{t.auto}</label>
       </div>
       {selected && <section ref={confirmation} className="server-monitor-signal-confirmation" aria-label={t.signal.target}>
-        <strong>{t.signal[selected.action]} · PID {selected.row.id} · {selected.row.user} · {selected.row.database}</strong>
-        <p>{selected.action === 'cancel-query' ? t.signal.cancelHint : t.signal.terminateHint}</p>
-        <label>{t.signal.pid}<input inputMode="numeric" value={confirmedPid} maxLength={10} onChange={event => setConfirmedPid(event.target.value)} /></label>
+        <strong>{t.signal[selected.action]} · {idLabel} {selected.row.id} · {selected.row.user} · {selected.row.host || '—'} · {selected.row.database || '—'}</strong>
+        <p>{selected.action === 'cancel-query'
+          ? (postgres ? t.signal.cancelHint : snapshot?.dialect === 'mariadb' ? t.signal.mariaCancelHint : t.signal.mysqlCancelHint)
+          : (postgres ? t.signal.terminateHint : t.signal.mysqlTerminateHint)}</p>
+        <label>{postgres ? t.signal.pid : t.signal.connectionId}<input inputMode="numeric" value={confirmedPid} maxLength={postgres ? 10 : 20} onChange={event => setConfirmedPid(event.target.value)} /></label>
         <div className="server-monitor-signal-actions">
           <button type="button" className="danger" disabled={busy || confirmedPid !== selected.row.id} onClick={() => void sendSignal()}>{t.signal.confirm}</button>
           <button type="button" onClick={() => setIntent(undefined)}>{t.signal.back}</button>
         </div>
       </section>}
       {(signalling || signalMessage) && <p role="status">{signalling ? t.signal.pending : signalMessage}</p>}
-      <p>{t.notice}</p><UsageHelp><p>{t.snapshot}</p><p>{postgres ? t.postgres.scope : t.scope}</p><p>{t.autoBudget}</p></UsageHelp>
+      <p>{t.notice}</p><UsageHelp><p>{t.snapshot}</p><p>{postgres ? t.postgres.scope : t.scope}</p>{!postgres && <p>{t.signal.mysqlScope}</p>}<p>{t.autoBudget}</p></UsageHelp>
       {closing ? <p role="status">{t.closing}</p> : view.waiting && <p role="status">{t.waiting}</p>}
       {sameTarget && view.error && <p role="alert">{view.error}</p>}
       {!snapshot && <p role="status">{t.empty}</p>}

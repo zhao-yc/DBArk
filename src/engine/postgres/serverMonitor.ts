@@ -15,6 +15,7 @@ const instance = `pg_catalog.jsonb_build_array(pg_catalog.inet_server_addr(), pg
   EXTRACT(EPOCH FROM pg_catalog.pg_postmaster_start_time()), pg_catalog.current_database())::text`;
 
 export interface PostgresMonitorSignalTarget {
+  dialect: 'postgresql';
   pid: string;
   user: string;
   database: string;
@@ -105,7 +106,7 @@ export async function readPostgresServerMonitor(connection: PostgresConnection, 
       // 身份数据仅交给 Main 签发本窗口的一次性能力。看不到后端启动时间的会话保持只读。
       if (session.command === 'client backend' && session.user !== null && session.database !== null &&
           epoch(row.c10) && typeof row.c11 === 'string' && row.c11.length <= 512) {
-        signalTargets.push({ pid: session.id, user: session.user, database: session.database, backendStart: row.c10, instance: row.c11,
+        signalTargets.push({ dialect: 'postgresql', pid: session.id, user: session.user, database: session.database, backendStart: row.c10, instance: row.c11,
           ...(epoch(row.c12) && digest(row.c13) ? { query: { start: row.c12, digest: row.c13 } } : {}) });
       }
       return session;
@@ -121,7 +122,8 @@ export async function readPostgresServerMonitor(connection: PostgresConnection, 
 export async function signalPostgresMonitorTarget(connection: PostgresConnection, target: PostgresMonitorSignalTarget,
   action: ServerMonitorSignalAction, beforeSend: () => void): Promise<ServerMonitorSignalResult> {
   const cancel = action === 'cancel-query';
-  if (!epoch(target.backendStart) || cancel && (!epoch(target.query?.start) || !digest(target.query?.digest))) return { status: 'stale' };
+  if (!/^[1-9]\d{0,9}$/.test(target.pid) || Number(target.pid) > 2_147_483_647 ||
+      !epoch(target.backendStart) || cancel && (!epoch(target.query?.start) || !digest(target.query?.digest))) return { status: 'stale' };
   const parameters = [target.pid, target.user, target.database, target.backendStart, target.instance];
   if (cancel) parameters.push(target.query!.start, target.query!.digest);
   const matching = `FROM pg_catalog.pg_stat_activity WHERE pid = $1::integer AND pid <> pg_catalog.pg_backend_pid()

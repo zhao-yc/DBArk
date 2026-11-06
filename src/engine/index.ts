@@ -16,6 +16,8 @@ import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSch
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from '../shared/resultInsert';
 import { TableCreateTasks } from './tableCreateTasks';
 import { readServerMonitor } from './serverMonitor';
+import { signalMysqlMonitorTarget, type MysqlMonitorSignalTarget } from './mysqlMonitorSignal';
+import { serverMonitorSignalSchema, type ServerMonitorSignalInput, type ServerMonitorSignalResult } from '../shared/serverMonitor';
 import { IndependentTaskResources, type IndependentTaskResourceLease } from './independentTaskResources';
 import { CsvExportFieldCatalogs, type CsvExportFieldSnapshot } from './csvExportFields';
 import { TableCopyStructureTasks } from './tableCopyStructureTasks';
@@ -471,6 +473,15 @@ export class Engine {
         return this.withIndependentTask(input.connectionId, input.taskId,
           (managed, control) => readServerMonitor({ managed, ...control }, { connectionId: input.connectionId, taskId: input.taskId, ...(input.sessionLimit !== undefined ? { sessionLimit: input.sessionLimit } : {}) }),
           undefined, '读取服务器监控', true, () => ({}));
+      }
+      case 'serverMonitor.signal': {
+        const { profile, signalTarget, ...request } = input;
+        const action = serverMonitorSignalSchema.parse(request);
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== action.connectionId ||
+            (signalTarget?.dialect !== 'mysql' && signalTarget?.dialect !== 'mariadb') || signalTarget.pid !== action.pid)
+          throw Error('会话操作需要主进程核准的 MySQL 或 MariaDB 快照和目标');
+        this.copySourceProfile(input);
+        return this.monitorMysqlSignal(action, signalTarget);
       }
       case 'search.structure':case 'search.structureContinue':{
         const profile=input.profile as NetworkConnectionProfile|undefined;
@@ -957,6 +968,28 @@ export class Engine {
     if (!this.profiles.has(input.connectionId) && input.profile) this.profiles.set(input.connectionId, input.profile);
   }
 
+  /** 发送后保留原控制任务及服务器回执，迟到的取消或退出只等待其收尾。 */
+  private async monitorMysqlSignal(input: ServerMonitorSignalInput, target: MysqlMonitorSignalTarget): Promise<ServerMonitorSignalResult> {
+    const { connectionId, taskId, action } = input;
+    let sent = false, receipt: ServerMonitorSignalResult | undefined;
+    this.emit({ taskId, status: 'running', progress: 0, message: '正在复核服务器会话' });
+    let result: ServerMonitorSignalResult;
+    try {
+      result = await this.withIndependentTask(connectionId, taskId, async (managed, control) => {
+        receipt = await signalMysqlMonitorTarget({ managed, ...control }, target, action, () => {
+          control.checkCancelled();
+          sent = true;
+        });
+        return receipt;
+      }, undefined, '复核服务器会话', 'no-default-database', undefined, true, undefined, undefined, undefined, () => sent);
+    } catch (reason) {
+      if (!receipt) throw reason;
+      result = { ...receipt, cleanupUnconfirmed: true };
+    }
+    this.emit({ taskId, status: result.status === 'accepted' ? 'completed' : 'failed', progress: 100, message: '服务器会话操作已结算' });
+    return result;
+  }
+
   /** 新增只读任务受15秒总期限及原KILL/关闭终态保护，不以Promise超时抢先返回。 */
   private async withCopySourceTask<T>(connectionId: string, taskId: string, action: (context: Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>) => Promise<T>, label = '读取完整复制源', mode: true | 'no-default-database' = true): Promise<T> {
     let expired = false, settled = false, cancelling: Promise<unknown> | undefined;
@@ -1045,7 +1078,7 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead: boolean | 'no-default-database' = false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: { target: { database: string; table: string }; commitProtected(): boolean }, taskFinalizer?: (succeeded: boolean) => Promise<void>): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead: boolean | 'no-default-database' = false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: { target: { database: string; table: string }; commitProtected(): boolean }, taskFinalizer?: (succeeded: boolean) => Promise<void>, protectSubmitted?: () => boolean): Promise<T> {
     let resourcesStarted = false;
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.taskIdInUse(taskId)) throw new Error('任务编号为空或任务已在执行');
@@ -1061,7 +1094,7 @@ export class Engine {
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
-      const task: IndependentTask = { commitProtected: dataWrite?.commitProtected, connectionId, controller, done, resources, structureTask: Boolean(options || strictRead), generation: 0, ...(fileFinalizer ? { fileFinalization: true, externalAbort: fileFinalizer.abort } : {}) };
+      const task: IndependentTask = { commitProtected: protectSubmitted ?? dataWrite?.commitProtected, connectionId, controller, done, resources, structureTask: Boolean(options || strictRead), generation: 0, ...(fileFinalizer ? { fileFinalization: true, externalAbort: fileFinalizer.abort } : {}) };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseDefaultEncoding' ? { databaseDefaultEncoding: { ...options.progress } } : options.purpose === 'databaseDrop' ? { databaseDrop: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableChecks' ? { tableChecks: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
@@ -1371,7 +1404,7 @@ export class Engine {
     if (this.mysqlDataComparisons.has(id)) return this.mysqlDataComparisons.cancel(id);
     if (this.schemaComparisons.has(id)) return this.schemaComparisons.cancel(id);
     const independent = this.independentTasks.get(id);
-    // 结果插入的COMMIT已发送时不再KILL，避免把已提交误报为已撤销。
+    // 提交或会话信号已发送时不再 KILL 控制连接，保留原动作的回执。
     if (independent) {
       if (independent.commitProtected?.()) { await independent.done; return; }
       if (independent.actionSettled) { if (independent.fileFinalization && !independent.fileCommitStarted) independent.cancelRequested = true; await independent.done; return; }

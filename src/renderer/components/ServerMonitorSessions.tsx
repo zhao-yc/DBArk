@@ -40,7 +40,7 @@ export function ServerMonitorSessions({section,disabled=false,postgres=false,sig
         <td><details><summary>{monitor.sqlDetail}</summary><pre>{value(row.sql)}</pre></details><span>{value(row.sqlLength)}{row.sqlTruncated?` · ${monitor.sqlLimited}`:''}</span></td>
         {signal && <td>{targets.has(row.id) && <div className="server-monitor-signal-actions">
           {targets.get(row.id)?.canCancel && <button disabled={disabled} onClick={() => onSignal?.(row, 'cancel-query')}>{monitor.signal['cancel-query']}</button>}
-          <button className="danger" disabled={disabled} onClick={() => onSignal?.(row, 'terminate-session')}>{monitor.signal['terminate-session']}</button>
+          {targets.get(row.id)?.canTerminate !== false && <button className="danger" disabled={disabled} onClick={() => onSignal?.(row, 'terminate-session')}>{monitor.signal['terminate-session']}</button>}
         </div>}</td>}
       </tr>)}</tbody></table></div>
     </>}

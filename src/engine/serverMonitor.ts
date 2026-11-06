@@ -1,5 +1,6 @@
 import { serverMonitorLimits, serverMonitorStatusNames, validateServerMonitorInput, type ServerMonitorInput, type ServerMonitorSnapshot, type ServerMonitorSection, type ServerMonitorSession, type ServerMonitorSummary } from '../shared/serverMonitor';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
+import { captureMysqlMonitorTargets, type MysqlMonitorPrivateSnapshot } from './mysqlMonitorSignal';
 
 type Row = Record<string, unknown>;
 const summarySql = 'SELECT LEFT(VERSION(), 128) AS version, LEFT(@@version_comment, 255) AS versionComment, LEFT(@@hostname, 255) AS hostname, CAST(@@port AS CHAR) AS port, LEFT(CURRENT_USER(), 512) AS currentUser, CAST(CONNECTION_ID() AS CHAR) AS connectionId';
@@ -33,7 +34,7 @@ async function section<T>(context: StructureTaskContext, read: () => Promise<T>)
   }
 }
 /** 调用方必须提供专属短连接及真实命令取消边界；不复用用户 SQL 会话。 */
-export async function readServerMonitor(context: StructureTaskContext, input: ServerMonitorInput): Promise<ServerMonitorSnapshot> {
+export async function readServerMonitor(context: StructureTaskContext, input: ServerMonitorInput): Promise<MysqlMonitorPrivateSnapshot> {
   validateServerMonitorInput(input);
   const startedAt = new Date().toISOString(), limit = input.sessionLimit ?? serverMonitorLimits.defaultSessions;
   const summary = await section(context, async (): Promise<ServerMonitorSummary> => {
@@ -63,8 +64,12 @@ export async function readServerMonitor(context: StructureTaskContext, input: Se
     });
     return { rows: mapped, limit, truncated: rows.length > limit, visibility: 'account-visible-unconfirmed' as const };
   });
+  const signalTargets = sessions.status === 'available' ? await captureMysqlMonitorTargets(context, sessions.value.rows) : [];
   context.checkCancelled();
-  return finalizeServerMonitorSnapshot({ startedAt, summary, globalStatus, sessions });
+  const snapshot = finalizeServerMonitorSnapshot({
+    startedAt, summary, globalStatus, sessions, ...(signalTargets.length ? { dialect: signalTargets[0].dialect } : {}),
+  });
+  return signalTargets.length ? { ...snapshot, signalTargets } : snapshot;
 }
 
 /** 回包预算包括计数字段自身，两个驱动用同一序列化口径。 */

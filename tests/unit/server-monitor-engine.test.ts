@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
 import { readServerMonitor, serverMonitorSessionsSql } from '../../src/engine/serverMonitor';
+import { signalMysqlMonitorTarget, type MysqlMonitorSignalTarget } from '../../src/engine/mysqlMonitorSignal';
 import { readPostgresServerMonitor, signalPostgresMonitorTarget } from '../../src/engine/postgres/serverMonitor';
 import { ServerMonitorSignals } from '../../src/main/serverMonitorSignals';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
@@ -67,8 +68,58 @@ describe('服务器监控固定只读查询与快照', () => {
   });
 });
 
+describe('MySQL 和 MariaDB 监控会话信号', () => {
+  const target: MysqlMonitorSignalTarget = { dialect: 'mysql', pid: '9007199254740994', user: 'owner',
+    host: 'host:3306', database: 'ledger', instance: 'a'.repeat(64), threadId: '77', query: '88' };
+  const row = { id: target.pid, user: target.user, host: target.host, databaseName: target.database,
+    threadId: target.threadId, queryId: target.query, command: 'Query', sqlText: 'SELECT 1' };
+  const networkContext = (dialect = target.dialect) => ({
+    ...context(), managed: { status: { dialect, version: '8.4.11' } } as StructureTaskContext['managed'],
+  });
+  const instance = { rows: [{ instance: target.instance }] };
+  const recheck = (identity: Record<string, unknown> = row) => query.mockResolvedValueOnce(instance).mockResolvedValueOnce({ rows: [identity] });
+
+  it('拒绝超出范围的整数和任何 SQL 片段；原线程或原语句变化时不发送', async () => {
+    for (const pid of ['0', '01', '18446744073709551616', '1; SELECT 1']) {
+      await expect(signalMysqlMonitorTarget(networkContext(), { ...target, pid }, 'cancel-query', vi.fn())).resolves.toEqual({ status: 'stale' });
+    }
+    expect(query).not.toHaveBeenCalled();
+    for (const identity of [{ ...row, threadId: '78' }, { ...row, queryId: '89' }]) {
+      recheck(identity);
+      await expect(signalMysqlMonitorTarget(networkContext(), target, 'cancel-query', vi.fn())).resolves.toEqual({ status: 'stale' });
+    }
+    expect(query.mock.calls.every(([, sql]) => sql.startsWith('SELECT '))).toBe(true);
+  });
+
+  it('MySQL 使用精确连接 ID 发送一次，观测断开时保留已接收回执', async () => {
+    const submitted = vi.fn();
+    recheck().mockImplementationOnce(async (_context, sql, before) => {
+      expect(sql).toBe('KILL QUERY 9007199254740994');
+      before();
+      return { rows: { fieldCount: 0, affectedRows: 0 } };
+    }).mockRejectedValueOnce(Error('观测连接断开'));
+    await expect(signalMysqlMonitorTarget(networkContext(), target, 'cancel-query', submitted))
+      .resolves.toEqual({ status: 'accepted', observation: 'unknown' });
+    expect(submitted).toHaveBeenCalledOnce();
+    expect(query.mock.calls.filter(([, sql]) => sql.startsWith('KILL '))).toHaveLength(1);
+  });
+
+  it('MariaDB 无线程身份时只发原查询 ID，服务器报告该 ID 消失时返回快照过期', async () => {
+    const maria = { ...target, dialect: 'mariadb' as const, threadId: undefined };
+    await expect(signalMysqlMonitorTarget(networkContext('mariadb'), maria, 'terminate-session', vi.fn())).resolves.toEqual({ status: 'stale' });
+    expect(query).not.toHaveBeenCalled();
+    recheck({ ...row, threadId: null }).mockImplementationOnce(async (_context, sql, before) => {
+      expect(sql).toBe('KILL SOFT QUERY ID 88');
+      before();
+      throw Object.assign(Error('查询已结束'), { errno: 1957 });
+    });
+    await expect(signalMysqlMonitorTarget(networkContext('mariadb'), maria, 'cancel-query', vi.fn())).resolves.toEqual({ status: 'stale' });
+    expect(query.mock.calls[1][1]).not.toContain('performance_schema.threads');
+  });
+});
+
 describe('PostgreSQL 监控会话信号', () => {
-  const target = { pid: '20', user: 'owner', database: 'ledger', backendStart: '1760000000.123456',
+  const target = { dialect: 'postgresql' as const, pid: '20', user: 'owner', database: 'ledger', backendStart: '1760000000.123456',
     instance: 'original-instance', query: { start: '1760000010.123456', digest: 'a'.repeat(32) } };
 
   it('匹配失效时不重试，SQL 的 PID、后端代次及查询指纹走原绑定参数', async () => {

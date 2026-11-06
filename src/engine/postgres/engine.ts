@@ -1175,7 +1175,7 @@ export class PostgresEngine {
       case 'serverMonitor.signal': {
         const { profile, signalTarget, ...request } = input;
         const action = serverMonitorSignalSchema.parse(request);
-        if (profile?.dialect !== 'postgresql' || profile.id !== action.connectionId || signalTarget?.pid !== action.pid)
+        if (profile?.dialect !== 'postgresql' || profile.id !== action.connectionId || signalTarget?.dialect !== 'postgresql' || signalTarget.pid !== action.pid)
           throw Error('会话操作需要主进程核准的 PostgreSQL 快照和目标');
         return this.monitorSignal(action, profile, signalTarget);
       }
