@@ -57,6 +57,9 @@
 .pg-reference-candidates table { border-collapse: collapse; width: 100%; }
 .pg-reference-candidates :is(th, td) { padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
 .pg-reference-candidates th { position: sticky; top: 0; background: var(--surface); }
+.pg-value-options table { width: 100%; table-layout: fixed; }
+.pg-value-options :is(th, td):last-child { width: 12ch; }
+.pg-value-options label span { min-width: 0; overflow-wrap: anywhere; }
 .pg-record-pending { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; background: var(--surface); }
 .pg-find-host { display: contents; }
 .pg-table-find { flex: none; max-height: 50%; overflow: auto; border-bottom: 1px solid var(--line-soft); }

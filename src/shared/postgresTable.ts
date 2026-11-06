@@ -119,6 +119,17 @@ export const postgresTablePreviewSchema = target.extend({
 });
 export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
+export const postgresTableValueLimits = { groups: 500, page: 50, search: 256 } as const;
+export const postgresTableValuesSchema = postgresTableReleaseSchema.extend({
+  column,
+  search: z.string().max(postgresTableValueLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
+}).strict();
+export type PostgresTableValuesInput = z.infer<typeof postgresTableValuesSchema>;
+export interface PostgresTableValues {
+  options: { value: string | null; count: string; clipped: boolean }[];
+  truncated: boolean;
+}
+
 export const postgresTableReferenceLimits = { page: 40, offset: 100_000, search: 256, constraints: 128, columns: 16 } as const;
 export const postgresTableReferenceSchema = postgresTableReleaseSchema.extend({
   lookup: z.object({
@@ -188,6 +199,7 @@ export type PostgresTablePreviewInput = z.infer<typeof postgresTablePreviewSchem
 export type PostgresTableApplyInput = z.infer<typeof postgresTableApplySchema>;
 export type PostgresTableReleaseInput = z.infer<typeof postgresTableReleaseSchema>;
 export interface PostgresTableColumn extends ResultColumn {
+  valueOptions?: true;
   nullable: boolean;
   defaultValue: boolean;
   generated: boolean;

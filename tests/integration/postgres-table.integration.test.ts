@@ -9,7 +9,8 @@ import { from as copyFrom } from 'pg-copy-streams';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
-import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult } from '../../src/shared/postgresTable';
+import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult, PostgresTableValues } from '../../src/shared/postgresTable';
+import { appendPostgresValueFilter } from '../../src/renderer/postgresTableValues';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { inspectPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
 
@@ -112,6 +113,40 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(correctedPage.counted).toEqual({ matchingRows: '2', offset: 1 });
       const emptyLastPage = await read({ ...navigationOptions, navigation: 'last', filter: { column: 'note', text: '空范围' } });
       expect(emptyLastPage).toMatchObject({ counted: { matchingRows: '0', offset: 0 }, rows: [], hasNext: false });
+      const valueTable = { table: '"浏览"."不同值"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE ${valueTable.table}
+        (id bigint PRIMARY KEY, note text, amount numeric(40,18), raw bytea, doc jsonb, hidden json);
+        INSERT INTO ${valueTable.table}
+        SELECT i, CASE i WHEN 1 THEN NULL WHEN 2 THEN '' WHEN 3 THEN '换' || chr(13) || chr(10) || '行'
+          WHEN 4 THEN repeat('大',4100) WHEN 502 THEN '末尾_%' WHEN 503 THEN '末尾_%'
+          ELSE '候选' || i END, 1234567890123456789012.123456789012345678, decode('00ff','hex'), '{"n":9007199254740993}', '{}'
+        FROM generate_series(1, 503) i;`);
+      const originalFilter = { rules: [{ column: 'id', operator: '<', value: '503' }], mode: 'all' } as const;
+      const valuePage = await read({ ...valueTable, filter: originalFilter, limit: 1 });
+      const values = (column: string, search = '', extra = {}): Promise<PostgresTableValues> =>
+        engine.handle('postgres.table.values', { ...target, ...valueTable, profile, pageToken: valuePage.exportToken, column, search, ...extra });
+      const bounded = await values('c1');
+      expect(bounded.truncated).toBe(true);
+      expect(bounded.options).toHaveLength(500);
+      expect(bounded.options.slice(0, 2)).toEqual([{ value: null, count: '1', clipped: false }, { value: '', count: '1', clipped: false }]);
+      expect(await values('c1', '_%')).toEqual({ truncated: false, options: [{ value: '末尾_%', count: '1', clipped: false }] });
+      expect((await values('c1', '大')).options).toEqual([{ value: '大'.repeat(200), count: '1', clipped: true }]);
+      expect((await values('c2')).options).toEqual([{ value: '1234567890123456789012.123456789012345678', count: '502', clipped: false }]);
+      expect((await values('c3')).options).toEqual([{ value: '\\x00ff', count: '502', clipped: false }]);
+      expect((await values('c4')).options).toEqual([{ value: '{"n": 9007199254740993}', count: '502', clipped: false }]);
+      await expect(values('c5')).rejects.toThrow('不支持');
+      await expect(values('c1', '', { owner: randomUUID() })).rejects.toThrow('快照');
+      const preparedFilter = { mode: 'all' as const, rules: [{ column: 'id', operator: '<' as const, value: '6' }] };
+      const exactValues = [null, '', '换\r\n行'];
+      const filteredIds = async (values: (string | null)[], exclude: boolean) =>
+        (await read({ ...valueTable, limit: 10, filter: appendPostgresValueFilter(preparedFilter, 'note', values, exclude) })).rows.map(row => row.c0);
+      expect(await filteredIds(exactValues, false)).toEqual(['1', '2', '3']);
+      expect(await filteredIds(exactValues, true)).toEqual(['4', '5']);
+      expect(await filteredIds(exactValues.slice(1), true)).toEqual(['1', '4', '5']);
+      await expect(values('c1')).rejects.toThrow('快照');
+      const beforeValuesDdl = await read({ ...valueTable, limit: 1 });
+      await client.query(`ALTER TABLE ${valueTable.table} RENAME COLUMN note TO renamed`);
+      await expect(values('c1', '', { pageToken: beforeValuesDdl.exportToken })).rejects.toThrow('结构或权限');
       const advancedFilter = { mode: 'all', rules: [
         { column: 'amount', operator: '>', value: '2.000000000000000001' },
         { column: 'id', operator: 'IN', values: ['1', '2'] },

@@ -45,6 +45,7 @@ import { setTableColumnWidths } from '../tableColumnPreferences';
 import { postgresTablePresetConfiguration, postgresTablePresetOptions, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { validateTableSort } from '../tableSort';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
+import type { PostgresTableValueSource } from './PostgresTableValueOptions';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -61,6 +62,7 @@ interface InlineEdit {
 export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab; active: boolean; onInspect(): void }) {
   const limit = useWorkspace(state => state.settings.pageSize);
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
+  const workspaceBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
   const [options, setOptions] = useState<PageOptions>({ offset: 0, limit: Math.min(postgresTableLimits.page, limit) });
   const [page, setPage] = useState<PostgresTablePage>();
   const [pageConnectionVersion, setPageConnectionVersion] = useState<number>();
@@ -86,6 +88,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [filterColumn, setFilterColumn] = useState('');
   const [filterText, setFilterText] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState(false);
+  const [valueSource, setValueSource] = useState<PostgresTableValueSource>();
   const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
   const [cellMenu, setCellMenu] = useState<{
     scope: object; cell: QueryResultCopyCell; anchor: GridCellMenuAnchor; seed: FilterDraft;
@@ -131,7 +134,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 操作回包只能发布到原组件代次，加载或应用进行时由全局标签忙碌屏障保护。 */
   async function run(action: (isCurrent: () => boolean) => Promise<unknown>, onError?: (reason: unknown) => void) {
     const life = lifetime.current;
-    if (!life || lease.current) return;
+    if (!life || lease.current || useWorkspace.getState().activeJobs[tab.id]) return;
     const owner = {}, job = acquireWorkspaceBusy(tab.id);
     lease.current = owner;
     const isCurrent = () => lifetime.current === life && lease.current === owner;
@@ -211,7 +214,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || valueSource || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const retainPageTokens = [...new Set(draft.map(entry => entry.change.pageToken))];
     void run(isCurrent => read(next, isCurrent, { ...movement, ...(retainPageTokens.length ? { retainPageTokens } : {}) }));
@@ -283,7 +286,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   const layoutOpen = layoutDialog === layoutKey;
-  const modalBlocked = busy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || layoutOpen;
+  // 候选弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!valueSource || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -470,6 +474,24 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   function closeAdvancedFilters() {
     setAdvancedFilters(false);
     setCellFilterSeed(undefined);
+    setValueSource(undefined);
+  }
+
+  const valueColumns = page?.columns.filter(column => column.valueOptions) ?? [];
+  const canReadValues = active && !frozenPage && !requiresRefresh && !!page?.exportToken &&
+    pageConnectionVersion === connectionVersion && !!valueColumns.length;
+  useEffect(() => {
+    if (valueSource && !valueSource.current()) setValueSource(undefined);
+  }, [active, connectionVersion, page, valueSource]);
+
+  /** 候选绑定原页和连接修订，切换标签或刷新后不得再写筛选草稿。 */
+  function openValueOptions() {
+    const pageToken = page?.exportToken;
+    if (!canReadValues || !pageToken || !layoutScope.current.current() || lease.current ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const current = () => issued.current === pageToken && layoutScope.current.current() && !lease.current && !recordDirty.current;
+    setValueSource({ input: { ...target, pageToken }, columns: valueColumns, current,
+      initialColumn: valueColumns.find(column => column.name === filterColumn)?.key });
   }
 
   /** 仅保存明确调整后的宽度，跳过虚拟网格的自动测量和无变化事件。 */
@@ -667,6 +689,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
       initial={appliedAdvanced} seed={cellFilterSeed} onSeedAdded={() => setCellFilterSeed(undefined)}
+      values={valueSource} canReadValues={canReadValues} onOpenValues={openValueOptions} onCloseValues={() => setValueSource(undefined)}
       replacesQuick={!!(options.filter && 'text' in options.filter && options.filter.text)}
       disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
     {message && <div className="info-strip" role="status">{message}</div>}

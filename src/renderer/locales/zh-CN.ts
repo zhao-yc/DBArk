@@ -407,6 +407,7 @@ export const zh = {
     filterIsNotNull: "不为空值",
     filterSetValues: "集合值",
     filterSetHint: "每行一个值；逗号和空格原样保留，空行表示空字符串。只筛选空字符串时可勾选下方选项。",
+    filterSetJson: "使用 JSON 字符串数组编辑集合，转义换行并保留空字符串。",
     filterIncludeEmptyString: "额外包含空字符串",
     filterRangeStart: "区间起始值",
     filterRangeEnd: "区间结束值",

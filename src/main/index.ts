@@ -870,7 +870,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       } finally { postgresImportChoosing.delete(document); }
     });
   }
-  if (command === 'postgres.table.page' || command === 'postgres.table.preview' || command === 'postgres.table.references' ||
+  if (command === 'postgres.table.page' || command === 'postgres.table.preview' || command === 'postgres.table.references' || command === 'postgres.table.values' ||
       command === 'postgres.table.apply' || command === 'postgres.table.release') {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document;
@@ -890,7 +890,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         connectionConfig.assertAvailable(input.connectionId);
         if (shuttingDown || request.connectionRevision !== store.connectionRevision()) throw Error('PostgreSQL表页来源已变化');
       } catch (error) {
-        const pageToken = command === 'postgres.table.references' ? undefined :
+        const pageToken = command === 'postgres.table.references' || command === 'postgres.table.values' ? undefined :
           command === 'postgres.table.page' ? result?.exportToken ?? result?.pageToken : input.pageToken;
         if (pageToken) {
           const { connectionId, database, table, tabId, connectionRevision } = request;

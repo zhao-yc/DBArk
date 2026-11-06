@@ -9,6 +9,7 @@ export type { FilterMode };
 export { maxTablePage };
 export interface FilterDraft {
   column: string; operator: FilterRule['operator']; value: string; upperValue: string; valuesText: string; includeEmptyString: boolean;
+  valuesJson?: true;
 }
 export const filterOperatorLabels: Record<FilterRule['operator'], string> = {
   '=': zh.table.filterEquals, '!=': zh.table.filterNotEquals, '>': zh.table.filterGreater, '>=': zh.table.filterGreaterOrEqual,
@@ -38,15 +39,27 @@ export function filterRuleFromDraft(draft: FilterDraft, columns: readonly string
   if (!columns.includes(draft.column)) throw new Error(zh.table.filterSelectColumn);
   const base = { column: draft.column, operator: draft.operator };
   if (draft.operator === 'IS NULL' || draft.operator === 'IS NOT NULL') return base;
-  if (draft.operator === 'IN' || draft.operator === 'NOT IN') return { ...base, values: parseFilterSet(draft.valuesText, draft.includeEmptyString) };
+  if (draft.operator === 'IN' || draft.operator === 'NOT IN') {
+    if (!draft.valuesJson) return { ...base, values: parseFilterSet(draft.valuesText, draft.includeEmptyString) };
+    // JSON 数组保持数据库值中的原换行和空串，不能按文本框行尾拆分。
+    const values: unknown = JSON.parse(draft.valuesText);
+    if (!Array.isArray(values) || values.some(value => typeof value !== 'string')) throw Error(zh.table.filterSetJson);
+    const rule = { ...base, values };
+    validateFilterRules([rule]);
+    return rule;
+  }
   if (draft.operator === 'BETWEEN') { checkValueLengths([draft.value, draft.upperValue]); return { ...base, values: [draft.value, draft.upperValue] }; }
   checkValueLengths([draft.value]); return { ...base, value: draft.value };
 }
 
 /** 编辑时还原原始字符串；单独一个空字符串以显式勾选恢复，保证再次保存语义相同。 */
-export function filterDraftFromRule(rule: FilterRule): FilterDraft {
+export function filterDraftFromRule(rule: FilterRule, multiline = false): FilterDraft {
   const draft = { ...emptyFilterDraft(rule.column), operator: rule.operator };
-  if (rule.operator === 'IN' || rule.operator === 'NOT IN') return { ...draft, valuesText: (rule.values ?? []).join('\n'), includeEmptyString: rule.values?.length === 1 && rule.values[0] === '' };
+  if (rule.operator === 'IN' || rule.operator === 'NOT IN') {
+    const values = rule.values ?? [];
+    if (multiline && values.some(value => /[\r\n]/.test(value))) return { ...draft, valuesText: JSON.stringify(values, null, 2), valuesJson: true };
+    return { ...draft, valuesText: values.join('\n'), includeEmptyString: values.length === 1 && values[0] === '' };
+  }
   if (rule.operator === 'BETWEEN') return { ...draft, value: rule.values?.[0] ?? '', upperValue: rule.values?.[1] ?? '' };
   return { ...draft, value: rule.value ?? '' };
 }

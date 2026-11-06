@@ -3,12 +3,13 @@ import type { CellValue, DataRow } from '../../shared/contracts';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
+import { FILTER_LIMITS } from '../../shared/filtering';
 import {
-  isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresCountedWindow, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema,
+  isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresCountedWindow, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema, postgresTableValueLimits,
   type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
-  type PostgresTableReferenceInput, type PostgresTableReferenceResult,
+  type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableValuesInput, type PostgresTableValues,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
@@ -47,6 +48,10 @@ interface Snapshot {
 interface TableSnapshots { current: Snapshot; retained: Map<string, Snapshot>; }
 export type PostgresTableImportRequest = Scoped<PostgresTableImportInput> & { source: PostgresCopySource };
 const noWrites: Capabilities = { insert: false, update: false, delete: false };
+// 按内置类型 OID 开放可原生比较且文本可往返的字段，避免同名自定义类型混入。
+const valueOptionTypes = new Set([
+  '16', '17', '20', '21', '23', '25', '700', '701', '1042', '1043', '1082', '1083', '1114', '1184', '1266', '1700', '2950', '3802',
+]);
 const small = () => ({ rows: 1024, bytes: 2 * 1024 * 1024 });
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const only = (relation: Relation) => (relation.kind === 'r' ? 'ONLY ' : '') + relation.sql;
@@ -88,6 +93,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
     key: 'c' + index, name: String(field.c0), type: String(field.c1), nullable: field.c2 !== 't',
     defaultValue: field.c3 === 't' || field.c5 !== '', generated: field.c4 !== '' || field.c5 === 'a',
     primary: Number(field.c7) > 0, binary: field.c6 === '17', ...(field.c5 === 'a' ? { identityAlways: true } : {}),
+    ...(valueOptionTypes.has(String(field.c6)) ? { valueOptions: true } : {}),
   }));
   const keys = fields.rows.map((field, index) => ({ index, position: Number(field.c7) }))
     .filter(item => item.position > 0).sort((a, b) => a.position - b.position)
@@ -321,6 +327,55 @@ export class PostgresTableWorkspace {
     });
     if (this.snapshot(input, true) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开选值');
     return result;
+  }
+
+  /** 候选沿原表页已应用条件读全范围，原生分组保留列的比较与排序规则。 */
+  async values(input: Scoped<PostgresTableValuesInput>, connect: Connect): Promise<PostgresTableValues> {
+    const original = this.snapshot(input);
+    const key = this.key(input);
+    if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
+    this.active.add(key);
+    try {
+      const result = await connect(async connection => {
+        await begin(connection, 'page');
+        const relation = await readRelation(connection, input.table);
+        if (relation.fingerprint !== original.relation.fingerprint) throw Error('原表页结构或权限已变化，请刷新');
+        const column = relation.columns.find(item => item.key === input.column && item.valueOptions);
+        if (!column) throw Error('当前字段不支持按不同值筛选');
+        if (column.type === 'real' || column.type === 'double precision') {
+          // 改精度会影响已应用的文字筛选。服务端启用舍入时拒绝生成可能失真的候选。
+          const precision = await connection.query("SELECT pg_catalog.current_setting('extra_float_digits')::int >= 3 OR " +
+            "(pg_catalog.current_setting('server_version_num')::int >= 120000 AND pg_catalog.current_setting('extra_float_digits')::int > 0)", undefined, small());
+          if (precision.rows[0]?.c0 !== 't') throw Error('服务器浮点文本输出精度不足，无法准确按不同值筛选');
+        }
+        const name = postgresIdentifier(column.name), args: unknown[] = [input.search];
+        const condition = postgresTableCondition(original.options.filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
+        const maximum = postgresTableValueLimits.groups + 1;
+        // 原生相等的值只保留一个可重复选取的文本代表，搜索在计数之后执行。
+        const rows = await connection.query(`
+          SELECT pg_catalog.left(display, ${FILTER_LIMITS.valueLength + 1}), frequency::text
+          FROM (SELECT pg_catalog.min(${name}::text COLLATE pg_catalog."C") AS display,
+                       pg_catalog.count(*) AS frequency
+                FROM ${only(relation)} ${condition ? 'WHERE ' + condition : ''}
+                GROUP BY ${name}) AS grouped_values
+          WHERE $1::text = '' OR pg_catalog.strpos(display, $1) > 0
+          ORDER BY display NULLS FIRST LIMIT ${maximum}
+        `, args, { rows: maximum, bytes: 12 * 1024 * 1024 });
+        if (rows.truncated) throw Error('PostgreSQL 不同值超过读取预算，请缩小搜索范围');
+        const completed = await connection.query('COMMIT', undefined, small());
+        if (completed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 不同值读取事务未完成');
+        const options = rows.rows.slice(0, postgresTableValueLimits.groups).map(row => {
+          const value = row.c0, count = row.c1;
+          if ((value !== null && typeof value !== 'string') || typeof count !== 'string' || !/^[1-9]\d{0,18}$/.test(count))
+            throw Error('PostgreSQL 不同值回包无效');
+          const clipped = value !== null && value.length > FILTER_LIMITS.valueLength;
+          return { value: clipped ? Array.from(value).slice(0, 200).join('') : value, count, clipped };
+        });
+        return { options, truncated: rows.rows.length > postgresTableValueLimits.groups };
+      });
+      if (this.snapshot(input) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开不同值');
+      return result;
+    } finally { this.active.delete(key); }
   }
 
   /** 先声明游标锁住并复核关系。原生 COPY 使用同一事务中的单条 SELECT 快照。 */
