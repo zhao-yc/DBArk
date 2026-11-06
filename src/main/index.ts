@@ -2073,6 +2073,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       return;
     case 'backupArchive.open': return queryFileOperation(() => backupArchiveFiles.open(columns!, input.operationId));
     case 'backupArchive.exportSql': return queryFileOperation(() => backupArchiveFiles.export(columns!, input.operationId, input.token));
+    case 'backupArchive.inspectSql': return queryFileOperation(() => backupArchiveFiles.inspectSql(columns!, input.operationId, input.token));
     case 'backupArchive.auditTarget': {
       const { connectionId, operationId, token } = input;
       const revision = store.connectionRevision();

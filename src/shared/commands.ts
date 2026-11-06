@@ -166,7 +166,7 @@ export const publicCommands: Record<Command, true> = {
   'schema.foreignKeys.get': true, 'schema.foreignKeys.preview': true, 'schema.foreignKeys.apply': true, 'schema.foreignKeys.release': true,
   'files.exportColumns': true, 'files.releaseExportColumns': true, 'files.importKeys': true,
   'sqlite.databaseCopy': true,
-  'backupArchive.open': true, 'backupArchive.exportSql': true, 'backupArchive.auditTarget': true, 'backupArchive.cancel': true,
+  'backupArchive.open': true, 'backupArchive.exportSql': true, 'backupArchive.inspectSql': true, 'backupArchive.auditTarget': true, 'backupArchive.cancel': true,
   'files.choose': true, 'files.createSqlite': true, 'files.path': true, 'files.preview': true, 'files.inspectImport': true, 'files.import': true, 'files.export': true, 'files.exportResult': true,
   'files.readQuery': true, 'files.writeQuery': true,
   'files.previewResultSql': true, 'files.releaseResultSql': true,

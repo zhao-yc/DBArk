@@ -4,7 +4,8 @@ import { lstat, open } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
 import { AtomicFile, privateAtomicFileIO } from '../engine/atomicFile';
 import { databaseBackupArchiveLimits, inspectDatabaseBackupArchive, type DatabaseBackupArchiveSink } from '../engine/databaseBackupArchive';
-import { databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit, type DatabaseBackupSqlExport } from '../shared/databaseBackupArchiveFiles';
+import { DatabaseBackupSqlInventoryReader } from '../engine/databaseBackupSqlInventory';
+import { databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit, type DatabaseBackupSqlExport, type DatabaseBackupSqlInventory } from '../shared/databaseBackupArchiveFiles';
 
 const leaseMs = 10 * 60_000;
 const invalidPath = () => Error('请选择有效的普通归档文件或新的 SQL 文件名');
@@ -141,6 +142,18 @@ export class DatabaseBackupArchiveFiles<Owner> {
       const view = { token: randomUUID(), name: basename(path), manifest: checked.manifest, archive: checked.archive };
       this.inspection = { owner, path, stamp, view, expires: Date.now() + leaseMs };
       return structuredClone(view);
+    });
+  }
+
+  /** 只在整包二次复核通过后发布检查结果，避免将读取中的不完整字节与原清单混用。 */
+  inspectSql(owner: Owner, id: string, token: string): Promise<DatabaseBackupSqlInventory> {
+    return this.run(owner, id, async check => {
+      const original = this.assertInspection(owner, token);
+      const inventory = new DatabaseBackupSqlInventoryReader(original.view.manifest);
+      const { checked } = await readArchive(original.path, check, original.stamp, inventory);
+      if (checked.archive.sha256 !== original.view.archive.sha256) throw changed();
+      this.assertInspection(owner, token);
+      return inventory.finish();
     });
   }
 

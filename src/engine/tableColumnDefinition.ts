@@ -23,9 +23,9 @@ function decodeQuoted(source: string, start: number, end: number, quote: string,
 }
 
 /** 这是定义属性的保偏移词法层；语句分隔和完整性首先使用既有 SqlScriptScanner 校验。 */
-function tokenize(source: string, context: TableDefinitionContext, from = 0, until = source.length): Token[] {
+function tokenize(source: string, context: TableDefinitionContext, from = 0, until = source.length, prefixTokens = Infinity): Token[] {
   const tokens: Token[] = [];
-  for (let index = from; index < until;) {
+  for (let index = from; index < until && tokens.length < prefixTokens;) {
     const start = index, char = source[index], next = source[index + 1];
     if (/\s/.test(char)) { index++; continue; }
     if (char === '#' || (char === '-' && next === '-' && /[\x00-\x20\x7f]/.test(source[index + 2] ?? ' '))) { const end = source.indexOf('\n', index); index = end < 0 ? until : Math.min(until, end + 1); continue; }
@@ -224,6 +224,11 @@ export function assertColumnAttributeReadable(column: TableColumnDefinition, att
 export function tableDefinitionTokens(source: string, context: TableDefinitionContext): TableDefinitionToken[] {
   if (source.length > limits.definitionBytes || new TextEncoder().encode(source).length > limits.definitionBytes) throw new Error('表定义超过 2 MiB 预算');
   return tokenize(source, context);
+}
+
+/** 大型 INSERT 只需要读取语句头。调用方负责限制单条语句大小，并自行检查是否需要完整词法结果。 */
+export function tableDefinitionPrefix(source: string, context: TableDefinitionContext, count: number): TableDefinitionToken[] {
+  return tokenize(source, context, 0, source.length, count);
 }
 
 /** MariaDB的JSON别名须完整保有二进制排序规则和本列JSON_VALID校验；不从LONGTEXT或备注猜类型。 */

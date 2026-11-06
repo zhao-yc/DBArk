@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { NetworkConnectionProfile } from '../../shared/contracts';
 import { databaseBackupKinds } from '../../shared/databaseBackup';
-import { databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit } from '../../shared/databaseBackupArchiveFiles';
+import { databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit, type DatabaseBackupSqlInventory } from '../../shared/databaseBackupArchiveFiles';
 import { databaseBackupZh } from '../locales/databaseBackup.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal } from './ui';
@@ -15,24 +15,29 @@ export function DatabaseBackupArchiveDialog({ connections, onClose }: {
   const [archive, setArchive] = useState<DatabaseBackupArchiveView | null>(null);
   const [connectionId, setConnectionId] = useState('');
   const [audit, setAudit] = useState<DatabaseBackupRestoreTargetAudit | null>(null);
+  const [inventory, setInventory] = useState<DatabaseBackupSqlInventory | null>(null);
   const [busy, setBusy] = useState(''), [status, setStatus] = useState(''), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
   const target = connections.find(connection => connection.id === connectionId);
   const familyName = (family: NetworkConnectionProfile['dialect']) => family === 'mysql' ? 'MySQL' : 'MariaDB';
-  async function run(action: 'open' | 'export' | 'audit') {
+  async function run(action: 'open' | 'export' | 'audit' | 'inspectSql') {
     if (running.current) return;
     const operationId = uid();
     running.current = operationId;
-    setError(''); setStatus(''); setBusy(action === 'open' ? text.checking : action === 'export' ? text.exporting : text.auditing);
+    const busyMessage = { open: text.checking, export: text.exporting, audit: text.auditing, inspectSql: text.inspectingSql };
+    setError(''); setStatus(''); setBusy(busyMessage[action]);
     try {
       if (action === 'open') {
-        setArchive(null); setAudit(null);
+        setArchive(null); setAudit(null); setInventory(null);
         const result = await invoke('backupArchive.open', { operationId });
         if (result) { setArchive(result); setStatus(text.checked); }
       } else if (action === 'export' && archive) {
         const result = await invoke('backupArchive.exportSql', { operationId, token: archive.token });
         if (result) setStatus(result.cleanupPending ? text.cleanupPending : text.saved(result.name));
-      } else if (archive && target) {
+      } else if (action === 'inspectSql' && archive) {
+        setInventory(null);
+        setInventory(await invoke('backupArchive.inspectSql', { operationId, token: archive.token }));
+      } else if (action === 'audit' && archive && target) {
         setAudit(null);
         setAudit(await invoke('backupArchive.auditTarget', { operationId, token: archive.token, connectionId: target.id }));
       }
@@ -63,6 +68,20 @@ export function DatabaseBackupArchiveDialog({ connections, onClose }: {
           <ul>{archive.manifest.externalDependencies.map((value, index) => <li key={index}>{value}</li>)}</ul>
         </details>}
       </section>}
+      {inventory && <section className="database-backup-plan" role="region" aria-label={text.sqlInventory} aria-live="polite">
+        <h3>{text.sqlInventory}</h3>
+        <p>{text.sqlInventoryState[inventory.state]}</p>
+        <p>{text.sqlInventoryCounts(inventory.definitions, inventory.statements, inventory.dataStatements)}</p>
+        {!!inventory.databases.length && <p>{text.sqlDatabases}　{inventory.databases.join(' · ')}</p>}
+        {!!inventory.definers.length && <p>{text.sqlDefiners}　{inventory.definers.join(' · ')}</p>}
+        {inventory.reason && <p>{text.sqlReason[inventory.reason]}</p>}
+        {!!inventory.otherStatements && <p>{text.sqlOther(inventory.otherStatements)}</p>}
+        {(['missing', 'extra'] as const).map(kind => inventory[kind].total > 0 && <details key={kind} open>
+          <summary>{kind === 'missing' ? text.sqlMissing : text.sqlExtra}（{inventory[kind].total}）</summary>
+          <ul>{inventory[kind].items.map(item => <li key={JSON.stringify([item.kind, item.name])}>{item.kind === 'table' ? text.sqlTable : databaseBackupZh.kinds[item.kind]}　{item.name}</li>)}</ul>
+        </details>)}
+        <p>{text.sqlScope}</p>
+      </section>}
       {archive && <section className="database-backup-plan">
         <h3>{text.target}</h3>
         {connections.length ? <div className="database-backup-target">
@@ -85,6 +104,7 @@ export function DatabaseBackupArchiveDialog({ connections, onClose }: {
     </div>
     <footer className="modal-footer">
       <button disabled={!!busy} onClick={() => void run('open')}>{text.select}</button>
+      <button disabled={!!busy || !archive} onClick={() => void run('inspectSql')}>{text.inspectSql}</button>
       <button className="primary" disabled={!!busy || !archive} onClick={() => void run('export')}>{text.export}</button>
       {busy && <button onClick={cancel}>{text.cancel}</button>}
       <span className="grow"/>

@@ -434,6 +434,7 @@ export interface CommandMap {
   'sqlite.databaseCopy': { input: import('./sqliteDatabaseBackup').SqliteDatabaseCopyInput; output: import('./sqliteDatabaseBackup').SqliteDatabaseCopyOutput | null };
   'backupArchive.open': { input: { operationId: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupArchiveView | null };
   'backupArchive.exportSql': { input: { operationId: string; token: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupSqlExport | null };
+  'backupArchive.inspectSql': { input: { operationId: string; token: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupSqlInventory };
   'backupArchive.auditTarget': { input: { operationId: string; token: string; connectionId: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupRestoreTargetAudit };
   'backupArchive.cancel': { input: { operationId: string }; output: void };
   'files.createSqlite': { input: { connectionId: string }; output: FileChoice | null };

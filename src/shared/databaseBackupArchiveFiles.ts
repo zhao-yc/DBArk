@@ -1,4 +1,4 @@
-import type { DatabaseBackupBlocker, DatabaseBackupManifest } from './databaseBackup';
+import type { DatabaseBackupBlocker, DatabaseBackupKind, DatabaseBackupManifest } from './databaseBackup';
 
 export interface DatabaseBackupArchiveView {
   token: string;
@@ -12,6 +12,19 @@ export interface DatabaseBackupSqlExport {
   bytes: string;
   sha256: string;
   cleanupPending: boolean;
+}
+
+export interface DatabaseBackupSqlInventory {
+  state: 'matches' | 'differs' | 'partial';
+  statements: number;
+  dataStatements: number;
+  definitions: number;
+  otherStatements: number;
+  databases: string[];
+  definers: string[];
+  missing: { total: number; items: { kind: DatabaseBackupKind; name: string }[] };
+  extra: { total: number; items: { kind: DatabaseBackupKind; name: string }[] };
+  reason: 'encoding' | 'lexical' | 'budget' | 'version' | null;
 }
 
 export interface DatabaseBackupRestoreTargetAudit {
@@ -51,6 +64,19 @@ export const databaseBackupArchiveZh = {
   cleanupPending: 'SQL 已导出，临时文件清理未确认',
   stale: '备份归档或原窗口已变化，请重新选择归档',
   existing: '目标文件已存在，请选择新的 SQL 文件名',
+  inspectSql: '检查 SQL 对象',
+  inspectingSql: '正在复核归档并核对 SQL 对象',
+  sqlInventory: 'SQL 对象检查结果',
+  sqlInventoryState: { matches: '识别到的对象类型和名称均与清单一致', differs: '识别到的对象或目标库与清单不同', partial: '只取得部分 SQL 对象检查结果' },
+  sqlInventoryCounts: (definitions: number, statements: number, inserts: number) => `定义对象 ${definitions} · SQL 语句 ${statements} · 数据写入语句 ${inserts}`,
+  sqlDatabases: '脚本显式指定的目标库',
+  sqlDefiners: '脚本显式声明的 DEFINER',
+  sqlMissing: '清单中有，脚本定义未找到',
+  sqlExtra: '脚本中有，清单未列出',
+  sqlTable: '表',
+  sqlOther: (amount: number) => `有 ${amount} 条语句无法归入已识别的转储语法。`,
+  sqlReason: { encoding: '脚本编码无法按 UTF-8 完整读取。', lexical: '脚本语句边界或会话词法条件无法完整解析。', budget: '脚本超过对象检查预算。', version: '清单中的服务器版本无法用于判断条件注释。' },
+  sqlScope: '检查只核对显式语句和定义名称。结果以清单声明的方言与版本解释条件注释，完整依赖、定义内容及恢复可用性仍待验证。',
   target: '恢复目标连接',
   targetPlaceholder: '选择已保存的 MySQL 或 MariaDB 连接',
   noTargets: '保存 MySQL 或 MariaDB 连接后，可以检查恢复目标。',

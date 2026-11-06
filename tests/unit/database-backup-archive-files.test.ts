@@ -87,9 +87,23 @@ describe('备份归档检查及无覆盖 SQL 导出', () => {
     expect(validateCommand('backupArchive.open', { operationId: 'job' })).toEqual({ operationId: 'job' });
     expect(() => validateCommand('backupArchive.open', { operationId: 'job', path: source })).toThrow();
     expect(() => validateCommand('backupArchive.exportSql', { operationId: 'job', token: 'archive', path: target })).toThrow();
+    expect(() => validateCommand('backupArchive.inspectSql', { operationId: 'job', token: 'archive', sql: 'SELECT 1' })).toThrow();
     expect(validateCommand('backupArchive.auditTarget', { operationId: 'job', token: 'archive', connectionId: 'saved' }))
       .toEqual({ operationId: 'job', token: 'archive', connectionId: 'saved' });
     expect(() => validateCommand('backupArchive.auditTarget', { operationId: 'job', token: 'archive', connectionId: 'saved', manifest: {} })).toThrow();
+  });
+
+  it('SQL 对象结果只发布给原窗口的原归档，检查不创建新文件', async () => {
+    const database = '测试库', bytes = await makeDatabaseBackupArchive(Buffer.from(
+      'CREATE DATABASE `测试库`; USE `测试库`; CREATE TABLE ledger(id INT);'), 'mysql', database);
+    await writeFile(source, bytes);
+    const owner = files(), view = (await owner.open('window', 'inspect'))!;
+    await expect(owner.inspectSql('other-window', 'foreign', view.token)).rejects.toThrow('已变化');
+    await expect(owner.inspectSql('window', 'sql', view.token)).resolves.toMatchObject({ state: 'matches', definitions: 2 });
+    expect(await readFile(source)).toEqual(bytes);
+    expect(await readdir(directory)).toEqual(['归档.dbark-backup.zip']);
+    await writeFile(source, Buffer.from('已替换'));
+    await expect(owner.inspectSql('window', 'stale', view.token)).rejects.toThrow('已变化');
   });
 
   it('目标检查绑定原窗口和文件代次，取消等待原连接收尾', async () => {
