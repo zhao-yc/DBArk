@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import mysql from 'mysql2/promise';
@@ -15,10 +16,17 @@ test.describe.configure({ timeout: 120000, retries: 0 });
 test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
   const user = process.env.DBARK_BACKUP_AUDIT_USER ?? '', password = process.env.DBARK_BACKUP_AUDIT_PASSWORD ?? '';
   const mysqlPort = Number(process.env.DBARK_BACKUP_AUDIT_MYSQL_PORT), mariaPort = Number(process.env.DBARK_BACKUP_AUDIT_MARIA_PORT);
+  const sshPort = Number(process.env.DBARK_MYSQL_BACKUP_SSH_PORT ?? 0);
+  const sshPassword = process.env.DBARK_MYSQL_BACKUP_SSH_PASSWORD ?? '';
+  const fingerprint = process.env.DBARK_MYSQL_BACKUP_SSH_FINGERPRINT ?? '';
+  const caPath = process.env.DBARK_MYSQL_BACKUP_TLS_CA ?? '';
   const mysqlTool = process.env.DBARK_MYSQL_DUMP_TOOL ?? '', mariaTool = process.env.DBARK_MARIA_DUMP_TOOL ?? '';
   if (!['darwin', 'win32'].includes(process.platform) || info.config.workers !== 1 || info.retry ||
     process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_aud_[a-f0-9]{12}$/.test(user) || !/^[a-f0-9]{64}$/.test(password) ||
     mysqlPort === mariaPort || ![mysqlPort, mariaPort].every(port => Number.isInteger(port) && port > 1024 && port <= 65535) ||
+    sshPort && (!Number.isInteger(sshPort) || sshPort < 1025 || sshPort > 65535 ||
+      !/^[a-f0-9]{64}$/.test(sshPassword) || !/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint)) ||
+    caPath && (!isAbsolute(caPath) || process.env.DBARK_MYSQL_BACKUP_REQUIRE_TLS !== '1') ||
     !mysqlTool || !mariaTool || ['DBARK_EXECUTABLE_PATH', 'DBARK_DEV_URL', 'DBARK_USER_DATA'].some(key => process.env[key]))
     throw Error('只允许隔离源码和双端回环实库');
 
@@ -26,7 +34,9 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
   const own = () => { if (ownedDesktopResources(info).page !== page) throw Error('测试窗口归属已变化'); };
   const menu = (name: string) => navigationMenuItem(page.locator('.navigation-toolbar'), { name, exact: true }, own);
   const db = user + '_used', blocked = user + '_empty';
-  const tls = process.env.DBARK_MYSQL_BACKUP_REQUIRE_TLS === '1' ? { rejectUnauthorized: false } : undefined;
+  const tls = process.env.DBARK_MYSQL_BACKUP_REQUIRE_TLS === '1'
+    ? caPath ? { rejectUnauthorized: true, ca: await readFile(caPath) } : { rejectUnauthorized: false }
+    : undefined;
   const targets = [
     { dialect: 'mysql', port: mysqlPort, tool: mysqlTool, path: join(dataDir, 'MySQL.sql'), label: 'MySQL 源与目标' },
     { dialect: 'mariadb', port: mariaPort, tool: mariaTool, path: join(dataDir, 'MariaDB.sql'), label: 'MariaDB 源与目标' },
@@ -43,10 +53,21 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
       await form.getByLabel(zh.common.user, { exact: true }).fill(user);
       await form.getByLabel(zh.connections.text011, { exact: true }).fill(password);
       await form.getByLabel(zh.connections.text016, { exact: true }).uncheck();
+      if (sshPort) {
+        if (!caPath) await form.getByLabel(zh.connections.text009, { exact: true }).fill(`backup-${target.dialect}.invalid`);
+        await form.getByRole('button', { name: zh.connections.text005, exact: true }).click();
+        await form.getByRole('checkbox', { name: zh.connections.text017, exact: true }).check();
+        await form.getByLabel(zh.connections.text018, { exact: true }).fill('127.0.0.1');
+        await form.getByLabel(zh.connections.text019, { exact: true }).fill(String(sshPort));
+        await form.getByLabel(zh.connections.text020, { exact: true }).fill('tabrelio-test');
+        await form.getByLabel(zh.connections.text021, { exact: true }).fill(sshPassword);
+        await form.getByLabel(zh.connections.text025, { exact: true }).fill(fingerprint);
+      }
       if (tls) {
         await form.getByRole('button', { name: 'TLS / SSL', exact: true }).click();
         await form.getByRole('checkbox', { name: zh.connections.text027, exact: true }).check();
-        await form.getByRole('checkbox', { name: zh.connections.text028, exact: true }).uncheck();
+        if (caPath) await form.getByLabel(zh.connections.text029, { exact: true }).fill(caPath);
+        else await form.getByRole('checkbox', { name: zh.connections.text028, exact: true }).uncheck();
       }
       await form.getByRole('button', { name: zh.connections.text036, exact: true }).click();
       await expect(form).toBeHidden();

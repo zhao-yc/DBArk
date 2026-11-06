@@ -31,6 +31,8 @@ export interface ManagedConnection {
   signal?: AbortSignal;
   /** 结束数据库会话并释放附属 SSH 隧道，可以重复调用。 */
   close(options?: { strict?: boolean }): Promise<void>;
+  /** 仅复用本连接已验证主机指纹的 SSH 会话，通道目标固定为配置中的数据库地址。 */
+  openSshChannel?(signal: AbortSignal): Promise<ClientChannel>;
   /** 物理连接自身全部资源的内部证明/显式恢复端口；缺失代表不能提供独立证明，不能当已关闭。 */
   readonly resources?: ConnectionResourceRecovery;
 }
@@ -231,6 +233,37 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
     let closePending: Promise<void> | undefined;
     const managed: ManagedConnection = {
       connection: active, profile, status: { version: '', dialect: profile.dialect, connectionId: active.threadId }, broken: false, signal, resources: resources.recovery,
+      ...(ssh ? { openSshChannel(request: AbortSignal) {
+        const client = ssh;
+        if (!client || sshClosed || managed.broken || closePending || signal?.aborted || request.aborted)
+          return Promise.reject(Error('原数据库 SSH 会话不可用'));
+        return new Promise<ClientChannel>((resolve, reject) => {
+          const allocated = resources.beginAllocation();
+          const cleanup = () => {
+            request.removeEventListener('abort', abort);
+            client.removeListener('close', closed);
+            allocated();
+          };
+          const closed = () => { cleanup(); reject(Error('原数据库 SSH 会话已关闭')); };
+          const abort = () => {
+            // 只有尚未收到转发回调才结束原会话，避免等待悬空，也不放行迟到通道。
+            client.destroy();
+            reject(Error('备份 SSH 通道建立已取消'));
+          };
+          request.addEventListener('abort', abort, { once: true });
+          client.once('close', closed);
+          try {
+            client.forwardOut('127.0.0.1', 0, profile.host, profile.port, (error, channel) => {
+              if (channel) resources.add('ssh-channel', channel);
+              cleanup();
+              if (error || request.aborted || sshClosed || closePending) {
+                channel?.destroy();
+                reject(Error('原数据库 SSH 转发未建立'));
+              } else resolve(channel);
+            });
+          } catch { cleanup(); reject(Error('原数据库 SSH 转发未建立')); }
+        });
+      } } : {}),
       /** 优先发送正常退出；连接已卡死时限时销毁，防止退出流程永久等待。 */
       async close(options = {}) {
         resources.captureTransport();

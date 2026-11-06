@@ -1,55 +1,22 @@
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer, isIP, type Socket } from 'node:net';
+import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import type { Duplex } from 'node:stream';
 import { getCACertificates } from 'node:tls';
 import { isPostgresCustomArchiveDestination, type PostgresDatabaseBackupInput, type PostgresDatabaseBackupResult } from '../../shared/postgresDatabaseBackup';
 import { postgresSqlFileLimits } from '../../shared/postgresSqlFile';
 import { AtomicFile, privateAtomicFileIO } from '../atomicFile';
+import { openNativeBackupTunnel } from '../nativeBackupTunnel';
 import type { PostgresConnection } from './connection';
 import { postgresToolEnvironment, readPostgresToolVersion, runPostgresNativeTool, type PostgresNativeTool } from './nativeTool';
 
 export type PostgresDatabaseBackupRequest = PostgresDatabaseBackupInput & { filePath: string; tool: PostgresNativeTool<'pg_dump'> };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>) => Promise<T>;
 
-/** 已核验的 SSH 会话额外开启一个单次使用的回环端口，libpq 仍对数据库服务器完成独立 TLS。 */
-async function dumpTunnel(connection: PostgresConnection) {
+function dumpTunnel(connection: PostgresConnection) {
   if (!connection.profile.ssh?.enabled) return;
-  let local: Socket | undefined, remote: Duplex | undefined, opening: Promise<void> | undefined, stopping = false;
-  const server = createServer({ pauseOnConnect: true }, socket => {
-    if (local || stopping) { socket.destroy(); return; }
-    local = socket;
-    socket.on('error', () => remote?.destroy());
-    socket.once('close', () => remote?.destroy());
-    opening = connection.openSshChannel().then(channel => {
-      remote = channel;
-      channel.on('error', () => socket.destroy());
-      channel.once('close', () => socket.destroy());
-      if (stopping || socket.destroyed) { channel.destroy(); return; }
-      socket.pipe(channel).pipe(socket);
-      socket.resume();
-    }, () => socket.destroy()).then(() => undefined);
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') throw Error('pg_dump SSH 回环端口未建立');
-  return {
-    port: address.port,
-    async close() {
-      stopping = true;
-      local?.destroy();
-      remote?.destroy();
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-      // 如果 pg_dump 已结束但 SSH 建通道还在等待，关闭原连接才有可验证的收尾。
-      if (opening && !remote) connection.abort();
-      await opening;
-    },
-  };
+  return openNativeBackupTunnel('127.0.0.1', () => connection.openSshChannel(), () => connection.abort());
 }
 
 async function dumpEnvironment(connection: PostgresConnection, directory: string, applicationName: string, tunnel?: { port: number }) {

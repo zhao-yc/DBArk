@@ -5,7 +5,7 @@ export const mysqlDatabaseBackupZh = {
   tool: mysqlDumpToolTitle,
   connection: '来源连接',
   database: '备份数据库',
-  scope: '从直连的 MySQL 或 MariaDB 导出带建库语句的 UTF-8 SQL。请选择与服务器系列和主版本匹配的官方客户端工具。',
+  scope: '通过直连或 SSH 从 MySQL 或 MariaDB 导出带建库语句的 UTF-8 SQL。请选择与服务器系列和主版本匹配的官方客户端工具。',
   snapshot: 'InnoDB 数据来自一致性快照。备份期间请避免建表、改表、删除或修改例程等结构操作。',
   confirm: '我已核对来源，并确认备份期间会避免修改数据库结构',
   choose: '选择 SQL 保存位置',

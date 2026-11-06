@@ -5,11 +5,13 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { getCACertificates } from 'node:tls';
 import { promisify } from 'node:util';
-import { mysqlBackupDatabase, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
+import { mysqlBackupDatabase, mysqlBackupTunnelHost, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
 import { AtomicFile, privateAtomicFileIO } from './atomicFile';
 import { execute } from './connection';
 import { mysqlDumpOptionFile } from './databaseBackupNativeOptions';
 import { databaseBackupGlobalGrants, databaseBackupSourceSql as sourceSql } from './databaseBackupSource';
+import { inspectMysqlBackupHandshake } from './mysqlBackupHandshake';
+import { openNativeBackupTunnel } from './nativeBackupTunnel';
 import { readMysqlDumpVersion, runMysqlDumpTool, type MysqlDumpTool } from './mysqlDumpTool';
 import type { StructureTaskContext } from './structureDefinition';
 
@@ -135,7 +137,7 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
       const { managed } = context, profile = managed.profile, family = managed.status.dialect;
       if (!mysqlBackupDatabase.safeParse(database).success || !isAbsolute(filePath) || !/\.sql$/i.test(filePath)) throw Error('备份库名或 SQL 目标无效');
       if (family !== tool.family || profile.dialect !== family) throw Error('工具需与实际服务器系列匹配');
-      if (profile.ssh?.enabled) throw Error('当前整库原生备份需要直连 TCP；所选连接使用了 SSH 隧道');
+      const localHost = mysqlBackupTunnelHost(profile);
       const toolVersion = await readMysqlDumpVersion(tool, signal);
       const serverVersion = managed.status.version;
       if (toolVersion.split('.')[0] !== serverVersion.replace(/^5\.5\.5-/, '').split('.')[0])
@@ -159,10 +161,18 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
         check();
         const defaults = join(directory, 'client.cnf');
         await writeFile(defaults, mysqlDumpOptionFile(profile.user, profile.password ?? ''), { flag: 'wx', mode: 0o600 });
-        const mysql = family === 'mysql';
+        const mysql = family === 'mysql', tls = await tlsArgs(profile, family, directory);
+        check();
+        const opening = new AbortController();
+        const openChannel = managed.openSshChannel;
+        if (localHost && !openChannel) throw Error('原数据库 SSH 会话不可用');
+        const tunnel = localHost ? await openNativeBackupTunnel(localHost,
+          () => openChannel!(AbortSignal.any([signal, opening.signal, AbortSignal.timeout(15_000)])),
+          () => opening.abort(),
+          channel => inspectMysqlBackupHandshake(channel, serverVersion, Boolean(profile.tls?.enabled))) : undefined;
         const args = [
           '--defaults-file=' + defaults, ...(mysql ? ['--no-login-paths'] : []),
-          '--protocol=TCP', '--host=' + profile.host, '--port=' + profile.port, ...await tlsArgs(profile, family, directory),
+          '--protocol=TCP', '--host=' + (tunnel?.host ?? profile.host), '--port=' + (tunnel?.port ?? profile.port), ...tls,
           '--default-character-set=utf8mb4', '--single-transaction', '--quick', '--hex-blob',
           '--routines', '--events', '--triggers', '--skip-lock-tables', '--skip-add-locks',
           ...(lock ? ['--set-gtid-purged=OFF', '--column-statistics=0', '--no-tablespaces',
@@ -177,9 +187,15 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
             tail = (tail + chunk.subarray(-256).toString('latin1')).slice(-256);
             return staged.writeBytes(chunk);
           });
-        } finally { if (lock) await settleMysqlDumpBackend(managed, lock); }
+        } catch (error) {
+          if (tunnel?.failed && !signal.aborted) throw Error('备份 SSH 转发未建立，或数据库版本与 TLS 能力未通过检查');
+          throw error;
+        } finally {
+          try { await tunnel?.close(); }
+          finally { if (lock && (!tunnel || tunnel.forwardingStarted)) await settleMysqlDumpBackend(managed, lock); }
+        }
         const version = /^-- Server version[ \t]+([^\r\n]+)\r?$/m.exec(header)?.[1];
-        if (version !== serverVersion || !/^-- Dump completed on [^\r\n]+\r?$/m.test(tail))
+        if (tunnel && !tunnel.forwardingStarted || version !== serverVersion || !/^-- Dump completed on [^\r\n]+\r?$/m.test(tail))
           throw Error('未确认完整的原生转储头尾或实际服务器版本');
       } finally { await rm(directory, { recursive: true, force: true }); }
       if (before !== await catalogue(context, database)) throw Error('备份期间数据库对象目录发生变化，未保存备份');

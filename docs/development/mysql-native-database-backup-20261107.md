@@ -9,7 +9,7 @@
 
 表数据使用原生工具的一致性快照。开始和结束均核对目录，但目录复核只能发现可观测的变化。备份期间需避免 DDL 和对象定义变更。取消会停止原生客户端，等待资源收尾后清除临时文件。MySQL 使用任务专用命名锁复核原服务器线程。MariaDB 的取消界面以本机客户端退出为准。临时凭据目录先校验访问权限，密码不会写入进程参数。原生工具成功退出、核对转储头尾并关闭检查连接后，才提交备份文件。[MySQL 原生转储说明](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html) · [MariaDB 原生转储说明](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump)
 
-本入口覆盖直连 TCP。连接使用 TLS 时，按保存的连接配置设置验证和客户端证书。SSH 隧道、ZIP 归档写入与归档直接恢复仍在后续范围。
+本节验收覆盖直连 TCP。连接使用 TLS 时，按保存的连接配置设置验证和客户端证书。SSH 入口和严格 TLS 的适用条件见[通过 SSH 备份整库](mysql-ssh-database-backup-20261107.md)。ZIP 归档写入与归档直接恢复继续。
 
 ## 2026-11-07 验收
 

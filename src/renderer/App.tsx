@@ -1012,7 +1012,7 @@ function WorkspaceApp() {
     'mysql-database-backup': handler(() => {
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       workbenchNavigation.invalidate(); setMysqlDatabaseBackup(true);
-    }, networkConnections.some(profile => !profile.pendingFiles?.length && !profile.ssh?.enabled)),
+    }, networkConnections.some(profile => !profile.pendingFiles?.length)),
     'mysql-sql-file': handler(() => {
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       workbenchNavigation.invalidate(); setMysqlSqlFile(true);
@@ -1178,7 +1178,7 @@ function WorkspaceApp() {
     {serverDataCompare && <ServerDataCompareDialog dialect={serverDataCompare} connections={connections.filter(profile => !profile.pendingFiles?.length &&
       (serverDataCompare === 'postgres' ? profile.dialect === 'postgresql' : profile.dialect === 'mysql' || profile.dialect === 'mariadb'))} onClose={() => setServerDataCompare(undefined)}/>}
     {sqliteDataCompare && <SqliteDataCompareDialog connections={connections.filter(profile => profile.dialect === 'sqlite' && !!profile.sqlite.filePath && !profile.pendingFiles?.length)} onClose={() => setSqliteDataCompare(false)}/>}
-    {mysqlDatabaseBackup && <MysqlDatabaseBackupDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length && !profile.ssh?.enabled)}
+    {mysqlDatabaseBackup && <MysqlDatabaseBackupDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)}
       onClose={() => setMysqlDatabaseBackup(false)}/>}
     {mysqlSqlFile && <MysqlSqlFileDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)}
       onRefresh={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}

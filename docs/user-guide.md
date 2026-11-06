@@ -14,7 +14,7 @@
 
 从「工具 → 打开数据库备份归档」选择 MySQL 或 MariaDB 的 tabrelio 归档，可以查看清单与摘要，并将原始 SQL 导出到新文件。点击「检查 SQL 对象」，可离线核对脚本定义与清单，查看显式目标库和 `DEFINER`。也可以选择已保存的连接，点击「检查目标」，查看服务器版本、同名库、可见对象和事件调度器状态。目录权限不足时，状态显示为未知。恢复可用性仍待验证。[归档检查与 SQL 导出](development/database-backup-archive-sql-20261106.md) · [SQL 对象检查](development/backup-archive-sql-inventory-20261107.md) · [恢复目标检查](development/backup-restore-target-audit-20261107.md)
 
-在「工具 → MySQL／MariaDB 整库备份」选择直连来源、数据库和对应的 `mysqldump` 或 `mariadb-dump`，确认后可生成带原库名的整库 SQL。开始前应停止对源库执行 DDL。已生成的 SQL 可以在下方的执行入口恢复。[原生整库备份与验收](development/mysql-native-database-backup-20261107.md)
+在「工具 → MySQL／MariaDB 整库备份」选择直连或 SSH 来源、数据库和对应的 `mysqldump` 或 `mariadb-dump`，确认后可生成带原库名的整库 SQL。开始前应停止对源库执行 DDL。已生成的 SQL 可以在下方的执行入口恢复。[原生整库备份与验收](development/mysql-native-database-backup-20261107.md) · [SSH 备份与 TLS 条件](development/mysql-ssh-database-backup-20261107.md)
 
 在「工具 → 执行 MySQL／MariaDB SQL 文件」可用原生转储或归档导出的 SQL 恢复数据库。先选择目标连接和文件编码。转储自带建库与 `USE` 时，初始数据库选「由脚本指定数据库」。转储只含表和数据时，选择已有的目标数据库。勾选信任确认后执行，完成后在回执中查看语句数及失败位置。取消或失败后先核对目标，因为已提交的数据和 DDL 可能保留。[SQL 文件恢复与验收](development/mysql-sql-file-20261107.md)
 
