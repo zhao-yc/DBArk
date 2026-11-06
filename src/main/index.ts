@@ -870,7 +870,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       } finally { postgresImportChoosing.delete(document); }
     });
   }
-  if (command === 'postgres.table.page' || command === 'postgres.table.preview' || command === 'postgres.table.references' ||
+  if (command === 'postgres.table.page' || command === 'postgres.table.preview' || command === 'postgres.table.references' || command === 'postgres.table.related' ||
       command === 'postgres.table.values' || command === 'postgres.table.statistics' ||
       command === 'postgres.table.apply' || command === 'postgres.table.release') {
     columnsMain.assertCapturedOwner(columns);
@@ -878,7 +878,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     let owner = postgresTableOwners.get(document);
     if (!owner) { owner = randomUUID(); postgresTableOwners.set(document, owner); }
     const request = { ...input, owner, connectionRevision: store.connectionRevision() };
-    if (command === 'postgres.table.release') return broker.request(command, request);
+    if (command === 'postgres.table.release' || (command === 'postgres.table.related' && input.operation === 'close'))
+      return broker.request(command, request);
     if (shuttingDown) throw Error('客户端正在退出，不能开始PostgreSQL表页操作');
     connectionConfig.assertAvailable(input.connectionId);
     const connection = store.connections().find(profile => profile.id === input.connectionId);
@@ -891,7 +892,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         connectionConfig.assertAvailable(input.connectionId);
         if (shuttingDown || request.connectionRevision !== store.connectionRevision()) throw Error('PostgreSQL表页来源已变化');
       } catch (error) {
-        const pageToken = command === 'postgres.table.references' || command === 'postgres.table.values' || command === 'postgres.table.statistics' ? undefined :
+        if (command === 'postgres.table.references' && result?.opened) {
+          const { connectionId, database, connectionRevision } = request;
+          await broker.request('postgres.table.related', { connectionId, database, connectionRevision, owner,
+            ...result.opened, operation: 'close' }).catch(() => {});
+        }
+        const pageToken = command === 'postgres.table.references' || command === 'postgres.table.related' || command === 'postgres.table.values' || command === 'postgres.table.statistics' ? undefined :
           command === 'postgres.table.page' ? result?.exportToken ?? result?.pageToken : input.pageToken;
         if (pageToken) {
           const { connectionId, database, table, tabId, connectionRevision } = request;

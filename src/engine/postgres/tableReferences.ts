@@ -12,7 +12,7 @@ const catalogRecord = z.object({
     parentCast: z.string().nullable(), childCast: z.string().nullable(),
     collation: z.string().nullable(), collationSchema: z.string().nullable() })).min(1).max(32),
 });
-type SourceRow = { incoming: boolean; sql: string; name: string; oid: string; tableOid: string; tid: string; version: string };
+export type PostgresReferenceSourceRow = { incoming: boolean; sql: string; name: string; oid: string; tableOid: string; tid: string; version: string };
 
 /** 与 PostgreSQL 的外键检查一样，按目录使用对应操作符、输入类型及父键排序规则。 */
 function foreignKeyComparison(pair: z.infer<typeof catalogRecord>['pairs'][number]): string {
@@ -29,7 +29,7 @@ function foreignKeyComparison(pair: z.infer<typeof catalogRecord>['pairs'][numbe
 
 /** 按约束序号绑定两边字段，仅返回当前账号可以读取整组引用键的约束。 */
 export async function readPostgresTableReferences(connection: PostgresConnection, source: string, columns: readonly PostgresTableColumn[],
-  lookup: PostgresTableReferenceInput['lookup'], sourceRow?: SourceRow): Promise<PostgresTableReferenceResult> {
+  lookup: PostgresTableReferenceInput['lookup'], sourceRow?: PostgresReferenceSourceRow, fullColumns = false): Promise<PostgresTableReferenceResult> {
   const incoming = sourceRow?.incoming === true;
   // 从分区查看时沿声明式分区链查找外键，排除已标记分离的分区与约束副本。
   const ancestors = incoming ? `WITH RECURSIVE ancestors(oid) AS (
@@ -96,6 +96,7 @@ export async function readPostgresTableReferences(connection: PostgresConnection
 
   const relation = postgresIdentifier(selected.schema) + '.' + postgresIdentifier(selected.table);
   const keyNames = selected.pairs.map(pair => incoming ? pair.local : pair.remote);
+  const extraLimit = fullColumns ? 1022 - keyNames.length : limits.columns;
   const extras = await connection.query(`
     SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)
     FROM pg_catalog.pg_attribute a
@@ -103,8 +104,9 @@ export async function readPostgresTableReferences(connection: PostgresConnection
       AND NOT (a.attname::text = ANY($2::text[]))
       AND pg_catalog.has_column_privilege(a.attrelid, a.attnum, 'SELECT')
     ORDER BY a.attnum LIMIT $3
-  `, [selected.target, keyNames, limits.columns], { rows: limits.columns, bytes: 128 * 1024 });
-  if (extras.truncated) throw Error('引用记录字段目录超过预算');
+  `, [selected.target, keyNames, fullColumns ? extraLimit + 1 : extraLimit],
+  { rows: fullColumns ? extraLimit + 1 : extraLimit, bytes: fullColumns ? 2 * 1024 * 1024 : 128 * 1024 });
+  if (extras.truncated || extras.rows.length > extraLimit) throw Error('引用记录字段目录超过预算');
   const keys = keyNames.map(postgresIdentifier);
   const metadata = [...selected.pairs.map((pair, index) => ({ name: keyNames[index], type: pair.type })),
     ...extras.rows.map(row => ({ name: String(row.c0), type: String(row.c1) }))];

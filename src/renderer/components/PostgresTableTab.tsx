@@ -993,7 +993,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       }}/>}
     {browsedReference && <Modal title={browsedReference.input.childrenRow === undefined ? referenceText.browseTitle : referenceText.childrenTitle}
       onClose={() => setBrowsedReference(undefined)} wide>
-      <div className="modal-content"><PostgresReferencePicker source={browsedReference} onClose={() => setBrowsedReference(undefined)}/></div>
+      <div className="modal-content"><PostgresReferencePicker source={browsedReference} onClose={() => setBrowsedReference(undefined)}
+        onOpen={opened => {
+          if (!browsedReference.current()) throw Error(referenceText.relatedExpired);
+          const workspace = useWorkspace.getState();
+          if (workspace.settings.tabs.length >= 100) throw Error(referenceText.relatedTabsFull);
+          workspace.openTab({ id: opened.tabId, kind: 'table', title: referenceText.relatedTitle(opened.table),
+            connectionId: target.connectionId, database: target.database, table: opened.table });
+        }}/></div>
     </Modal>}
     {form && page && <PostgresRecordForm page={page} row={form.row}
       duplicate={form.duplicate}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { postgresTableReferenceLimits, postgresTableReferenceSchema, type PostgresTableReference } from '../../src/shared/postgresTable';
+import { postgresRelatedTableSchema, postgresTableReferenceLimits, postgresTableReferenceSchema, type PostgresTableReference } from '../../src/shared/postgresTable';
+import { postgresRelatedTabPrefix } from '../../src/shared/postgresRelatedTab';
 import { postgresReferenceSelection } from '../../src/renderer/postgresReferenceSelection';
 import { readPostgresTableReferences } from '../../src/engine/postgres/tableReferences';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
@@ -68,5 +69,21 @@ describe('PostgreSQL 外键选值', () => {
     expect(postgresTableReferenceSchema.safeParse({ ...input, parentRow: 0 }).success).toBe(false);
     expect(postgresTableReferenceSchema.safeParse({ ...input, childrenRow: 200 }).success).toBe(false);
     expect(postgresTableReferenceSchema.safeParse({ ...input, targetTable: '其他表' }).success).toBe(false);
+  });
+
+  it('只允许从有原行及准确约束的首屏请求签发独立关联标签', () => {
+    const relatedTabId = postgresRelatedTabPrefix + 'abcabcab-abca-4abc-8abc-abcabcabcabc';
+    const input = { connectionId: '连接', database: '库', table: '"引用库"."父表"', tabId: '标签',
+      pageToken: 'abcabcab-abca-4abc-8abc-abcabcabcabc', relatedTabId, childrenRow: 0,
+      lookup: { id: choice.id, stamp: choice.stamp, search: '_%', offset: 0 } };
+    expect(postgresTableReferenceSchema.safeParse(input).success).toBe(true);
+    expect(postgresTableReferenceSchema.safeParse({ ...input, childrenRow: undefined }).success).toBe(false);
+    expect(postgresTableReferenceSchema.safeParse({ ...input, lookup: { ...input.lookup, offset: 40 } }).success).toBe(false);
+    expect(postgresTableReferenceSchema.safeParse({ ...input, tabId: relatedTabId }).success).toBe(false);
+    const request = { connectionId: input.connectionId, database: input.database, table: input.table, tabId: relatedTabId,
+      operation: 'page', offset: 40 };
+    expect(postgresRelatedTableSchema.safeParse(request).success).toBe(true);
+    expect(postgresRelatedTableSchema.safeParse({ ...request, tabId: '普通表页' }).success).toBe(false);
+    expect(postgresRelatedTableSchema.safeParse({ ...request, sql: 'SELECT 1' }).success).toBe(false);
   });
 });

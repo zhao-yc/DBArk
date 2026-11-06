@@ -72,6 +72,10 @@ test('PostgreSQL 从当前记录双向查看复合外键关联', async ({}, info
     const button = (name: string) => tab.getByRole('button', { name, exact: true });
     const dialog = page.getByRole('dialog', { name: text.browseTitle, exact: true });
     const close = () => dialog.getByRole('button', { name: zh.dialogs.text001, exact: true }).click();
+    const relatedTab = page.locator('.postgres-related-table-tab:visible');
+    const tabButton = (title: string) => page.locator('.tab-strip .tab-select').getByText(title, { exact: true });
+    const closeTab = (title: string) => page.locator('.tab-strip .workspace-tab-button')
+      .filter({ has: page.getByText(title, { exact: true }) }).locator('.tab-close').click();
     await expect(button(text.browse)).toBeDisabled();
     await grid.getByRole('gridcell', { name: '9007199254740993', exact: true }).click();
     await button(text.browse).click();
@@ -83,7 +87,15 @@ test('PostgreSQL 从当前记录双向查看复合外键关联', async ({}, info
     await expect(dialog.getByRole('textbox', { name: recordText.raw('details'), exact: true })).toHaveValue('长说明'.repeat(150) + '结尾甲');
     await dialog.getByRole('button', { name: recordText.raw('details'), exact: true }).click();
     await page.screenshot({ path: info.outputPath('PostgreSQL查看引用记录.png') });
-    await close();
+    await dialog.getByRole('button', { name: text.openRelated, exact: true }).click();
+    const relatedParentTitle = text.relatedTitle('"回归"."父档案"');
+    await expect(tabButton(relatedParentTitle)).toBeVisible();
+    await expect(relatedTab.getByRole('grid')).toContainText('9007199254740993');
+    await expect(relatedTab.getByRole('grid')).not.toContainText('候选父乙');
+    await relatedTab.getByRole('button', { name: text.relatedRecord, exact: true }).click();
+    await expect(relatedTab.getByRole('table')).toContainText('0x00ff');
+    await closeTab(relatedParentTitle);
+    await expect(tabButton(relatedParentTitle)).toHaveCount(0);
     await mark('网格按复合外键准确读取父记录，保留大整数、完整长文本和 BYTEA');
 
     await button(tableText.edit).click();
@@ -152,6 +164,40 @@ test('PostgreSQL 从当前记录双向查看复合外键关联', async ({}, info
     await draft.getByRole('button', { name: tableText.discard, exact: true }).click();
     await expect(draft).toHaveCount(0);
     await mark('字面搜索、完整字段、约束切换及原草稿均已核对，独立读回确认零写入');
+
+    await button(text.children).click();
+    await selectTable('订单明细');
+    await children.getByRole('searchbox', { name: text.childQuery, exact: true }).fill('_%');
+    await children.getByRole('button', { name: text.childSearch, exact: true }).click();
+    await expect(children.getByText(text.childRange(0, 1))).toBeVisible();
+    await children.getByRole('button', { name: text.openRelated, exact: true }).click();
+    const relatedChildTitle = text.relatedTitle('"回归"."订单明细"');
+    await expect(tabButton(relatedChildTitle)).toBeVisible();
+    const search = relatedTab.getByRole('searchbox', { name: text.childQuery, exact: true });
+    await expect(search).toHaveValue('_%');
+    await expect(relatedTab.getByText(text.childRange(0, 1))).toBeVisible();
+    await closeTab('"回归"."父档案"');
+    await expect(tabButton('"回归"."父档案"')).toHaveCount(0);
+    await search.fill('');
+    await relatedTab.getByRole('button', { name: text.childSearch, exact: true }).click();
+    await expect(relatedTab.getByText(text.childRange(0, 40))).toBeVisible();
+    await relatedTab.getByRole('button', { name: text.childNext, exact: true }).click();
+    await expect(relatedTab.getByText(text.childRange(40, 3))).toBeVisible();
+    await expect(relatedTab.getByRole('grid')).not.toContainText('不属于甲');
+    await page.screenshot({ path: info.outputPath('PostgreSQL独立关联表页.png') });
+    await mark('独立子表页继承搜索，关闭源页后仍能在原外键范围准确翻页');
+
+    await page.locator('.object-row').getByRole('button', { name: '"回归"."订单明细"', exact: true }).click();
+    await expect(tabButton('"回归"."订单明细"')).toBeVisible();
+    await expect(tabButton(relatedChildTitle)).toBeVisible();
+    await tabButton(relatedChildTitle).click();
+    await reader.query(`UPDATE "回归"."父档案" SET details = details || '外部变化' WHERE code=9007199254740993`);
+    await relatedTab.getByRole('button', { name: text.relatedRefresh, exact: true }).click();
+    await expect(relatedTab.getByRole('alert')).toContainText('原记录已变化');
+    await expect(relatedTab.getByRole('grid')).toHaveCount(0);
+    await closeTab(relatedChildTitle);
+    await expect(tabButton(relatedChildTitle)).toHaveCount(0);
+    await mark('普通表页独立打开，外部修改源记录后关联页拒绝刷新并清除旧结果');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

@@ -3,6 +3,7 @@ import type { DataRow, ResultColumn, SortRule } from './contracts';
 import { csvExportDelimiters } from './csvExport';
 import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, validateFilterGroup } from './filtering';
 import { strictTableLayoutPreferences } from './tablePreferences';
+import { postgresRelatedTabPrefix } from './postgresRelatedTab';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -132,17 +133,24 @@ export interface PostgresTableValues {
 }
 
 export const postgresTableReferenceLimits = { page: 40, offset: 100_000, search: 256, constraints: 128, columns: 16 } as const;
+const referenceSearch = z.string().max(postgresTableReferenceLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value));
+const referenceOffset = z.number().int().min(0).max(postgresTableReferenceLimits.offset);
+const relatedTabId = identity.startsWith(postgresRelatedTabPrefix)
+  .refine(value => token.safeParse(value.slice(postgresRelatedTabPrefix.length)).success);
 export const postgresTableReferenceSchema = postgresTableReleaseSchema.extend({
   parentRow: z.number().int().min(0).max(postgresTableLimits.page - 1).optional(),
   childrenRow: z.number().int().min(0).max(postgresTableLimits.page - 1).optional(),
   lookup: z.object({
     id: z.string().regex(/^[1-9][0-9]{0,9}$/),
     stamp: z.string().regex(/^[0-9a-f]{64}$/),
-    search: z.string().max(postgresTableReferenceLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
-    offset: z.number().int().min(0).max(postgresTableReferenceLimits.offset),
+    search: referenceSearch,
+    offset: referenceOffset,
   }).strict().optional(),
+  relatedTabId: relatedTabId.optional(),
 }).strict().refine(input => input.parentRow === undefined ||
-  (input.childrenRow === undefined && (!input.lookup || (input.lookup.search === '' && input.lookup.offset === 0))));
+  (input.childrenRow === undefined && (!input.lookup || (input.lookup.search === '' && input.lookup.offset === 0))))
+  .refine(input => input.relatedTabId === undefined || (input.relatedTabId !== input.tabId && !!input.lookup &&
+    input.lookup.offset === 0 && (input.parentRow !== undefined || input.childrenRow !== undefined)));
 export type PostgresTableReferenceInput = z.infer<typeof postgresTableReferenceSchema>;
 export interface PostgresTableReference {
   id: string; stamp: string; name: string; schema: string; table: string;
@@ -150,7 +158,22 @@ export interface PostgresTableReference {
 }
 export interface PostgresTableReferenceResult {
   choices: PostgresTableReference[];
-  page?: { columns: ResultColumn[]; rows: DataRow[]; hasNext: boolean };
+  page?: PostgresRelatedRows;
+  opened?: { tabId: string; table: string };
+}
+export interface PostgresRelatedRows { columns: ResultColumn[]; rows: DataRow[]; hasNext: boolean; }
+const relatedTarget = target.extend({ tabId: relatedTabId });
+export const postgresRelatedTableSchema = z.discriminatedUnion('operation', [
+  relatedTarget.extend({ operation: z.literal('page'), offset: referenceOffset, search: referenceSearch.optional() }).strict(),
+  relatedTarget.extend({ operation: z.literal('close') }).strict(),
+]);
+export type PostgresRelatedTableInput = z.infer<typeof postgresRelatedTableSchema>;
+export interface PostgresRelatedTablePage {
+  page: PostgresRelatedRows;
+  incoming: boolean;
+  constraint: string;
+  offset: number;
+  search: string;
 }
 const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy']);
 

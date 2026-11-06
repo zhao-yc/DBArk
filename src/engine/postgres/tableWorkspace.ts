@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { CellValue, DataRow } from '../../shared/contracts';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
+import { isPostgresRelatedTabId } from '../../shared/postgresRelatedTab';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import { FILTER_LIMITS } from '../../shared/filtering';
@@ -10,12 +11,13 @@ import {
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
   type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableColumnReadInput, type PostgresTableValuesInput, type PostgresTableValues,
+  type PostgresRelatedTableInput, type PostgresRelatedTablePage,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
 import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
 import { postgresTableCondition } from './tableFilter';
-import { readPostgresTableReferences } from './tableReferences';
+import { readPostgresTableReferences, type PostgresReferenceSourceRow } from './tableReferences';
 import { readPostgresColumnStatistics } from './tableStatistics';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
@@ -48,6 +50,15 @@ interface Snapshot {
   preview?: { token: string; expires: number; writes: Write[] };
 }
 interface TableSnapshots { current: Snapshot; retained: Map<string, Snapshot>; }
+interface RelatedScope {
+  target: Scoped<PostgresTableTarget>;
+  originTable: string;
+  relation: Relation;
+  row: Original;
+  incoming: boolean;
+  lookup: NonNullable<PostgresTableReferenceInput['lookup']>;
+  expires: number;
+}
 export type PostgresTableImportRequest = Scoped<PostgresTableImportInput> & { source: PostgresCopySource };
 const noWrites: Capabilities = { insert: false, update: false, delete: false };
 // 按内置类型 OID 开放可原生比较且文本可往返的字段，避免同名自定义类型混入。
@@ -173,6 +184,24 @@ function rowPredicate(values: unknown[], row: Original): string {
   return 'ctid = $' + pos + '::tid AND xmin = $' + (pos + 1) + '::xid';
 }
 
+/** 关联页和弹窗共用原行核对。分区 OID、物理版本和完整值摘要都必须匹配。 */
+async function referenceSource(connection: PostgresConnection, relation: Relation, row: Original,
+  incoming: boolean, verify: boolean): Promise<PostgresReferenceSourceRow> {
+  const source = { incoming, sql: only(relation), tid: row.tid, version: row.version, tableOid: row.tableOid,
+    oid: relation.oid, name: relation.sql };
+  if (verify) {
+    const args: unknown[] = [];
+    const predicate = rowPredicate(args, row);
+    const projection = relation.columns.map(column => postgresIdentifier(column.name)).join(', ');
+    const current = await connection.query('SELECT ' + projection + ' FROM ' + source.sql + ' WHERE ' + predicate +
+      ' AND tableoid = $3::oid AND pg_catalog.to_regclass($4)::oid = $5::oid',
+    [...args, source.tableOid, source.name, source.oid], { rows: 2, bytes: 8 * 1024 * 1024 });
+    if (current.truncated || current.rows.length !== 1 || digest(current.rows[0]) !== row.digest)
+      throw Error('原记录已变化，请刷新后查看引用记录');
+  }
+  return source;
+}
+
 /** 控制表页事务锁及每条语句的数据库端等待上限。 */
 async function begin(connection: PostgresConnection, mode: 'page' | 'export' | 'write' = 'write'): Promise<void> {
   await connection.query(mode === 'page' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' :
@@ -186,11 +215,13 @@ async function begin(connection: PostgresConnection, mode: 'page' | 'export' | '
 export class PostgresTableWorkspace {
   private readonly snapshots = new Map<string, TableSnapshots>();
   private readonly active = new Set<string>();
+  private readonly related = new Map<string, RelatedScope>();
 
   private key(scope: Scoped<PostgresTableTarget>): string { return JSON.stringify([scope.owner, scope.tabId]); }
 
   /** 仅保留本标签仍有草稿的原页，导入和导出继续绑定当前页。 */
   async page(input: Scoped<PostgresTablePageInput>, connect: Connect): Promise<PostgresTablePage> {
+    if (isPostgresRelatedTabId(input.tabId)) throw Error('关联表页必须按原外键范围读取');
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     this.active.add(key);
@@ -338,6 +369,7 @@ export class PostgresTableWorkspace {
     const browsing = rowIndex !== undefined;
     const original = this.snapshot(input, !browsing);
     const source = rowIndex === undefined ? undefined : original.rows[rowIndex];
+    const incoming = input.childrenRow !== undefined;
     if (browsing && !source) throw Error('原记录不可定位，请刷新表页');
     if (!browsing && !original.relation.capabilities.insert && !original.relation.capabilities.update)
       throw Error('原表页不支持写入外键字段');
@@ -345,27 +377,62 @@ export class PostgresTableWorkspace {
       await begin(connection, 'page');
       const relation = await readRelation(connection, input.table);
       if (relation.fingerprint !== original.relation.fingerprint) throw Error('原表页结构或权限已变化，请刷新');
-      // 在同一快照内核对原行，再按数据库自己的外键规则查询关联记录。
-      const sourceRow = source && { incoming: input.childrenRow !== undefined, sql: only(relation),
-        tid: source.tid, version: source.version, tableOid: source.tableOid,
-        oid: relation.oid, name: relation.sql };
-      if (source && sourceRow && input.lookup) {
-        const args: unknown[] = [];
-        const predicate = rowPredicate(args, source);
-        const projection = relation.columns.map(column => postgresIdentifier(column.name)).join(', ');
-        const row = await connection.query('SELECT ' + projection + ' FROM ' + sourceRow.sql + ' WHERE ' + predicate +
-          ' AND tableoid = $3::oid AND pg_catalog.to_regclass($4)::oid = $5::oid',
-        [...args, sourceRow.tableOid, sourceRow.name, sourceRow.oid], { rows: 2, bytes: 8 * 1024 * 1024 });
-        if (row.truncated || row.rows.length !== 1 || digest(row.rows[0]) !== source.digest)
-          throw Error('原记录已变化，请刷新后查看引用记录');
-      }
+      const sourceRow = source && await referenceSource(connection, relation, source, incoming, !!input.lookup);
       const references = await readPostgresTableReferences(connection, relation.oid, relation.columns, input.lookup, sourceRow);
       const reply = await connection.query('COMMIT', undefined, small());
       if (reply.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 外键候选读取未完成');
       return references;
     });
     if (this.active.has(key) || this.snapshot(input, !browsing) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开外键记录');
+    const lookup = input.lookup;
+    if (input.relatedTabId && source && lookup) {
+      const choice = result.choices.find(item => item.id === lookup.id && item.stamp === lookup.stamp);
+      if (!choice || !result.page || (!incoming && !result.page.rows.length)) throw Error('没有可打开的关联记录');
+      const table = postgresIdentifier(choice.schema) + '.' + postgresIdentifier(choice.table);
+      const { owner, connectionRevision, connectionId, database } = input;
+      const target = { owner, connectionRevision, connectionId, database, table, tabId: input.relatedTabId };
+      const now = Date.now(), relatedKey = this.key(target);
+      for (const [id, scope] of this.related) if (scope.expires <= now) this.related.delete(id);
+      if (this.related.has(relatedKey) || this.related.size >= 128) throw Error('关联表页已存在或达到数量上限');
+      this.related.set(relatedKey, { target, originTable: input.table, relation: original.relation, row: source,
+        incoming, lookup, expires: now + 30 * 60 * 1000 });
+      return { choices: result.choices, opened: { tabId: target.tabId, table } };
+    }
     return result;
+  }
+
+  /** 新标签只继承已核准的关联来源，翻页与刷新均重新核对权限、外键和原记录。 */
+  async relatedPage(input: Scoped<Extract<PostgresRelatedTableInput, { operation: 'page' }>>,
+    connect: Connect): Promise<PostgresRelatedTablePage> {
+    const key = this.key(input), scope = this.related.get(key);
+    const current = () => this.related.get(key) === scope && !!scope && scope.expires > Date.now();
+    if (!scope || !current() || scope.target.table !== input.table || scope.target.connectionId !== input.connectionId ||
+        scope.target.connectionRevision !== input.connectionRevision || scope.target.database !== input.database)
+      throw Error('关联表页已失效，请从源记录重新打开');
+    const search = scope.incoming ? input.search ?? scope.lookup.search : '';
+    const offset = scope.incoming ? input.offset : 0;
+    const result = await connect(async connection => {
+      await begin(connection, 'page');
+      const relation = await readRelation(connection, scope.originTable);
+      if (relation.fingerprint !== scope.relation.fingerprint) throw Error('关联来源结构或权限已变化，请重新打开');
+      const source = await referenceSource(connection, relation, scope.row, scope.incoming, true);
+      const lookup = { ...scope.lookup, search, offset };
+      const { choices, page } = await readPostgresTableReferences(connection, relation.oid, relation.columns, lookup, source, true);
+      const choice = choices.find(item => item.id === lookup.id && item.stamp === lookup.stamp);
+      if (!choice || !page) throw Error('原关联已变化，请重新打开');
+      const reply = await connection.query('COMMIT', undefined, small());
+      if (reply.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 关联记录读取未完成');
+      return { page, incoming: scope.incoming, constraint: choice.name, offset, search };
+    });
+    if (!current()) throw Error('关联表页已失效，请从源记录重新打开');
+    return result;
+  }
+
+  closeRelated(input: Scoped<PostgresTableTarget>): null {
+    const key = this.key(input), scope = this.related.get(key);
+    if (scope?.target.connectionId === input.connectionId && scope.target.database === input.database && scope.target.table === input.table)
+      this.related.delete(key);
+    return null;
   }
 
   /** 字段只读任务复用原表页范围，读前核对列目录，读后拒绝已撤销的原页。 */
@@ -615,12 +682,14 @@ export class PostgresTableWorkspace {
 
   /** 原表能力也参与连接断开路由，冷打开的表页无需额外缓存密码。 */
   connectionIds(): string[] {
-    return [...new Set([...this.snapshots.values()].map(group => group.current.scope.connectionId))];
+    return [...new Set([...this.snapshots.values()].map(group => group.current.scope.connectionId)
+      .concat([...this.related.values()].map(scope => scope.target.connectionId)))];
   }
 
   /** 断开或修改传输配置后撤销该连接的全部待提交预览。 */
   clear(connectionId: string): void {
     for (const [key, group] of this.snapshots) if (group.current.scope.connectionId === connectionId) this.snapshots.delete(key);
+    for (const [key, scope] of this.related) if (scope.target.connectionId === connectionId) this.related.delete(key);
   }
 }
 

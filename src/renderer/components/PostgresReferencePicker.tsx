@@ -1,21 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import { postgresTableReferenceLimits as limits, type PostgresTableField, type PostgresTableReference, type PostgresTableReferenceInput, type PostgresTableReferenceResult } from '../../shared/postgresTable';
 import { postgresReferencePickerZh as text } from '../locales/postgresReferencePicker.zh-CN';
-import { postgresRecordViewZh as recordText } from '../locales/postgresRecordView.zh-CN';
-import { cellPreview, cellText, errorMessage, invoke } from '../lib';
+import { postgresRelatedTabPrefix } from '../../shared/postgresRelatedTab';
+import { cellPreview, errorMessage, invoke, uid } from '../lib';
 import { postgresReferenceSelection } from '../postgresReferenceSelection';
 import { ErrorBox } from './ui';
+import { PostgresReferenceRecord } from './PostgresReferenceRecord';
 
 export interface PostgresReferenceSource {
   input: Omit<PostgresTableReferenceInput, 'lookup'>;
   current(): boolean;
 }
 type CandidatePage = NonNullable<PostgresTableReferenceResult['page']>;
+type Opened = NonNullable<PostgresTableReferenceResult['opened']>;
 type View = { choice: PostgresTableReference; page: CandidatePage; offset: number; search: string };
 
 /** 候选回包属于打开时的表单和查询代次，填入操作只写父级字段输入。 */
-export function PostgresReferencePicker({ source, onClose, onChoose }: {
-  source: PostgresReferenceSource; onClose(): void; onChoose?(fields: PostgresTableField[]): void;
+export function PostgresReferencePicker({ source, onClose, onChoose, onOpen }: {
+  source: PostgresReferenceSource; onClose(): void; onChoose?(fields: PostgresTableField[]): void; onOpen?(opened: Opened): void;
 }) {
   const parent = source.input.parentRow !== undefined, children = source.input.childrenRow !== undefined;
   const browse = parent || children;
@@ -23,15 +25,16 @@ export function PostgresReferencePicker({ source, onClose, onChoose }: {
   const [choice, setChoice] = useState<PostgresTableReference>();
   const [view, setView] = useState<View>();
   const [query, setQuery] = useState(''), [details, setDetails] = useState(true);
-  const [expanded, setExpanded] = useState<string>();
   const [childIndex, setChildIndex] = useState<number>();
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const latest = useRef(source); latest.current = source;
   const generation = useRef(0);
   const liveView = useRef<View>(undefined);
+  const opening = useRef(false);
 
   /** 查询开始立即收起旧结果，避免搜索和翻页过程中使用旧行。 */
   async function load(key?: PostgresTableReference, search = '', offset = 0) {
+    if (opening.current) return;
     const request = ++generation.current, input = latest.current.input;
     const current = () => generation.current === request && latest.current.input.pageToken === input.pageToken &&
       latest.current.input.parentRow === input.parentRow && latest.current.input.childrenRow === input.childrenRow &&
@@ -39,7 +42,6 @@ export function PostgresReferencePicker({ source, onClose, onChoose }: {
     if (!current()) { setError(text.expired); return; }
     liveView.current = undefined;
     setView(undefined);
-    setExpanded(undefined);
     setChildIndex(undefined);
     setBusy(true);
     setError('');
@@ -70,6 +72,34 @@ export function PostgresReferencePicker({ source, onClose, onChoose }: {
     return () => { generation.current++; liveView.current = undefined; };
   }, []);
 
+  /** 独立标签只接纳原弹窗的核准回包。关闭或换源后及时释放迟到的会话能力。 */
+  async function openRelated() {
+    if (!browse || !onOpen || !view || opening.current || liveView.current !== view || !source.current()) return;
+    const { connectionId, database } = source.input;
+    const relatedTabId = postgresRelatedTabPrefix + uid(), request = generation.current;
+    const current = () => generation.current === request && liveView.current === view && source.current();
+    let opened: Opened | undefined, published = false;
+    opening.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      const result = await invoke('postgres.table.references', { ...source.input, relatedTabId,
+        lookup: { id: view.choice.id, stamp: view.choice.stamp, search: view.search, offset: 0 } });
+      opened = result.opened;
+      if (!current()) return;
+      if (!opened || opened.tabId !== relatedTabId) throw Error(text.relatedExpired);
+      onOpen(opened);
+      published = true;
+      onClose();
+    } catch (reason) {
+      if (current()) setError(errorMessage(reason));
+    } finally {
+      if (opened && !published) void invoke('postgres.table.related', { ...opened, connectionId, database, operation: 'close' }).catch(() => {});
+      opening.current = false;
+      if (generation.current === request) setBusy(false);
+    }
+  }
+
   const columns = view ? details ? view.page.columns : view.page.columns.slice(0, view.choice.pairs.length) : [];
   const record = view?.page.rows[parent ? 0 : childIndex ?? -1];
   const emptyDirectory = children ? text.emptyChildKeys : parent ? text.emptyBrowseKeys : text.emptyKeys;
@@ -91,6 +121,8 @@ export function PostgresReferencePicker({ source, onClose, onChoose }: {
         }}/>
       <button type="button" disabled={busy || !choice} onClick={() => void load(choice, query)}>{children ? text.childSearch : text.search}</button></>}
       <button type="button" disabled={busy} onClick={() => { setQuery(''); void load(); }}>{text.refresh}</button>
+      {browse && onOpen && <button type="button" disabled={busy || !view || (parent && !view.page.rows.length)}
+        onClick={() => void openRelated()}>{text.openRelated}</button>}
       {!browse && <button type="button" onClick={onClose}>{text.close}</button>}
     </div>
     {browse && choice && <p><strong>{children ? text.childTable : text.parentTable}</strong>　{choice.schema}.{choice.table}</p>}
@@ -98,18 +130,8 @@ export function PostgresReferencePicker({ source, onClose, onChoose }: {
     {busy && <p role="status">{text.loading}</p>}
     <ErrorBox message={error}/>
     {!busy && choices?.length === 0 && <p>{emptyDirectory}</p>}
-    {children && record && <button type="button" onClick={() => { setChildIndex(undefined); setExpanded(undefined); }}>{text.backToChildren}</button>}
-    {view && record && <div className="pg-reference-candidates pg-reference-record"><table>
-      <tbody>{view.page.columns.map(column => {
-        const value = record[column.key], open = expanded === column.key;
-        return <tr key={column.key}><th scope="row">{column.name}</th><td>
-          {value === null ? recordText.null : value === '' ? recordText.empty : cellPreview(value)}
-          {value != null && value !== '' && <button type="button" aria-expanded={open} aria-label={recordText.raw(column.name)}
-            onClick={() => setExpanded(open ? undefined : column.key)}>{open ? recordText.closeValue : recordText.fullValue}</button>}
-          {open && <textarea readOnly aria-label={recordText.raw(column.name)} rows={3} value={cellText(value)}/>}
-        </td></tr>;
-      })}</tbody>
-    </table></div>}
+    {children && record && <button type="button" onClick={() => setChildIndex(undefined)}>{text.backToChildren}</button>}
+    {view && record && <PostgresReferenceRecord columns={view.page.columns} row={record}/>}
     {parent && view && !record && <p>{text.emptyParent}</p>}
     {!parent && !record && view && <>
       <div className="pg-table-controls">

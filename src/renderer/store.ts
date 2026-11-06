@@ -1,4 +1,5 @@
 import { isSqliteRelatedTabId } from '../shared/sqliteRelatedTab';
+import { isPostgresRelatedTabId } from '../shared/postgresRelatedTab';
 import { isPostgresPresetTabId, postgresPresetIdFromTab } from '../shared/postgresPresetTab';
 import { assertSqliteTableRebuildFactTransition, sqliteTableRebuildFactSchema } from '../shared/sqliteTableRebuild';
 import { sqliteTableRebuildFactMessage, sqliteTableRebuildTaskMessage } from '../shared/sqliteTableRebuildFact';
@@ -197,6 +198,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const current = get().settings;
     const presetId = postgresPresetIdFromTab(candidate.id);
     const existing = candidate.kind === 'table' ? current.tabs.find(tab => !isSqliteRelatedTabId(candidate.id) && !isSqliteRelatedTabId(tab.id) &&
+      !isPostgresRelatedTabId(candidate.id) && !isPostgresRelatedTabId(tab.id) &&
       tab.kind === 'table' && tab.connectionId === candidate.connectionId && tab.database === candidate.database && tab.table === candidate.table &&
       (presetId ? postgresPresetIdFromTab(tab.id) === presetId : !isPostgresPresetTabId(candidate.id) && !isPostgresPresetTabId(tab.id)))
       : candidate.kind === 'objects' ? current.tabs.find(tab => tab.kind === 'objects' && tab.connectionId === candidate.connectionId && tab.database === candidate.database) : undefined;

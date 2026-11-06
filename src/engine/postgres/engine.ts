@@ -711,6 +711,7 @@ export class PostgresEngine {
           command === 'postgres.foreignEdit.apply' ? this.foreignEdits : this.checkEdits;
         return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
+      case 'postgres.table.related':
       case 'postgres.table.page':
       case 'postgres.table.values':
       case 'postgres.table.statistics':
@@ -718,11 +719,14 @@ export class PostgresEngine {
       case 'postgres.table.apply':
       case 'postgres.table.import':
       case 'postgres.table.export': {
+        if (command === 'postgres.table.related' && input.operation === 'close')
+          return this.tables.closeRelated(input as Parameters<PostgresTableWorkspace['closeRelated']>[0]);
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的PostgreSQL表页连接及原文档');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
+        if (command === 'postgres.table.related') return this.tables.relatedPage(input as Parameters<PostgresTableWorkspace['relatedPage']>[0], connect);
         if (command === 'postgres.table.export') return this.exportTable(input as PostgresTableExportRequest, profile);
         if (command === 'postgres.table.import') return this.importTable(input as PostgresTableImportRequest, profile);
         if (command === 'postgres.table.references') return this.tables.references(input as Parameters<PostgresTableWorkspace['references']>[0], connect);

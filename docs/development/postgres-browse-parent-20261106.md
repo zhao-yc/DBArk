@@ -4,7 +4,7 @@
 
 读取使用数据库的复合键顺序、比较操作符及父键排序规则。目标字段受列权限和行级策略约束。窗口最多显示外键字段和 16 个可读说明字段。原行已被替换时，刷新表页后再查看；空外键或父记录不可见时显示空结果。[PostgreSQL 外键目录](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)
 
-仅有读取权限的账号可以从拥有表级 SELECT 权限的普通表或分区表查看父记录。打开独立父表页和时间范围外键仍待接入。反向浏览见[PostgreSQL 查看子记录](postgres-browse-children-20261106.md)。
+仅有读取权限的账号可以从拥有表级 SELECT 权限的普通表或分区表查看父记录。时间范围外键仍待接入。后续入口见[PostgreSQL 查看子记录](postgres-browse-children-20261106.md)和[独立关联表页](postgres-related-table-20261106.md)。
 
 ## 验证记录
 
