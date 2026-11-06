@@ -24,9 +24,10 @@ function equalFields(left: PostgresRecordValues, right: PostgresRecordValues): b
 }
 
 /** 行输入只属于原页及原行。换行或跨页时通过 key 更换输入组件，字段导航偏好保留。 */
-function RecordInput({ page, row, columns, draft, editable, reference, onDirty, onStage }: {
+function RecordInput({ page, row, columns, draft, editable, reference, current, onDirty, onStage }: {
   page: PostgresTablePage; row: number; columns: PostgresTableColumn[]; draft?: RecordDraft; editable: boolean;
   reference?: PostgresReferenceSource;
+  current(): boolean;
   onDirty(dirty: boolean): void; onStage(fields: PostgresTableField[]): void;
 }) {
   const saved = useMemo<PostgresRecordValues>(() => new Map(draft?.kind === 'update'
@@ -123,7 +124,7 @@ function RecordInput({ page, row, columns, draft, editable, reference, onDirty, 
     </div>}
     <ErrorBox message={error}/>
     {columns.length ? <PostgresRecordFields columns={columns} original={page.rows[row]} fields={input ?? saved}
-      editable={editable || !!input || draft?.kind === 'update'} disabled={!editable} inspect reference={reference} onChange={changeInput}/> : <Empty title={text.noFields}/>}
+      editable={editable || !!input || draft?.kind === 'update'} disabled={!editable} inspect reference={reference} current={current} onChange={changeInput}/> : <Empty title={text.noFields}/>}
   </>;
 }
 
@@ -176,7 +177,8 @@ export function PostgresTableRecordView({ page, row, offset, visible, draft, edi
         {/* 切换只读展示时保留原表单实例，未暂存输入仍由原页和原行持有。 */}
         <div hidden={mode !== 'form'}>
           <RecordInput key={page.exportToken + ':' + row} page={page} row={row} columns={columns} draft={draft}
-            editable={editable} reference={reference} onDirty={dirty => onDirty(row, dirty)} onStage={fields => onStage(row, fields)}/>
+            editable={editable} reference={reference} current={() => mode === 'form' && projectionCurrent()}
+            onDirty={dirty => onDirty(row, dirty)} onStage={fields => onStage(row, fields)}/>
         </div>
         {mode !== 'form' && <>
           {pending ? <p role="status">{projectionText.pending}</p> : draft && <p role="status">{projectionText.staged}</p>}

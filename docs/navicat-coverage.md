@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 记录表单支持 BYTEA 原字节查看、图片预览和另存，支持从文件载入十六进制赋值并沿原事务提交。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL BYTEA 文件操作](development/postgres-bytea-files-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 可写记录表单与弹窗支持 JSON 节点替换、对象成员和数组结构操作，沿用当前字段赋值及既有事务。D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL JSON 节点与结构编辑](development/postgres-record-json-tree-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 可在可写记录表单及记录弹窗编辑整行 JSON。输入与字段表单互换，沿原暂存、SQL 预览及事务提交。D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 整行 JSON 编辑](development/postgres-record-json-edit-20261106.md)

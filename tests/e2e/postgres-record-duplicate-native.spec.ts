@@ -13,6 +13,8 @@ import { postgresDraftFilesZh as draftFilesText } from '../../src/renderer/local
 import { decodePostgresDraft } from '../../src/shared/postgresTableDraft';
 import { cellClipboardType, decodeClipboard } from '../../src/renderer/gridClipboard';
 import { binaryCellZh } from '../../src/renderer/locales/binaryCell.zh-CN';
+import { binaryCellFilesZh as binaryFilesText } from '../../src/renderer/locales/binaryCellFiles.zh-CN';
+import { postgresByteaZh as byteaText } from '../../src/renderer/locales/postgresBytea.zh-CN';
 import { tableQueryTemplateZh as sqlTemplateText } from '../../src/renderer/locales/tableQueryTemplate.zh-CN';
 import { tableFilteredSelectZh as filteredSelectText } from '../../src/renderer/locales/tableFilteredSelect.zh-CN';
 import { postgresColumnStatisticsZh as statisticsText } from '../../src/renderer/locales/postgresColumnStatistics.zh-CN';
@@ -842,6 +844,95 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     expect(await readJsonRows()).toEqual([...afterJson, { id: '9007199254740994', amount: null, doc: '{"创建":true}', raw: null,
       nullable_text: null, state: '恢复默认', derived: '恢复默认-生成' }]);
     await mark('新增窗口可直接暂存整行 JSON，省略字段使用数据库默认值且独立读回一致');
+
+    await expect(button(tableText.refresh)).toBeEnabled();
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j04QAAAAASUVORK5CYII=', 'base64');
+    const binaryInputs = ['超限.bin', '空文件.bin', '图片.png'].map(name => info.outputPath(name));
+    const binaryOutputs = ['原表字节.bin', '输入图片.bin', '只读视图字节.bin'].map(name => info.outputPath(name));
+    await Promise.all([writeFile(binaryInputs[0], Buffer.alloc(32769, 255)), writeFile(binaryInputs[1], Buffer.alloc(0)), writeFile(binaryInputs[2], png)]);
+    await application.evaluate(({ BrowserWindow, dialog }, args) => {
+      const open = dialog.showOpenDialog, save = dialog.showSaveDialog;
+      const calls = { open: 0, save: 0 };
+      const check = (values: unknown[], title: string) => {
+        const owner = BrowserWindow.getAllWindows().find(window => window.webContents.id === args.sender);
+        const options = values[1] as { title: string; filters: { extensions: string[] }[] };
+        if (!owner || values[0] !== owner || options.title !== title || options.filters[0].extensions[0] !== '*')
+          throw Error('BYTEA 文件选择器的归属或用途不符');
+      };
+      dialog.showOpenDialog = (async (...values: unknown[]) => {
+        check(values, '载入二进制单元格文件');
+        const input = args.binaryInputs[[0, 1, 2, 1][calls.open++]];
+        if (!input) throw Error('BYTEA 文件选择超出本例预定范围');
+        return { canceled: false, filePaths: [input] };
+      }) as typeof open;
+      dialog.showSaveDialog = (async (...values: unknown[]) => {
+        check(values, '另存二进制单元格原字节');
+        const output = args.binaryOutputs[calls.save++];
+        if (!output) throw Error('BYTEA 另存超出本例预定范围');
+        return { canceled: false, filePath: output };
+      }) as typeof save;
+      Object.assign(globalThis, { finishPgBytea: () => { dialog.showOpenDialog = open; dialog.showSaveDialog = save; return calls; } });
+    }, { sender, binaryInputs, binaryOutputs });
+    const byteaViewer = recordView.getByRole('region', { name: binaryCellZh.title, exact: true });
+    const byteaButton = (name: string) => byteaViewer.getByRole('button', { name, exact: true });
+    const savedHex = (path: string) => readFile(path).then(bytes => bytes.toString('hex'), () => undefined);
+    const unchangedBytea = await readJsonRows();
+    let fileCalls: { open: number; save: number };
+    try {
+      await viewButton(byteaText.original).click();
+      await expect(byteaViewer.getByRole('textbox', { name: binaryCellZh.hexLabel, exact: true })).toHaveValue('ff 00');
+      await byteaButton(binaryFilesText.save).click();
+      await expect.poll(() => savedHex(binaryOutputs[0])).toBe('ff00');
+      await mode(recordView, 'raw').selectOption('binary');
+      await viewButton(byteaText.edit).click();
+      await byteaButton(binaryFilesText.load).click();
+      await expect(byteaViewer.getByRole('alert')).toContainText('32 KiB');
+      await expect(value(recordView, 'raw')).toHaveValue('ff00');
+      await byteaButton(binaryFilesText.load).click();
+      await expect(value(recordView, 'raw')).toHaveValue('');
+      await expect(byteaViewer.getByText(binaryCellZh.empty, { exact: true })).toBeVisible();
+      await byteaButton(binaryFilesText.load).click();
+      await expect(value(recordView, 'raw')).toHaveValue(png.toString('hex'));
+      await byteaButton(binaryCellZh.image).click();
+      await expect(byteaViewer.getByRole('img', { name: binaryCellZh.image, exact: true })).toBeVisible();
+      await byteaButton(binaryFilesText.save).click();
+      await expect.poll(() => savedHex(binaryOutputs[1])).toBe(png.toString('hex'));
+      await byteaViewer.getByRole('img', { name: binaryCellZh.image, exact: true }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: info.outputPath('PostgreSQL-BYTEA-文件输入.png') });
+      await viewButton(viewText.stage).click();
+      expect(await readJsonRows()).toEqual(unchangedBytea);
+      await button(tableText.preview).click();
+      await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+      await expect(draft).toHaveCount(0);
+      expect(await readJsonRows()).toEqual([{ ...unchangedBytea[0], raw: png.toString('hex') }, unchangedBytea[1]]);
+      await mark('BYTEA 原字节另存、超限拒绝、空文件、PNG 预览及明确提交后逐字读回');
+
+      await page.locator('.tab-select').getByText('"回归"."原值结构"', { exact: true }).click();
+      await viewButton(originalText.form).click();
+      await recordView.getByRole('searchbox', { name: viewText.search, exact: true }).fill('');
+      await viewButton(byteaText.original).click();
+      await expect(byteaButton(binaryFilesText.load)).toHaveCount(0);
+      await byteaButton(binaryFilesText.save).click();
+      await expect.poll(() => savedHex(binaryOutputs[2])).toBe('00ff');
+      await mark('只读 PostgreSQL 视图另存完整 BYTEA 原字节');
+
+      await page.locator('.tab-select').getByText('"回归"."整行编辑"', { exact: true }).click();
+      await button(tableText.add).click();
+      const newBytea = page.getByRole('dialog', { name: tableText.add, exact: true });
+      await mode(newBytea, 'raw').selectOption('binary');
+      await value(newBytea, 'raw').fill('ffff');
+      await newBytea.getByRole('button', { name: byteaText.edit, exact: true }).click();
+      await newBytea.getByRole('button', { name: binaryFilesText.load, exact: true }).click();
+      await expect(value(newBytea, 'raw')).toHaveValue('');
+      await newBytea.getByRole('button', { name: tableText.cancel, exact: true }).click();
+      expect(await readJsonRows()).toEqual([{ ...unchangedBytea[0], raw: png.toString('hex') }, unchangedBytea[1]]);
+      await mark('新增弹窗载入空文件只改变输入，取消后数据库保持');
+    } finally {
+      fileCalls = await application.evaluate(() => (globalThis as typeof globalThis & {
+        finishPgBytea(): { open: number; save: number };
+      }).finishPgBytea());
+    }
+    expect(fileCalls).toEqual({ open: 4, save: 3 });
 
     check();
     expect(runtime.pageErrors).toEqual([]);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { DataRow } from '../../shared/contracts';
 import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField, type PostgresTablePage } from '../../shared/postgresTable';
 import { cellPreview, cellText, errorMessage, ownCell } from '../lib';
@@ -11,25 +11,40 @@ import { beginPostgresRecordJson, isPostgresJsonTextType, postgresRecordJsonBudg
 import { BoundedRecordTextarea } from './BoundedRecordTextarea';
 import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
 import { PostgresRecordJsonTree } from './PostgresRecordJsonTree';
+import { BinaryCellViewer } from './BinaryCellViewer';
+import { binaryByteLength } from '../binaryCell';
+import { postgresBinaryEditBytes, postgresBinaryInputHex } from '../postgresBinaryInput';
+import { postgresByteaZh as byteaText } from '../locales/postgresBytea.zh-CN';
 import { ErrorBox, Modal } from './ui';
 import '../recordProjections.css';
 
 export type PostgresEditableRecord = Extract<PostgresTableChange, { kind: 'insert' | 'update' }>;
 export type PostgresRecordValues = Map<string, PostgresTableField['value']>;
 type Mode = PostgresTableField['value']['mode'] | 'unchanged';
+const emptyBinary = { type: 'binary' as const, base64: '' };
 
 /** 网格弹窗和记录视图共用字段模式，分别管理自己的输入和暂存。 */
-export function PostgresRecordFields({ columns, original, fields, editable, disabled, inspect, reference, batch, explicitDefault, onChange }: {
+export function PostgresRecordFields({ columns, original, fields, editable, disabled, inspect, reference, batch, explicitDefault, current, onChange }: {
   columns: readonly PostgresTableColumn[]; original?: DataRow; fields: PostgresRecordValues; editable: boolean; disabled?: boolean; inspect?: boolean;
   reference?: PostgresReferenceSource;
   batch?: true;
   explicitDefault?: boolean;
+  current?(): boolean;
   onChange(change: (current: PostgresRecordValues) => PostgresRecordValues): void;
 }) {
   const [expanded, setExpanded] = useState<string>();
   const [pickReference, setPickReference] = useState(false);
+  const [binaryView, setBinaryView] = useState<{ column: string; mode: 'original' | 'input' }>();
+  const fileSource = useRef(current);
+  fileSource.current = current;
+  const filesCurrent = current ? () => fileSource.current?.() === true : undefined;
+
+  function toggleBinary(column: string, mode: 'original' | 'input') {
+    setBinaryView(previous => previous?.column === column && previous.mode === mode ? undefined : { column, mode });
+  }
 
   function changeMode(column: string, mode: Mode) {
+    setBinaryView(undefined);
     onChange(previous => {
       const result = new Map(previous);
       if (mode === 'unchanged') result.delete(column);
@@ -55,6 +70,15 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
     const value = fields.get(column.key);
     const originalValue = original && ownCell(original, column.key);
     const summary = inspect && originalValue === null ? viewText.null : inspect && originalValue === '' ? viewText.empty : cellPreview(originalValue);
+    const originalBinary = column.binary && originalValue && typeof originalValue === 'object' ? originalValue : undefined;
+    const largeBinary = originalBinary && (binaryByteLength(originalBinary) ?? 0) > postgresBinaryEditBytes;
+    const originalOpen = binaryView?.column === column.key && binaryView.mode === 'original';
+    const inputOpen = binaryView?.column === column.key && binaryView.mode === 'input' && value?.mode === 'binary';
+    const valueLabel = column.name + ' ' + text.value;
+    const writeHex = (hex: string) => {
+      const next = postgresBinaryInputHex(hex);
+      onChange(previous => new Map(previous).set(column.key, { mode: 'binary', value: next }));
+    };
     return <div className="pg-record-field" key={column.key} data-record-column={column.key}>
       <strong tabIndex={inspect ? -1 : undefined}>{column.name} <small className="muted">{column.type}</small></strong>
       {original && <div className="muted pg-record-original">{text.original}　{summary}
@@ -62,17 +86,32 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
           aria-label={viewText.raw(column.name)} onClick={() => setExpanded(previous => previous === column.key ? undefined : column.key)}>
           {expanded === column.key ? viewText.closeValue : viewText.fullValue}
         </button>}
+        {originalBinary && <button type="button" aria-expanded={originalOpen} disabled={!originalOpen && filesCurrent?.() === false}
+          onClick={() => toggleBinary(column.key, 'original')}>
+          {originalOpen ? byteaText.close : byteaText.original}
+        </button>}
       </div>}
       {inspect && expanded === column.key && <textarea readOnly aria-label={viewText.raw(column.name)} rows={3} value={cellText(originalValue)}/>}
+      {originalBinary && originalOpen && <BinaryCellViewer value={originalBinary} source={[original, column]} isCurrent={filesCurrent}/>}
       {column.generated ? <span className="muted">{text.generated}</span> : editable && <div className="pg-record-inputs">
         <select aria-label={column.name + ' ' + text.valueMode} value={value?.mode ?? 'unchanged'} disabled={disabled} onChange={event => changeMode(column.key, event.target.value as Mode)}>
           <option value="unchanged">{original || batch ? text.unchanged : explicitDefault ? text.omitInsertField : text.default}</option>
           <option value="text">{text.text}</option>
-          {column.binary && <option value="binary">{text.hex}</option>}
+          {column.binary && <option value="binary" disabled={!!largeBinary && value?.mode !== 'binary'}>{text.hex}</option>}
           {column.nullable && <option value="null">{text.null}</option>}
           {(original || batch || explicitDefault) && <option value="default">{text.default}</option>}
         </select>
-        {value && 'value' in value && <textarea aria-label={column.name + ' ' + text.value} value={value.value}
+        {largeBinary && value?.mode !== 'binary' && <button type="button" title={byteaText.replacementHint} disabled={disabled} onClick={() => {
+          writeHex(''); setBinaryView({ column: column.key, mode: 'input' });
+        }}>{byteaText.replace}</button>}
+        {value?.mode === 'binary' && <button type="button" aria-expanded={inputOpen} disabled={!inputOpen && filesCurrent?.() === false}
+          onClick={() => toggleBinary(column.key, 'input')}>
+          {inputOpen ? byteaText.close : byteaText.edit}
+        </button>}
+        {inputOpen && value?.mode === 'binary' ? <BinaryCellViewer value={emptyBinary} hexInput={value.value} label={valueLabel}
+          reason={disabled ? viewText.expired : undefined} source={[original, column, fields]} isCurrent={filesCurrent}
+          onHexChange={disabled ? undefined : writeHex}/>
+        : value && 'value' in value && <textarea aria-label={valueLabel} value={value.value}
           maxLength={postgresTableLimits.value} readOnly={disabled} rows={2} onChange={event => {
             const next = event.target.value;
             onChange(previous => new Map(previous).set(column.key, { ...value, value: next }));
@@ -153,7 +192,7 @@ export function PostgresRecordForm({ page, row, initial, reference, duplicate, e
           setFields(replacePostgresJsonField(original, fields, column, previous, next));
         }} onClose={() => setTree(false)}/>
         : json ? <PostgresRecordJsonEditor buffer={json} onChange={value => { setJson(value); setError(''); }}/>
-        : <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference}
+        : <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference} current={sourceCurrent}
           explicitDefault={editingDraft} onChange={setFields}/>}
       <ErrorBox message={error}/>
     </div>

@@ -226,6 +226,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 点「编辑 JSON 记录树」，选字段后点「解析当前字段」，可修改节点值、调整成员和数组结构。修改先应用到字段输入，带回表单后再暂存。详见[PostgreSQL JSON 节点与结构编辑](development/postgres-record-json-tree-20261106.md)。
 
+PostgreSQL 记录表单的 BYTEA 字段可查看 Hex、严格解码文本或图片，也可另存原字节。选十六进制赋值后，点「查看或载入 BYTEA」可载入本地文件，再按原流程暂存。详见[PostgreSQL BYTEA 文件操作](development/postgres-bytea-files-20261106.md)。
+
 在 PostgreSQL 可写表单中用[外键选值](development/postgres-reference-picker-20261106.md)搜索引用记录，并将单列或复合键一并带入当前表单。
 
 在 PostgreSQL 记录页可[精确计数、跳页或定位末页](development/postgres-table-pagination-20261106.md)。计数沿用当前筛选，末页在同一读取快照内定位。
