@@ -26,7 +26,7 @@ function validateExportRow(row: CellValue[]) {
 export async function exportPostgresTable(workspace: PostgresTableWorkspace, input: PostgresTableExportRequest,
   connect: Source[1], check: () => void, commitStart: () => void, progress: (rows: number) => void): Promise<PostgresTableExportOutput> {
   if (!isAbsolute(input.filePath) || input.filePath.includes('\0')) throw Error('主进程未提供授权的导出路径');
-  if (input.format === 'sql' && input.encoding !== 'utf8') throw Error('PostgreSQL SQL 脚本使用 UTF-8');
+  if ((input.format === 'sql' || input.format === 'sql-backup') && input.encoding !== 'utf8') throw Error('PostgreSQL SQL 脚本使用 UTF-8');
   if (input.format === 'copy' && input.encoding !== 'utf8') throw Error('PostgreSQL COPY CSV 使用 UTF-8');
   const delimiter = csvExportDelimiter(postgresTableExportExtension(input.format), input.csvDelimiter);
   let file: AtomicFile | undefined, rows = 0;
@@ -48,9 +48,9 @@ export async function exportPostgresTable(workspace: PostgresTableWorkspace, inp
           yield row;
         }
       }
-      if (input.format === 'sql') {
+      if (input.format === 'sql' || input.format === 'sql-backup') {
         if (!replay) throw Error('PostgreSQL SQL 导出缺少回放设置');
-        rows = await writePostgresSqlData(replay.table, columns, replay.settings, validatedRows(), chunk => staged.write(chunk), progress);
+        rows = await writePostgresSqlData(replay.table, columns, replay.settings, validatedRows(), chunk => staged.write(chunk), progress, replay.backup);
         await staged.prepare(true);
         return;
       }

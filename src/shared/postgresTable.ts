@@ -200,11 +200,11 @@ export interface PostgresRelatedTablePage {
   search: string;
   editToken?: string;
 }
-const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy']);
+const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup']);
 
 /** 原生 COPY 使用 CSV 扩展名，文件能力仍按具体导出格式绑定。 */
 export function postgresTableExportExtension(format: PostgresTableExportInput['format']) {
-  return format === 'copy' ? 'csv' : format;
+  return format === 'copy' ? 'csv' : format === 'sql-backup' ? 'sql' : format;
 }
 /** 文件能力只由主进程签发，筛选和排序只从原服务端表页读取。 */
 export const postgresTableExportChooseSchema = z.object({
@@ -219,7 +219,7 @@ export const postgresTableExportSchema = target.extend({
   if (input.csvDelimiter !== undefined && postgresTableExportExtension(input.format) !== 'csv')
     context.addIssue({ code: 'custom', message: '只有 CSV 可指定分隔符' });
   if (input.format === 'xlsx' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'XLSX 使用固定内部编码' });
-  if (input.format === 'sql' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL SQL 脚本使用 UTF-8' });
+  if ((input.format === 'sql' || input.format === 'sql-backup') && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL SQL 脚本使用 UTF-8' });
   if (input.format === 'copy' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL COPY CSV 使用 UTF-8' });
 });
 export type PostgresTableExportInput = z.infer<typeof postgresTableExportSchema>;

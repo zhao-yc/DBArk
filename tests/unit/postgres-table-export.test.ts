@@ -21,6 +21,9 @@ describe('PostgreSQL 表页导出协议', () => {
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'xlsx', csvDelimiter: undefined, encoding: 'utf16le' }).success).toBe(false);
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'sql', csvDelimiter: undefined }).success).toBe(true);
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'sql', csvDelimiter: undefined, encoding: 'gb18030' }).success).toBe(false);
+    expect(postgresTableExportSchema.safeParse({ ...request, format: 'sql-backup', csvDelimiter: undefined }).success).toBe(true);
+    expect(postgresTableExportSchema.safeParse({ ...request, format: 'sql-backup', csvDelimiter: undefined, encoding: 'gb18030' }).success).toBe(false);
+    expect(postgresTableExportExtension('sql-backup')).toBe('sql');
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'copy', csvDelimiter: '\t' }).success).toBe(true);
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'copy', encoding: 'utf16le' }).success).toBe(false);
     expect(postgresTableExportSchema.safeParse({ ...request, format: 'copy', csvDelimiter: '|' }).success).toBe(false);

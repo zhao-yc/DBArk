@@ -17,7 +17,8 @@ import {
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import type { PostgresSyncEvidence, PostgresSyncRow } from './dataCompare';
-import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
+import { readPostgresSqlExportSettings, type PostgresSqlExportSettings, type PostgresTableBackupSql } from './sqlExport';
+import { readPostgresTableBackup } from './tableBackup';
 import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
 import { postgresTableCondition, postgresTableReadOrder } from '../../shared/postgresTableReadSql';
 import { readPostgresTableReferences, type PostgresReferenceSourceRow, type PostgresReferenceRowVersion } from './tableReferences';
@@ -49,7 +50,7 @@ interface FilteredWriteMatch { sql: string; values: unknown[]; signature: string
 type FilteredWrite = { kind: 'update'; fields: PostgresTableField[] } | { kind: 'delete' };
 type ExportSource = { kind: 'copy'; write: (sink: (chunk: Buffer) => Promise<void>) => Promise<number> } |
   { kind: 'cursor'; columns: PostgresTableColumn[]; rows: AsyncIterable<CellValue[]>;
-    replay?: { table: string; settings: PostgresSqlExportSettings } };
+    replay?: { table: string; settings: PostgresSqlExportSettings; backup?: PostgresTableBackupSql } };
 interface Snapshot {
   scope: Scoped<PostgresTableTarget>;
   token: string;
@@ -687,19 +688,30 @@ export class PostgresTableWorkspace {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot({ ...input, pageToken: input.exportToken });
+    const backup = input.format === 'sql-backup';
+    if (backup && snapshot.relation.kind !== 'r') throw Error('整表 SQL 备份只支持普通持久表');
     this.active.add(key);
     try {
       await connect(async connection => {
         check();
-        await begin(connection, 'export');
+        await begin(connection, backup ? 'page' : 'export');
+        if (backup) {
+          // 在首个快照前锁定真实原表，备份模式固定读取整张表且拒绝被 RLS 静默筛掉的记录。
+          await connection.query('LOCK TABLE ONLY ' + snapshot.relation.sql + ' IN ACCESS SHARE MODE', undefined, small());
+          await connection.query('SET LOCAL row_security = off', undefined, small());
+        }
         const relation = await readRelation(connection, input.table);
         if (relation.fingerprint !== snapshot.relation.fingerprint) throw Error('导出关系结构已变化，请刷新表页');
         const columns = input.columns.map(key => relation.columns.find(column => column.key === key));
         if (columns.some(column => !column)) throw Error('导出列已变化，请刷新表页');
         const selected = columns as PostgresTableColumn[];
-        if (input.format === 'sql' && (!isPostgresSqlExportRelation(relation.kind) || !selected.every(isPostgresSqlExportColumn)))
+        if ((input.format === 'sql' || backup) && (!isPostgresSqlExportRelation(relation.kind) || !selected.every(isPostgresSqlExportColumn)))
           throw Error('SQL 数据脚本只支持表的可插入列，计算生成列由目标表恢复');
-        const { sql, args } = readSql(relation, snapshot.options, undefined, selected);
+        if (backup && selected.length !== relation.columns.filter(isPostgresSqlExportColumn).length)
+          throw Error('整表 SQL 备份需要全部可恢复字段');
+        const { sql, args } = backup ? {
+          sql: 'SELECT ' + selected.map(column => postgresIdentifier(column.name)).join(', ') + ' FROM ' + only(relation), args: [],
+        } : readSql(relation, snapshot.options, undefined, selected);
         const declared = await connection.query('DECLARE dbark_table_export NO SCROLL CURSOR FOR ' + sql, args, small(), undefined, 'extended');
         if (declared.postgresCommand !== 'DECLARE') throw Error('PostgreSQL 导出游标未确认');
         const locked = await readRelation(connection, input.table);
@@ -712,7 +724,10 @@ export class PostgresTableWorkspace {
             postgresDdlLiteral(delimiter) + ')';
           await consume({ kind: 'copy', write: sink => connection.copyOut(command, sink) });
         } else {
-          const replay = input.format === 'sql' ? { table: relation.sql, settings: await readPostgresSqlExportSettings(connection) } : undefined;
+          const backupSql = backup ? await readPostgresTableBackup(connection, input.table, relation.oid) : undefined;
+          const replay = input.format === 'sql' || backup ? {
+            table: relation.sql, settings: await readPostgresSqlExportSettings(connection), backup: backupSql,
+          } : undefined;
           await consume({ kind: 'cursor', columns: selected, rows: readExportCursor(connection, selected, check), replay });
         }
         check();

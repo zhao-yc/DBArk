@@ -316,6 +316,8 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 普通表和分区表还可以选择 SQL，生成写入同名表的 UTF-8 INSERT 数据脚本。标识列可保留原值，计算生成列由目标库恢复。详见[PostgreSQL 表页 SQL 数据导出](development/postgres-sql-export-20261105.md)。
 
+普通持久表还可以在「导出数据」选择「整表备份（SQL）」，生成含表结构、全部记录和本表所属序列的 UTF-8 文件。在目标库准备同名 schema 和所需依赖，通过查询页打开文件并执行，可恢复成新表。详见[PostgreSQL 整表备份与恢复](development/postgres-table-sql-backup-20261107.md)。
+
 要把数据交给 PostgreSQL 的 `COPY FROM`，在表页「导出数据」中选择「COPY CSV（PostgreSQL 原生）」。选择输出列及逗号、分号或 Tab，再指定 `.csv` 保存位置。文件含列名，固定 UTF-8，按 PostgreSQL 的 CSV 规则区分 NULL 和空字符串。导入时使用相同分隔符，并按文件列顺序指定目标列。详见[PostgreSQL 表页原生 COPY 导出](development/postgres-copy-export-20261105.md)。
 
 在有写入权限的 PostgreSQL 普通表或分区表打开「导入 CSV」。选择与源文件一致的分隔符和首行模式，再选 UTF-8 文件。核对数据样本和目标字段后，点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。详见[PostgreSQL CSV 导入及样本预览](development/postgres-copy-preview-20261105.md)。

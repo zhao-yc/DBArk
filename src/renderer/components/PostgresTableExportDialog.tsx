@@ -10,7 +10,7 @@ import { acquireWorkspaceBusy } from '../store';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
 
-const formats = ['csv', 'json', 'xlsx', 'sql', 'copy'] as const;
+const formats = ['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup'] as const;
 const encodings = [['utf8', 'UTF-8'], ['utf16le', 'UTF-16 LE'], ['gb18030', 'GB18030']] as const;
 
 /** 文件选择、列和任务只对应打开时的原服务端表页。 */
@@ -25,8 +25,10 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
   const [busy, setBusy] = useState(false), [taskId, setTaskId] = useState<string>();
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const occupied = useRef(false), cancelRequested = useRef(false);
-  const available = format === 'sql' ? page.columns.filter(isPostgresSqlExportColumn) : page.columns;
-  const output = available.filter(column => selected.has(column.key));
+  const backup = format === 'sql-backup';
+  const sql = backup || format === 'sql';
+  const available = sql ? page.columns.filter(isPostgresSqlExportColumn) : page.columns;
+  const output = backup ? available : available.filter(column => selected.has(column.key));
   const textEncoding = format === 'csv' || format === 'json';
   const extension = postgresTableExportExtension(format);
 
@@ -63,7 +65,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
         ...(extension === 'csv' ? { csvDelimiter: delimiter } : {}),
       });
       if (!result.fileCommitted) throw Error(text.cancelled);
-      setMessage(text.saved(result.rows));
+      setMessage(backup ? text.backupSaved(result.rows) : text.saved(result.rows));
     } catch (reason) { setError(cancelRequested.current ? text.cancelled : errorMessage(reason)); }
     finally {
       setTaskId(undefined);
@@ -85,13 +87,14 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
   const locked = busy || !!taskId;
   return <Modal title={text.title} onClose={() => { if (!occupied.current) onClose(); }}>
     <div className="modal-content pg-table-export">
-      <p><strong>{target.table}</strong> · {text.source} · {filtered ? text.filtered : text.all}</p>
-      <p>{text.note}</p>
+      <p><strong>{target.table}</strong> · {text.source} · {filtered && !backup ? text.filtered : text.all}</p>
+      <p>{backup ? text.backupHint : text.note}</p>
       <div className="pg-table-controls">
         <Field label={text.format}><select aria-label={text.format} value={format} disabled={locked}
           onChange={event => { setFormat(event.target.value as typeof format); setFile(null); setMessage(''); }}>
-          {formats.map(value => <option key={value} value={value} disabled={value === 'sql' && !isPostgresSqlExportRelation(page.relationKind)}>
-            {value === 'copy' ? text.copyFormat : value.toUpperCase()}
+          {formats.map(value => <option key={value} value={value} disabled={value === 'sql-backup' ? page.relationKind !== 'r' :
+            value === 'sql' && !isPostgresSqlExportRelation(page.relationKind)}>
+            {value === 'copy' ? text.copyFormat : value === 'sql-backup' ? text.backupFormat : value.toUpperCase()}
           </option>)}
         </select></Field>
         {textEncoding && <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
@@ -102,14 +105,14 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
       </div>
       {format === 'sql' && <p>{text.sqlHint}</p>}
       {format === 'copy' && <p>{text.copyHint}</p>}
-      <fieldset disabled={locked}>
+      <fieldset disabled={locked || backup}>
         <legend>{text.columns}</legend>
         <button onClick={() => setSelected(new Set(available.map(column => column.key)))}>{text.allColumns}</button>
         <button onClick={() => setSelected(new Set())}>{text.noColumns}</button>
         <div className="pg-table-export-columns">{page.columns.map(column => {
-          const eligible = format !== 'sql' || isPostgresSqlExportColumn(column);
+          const eligible = !sql || isPostgresSqlExportColumn(column);
           return <label key={column.key}>
-          <input type="checkbox" disabled={!eligible} checked={eligible && selected.has(column.key)} onChange={event => {
+          <input type="checkbox" disabled={!eligible} checked={eligible && (backup || selected.has(column.key))} onChange={event => {
             const next = new Set(selected);
             if (event.target.checked) next.add(column.key); else next.delete(column.key);
             setSelected(next);
