@@ -333,7 +333,7 @@ export class Engine {
         if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId ||
           input.acknowledgeSnapshot !== true || !input.tool) throw Error('缺少可信的整库备份来源或工具');
         this.copySourceProfile(input);
-        const job = createMysqlDatabaseBackup({ database: input.database, filePath: input.filePath, tool: input.tool });
+        const job = createMysqlDatabaseBackup({ database: input.database, filePath: input.filePath, tool: input.tool, format: input.format });
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => job.stage({ managed, ...control }),
           undefined, '备份整库 SQL', 'no-default-database', undefined, false, job);
       }

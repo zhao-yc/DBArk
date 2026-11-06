@@ -16,6 +16,8 @@
 
 在「工具 → MySQL／MariaDB 整库备份」选择直连或 SSH 来源、数据库和对应的 `mysqldump` 或 `mariadb-dump`，确认后可生成带原库名的整库 SQL。开始前应停止对源库执行 DDL。已生成的 SQL 可以在下方的执行入口恢复。[原生整库备份与验收](development/mysql-native-database-backup-20261107.md) · [SSH 备份与 TLS 条件](development/mysql-ssh-database-backup-20261107.md)
 
+整库备份的「备份格式」可以选择「tabrelio ZIP 归档」。保存后通过「打开数据库备份归档」校验清单、导出原始 SQL，再按下述流程恢复。[整库 ZIP 归档与验收](development/mysql-zip-backup-20261107.md)
+
 在「工具 → 执行 MySQL／MariaDB SQL 文件」可用原生转储或归档导出的 SQL 恢复数据库。先选择目标连接和文件编码。转储自带建库与 `USE` 时，初始数据库选「由脚本指定数据库」。转储只含表和数据时，选择已有的目标数据库。勾选信任确认后执行，完成后在回执中查看语句数及失败位置。取消或失败后先核对目标，因为已提交的数据和 DDL 可能保留。[SQL 文件恢复与验收](development/mysql-sql-file-20261107.md)
 
 SQLite 连接行的操作菜单提供「备份 SQLite 整库」。侧栏标题旁的「从 SQLite 备份恢复」先选择备份，再将其恢复为新文件。恢复后可在新建连接时选择该文件。[SQLite 备份与恢复](development/sqlite-database-backup-20261106.md)

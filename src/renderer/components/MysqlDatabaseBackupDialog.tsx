@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
-import { mysqlBackupDatabase, type MysqlDatabaseBackupResult } from '../../shared/mysqlDatabaseBackup';
+import { mysqlBackupDatabase, type MysqlDatabaseBackupFormat, type MysqlDatabaseBackupResult } from '../../shared/mysqlDatabaseBackup';
 import { errorMessage, invoke, uid } from '../lib';
 import { mysqlDatabaseBackupZh as text } from '../locales/mysqlDatabaseBackup.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
@@ -11,6 +11,7 @@ export function MysqlDatabaseBackupDialog({ connections, onClose }: {
   onClose(): void;
 }) {
   const [connectionId, setConnection] = useState(connections.length === 1 ? connections[0].id : '');
+  const [format, setFormat] = useState<MysqlDatabaseBackupFormat>('sql');
   const [database, setDatabase] = useState('');
   const [databases, setDatabases] = useState<string[]>([]);
   const [tool, setTool] = useState<FileChoice | null>(null);
@@ -44,7 +45,7 @@ export function MysqlDatabaseBackupDialog({ connections, onClose }: {
         setTool(null);
         setTool(await invoke('mysql.backup.chooseTool', {}));
       } else if (tool) {
-        setFile(await invoke('mysql.backup.chooseFile', { connectionId, database, toolToken: tool.token }));
+        setFile(await invoke('mysql.backup.chooseFile', { connectionId, database, format, toolToken: tool.token }));
       }
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setBusy(false); occupied.current = false; }
@@ -58,7 +59,7 @@ export function MysqlDatabaseBackupDialog({ connections, onClose }: {
     resetFile();
     try {
       setResult(await invoke('mysql.backup.database', {
-        connectionId, database, toolToken: tool.token, fileToken: file.token, taskId: id, acknowledgeSnapshot: true,
+        connectionId, database, format, toolToken: tool.token, fileToken: file.token, taskId: id, acknowledgeSnapshot: true,
       }));
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setTask(undefined); setCancelling(false); occupied.current = false; }
@@ -85,7 +86,13 @@ export function MysqlDatabaseBackupDialog({ connections, onClose }: {
         }}>
           <option value="">—</option>{databases.map(item => <option key={item}>{item}</option>)}
         </select></Field>
+        <Field label={text.format}><select aria-label={text.format} value={format} onChange={event => {
+          setFormat(event.target.value === 'archive' ? 'archive' : 'sql'); resetFile();
+        }}>
+          <option value="sql">{text.sql}</option><option value="archive">{text.archive}</option>
+        </select></Field>
       </fieldset>
+      {format === 'archive' && <p>{text.archiveScope}</p>}
       <div>
         <button disabled={locked} onClick={() => void choose('tool')}>{text.tool}</button>
         {tool && <span> · {tool.name}</span>}
@@ -97,7 +104,8 @@ export function MysqlDatabaseBackupDialog({ connections, onClose }: {
       </section>}
       {taskId && <p role="status">{cancelling ? text.cancelling : text.running}</p>}
       {result && <section role="status" className="database-backup-plan">
-        <p>{text.saved(result.bytes, result.toolVersion)}</p><p>{result.serverVersion}</p>
+        <p>{text.saved(result.bytes, result.toolVersion, Boolean(result.archiveSha256))}</p><p>{result.serverVersion}</p>
+        {result.archiveSha256 && <p>{text.archiveHash}　<code>{result.archiveSha256}</code></p>}
       </section>}
       <ErrorBox message={error}/>
     </div>

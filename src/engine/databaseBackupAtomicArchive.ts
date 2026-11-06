@@ -1,6 +1,7 @@
+import type { DatabaseBackupManifest } from '../shared/databaseBackup';
 import { basename, dirname, resolve } from 'node:path';
 import { AtomicFile, AtomicFileTargetReservation, nativeAtomicFileIO, type AtomicFileIO, type WritableFile } from './atomicFile';
-import { DatabaseBackupArchiveWriter, type DatabaseBackupArchiveManifest, type DatabaseBackupArchiveManifestInput } from './databaseBackupArchive';
+import { DatabaseBackupArchiveWriter, type DatabaseBackupArchiveManifestInput } from './databaseBackupArchive';
 
 interface Owner { readonly taskId:string; readonly planToken:string; }
 interface EndProof { owner:Owner; state:'confirmed'|'unknown'; }
@@ -9,7 +10,7 @@ interface FileRecord {
   closePromise?:Promise<void>; removePromise?:Promise<void>;
 }
 interface Hooks { checkCancelled():void; onCommitStart():void; }
-type Summary={dump:DatabaseBackupArchiveManifest['dump'];archive:{bytes:string;sha256:string};manifest:DatabaseBackupArchiveManifest};
+type Summary={dump:DatabaseBackupManifest['dump'];archive:{bytes:string;sha256:string};manifest:DatabaseBackupManifest};
 
 /** 同一owner的真实归档适配器；只消费已授权路径与预登记的目标预留Promise，不创建新的文件授权。 */
 export class DatabaseBackupAtomicArchive {
@@ -85,8 +86,10 @@ export class DatabaseBackupAtomicArchive {
   });}
   /** 每片保持64KiB上限，真实背压沿writer和AtomicFile传递，不解码或重写SQL。 */
   writeDump(bytes:Uint8Array):Promise<void>{return this.operation(['open'],async()=>{this.check();await this.writer!.writeDump(bytes);this.check();});}
-  finish(manifest:DatabaseBackupArchiveManifestInput):Promise<Summary>{return this.operation(['open'],async()=>{
-    this.check();const result=await this.writer!.finish(manifest);this.check();this.summary=result;this.state='finished';return structuredClone(result);
+  finish(manifest:Extract<DatabaseBackupArchiveManifestInput,{schemaVersion:1}>):Promise<Summary>{return this.operation(['open'],async()=>{
+    this.check();const result=await this.writer!.finish(manifest);this.check();
+    if(result.manifest.schemaVersion!==1)throw Error('注册套件执行器需要第一版归档清单');
+    const summary={...result,manifest:result.manifest};this.summary=summary;this.state='finished';return structuredClone(summary);
   });}
   /** rename边界开始后即保留未知；成功后还要确认AtomicFile清理完成才发放closed事实。 */
   commit():Promise<void>{return this.operation(['finished'],async()=>{

@@ -1,4 +1,4 @@
-import { mysqlDatabaseBackupTitle, mysqlBackupTunnelHost, mysqlDumpToolTitle, type MysqlDatabaseBackupChooseInput } from '../shared/mysqlDatabaseBackup';
+import { mysqlDatabaseBackupTitle, mysqlDatabaseBackupPathMatches, mysqlBackupTunnelHost, mysqlDumpToolTitle, type MysqlDatabaseBackupChooseInput } from '../shared/mysqlDatabaseBackup';
 import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpTool';
 import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
 import { inspectMysqlSqlFile, type MysqlSqlFileSource } from '../engine/mysqlSqlFile';
@@ -1185,12 +1185,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           throw Error('请选择与 MySQL 或 MariaDB 连接匹配的转储工具');
         mysqlBackupTunnelHost(profile);
         const name = target.database.replace(/[<>:"/\\|?*]/g, '_');
+        const archive = target.format === 'archive';
         const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: mysqlDatabaseBackupTitle,
-          defaultPath: name + '-整库备份.sql', filters: [{ name: 'SQL', extensions: ['sql'] }] });
+          defaultPath: name + (archive ? '-整库备份.dbark-backup.zip' : '-整库备份.sql'),
+          filters: archive ? [{ name: 'tabrelio 数据库备份归档', extensions: ['zip'] }] : [{ name: 'SQL', extensions: ['sql'] }] });
         check();
         connectionConfig.assertAvailable(target.connectionId);
         if (chosen.canceled || !chosen.filePath) return null;
-        if (!/\.sql$/i.test(chosen.filePath)) throw Error('请选择 SQL 目标文件');
+        if (!mysqlDatabaseBackupPathMatches(chosen.filePath, target.format)) throw Error('请选择与备份格式匹配的文件');
         const token = randomUUID();
         mysqlBackupFiles.set(document, { ...target, token, path: chosen.filePath, revision, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(chosen.filePath) };
@@ -2336,6 +2338,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const file = mysqlBackupFiles.get(document), tool = mysqlDumpTools.get(document);
       if (shuttingDown || !file || !tool || file.token !== input.fileToken || tool.token !== input.toolToken ||
         file.toolToken !== input.toolToken || file.connectionId !== input.connectionId || file.database !== input.database ||
+        (file.format ?? 'sql') !== (input.format ?? 'sql') ||
         file.revision !== store.connectionRevision() || file.expires <= Date.now())
         throw Error('备份目标、来源或转储工具已变化，请重新选择');
       const profile = store.resolveConnection(input.connectionId);

@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, lstat, realpath } from 'node:fs/promises';
+import { access, lstat, open, realpath } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
 import { runNativeProcess } from './nativeProcess';
 
@@ -19,18 +20,41 @@ export async function inspectMysqlDumpTool(selected: string): Promise<MysqlDumpT
   return { path, family, identity };
 }
 
+async function assertTool(tool: MysqlDumpTool) {
+  const current = await inspectMysqlDumpTool(tool.path);
+  if (current.family !== tool.family || current.identity !== tool.identity) throw Error('原生转储工具已变化，请重新选择');
+}
+
+/** 只摘要本次选择的程序字节。读取句柄和授权路径均须保持原文件代次。 */
+export async function hashMysqlDumpTool(tool: MysqlDumpTool, signal: AbortSignal) {
+  signal.throwIfAborted();
+  await assertTool(tool);
+  const flags = process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  const file = await open(tool.path, flags);
+  try {
+    const check = async () => {
+      const stat = await file.stat({ bigint: true });
+      const identity = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode].join(':');
+      if (!stat.isFile() || identity !== tool.identity) throw Error('原生转储工具已变化，请重新选择');
+    };
+    await check();
+    const sha = createHash('sha256');
+    for await (const chunk of file.createReadStream({ autoClose: false, signal })) sha.update(chunk);
+    await check();
+    await assertTool(tool);
+    signal.throwIfAborted();
+    return sha.digest('hex');
+  } finally { await file.close(); }
+}
+
 export async function runMysqlDumpTool(tool: MysqlDumpTool, args: readonly string[], signal: AbortSignal, write: (chunk: Buffer) => Promise<void>) {
-  const assertTool = async () => {
-    const current = await inspectMysqlDumpTool(tool.path);
-    if (current.family !== tool.family || current.identity !== tool.identity) throw Error('原生转储工具已变化，请重新选择');
-  };
   const env: NodeJS.ProcessEnv = { LC_ALL: 'C' };
   for (const key of ['SystemRoot', 'WINDIR', 'SystemDrive', 'TEMP', 'TMP', 'TMPDIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
-  await assertTool();
+  await assertTool(tool);
   const warning = await runNativeProcess(tool.path, basename(tool.path), args, env, signal, write);
-  await assertTool();
+  await assertTool(tool);
   // 原生 stderr 可能含连接身份、SQL 或样本内容，只报告异常事实。
   if (warning) throw Error('原生转储工具返回诊断信息，备份未保存。请核对工具版本、源权限和连接设置');
 }

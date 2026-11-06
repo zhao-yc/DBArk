@@ -9,7 +9,7 @@ const reservations:AtomicFileTargetReservation[]=[];
 // 仅回收本进程RAM夹具的互斥键；未知断言保持原事实，不据此声称真实文件资源已清理。
 afterEach(()=>{for(const item of reservations.splice(0))item.release();});
 function deferred<T=void>(){let finish!:(value:T)=>void;const promise=new Promise<T>(resolve=>{finish=resolve;});return{promise,resolve:(value?:T)=>finish(value as T)};}
-const manifest=():DatabaseBackupArchiveManifestInput=>({format:'dbark-backup-zip-store-v1',schemaVersion:1,family:'mysql',serverVersion:'8.4.11',toolVersion:'8.4.11',toolSuiteSha256:'a'.repeat(64),toolRegistryRevision:'ram-suite',database:'ram_backup',objects:[{kind:'table',name:'subject',definitionSha256:'b'.repeat(64),engine:'InnoDB'}],consistency:{profileId:'ram-lock',acquiredAt:'2026-10-17T10:00:00Z',completedAt:'2026-10-17T10:00:01Z',allObjectsFrozen:true},externalDependencies:[],resourcesConfirmed:true,restoreVerified:false});
+const manifest=():Extract<DatabaseBackupArchiveManifestInput,{schemaVersion:1}>=>({format:'dbark-backup-zip-store-v1',schemaVersion:1,family:'mysql',serverVersion:'8.4.11',toolVersion:'8.4.11',toolSuiteSha256:'a'.repeat(64),toolRegistryRevision:'ram-suite',database:'ram_backup',objects:[{kind:'table',name:'subject',definitionSha256:'b'.repeat(64),engine:'InnoDB'}],consistency:{profileId:'ram-lock',acquiredAt:'2026-10-17T10:00:00Z',completedAt:'2026-10-17T10:00:01Z',allObjectsFrozen:true},externalDependencies:[],resourcesConfirmed:true,restoreVerified:false});
 
 /** 数据/句柄/替换均走RAM IO，只有既有父目录归一化复用真实AtomicFile的只读realpath。 */
 async function fixture(){

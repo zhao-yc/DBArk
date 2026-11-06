@@ -63,7 +63,11 @@ export function DatabaseBackupArchiveDialog({ connections, onClose }: {
         <p>{text.archiveHash}　<code>{archive.archive.sha256}</code></p>
         <h3>{text.objects}</h3>
         <ul>{databaseBackupKinds.map(kind => <li key={kind}>{databaseBackupZh.kinds[kind]}　{counts.get(kind) ?? 0}</li>)}</ul>
-        {archive.manifest.externalDependencies.length > 0 && <details>
+        {archive.manifest.schemaVersion === 2 && <>
+          <p>{text.snapshotScope}</p>
+          <p>{text.executableHash}　<code>{archive.manifest.toolExecutableSha256}</code></p>
+        </>}
+        {archive.manifest.schemaVersion === 1 && archive.manifest.externalDependencies.length > 0 && <details>
           <summary>{text.dependencies}（{archive.manifest.externalDependencies.length}）</summary>
           <ul>{archive.manifest.externalDependencies.map((value, index) => <li key={index}>{value}</li>)}</ul>
         </details>}

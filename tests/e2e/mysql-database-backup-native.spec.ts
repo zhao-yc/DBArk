@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import mysql from 'mysql2/promise';
+import { inspectDatabaseBackupArchive } from '../../src/engine/databaseBackupArchive';
+import { databaseBackupArchiveZh as archiveText } from '../../src/shared/databaseBackupArchiveFiles';
 import { mysqlDatabaseBackupZh as backup } from '../../src/renderer/locales/mysqlDatabaseBackup.zh-CN';
 import { mysqlSqlFileZh as restore } from '../../src/renderer/locales/mysqlSqlFile.zh-CN';
 import { sqlFileImportZh as receipt } from '../../src/renderer/locales/sqlFileImport.zh-CN';
@@ -33,6 +36,7 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
   const { page, application } = ownedDesktopResources(info);
   const own = () => { if (ownedDesktopResources(info).page !== page) throw Error('测试窗口归属已变化'); };
   const menu = (name: string) => navigationMenuItem(page.locator('.navigation-toolbar'), { name, exact: true }, own);
+  const zip = process.env.DBARK_MYSQL_BACKUP_ARCHIVE_NATIVE === '1';
   const db = user + '_used', blocked = user + '_empty';
   const tls = process.env.DBARK_MYSQL_BACKUP_REQUIRE_TLS === '1'
     ? caPath ? { rejectUnauthorized: true, ca: await readFile(caPath) } : { rejectUnauthorized: false }
@@ -41,7 +45,9 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
     { dialect: 'mysql', port: mysqlPort, tool: mysqlTool, path: join(dataDir, 'MySQL.sql'), label: 'MySQL 源与目标' },
     { dialect: 'mariadb', port: mariaPort, tool: mariaTool, path: join(dataDir, 'MariaDB.sql'), label: 'MariaDB 源与目标' },
   ] as const;
-  const guarded = join(dataDir, '原文件.sql');
+  const archivePath = (path: string) => path.replace(/\.sql$/, '.dbark-backup.zip');
+  const destination = (path: string) => zip ? archivePath(path) : path;
+  const guarded = destination(join(dataDir, '原文件.sql'));
   await writeFile(guarded, '原文件\n');
   try {
     for (const target of targets) {
@@ -72,24 +78,28 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
       await form.getByRole('button', { name: zh.connections.text036, exact: true }).click();
       await expect(form).toBeHidden();
     }
-    await application.evaluate(({ dialog }, { sources, destinations, tools, openTitle, saveTitle, scriptTitle }) => {
+    await application.evaluate(({ dialog }, { sources, destinations, tools, archives, exports, openTitle, saveTitle, scriptTitle, archiveTitle, exportTitle }) => {
       const originalOpen = dialog.showOpenDialog, originalSave = dialog.showSaveDialog;
       dialog.showOpenDialog = (async (...args: unknown[]) => {
         const title = (args.at(-1) as Electron.OpenDialogOptions).title;
-        const path = (title === openTitle ? tools : title === scriptTitle ? sources : []).shift();
+        const path = (title === openTitle ? tools : title === scriptTitle ? sources : title === archiveTitle ? archives : []).shift();
         if (!path) throw Error('非本例文件选择');
-        if (!tools.length && !sources.length) dialog.showOpenDialog = originalOpen;
+        if (!tools.length && !sources.length && !archives.length) dialog.showOpenDialog = originalOpen;
         return { canceled: false, filePaths: [path] };
       }) as typeof originalOpen;
       dialog.showSaveDialog = (async (...args: unknown[]) => {
-        const path = destinations.shift();
-        if ((args.at(-1) as Electron.SaveDialogOptions).title !== saveTitle || !path) throw Error('非本例备份路径');
-        if (!destinations.length) dialog.showSaveDialog = originalSave;
+        const title = (args.at(-1) as Electron.SaveDialogOptions).title;
+        const path = (title === saveTitle ? destinations : title === exportTitle ? exports : []).shift();
+        if (!path) throw Error('非本例备份路径');
+        if (!destinations.length && !exports.length) dialog.showSaveDialog = originalSave;
         return { canceled: false, filePath: path };
       }) as typeof originalSave;
     }, {
       sources: targets.map(item => item.path), tools: targets.map(item => item.tool),
-      destinations: [targets[0].path, guarded, guarded, targets[1].path],
+      destinations: [destination(targets[0].path), guarded, guarded, destination(targets[1].path)],
+      archives: zip ? targets.map(item => destination(item.path)) : [],
+      exports: zip ? targets.map(item => item.path) : [],
+      archiveTitle: archiveText.select, exportTitle: archiveText.export,
       openTitle: backup.tool, saveTitle: backup.title, scriptTitle: restore.title,
     });
     for (const target of targets) {
@@ -98,6 +108,7 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
       await modal.getByRole('combobox', { name: backup.connection }).selectOption({ label: target.label });
       const database = modal.getByRole('combobox', { name: backup.database });
       await database.selectOption(db);
+      if (zip) await modal.getByRole('combobox', { name: backup.format }).selectOption('archive');
       await modal.getByRole('button', { name: backup.tool, exact: true }).click();
       const choose = modal.getByRole('button', { name: backup.choose, exact: true });
       const run = modal.getByRole('button', { name: backup.start, exact: true });
@@ -108,8 +119,22 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
         await run.click();
       };
       await stage();
-      await expect(modal.getByRole('status')).toContainText('已保存整库 SQL', { timeout: 20000 });
-      const original = await readFile(target.path);
+      await expect(modal.getByRole('status')).toContainText(zip ? '已保存整库 ZIP 归档' : '已保存整库 SQL', { timeout: 20000 });
+      const saved = await readFile(destination(target.path)), sqlChunks: Buffer[] = [];
+      const checked = zip ? await inspectDatabaseBackupArchive({
+        size: BigInt(saved.length),
+        async read(offset, length) { return saved.subarray(Number(offset), Number(offset) + length); },
+      }, undefined, { async writeBytes(bytes) { sqlChunks.push(Buffer.from(bytes)); } }) : undefined;
+      const original = checked ? Buffer.concat(sqlChunks) : saved;
+      if (checked) {
+        expect(checked.manifest).toMatchObject({ schemaVersion: 2, family: target.dialect, database: db, resourcesConfirmed: true,
+          toolExecutableSha256: createHash('sha256').update(await readFile(target.tool)).digest('hex') });
+        expect(checked.manifest.objects.map(object => object.kind).sort()).toEqual(['database', 'event', 'function', 'procedure', 'table', 'table', 'trigger', 'view']);
+        expect(Number(checked.dump.bytes)).toBeGreaterThan(64 * 1024);
+        expect(checked.archive.sha256).toBe(createHash('sha256').update(saved).digest('hex'));
+        await expect(modal.getByRole('status')).toContainText(checked.archive.sha256);
+        await writeFile(info.outputPath(target.dialect + '-整库备份.zip'), saved);
+      }
       expect(original.toString()).toContain('CREATE DATABASE');
       expect(original.toString()).toContain('Dump completed');
       await page.screenshot({ path: info.outputPath(target.dialect + '-整库备份.png') });
@@ -140,6 +165,28 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
         }
       }
       await modal.getByRole('button', { name: backup.close, exact: true }).click();
+      if (checked) {
+        await (await menu(archiveText.title)).click();
+        const archiveModal = page.getByRole('dialog', { name: archiveText.title, exact: true });
+        await archiveModal.getByRole('button', { name: archiveText.select, exact: true }).click();
+        await expect(archiveModal.getByRole('status')).toContainText(archiveText.checked);
+        await expect(archiveModal.getByText(checked.dump.sha256, { exact: true })).toBeVisible();
+        await expect(archiveModal.getByText(archiveText.snapshotScope, { exact: true })).toBeVisible();
+        await page.screenshot({ path: info.outputPath(target.dialect + '-归档校验.png') });
+        await archiveModal.getByRole('button', { name: archiveText.inspectSql, exact: true }).click();
+        await expect(archiveModal.getByRole('region', { name: archiveText.sqlInventory })).toBeVisible();
+        const family = target.dialect === 'mysql' ? 'MySQL' : 'MariaDB';
+        await archiveModal.getByRole('combobox', { name: archiveText.target }).selectOption({ label: target.label + ' · ' + family });
+        await archiveModal.getByRole('button', { name: archiveText.audit, exact: true }).click();
+        const targetAudit = archiveModal.getByRole('region', { name: archiveText.auditResult });
+        await expect(targetAudit).toContainText(archiveText.targetVersion.match);
+        await expect(targetAudit).toContainText(archiveText.targetState.occupied);
+        await archiveModal.getByRole('button', { name: archiveText.export, exact: true }).click();
+        await expect(archiveModal.getByRole('status')).toContainText(archiveText.saved(target.dialect === 'mysql' ? 'MySQL.sql' : 'MariaDB.sql'));
+        expect(await readFile(target.path)).toEqual(original);
+        expect(await readFile(destination(target.path))).toEqual(saved);
+        await archiveModal.getByRole('button', { name: archiveText.close, exact: true }).click();
+      }
 
       // 源库属于一次性容器。先清除夹具，再通过正式 SQL 入口验证备份可建库和回放。
       const control = await mysql.createConnection({ host: '127.0.0.1', port: target.port, user, password, ssl: tls });

@@ -1,29 +1,14 @@
-/** 结构对齐固定B01合同fb4db474；本模块不拥有共享合同文件，也不提供进程/恢复能力。 */
+import type { DatabaseBackupManifest } from '../shared/databaseBackup';
+import type { DatabaseBackupFileManifest, DatabaseBackupSelectedToolManifest } from '../shared/databaseBackupArchiveFiles';
+
 export interface DatabaseBackupArchiveDump {
   entry: 'dump.sql';
   bytes: string;
   sha256: string;
 }
-export interface DatabaseBackupArchiveManifest {
-
-  format: 'dbark-backup-zip-store-v1';
-  schemaVersion: 1;
-  family: 'mysql' | 'mariadb';
-  serverVersion: string;
-  toolVersion: string;
-  toolSuiteSha256: string;
-  toolRegistryRevision: string;
-  database: string;
-
-  objects: readonly { kind: 'database' | 'table' | 'view' | 'trigger' | 'procedure' | 'function' | 'event'; name: string; definitionSha256: string | null; engine?: string }[];
-
-  dump: DatabaseBackupArchiveDump;
-  consistency: { profileId: string; acquiredAt: string; completedAt: string; allObjectsFrozen: boolean };
-  externalDependencies: readonly string[];
-  resourcesConfirmed: boolean;
-  restoreVerified: false;
-}
-export type DatabaseBackupArchiveManifestInput = Omit<DatabaseBackupArchiveManifest, 'dump'> & { dump?: DatabaseBackupArchiveDump };
+export type DatabaseBackupArchiveManifest = DatabaseBackupFileManifest;
+export type DatabaseBackupArchiveManifestInput = (Omit<DatabaseBackupManifest, 'dump'> |
+  Omit<DatabaseBackupSelectedToolManifest, 'dump'>) & { dump?: DatabaseBackupArchiveDump };
 export const databaseBackupArchiveLimits = { archiveBytes: 10n * 1024n ** 3n, manifestBytes: 2 * 1024 * 1024, blockBytes: 64 * 1024 } as const;
 const invalid = () => new Error('备份清单结构、字段或预算无效');
 
@@ -95,7 +80,11 @@ function hash(v: unknown): void {
 /** 清单只表达声明；结构有效不等于对象/锁/资源/恢复事实已独立证明。 */
 export function databaseBackupArchiveManifest(value: unknown, dump?: DatabaseBackupArchiveDump): { manifest: DatabaseBackupArchiveManifest; bytes: Buffer } {
 
-  const clone = record(safeClone(value), ['format', 'schemaVersion', 'family', 'serverVersion', 'toolVersion', 'toolSuiteSha256', 'toolRegistryRevision', 'database', 'objects', 'consistency', 'externalDependencies', 'resourcesConfirmed', 'restoreVerified'], ['dump']);
+  const cloned = safeClone(value);
+  const selectedTool = (cloned as { schemaVersion?: unknown } | null)?.schemaVersion === 2;
+  const fields = ['format', 'schemaVersion', 'family', 'serverVersion', 'toolVersion', 'database', 'objects', 'consistency', 'resourcesConfirmed', 'restoreVerified',
+    ...(selectedTool ? ['toolExecutableSha256'] : ['toolSuiteSha256', 'toolRegistryRevision', 'externalDependencies'])];
+  const clone = record(cloned, fields, ['dump']);
 
   if (dump) {
     if (Object.hasOwn(clone, 'dump')) {
@@ -105,23 +94,47 @@ export function databaseBackupArchiveManifest(value: unknown, dump?: DatabaseBac
     clone.dump = { ...dump };
   }
 
-  const r = record(clone, ['format', 'schemaVersion', 'family', 'serverVersion', 'toolVersion', 'toolSuiteSha256', 'toolRegistryRevision', 'database', 'objects', 'dump', 'consistency', 'externalDependencies', 'resourcesConfirmed', 'restoreVerified']);
-
-  if (r.format !== 'dbark-backup-zip-store-v1' || r.schemaVersion !== 1 || (r.family !== 'mysql' && r.family !== 'mariadb') || typeof r.resourcesConfirmed !== 'boolean' || r.restoreVerified !== false) throw invalid();
+  const r = record(clone, [...fields, 'dump']);
+  if (r.format !== 'dbark-backup-zip-store-v1' || (!selectedTool && r.schemaVersion !== 1) ||
+    (r.family !== 'mysql' && r.family !== 'mariadb') || typeof r.resourcesConfirmed !== 'boolean' || r.restoreVerified !== false)
+    throw invalid();
 
   text(r.serverVersion);
   text(r.toolVersion);
-  hash(r.toolSuiteSha256);
-  text(r.toolRegistryRevision);
   text(r.database, 64);
-
-  if (!Array.isArray(r.objects) || !Array.isArray(r.externalDependencies)) throw invalid();
+  if (!Array.isArray(r.objects)) throw invalid();
+  if (selectedTool) {
+    hash(r.toolExecutableSha256);
+    if (!/^\d{1,2}\.\d{1,2}\.\d{1,2}$/.test(r.serverVersion) || r.resourcesConfirmed !== true) throw invalid();
+    const c = record(r.consistency, ['mode', 'startedAt', 'completedAt', 'allObjectsFrozen']);
+    if (c.mode !== 'innodb-consistent-read' || c.allObjectsFrozen !== false) throw invalid();
+    text(c.startedAt, 128);
+    text(c.completedAt, 128);
+  } else {
+    hash(r.toolSuiteSha256);
+    text(r.toolRegistryRevision);
+    if (!Array.isArray(r.externalDependencies)) throw invalid();
+    for (const dependency of r.externalDependencies) text(dependency);
+    const c = record(r.consistency, ['profileId', 'acquiredAt', 'completedAt', 'allObjectsFrozen']);
+    text(c.profileId);
+    text(c.acquiredAt, 128);
+    text(c.completedAt, 128);
+    if (typeof c.allObjectsFrozen !== 'boolean') throw invalid();
+  }
   const seen = new Set<string>();
+  let databases = 0;
 
   for (const obj of r.objects) {
     const o = record(obj, ['kind', 'name', 'definitionSha256'], ['engine']);
     if (typeof o.kind !== 'string' || !['database', 'table', 'view', 'trigger', 'procedure', 'function', 'event'].includes(o.kind)) throw invalid();
     text(o.name, 64);
+    if (selectedTool) {
+      if (o.definitionSha256 !== null || (o.kind === 'table' ? o.engine !== 'InnoDB' : Object.hasOwn(o, 'engine'))) throw invalid();
+      if (o.kind === 'database') {
+        if (o.name !== r.database) throw invalid();
+        databases++;
+      }
+    }
     if (o.definitionSha256 !== null) hash(o.definitionSha256);
     if (Object.hasOwn(o, 'engine')) text(o.engine, 64);
     const key = JSON.stringify([o.kind, o.name]);
@@ -129,17 +142,10 @@ export function databaseBackupArchiveManifest(value: unknown, dump?: DatabaseBac
     seen.add(key);
   }
 
-  for (const dependency of r.externalDependencies) text(dependency);
-
+  if (selectedTool && databases !== 1) throw invalid();
   const d = record(r.dump, ['entry', 'bytes', 'sha256']);
   if (d.entry !== 'dump.sql' || typeof d.bytes !== 'string' || d.bytes.length > 20 || !/^(0|[1-9]\d*)$/.test(d.bytes) || BigInt(d.bytes) > databaseBackupArchiveLimits.archiveBytes) throw invalid();
   hash(d.sha256);
-
-  const c = record(r.consistency, ['profileId', 'acquiredAt', 'completedAt', 'allObjectsFrozen']);
-  text(c.profileId);
-  text(c.acquiredAt, 128);
-  text(c.completedAt, 128);
-  if (typeof c.allObjectsFrozen !== 'boolean') throw invalid();
 
   const encoded = JSON.stringify(r);
   if (Buffer.byteLength(encoded) > databaseBackupArchiveLimits.manifestBytes) throw invalid();

@@ -5,14 +5,17 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { getCACertificates } from 'node:tls';
 import { promisify } from 'node:util';
-import { mysqlBackupDatabase, mysqlBackupTunnelHost, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
+import { mysqlBackupDatabase, mysqlBackupTunnelHost, mysqlDatabaseBackupPathMatches, type MysqlDatabaseBackupFormat, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
+import type { DatabaseBackupObject } from '../shared/databaseBackup';
+import type { DatabaseBackupSelectedToolManifest } from '../shared/databaseBackupArchiveFiles';
+import { DatabaseBackupArchiveWriter, databaseBackupArchiveLimits } from './databaseBackupArchive';
 import { AtomicFile, privateAtomicFileIO } from './atomicFile';
 import { execute } from './connection';
 import { mysqlDumpOptionFile } from './databaseBackupNativeOptions';
 import { databaseBackupGlobalGrants, databaseBackupSourceSql as sourceSql } from './databaseBackupSource';
 import { inspectMysqlBackupHandshake } from './mysqlBackupHandshake';
 import { openNativeBackupTunnel } from './nativeBackupTunnel';
-import { readMysqlDumpVersion, runMysqlDumpTool, type MysqlDumpTool } from './mysqlDumpTool';
+import { hashMysqlDumpTool, readMysqlDumpVersion, runMysqlDumpTool, type MysqlDumpTool } from './mysqlDumpTool';
 import type { StructureTaskContext } from './structureDefinition';
 
 type Context = Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>;
@@ -105,7 +108,26 @@ async function catalogue(context: Context, database: string) {
   const routines = await read(sourceSql.routines, [database]);
   const triggers = await read(sourceSql.triggers, [database]);
   const events = await read(sourceSql.events, [database]);
-  return JSON.stringify({ schemas, tables, routines, triggers, events, account: facts.currentUser });
+  return { schemas, tables, routines, triggers, events, account: facts.currentUser };
+}
+
+/** 只记录目录可见的对象名称。快照未冻结所有定义，因此不写定义摘要或依赖结论。 */
+function archiveObjects(database: string, snapshot: Awaited<ReturnType<typeof catalogue>>): DatabaseBackupObject[] {
+  const object = (kind: DatabaseBackupObject['kind'], name: unknown): DatabaseBackupObject => {
+    if (typeof name !== 'string') throw Error('备份对象名称无效');
+    return { kind, name, definitionSha256: null };
+  };
+  const objects = [object('database', database),
+    ...snapshot.tables.map(row => row.objectType === 'VIEW' ? object('view', row.name) : { ...object('table', row.name), engine: 'InnoDB' }),
+    ...snapshot.routines.map(row => {
+      if (row.routineType !== 'PROCEDURE' && row.routineType !== 'FUNCTION') throw Error('备份例程类型无效');
+      return object(row.routineType === 'FUNCTION' ? 'function' : 'procedure', row.name);
+    }),
+    ...snapshot.triggers.map(row => object('trigger', row.name)),
+    ...snapshot.events.map(row => object('event', row.name)),
+  ];
+  if (objects.length > 10_000) throw Error('备份归档对象目录超过预算');
+  return objects;
 }
 
 /** MySQL 转储连接持有本任务随机命名锁。只在原锁仍在时结束该服务器线程。 */
@@ -125,17 +147,19 @@ async function settleMysqlDumpBackend(managed: Context['managed'], lock: string)
   throw Error('原生转储线程退出尚未确认');
 }
 
-export function createMysqlDatabaseBackup(input: { database: string; filePath: string; tool: MysqlDumpTool }) {
+export function createMysqlDatabaseBackup(input: { database: string; filePath: string; tool: MysqlDumpTool; format?: MysqlDatabaseBackupFormat }) {
   const controller = new AbortController();
   const signal = controller.signal;
   let output: AtomicFile | undefined, result: MysqlDatabaseBackupResult | undefined;
   let publish: (() => void) | undefined;
+  let archive: DatabaseBackupArchiveWriter | undefined;
+  let manifest: Omit<DatabaseBackupSelectedToolManifest, 'dump'> | undefined;
   return {
     abort() { controller.abort(Error('整库备份已取消')); },
     async stage(context: Context) {
-      const { tool, database, filePath } = input;
+      const { tool, database, filePath, format } = input;
       const { managed } = context, profile = managed.profile, family = managed.status.dialect;
-      if (!mysqlBackupDatabase.safeParse(database).success || !isAbsolute(filePath) || !/\.sql$/i.test(filePath)) throw Error('备份库名或 SQL 目标无效');
+      if (!mysqlBackupDatabase.safeParse(database).success || !isAbsolute(filePath) || !mysqlDatabaseBackupPathMatches(filePath, format)) throw Error('备份库名或目标文件格式无效');
       if (family !== tool.family || profile.dialect !== family) throw Error('工具需与实际服务器系列匹配');
       const localHost = mysqlBackupTunnelHost(profile);
       const toolVersion = await readMysqlDumpVersion(tool, signal);
@@ -143,6 +167,10 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
       if (toolVersion.split('.')[0] !== serverVersion.replace(/^5\.5\.5-/, '').split('.')[0])
         throw Error('请选择与服务器主版本相同的原生转储工具');
       const before = await catalogue(context, database);
+      const archiveVersion = format === 'archive' ? /^\d{1,2}\.\d{1,2}\.\d{1,2}(?!\d)/.exec(serverVersion.replace(/^5\.5\.5-/, ''))?.[0] : undefined;
+      if (format === 'archive' && !archiveVersion) throw Error('无法确认归档所需的数据库版本');
+      const archiveToolHash = archiveVersion ? await hashMysqlDumpTool(tool, signal) : undefined;
+      const objects = archiveVersion ? archiveObjects(database, before) : undefined;
       const lock = family === 'mysql' ? 'tabrelio-dump-' + randomUUID() : undefined;
       let uuid: string | undefined;
       if (lock) {
@@ -155,6 +183,11 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
       }
       const check = () => { signal.throwIfAborted(); context.checkCancelled(); };
       output = await AtomicFile.create(filePath, 'utf8', check, () => publish?.(), privateAtomicFileIO, 10 * 1024 ** 3, undefined, true);
+      if (archiveVersion) {
+        archive = new DatabaseBackupArchiveWriter(output, check);
+        await archive.startDump();
+      }
+      const startedAt = new Date().toISOString();
       const directory = await mkdtemp(join(tmpdir(), 'tabrelio-mysql-dump-'));
       try {
         await protectCredentialDirectory(directory);
@@ -182,10 +215,12 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
         let header = '', tail = '';
         const staged = output;
         try {
-          await runMysqlDumpTool(tool, args, signal, chunk => {
+          await runMysqlDumpTool(tool, args, signal, async chunk => {
             if (header.length < 4096) header += chunk.toString('latin1', 0, 4096 - header.length);
             tail = (tail + chunk.subarray(-256).toString('latin1')).slice(-256);
-            return staged.writeBytes(chunk);
+            if (!archive) { await staged.writeBytes(chunk); return; }
+            for (let offset = 0; offset < chunk.length; offset += databaseBackupArchiveLimits.blockBytes)
+              await archive.writeDump(chunk.subarray(offset, offset + databaseBackupArchiveLimits.blockBytes));
           });
         } catch (error) {
           if (tunnel?.failed && !signal.aborted) throw Error('备份 SSH 转发未建立，或数据库版本与 TLS 能力未通过检查');
@@ -198,8 +233,12 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
         if (tunnel && !tunnel.forwardingStarted || version !== serverVersion || !/^-- Dump completed on [^\r\n]+\r?$/m.test(tail))
           throw Error('未确认完整的原生转储头尾或实际服务器版本');
       } finally { await rm(directory, { recursive: true, force: true }); }
-      if (before !== await catalogue(context, database)) throw Error('备份期间数据库对象目录发生变化，未保存备份');
-      await output.prepare(true);
+      if (JSON.stringify(before) !== JSON.stringify(await catalogue(context, database))) throw Error('备份期间数据库对象目录发生变化，未保存备份');
+      if (archiveVersion && archiveToolHash && objects) {
+        manifest = { format: 'dbark-backup-zip-store-v1', schemaVersion: 2, family, database, serverVersion: archiveVersion,
+          toolVersion, toolExecutableSha256: archiveToolHash, objects, resourcesConfirmed: true, restoreVerified: false,
+          consistency: { mode: 'innodb-consistent-read', startedAt, completedAt: new Date().toISOString(), allObjectsFrozen: false } };
+      } else await output.prepare(true);
       check();
       result = { bytes: output.bytesWritten, toolVersion, serverVersion };
       return result;
@@ -207,6 +246,13 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
     async commit(check: () => void, start: () => void) {
       if (!output || !result) throw Error('备份未完成暂存');
       check();
+      // 独立任务已确认来源资源关闭。此时才写入带终态的清单，再沿同一原子文件发布。
+      if (archive) {
+        if (!manifest) throw Error('归档清单未完成');
+        const summary = await archive.finish(manifest);
+        await output.prepare(true);
+        result = { ...result, bytes: output.bytesWritten, archiveSha256: summary.archive.sha256 };
+      }
       publish = start;
       await output.commit();
       return result;

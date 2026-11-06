@@ -5,17 +5,27 @@ import { queryZipDirectory, queryZipEnd } from '../../src/engine/queryCsvZip';
 
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 /** 清单中的锁/资源均为外部声明；字节完整性测试不把它们当作真实数据库证明。 */
-function manifest(): DatabaseBackupArchiveManifestInput {
+function manifest(): Extract<DatabaseBackupArchiveManifestInput, { schemaVersion: 1 }> {
   return { format: 'dbark-backup-zip-store-v1', schemaVersion: 1, family: 'mysql', serverVersion: '8.4.0', toolVersion: '8.4.0', toolSuiteSha256: 'a'.repeat(64), toolRegistryRevision: 'fixture-v1', database: '测试库', objects: [{ kind: 'table', name: '原字节表', definitionSha256: 'b'.repeat(64), engine: 'InnoDB' }], consistency: { profileId: 'fixture-lock', acquiredAt: '2026-10-17T10:00:00Z', completedAt: '2026-10-17T10:00:01Z', allObjectsFrozen: false }, externalDependencies: [], resourcesConfirmed: false, restoreVerified: false };
 }
 /** RAM端口只保存小夹具；不创建文件、不提交原子文件、不运行数据库或OS程序。 */
-async function archive(sql = Buffer.from('SELECT 1;\r\n'), input = manifest()) {
+async function archive(sql = Buffer.from('SELECT 1;\r\n'), input: DatabaseBackupArchiveManifestInput = manifest()) {
   const chunks: Buffer[] = [], sink = { writeBytes: vi.fn(async (bytes: Uint8Array) => { chunks.push(Buffer.from(bytes)); }) };
   const writer = new DatabaseBackupArchiveWriter(sink);
   await writer.startDump();
   for (let at = 0; at < sql.length; at += 137) await writer.writeDump(sql.subarray(at, at + 137));
   const result = await writer.finish(input);
   return { bytes: Buffer.concat(chunks), result, sink, writer };
+}
+function selectedToolManifest(): Extract<DatabaseBackupArchiveManifestInput, { schemaVersion: 2 }> {
+  return {
+    format: 'dbark-backup-zip-store-v1', schemaVersion: 2, family: 'mariadb', serverVersion: '11.4.13', toolVersion: '11.4.13',
+    toolExecutableSha256: 'c'.repeat(64), database: '测试库', objects: [
+      { kind: 'database', name: '测试库', definitionSha256: null },
+      { kind: 'table', name: '原字节表', engine: 'InnoDB', definitionSha256: null },
+    ], consistency: { mode: 'innodb-consistent-read', startedAt: '2026-11-07T10:00:00Z', completedAt: '2026-11-07T10:00:01Z', allObjectsFrozen: false },
+    resourcesConfirmed: true, restoreVerified: false,
+  };
 }
 function reader(bytes: Buffer, short = limits.blockBytes): DatabaseBackupArchiveReader {
   return { size: BigInt(bytes.length), async read(offset, length) { expect(length).toBeLessThanOrEqual(limits.blockBytes); expect(typeof offset).toBe('bigint'); return bytes.subarray(Number(offset), Number(offset) + Math.min(length, short)); } };
@@ -100,11 +110,23 @@ describe('B01顺序归档writer与严格inspect（纯RAM）', () => {
     const getter = vi.fn(() => 'mysql'), call = vi.fn(() => ({}));
     const evil = manifest(); Object.defineProperty(evil, 'family', { get: getter, enumerable: true });
     await expect(archive(Buffer.alloc(0), evil)).rejects.toThrow('清单'); expect(getter).not.toHaveBeenCalled();
-    await expect(archive(Buffer.alloc(0), { ...manifest(), toJSON: call } as DatabaseBackupArchiveManifestInput)).rejects.toThrow('清单'); expect(call).not.toHaveBeenCalled();
+    await expect(archive(Buffer.alloc(0), { ...manifest(), toJSON: call } as unknown as DatabaseBackupArchiveManifestInput)).rejects.toThrow('清单'); expect(call).not.toHaveBeenCalled();
     const cycle = manifest(); (cycle.externalDependencies as unknown as unknown[]).push(cycle);
     await expect(archive(Buffer.alloc(0), cycle)).rejects.toThrow('清单');
     await expect(archive(Buffer.alloc(0), { ...manifest(), objects: [manifest().objects[0], manifest().objects[0]] })).rejects.toThrow('清单');
     await expect(archive(Buffer.alloc(0), { ...manifest(), externalDependencies: Array(1100).fill('x'.repeat(2048)) })).rejects.toThrow('预算');
+  });
+  it('第二版清单保留程序摘要和原始 SQL，并拒绝混入套件证明', async () => {
+    const sql = Buffer.from('CREATE DATABASE `测试库`;\r\n');
+    const input = selectedToolManifest(), value = await archive(sql, input);
+    const output: Buffer[] = [];
+    const opened = await inspectDatabaseBackupArchive(reader(value.bytes), undefined, {
+      async writeBytes(bytes) { output.push(Buffer.from(bytes)); },
+    });
+    expect(opened.manifest).toEqual({ ...input, dump: { entry: 'dump.sql', bytes: String(sql.length), sha256: sha(sql) } });
+    expect(Buffer.concat(output)).toEqual(sql);
+    await expect(archive(sql, { ...input, toolSuiteSha256: 'd'.repeat(64) } as unknown as DatabaseBackupArchiveManifestInput)).rejects.toThrow('清单');
+    await expect(archive(sql, { ...input, objects: [] })).rejects.toThrow('清单');
   });
   it('实际dump字节损坏由CRC阻断；CRC全部重算后仍须通过SHA', async () => {
     const value = await archive(), altered = Buffer.from(value.bytes); altered[58] ^= 1;

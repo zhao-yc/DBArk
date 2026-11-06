@@ -1,9 +1,19 @@
 import type { DatabaseBackupBlocker, DatabaseBackupKind, DatabaseBackupManifest } from './databaseBackup';
 
+/** ZIP64 容器兼容旧清单。用户选取的程序只记录实际可执行文件摘要，目录记录可见对象。 */
+export type DatabaseBackupSelectedToolManifest = Omit<DatabaseBackupManifest,
+  'schemaVersion' | 'toolSuiteSha256' | 'toolRegistryRevision' | 'consistency' | 'externalDependencies' | 'resourcesConfirmed'> & {
+  schemaVersion: 2;
+  toolExecutableSha256: string;
+  consistency: { mode: 'innodb-consistent-read'; startedAt: string; completedAt: string; allObjectsFrozen: false };
+  resourcesConfirmed: true;
+};
+export type DatabaseBackupFileManifest = DatabaseBackupManifest | DatabaseBackupSelectedToolManifest;
+
 export interface DatabaseBackupArchiveView {
   token: string;
   name: string;
-  manifest: DatabaseBackupManifest;
+  manifest: DatabaseBackupFileManifest;
   archive: { bytes: string; sha256: string };
 }
 
@@ -59,6 +69,8 @@ export const databaseBackupArchiveZh = {
   archiveHash: '归档 SHA-256',
   objects: '清单对象',
   dependencies: '清单中的外部依赖',
+  snapshotScope: '清单记录可见对象与 InnoDB 数据快照，外部依赖需另行核对。',
+  executableHash: '转储工具 SHA-256',
   scope: '归档校验只核对容器和字节摘要。来源与恢复可用性须另行核对，导出不会执行 SQL。',
   saved: (name: string) => `已导出「${name}」`,
   cleanupPending: 'SQL 已导出，临时文件清理未确认',
