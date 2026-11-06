@@ -1,5 +1,6 @@
 import { Client } from 'pg';
 import { databaseSearchZh as text } from '../../src/renderer/locales/databaseSearch.zh-CN';
+import { definitionNavigationZh as matches } from '../../src/renderer/locales/definitionNavigation.zh-CN';
 import { postgresStructureZh as structure } from '../../src/renderer/locales/postgresStructure.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { postgresIdentifier as q } from '../../src/shared/postgresSql';
@@ -69,7 +70,7 @@ test('PostgreSQL 全库结构搜索跨库续页，遵循对象权限并定位原
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: text.entry, exact: true }, own)).click();
     const dialog = page.getByRole('dialog', { name: text.title, exact: true });
     await dialog.getByRole('combobox', { name: text.connection, exact: true }).selectOption({ label: connectionName });
-    await expect(dialog.getByRole('combobox', { name: text.searchIn, exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('combobox', { name: text.searchIn, exact: true })).toHaveValue('name');
     const databases = dialog.getByRole('textbox', { name: text.databases, exact: true });
     const keyword = dialog.getByRole('textbox', { name: text.pattern, exact: true });
     const start = dialog.getByRole('button', { name: text.start, exact: true });
@@ -134,6 +135,63 @@ test('PostgreSQL 全库结构搜索跨库续页，遵循对象权限并定位原
     await page.screenshot({ path: info.outputPath('只读结构字段定位.png') });
     await detail.getByRole('button', { name: structure.close, exact: true }).click();
     await expect(detail).toBeHidden();
+    await assertClosedSearch();
+
+    const marker = 'PGDef%_Needle😀';
+    await second.query(`COMMENT ON TABLE public."page%_last" IS '${marker} 表'`);
+    await second.query(`CREATE VIEW pgdef_view AS SELECT '${marker} 视图'::text AS body`);
+    await second.query(`CREATE MATERIALIZED VIEW pgdef_materialized AS SELECT '${marker} 物化视图'::text AS body WITH NO DATA`);
+    await second.query(`CREATE PROCEDURE pgdef_proc() LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION USING MESSAGE = '${marker} 过程'; END $$`);
+    // 定义超预算的对象排在前面。即使没有匹配文字，也必须报告跳过原因。
+    await second.query('CREATE FUNCTION pgdef_00_oversize() RETURNS text LANGUAGE sql AS $$ SELECT \'' +
+      'x'.repeat(2 * 1024 * 1024 + 16_384) + '\'::text $$');
+    for (let index = 1; index <= 12; index++)
+      await second.query(`CREATE FUNCTION pgdef_${String(index).padStart(2, '0')}() RETURNS text LANGUAGE sql AS $$ SELECT '${marker}'::text $$`);
+
+    const openDefinitionSearch = async () => {
+      await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: text.entry, exact: true }, own)).click();
+      await dialog.getByRole('combobox', { name: text.connection, exact: true }).selectOption({ label: connectionName });
+      await dialog.getByRole('combobox', { name: text.searchIn, exact: true }).selectOption('definition');
+      const definitions = page.getByRole('dialog', { name: text.definitionsTitle, exact: true });
+      await definitions.getByRole('textbox', { name: text.pattern, exact: true }).fill(marker);
+      await definitions.getByRole('checkbox', { name: text.caseSensitive, exact: true }).check();
+      return definitions;
+    };
+    const definitions = await openDefinitionSearch();
+    await definitions.getByRole('textbox', { name: text.databases, exact: true }).fill([denied, dbOther].join('\n'));
+    await definitions.getByRole('combobox', { name: text.onError, exact: true }).selectOption('continue');
+    await definitions.getByRole('button', { name: text.start, exact: true }).click();
+    const definitionStatus = definitions.locator('.database-search-status');
+    const definitionNext = definitions.getByRole('button', { name: text.next, exact: true });
+    await expect(definitionStatus).toContainText(text.summary(0, 4, 8));
+    await definitionNext.click();
+    await expect(definitionStatus).toContainText(text.summary(9, 7, 8));
+    await expect(definitionStatus).toContainText('已检查定义 10');
+    await expect(definitions.locator('.database-search-failures')).toContainText('2 MiB');
+    await assertClosedSearch();
+    await definitionNext.click();
+    await expect(definitionStatus).toContainText(text.summary(16, 8, 8));
+    await expect(definitionNext).toBeDisabled();
+    await definitions.getByRole('gridcell', { name: '"public"."page%_last"', exact: true }).click();
+    await definitions.getByRole('button', { name: text.open, exact: true }).click();
+    const viewer = page.getByRole('dialog', { name: /查看表/ });
+    await expect(viewer.getByRole('region', { name: matches.title })).toContainText('第 1 / 1 处');
+    await expect(viewer.locator('.definition-match-active')).toHaveCount(1);
+    await page.screenshot({ path: info.outputPath('定义正文高亮.png') });
+    await viewer.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+
+    const stale = await openDefinitionSearch();
+    await stale.getByRole('textbox', { name: text.databases, exact: true }).fill(dbOther);
+    for (const kind of ['view', 'procedure', 'function'] as const)
+      await stale.getByRole('checkbox', { name: text.kinds[kind], exact: true }).uncheck();
+    await stale.getByRole('button', { name: text.start, exact: true }).click();
+    await expect(stale.locator('.database-search-status')).toContainText(text.summary(1, 1, 1));
+    await second.query('COMMENT ON TABLE public."page%_last" IS \'新定义\'');
+    await stale.getByRole('gridcell', { name: '"public"."page%_last"', exact: true }).click();
+    await stale.getByRole('button', { name: text.open, exact: true }).click();
+    await expect(viewer).toContainText(matches.invalid);
+    await expect(viewer.locator('.definition-match-active')).toHaveCount(0);
+    await viewer.getByRole('button', { name: zh.common.cancel, exact: true }).click();
     await assertClosedSearch();
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(pageErrors).toEqual([]);

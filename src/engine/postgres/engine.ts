@@ -51,6 +51,8 @@ import { serverMonitorSignalSchema, validateServerMonitorInput, type ServerMonit
 import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
 import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
+import { preparePostgresSearchConnection, readPostgresDefinitionText } from './definitionSearch';
+import { postgresDefinitionTargetSchema } from '../../shared/databaseSearch';
 interface Session {
   id: string;
   connectionId: string;
@@ -1033,9 +1035,18 @@ export class PostgresEngine {
       case 'postgres.routine.dependencies':
       case 'postgres.routine.ownerTargets':
       case 'postgres.structure.dependencies':
+      case 'postgres.structure.definition':
       case 'postgres.structure.read': {
         const profile = input.profile as PostgresConnectionProfile | undefined;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的PostgreSQL结构连接');
+        if (command === 'postgres.structure.definition') {
+          const { profile: _, ...request } = input;
+          const target = postgresDefinitionTargetSchema.parse(request);
+          return this.use(profile, target.database, async connection => {
+            await preparePostgresSearchConnection(connection, target.database);
+            return readPostgresDefinitionText(connection, target);
+          });
+        }
         if (command === 'postgres.sequence.read') return this.use(profile, input.database,
           async connection => (await readPostgresSequence(connection, input.table)).info);
         if (command === 'postgres.sequence.targets') return this.use(profile, input.database, async connection => {

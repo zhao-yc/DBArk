@@ -7,12 +7,20 @@ export const structureSearchLimits={databases:32,pageHits:50,pageQueries:10,maxH
 export const structureSearchKinds=['table','view','column','index','primaryKey','foreignKey','procedure','function','trigger','event'] as const;
 export const postgresStructureSearchKinds = ['table', 'view', 'column', 'index', 'primaryKey', 'foreignKey', 'uniqueKey', 'check', 'sequence', 'procedure', 'function'] as const;
 export const definitionSearchKinds=['table','view','procedure','function','trigger','event'] as const;
+export const postgresDefinitionSearchKinds = ['table', 'view', 'procedure', 'function'] as const;
+export type PostgresDefinitionSearchKind = typeof postgresDefinitionSearchKinds[number];
 export type DefinitionSearchKind=typeof definitionSearchKinds[number];
 export type StructureSearchKind=typeof structureSearchKinds[number];
 export type PostgresStructureSearchKind=typeof postgresStructureSearchKinds[number];
 const searchableKinds = [...new Set([...structureSearchKinds, ...postgresStructureSearchKinds])] as [StructureSearchKind | PostgresStructureSearchKind, ...(StructureSearchKind | PostgresStructureSearchKind)[]];
 export const searchIdentifier=z.string().min(1).max(64).refine(value=>!/[\0\ud800-\udfff]/.test(value),'名称必须是1至64字的BMP标识符');
 const postgresSearchDatabase = z.string().min(1).max(128).refine(value => !/[\0\ud800-\udfff]/u.test(value) && [...value].length <= 64);
+export const postgresDefinitionTargetSchema = z.object({
+  connectionId: z.string().min(1).max(200), database: postgresSearchDatabase,
+  name: z.string().min(1).max(64 * 1024).refine(value => !/[\0\ud800-\udfff]/u.test(value)),
+  kind: z.enum(postgresDefinitionSearchKinds),
+}).strict();
+export type PostgresDefinitionTarget = z.infer<typeof postgresDefinitionTargetSchema>;
 const unique=<T>(values:T[])=>new Set(values).size===values.length;
 export const structureSearchInputSchema=z.object({
   connectionId:z.string().min(1).max(200),taskId:z.string().uuid(),
@@ -24,14 +32,16 @@ export const structureSearchInputSchema=z.object({
   searchIn:z.literal('definition').optional(),
 }).strict().superRefine((value, context) => {
   const postgres = value.dialect === 'postgresql';
-  const allowed: readonly string[] = postgres ? postgresStructureSearchKinds : value.searchIn === 'definition' ? definitionSearchKinds : structureSearchKinds;
+  const allowed: readonly string[] = value.searchIn === 'definition'
+    ? (postgres ? postgresDefinitionSearchKinds : definitionSearchKinds)
+    : (postgres ? postgresStructureSearchKinds : structureSearchKinds);
   if (value.kinds.some(kind => !allowed.includes(kind))) context.addIssue({ code: 'custom', path: ['kinds'],
     message: value.searchIn === 'definition' ? '定义正文按表、视图、过程、函数、触发器或事件搜索；字段和约束包含在所属表定义中'
       : '对象类别超出当前搜索范围' });
   if (!postgres && value.databases.some(database => !searchIdentifier.safeParse(database).success))
     context.addIssue({ code: 'custom', path: ['databases'], message: '名称必须是1至64字的BMP标识符' });
-  if (postgres && (value.searchIn || value.pattern.text.includes('\0')))
-    context.addIssue({ code: 'custom', path: ['pattern'], message: 'PostgreSQL 结构名称搜索不接受 NUL 或定义正文模式' });
+  if (postgres && value.pattern.text.includes('\0'))
+    context.addIssue({ code: 'custom', path: ['pattern'], message: 'PostgreSQL 结构搜索不接受 NUL' });
 });
 export const structureSearchContinueSchema=z.object({connectionId:z.string().min(1).max(200),taskId:z.string().uuid(),cursor:z.string().uuid()}).strict();
 export const structureSearchReleaseSchema=structureSearchContinueSchema.omit({taskId:true});

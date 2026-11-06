@@ -4,6 +4,8 @@ import { postgresStructureSearchQuery, readPostgresStructureSearchPage } from '.
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import { StructureSearches, type StructureSearchState } from '../../src/engine/structureSearch';
 import { structureSearchInputSchema, type StructureSearchInput } from '../../src/shared/databaseSearch';
+import { definitionSearchOpenSchema } from '../../src/shared/definitionNavigation';
+import { validateCommand } from '../../src/shared/validation';
 
 const input: StructureSearchInput = { connectionId: 'PG', taskId: randomUUID(), dialect: 'postgresql', databases: ['库😀', '次库'],
   kinds: ['table'], pattern: { mode: 'contains', text: "A%_\\' --", caseSensitive: false }, maxResults: 200, onError: 'continue' };
@@ -13,7 +15,7 @@ const row = (index: number) => ({ c0: '"例"."对象' + index + '"', c1: '对象
 describe('PostgreSQL 结构名称搜索', () => {
   it('按方言验证对象类别、标识符和模式，保留有效的补充平面字符', () => {
     expect(structureSearchInputSchema.parse({ ...input, kinds: ['sequence'] }).databases).toEqual(input.databases);
-    for (const value of [{ ...input, dialect: undefined }, { ...input, kinds: ['event'] }, { ...input, searchIn: 'definition' },
+    for (const value of [{ ...input, dialect: undefined }, { ...input, kinds: ['event'] }, { ...input, searchIn: 'definition', kinds: ['index'] },
       { ...input, pattern: { ...input.pattern, text: 'A\0B' } }])
       expect(structureSearchInputSchema.safeParse(value).success).toBe(false);
   });
@@ -80,5 +82,26 @@ describe('PostgreSQL 结构名称搜索', () => {
     searches.releaseConnection(input.connectionId);
     finish();
     await expect(pending).rejects.toThrow('搜索连接已断开');
+  });
+
+  it('正文仅绑定到数据库匹配查询，回包只包含位置和摘要', async () => {
+    const signature = '"例"."f"(integer)', body = "SELECT '正文%_😀'";
+    const pattern = { mode: 'contains' as const, text: '正文%_😀', caseSensitive: true };
+    const definitionState = { ...state(), input: { ...input, searchIn: 'definition' as const, kinds: ['function' as const], pattern } };
+    const query = vi.fn().mockResolvedValueOnce({}).mockResolvedValueOnce({ rows: [{ c0: signature, c1: 'f' }] })
+      .mockResolvedValueOnce({ rows: [{ c0: body, c1: null }] }).mockResolvedValueOnce({ rows: [{ c0: '15' }] });
+    const read = <T>(database: string, action: (connection: PostgresConnection) => Promise<T>) =>
+      action({ database, query } as unknown as PostgresConnection);
+    const page = await readPostgresStructureSearchPage(definitionState, read, () => {});
+    expect(query.mock.calls[2][1]).toEqual([signature, 'function']);
+    expect(query.mock.calls[3][1]).toEqual([pattern.text, body]);
+    expect(query.mock.calls[3][0]).not.toContain(pattern.text);
+    expect(page).toMatchObject({ totalHits: 1, completedScopes: 1, scannedDefinitions: 1, hits: [{ object: signature,
+      definitionNavigation: { status: 'ready', ranges: [{ offset: 8, length: pattern.text.length }] } }] });
+    expect(JSON.stringify(page)).not.toContain(body);
+    const target = { connectionId: input.connectionId, database: input.databases[0], name: signature, kind: 'function' };
+    expect(validateCommand('postgres.structure.definition', target)).toEqual(target);
+    expect(() => validateCommand('postgres.structure.definition', { ...target, sql: body })).toThrow();
+    expect(definitionSearchOpenSchema.safeParse({ ...target, dialect: 'postgresql', connectionVersion: 1, invalidated: false }).success).toBe(true);
   });
 });

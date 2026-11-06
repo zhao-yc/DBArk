@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { definitionSearchKinds, searchIdentifier, type DefinitionSearchKind } from './databaseSearch';
+import { definitionSearchKinds, postgresDefinitionTargetSchema, searchIdentifier, type DefinitionSearchKind } from './databaseSearch';
 import type { SavedQueryMatchSpan } from './savedQuerySearch';
 
 export const definitionNavigationLimits = { matches: 200, sourceBytes: 2 * 1024 * 1024, payloadBytes: 12 * 1024 } as const;
@@ -19,10 +19,14 @@ export const definitionNavigationResultSchema = z.discriminatedUnion('status', [
 });
 export type DefinitionNavigationResult = z.infer<typeof definitionNavigationResultSchema>;
 /** 搜索时的连接修订与位置一起保存在窗口内存，不写工作台或保存查询。 */
-export interface DefinitionNavigationTarget { connectionId: string; connectionVersion: number; database: string; name: string; kind: DefinitionSearchKind; }
+export interface DefinitionNavigationTarget { connectionId: string; connectionVersion: number; database: string; name: string; kind: DefinitionSearchKind; dialect?: 'postgresql'; }
 export interface DefinitionSearchOpen extends DefinitionNavigationTarget { invalidated: boolean; result?: DefinitionNavigationResult; }
 export interface DefinitionNavigationSource extends DefinitionNavigationTarget { uri: string; digest: string; sql: string; ranges: SavedQueryMatchSpan[]; limitReached: boolean; }
-export const definitionSearchOpenSchema = z.object({ connectionId: z.string().min(1).max(200), connectionVersion: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), database: searchIdentifier, name: searchIdentifier, kind: z.enum(definitionSearchKinds), invalidated: z.boolean(), result: definitionNavigationResultSchema.optional() }).strict();
+const searchEvidence = { connectionVersion: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), invalidated: z.boolean(), result: definitionNavigationResultSchema.optional() };
+export const definitionSearchOpenSchema = z.union([
+  postgresDefinitionTargetSchema.extend({ ...searchEvidence, dialect: z.literal('postgresql') }),
+  z.object({ ...searchEvidence, connectionId: z.string().min(1).max(200), database: searchIdentifier, name: searchIdentifier, kind: z.enum(definitionSearchKinds) }).strict(),
+]);
 /** 不先分配UTF8大缓冲；拒绝孤立代理项，避免摘要编码成另一个字串。 */
 export function definitionTextWithinBudget(sql: string): boolean {
   if (sql.length > definitionNavigationLimits.sourceBytes) return false;

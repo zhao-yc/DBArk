@@ -7,6 +7,7 @@ export const databaseSearchZh={
   definitionMatch:(characters:number)=>`定义正文（${characters}字符）`,definitionCount:(count:number)=>` 已检查定义 ${count}。`,definitionsDone:'已完成所选可见对象的定义搜索。',
   databaseHint:'搜索当前账号可见的结构名称，最多 32 个数据库，不读取表数据。',
   postgresHint:'搜索最多 32 个 PostgreSQL 数据库的用户架构。每批至多读取一个数据库，页间关闭搜索连接。',
+  postgresDefinitionHint:'搜索 PostgreSQL 表、视图和例程的目录定义。每批至多检查 10 个对象，每个对象最多 2 MiB。',
   pattern:'搜索文字',mode:'匹配方式',modes:{contains:'包含文字',whole:'完整名称',prefix:'前缀',regexp:'服务器正则'},
   kinds:{table:'表',view:'视图',column:'字段',index:'索引',primaryKey:'主键',foreignKey:'外键',uniqueKey:'唯一约束',check:'CHECK 约束',sequence:'序列',procedure:'存储过程',function:'函数',trigger:'触发器',event:'事件'},
   caseSensitive:'区分大小写',ruleHint:'匹配遵循数据库的大小写和正则规则；普通文字模式中 % 和 _ 按原文搜索。',
@@ -22,6 +23,7 @@ export const databaseSearchZh={
   failureCount:(count:number)=>`失败范围：${count}`,
   definitionTitle:(kind:string,name:string)=>`查看${kind} · ${name}`,
   definitionReadOnly:'当前定义只读查看；搜索结果可能已经变化。修改结构请从对象树进入对应的设计入口。',
+  postgresDefinitionReadOnly:'当前目录定义供只读检查。还原数据库请使用备份与恢复功能。',
   failed:'搜索批次失败，已显示的结果保留；本批结果未追加，请重新搜索。',cancelled:'搜索已取消，已显示的结果保留；没有自动继续。',
   invalidRequest:'请检查搜索条件：数据库和类别不能为空或重复，命中上限为1至1000；除完整名称外，搜索文字不能为空。最多32个数据库，名称中的空格会保留。',
 } as const;

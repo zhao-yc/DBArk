@@ -1,4 +1,4 @@
-import { structureSearchLimits as limits, type PostgresStructureSearchKind, type StructureSearchHit, type StructureSearchPage } from '../../shared/databaseSearch';
+import { structureSearchLimits as limits, type PostgresDefinitionSearchKind, type PostgresStructureSearchKind, type StructureSearchHit, type StructureSearchPage } from '../../shared/databaseSearch';
 import type { DatabaseSearchPattern } from '../../shared/databaseSearchPattern';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
 import type { StructureSearchState } from '../structureSearch';
@@ -6,6 +6,7 @@ import type { PostgresConnection } from './connection';
 import { postgresStructureVisibleSql } from './relationStructure';
 import { postgresRoutineSignatureSql, postgresRoutineVisibleSql } from './routine';
 import { postgresSequenceVisibleSql } from './sequence';
+import { matchPostgresDefinition, postgresSearchPredicate, preparePostgresSearchConnection, readPostgresDefinitionText } from './definitionSearch';
 
 const relations = 'FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace';
 const schemaScope = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')";
@@ -41,12 +42,7 @@ function source(kind: PostgresStructureSearchKind) {
 export function postgresStructureSearchQuery(kind: PostgresStructureSearchKind, pattern: DatabaseSearchPattern,
   take: number, after?: StructureSearchState['after']) {
   if (!Number.isInteger(take) || take < 1 || take > limits.pageHits) throw Error('结构搜索批次大小无效');
-  const name = pattern.caseSensitive ? 'match_name' : 'pg_catalog.lower(match_name)';
-  const value = pattern.caseSensitive ? '$1::text' : 'pg_catalog.lower($1::text)';
-  const match = pattern.mode === 'regexp' ? `match_name ${pattern.caseSensitive ? '~' : '~*'} $1::text`
-    : pattern.mode === 'whole' ? `${name} ${collation} = ${value}`
-    : pattern.mode === 'prefix' ? `pg_catalog.starts_with(${name}, ${value})`
-    : `pg_catalog.strpos(${name}, ${value}) > 0`;
+  const match = postgresSearchPredicate('match_name', pattern);
   const cursor = after ? `AND (object_name ${collation}, match_name ${collation}) > ($2::text, $3::text)` : '';
   return {
     sql: `SELECT object_name, match_name, parent_kind FROM (${source(kind)}) AS names(object_name, match_name, parent_kind)
@@ -58,6 +54,76 @@ export function postgresStructureSearchQuery(kind: PostgresStructureSearchKind, 
 type Read = <T>(database: string, action: (connection: PostgresConnection) => Promise<T>) => Promise<T>;
 const stateCode = (error: unknown) => (error as { postgresSqlState?: string }).postgresSqlState;
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 512);
+
+/** 每页最多检查十个可见对象，游标保存限定名与进度，正文不进入游标或搜索结果。 */
+async function readDefinitionPage(connection: PostgresConnection, state: StructureSearchState, page: StructureSearchPage,
+  database: string, end: number, check: () => void) {
+  const { input } = state;
+  let scanned = 0, bytes = 0;
+  const hitBudget = limits.pageBytes - 48 * 1024;
+  const advance = () => { state.scope++; state.after = undefined; };
+  for (let reads = 0; reads < limits.pageQueries && state.scope < end &&
+      scanned < limits.definitionPageObjects && state.total < input.maxResults; reads++) {
+    check();
+    const kind = input.kinds[state.scope % input.kinds.length] as PostgresDefinitionSearchKind;
+    const take = limits.definitionPageObjects - scanned;
+    const after = state.after;
+    let result;
+    try {
+      result = await connection.query(`SELECT object_name, match_name FROM (${source(kind)}) AS names(object_name, match_name, parent_kind)
+        ${after ? `WHERE (object_name ${collation}, match_name ${collation}) > ($1::text, $2::text)` : ''}
+        ORDER BY object_name ${collation}, match_name ${collation} LIMIT ${take + 1}`,
+      after ? [after.object, after.name] : undefined, { rows: take + 1, bytes: 1024 * 1024 });
+    } catch (error) {
+      check();
+      if (connection.broken || !stateCode(error)) throw error;
+      page.failures.push({ database, kind, message: message(error) });
+      advance();
+      if (input.onError === 'stop') { page.stoppedOnError = true; return; }
+      continue;
+    }
+    if (result.truncated || result.rows.length > take + 1) throw Error('PostgreSQL 定义目录回包超出预算');
+    let consumed = 0;
+    for (const row of result.rows.slice(0, take)) {
+      check();
+      const { c0: object, c1: name } = row;
+      if (typeof object !== 'string' || !object || object.length > 64 * 1024 || typeof name !== 'string' || !name)
+        throw Error('PostgreSQL 定义目录返回无效的对象身份');
+      const previous = state.after;
+      state.after = { object, name };
+      scanned++; consumed++;
+      state.scannedDefinitions = (state.scannedDefinitions ?? 0) + 1;
+      try {
+        const body = await readPostgresDefinitionText(connection, { database, kind, name: object });
+        check();
+        const match = await matchPostgresDefinition(connection, body, input.pattern);
+        check();
+        if (match) {
+          const hit: StructureSearchHit = { database, kind, object, name, parentKind: kind,
+            dialect: 'postgresql', matchedIn: 'definition', ...match };
+          const size = Buffer.byteLength(JSON.stringify(hit), 'utf8') + 1;
+          if (size > hitBudget) throw Error('单条 PostgreSQL 定义命中超过回包预算');
+          // 本页放不下时将此对象留给下一页，避免丢失刚读到的命中。
+          if (bytes + size > hitBudget) {
+            state.after = previous;
+            state.scannedDefinitions--;
+            return;
+          }
+          bytes += size;
+          page.hits.push(hit);
+          state.total++;
+        }
+      } catch (error) {
+        check();
+        if (connection.broken) throw error;
+        page.failures.push({ database, kind, object: object.slice(0, 256), message: message(error) });
+        if (input.onError === 'stop') { page.stoppedOnError = true; return; }
+      }
+      if (state.total >= input.maxResults) break;
+    }
+    if (consumed === result.rows.length) advance();
+  }
+}
 
 /** 每页至多连接一个数据库。权限或对象目录失败保留当前进度，运输或清理失败丢弃整页。 */
 export async function readPostgresStructureSearchPage(state: StructureSearchState, read: Read, check: () => void): Promise<StructureSearchPage> {
@@ -71,10 +137,8 @@ export async function readPostgresStructureSearchPage(state: StructureSearchStat
   try {
     await read(database, async connection => {
       started = true;
-      if (connection.database !== database) throw Error('PostgreSQL 搜索连接未绑定目标数据库');
-      await connection.query(`SELECT pg_catalog.set_config('search_path', 'pg_catalog', false),
-        pg_catalog.set_config('statement_timeout', '5s', false), pg_catalog.set_config('lock_timeout', '1s', false),
-        pg_catalog.set_config('default_transaction_read_only', 'on', false)`, undefined, { rows: 1, bytes: 1024 });
+      await preparePostgresSearchConnection(connection, database);
+      if (input.searchIn === 'definition') return readDefinitionPage(connection, state, page, database, end, check);
       let bytes = 0;
       for (let reads = 0; reads < limits.pageQueries && state.scope < end && page.hits.length < limits.pageHits &&
           state.total < input.maxResults; reads++) {
@@ -130,6 +194,7 @@ export async function readPostgresStructureSearchPage(state: StructureSearchStat
   }
   page.totalHits = state.total;
   page.completedScopes = state.scope;
+  if (input.searchIn === 'definition') page.scannedDefinitions = state.scannedDefinitions ?? 0;
   page.limitReached = !page.stoppedOnError && state.total >= input.maxResults && state.scope < page.scopeCount;
   return page;
 }

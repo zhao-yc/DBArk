@@ -293,6 +293,7 @@ export interface CommandMap {
   'postgres.sequence.manage.apply': { input: import('./postgresCreateTable').PostgresCreateTableApply; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.sequence.targets': { input: import('./postgresSequence').PostgresSequenceTargetsInput; output: import('./postgresSequence').PostgresSequenceTargets };
   'postgres.structure.read': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresStructure').PostgresStructureResult };
+  'postgres.structure.definition': { input: import('./databaseSearch').PostgresDefinitionTarget; output: string };
   'postgres.structure.dependencies': { input: import('./postgresStructure').PostgresStructureInput; output: import('./postgresDependencies').PostgresDependencies };
   'postgres.routine.read': { input: import('./postgresRoutine').PostgresRoutineReadInput; output: import('./postgresRoutine').PostgresRoutineInfo };
   'postgres.routine.dependencies': { input: import('./postgresRoutine').PostgresRoutineDependencyInput; output: import('./postgresDependencies').PostgresDependencies };

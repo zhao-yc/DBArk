@@ -28,6 +28,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.sequence.manage.preview': true, 'postgres.sequence.manage.apply': true,
   'postgres.sequence.targets': true,
   'postgres.structure.read': true,
+  'postgres.structure.definition': true,
   'postgres.structure.dependencies': true,
   'postgres.routine.read': true,
   'postgres.routine.dependencies': true,

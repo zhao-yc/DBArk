@@ -6,10 +6,16 @@ import { exactSavedQueryModelRanges, validSavedQuerySpans, type SavedQueryNaviga
 export type DefinitionNavigationState = SavedQueryNavigationState & { line?: number; column?: number };
 export interface DefinitionNavigationIdentity extends DefinitionNavigationTarget { uri: string; sql: string; digest: string; }
 /** URI沿用工作台完整身份编码；无法表示的对象只降级查看，不自行创造另一套URI。 */
-export function definitionUri(target: DefinitionNavigationTarget): string | undefined { try { return objectUri({ connectionId: target.connectionId, database: target.database, name: target.name, kind: target.kind }); } catch { return; } }
+export function definitionUri(target: DefinitionNavigationTarget): string | undefined {
+  if (target.dialect === 'postgresql') {
+    // 重载签名可能超出收藏 URI 的长度，这个身份仅供当前只读编辑器核对。
+    return 'postgresql-definition:' + JSON.stringify([target.connectionId, target.database, target.kind, target.name]);
+  }
+  try { return objectUri({ connectionId: target.connectionId, database: target.database, name: target.name, kind: target.kind }); } catch { return; }
+}
 /** 完整目标和修订逐字段绑定；名称包含分隔符时也不会碰撞。 */
 export function sameDefinitionTarget(a: DefinitionNavigationTarget, b: DefinitionNavigationTarget | undefined): boolean {
-  return !!b && Number.isSafeInteger(a.connectionVersion) && a.connectionVersion >= 0 && a.connectionId === b.connectionId && a.connectionVersion === b.connectionVersion && a.database === b.database && a.name === b.name && a.kind === b.kind;
+  return !!b && Number.isSafeInteger(a.connectionVersion) && a.connectionVersion >= 0 && a.connectionId === b.connectionId && a.connectionVersion === b.connectionVersion && a.database === b.database && a.name === b.name && a.kind === b.kind && a.dialect === b.dialect;
 }
 /** 同步订阅首次看到目标变化就永久结束，回到旧目标也不能交付迟到读取。 */
 export class DefinitionReadLease {
