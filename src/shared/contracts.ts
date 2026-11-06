@@ -314,6 +314,9 @@ export interface CommandMap {
   'postgres.table.exportChoose': { input: import('./postgresTable').PostgresTableExportChooseInput; output: FileChoice | null };
   'postgres.table.export': { input: import('./postgresTable').PostgresTableExportInput | import('./postgresTable').PostgresBackupSetInput; output: import('./postgresTable').PostgresTableExportOutput };
   'postgres.backup.catalogue': { input: import('./postgresTable').PostgresBackupCatalogueInput; output: string[] };
+  'postgres.backup.chooseDumpTool': { input: Record<string, never>; output: FileChoice | null };
+  'postgres.backup.chooseDatabaseFile': { input: import('./postgresDatabaseBackup').PostgresDatabaseBackupChooseInput; output: FileChoice | null };
+  'postgres.backup.database': { input: import('./postgresDatabaseBackup').PostgresDatabaseBackupInput; output: import('./postgresDatabaseBackup').PostgresDatabaseBackupResult };
   'postgres.sqlFile.choose': { input: import('./postgresSqlFile').PostgresSqlFileChooseInput; output: import('./postgresSqlFile').PostgresSqlFileChoice | null };
   'postgres.sqlFile.execute': { input: import('./postgresSqlFile').PostgresSqlFileExecuteInput; output: import('./postgresSqlFile').PostgresSqlFileResult };
   'postgres.table.importChoose': { input: import('./postgresTable').PostgresTableImportChooseInput; output: import('./postgresTable').PostgresTableImportChoice | null };

@@ -12,6 +12,9 @@ import { sqliteTableEditMessages } from '../shared/sqliteTableEdit';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command === 'postgres.backup.database') return event.status === 'completed' ? 'PostgreSQL 整库备份文件已保存。' :
+    event.status === 'cancelled' ? 'PostgreSQL 整库备份已取消。' :
+    event.status === 'running' ? '正在生成 PostgreSQL 整库备份。' : 'PostgreSQL 整库备份未完成。';
   if (command === 'postgres.sqlFile.execute') return event.status === 'completed' ? 'PostgreSQL 文件事务已确认提交。' :
     event.status === 'running' ? '正在流式执行 PostgreSQL SQL 文件。' : 'PostgreSQL 文件未确认提交，请在原窗口核对回执。';
   if (command === 'postgres.table.import') return event.status === 'completed' ? 'PostgreSQL 已确认导入提交。' :

@@ -3,6 +3,7 @@ import { SqliteDataCompareDialog } from './components/SqliteDataCompareDialog';
 import { DatabaseBackupArchiveDialog } from './components/DatabaseBackupArchiveDialog';
 import { PostgresTableBackupDialog } from './components/PostgresTableBackupDialog';
 import { PostgresSqlFileDialog } from './components/PostgresSqlFileDialog';
+import { PostgresDatabaseBackupDialog } from './components/PostgresDatabaseBackupDialog';
 import { PostgresCreateRoutineDialog } from './components/PostgresCreateRoutineDialog';
 import { PostgresRoutineDialog } from './components/PostgresRoutineDialog';
 import { PostgresCreateSequenceDialog, PostgresSequenceDialog } from './components/PostgresSequenceDialog';
@@ -212,6 +213,7 @@ function WorkspaceApp() {
   const [backupArchive, setBackupArchive] = useState(false);
   const [postgresBackup, setPostgresBackup] = useState(false);
   const [postgresSqlFile, setPostgresSqlFile] = useState(false);
+  const [postgresDatabaseBackup, setPostgresDatabaseBackup] = useState(false);
   const [serverDataCompare, setServerDataCompare] = useState<'postgres' | 'mysql'>();
   const [sqliteDataCompare, setSqliteDataCompare] = useState(false);
   const [routineInvocationTarget, setRoutineInvocationTarget] = useState<RoutineInvocationTarget | null>(null);
@@ -1003,6 +1005,10 @@ function WorkspaceApp() {
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       workbenchNavigation.invalidate(); setPostgresSqlFile(true);
     }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
+    'postgres-database-backup': handler(() => {
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      workbenchNavigation.invalidate(); setPostgresDatabaseBackup(true);
+    }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
     'explain-snapshot': handler(openExplainSnapshot), 'result-snapshot': handler(openResultSnapshot),
     'task-center': handler(() => setTasks(true)), 'tab-search': handler(openTabSearch),
     'close-tab': handler(() => { if (activeTab) closeTab(activeTab.id); }, !!activeTab && !state.activeJobs[activeTab.id]),
@@ -1154,6 +1160,7 @@ function WorkspaceApp() {
     {sqliteDataCompare && <SqliteDataCompareDialog connections={connections.filter(profile => profile.dialect === 'sqlite' && !!profile.sqlite.filePath && !profile.pendingFiles?.length)} onClose={() => setSqliteDataCompare(false)}/>}
     {backupArchive && <DatabaseBackupArchiveDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)} onClose={() => setBackupArchive(false)}/>}
     {postgresBackup && <PostgresTableBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresBackup(false)}/>}
+    {postgresDatabaseBackup && <PostgresDatabaseBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresDatabaseBackup(false)}/>}
     {postgresSqlFile && <PostgresSqlFileDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)}
       onDatabaseCreated={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}
       onClose={() => setPostgresSqlFile(false)}/>}

@@ -33,6 +33,7 @@ import { preparePostgresCheckEdit } from './checkEdit';
 import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
 import { exportPostgresBackupSet, type PostgresBackupSetRequest } from './tableBackupSet';
+import { exportPostgresDatabaseBackup, type PostgresDatabaseBackupRequest } from './databaseBackup';
 import { readPostgresBackupCatalogue } from './tableBackup';
 import { assertPostgresSqlFileSource, executePostgresSqlFile, postgresRestoreDatabaseCommand, readPostgresRestoreDatabaseOid,
   type PostgresSqlFileControl, type PostgresSqlFileSource } from './sqlFile';
@@ -83,6 +84,7 @@ interface TransferTask {
   commandActive?: boolean;
   connection?: PostgresConnection;
   done?: Promise<unknown>;
+  processAbort?: AbortController;
 }
 type Input = Record<string, any>;
 /** PostgreSQL独立网络执行账本，共用utility隔离进程及TaskEvent，不进入mysql2或其SQL生成器。 */
@@ -299,6 +301,7 @@ export class PostgresEngine {
   private cancelTransfer(task: TransferTask): Promise<void> | undefined {
     if (task.publishing || task.cancelled) return task.cancelPending;
     task.cancelled = true;
+    task.processAbort?.abort(Error('PostgreSQL 整库备份已取消'));
     const original = task.connection;
     if (!original) return;
     if (!task.otherConnectionId && !task.gracefulCancel) { original.abort(); return; }
@@ -551,6 +554,31 @@ export class PostgresEngine {
     } catch (reason) {
       this.emit({ taskId: input.taskId, status: task.cancelled ? 'cancelled' : 'failed', progress: 0,
         message: task.cancelled ? 'PostgreSQL 导出已取消' : 'PostgreSQL 导出未正常完成，请核对所选文件' });
+      throw reason;
+    } finally {
+      this.transfers.delete(input.taskId);
+      this.rememberCompleted(input.taskId);
+    }
+  }
+
+  /** 子进程、快照会话和暂存文件属于同一任务，文件替换开始后不再取消。 */
+  private async exportDatabase(input: PostgresDatabaseBackupRequest, profile: PostgresConnectionProfile) {
+    if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
+      throw Error('PostgreSQL 整库备份任务已存在、连接关闭中或已达并发上限');
+    const abort = new AbortController();
+    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true, processAbort: abort };
+    this.transfers.set(input.taskId, task);
+    const connect = <T>(action: (connection: PostgresConnection) => Promise<T>) =>
+      this.use(profile, input.database, action, false, false, true);
+    const done = task.done = exportPostgresDatabaseBackup(input, connect, abort.signal, () => { task.publishing = true; });
+    try {
+      const result = await done;
+      this.emit({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 整库备份文件已保存' });
+      return result;
+    } catch (reason) {
+      const cancelled = task.cancelled && reason instanceof Error && reason.message === abort.signal.reason?.message;
+      this.emit({ taskId: input.taskId, status: cancelled ? 'cancelled' : 'failed', progress: 0,
+        message: cancelled ? 'PostgreSQL 整库备份已取消' : 'PostgreSQL 整库备份未完成，请核对所选文件' });
       throw reason;
     } finally {
       this.transfers.delete(input.taskId);
@@ -963,6 +991,12 @@ export class PostgresEngine {
         const profile = input.profile as PostgresConnectionProfile;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 备份连接');
         return this.use(profile, input.database, readPostgresBackupCatalogue);
+      }
+      case 'postgres.backup.database': {
+        const profile = input.profile as PostgresConnectionProfile;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.tool)
+          throw Error('缺少可信的 PostgreSQL 整库备份连接及原生工具');
+        return this.exportDatabase(input as PostgresDatabaseBackupRequest, profile);
       }
       case 'postgres.sqlFile.execute': {
         const profile = input.profile as PostgresConnectionProfile;

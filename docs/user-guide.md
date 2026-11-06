@@ -320,6 +320,8 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 备份多张关联表时，在「工具 → PostgreSQL 多表备份」选择连接、数据库和表。客户端将所选表保存到一份 SQL 文件，回放时先恢复所有记录及索引，再建立外键，可处理跨 schema 与双向引用。详见[PostgreSQL 多表备份与恢复](development/postgres-multi-table-backup-20261107.md)。
 
+备份整个 PostgreSQL 数据库时，在「工具 → PostgreSQL 整库备份」选择来源连接和数据库，选取本机 PostgreSQL 安装中的 `pg_dump`，再选择 SQL 文件并确认。默认保留对象所有者和授权，迁移到角色配置不同的服务器时可勾选省略。详见[PostgreSQL 整库备份](development/postgres-database-backup-20261107.md)。
+
 回放大备份时，在「工具 → 执行 PostgreSQL SQL 文件」选择目标连接、数据库和 UTF-8 文件，再确认执行。客户端在独立事务里逐条读取，显示提交、回滚或结果未知的回执。可选择 `pg_dump` 生成的 UTF-8 纯文本 SQL，内联文本或 CSV 数据通过 PostgreSQL 的 COPY 协议写入。详见[恢复 PostgreSQL 原生纯文本备份](development/postgres-copy-script-restore-20261107.md)。
 
 要恢复到空库，勾选「恢复到新数据库」，选择维护数据库，填写新库名称并选择 SQL 文件，再点「确认创建并恢复」。连接角色须能创建数据库。同名库存在时会停止，文件事务失败时会保留已建库并显示两步的结果。详见[恢复 PostgreSQL 整库到新数据库](development/postgres-restore-new-database-20261107.md)。

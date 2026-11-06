@@ -165,17 +165,9 @@ export class PostgresConnection {
         });
       });
       this.check();
-      this.channel = await new Promise<ClientChannel>((resolve, reject) =>
-        ssh.forwardOut('127.0.0.1', 0, this.profile.host, this.profile.port, (error, channel) => {
-          if (error) reject(error);
-          else {
-            channel.once('close', () => {
-              this.channelClosed = true;
-            });
-            resolve(channel);
-          }
-        }),
-      );
+      this.channel = await this.openSshChannel(channel => {
+        channel.once('close', () => { this.channelClosed = true; });
+      });
       this.check();
     }
     const tls = this.profile.tls;
@@ -242,6 +234,22 @@ export class PostgresConnection {
     this.version = row.c1;
     this.standardStrings = row.c2 === 'on';
     this.backendStart = row.c3;
+  }
+
+  /** 原连接和原生备份共用已经验证主机指纹的 SSH 会话，通道只能转发至连接的数据库地址。 */
+  async openSshChannel(onOpen?: (channel: ClientChannel) => void): Promise<ClientChannel> {
+    this.check();
+    const ssh = this.ssh;
+    if (!ssh || this.sshClosed) throw Error('PostgreSQL SSH 会话不可用');
+    return new Promise((resolve, reject) => {
+      ssh.forwardOut('127.0.0.1', 0, this.profile.host, this.profile.port, (error, channel) => {
+        if (error) reject(error);
+        else {
+          onOpen?.(channel);
+          resolve(channel);
+        }
+      });
+    });
   }
   /** 状态只读来自实际ReadyForQuery缓存，失败事务E不能伪称空闲或已回滚。 */
   state() {

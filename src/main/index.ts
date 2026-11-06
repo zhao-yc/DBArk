@@ -9,6 +9,8 @@ import { postgresTableExportExtension, type PostgresTableImportChooseInput } fro
 import { inspectPostgresCopySource, type PostgresCopySource } from '../engine/postgres/copyImportFile';
 import { inspectPostgresSqlFile, type PostgresSqlFileSource } from '../engine/postgres/sqlFile';
 import { postgresSqlFileTitle } from '../shared/postgresSqlFile';
+import { postgresDatabaseBackupPickToolTitle, postgresDatabaseBackupTitle, type PostgresDatabaseBackupChooseInput } from '../shared/postgresDatabaseBackup';
+import { inspectPostgresDumpTool, type PostgresDumpTool } from '../engine/postgres/databaseBackup';
 import type { SqliteDraftRestored } from '../shared/sqliteTableDraft';
 import { SqliteTableDraftFiles, bindSqliteTableDraft, assertSqliteTableDraftBinding } from './sqliteTableDraftFiles';
 import { tableDraftEndpointKey } from './tableDraftBinding';
@@ -860,6 +862,11 @@ const postgresTableOwners = new WeakMap<object, string>();
 const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
 const postgresSqlFileSources = new WeakMap<object, { token: string; connectionId: string; database: string; newDatabase?: string; revision: number; source: PostgresSqlFileSource; expires: number }>();
 const postgresSqlFileChoosing = new WeakSet<object>();
+const postgresDumpTools = new WeakMap<object, { token: string; tool: PostgresDumpTool }>();
+const postgresDatabaseBackupFiles = new WeakMap<object, PostgresDatabaseBackupChooseInput & {
+  path: string; token: string; revision: number; expires: number;
+}>();
+const postgresDatabaseBackupChoosing = new WeakSet<object>();
 const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
 const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource; revision: number; expires: number }>();
@@ -1116,6 +1123,51 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         postgresExportFiles.set(document, { token, format: input.format, path: chosen.filePath, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(chosen.filePath) };
       } finally { postgresExportChoosing.delete(document); }
+    });
+  }
+  if (command === 'postgres.backup.chooseDumpTool' || command === 'postgres.backup.chooseDatabaseFile') {
+    columnsMain.assertCapturedOwner(columns);
+    const document = columns!.owner.document, revision = store.connectionRevision();
+    const check = () => {
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown) throw Error('客户端正在退出，PostgreSQL 备份选择已失效');
+    };
+    check();
+    if (postgresDatabaseBackupChoosing.has(document)) throw Error('原窗口仍在选择 PostgreSQL 备份文件');
+    postgresDatabaseBackupChoosing.add(document);
+    postgresDatabaseBackupFiles.delete(document);
+    return queryFileOperation(async () => {
+      try {
+        if (command === 'postgres.backup.chooseDumpTool') {
+          postgresDumpTools.delete(document);
+          const chosen = await dialog.showOpenDialog(columns!.owner.window, { title: postgresDatabaseBackupPickToolTitle,
+            properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: 'pg_dump', extensions: ['exe'] }] } : {}) });
+          check();
+          if (chosen.canceled || !chosen.filePaths[0]) return null;
+          const tool = await inspectPostgresDumpTool(chosen.filePaths[0]);
+          check();
+          const token = randomUUID();
+          postgresDumpTools.set(document, { token, tool });
+          return { token, name: basename(tool.path) };
+        }
+        const target: PostgresDatabaseBackupChooseInput = input;
+        const tool = postgresDumpTools.get(document);
+        if (!tool || tool.token !== target.toolToken) throw Error('请选择本次整库备份使用的 pg_dump');
+        connectionConfig.assertAvailable(target.connectionId);
+        if (store.resolveConnection(target.connectionId).dialect !== 'postgresql') throw Error('整库备份需要已保存的 PostgreSQL 连接');
+        const name = target.database.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 120);
+        const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: postgresDatabaseBackupTitle,
+          defaultPath: name + '-整库备份.sql', filters: [{ name: 'SQL', extensions: ['sql'] }] });
+        check();
+        connectionConfig.assertAvailable(target.connectionId);
+        if (revision !== store.connectionRevision() || postgresDumpTools.get(document) !== tool)
+          throw Error('PostgreSQL 整库备份目标已变化');
+        if (chosen.canceled || !chosen.filePath) return null;
+        if (!/\.sql$/i.test(chosen.filePath)) throw Error('请选择 .sql 备份文件');
+        const token = randomUUID();
+        postgresDatabaseBackupFiles.set(document, { ...target, path: chosen.filePath, token, revision, expires: Date.now() + 5 * 60 * 1000 });
+        return { token, name: basename(chosen.filePath) };
+      } finally { postgresDatabaseBackupChoosing.delete(document); }
     });
   }
   if (command === 'postgres.sqlFile.choose') {
@@ -1877,7 +1929,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     case 'query.cancel': {
       if (['postgres.compareData', 'mysql.compareData'].includes(tasks.get(input.taskId)?.kind ?? '')) return cancelNetworkCompare(input.taskId, columns);
-      if (['postgres.table.export', 'postgres.sqlFile.execute'].includes(tasks.get(input.taskId)?.kind ?? '')) {
+      if (['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database'].includes(tasks.get(input.taskId)?.kind ?? '')) {
         const backupOwner = postgresSqlTaskOwners.get(input.taskId);
         if (backupOwner) {
           columnsMain.assertCapturedOwner(columns);
@@ -2166,6 +2218,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       input = { ...input, profile, owner, filePath: file.path, connectionRevision: store.connectionRevision() };
       break;
     }
+    case 'postgres.backup.database': {
+      columnsMain.assertCapturedOwner(columns);
+      const document = columns!.owner.document;
+      const selected = postgresDatabaseBackupFiles.get(document), tool = postgresDumpTools.get(document);
+      if (shuttingDown || !selected || !tool || tool.token !== input.toolToken || selected.token !== input.fileToken ||
+          selected.toolToken !== input.toolToken || selected.connectionId !== input.connectionId || selected.database !== input.database ||
+          selected.portable !== input.portable || selected.revision !== store.connectionRevision() || selected.expires <= Date.now())
+        throw Error('PostgreSQL 整库备份的文件、工具或目标已变化，请重新选择');
+      const profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect !== 'postgresql') throw Error('整库备份需要已保存的 PostgreSQL 连接');
+      postgresDatabaseBackupFiles.delete(document);
+      input = { ...input, profile, tool: tool.tool, filePath: selected.path, connectionRevision: selected.revision };
+      break;
+    }
     case 'postgres.sqlFile.execute': {
       columnsMain.assertCapturedOwner(columns);
       const document = columns!.owner.document, file = postgresSqlFileSources.get(document);
@@ -2226,7 +2292,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
   try {
     if (command === 'postgres.table.import') postgresImportTaskOwners.set(taskId!, columns!);
-    if (command === 'postgres.sqlFile.execute' || command === 'postgres.table.export' && input.format === 'sql-backup-set') postgresSqlTaskOwners.set(taskId!, columns!);
+    if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database') || command === 'postgres.table.export' && input.format === 'sql-backup-set') postgresSqlTaskOwners.set(taskId!, columns!);
     if (command === 'sqliteDraftFiles.restore') sqliteEditLease = sqliteEdits.begin(taskId!, columns!, sqlitePage!.check);
     if (sqliteApplySource) {
       sqliteClaim = sqliteEdits.claim(columns!, input.previewId);
@@ -2236,8 +2302,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     if (tableFilteredExport) filteredExportLease = tableFilteredExports.begin(taskId!, columns!, assertTableFilteredExportCurrent);
     if(command==='query.exportStream'&&input.format==='sql')input={...input,filePath:queryInsertExports.begin(input,columns)};
-    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || command === 'postgres.table.export' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
-    if (command === 'postgres.table.export') {
+    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || command === 'postgres.table.export' || command === 'postgres.backup.database' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
+    if (command === 'postgres.table.export' || command === 'postgres.backup.database') {
       await assertSqliteExportDestination(input.filePath, store.connections());
       columnsMain.assertCapturedOwner(columns);
       if (shuttingDown || tableValueOptionsClosing.has(requestConnectionId) || input.connectionRevision !== store.connectionRevision())
@@ -2394,7 +2460,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableChecks' ? 'tableChecks' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId), ...(structurePurpose === 'tableChecks' ? tableChecksFailureProgress(sentToEngine && command === structurePrefix + 'apply', structureProgress.get(taskId)) : {}) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  } finally { if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); if (command === 'postgres.table.import') postgresImportTaskOwners.delete(taskId); if (command === 'postgres.sqlFile.execute' || command === 'postgres.table.export' && input.format === 'sql-backup-set') postgresSqlTaskOwners.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
+  } finally { if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); if (command === 'postgres.table.import') postgresImportTaskOwners.delete(taskId); if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database') || command === 'postgres.table.export' && input.format === 'sql-backup-set') postgresSqlTaskOwners.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
 }
 
 /** 菜单模板只接纳固定命令，执行资格由当前文档的准确修订决定。 */
@@ -2706,9 +2772,9 @@ else {
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
-        if (payload.command === 'app.menuState' || payload.command === 'postgres.backup.catalogue' ||
+        if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') ||
             payload.command === 'query.cancel' && (['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
-              ['postgres.table.export', 'postgres.sqlFile.execute'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && postgresSqlTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
+              ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && postgresSqlTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
             payload.command === 'postgres.completion' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') ||

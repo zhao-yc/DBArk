@@ -75,7 +75,7 @@ export class ApplicationMenu {
       { label: text.tools, submenu: [
         { label: text.query, submenu: [item('execute', 'CmdOrCtrl+Enter'), item('execute-selection'), item('execute-current'), item('execute-all'), item('stop'), separator, item('format'), item('select-current-statement'), item('previous-statement', 'CmdOrCtrl+Alt+PageUp'), item('next-statement', 'CmdOrCtrl+Alt+PageDown'), item('statement-navigation'), item('syntax-check'), item('object-definition'), item('parameters'), item('explain'), item('analyze'), item('transaction-settings')] },
         { label: text.transfer, submenu: [item('import'), item('export')] }, separator,
-        item('schema-compare'), item('sqlite-data-compare'), item('postgres-data-compare'), item('mysql-data-compare'), item('structure-search', 'CmdOrCtrl+Shift+F'), item('server-monitor'), item('backup-archive'), item('postgres-table-backup'), item('postgres-sql-file'),
+        item('schema-compare'), item('sqlite-data-compare'), item('postgres-data-compare'), item('mysql-data-compare'), item('structure-search', 'CmdOrCtrl+Shift+F'), item('server-monitor'), item('backup-archive'), item('postgres-table-backup'), item('postgres-database-backup'), item('postgres-sql-file'),
         { label: text.snapshots, submenu: [item('explain-snapshot'), item('result-snapshot')] }, separator, item('task-center')
       ] },
       { label: text.window, submenu: [
