@@ -1,5 +1,7 @@
 # 使用指南
 
+对支持写入的 PostgreSQL 普通表做完整比较后，可以跨页勾选差异，预览并确认同步到右侧。[PostgreSQL 差异同步](development/postgres-data-sync-20261107.md)
+
 从「工具」选择「比较 PostgreSQL 表数据」，可对两张普通表或分区表按主键比较，查看精确值及分页差异。[PostgreSQL 表数据比较](development/postgres-data-compare-20261107.md)
 
 从「工具」选择「比较 SQLite 表数据」，可按主键核对同库或跨文件普通表，按差异类型翻页并查看左右字段原值。[SQLite 数据比较](development/sqlite-data-compare-20261106.md)

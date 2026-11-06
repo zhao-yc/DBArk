@@ -34,8 +34,10 @@ import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
-import { comparePostgresSnapshots, inPostgresCompareSnapshot, readPostgresCompareTable } from './dataCompare';
-import { postgresDataCompareLimits, postgresDataCompareSchema, postgresDataCompareZh } from '../../shared/postgresDataCompare';
+import { comparePostgresSnapshots, configurePostgresCompare, inPostgresCompareSnapshot, readPostgresCompareTable, type PostgresSyncEvidence, type PostgresSyncRow } from './dataCompare';
+import { postgresDataCompareLimits, postgresDataCompareSchema, postgresDataCompareZh,
+  postgresDataSyncApplySchema, postgresDataSyncLimits, postgresDataSyncPreviewSchema, postgresDataSyncZh,
+  type PostgresDataCompareEndpoint, type PostgresDataSyncPreview } from '../../shared/postgresDataCompare';
 import { explainLimits } from '../../shared/explain';
 interface Session {
   id: string;
@@ -53,6 +55,11 @@ interface Task {
   sent: boolean;
   cancel?: Promise<void>;
   terminal: boolean;
+}
+interface SyncSnapshot {
+  id: string; owner: string; revision: number; expires: number;
+  source: PostgresDataCompareEndpoint; target: PostgresDataCompareEndpoint; evidence: PostgresSyncEvidence;
+  preview?: { report: PostgresDataSyncPreview; rows: PostgresSyncRow[] };
 }
 interface Lease {
   managed: PostgresConnection;
@@ -122,6 +129,7 @@ export class PostgresEngine {
   private readonly profiles = new Map<string, PostgresConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, Task>();
+  private syncSnapshot?: SyncSnapshot;
   private readonly transfers = new Map<string, TransferTask>();
   private readonly completedTasks = new Set<string>();
   private readonly leases = new Set<Lease>();
@@ -314,6 +322,8 @@ export class PostgresEngine {
       throw Error('比较需要两条准确的已保存 PostgreSQL 连接配置');
     if (this.stopping || this.closing.has(left.id) || this.closing.has(right.id) || this.ownsTask(taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 比较任务已存在、连接关闭中或已达并发上限');
+    this.syncSnapshot = undefined;
+    const capture = typeof raw.owner === 'string' && Number.isSafeInteger(raw.connectionRevision) && !filter?.text;
     const task: TransferTask = { connectionId: left.id, otherConnectionId: right.id, cancelled: false, publishing: false };
     const shared = left.id === right.id && source.database === target.database;
     let timedOut = false;
@@ -342,15 +352,21 @@ export class PostgresEngine {
       const [a, b] = shared
         ? await open(left, source.database, async managed => {
           const a = await readPostgresCompareTable(managed, source, filter, check);
-          const b = await readPostgresCompareTable(managed, target, filter, check);
+          const b = await readPostgresCompareTable(managed, target, filter, check, capture);
           return [a, b] as const;
         })
         : [
           await open(left, source.database, managed => readPostgresCompareTable(managed, source, filter, check)),
-          await open(right, target.database, managed => readPostgresCompareTable(managed, target, filter, check)),
+          await open(right, target.database, managed => readPostgresCompareTable(managed, target, filter, check, capture)),
         ];
       check();
-      return comparePostgresSnapshots(a, b, shared);
+      let evidence: PostgresSyncEvidence | undefined;
+      const report = comparePostgresSnapshots(a, b, shared, capture ? value => { evidence = value; } : undefined);
+      if (!evidence) return report;
+      const id = randomUUID(), expires = Date.now() + postgresDataSyncLimits.lifetimeMs;
+      this.syncSnapshot = { id, owner: raw.owner, revision: raw.connectionRevision, source, target, evidence, expires };
+      setTimeout(() => { if (this.syncSnapshot?.id === id) this.syncSnapshot = undefined; }, postgresDataSyncLimits.lifetimeMs).unref();
+      return { ...report, syncSnapshotId: id };
     });
     try { return await done; }
     catch (reason) {
@@ -362,6 +378,57 @@ export class PostgresEngine {
       this.transfers.delete(taskId);
       this.rememberCompleted(taskId);
     }
+  }
+
+  private requireSyncSnapshot(raw: Input, id: string) {
+    const record = this.syncSnapshot;
+    if (!record || record.id !== id || record.owner !== raw.owner || record.revision !== raw.connectionRevision ||
+        record.expires <= Date.now() || this.stopping || this.closing.has(record.source.connectionId) || this.closing.has(record.target.connectionId))
+      throw Error(postgresDataSyncZh.stale);
+    return record;
+  }
+
+  /** 只接受原快照中行的编号。预览一次领取，网络错误也不能用旧令牌重放。 */
+  private previewSync(raw: Input): PostgresDataSyncPreview {
+    const input = postgresDataSyncPreviewSchema.parse({ snapshotId: raw.snapshotId, selected: raw.selected });
+    const record = this.requireSyncSnapshot(raw, input.snapshotId);
+    record.preview = undefined;
+    const rows = input.selected.map(index => record.evidence.rows[index]);
+    if (rows.some(row => !row) || Buffer.byteLength(JSON.stringify(rows)) > postgresDataSyncLimits.bytes)
+      throw Error('同步选择无效或超过 1 MiB，请减少所选行');
+    const counts = { insert: 0, update: 0, delete: 0 };
+    for (const row of rows) {
+      const kind = !row.before ? 'insert' : !row.after ? 'delete' : 'update';
+      if (!record.evidence.relation.capabilities[kind]) throw Error('右侧账号缺少所选操作的权限');
+      counts[kind]++;
+    }
+    const report = { previewId: randomUUID(), confirmation: record.target.database + '.' + record.evidence.relation.sql, counts };
+    record.preview = { report, rows };
+    return report;
+  }
+
+  private async applySync(raw: Input) {
+    const input = postgresDataSyncApplySchema.parse({
+      snapshotId: raw.snapshotId, previewId: raw.previewId, taskId: raw.taskId, confirmation: raw.confirmation,
+    });
+    const record = this.requireSyncSnapshot(raw, input.snapshotId);
+    const preview = record.preview, profile = raw.targetProfile as PostgresConnectionProfile;
+    if (!preview || preview.report.previewId !== input.previewId || preview.report.confirmation !== input.confirmation ||
+        profile?.dialect !== 'postgresql' || profile.id !== record.target.connectionId) throw Error(postgresDataSyncZh.stale);
+    if (this.ownsTask(input.taskId) || this.transfers.size >= 32) throw Error('PostgreSQL 同步任务编号已使用或已达并发上限');
+    this.syncSnapshot = undefined;
+    // 发起后的连接受写入保护，断开和退出等待原事务事实，不能用取消中止 COMMIT。
+    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: true };
+    this.transfers.set(input.taskId, task);
+    const done = task.done = this.tables.synchronize(record.evidence, record.target.table, preview.rows,
+      (action, writing) => this.use(profile, record.target.database, action, false, false, writing),
+      connection => configurePostgresCompare(connection, () => {}));
+    try { return await done; }
+    finally { this.transfers.delete(input.taskId); this.rememberCompleted(input.taskId); }
+  }
+
+  private invalidateSync(id: string) {
+    if (this.syncSnapshot && [this.syncSnapshot.source.connectionId, this.syncSnapshot.target.connectionId].includes(id)) this.syncSnapshot = undefined;
   }
 
   /** 在第一个等待之前登记文件任务，只有原子替换成功才报告已保存。 */
@@ -421,6 +488,7 @@ export class PostgresEngine {
   private async closeConnection(id: string): Promise<void> {
     if (this.closing.has(id)) throw Error('PostgreSQL连接正在关闭');
     this.closing.add(id);
+    this.invalidateSync(id);
     try {
       const transfers = [...this.transfers.values()].filter(task => (task.connectionId === id || task.otherConnectionId === id));
       for (const task of transfers) this.cancelTransfer(task);
@@ -463,6 +531,7 @@ export class PostgresEngine {
     )
       throw Error('该PostgreSQL连接仍有会话或未确认资源，请先关闭标签并显式断开');
     if (changed) {
+      this.invalidateSync(input.id);
       this.tables.clear(input.id);
       this.creations.clear(input.id);
       this.columnEdits.clear(input.id);
@@ -475,6 +544,7 @@ export class PostgresEngine {
   }
   async closeAll(): Promise<void> {
     this.stopping = true;
+    this.syncSnapshot = undefined;
     try {
       for (const id of new Set([
         ...this.profiles.keys(),
@@ -788,6 +858,8 @@ export class PostgresEngine {
         return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
       case 'postgres.compareData': return this.compareData(input);
+      case 'postgres.compareData.syncPreview': return this.previewSync(input);
+      case 'postgres.compareData.syncApply': return this.applySync(input);
       case 'postgres.compareData.catalogue': {
         const profile = input.profile as PostgresConnectionProfile;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 比较连接');

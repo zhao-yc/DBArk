@@ -16,6 +16,7 @@ import {
   type PostgresFilteredUpdateInput,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
+import type { PostgresSyncEvidence, PostgresSyncRow } from './dataCompare';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
 import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
 import { postgresTableCondition, postgresTableReadOrder } from '../../shared/postgresTableReadSql';
@@ -40,9 +41,10 @@ interface Relation {
   capabilities: Capabilities;
   canImport: boolean;
   canReadSystemColumns: boolean;
+  syncCompatible: boolean;
 }
 interface Original extends PostgresReferenceRowVersion { digest: string; key: string; }
-interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; }
+interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; expected?: DataRow; }
 interface FilteredWriteMatch { sql: string; values: unknown[]; signature: string; count: number; }
 type FilteredWrite = { kind: 'update'; fields: PostgresTableField[] } | { kind: 'delete' };
 type ExportSource = { kind: 'copy'; write: (sink: (chunk: Buffer) => Promise<void>) => Promise<number> } |
@@ -136,6 +138,9 @@ export async function readRelation(connection: PostgresConnection, table: string
   return {
     oid: info.c0, sql: postgresIdentifier(schema) + '.' + postgresIdentifier(name), kind, columns, keys,
     fingerprint: digest([info, fields.rows]),
+    syncCompatible: editable && info.c12 === 't' && info.c10 === 'f' &&
+      (info.c5 === 't' || info.c6 === 't' || info.c7 === 't') &&
+      fields.rows.every(field => field.c6 === '114' || valueOptionTypes.has(String(field.c6))),
     canImport: (kind === 'r' || kind === 'p') && info.c4 === 'f' && info.c5 === 't' && info.c10 === 'f',
     canReadSystemColumns: (kind === 'r' || kind === 'p') && info.c12 === 't',
     capabilities: {
@@ -868,21 +873,79 @@ export class PostgresTableWorkspace {
     }
   }
 
+  /** 使用比较快照的右侧版本和冻结左值生成绑定参数。原有事务路径统一确认提交、回滚和断线未知。 */
+  async synchronize(evidence: PostgresSyncEvidence, table: string, rows: PostgresSyncRow[], connect: Connect,
+    configure: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
+    const relation = evidence.relation;
+    const positions = relation.columns.map(column => evidence.columns.indexOf(column.name));
+    const project = (row: CellValue[]) => Object.fromEntries(relation.columns.map((column, index) => [column.key, row[positions[index]]]));
+    const bind = (value: CellValue) => value && typeof value === 'object' ? Buffer.from(value.base64, 'base64') : value;
+    const projection = relation.columns.map(column => postgresIdentifier(column.name)).join(', ');
+    const writes: Write[] = rows.map(({ before, after, version }) => {
+      if (before && !version) throw Error('PostgreSQL 同步缺少右侧原行版本');
+      const original = before && version ? { ...version, digest: digest(project(before)), key: '' } : undefined;
+      if (!after) {
+        if (!original) throw Error('PostgreSQL 同步缺少删除原行');
+        const values: unknown[] = [];
+        return { kind: 'delete', original, values, sql: 'DELETE FROM ' + only(relation) + ' WHERE ' + rowPredicate(values, original) };
+      }
+      const expected = project(after);
+      if (!original) {
+        const columns = relation.columns.filter(isPostgresSqlExportColumn);
+        const names = columns.map(column => postgresIdentifier(column.name)).join(', ');
+        const values = columns.map(column => bind(expected[column.key]));
+        const override = columns.some(column => column.identityAlways) ? ' OVERRIDING SYSTEM VALUE' : '';
+        return { kind: 'insert', values, expected, sql: 'INSERT INTO ' + relation.sql + ' (' + names + ')' + override +
+          ' VALUES (' + values.map((_, index) => '$' + (index + 1)).join(', ') + ') RETURNING ' + projection };
+      }
+      const previous = project(before!);
+      const columns = relation.columns.filter(column => !column.generated && digest(previous[column.key]) !== digest(expected[column.key]));
+      if (!columns.length) throw Error('PostgreSQL 所选差异仅涉及数据库生成的值');
+      const values: unknown[] = columns.map(column => bind(expected[column.key]));
+      const assignments = columns.map((column, index) => postgresIdentifier(column.name) + ' = $' + (index + 1));
+      return { kind: 'update', original, values, expected, sql: 'UPDATE ' + only(relation) + ' SET ' + assignments.join(', ') +
+        ' WHERE ' + rowPredicate(values, original) + ' RETURNING ' + projection };
+    });
+    // 同批先删除已选的旧行，释放其唯一键后再更新和插入。全部仍在同一事务中。
+    const order = { delete: 0, update: 1, insert: 2 };
+    writes.sort((a, b) => order[a.kind] - order[b.kind]);
+    let receipt: PostgresTableOutcome | undefined;
+    try {
+      await connect(async connection => {
+        receipt = await this.applyTransaction(connection, relation, table, writes, undefined, undefined, configure);
+      }, true);
+      return receipt!;
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      return receipt ? { ...receipt, message: receipt.message + '，连接收尾异常：' + message } :
+        { outcome: 'notSent', affected: 0, message };
+    }
+  }
+
   /** 提交回执以实际命令标签及空闲状态为准，断线时保留未知终态。 */
   private async applyTransaction(connection: PostgresConnection, expected: Relation, table: string, writes: Write[],
-    related?: RelatedScope, filtered?: FilteredWriteMatch): Promise<PostgresTableOutcome> {
+    related?: RelatedScope, filtered?: FilteredWriteMatch, synchronize?: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
     let sent = false;
     let commitAttempted = false;
     try {
       // 等锁期间可能有事务提交。显式使用读已提交，锁后的复核才能取得新快照。
-      await begin(connection, filtered ? 'filteredWrite' : 'write');
+      await begin(connection, filtered || synchronize ? 'filteredWrite' : 'write');
+      if (synchronize) await synchronize(connection);
       const current = await readRelation(connection, table);
       if (current.fingerprint !== expected.fingerprint || current.sql !== expected.sql) throw Error('关系结构或权限已变化，请重新读取');
       // 筛选集合复核和写入期间阻止其他事务增删改，避免新匹配行在核对后进入原范围。
-      await connection.query('LOCK TABLE ' + only(current) + (filtered ? ' IN SHARE ROW EXCLUSIVE MODE' : ' IN ROW EXCLUSIVE MODE'), undefined, small());
+      await connection.query('LOCK TABLE ' + only(current) + (filtered || synchronize ? ' IN SHARE ROW EXCLUSIVE MODE' : ' IN ROW EXCLUSIVE MODE'), undefined, small());
       const locked = await readRelation(connection, table);
       if (locked.fingerprint !== expected.fingerprint || writes.some(write => !locked.capabilities[write.kind])) {
         throw Error('锁定后的关系结构或权限已变化，请重新读取');
+      }
+      if (synchronize) {
+        // 目标表锁保证检查后不能并发增删触发器或入向外键，防止对所选行以外的写入。
+        const effects = await connection.query(`SELECT
+          EXISTS (SELECT 1 FROM pg_catalog.pg_trigger WHERE tgrelid = $1::oid AND NOT tgisinternal AND tgenabled <> 'D'),
+          EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE contype = 'f' AND confrelid = $1::oid)`,
+        [locked.oid], { rows: 1, bytes: 1024 });
+        if (effects.rows[0]?.c0 !== 'f' || effects.rows[0]?.c1 !== 'f') throw Error('右侧表有启用的触发器或被外键引用，整批未写入');
       }
       const projection = locked.columns.map(column => postgresIdentifier(column.name)).join(', ');
       for (const { original } of writes) if (original) {
@@ -900,7 +963,9 @@ export class PostgresTableWorkspace {
       }
       for (const write of writes) {
         sent = true;
-        const result = await connection.query(write.sql, write.values, small());
+        const result = await connection.query(write.sql, write.values, write.expected ? { rows: 1, bytes: 8 * 1024 * 1024 } : small());
+        if (write.expected && (result.truncated || result.rows.length !== 1 || digest(result.rows[0]) !== digest(write.expected)))
+          throw Error('PostgreSQL 写入回读值与左侧快照不一致');
         if (result.postgresCommand !== write.kind.toUpperCase() || result.affectedRows !== (filtered?.count ?? 1))
           throw Error(filtered ? '数据库确认的影响行数与筛选预览不一致' : '数据库未确认该语句恰好影响一行');
       }

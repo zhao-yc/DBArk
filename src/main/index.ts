@@ -1,4 +1,5 @@
-import { postgresDataCompareZh, type PostgresDataCompareInput } from '../shared/postgresDataCompare';
+import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
+  type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
 import { buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync';
 import type { SqliteEditClaim } from './sqliteTableEdit';
 import { sqliteDataCompareLimits, sqliteDataCompareZh, sqliteDataSyncLimits, sqliteDataSyncZh, type SqliteDataCompareInput, type SqliteDataSyncPreviewInput } from '../shared/sqliteDataCompare';
@@ -155,6 +156,7 @@ const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatem
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
+let postgresSyncTarget: { snapshotId: string; owner: MainInvocation; revision: number; expires: number; target: PostgresDataCompareInput['target'] } | undefined;
 let postgresComparison: { owner: MainInvocation; id: string; cancelled: boolean; done: Promise<unknown> } | undefined;
 let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
 interface SqliteSynchronization {
@@ -858,6 +860,13 @@ const postgresImportChoosing = new WeakSet<object>();
 const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 
+function postgresCompareOwner(owner: MainInvocation): string {
+  const document = owner.owner.document;
+  let id = postgresTableOwners.get(document);
+  if (!id) { id = randomUUID(); postgresTableOwners.set(document, id); }
+  return id;
+}
+
 /** 比较任务固定原文档和已保存配置，迟到的取消或结果不能越过窗口与连接修订。 */
 async function comparePostgresData(input: PostgresDataCompareInput, owner: MainInvocation | undefined) {
   columnsMain.assertCapturedOwner(owner);
@@ -875,13 +884,17 @@ async function comparePostgresData(input: PostgresDataCompareInput, owner: MainI
   if (sourceProfile.dialect !== 'postgresql' || targetProfile.dialect !== 'postgresql') throw Error('两侧须选择已保存的 PostgreSQL 连接');
   tasks.set(input.taskId, { id: input.taskId, kind: 'postgres.compareData', status: 'running', progress: 0,
     message: postgresDataCompareZh.running, startedAt: new Date().toISOString() });
-  const done = broker.request('postgres.compareData', { ...input, sourceProfile, targetProfile });
+  postgresSyncTarget = undefined;
+  const done = broker.request('postgres.compareData', { ...input, sourceProfile, targetProfile,
+    owner: postgresCompareOwner(owner!), connectionRevision: revision });
   const record = { owner: owner!, id: input.taskId, cancelled: false, done };
   postgresComparison = record;
   try {
     const result = await done;
     if (record.cancelled) throw Error(postgresDataCompareZh.cancelled);
     check();
+    if (result.syncSnapshotId) postgresSyncTarget = { snapshotId: result.syncSnapshotId, owner: owner!, revision,
+      expires: Date.now() + postgresDataSyncLimits.lifetimeMs, target: input.target };
     taskEvent({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 表数据比较完成' });
     return result;
   } catch (reason) {
@@ -889,6 +902,41 @@ async function comparePostgresData(input: PostgresDataCompareInput, owner: MainI
       message: record.cancelled ? postgresDataCompareZh.cancelled : 'PostgreSQL 比较未完成' });
     throw reason;
   } finally { postgresComparison = undefined; }
+}
+
+/** 只有比较结果的原文档可以预览或写入。写操作入队前固定目标和连接修订。 */
+function postgresSyncScope(snapshotId: string, owner: MainInvocation | undefined) {
+  columnsMain.assertCapturedOwner(owner);
+  const record = postgresSyncTarget;
+  if (!record || record.snapshotId !== snapshotId || record.revision !== store.connectionRevision() ||
+      record.expires <= Date.now() || postgresComparison || shuttingDown || !columnsMain.sharesDocumentOwner(record.owner, owner!))
+    throw Error(postgresDataSyncZh.stale);
+  connectionConfig.assertAvailable(record.target.connectionId);
+  return { target: record.target, owner: postgresCompareOwner(owner!), connectionRevision: record.revision };
+}
+
+function previewPostgresSync(input: PostgresDataSyncPreviewInput, owner: MainInvocation | undefined) {
+  return broker.request('postgres.compareData.syncPreview', { ...input, ...postgresSyncScope(input.snapshotId, owner) });
+}
+
+async function applyPostgresSync(input: PostgresDataSyncApplyInput, owner: MainInvocation | undefined) {
+  const scope = postgresSyncScope(input.snapshotId, owner);
+  if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId)) throw Error('PostgreSQL 任务编号已使用');
+  const targetProfile = store.resolveConnection(scope.target.connectionId);
+  if (targetProfile.dialect !== 'postgresql') throw Error(postgresDataSyncZh.stale);
+  postgresSyncTarget = undefined;
+  tasks.set(input.taskId, { id: input.taskId, kind: 'postgres.compareData.syncApply', status: 'running', progress: 0,
+    message: postgresDataSyncZh.working, startedAt: new Date().toISOString() });
+  try {
+    const result = await broker.request('postgres.compareData.syncApply', { ...input, ...scope, targetProfile });
+    const committed = result.outcome === 'committed';
+    taskEvent({ taskId: input.taskId, status: committed ? 'completed' : 'failed', progress: committed ? 100 : 0,
+      message: committed ? 'PostgreSQL 差异同步已确认提交' : result.outcome === 'unknown' ? 'PostgreSQL 差异同步终态待核对' : 'PostgreSQL 差异同步未提交' });
+    return result;
+  } catch (reason) {
+    taskEvent({ taskId: input.taskId, status: 'failed', progress: 0, message: 'PostgreSQL 同步未取得完整回执，请核对右侧数据库' });
+    throw reason;
+  }
 }
 
 async function cancelPostgresCompare(taskId: string, owner: MainInvocation | undefined) {
@@ -1990,6 +2038,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
     case 'postgres.compareData': return comparePostgresData(input, columns);
+    case 'postgres.compareData.syncPreview': return previewPostgresSync(input, columns);
+    case 'postgres.compareData.syncApply': return applyPostgresSync(input, columns);
     case 'postgres.compareData.cancel': return cancelPostgresCompare(input.taskId, columns);
     case 'postgres.compareData.catalogue': {
       columnsMain.assertCapturedOwner(columns);

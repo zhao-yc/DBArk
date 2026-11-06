@@ -2,7 +2,7 @@ import { Client } from 'pg';
 import { confirmOwnedDesktopExit, expect, ownedDesktopResources, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 import { zh } from '../../src/renderer/locales/zh-CN';
-import { postgresDataCompareZh as text } from '../../src/shared/postgresDataCompare';
+import { postgresDataCompareZh as text, postgresDataSyncZh as sync } from '../../src/shared/postgresDataCompare';
 
 test.skip(process.env.DBARK_POSTGRES_DATA_COMPARE_NATIVE !== '1', '仅运行本轮隔离 PostgreSQL 数据比较');
 test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' });
@@ -118,6 +118,7 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
     await modal.getByLabel(text.filterValue, { exact: true }).fill('9223372036854775807');
     await run.click();
     await expect(summary).toContainText('左侧行数 1 · 右侧行数 1 · 相同 0 · 仅左侧 0 · 仅右侧 0 · 字段值不同 1');
+    await expect(modal.getByRole('button', { name: sync.preview, exact: true })).toHaveCount(0);
     await modal.getByLabel(text.filterValue, { exact: true }).clear();
     await side(text.target, text.connection).selectOption({ label: profileName });
     await choose(text.target, database, '超限');
@@ -151,6 +152,110 @@ test('PostgreSQL 同库与跨库比较、原值分页、预算及取消', async 
       const value = await client.query('SELECT encode(raw,\'hex\') AS value FROM "对照"."明细" WHERE id=9223372036854775807');
       expect(value.rows[0].value).toBe(raw);
     }
+    // 先制造唯一约束冲突。UPDATE 已执行后 INSERT 失败，整批回滚。
+    await right.query('CREATE UNIQUE INDEX sync_amount_guard ON "对照"."明细" (amount) WHERE id >= 100');
+    await side(text.target, text.connection).selectOption({ label: secondProfile });
+    await choose(text.target, targetDatabase, '明细');
+    const mark = async (kind: string, key: string) => {
+      await modal.getByLabel(text.kind, { exact: true }).selectOption(kind);
+      if (kind === 'different') await modal.getByRole('button', { name: text.next, exact: true }).click();
+      await modal.getByRole('checkbox', { name: sync.select + ' "' + key + '"', exact: true }).check();
+    };
+    const preview = modal.getByRole('button', { name: sync.preview, exact: true });
+    const apply = modal.getByRole('button', { name: sync.apply, exact: true });
+    const confirm = modal.getByLabel(sync.confirm, { exact: true });
+    const exact = targetDatabase + '."对照"."明细"';
+    const current = async () => (await right.query(`SELECT id::text, amount::text, encode(raw,'hex') AS raw, note
+      FROM "对照"."明细" WHERE id IN (1,101,102,9223372036854775807) ORDER BY id`)).rows;
+    const original = await current();
+    await run.click();
+    await expect(summary).toContainText('字段值不同 27');
+    await mark('source-only', '101');
+    await mark('different', '9223372036854775807');
+    await preview.click();
+    await confirm.fill(exact);
+    await apply.click();
+    await expect(modal.getByRole('alert')).toContainText('整批已回滚');
+    expect(await current()).toEqual(original);
+
+    // 同值更新也改变物理行版本，旧比较不得写入。
+    await run.click();
+    await expect(summary).toContainText('字段值不同 27');
+    await mark('different', '9223372036854775807');
+    await preview.click();
+    await right.query('UPDATE "对照"."明细" SET note=note WHERE id=9223372036854775807');
+    await confirm.fill(exact);
+    await apply.click();
+    await expect(modal.getByRole('alert')).toContainText('原记录已被修改');
+    expect(await current()).toEqual(original);
+
+    await run.click();
+    await expect(summary).toContainText('字段值不同 27');
+    await mark('source-only', '101');
+    await mark('target-only', '102');
+    await mark('different', '9223372036854775807');
+    await preview.click();
+    const review = modal.getByRole('group', { name: sync.preview, exact: true });
+    await expect(review.getByRole('listitem')).toHaveText(['插入　"101"', '删除　"102"', '更新　"9223372036854775807"']);
+    await confirm.fill(targetDatabase + '."对照"."副本"');
+    await expect(apply).toBeDisabled();
+    await confirm.fill(exact);
+    await expect(apply).toBeEnabled();
+    await confirm.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('PostgreSQL差异同步.png') });
+    await apply.click();
+    await expect(modal.getByRole('status').filter({ hasText: '已确认整批提交' })).toBeVisible();
+    expect(await current()).toEqual([
+      original[0],
+      { id: '101', amount: '0', raw: null, note: '仅左' },
+      { id: '9223372036854775807', amount: '9007199254740993.000000000000000001', raw: '00ff80', note: null },
+    ]);
+    expect((await left.query('SELECT count(*)::int AS count FROM "对照"."明细"')).rows[0].count).toBe(28);
+    await run.click();
+    await expect(summary).toContainText('相同 2 · 仅左侧 0 · 仅右侧 0 · 字段值不同 26');
+    const markFirstChanged = async () => {
+      await expect(summary).toContainText('字段值不同 26');
+      await modal.getByRole('checkbox', { name: sync.select + ' "1"', exact: true }).check();
+      await preview.click();
+      await confirm.fill(exact);
+    };
+    const committedRows = await current();
+    await markFirstChanged();
+    // 预览完成后新建触发器。写事务必须按锁内实际目录拦截。
+    await right.query(`CREATE FUNCTION "对照".sync_trigger() RETURNS trigger LANGUAGE plpgsql AS
+      $$BEGIN RAISE EXCEPTION '意外触发'; END;$$;
+      CREATE TRIGGER sync_trigger BEFORE UPDATE ON "对照"."明细" FOR EACH ROW EXECUTE FUNCTION "对照".sync_trigger()`);
+    await apply.click();
+    await expect(modal.getByRole('alert')).toContainText('启用的触发器或被外键引用');
+    expect(await current()).toEqual(committedRows);
+    await right.query('DROP TRIGGER sync_trigger ON "对照"."明细"; CREATE TABLE "对照"."引用" (id bigint REFERENCES "对照"."明细"(id) ON DELETE CASCADE)');
+    await run.click();
+    await markFirstChanged();
+    await apply.click();
+    await expect(modal.getByRole('alert')).toContainText('启用的触发器或被外键引用');
+    expect(await current()).toEqual(committedRows);
+
+    // 显式保留 identity 值，计算列在回读时一起核对，序列保持原位置。
+    const identitySql = `CREATE TABLE "对照"."标识" (
+      id bigint GENERATED ALWAYS AS IDENTITY (START WITH 42) PRIMARY KEY, val int,
+      derived int GENERATED ALWAYS AS (val * 2) STORED)`;
+    await left.query(identitySql + '; INSERT INTO "对照"."标识" (id,val) OVERRIDING SYSTEM VALUE VALUES (99,7)');
+    await right.query(identitySql);
+    // 切换数据库重新加载真实表目录。
+    await choose(text.source, targetDatabase, '标识');
+    await choose(text.source, database, '标识');
+    await choose(text.target, database, '标识');
+    await choose(text.target, targetDatabase, '标识');
+    await run.click();
+    await expect(summary).toContainText('仅左侧 1');
+    await mark('source-only', '99');
+    await preview.click();
+    await confirm.fill(targetDatabase + '."对照"."标识"');
+    await apply.click();
+    await expect(modal.getByRole('status').filter({ hasText: '已确认整批提交' })).toBeVisible();
+    expect((await right.query('SELECT id::text,val,derived FROM "对照"."标识"')).rows).toEqual([{ id: '99', val: 7, derived: 14 }]);
+    expect((await right.query('SELECT last_value::text,is_called FROM "对照"."标识_id_seq"')).rows)
+      .toEqual([{ last_value: '42', is_called: false }]);
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();
     await confirmOwnedDesktopExit(info);
