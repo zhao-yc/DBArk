@@ -1,3 +1,4 @@
+import { postgresTableCopyZh } from '../locales/postgresTableCopy.zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { ColumnWidths } from 'react-data-grid';
 import type { TablePreferences } from '../../shared/tablePreferences';
@@ -112,7 +113,7 @@ interface InlineEdit {
 }
 
 /** 浏览、选择、草稿及回执归属于同一标签及原页，隐藏标签保留本地工作。 */
-export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab; active: boolean; onInspect(): void }) {
+export function PostgresTableTab({ tab, active, onInspect, onCopyTable }: { tab: WorkspaceTab; active: boolean; onInspect(): void; onCopyTable?(): void }) {
   const limit = useWorkspace(state => state.settings.pageSize);
   const resultLimit = useWorkspace(state => state.settings.resultLimit);
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
@@ -1083,6 +1084,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         ? <button disabled={blocked} onClick={() => void run(openPresetPage)}>{tablePresetsZh.treeRetry}</button>
         : <button disabled={frozenPage} onClick={() => navigate({ ...options, limit: pageSize })}>{text.refresh}</button>}
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
+      {onCopyTable && <button disabled={blocked || requiresRefresh || page?.relationKind !== 'r' || !!draft.length} onClick={onCopyTable}>{postgresTableCopyZh.open}</button>}
       <button disabled={!canBrowseReference} onClick={() => browseReference('parent')}>{referenceText.browse}</button>
       <button disabled={!canBrowseReference} onClick={() => browseReference('children')}>{referenceText.children}</button>
       <button disabled={!canReadStatistics} onClick={() => openColumnReader('statistics')}>{postgresColumnStatisticsZh.title}</button>

@@ -11,6 +11,7 @@ import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { sqliteRecordTransferZh as sqliteTransferText } from '../../src/renderer/locales/sqliteRecordTransfer.zh-CN';
 import { sqliteTableClipboardZh as clipboardText } from '../../src/renderer/locales/sqliteTableClipboard.zh-CN';
 import { sqliteTableEditZh as sqliteEditText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
+import { postgresTableCopyZh as copyText } from '../../src/renderer/locales/postgresTableCopy.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { sidebarMenuItem } from './sidebar-menu';
 
@@ -89,6 +90,9 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
     await mark('从只读视图逆序勾选两条记录，当前源表无法作为目标');
 
     await open(targetDatabase, '"迁移回归"."目标表"');
+    await expect(tab).toBeVisible();
+    const targetTabId = await page.locator('[data-active-workspace-tab="true"]').getAttribute('data-workspace-tab-id');
+    expect(targetTabId).toBeTruthy();
     await button(transferText.open).click();
     const dialog = page.getByRole('dialog', { name: transferText.title, exact: true });
     await expect(dialog).toContainText(`${title} / ${database} / "迁移回归"."源视图"`);
@@ -314,6 +318,36 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
     expect(runtime.pageErrors).toEqual([]);
     await writeFile(info.outputPath('SQLite独立读回.json'), JSON.stringify(readSqliteTarget(), null, 2));
     await mark('PostgreSQL 勾选结果到 STRICT SQLite，排除会丢精度的 REAL 目标，确认后独立读回原类型');
+    await expect(sqliteReview).toBeHidden();
+    await page.locator(`[data-workspace-tab-id="${targetTabId}"] .tab-select`).click();
+    await button(tableText.refresh).click();
+    await expect(button(copyText.open)).toBeEnabled();
+    await button(copyText.open).click();
+    const copyDialog = page.getByRole('dialog', { name: copyText.title, exact: true });
+    await copyDialog.getByLabel(copyText.schema, { exact: true }).selectOption('public');
+    await copyDialog.getByLabel(copyText.name, { exact: true }).fill('整表副本');
+    await copyDialog.getByLabel(copyText.mode, { exact: true }).selectOption('data');
+    await copyDialog.getByRole('button', { name: copyText.preview, exact: true }).click();
+    await expect(copyDialog).toContainText('CREATE TABLE "public"."整表副本"');
+    await expect(copyDialog).toContainText('OVERRIDING SYSTEM VALUE');
+    expect((await target.query('SELECT to_regclass($1)::text AS value', ['"public"."整表副本"'])).rows).toEqual([{ value: null }]);
+    await expect(page.locator('.toast')).toBeHidden({ timeout: 10000 });
+    await page.screenshot({ path: info.outputPath('PostgreSQL整表复制预览.png') });
+    await copyDialog.getByRole('checkbox', { name: copyText.confirm, exact: true }).check();
+    await copyDialog.getByRole('button', { name: copyText.apply, exact: true }).click();
+    await expect(copyDialog).toBeHidden();
+    await expect(page.locator('.tab-select').getByText('"public"."整表副本"', { exact: true })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: copyText.copied('6') })).toBeVisible();
+    const rows = (await target.query(`SELECT id::text, memo, amount::text, encode(raw,'hex') AS raw,
+      missing, derived FROM "public"."整表副本" ORDER BY id`)).rows;
+    expect(rows).toEqual(await readTarget());
+    expect((await target.query(`SELECT exact_integer::text AS value FROM "public"."整表副本" WHERE exact_integer IS NOT NULL ORDER BY id`)).rows)
+      .toEqual([{ value: '9223372036854775807' }, { value: '-9223372036854775808' }]);
+    expect((await target.query('INSERT INTO "public"."整表副本"(memo) VALUES (\'副本新行\') RETURNING id::text')).rows)
+      .toEqual([{ id: '9007199254740999' }]);
+    expect(await readTarget()).toHaveLength(6);
+    await writeFile(info.outputPath('PostgreSQL整表独立读回.json'), JSON.stringify(rows, null, 2));
+    await mark('PostgreSQL 跨 schema 创建独立表，预览零写入，确认复制六行及独立标识序列');
     await runtime.confirmOwnedDesktopExit(info);
     await mark('窗口正常退出');
   } catch (error) {

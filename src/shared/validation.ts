@@ -10,6 +10,7 @@ import { postgresCompletionSchema } from './postgresCompletion';
 import { postgresMaterializedRefreshSchema } from './postgresMaterializedView';
 import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema, postgresViewManagePreviewSchema } from './postgresCreateView';
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
+import { postgresTableCopyApplySchema, postgresTableCopyPreviewSchema } from './postgresTableCopy';
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
 import { postgresTableHistogramSchema } from './postgresTable';
@@ -246,6 +247,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.createTable.schemas': postgresCreateTableSchemasSchema,
   'postgres.createTable.preview': postgresCreateTablePreviewSchema,
   'postgres.createTable.apply': postgresCreateTableApplySchema,
+  'postgres.createTable.copy.preview': postgresTableCopyPreviewSchema,
+  'postgres.createTable.copy.apply': postgresTableCopyApplySchema,
   'postgres.createView.preview': postgresCreateViewPreviewSchema,
   'postgres.createView.apply': postgresCreateTableApplySchema,
   'postgres.editView.preview': postgresEditViewPreviewSchema,

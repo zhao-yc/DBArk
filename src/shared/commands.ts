@@ -15,6 +15,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.explain': true,
   'postgres.analyzePreview': true, 'postgres.analyze': true, 'postgres.analyzeDiscard': true,
   'postgres.createTable.schemas': true, 'postgres.createTable.preview': true, 'postgres.createTable.apply': true,
+  'postgres.createTable.copy.preview': true, 'postgres.createTable.copy.apply': true,
   'postgres.createView.preview': true, 'postgres.createView.apply': true,
   'postgres.editView.preview': true, 'postgres.editView.apply': true,
   'postgres.viewManage.preview': true, 'postgres.viewManage.apply': true,

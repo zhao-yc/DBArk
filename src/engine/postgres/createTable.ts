@@ -17,21 +17,25 @@ import { compilePostgresRoutine } from './createRoutine';
 import { postgresRoutineCreateSchema, postgresRoutineManageSchema, type PostgresRoutineCreateInput,
   type PostgresRoutineManageInput } from '../../shared/postgresRoutine';
 import { compilePostgresRoutineManage } from './routine';
+import { postgresTableCopyPreviewSchema, type PostgresTableCopyInput } from '../../shared/postgresTableCopy';
+import { postgresTableCopySql, readPostgresCopyColumns, readPostgresCopySource } from './tableCopy';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
-type RelationKind = 'table' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
+type RelationKind = 'table' | 'tableCopy' | 'view' | 'viewEdit' | 'viewManage' | 'materializedRefresh' | 'sequence' | 'sequenceManage' | 'routineCreate' | 'routineManage';
 interface Plan {
   table: string;
   statements: string[];
   preflight(connection: PostgresConnection): Promise<string>;
   validate?(connection: PostgresConnection): Promise<void>;
-  verify(connection: PostgresConnection, schemaOid: string): Promise<void>;
+  verify(connection: PostgresConnection, schemaOid: string, insertedRows?: number): Promise<void>;
   protocol?: 'extended';
   success: string;
   guard?: { sql: string; stamp: string; parseOnly?: true };
   statementTimeout?: '120s';
   firstCommand?: 'SELECT';
+  lock?: string;
+  commands?: { tag: string; rows?: number }[];
 }
 interface Prepared {
   input: Scoped<PostgresCreateTableTarget>;
@@ -149,6 +153,44 @@ export class PostgresCreateTableWorkspace {
           ...check, length: draft.columns.find(column => column.name === check.name)?.length,
         }))),
         verify: (connection, oid) => verify(connection, draft, oid),
+      };
+    });
+  }
+
+  /** 来源表结构与目标 schema 绑定预览，确认后只复制事务内可见的已提交行。 */
+  async prepareTableCopy(input: Scoped<PostgresTableCopyInput>, connect: Connect): Promise<PostgresCreateTablePreview> {
+    const { owner: _owner, connectionRevision: _revision, ...raw } = input;
+    const draft = postgresTableCopyPreviewSchema.parse(raw);
+    return this.prepareRelation(input, 'tableCopy', connect, () => async connection => {
+      const original = await readPostgresCopySource(connection, draft);
+      const sql = postgresTableCopySql(draft, original.columns, original.comment);
+      return {
+        ...sql, protocol: 'extended', statementTimeout: '120s', success: 'PostgreSQL 表副本已确认创建',
+        commands: sql.statements.map(statement => statement.startsWith('WITH ') ? { tag: 'SELECT', rows: 1 } : { tag: statement.split(' ', 1)[0] }),
+        async preflight(current) {
+          const actual = await readPostgresCopySource(current, draft);
+          if (actual.stamp !== original.stamp) throw Error('来源表结构已变化，请重新预览');
+          return preflight(current, draft, draft.name, [], '表');
+        },
+        async verify(current, schemaOid, insertedRows) {
+          const result = await current.query(`
+            SELECT c.oid::text, pg_catalog.obj_description(c.oid, 'pg_class') FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.oid = $1::oid AND n.nspname::text = $2 AND c.relname::text = $3 AND c.relkind = 'r' AND c.relpersistence = 'p'
+          `, [schemaOid, draft.schema, draft.name], budget());
+          const row = result.rows[0];
+          if (result.truncated || result.rows.length !== 1 || typeof row?.c0 !== 'string' || row.c0 === original.oid || row.c1 !== original.comment)
+            throw Error('未确认新表的独立身份或注释');
+          const columns = await readPostgresCopyColumns(current, row.c0);
+          if (JSON.stringify(columns.map(column => column.signature)) !== JSON.stringify(original.columns.map(column => column.signature)))
+            throw Error('实际副本字段与来源结构不同，未提交');
+          if (draft.mode === 'data') {
+            const count = await current.query('SELECT pg_catalog.count(*)::text FROM ONLY ' + sql.table, undefined, budget());
+            if (!Number.isSafeInteger(insertedRows) || count.rows[0]?.c0 !== String(insertedRows))
+              throw Error('实际副本行数与服务器插入回执不同，未提交');
+          }
+          if ((await readPostgresCopySource(current, draft)).stamp !== original.stamp) throw Error('来源表结构在复制期间变化，未提交');
+        },
       };
     });
   }
@@ -437,7 +479,8 @@ export class PostgresCreateTableWorkspace {
       if (this.plans.size >= 128) throw Error('PostgreSQL 关系创建预览已满，请稍后重试');
       const token = randomUUID();
       this.plans.set(key, { input: { connectionId, database, owner, connectionRevision }, token, targetStamp, plan, expires: now + 300_000 });
-      return { token, statements: plan.guard && !plan.guard.parseOnly ? [plan.guard.sql, ...plan.statements] : plan.statements };
+      const first = plan.lock ?? (plan.guard && !plan.guard.parseOnly ? plan.guard.sql : undefined);
+      return { token, statements: first ? [first, ...plan.statements] : plan.statements };
     } finally { this.pending.delete(key); }
   }
 
@@ -465,6 +508,8 @@ export class PostgresCreateTableWorkspace {
     try {
       await startPostgresDdl(connection, false);
       const { plan, targetStamp } = prepared;
+      if (plan.lock && (await connection.query(plan.lock, undefined, budget(), undefined, 'extended')).postgresCommand !== 'LOCK')
+        throw Error('服务器未确认锁定来源表');
       if (plan.guard) {
         await connection.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED', undefined, budget());
         // 先取目标锁，再读取会取得共享锁的反编译定义，避免并发替换时先阻塞在读路径。
@@ -480,22 +525,26 @@ export class PostgresCreateTableWorkspace {
         throw Error(plan.guard ? '原视图已变化，请刷新结构后继续' : '原 schema 已被替换，请重新预览');
       if (plan.statementTimeout) await connection.query(
         "SELECT pg_catalog.set_config('statement_timeout', $1, true)", [plan.statementTimeout], budget());
+      let insertedRows: number | undefined;
       for (const [index, statement] of plan.statements.entries()) {
         sent = true;
         const result = await connection.query(statement, undefined, budget(), undefined, prepared.plan.protocol);
-        const command = index === 0 && plan.firstCommand || statement.slice(0, statement.indexOf(' '));
-        if (result.postgresCommand !== command) {
+        const expected = plan.commands?.[index];
+        const command = expected?.tag ?? (index === 0 && plan.firstCommand || statement.slice(0, statement.indexOf(' ')));
+        if (result.postgresCommand !== command || expected?.rows !== undefined && (result.truncated || result.rows.length !== expected.rows)) {
           throw Error('PostgreSQL 未返回预期的结构回执');
         }
+        if (command === 'INSERT') insertedRows = result.affectedRows;
       }
-      await prepared.plan.verify(connection, prepared.targetStamp);
+      await prepared.plan.verify(connection, prepared.targetStamp, insertedRows);
       committing = true;
       const result = await connection.query('COMMIT', undefined, budget());
       if (result.postgresCommand === 'ROLLBACK') return { outcome: 'rolledBack', message: '服务器已回滚结构操作' };
       if (result.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen) {
         throw Error('PostgreSQL 结构提交未确认');
       }
-      return { outcome: 'committed', table: prepared.plan.table, message: prepared.plan.success };
+      return { outcome: 'committed', table: prepared.plan.table, message: prepared.plan.success,
+        ...(insertedRows === undefined ? {} : { copiedRows: String(insertedRows) }) };
     } catch (reason) {
       const message = connection.error(reason).message;
       if (!sent) return { outcome: 'notSent', message };

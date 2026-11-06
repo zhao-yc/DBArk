@@ -607,6 +607,8 @@ export class PostgresEngine {
       case 'postgres.createTable.schemas':
       case 'postgres.createTable.preview':
       case 'postgres.createTable.apply':
+      case 'postgres.createTable.copy.preview':
+      case 'postgres.createTable.copy.apply':
       case 'postgres.createView.preview':
       case 'postgres.createView.apply':
       case 'postgres.editView.preview':
@@ -630,6 +632,12 @@ export class PostgresEngine {
           this.use(profile, input.database, action, false, false, writing);
         if (command === 'postgres.createTable.schemas') return connect(postgresCreateSchemas);
         if (command === 'postgres.createTable.preview') return this.creations.prepare(input as Parameters<PostgresCreateTableWorkspace['prepare']>[0], connect);
+        if (command === 'postgres.createTable.copy.preview') {
+          const { profile: _profile, ...draft } = input;
+          return this.creations.prepareTableCopy(draft as Parameters<PostgresCreateTableWorkspace['prepareTableCopy']>[0], connect);
+        }
+        if (command === 'postgres.createTable.copy.apply' && input.confirmed !== true)
+          throw Error('请明确确认 PostgreSQL 表复制');
         if (command === 'postgres.createView.preview') return this.creations.prepareView(input as Parameters<PostgresCreateTableWorkspace['prepareView']>[0], connect);
         if (command === 'postgres.editView.preview') return this.creations.prepareViewEdit(input as Parameters<PostgresCreateTableWorkspace['prepareViewEdit']>[0], connect);
         if (command === 'postgres.viewManage.preview') return this.creations.prepareViewManage(input as Parameters<PostgresCreateTableWorkspace['prepareViewManage']>[0], connect);
@@ -642,7 +650,7 @@ export class PostgresEngine {
           return this.creations.prepareSequenceManage(draft as Parameters<PostgresCreateTableWorkspace['prepareSequenceManage']>[0], connect);
         }
         return this.creations.apply(input as Parameters<PostgresCreateTableWorkspace['apply']>[0], connect,
-          command === 'postgres.routine.manage.apply' ? 'routineManage' : command === 'postgres.routine.create.apply' ? 'routineCreate' : command === 'postgres.sequence.manage.apply' ? 'sequenceManage' : command === 'postgres.sequence.apply' ? 'sequence' : command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
+          command === 'postgres.createTable.copy.apply' ? 'tableCopy' : command === 'postgres.routine.manage.apply' ? 'routineManage' : command === 'postgres.routine.create.apply' ? 'routineCreate' : command === 'postgres.sequence.manage.apply' ? 'sequenceManage' : command === 'postgres.sequence.apply' ? 'sequence' : command === 'postgres.materializedRefresh.apply' ? 'materializedRefresh' : command === 'postgres.viewManage.apply' ? 'viewManage' : command === 'postgres.editView.apply' ? 'viewEdit' : command === 'postgres.createView.apply' ? 'view' : 'table');
       }
       case 'postgres.sequence.read':
       case 'postgres.sequence.targets':

@@ -234,6 +234,8 @@ PostgreSQL 表页的「按当前筛选删除」会预览目标表中所有匹配
 
 在 PostgreSQL 源表或视图勾选记录后点「暂存勾选记录以跨库复制」。到另一张可写 PostgreSQL 表点「从另一张表复制记录」，核对连接、数据库和字段映射，再加入新增草稿。草稿仍需预览并确认提交。详见[PostgreSQL 跨库复制记录](development/postgres-record-transfer-20261106.md)。
 
+在 PostgreSQL 普通持久表点「复制 PostgreSQL 表」，选择同库可写 schema、填写新表名，再选择「仅结构」或「结构和数据」。先预览 SQL，再勾选确认创建并点击「确认复制」。完整复制读取确认时服务器可见的全部来源行。成功后会刷新对象树并打开副本。外键、触发器、行级安全策略和授权可在新表单独配置。详见[PostgreSQL 整表复制](development/postgres-table-copy-20261106.md)。
+
 在 PostgreSQL 可写表单中用[外键选值](development/postgres-reference-picker-20261106.md)搜索引用记录，并将单列或复合键一并带入当前表单。
 
 在 PostgreSQL 记录页可[精确计数、跳页或定位末页](development/postgres-table-pagination-20261106.md)。计数沿用当前筛选，末页在同一读取快照内定位。

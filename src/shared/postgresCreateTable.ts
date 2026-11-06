@@ -64,6 +64,7 @@ export interface PostgresCreateTableOutcome {
   outcome: 'committed' | 'notSent' | 'rolledBack' | 'unknown';
   message: string;
   table?: string;
+  copiedRows?: string;
 }
 
 /** 显式 E 字符串只含转义后的数据，不依赖服务器 standard_conforming_strings。 */

@@ -1,0 +1,18 @@
+export const postgresTableCopyZh = {
+  open: '复制 PostgreSQL 表',
+  title: '复制 PostgreSQL 表到新表',
+  schema: '目标 schema',
+  name: '新表名',
+  mode: '复制范围',
+  structure: '仅结构',
+  data: '结构和数据',
+  scope: '在同一数据库创建独立新表。复制字段、默认值、检查约束、索引和注释。外键、触发器、行级安全策略和授权需在副本单独配置。',
+  dataScope: '数据按确认时的服务器快照读取。复制会在同一事务创建并填充新表，标识列使用独立序列。',
+  preview: '读取结构并预览复制',
+  confirm: '确认在所选 schema 中创建新表',
+  apply: '确认复制',
+  changed: '原连接或来源已变化，请重新打开复制窗口。',
+  unknown: '提交结果未知，请核对目标 schema 中的新表。',
+  close: '关闭',
+  copied: (rows: string) => `已确认复制 ${rows} 行`,
+};
