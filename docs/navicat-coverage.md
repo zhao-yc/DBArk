@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 可在可写记录表单及记录弹窗编辑整行 JSON。输入与字段表单互换，沿原暂存、SQL 预览及事务提交。D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 整行 JSON 编辑](development/postgres-record-json-edit-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 表和视图的记录表单支持原值记录树和整行 JSON。跨页沿原记录导航，表单输入和草稿与数据库原值分开保留。D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 原值记录视图](development/postgres-record-projections-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 字段概况支持当前筛选范围的数值直方图。整数及 numeric 保留精确边界，NULL 与非有限值独立计数。D09 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 数值直方图](development/postgres-table-histogram-20261106.md)

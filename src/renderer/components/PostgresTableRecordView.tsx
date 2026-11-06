@@ -3,9 +3,11 @@ import type { PostgresTableColumn, PostgresTableField, PostgresTablePage } from 
 import { errorMessage } from '../lib';
 import { postgresRecordViewZh as text } from '../locales/postgresRecordView.zh-CN';
 import { postgresReadonlyRecordZh as projectionText } from '../locales/postgresReadonlyRecord.zh-CN';
+import { postgresRecordJsonZh as jsonText } from '../locales/postgresRecordJson.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { postgresReadonlyRecord } from '../postgresReadonlyRecord';
-import { PostgresRecordFields, type PostgresRecordValues } from './PostgresRecordFields';
+import { beginPostgresRecordJson, readPostgresRecordJson, type PostgresRecordJsonBuffer } from '../postgresRecordJson';
+import { PostgresRecordFields, PostgresRecordJsonEditor, type PostgresRecordValues } from './PostgresRecordFields';
 import type { PostgresReferenceSource } from './PostgresReferencePicker';
 import { ReadonlyRecordView } from './ReadonlyRecordView';
 import { Empty, ErrorBox } from './ui';
@@ -29,6 +31,7 @@ function RecordInput({ page, row, columns, draft, editable, reference, onDirty, 
   const saved = useMemo<PostgresRecordValues>(() => new Map(draft?.kind === 'update'
     ? draft.fields.map(field => [field.column, field.value]) : []), [draft]);
   const [input, setInput] = useState<PostgresRecordValues>();
+  const [json, setJson] = useState<PostgresRecordJsonBuffer>();
   const pending = useRef<PostgresRecordValues>(undefined);
   const [error, setError] = useState('');
 
@@ -51,9 +54,46 @@ function RecordInput({ page, row, columns, draft, editable, reference, onDirty, 
     setError('');
   }
 
+  /** 打开整行缓冲时占用原行，解析成功后才整体交给已有字段输入。 */
+  function openJson() {
+    if (!editable) return;
+    try {
+      const next = beginPostgresRecordJson(page.columns, page.rows[row], pending.current ?? saved);
+      onDirty(true);
+      setJson(next);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  function finishJson(accept: boolean) {
+    if (!json || accept && !editable) return;
+    try {
+      if (accept) {
+        const next = readPostgresRecordJson(json);
+        const changed = equalFields(next, saved) ? undefined : next;
+        onDirty(!!changed);
+        pending.current = changed;
+        setInput(changed);
+      } else if (!pending.current) onDirty(false);
+      setJson(undefined);
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  if (json) return <div className="pg-record-json-editor">
+    <p role="status">{jsonText.pending}</p>
+    <div className="pg-record-pending">
+      <button type="button" disabled={!editable} onClick={() => finishJson(true)}>{jsonText.back}</button>
+      <button type="button" onClick={() => finishJson(false)}>{jsonText.discard}</button>
+    </div>
+    <ErrorBox message={error}/>
+    <PostgresRecordJsonEditor buffer={json} disabled={!editable} onChange={next => { setJson(next); setError(''); }}/>
+  </div>;
+
   return <>
     {draft && <p className="muted">{draft.kind === 'delete' ? text.deleted : text.staged}</p>}
     {!editable && !draft && <p className="muted">{tableText.noWrite}</p>}
+    {editable && <button type="button" onClick={openJson}>{jsonText.open}</button>}
     {input && <div className="pg-record-pending">
       <span role="status">{editable ? text.pending : text.expired}</span>
       <button type="button" onClick={reset}>{text.discard}</button>

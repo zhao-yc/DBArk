@@ -4,6 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { postgresReferencePickerZh as text } from '../../src/renderer/locales/postgresReferencePicker.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresRecordViewZh as recordText } from '../../src/renderer/locales/postgresRecordView.zh-CN';
+import { postgresRecordJsonZh as jsonText } from '../../src/renderer/locales/postgresRecordJson.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -203,7 +204,13 @@ test('PostgreSQL 从当前记录双向查看复合外键关联', async ({}, info
     await relatedTab.getByRole('button', { name: tableText.edit, exact: true }).click();
     await expect(edit.getByLabel('memo ' + tableText.value, { exact: true })).toHaveValue('拒绝');
     await mark('关联记录约束失败后确认回滚，原行保持且草稿可继续编辑');
-    await edit.getByLabel('memo ' + tableText.value, { exact: true }).fill('关联页已改42');
+    await edit.getByRole('button', { name: jsonText.open, exact: true }).click();
+    const json = edit.getByRole('textbox', { name: jsonText.input, exact: true });
+    const body = JSON.parse(await json.inputValue());
+    const memo = body.fields.find((field: { name: string }) => field.name === 'memo');
+    expect(memo).toMatchObject({ original: '明细42', assignment: { mode: 'text', value: '拒绝' } });
+    memo.assignment = { mode: 'text', value: '关联页已改42' };
+    await json.fill(JSON.stringify(body));
     await edit.getByRole('button', { name: tableText.stage, exact: true }).click();
     await relatedTab.getByRole('button', { name: tableText.preview, exact: true }).click();
     await expect(preview.getByText('关联页已改42', { exact: true })).toBeVisible();
@@ -214,7 +221,7 @@ test('PostgreSQL 从当前记录双向查看复合外键关联', async ({}, info
     await preview.getByRole('button', { name: tableText.apply, exact: true }).click();
     await expect(relatedTab.getByRole('gridcell', { name: '关联页已改42', exact: true })).toBeVisible();
     expect(await lastRows()).toEqual([{ id: 41, memo: '明细41' }, { id: 42, memo: '关联页已改42' }, { id: 44, memo: '不属于甲' }]);
-    await mark('关联页选中记录经表单、暂存和独立预览，确认后只更新目标行并保留筛选和页码');
+    await mark('关联页用整行 JSON 修正回滚草稿，确认后只更新目标行并保留筛选和页码');
 
     await page.locator('.object-row').getByRole('button', { name: '"回归"."订单明细"', exact: true }).click();
     await expect(tabButton('"回归"."订单明细"')).toBeVisible();

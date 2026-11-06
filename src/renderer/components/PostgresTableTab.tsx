@@ -326,7 +326,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   function stage(change: PostgresTableChange, owner?: InlineEdit) {
-    if (stageChanges([change], { owner })) setForm(undefined);
+    if (!stageChanges([change], { owner })) return;
+    setForm(undefined);
+    setMessage('');
   }
 
   /** 文件恢复由引擎完整核对后交付新页和整批草稿，保存仍保留现有编辑和历史。 */
@@ -1268,6 +1270,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     {form && page && <PostgresRecordForm page={page} row={form.row}
       duplicate={form.duplicate}
       editingDraft={!!form.insertion}
+      current={() => issued.current === page.exportToken && !requiresRefresh && !lease.current && layoutScope.current.current()}
       initial={form.insertion?.change ?? (form.duplicate ? { kind: 'insert', fields: form.duplicate.fields } : stagedChange?.kind === 'update' ? stagedChange : undefined)}
       reference={referenceSource(active && stagedChange?.kind !== 'delete' &&
         (form.row === null ? page.capabilities.insert : page.capabilities.update),

@@ -45,6 +45,7 @@
 .pg-record-body { display: flex; flex: 1; min-height: 0; }
 .pg-record-body > nav { width: min(200px, 30%); flex-shrink: 0; overflow: auto; padding: 8px; border-right: 1px solid var(--line-soft); }
 .pg-record-body > nav button { display: block; width: 100%; text-align: left; overflow-wrap: anywhere; margin-bottom: 4px; }
+.pg-record-body:has(.pg-record-json-editor) > nav { display: none; }
 .pg-record-content { flex: 1; min-width: 0; overflow: auto; padding: 0 12px 12px; }
 .pg-record-view .pg-record-inputs select { width: min(170px, 45%); }
 .pg-record-original { overflow-wrap: anywhere; }

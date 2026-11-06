@@ -222,6 +222,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 在 PostgreSQL「记录表单」内，可切到「原值记录树」或「原值整行 JSON」。记录树可按字段名搜索并解析 JSON 文本，整行 JSON 包含当前记录的全部列及原类型。返回字段表单可继续处理未暂存输入。详见[PostgreSQL 原值记录视图](development/postgres-record-projections-20261106.md)。
 
+可写记录的字段表单和记录弹窗支持「编辑整行 JSON」。改动字段的 `assignment` 后，可以带回字段表单核对。暂存、SQL 预览及确认提交沿用原流程。详见[PostgreSQL 整行 JSON 编辑](development/postgres-record-json-edit-20261106.md)。
+
 在 PostgreSQL 可写表单中用[外键选值](development/postgres-reference-picker-20261106.md)搜索引用记录，并将单列或复合键一并带入当前表单。
 
 在 PostgreSQL 记录页可[精确计数、跳页或定位末页](development/postgres-table-pagination-20261106.md)。计数沿用当前筛选，末页在同一读取快照内定位。

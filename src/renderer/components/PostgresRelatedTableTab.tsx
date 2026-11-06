@@ -188,7 +188,7 @@ export function PostgresRelatedTableTab({ tab, active }: { tab: WorkspaceTab; ac
         return column + '=' + value;
       }).join('，')}</p>
     </div>}
-    {edit?.form && <PostgresRecordForm page={edit.page} row={0} initial={edit.draft} onSave={change => {
+    {edit?.form && <PostgresRecordForm page={edit.page} row={0} initial={edit.draft} current={() => active && current() && !pending.current} onSave={change => {
       if (change.kind !== 'update' || !current()) throw Error(text.relatedExpired);
       postgresTablePreviewSchema.parse({ ...target, pageToken: edit.page.pageToken, changes: [change] });
       setEdit({ ...edit, draft: change, form: undefined });

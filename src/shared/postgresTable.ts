@@ -88,13 +88,13 @@ export function postgresTablePageOffset(value: string, limit: number): number {
   return offset;
 }
 
-const fieldValue = z.discriminatedUnion('mode', [
+export const postgresTableFieldValueSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('text'), value: z.string().max(postgresTableLimits.value).refine(value => !value.includes('\0')) }).strict(),
   z.object({ mode: z.literal('binary'), value: z.string().max(postgresTableLimits.value).regex(/^(?:[0-9a-fA-F]{2})*$/) }).strict(),
   z.object({ mode: z.literal('null') }).strict(),
   z.object({ mode: z.literal('default') }).strict(),
 ]);
-const field = z.object({ column, value: fieldValue }).strict();
+const field = z.object({ column, value: postgresTableFieldValueSchema }).strict();
 const row = z.number().int().min(0).max(postgresTableLimits.page - 1);
 export const postgresTableChangeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('insert'), pageToken: token.optional(), fields: z.array(field).max(postgresTableLimits.fields) }).strict(),

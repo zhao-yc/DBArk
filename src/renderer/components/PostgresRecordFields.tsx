@@ -6,8 +6,12 @@ import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { postgresRecordViewZh as viewText } from '../locales/postgresRecordView.zh-CN';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { postgresRecordDuplicateZh as duplicateText } from '../locales/postgresRecordDuplicate.zh-CN';
+import { postgresRecordJsonZh as jsonText } from '../locales/postgresRecordJson.zh-CN';
+import { beginPostgresRecordJson, postgresRecordJsonBudget, readPostgresRecordJson, type PostgresRecordJsonBuffer } from '../postgresRecordJson';
+import { BoundedRecordTextarea } from './BoundedRecordTextarea';
 import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
 import { ErrorBox, Modal } from './ui';
+import '../recordProjections.css';
 
 export type PostgresEditableRecord = Extract<PostgresTableChange, { kind: 'insert' | 'update' }>;
 export type PostgresRecordValues = Map<string, PostgresTableField['value']>;
@@ -77,22 +81,49 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
   })}</>;
 }
 
-export function PostgresRecordForm({ page, row, initial, reference, duplicate, editingDraft, onSave, onClose }: {
+export function PostgresRecordJsonEditor({ buffer, disabled, onChange }: {
+  buffer: PostgresRecordJsonBuffer; disabled?: boolean; onChange(buffer: PostgresRecordJsonBuffer): void;
+}) {
+  return <><p>{jsonText.hint}</p><BoundedRecordTextarea aria-label={jsonText.input} className="record-whole-json" spellCheck={false}
+    readOnly={disabled} inputIdentity={buffer.input} budget={postgresRecordJsonBudget} value={buffer.source}
+    onValueChange={source => onChange({ ...buffer, source })}/></>;
+}
+
+export function PostgresRecordForm({ page, row, initial, reference, duplicate, editingDraft, current, onSave, onClose }: {
   page: PostgresTablePage; row: number | null; initial?: PostgresEditableRecord;
   reference?: PostgresReferenceSource;
   duplicate?: { rowNumber: number; omitted: readonly string[] };
   editingDraft?: boolean;
+  current(): boolean;
   onSave(change: PostgresEditableRecord): void; onClose(): void;
 }) {
+  const [origin] = useState(() => ({ page, row }));
   const [fields, setFields] = useState<PostgresRecordValues>(() => new Map(initial?.fields.map(field => [field.column, field.value])));
+  const [json, setJson] = useState<PostgresRecordJsonBuffer>();
   const [error, setError] = useState('');
   const original = row === null ? undefined : page.rows[row];
 
+  function valid() {
+    if (!current() || origin.page !== page || origin.row !== row || row !== null && !original) throw Error(viewText.expired);
+  }
+
+  function changeMode() {
+    try {
+      valid();
+      if (json) { setFields(readPostgresRecordJson(json)); setJson(undefined); }
+      else setJson(beginPostgresRecordJson(page.columns, original, fields));
+      setError('');
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
   function submit() {
-    const list = Array.from(fields, ([column, value]) => ({ column, value }));
-    if (row !== null && !list.length) { setError(text.noChange); return; }
-    try { onSave(row === null ? { kind: 'insert', fields: list } : { kind: 'update', row, fields: list }); }
-    catch (reason) { setError(errorMessage(reason)); }
+    try {
+      valid();
+      const values = json ? readPostgresRecordJson(json) : fields;
+      const list = Array.from(values, ([column, value]) => ({ column, value }));
+      if (row !== null && !list.length) throw Error(text.noChange);
+      onSave(row === null ? { kind: 'insert', fields: list } : { kind: 'update', row, fields: list });
+    } catch (reason) { setError(errorMessage(reason)); }
   }
 
   return <Modal title={editingDraft ? text.editInsertDraft : duplicate ? duplicateText.title : row === null ? text.add : text.edit} onClose={onClose} wide>
@@ -101,8 +132,13 @@ export function PostgresRecordForm({ page, row, initial, reference, duplicate, e
         <p>{duplicateText.source(duplicate.rowNumber)} {duplicateText.notice}</p>
         {!!duplicate.omitted.length && <p>{duplicateText.omitted(duplicate.omitted.join('、'))}</p>}
       </>}
-      <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference}
-        explicitDefault={editingDraft} onChange={setFields}/>
+      <div className="pg-table-controls">
+        <button type="button" onClick={changeMode}>{json ? jsonText.back : jsonText.open}</button>
+        {json && <button type="button" onClick={() => { setJson(undefined); setError(''); }}>{jsonText.discard}</button>}
+      </div>
+      {json ? <PostgresRecordJsonEditor buffer={json} onChange={value => { setJson(value); setError(''); }}/>
+        : <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference}
+          explicitDefault={editingDraft} onChange={setFields}/>}
       <ErrorBox message={error}/>
     </div>
     <footer className="modal-footer"><button onClick={onClose}>{text.cancel}</button><button className="primary" onClick={submit}>{editingDraft ? text.saveInsertDraft : text.stage}</button></footer>

@@ -18,6 +18,7 @@ import { tableFilteredSelectZh as filteredSelectText } from '../../src/renderer/
 import { postgresColumnStatisticsZh as statisticsText } from '../../src/renderer/locales/postgresColumnStatistics.zh-CN';
 import { tableHistogramZh as histogramText } from '../../src/renderer/locales/tableHistogram.zh-CN';
 import { postgresReadonlyRecordZh as originalText } from '../../src/renderer/locales/postgresReadonlyRecord.zh-CN';
+import { postgresRecordJsonZh as recordJsonText } from '../../src/renderer/locales/postgresRecordJson.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 type Runtime = typeof import('./desktop-fixture');
@@ -64,7 +65,11 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
         VALUES ('模板原行',90071992547409931234.012345678901234567,decode('00ff','hex'),NULL,'原行专用');
       CREATE VIEW "回归"."原值结构" AS SELECT 9007199254740993::bigint AS id,
         '{"重复":9007199254740993,"重复":0.000000000000000001}'::json AS doc,
-        decode('00ff','hex') AS raw, NULL::text AS missing, ''::text AS empty`);
+        decode('00ff','hex') AS raw, NULL::text AS missing, ''::text AS empty;
+      CREATE TABLE "回归"."整行编辑" (id bigint PRIMARY KEY, amount numeric(40,18), doc json, raw bytea,
+        nullable_text text, state text DEFAULT '恢复默认', derived text GENERATED ALWAYS AS (state || '-生成') STORED);
+      INSERT INTO "回归"."整行编辑" (id, amount, doc, raw, nullable_text, state)
+        VALUES (9007199254740993, 9007199254740993.000000000000000001, '{}', decode('00ff','hex'), '保留到提交', '原状态')`);
     const readRows = async () => (await reader!.query(`SELECT id::text, legacy::text, code, note, encode(raw,'hex') AS raw, tag
       FROM "回归"."复制记录" ORDER BY id`)).rows;
     const originals = await readRows();
@@ -726,6 +731,75 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     ]);
     await page.screenshot({ path: info.outputPath('PostgreSQL原值整行JSON.png'), animations: 'disabled' });
     await mark('只读视图的原值树保留重复 JSON 成员和精确数字，搜索后完整 JSON 仍包含全部列');
+
+    const readJsonRows = async () => (await reader!.query(`SELECT id::text, amount::text, doc::text,
+      encode(raw, 'hex') AS raw, nullable_text, state, derived FROM "回归"."整行编辑" ORDER BY id`)).rows;
+    const beforeJson = await readJsonRows();
+    await page.locator('.object-row').getByRole('button', { name: '"回归"."整行编辑"', exact: true }).click();
+    await button(viewText.view).click();
+    await mode(recordView, 'amount').selectOption('text');
+    await value(recordView, 'amount').fill('9007199254740994.000000000000000003');
+    await viewButton(recordJsonText.open).click();
+    const jsonInput = recordView.getByRole('textbox', { name: recordJsonText.input, exact: true });
+    await expect(jsonInput).toHaveValue(/9007199254740994\.000000000000000003/);
+    await jsonInput.fill('{}');
+    await viewButton(recordJsonText.discard).click();
+    await expect(value(recordView, 'amount')).toHaveValue('9007199254740994.000000000000000003');
+    await viewButton(recordJsonText.open).click();
+    const rawJson = await jsonInput.inputValue();
+    await jsonInput.fill(rawJson.replace('"version": 1', '"version": 1, "version": 1'));
+    await viewButton(recordJsonText.back).click();
+    await expect(recordView.getByRole('alert')).toHaveText(recordJsonText.duplicate);
+    expect(await readJsonRows()).toEqual(beforeJson);
+    const changes = JSON.parse(rawJson);
+    const exact = '9007199254740995.000000000000000002';
+    const lexicalJson = '{"重复":9007199254740993,"重复":0.000000000000000001}';
+    changes.fields[1].assignment = { mode: 'text', value: exact };
+    changes.fields[2].assignment = { mode: 'text', value: lexicalJson };
+    changes.fields[3].assignment = { mode: 'binary', value: 'ff00' };
+    changes.fields[4].assignment = { mode: 'null' };
+    changes.fields[5].assignment = { mode: 'default' };
+    await jsonInput.fill(JSON.stringify(changes, null, 2));
+    await jsonInput.evaluate(element => {
+      element.scrollTop = 0;
+      element.closest('.pg-record-content')?.scrollTo(0, 0);
+    });
+    await page.screenshot({ path: info.outputPath('PostgreSQL整行JSON编辑.png') });
+    await viewButton(recordJsonText.back).click();
+    await expect(value(recordView, 'amount')).toHaveValue(exact);
+    await expect(value(recordView, 'raw')).toHaveValue('ff00');
+    await expect(mode(recordView, 'state')).toHaveValue('default');
+    await viewButton(viewText.stage).click();
+    await expect(draft).toContainText('amount=' + exact);
+    expect(await readJsonRows()).toEqual(beforeJson);
+    await button(tableText.preview).click();
+    await expect(review).toContainText('"state" = DEFAULT');
+    await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(tab.getByRole('status')).toContainText('已确认整批提交');
+    const afterJson = [{ id: '9007199254740993', amount: exact, doc: lexicalJson, raw: 'ff00', nullable_text: null,
+      state: '恢复默认', derived: '恢复默认-生成' }];
+    expect(await readJsonRows()).toEqual(afterJson);
+    await mark('整行 JSON 拒绝重复编辑键，字段表单和草稿保留精度；确认事务后才写入原值、字节及 DEFAULT');
+
+    await button(tableText.add).click();
+    const addJson = page.getByRole('dialog', { name: tableText.add, exact: true });
+    await addJson.getByRole('button', { name: recordJsonText.open, exact: true }).click();
+    const addJsonInput = addJson.getByRole('textbox', { name: recordJsonText.input, exact: true });
+    const insert = JSON.parse(await addJsonInput.inputValue());
+    insert.fields[0].assignment = { mode: 'text', value: '9007199254740994' };
+    await addJsonInput.fill(JSON.stringify(insert));
+    await addJson.getByRole('button', { name: tableText.stage, exact: true }).click();
+    await expect(draft).toContainText('id=9007199254740994');
+    await expect(tab.getByText('已确认整批提交', { exact: false })).toHaveCount(0);
+    expect(await readJsonRows()).toEqual(afterJson);
+    await button(tableText.preview).click();
+    await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(review).toHaveCount(0);
+    await expect(draft).toHaveCount(0);
+    await expect(tab.getByRole('status')).toContainText('已确认整批提交');
+    expect(await readJsonRows()).toEqual([...afterJson, { id: '9007199254740994', amount: null, doc: null, raw: null,
+      nullable_text: null, state: '恢复默认', derived: '恢复默认-生成' }]);
+    await mark('新增窗口可直接暂存整行 JSON，省略字段使用数据库默认值且独立读回一致');
 
     check();
     expect(runtime.pageErrors).toEqual([]);
