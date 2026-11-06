@@ -3,6 +3,7 @@ import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
 import { format } from 'sql-formatter';
 import type { QueryOutcome, QueryResult, ResultColumn } from '../../shared/contracts';
+import { postgresTableLimits } from '../../shared/postgresTable';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import { queryResultPresetValueSchema, type QueryResultPresetValue } from '../../shared/queryResultPresets';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
@@ -13,6 +14,8 @@ import { formatText, zh } from '../locales/zh-CN';
 import { pinLimits, snapshotQueryResult, type PinnedQueryResult } from '../queryPins';
 import { QueryResultSnapshotIntent } from '../queryResultSnapshotIntent';
 import { queryResultSnapshotUiZh as snapshotText } from '../locales/queryResultSnapshot.zh-CN';
+import { postgresRecordTransferZh as transferText } from '../locales/postgresRecordTransfer.zh-CN';
+import { capturePostgresQueryTransfer, usePostgresRecordTransfer } from '../postgresRecordTransfer';
 import { queryResultComparisonZh as comparisonText } from '../locales/queryResultComparison.zh-CN';
 import { ResultExportSelection, type ResultGridSelection, type ResultSelectionBinding } from '../resultExport';
 import { frozenQueryResultKeys, queryResultColumnKeys, queryResultColumnWidth, queryResultVisibleColumns, setQueryResultFrozenThrough, type QueryResultColumnLayout } from '../queryResultColumns';
@@ -1165,6 +1168,19 @@ export function PostgresQueryTab({
       setExportView({ result: snapshot, selected: selectedOnly });
     } catch (reason) { setError(errorMessage(reason)); }
   }
+
+  /** 仅消费当前结果代次已接纳的勾选，不读取连接或再次执行原 SQL。 */
+  function captureResultTransfer() {
+    if (pin || !binding || !resultCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    try {
+      const snapshot = capturePostgresQueryTransfer({
+        connectionId: tab.connectionId, label: profile?.name ?? tab.connectionId, database: scope.database,
+        title: tab.title, result: selected + 1,
+      }, resultSelection.snapshot(binding), binding.visibleColumns);
+      usePostgresRecordTransfer.setState({ snapshot });
+      workspace.notify(transferText.queryCaptured(snapshot.rows.length));
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
   return (
     <div className="workspace-tab query-tab postgres-query">
       <div className="context-bar">
@@ -1306,6 +1322,9 @@ export function PostgresQueryTab({
               <button disabled={locked || !binding || !historyBinding} onClick={openResultPresets}>{presetsText.open}</button>
               <button disabled={locked || !binding} onClick={() => openResultExport(false)}>{zh.resultExport.title}</button>
               <button disabled={locked || !selectedCount} onClick={() => openResultExport(true)}>{zh.resultExport.selectedTitle}</button>
+              {!pin && <button disabled={locked || !binding || !selectedCount || selectedCount > postgresTableLimits.changes ||
+                binding.visibleColumns.length > postgresTableLimits.fields} title={transferText.limits} onClick={captureResultTransfer}>
+                {transferText.queryCapture}</button>}
             </>}
           </div>
         )}

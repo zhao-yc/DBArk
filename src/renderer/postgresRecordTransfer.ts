@@ -1,22 +1,25 @@
 import { create } from 'zustand';
-import type { CellValue } from '../shared/contracts';
+import type { CellValue, DataRow, QueryResult, ResultColumn } from '../shared/contracts';
 import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTablePage, type PostgresTableTarget } from '../shared/postgresTable';
 import { ownCell } from './lib';
 import { postgresRecordTransferZh as text } from './locales/postgresRecordTransfer.zh-CN';
 import { postgresClipboardFieldValue } from './postgresGridPaste';
 
 export type PostgresTransferTable = Pick<PostgresTableTarget, 'connectionId' | 'database' | 'table'> & { label: string };
+type PostgresTransferQuery = Omit<PostgresTransferTable, 'table'> & { title: string; result: number; truncated: boolean };
+export type PostgresTransferSource = PostgresTransferTable | PostgresTransferQuery;
+export type PostgresTransferColumn = ResultColumn & { binary?: boolean; position?: number };
 export interface PostgresRecordTransfer {
-  readonly source: PostgresTransferTable;
-  readonly columns: readonly PostgresTableColumn[];
+  readonly source: PostgresTransferSource;
+  readonly columns: readonly PostgresTransferColumn[];
   readonly rows: readonly ReadonlyMap<string, CellValue>[];
 }
 
 // 每个窗口只保留一批有界快照。原值不进入持久化状态或系统剪贴板。
 export const usePostgresRecordTransfer = create<{ snapshot?: PostgresRecordTransfer }>(() => ({}));
 
-export function samePostgresTransferTable(left: PostgresTransferTable, right: PostgresTransferTable) {
-  return left.connectionId === right.connectionId && left.database === right.database && left.table === right.table;
+export function samePostgresTransferTable(left: PostgresTransferSource, right: PostgresTransferTable) {
+  return 'table' in left && left.connectionId === right.connectionId && left.database === right.database && left.table === right.table;
 }
 
 /** 只复制已勾选行的可见字段原值，脱离源表页后仍能核对来源。 */
@@ -24,11 +27,31 @@ export function capturePostgresRecordTransfer(
   source: PostgresTransferTable, page: PostgresTablePage, columns: readonly PostgresTableColumn[], selected: ReadonlySet<number>,
 ): PostgresRecordTransfer {
   if (!page.exportToken || page.truncated || columns.some(column => !page.columns.includes(column))) throw Error(text.stale);
-  if (!selected.size || selected.size > postgresTableLimits.changes || !columns.length || columns.length > postgresTableLimits.fields)
+  return captureRows(source, page.rows, columns, [...selected].sort((left, right) => left - right));
+}
+
+/** 选行控制器已经冻结显示顺序和可见字段。类型仍由同一绑定的 PostgreSQL 元数据提供。 */
+export function capturePostgresQueryTransfer(
+  source: Omit<PostgresTransferQuery, 'truncated'>, selected: QueryResult, columns: readonly ResultColumn[],
+): PostgresRecordTransfer {
+  if (selected.columns.length !== columns.length ||
+      columns.some((column, index) => selected.columns[index].key !== column.key || selected.columns[index].name !== column.name))
+    throw Error(text.stale);
+  const fields = columns.map((column, index) => ({
+    ...column, type: column.type.toLowerCase(), binary: column.type === 'BYTEA', position: index + 1,
+  }));
+  const { connectionId, database, label, title, result } = source;
+  return captureRows({ connectionId, database, label, title, result, truncated: selected.truncated },
+    selected.rows, fields, selected.rows.map((_, index) => index));
+}
+
+/** 两种来源共用预算及原值复制。暂存不包含 SQL 正文。 */
+function captureRows(source: PostgresTransferSource, original: readonly DataRow[], columns: readonly PostgresTransferColumn[], indices: readonly number[]): PostgresRecordTransfer {
+  if (!indices.length || indices.length > postgresTableLimits.changes || !columns.length || columns.length > postgresTableLimits.fields)
     throw Error(text.limits);
   let size = 0;
-  const rows = [...selected].sort((left, right) => left - right).map(index => {
-    const row = page.rows[index];
+  const rows = indices.map(index => {
+    const row = original[index];
     if (!Number.isSafeInteger(index) || !row) throw Error(text.stale);
     return new Map(columns.map(column => {
       const value = ownCell(row, column.key);
@@ -41,13 +64,14 @@ export function capturePostgresRecordTransfer(
   return { source, columns: columns.map(column => ({ ...column })), rows };
 }
 
-export function postgresTransferColumnsCompatible(source: PostgresTableColumn, target: PostgresTableColumn) {
+export function postgresTransferColumnsCompatible(source: PostgresTransferColumn, target: PostgresTableColumn) {
   return !target.generated && !!source.binary === !!target.binary;
 }
 
 /** 自动匹配要求名称和类型相同。带序列默认的目标列由用户明确决定是否复制。 */
 export function defaultPostgresTransferMapping(source: PostgresRecordTransfer, targets: readonly PostgresTableColumn[]) {
-  const fields = new Map(source.columns.map(column => [column.name, column]));
+  const fields = new Map<string, PostgresTransferColumn | undefined>();
+  for (const column of source.columns) fields.set(column.name, fields.has(column.name) ? undefined : column);
   return new Map(targets.flatMap(target => {
     const column = fields.get(target.name);
     return column && column.type === target.type && !target.sequenceDefault && postgresTransferColumnsCompatible(column, target)

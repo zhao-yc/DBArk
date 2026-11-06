@@ -1110,7 +1110,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <button disabled={!canReceiveTransfer} onClick={() => {
         if (canReceiveTransfer && transfer && page?.pageToken === issued.current && layoutScope.current.current() && !lease.current && !recordInput.current)
           setTransferIntent({ snapshot: transfer, scope: cellScope });
-      }}>{transferText.open}</button>
+      }}>{transfer && 'title' in transfer.source ? transferText.openQuery : transferText.open}</button>
       {transfer && <button disabled={blocked || !active} onClick={() => {
         if (layoutScope.current.current() && usePostgresRecordTransfer.getState().snapshot === transfer)
           usePostgresRecordTransfer.setState({ snapshot: undefined });

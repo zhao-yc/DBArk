@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { expect, test as base } from '@playwright/test';
 import { Client } from 'pg';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresRecordTransferZh as transferText } from '../../src/renderer/locales/postgresRecordTransfer.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
@@ -37,7 +38,7 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
   try {
     check();
     await source.connect(); await target.connect();
-    await source.query(`CREATE SCHEMA "迁移回归";
+    await source.query(`CREATE SCHEMA "迁移回归"; CREATE SEQUENCE "迁移回归"."执行标记";
       CREATE VIEW "迁移回归"."源视图" AS SELECT * FROM (VALUES
         ('第一行'::text, 9007199254740993.000000000000000001::numeric(40,18), decode('00ff','hex'), NULL::text),
         ('第二行', 0.000000000000000001::numeric(40,18), decode('','hex'), ''),
@@ -115,6 +116,52 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
     expect((await source.query('SELECT count(*)::text AS count FROM "迁移回归"."源视图"')).rows).toEqual([{ count: '3' }]);
     expect(runtime.pageErrors).toEqual([]);
     await mark('显式提交后独立读回两条记录及精确字段，源视图三条记录仍在');
+
+    await page.locator('.tab-select').getByText('"迁移回归"."源视图"', { exact: true }).click();
+    await button(tableText.query).click();
+    const query = page.locator('.postgres-query:visible');
+    await query.locator('.monaco-editor').getByRole('textbox').focus();
+    await page.keyboard.press((process.platform === 'darwin' ? 'Meta' : 'Control') + '+A');
+    await page.keyboard.insertText(`SELECT source_note || '-查询' AS memo, '错误列'::text AS memo, amount, raw, missing,
+      nextval('"迁移回归"."执行标记"') AS execution_id FROM "迁移回归"."源视图" ORDER BY amount DESC`);
+    const run = query.getByRole('button', { name: postgresZh.execute, exact: true });
+    await run.click();
+    const captureQuery = query.getByRole('button', { name: transferText.queryCapture, exact: true });
+    await expect(captureQuery).toBeDisabled();
+    for (const name of ['第二行-查询', '第一行-查询']) {
+      await query.getByRole('row').filter({ has: page.getByRole('gridcell', { name, exact: true }) }).getByRole('checkbox').check();
+    }
+    const readSequence = async () => (await source.query('SELECT last_value::text AS value FROM "迁移回归"."执行标记"')).rows;
+    expect(await readSequence()).toEqual([{ value: '3' }]);
+    await captureQuery.click();
+    await page.locator('.tab-select').getByText('"迁移回归"."目标表"', { exact: true }).click();
+    await button(transferText.openQuery).click();
+    await expect(dialog).toContainText('结果集 1');
+    await expect(dialog.getByRole('button', { name: transferText.remove('memo'), exact: true })).toHaveCount(0);
+    const addMapping = async (targetLabel: string, sourceLabel: string) => {
+      await dialog.getByLabel(transferText.targetColumn, { exact: true }).selectOption({ label: targetLabel });
+      await dialog.getByLabel(transferText.sourceColumn, { exact: true }).selectOption({ label: sourceLabel });
+      await dialog.getByRole('button', { name: transferText.add, exact: true }).click();
+    };
+    await expect(dialog.getByLabel(transferText.sourceColumn, { exact: true })).toContainText('memo (text) · 第 2 列');
+    await addMapping('memo (text)', 'memo (text) · 第 1 列');
+    await addMapping('amount (numeric(40,18))', 'amount (numeric) · 第 3 列');
+    await page.screenshot({ path: info.outputPath('PostgreSQL查询结果跨库映射.png') });
+    await stage.click();
+    await expect(dialog).toHaveCount(0);
+    await button(tableText.preview).click();
+    await expect(review).toContainText('第一行-查询');
+    await expect(review).not.toContainText('错误列');
+    expect(await readTarget()).toHaveLength(2);
+    await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(tab.getByRole('status')).toContainText('已确认整批提交');
+    expect((await readTarget()).slice(2)).toEqual([
+      { id: '9007199254740995', memo: '第一行-查询', amount: '9007199254740993.000000000000000001', raw: '00ff', missing: null, derived: '第一行-查询-生成' },
+      { id: '9007199254740996', memo: '第二行-查询', amount: '0.000000000000000001', raw: '', missing: '', derived: '第二行-查询-生成' },
+    ]);
+    expect(await readSequence()).toEqual([{ value: '3' }]);
+    expect(runtime.pageErrors).toEqual([]);
+    await mark('暂存查询勾选行，重复别名按列位置手动映射，确认后准确新增两行且原 SQL 未重跑');
     await runtime.confirmOwnedDesktopExit(info);
     await mark('窗口正常退出');
   } catch (error) {

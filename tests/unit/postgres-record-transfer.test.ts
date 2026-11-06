@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTableColumn, PostgresTablePage } from '../../src/shared/postgresTable';
-import { capturePostgresRecordTransfer, defaultPostgresTransferMapping, postgresTransferChanges, samePostgresTransferTable } from '../../src/renderer/postgresRecordTransfer';
+import { capturePostgresQueryTransfer, capturePostgresRecordTransfer, defaultPostgresTransferMapping, postgresTransferChanges, samePostgresTransferTable } from '../../src/renderer/postgresRecordTransfer';
 
 const relation = { connectionId: '源连接', database: '源库', table: '"样本"."记录"', label: '来源' };
 const note: PostgresTableColumn = { key: 'c0', name: '原备注', type: 'text', nullable: true, generated: false, defaultValue: false, primary: false, binary: false };
@@ -20,6 +20,28 @@ const target: PostgresTablePage = {
 const capture = () => capturePostgresRecordTransfer(relation, source, source.columns, new Set([1, 0]));
 
 describe('PostgreSQL 跨库记录草稿', () => {
+  it('查询结果保留显示顺序、二进制类型及截断状态，重复别名不自动匹配', () => {
+    const columns = [
+      { key: 'c0', name: '备注', type: 'TEXT' },
+      { key: 'c3', name: '备注', type: 'TEXT' },
+      { key: 'c2', name: '字节', type: 'BYTEA' },
+    ];
+    const query = { ...relation, title: '只读查询', result: 2 };
+    const selected = {
+      columns: columns.map(column => ({ ...column, type: '' })),
+      rows: [{ c0: '乙', c3: '其他', c2: { type: 'binary' as const, base64: '' } },
+        { c0: '甲', c3: '其他', c2: { type: 'binary' as const, base64: 'AP8=' } }],
+      truncated: true, elapsedMs: 0, statement: '原始 SQL',
+    };
+    const snapshot = capturePostgresQueryTransfer(query, selected, columns);
+    expect(snapshot.source).toMatchObject({ title: '只读查询', result: 2, truncated: true });
+    expect(samePostgresTransferTable(snapshot.source, relation)).toBe(false);
+    expect(snapshot.columns.map(column => [column.position, column.type])).toEqual([[1, 'text'], [2, 'text'], [3, 'bytea']]);
+    expect([...snapshot.rows[0]]).toEqual(Object.entries(selected.rows[0]));
+    expect([...defaultPostgresTransferMapping(snapshot, target.columns)]).toEqual([['c1', 'c2']]);
+    expect(() => capturePostgresQueryTransfer(query, selected, [...columns].reverse())).toThrow('变化');
+  });
+
   it('按原页顺序保留精确小数、字节、NULL 与空字符串，序列由目标库维护', () => {
     const snapshot = capture();
     const mapping = defaultPostgresTransferMapping(snapshot, target.columns);

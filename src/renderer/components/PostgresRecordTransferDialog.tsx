@@ -3,7 +3,7 @@ import { postgresTableLimits, type PostgresTableColumn } from '../../shared/post
 import { errorMessage } from '../lib';
 import { postgresRecordTransferZh as text } from '../locales/postgresRecordTransfer.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
-import { defaultPostgresTransferMapping, postgresTransferColumnsCompatible, type PostgresRecordTransfer, type PostgresTransferTable } from '../postgresRecordTransfer';
+import { defaultPostgresTransferMapping, postgresTransferColumnsCompatible, type PostgresRecordTransfer, type PostgresTransferColumn, type PostgresTransferSource, type PostgresTransferTable } from '../postgresRecordTransfer';
 import { ErrorBox, Field, Modal } from './ui';
 import '../tableStatistics.css';
 
@@ -20,12 +20,13 @@ export function PostgresRecordTransferDialog({ snapshot, target, columns, onStag
   const selectedTarget = available.find(column => column.key === targetKey) ?? available[0];
   const sources = selectedTarget ? snapshot.columns.filter(column => postgresTransferColumnsCompatible(column, selectedTarget)) : [];
   const selectedSource = sources.find(column => column.key === sourceKey) ?? sources[0];
-  const display = (table: PostgresTransferTable) => `${table.label} / ${table.database} / ${table.table}`;
-  const field = (column: PostgresTableColumn) => `${column.name} (${column.type})`;
+  const display = (source: PostgresTransferSource) => `${source.label} / ${source.database} / ${'table' in source ? source.table : text.queryResult(source.title, source.result)}`;
+  const field = (column: PostgresTransferColumn) => `${column.name} (${column.type})${column.position ? ' · ' + text.queryColumn(column.position) : ''}`;
   return <Modal title={text.title} onClose={onClose} wide>
     <div className="modal-content pg-record-form">
       <p>{text.notice}</p>
       <dl><dt>{text.source}</dt><dd>{display(snapshot.source)}</dd><dt>{text.target}</dt><dd>{display(target)}</dd></dl>
+      {'truncated' in snapshot.source && snapshot.source.truncated && <p className="warning-text">{text.truncated}</p>}
       <p>{text.rows(snapshot.rows.length)} · {text.mappingHint}</p>
       {!!mapping.size && <div className="table-statistics-results"><table>
         <thead><tr><th>{text.sourceColumn}</th><th>{text.targetColumn}</th><th/></tr></thead>
