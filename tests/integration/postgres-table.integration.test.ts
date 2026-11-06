@@ -98,6 +98,20 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect((await read({ sort: { column: 'id', direction: 'desc' } })).rows.map(row => row.c0)).toEqual(['3', '2']);
       expect((await read({ filter: { column: 'note', text: "原三';--" } })).rows).toEqual([]);
       expect((await read({ filter: { column: 'note', text: '原三' } })).rows.map(row => row.c0)).toEqual(['3']);
+      const navigationOptions = {
+        limit: 1, filter: { mode: 'all', rules: [{ column: 'amount', operator: '>', value: '2' }] },
+        sort: [{ column: 'id', direction: 'DESC' }],
+      };
+      const countPage = await read({ ...navigationOptions, navigation: 'count' });
+      expect(countPage).toMatchObject({ counted: { matchingRows: '2', offset: 0 }, hasNext: true });
+      expect(countPage.rows.map(row => row.c0)).toEqual(['3']);
+      const lastPage = await read({ ...navigationOptions, navigation: 'last' });
+      expect(lastPage).toMatchObject({ counted: { matchingRows: '2', offset: 1 }, hasNext: false });
+      expect(lastPage.rows.map(row => row.c0)).toEqual(['1']);
+      const correctedPage = await read({ ...navigationOptions, offset: 99, navigation: 'count' });
+      expect(correctedPage.counted).toEqual({ matchingRows: '2', offset: 1 });
+      const emptyLastPage = await read({ ...navigationOptions, navigation: 'last', filter: { column: 'note', text: '空范围' } });
+      expect(emptyLastPage).toMatchObject({ counted: { matchingRows: '0', offset: 0 }, rows: [], hasNext: false });
       const advancedFilter = { mode: 'all', rules: [
         { column: 'amount', operator: '>', value: '2.000000000000000001' },
         { column: 'id', operator: 'IN', values: ['1', '2'] },
@@ -132,7 +146,8 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       await expect(read({ ...cross, offset: 1, limit: 1, retainPageTokens: [pin(a)], sort: { column: 'id', direction: 'desc' } }))
         .rejects.toThrow('筛选或排序');
       const b = await crossPage(1, [pin(a)]);
-      const revisited = await crossPage(0, [pin(a), pin(b)]);
+      const revisited = await read({ ...cross, offset: 0, limit: 1, retainPageTokens: [pin(a), pin(b)], navigation: 'count' });
+      expect(revisited.counted).toEqual({ matchingRows: '3', offset: 0 });
       expect(revisited.rowKeys).toEqual(a.rowKeys);
       expect(b.rowKeys).not.toEqual(a.rowKeys);
       const compatible = { ...cross, tabId: randomUUID() };

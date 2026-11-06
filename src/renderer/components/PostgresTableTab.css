@@ -19,6 +19,8 @@
   gap: 6px;
 }
 .pg-table-controls input[type="number"] { width: 68px; }
+.pg-page-jump { display: inline-flex; align-items: center; gap: 4px; }
+.pg-page-jump input { width: 82px; }
 .pg-table-filter-panel { max-height: 42%; overflow: auto; border-bottom: 1px solid var(--border); }
 .pg-table-filter-panel > .expanded-filter-panel,
 .pg-table-sort-dialog > .expanded-filter-panel { max-height: none; overflow: visible; }

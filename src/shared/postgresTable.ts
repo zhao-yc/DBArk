@@ -49,9 +49,33 @@ export const postgresTablePageSchema = target.extend({
   sort: postgresTableSortSchema,
   filter: z.union([postgresQuickTableFilterSchema, postgresAdvancedTableFilterSchema]).optional(),
   checkFilterColumns: z.literal(true).optional(),
+  navigation: z.enum(['count', 'last']).optional(),
   retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
     .refine(value => new Set(value).size === value.length, '保留的草稿原页不能重复').optional(),
 }).strict();
+
+/** 精确计数始终以十进制字符串传输，只有已限制到浏览窗口的偏移和行数才转换为 number。 */
+export function postgresCountedWindow(matchingRows: unknown, limit: number, offset: number, navigation: 'count' | 'last') {
+  if (typeof matchingRows !== 'string' || !/^(0|[1-9]\d{0,18})$/.test(matchingRows) ||
+    !Number.isInteger(limit) || limit < 1 || limit > postgresTableLimits.page ||
+    !Number.isSafeInteger(offset) || offset < 0 || offset > postgresTableLimits.offset)
+    throw Error('PostgreSQL 计数或页位置无效');
+  const count = BigInt(matchingRows), size = BigInt(limit);
+  const position = navigation === 'last' || BigInt(offset) >= count
+    ? count === 0n ? 0n : (count - 1n) / size * size : BigInt(offset);
+  if (position > BigInt(postgresTableLimits.offset)) throw Error('末页超出 PostgreSQL 最大浏览偏移，请缩小筛选范围');
+  const remaining = count - position;
+  return { matchingRows, offset: Number(position), expected: Number(remaining > size ? size + 1n : remaining) };
+}
+
+/** 跳页使用已应用的页大小，避免把未提交的大小输入和正在浏览的页混用。 */
+export function postgresTablePageOffset(value: string, limit: number): number {
+  if (!/^[1-9]\d{0,6}$/.test(value) || !Number.isInteger(limit) || limit < 1 || limit > postgresTableLimits.page)
+    throw Error('请输入有效的正整数页码');
+  const offset = (Number(value) - 1) * limit;
+  if (offset > postgresTableLimits.offset) throw Error('页码超出 PostgreSQL 最大浏览偏移');
+  return offset;
+}
 
 const fieldValue = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('text'), value: z.string().max(postgresTableLimits.value).refine(value => !value.includes('\0')) }).strict(),
@@ -181,6 +205,7 @@ export interface PostgresTablePage {
   capabilities: { insert: boolean; update: boolean; delete: boolean };
   hasNext: boolean;
   truncated: boolean;
+  counted?: { matchingRows: string; offset: number };
   order: 'primary' | 'physical' | 'unstable';
   relationKind: 'r' | 'p' | 'v' | 'm' | 'f';
 }

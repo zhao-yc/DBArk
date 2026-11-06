@@ -220,6 +220,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 在 PostgreSQL 可写表单中用[外键选值](development/postgres-reference-picker-20261106.md)搜索引用记录，并将单列或复合键一并带入当前表单。
 
+在 PostgreSQL 记录页可[精确计数、跳页或定位末页](development/postgres-table-pagination-20261106.md)。计数沿用当前筛选，末页在同一读取快照内定位。
+
 在 PostgreSQL 表或视图的记录网格右键单元格，或聚焦后按 `Shift+F10`，可以[按此值筛选或排除此值](development/postgres-table-cell-filter-20261106.md)。检查带入的列、操作符和原值，点击「添加条件」，再点击「应用高级筛选」。
 
 在同一入口可修改已有字段的数据类型、默认值、空值约束和注释，或删除字段。删除在 SQL 预览后需额外确认，本表内引用该字段的索引和约束可能随之移除。详见[已有字段属性与删除](development/postgres-column-alter-20261105.md)。

@@ -5,7 +5,7 @@ import { exactTableLayoutProjection, postgresLayoutSchemas, type PostgresLayoutT
 import { postgresRelationSelect } from '../../shared/postgresSql';
 import { isPostgresPresetTabId, postgresPresetIdFromTab } from '../../shared/postgresPresetTab';
 import {
-  isPostgresTableFiltered, postgresTableLimits, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField,
+  isPostgresTableFiltered, postgresTableLimits, postgresTablePageOffset, postgresTablePreviewSchema, postgresTableSortRules, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTableTarget,
 } from '../../shared/postgresTable';
 import { cellPreview, cellText, errorMessage, invoke, ownCell } from '../lib';
@@ -49,6 +49,8 @@ import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
 type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 'sort'>;
+type PageMovement = { recordEdge?: 'last'; navigation?: PostgresTablePageInput['navigation'] };
+type PageRead = PageMovement & { retainPageTokens?: string[]; checkFilterColumns?: true; presetLayout?: TablePreferences };
 type DraftEntry = { change: PostgresTableChange & { pageToken: string }; rowKey?: string; offset: number };
 interface InlineEdit {
   scope: object; cell: QueryResultCopyCell; column: PostgresTableColumn; rowKey: string;
@@ -98,6 +100,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [layoutView, setLayoutView] = useState<SqliteLayoutView>({ preferences: { version: 1, columns: [] }, ready: false, pending: false, dirty: false, error: '' });
   const [layoutError, setLayoutError] = useState('');
   const [pageSize, setPageSize] = useState(options.limit);
+  const [pageJump, setPageJump] = useState('');
   const lease = useRef<object | undefined>(undefined);
   const issued = useRef<string | undefined>(undefined);
   const lifetime = useRef<object | undefined>(undefined);
@@ -144,9 +147,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   /** 只发布完整回包，旧组件迟到的原页能力显式释放。 */
-  async function read(next: PageOptions, isCurrent: () => boolean, retainPageTokens: string[] = [], checkFilterColumns = false, presetLayout?: TablePreferences, recordEdge?: 'last') {
-    const result = await invoke('postgres.table.page', { ...target, ...next,
-      ...(retainPageTokens.length ? { retainPageTokens } : {}), ...(checkFilterColumns ? { checkFilterColumns: true } : {}) });
+  async function read(next: PageOptions, isCurrent: () => boolean, extra: PageRead = {}) {
+    const { presetLayout, recordEdge, ...readOptions } = extra;
+    const result = await invoke('postgres.table.page', { ...target, ...next, ...readOptions });
     return publishPage(result, next, isCurrent, presetLayout, recordEdge);
   }
 
@@ -160,10 +163,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     if (presetLayout) layout.applyPreset(presetLayout, result.columns.map(column => column.name));
     setPage(result);
     setPageConnectionVersion(connectionVersion);
-    setOptions(next);
+    const offset = result.counted?.offset ?? next.offset;
+    setOptions({ ...next, offset });
     setPageSize(next.limit);
+    setPageJump('');
     // 表单翻页使用明确的首末位置；同页刷新优先复选仍在该页的主键。
-    const selectedKey = row !== null && next.offset === options.offset ? page?.rowKeys?.[row] : undefined;
+    const selectedKey = row !== null && offset === options.offset ? page?.rowKeys?.[row] : undefined;
     const retainedRow = selectedKey ? result.rowKeys?.indexOf(selectedKey) ?? -1 : -1;
     setRow(recordView && result.rows.length ? recordEdge === 'last' ? result.rows.length - 1 : Math.max(0, retainedRow) : null);
     setGridReturn(undefined);
@@ -205,10 +210,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   useEffect(() => { layout.sync(); });
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
-  function navigate(next: PageOptions, keepDraft = false, recordEdge?: 'last') {
+  function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
     if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
-    void run(isCurrent => read(next, isCurrent, [...new Set(draft.map(entry => entry.change.pageToken))], false, undefined, recordEdge));
+    const retainPageTokens = [...new Set(draft.map(entry => entry.change.pageToken))];
+    void run(isCurrent => read(next, isCurrent, { ...movement, ...(retainPageTokens.length ? { retainPageTokens } : {}) }));
   }
 
   /** 更新草稿及标签退出保护。 */
@@ -492,7 +498,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     let applied = false, failure: unknown;
     const conditions = postgresTablePresetOptions(configuration);
     await run(async isCurrent => {
-      applied = await read({ ...options, ...conditions, offset: 0 }, isCurrent, [], true, configuration.layout);
+      applied = await read({ ...options, ...conditions, offset: 0 }, isCurrent, { checkFilterColumns: true, presetLayout: configuration.layout });
       if (!applied) return;
       closeAdvancedFilters();
       setFilterText(configuration.quickFilter?.text ?? '');
@@ -538,7 +544,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     const last = page.rows.length - 1;
     if (move === 'first' || move === 'last') { setRow(move === 'first' ? 0 : last); return; }
     if (move === 'next' && row === last) navigate({ ...options, offset: options.offset + options.limit }, true);
-    else if (move === 'previous' && row === 0) navigate({ ...options, offset: Math.max(0, options.offset - options.limit) }, true, 'last');
+    else if (move === 'previous' && row === 0) navigate({ ...options, offset: Math.max(0, options.offset - options.limit) }, true, { recordEdge: 'last' });
     else setRow(row + (move === 'next' ? 1 : -1));
   }
 
@@ -615,6 +621,23 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         onClick={() => navigate({ ...options, offset: Math.max(0, options.offset - options.limit) }, true)}>{text.previous}</button>
       <button disabled={pagingBlocked || !page?.hasNext || options.offset + options.limit > postgresTableLimits.offset}
         onClick={() => navigate({ ...options, offset: options.offset + options.limit }, true)}>{text.next}</button>
+      <button type="button" disabled={!page || pagingBlocked}
+        onClick={() => navigate(options, true, { navigation: 'last', recordEdge: 'last' })}>{text.lastPage}</button>
+      <button type="button" disabled={!page || pagingBlocked}
+        onClick={() => navigate(options, true, { navigation: 'count' })}>{text.countRows}</button>
+      <form className="pg-page-jump" onSubmit={event => {
+        event.preventDefault();
+        if (!page || pagingBlocked || !active) return;
+        try {
+          const offset = postgresTablePageOffset(pageJump.trim(), options.limit);
+          navigate({ ...options, offset }, true);
+        } catch (reason) { setError(errorMessage(reason)); }
+      }}>
+        <input aria-label={text.pageNumber} inputMode="numeric" maxLength={7} value={pageJump}
+          placeholder={page ? text.currentPage(Math.floor(options.offset / options.limit) + 1) : undefined}
+          disabled={!page || pagingBlocked} onChange={event => setPageJump(event.target.value)}/>
+        <button type="submit" disabled={!page || pagingBlocked || !pageJump.trim()}>{text.jumpPage}</button>
+      </form>
       <Field label={text.pageSize}><input type="number" min={1} max={postgresTableLimits.page} value={pageSize} disabled={frozenPage}
         onChange={event => setPageSize(Math.max(1, Math.min(postgresTableLimits.page, Math.trunc(Number(event.target.value)) || 1)))}/></Field>
       <Field label={text.filterColumn}><select aria-label={text.filterColumn} value={filterColumn} disabled={frozenPage}
@@ -650,7 +673,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     <ErrorBox message={error}/>
     {page?.truncated && <div className="warning-text">{text.truncated}</div>}
     {page?.order === 'unstable' && <div className="info-strip">{text.unstable}</div>}
-    {page && <div className="tab-status"><span>{text.page(options.offset, page.rows.length)}</span><span>{row === null ? text.noSelection : text.selected(row + 1)}</span>
+    {page && <div className="tab-status"><span>{text.currentPage(Math.floor(options.offset / options.limit) + 1)}</span>
+      <span>{text.page(options.offset, page.rows.length)}</span><span>{row === null ? text.noSelection : text.selected(row + 1)}</span>
+      {page.counted && <span>{text.matchingRows(page.counted.matchingRows)}</span>}
       {appliedAdvanced && <span>{text.activeAdvancedFilter(appliedAdvanced.rules.filter(rule => rule.enabled !== false).length)}</span>}
       {sortRules.length > 0 && <span>{text.activeSort(sortRules.length)}</span>}
       {layoutView.dirty && <span>{tableGridZh.unsaved}</span>}

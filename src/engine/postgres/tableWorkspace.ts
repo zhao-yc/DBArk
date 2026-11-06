@@ -4,7 +4,7 @@ import { postgresIdentifier, postgresRelationName } from '../../shared/postgresS
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import {
-  isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema,
+  isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresCountedWindow, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema,
   type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
@@ -106,14 +106,16 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
   };
 }
 
+function columnIdentifier(relation: Relation, name: string): string {
+  const column = relation.columns.find(column => column.name === name);
+  if (!column) throw Error('PostgreSQL排序或筛选列已变化');
+  return postgresIdentifier(column.name);
+}
+
 /** 翻页、游标和 COPY 共用排序，显式规则优先，同值时沿用关系的分页键。 */
 function readSql(relation: Relation, input: Pick<PostgresTablePageInput, 'filter' | 'sort'>,
   page?: Pick<PostgresTablePageInput, 'limit' | 'offset' | 'checkFilterColumns'>, columns = relation.columns, copy = false) {
-  const key = (id: string) => {
-    const column = relation.columns.find(column => column.name === id);
-    if (!column) throw Error('PostgreSQL排序或筛选列已变化');
-    return postgresIdentifier(column.name);
-  };
+  const key = (id: string) => columnIdentifier(relation, id);
   const projection = columns.map(column => postgresIdentifier(column.name)).join(', ');
   // 载入方案时连停用规则也要核对，避免方案套用到字段已删除或改名的关系上。
   if (page?.checkFilterColumns && input.filter) {
@@ -184,8 +186,20 @@ export class PostgresTableWorkspace {
       const result = await connect(async connection => {
         await begin(connection, 'page');
         const relation = await readRelation(connection, input.table);
-        const { sql, args, withOriginal } = readSql(relation, options, input);
+        let counted: ReturnType<typeof postgresCountedWindow> | undefined;
+        if (input.navigation) {
+          const values: unknown[] = [];
+          const condition = postgresTableCondition(options.filter, name => columnIdentifier(relation, name), value => '$' + values.push(value));
+          const count = await connection.query('SELECT pg_catalog.count(*)::text FROM ' + only(relation) +
+            (condition ? ' WHERE ' + condition : ''), values, small());
+          if (count.truncated || count.rows.length !== 1) throw Error('PostgreSQL 匹配记录计数未完整返回');
+          counted = postgresCountedWindow(count.rows[0].c0, input.limit, input.offset, input.navigation);
+        }
+        const { sql, args, withOriginal } = readSql(relation, options, { ...input, offset: counted?.offset ?? input.offset });
         const records = await connection.query(sql, args, { rows: input.limit + 1, bytes: 8 * 1024 * 1024 });
+        // 数量与页面必须来自同一只读快照。易变视图或截断造成不一致时保留旧页。
+        if (counted && (records.truncated || records.rows.length !== counted.expected))
+          throw Error('PostgreSQL 计数与本次页记录不一致，请缩小筛选范围或刷新');
         const completed = await connection.query('COMMIT', undefined, small());
         if (completed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL表页读取事务未完成');
         const rows: DataRow[] = [], originals: Original[] = [];
@@ -200,7 +214,7 @@ export class PostgresTableWorkspace {
           }
           rows.push(row);
         }
-        return { relation, rows, originals, hasNext: records.rows.length > input.limit, truncated: records.truncated };
+        return { relation, rows, originals, counted, hasNext: records.rows.length > input.limit, truncated: records.truncated };
       });
       for (const snapshot of retained.values()) if (snapshot.relation.fingerprint !== result.relation.fingerprint)
         throw Error('关系结构或权限已变化，请先核对并处理原草稿');
@@ -223,6 +237,7 @@ export class PostgresTableWorkspace {
         columns: result.relation.columns, rows: result.rows, hasNext: result.hasNext, truncated: result.truncated,
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
         relationKind: result.relation.kind, capabilities, exportToken, ...(writeEligible ? { pageToken: exportToken } : {}),
+        ...(result.counted ? { counted: { matchingRows: result.counted.matchingRows, offset: result.counted.offset } } : {}),
         ...(writeEligible && result.originals.length ? { rowKeys: result.originals.map(row => row.key) } : {}),
         ...(result.relation.canImport ? { canImport: true as const } : {}),
       };
