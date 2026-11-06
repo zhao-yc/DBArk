@@ -34,6 +34,8 @@ import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
 import { exportPostgresBackupSet, type PostgresBackupSetRequest } from './tableBackupSet';
 import { readPostgresBackupCatalogue } from './tableBackup';
+import { executePostgresSqlFile, type PostgresSqlFileSource } from './sqlFile';
+import type { PostgresSqlFileResult } from '../../shared/postgresSqlFile';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { comparePostgresSnapshots, configurePostgresCompare, inPostgresCompareSnapshot, readPostgresCompareTable, type PostgresSyncEvidence, type PostgresSyncRow } from './dataCompare';
@@ -76,6 +78,8 @@ interface TransferTask {
   cancelPending?: Promise<void>;
   cancelled: boolean;
   publishing: boolean;
+  gracefulCancel?: boolean;
+  commandActive?: boolean;
   connection?: PostgresConnection;
   done?: Promise<unknown>;
 }
@@ -296,13 +300,49 @@ export class PostgresEngine {
     task.cancelled = true;
     const original = task.connection;
     if (!original) return;
-    if (!task.otherConnectionId) { original.abort(); return; }
-    task.cancelPending = this.cancelBackend(original, () => task.connection === original).catch(reason => {
+    if (!task.otherConnectionId && !task.gracefulCancel) { original.abort(); return; }
+    if (task.gracefulCancel && !task.commandActive) return;
+    task.cancelPending = this.cancelBackend(original, () => task.connection === original && (!task.gracefulCancel || !!task.commandActive)).catch(reason => {
       original.abort();
       throw reason;
     });
     void task.cancelPending.catch(() => undefined);
     return task.cancelPending;
+  }
+
+  /** 文件写入和取消使用独占连接，COMMIT 或回滚阶段不接受新的取消。 */
+  private async runSqlFile(input: Input, profile: PostgresConnectionProfile): Promise<PostgresSqlFileResult> {
+    if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
+      throw Error('PostgreSQL 文件任务已存在、连接关闭中或已达并发上限');
+    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true };
+    this.transfers.set(input.taskId, task);
+    let receipt: PostgresSqlFileResult | undefined;
+    const operation = this.use(profile, input.database, async connection => {
+      task.connection = connection;
+      receipt = await executePostgresSqlFile(connection, input.source as PostgresSqlFileSource, {
+        check: () => { if (task.cancelled) throw Error('PostgreSQL 文件执行已取消'); },
+        cancelled: () => task.cancelled,
+        active: value => { task.commandActive = value; },
+        protect: () => { task.publishing = true; },
+        settleCancel: async () => { await task.cancelPending?.catch(() => undefined); },
+        progress: statements => this.emit({ taskId: input.taskId, status: 'running', progress: 50,
+          message: 'PostgreSQL 文件已读取并执行 ' + statements + ' 条语句' }),
+      });
+      return receipt;
+    }, false, false, true);
+    const done = task.done = operation.catch((): PostgresSqlFileResult => receipt ? { ...receipt, cleanupWarning: true } : {
+      outcome: task.connection ? 'unknown' : 'not-started', completed: 0, cancelled: task.cancelled,
+      failure: { reason: task.cancelled ? 'cancelled' : 'connection' },
+    });
+    try {
+      const result = await done;
+      const status = result.outcome === 'committed' ? 'completed' : result.cancelled && result.outcome !== 'unknown' ? 'cancelled' : 'failed';
+      this.emit({ taskId: input.taskId, status, progress: status === 'completed' ? 100 : 0, message: 'PostgreSQL 文件执行已结算' });
+      return result;
+    } finally {
+      this.transfers.delete(input.taskId);
+      this.rememberCompleted(input.taskId);
+    }
   }
 
   /** 只保留终态任务编号，避免迟到的取消被分发给其他驱动。 */
@@ -868,6 +908,12 @@ export class PostgresEngine {
         const profile = input.profile as PostgresConnectionProfile;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 备份连接');
         return this.use(profile, input.database, readPostgresBackupCatalogue);
+      }
+      case 'postgres.sqlFile.execute': {
+        const profile = input.profile as PostgresConnectionProfile;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.source)
+          throw Error('缺少可信的 PostgreSQL 文件连接及来源');
+        return this.runSqlFile(input, profile);
       }
       case 'postgres.compareData.catalogue': {
         const profile = input.profile as PostgresConnectionProfile;

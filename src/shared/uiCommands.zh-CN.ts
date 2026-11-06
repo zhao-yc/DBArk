@@ -3,6 +3,7 @@ import { postgresDataCompareZh } from './postgresDataCompare';
 import { sqliteDataCompareZh } from './sqliteDataCompare';
 import { databaseBackupArchiveZh } from './databaseBackupArchiveFiles';
 import { postgresBackupSetTitle } from './postgresTable';
+import { postgresSqlFileTitle } from './postgresSqlFile';
 import type { UiCommandId } from './uiCommands';
 
 /** 菜单文案集中维护，分类不重复散落在主进程与页面中。 */
@@ -28,6 +29,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'previous-statement': '上一条语句', 'next-statement': '下一条语句',
   'import': '导入数据', 'export': '导出数据', 'sqlite-data-compare': sqliteDataCompareZh.title, 'postgres-data-compare': postgresDataCompareZh.title, 'mysql-data-compare': mysqlDataCompareZh.title, 'schema-compare': '结构比较', 'structure-search': '全库搜索',
   'server-monitor': '服务器监控', 'backup-archive': databaseBackupArchiveZh.title, 'postgres-table-backup': postgresBackupSetTitle, 'explain-snapshot': '打开计划快照', 'result-snapshot': '打开结果快照',
+  'postgres-sql-file': postgresSqlFileTitle,
   'task-center': '任务中心', 'tab-search': '查找已打开标签', 'close-tab': '关闭当前标签', 'reopen-query': '重新打开上个保留查询',
   'close-other-queries': '关闭其他查询', 'close-left-queries': '关闭左侧查询', 'close-right-queries': '关闭右侧查询',
   'next-tab': '下一个标签', 'previous-tab': '上一个标签', 'help': '使用说明', 'shortcuts': '快捷键', 'about': '关于 tabrelio'

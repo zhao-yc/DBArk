@@ -1,4 +1,5 @@
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
+import { postgresSqlFileChooseSchema, postgresSqlFileExecuteSchema } from './postgresSqlFile';
 import { postgresDataCompareCatalogueSchema, postgresDataCompareSchema, postgresDataSyncPreviewSchema, postgresDataSyncApplySchema } from './postgresDataCompare';
 import { sqliteDataCompareSchema, sqliteDataSyncPreviewSchema } from './sqliteDataCompare';
 import { postgresRoutineCreateSchema, postgresRoutineDependencySchema, postgresRoutineManageSchema,
@@ -283,6 +284,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.checkEdit.preview': postgresCheckPreviewSchema, 'postgres.checkEdit.apply': postgresCheckApplySchema,
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': z.union([postgresTableExportSchema, postgresBackupSetSchema]),
   'postgres.backup.catalogue': postgresBackupCatalogueSchema,
+  'postgres.sqlFile.choose': postgresSqlFileChooseSchema, 'postgres.sqlFile.execute': postgresSqlFileExecuteSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.draft.save': postgresTablePreviewSchema,

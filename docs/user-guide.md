@@ -320,6 +320,8 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 备份多张关联表时，在「工具 → PostgreSQL 多表备份」选择连接、数据库和表。客户端将所选表保存到一份 SQL 文件，回放时先恢复所有记录及索引，再建立外键，可处理跨 schema 与双向引用。详见[PostgreSQL 多表备份与恢复](development/postgres-multi-table-backup-20261107.md)。
 
+回放大备份时，在「工具 → 执行 PostgreSQL SQL 文件」选择目标连接、数据库和 UTF-8 文件，再确认执行。客户端在独立事务里逐条读取，显示提交、回滚或结果未知的回执。详见[PostgreSQL SQL 文件流式执行](development/postgres-sql-file-20261107.md)。
+
 要把数据交给 PostgreSQL 的 `COPY FROM`，在表页「导出数据」中选择「COPY CSV（PostgreSQL 原生）」。选择输出列及逗号、分号或 Tab，再指定 `.csv` 保存位置。文件含列名，固定 UTF-8，按 PostgreSQL 的 CSV 规则区分 NULL 和空字符串。导入时使用相同分隔符，并按文件列顺序指定目标列。详见[PostgreSQL 表页原生 COPY 导出](development/postgres-copy-export-20261105.md)。
 
 在有写入权限的 PostgreSQL 普通表或分区表打开「导入 CSV」。选择与源文件一致的分隔符和首行模式，再选 UTF-8 文件。核对数据样本和目标字段后，点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。详见[PostgreSQL CSV 导入及样本预览](development/postgres-copy-preview-20261105.md)。

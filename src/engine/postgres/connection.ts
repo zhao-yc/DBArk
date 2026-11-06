@@ -1,4 +1,4 @@
-import { Client, Query, types, type FieldDef, type QueryConfig, type ClientConfig } from 'pg';
+import { Client, DatabaseError, Query, types, type FieldDef, type QueryConfig, type ClientConfig } from 'pg';
 import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
 import type { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
@@ -107,7 +107,10 @@ export class PostgresConnection {
       this.profile.tls?.passphrase,
     ])
       if (secret) message = message.replaceAll(secret, '[已隐藏]');
-    return Error(message.slice(0, 8192));
+    const safe = Error(message.slice(0, 8192));
+    // 仅保留真实服务端 ERROR 的 SQLSTATE，以区分提交被服务器拒绝与连接断开。
+    return reason instanceof DatabaseError && reason.severity === 'ERROR' && /^[0-9A-Z]{5}$/.test(reason.code ?? '')
+      ? Object.assign(safe, { postgresSqlState: reason.code }) : safe;
   }
   private check() {
     if (this.stopped) throw Error('PostgreSQL连接已取消');

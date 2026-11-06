@@ -7,10 +7,12 @@ export interface PostgresStatement {
 }
 
 const maxScriptLength = 4 * 1024 * 1024;
+export const postgresSqlFileStatementBytes = 64 * 1024 ** 2;
 const whitespace = /[ \t\n\r\f\v]/;
 const identifierStart = /[A-Za-z_\u0080-\uFFFF]/;
 const identifierPart = /[A-Za-z_0-9$\u0080-\uFFFF]/;
 const tagPart = /[A-Za-z_0-9\u0080-\uFFFF]/;
+export class IncompletePostgresSql extends Error {}
 
 /** 扫描普通引号、标识符引号及转义字符串，返回紧随闭引号的位置。 */
 function quotedEnd(source: string, opening: number, backslash: boolean): number {
@@ -21,7 +23,7 @@ function quotedEnd(source: string, opening: number, backslash: boolean): number 
     if (source[i + 1] === quote) { i++; continue; }
     return i + 1;
   }
-  throw Error('PostgreSQL引用未闭合');
+  throw new IncompletePostgresSql('PostgreSQL引用未闭合');
 }
 
 /** PostgreSQL的块注释可嵌套，内部引号和分号均属于注释。 */
@@ -33,7 +35,7 @@ function blockCommentEnd(source: string, opening: number): number {
     else if (pair === '*/') { depth--; index += 2; }
     else index++;
   }
-  if (depth) throw Error('PostgreSQL块注释未闭合');
+  if (depth) throw new IncompletePostgresSql('PostgreSQL块注释未闭合');
   return index;
 }
 
@@ -49,6 +51,10 @@ function dollarTag(source: string, opening: number): string | undefined {
 /** 保留原文偏移，注释、引号及dollar正文中的分号和参数均不参与拆句。 */
 export function splitPostgresSql(source: string, standardStrings = true, firstOnly = false): PostgresStatement[] {
   if (source.length > maxScriptLength || source.includes('\0')) throw Error('PostgreSQL脚本超过4MiB或包含NUL');
+  return scanPostgresSql(source, standardStrings, firstOnly);
+}
+
+function scanPostgresSql(source: string, standardStrings: boolean, firstOnly: boolean): PostgresStatement[] {
   const statements: PostgresStatement[] = [];
   let start = 0, index = 0, meaningful = false, keyword = '';
   let parameters = new Set<number>();
@@ -91,7 +97,7 @@ export function splitPostgresSql(source: string, standardStrings = true, firstOn
       const tag = dollarTag(source, index);
       if (tag) {
         const end = source.indexOf(tag, index + tag.length);
-        if (end < 0) throw Error('PostgreSQL dollar-quote未闭合');
+        if (end < 0) throw new IncompletePostgresSql('PostgreSQL dollar-quote未闭合');
         index = end + tag.length;
         continue;
       }
@@ -130,6 +136,32 @@ export function postgresIdentifier(value: string): string {
 /** 脚本逐句按实际ParameterStatus识别下一条，前句改变字符串模式时重新取边界。 */
 export function firstPostgresStatement(source: string, standardStrings = true): PostgresStatement | undefined {
   return splitPostgresSql(source, standardStrings, true)[0];
+}
+
+/** 文件调用方在解码时排除 NUL，仅传入当前有界缓冲。编辑器继续使用原脚本上限。 */
+export function firstPostgresFileStatement(source: string, standardStrings: boolean): PostgresStatement | undefined {
+  if (source.length > postgresSqlFileStatementBytes) throw Error('PostgreSQL 文件语句超过预算');
+  return scanPostgresSql(source, standardStrings, true)[0];
+}
+
+/** 只接纳裸 BEGIN/COMMIT 作为文件外壳。忽略真实注释，不移除字符串内部的字符。 */
+export function isBarePostgresFileControl(source: string, keyword: 'BEGIN' | 'COMMIT'): boolean {
+  const trivia = (from: number) => {
+    let i = from;
+    while (i < source.length) {
+      if (whitespace.test(source[i])) { i++; continue; }
+      if (source.startsWith('/*', i)) { i = blockCommentEnd(source, i); continue; }
+      if (source.startsWith('--', i)) {
+        i += 2;
+        while (i < source.length && source[i] !== '\r' && source[i] !== '\n') i++;
+        continue;
+      }
+      break;
+    }
+    return i;
+  };
+  const start = trivia(0);
+  return source.slice(start, start + keyword.length).toUpperCase() === keyword && trivia(start + keyword.length) === source.length;
 }
 
 /** 目录复合名逐段还原；每段的成对双引号仅解码一次。 */
