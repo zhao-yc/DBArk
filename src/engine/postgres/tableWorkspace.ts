@@ -275,6 +275,7 @@ export class PostgresTableWorkspace {
     try {
       await connect(async connection => {
         let sent = false;
+        let commitAttempted = false;
         try {
           check();
           await begin(connection);
@@ -293,12 +294,13 @@ export class PostgresTableWorkspace {
           });
           check();
           commitStart();
+          commitAttempted = true;
           const completed = await connection.query('COMMIT', undefined, small());
           if (completed.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen)
             throw Error('PostgreSQL 未确认导入提交');
           receipt = { outcome: 'committed', affected: rows, message: 'PostgreSQL 已提交导入，共 ' + rows + ' 行' };
         } catch (reason) {
-          receipt = await this.rollbackWrite(connection, sent, reason);
+          receipt = await this.rollbackWrite(connection, sent, commitAttempted, reason);
         }
       }, true);
       return receipt!;
@@ -323,6 +325,8 @@ export class PostgresTableWorkspace {
 
   /** 外键目录和候选只读，返回前再次核对当前页，不能借已经翻走的表页回包。 */
   async references(input: Scoped<PostgresTableReferenceInput>, connect: Connect): Promise<PostgresTableReferenceResult> {
+    const key = this.key(input);
+    if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
     const original = this.snapshot(input, true);
     if (!original.relation.capabilities.insert && !original.relation.capabilities.update) throw Error('原表页不支持写入外键字段');
     const result = await connect(async connection => {
@@ -334,7 +338,7 @@ export class PostgresTableWorkspace {
       if (reply.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 外键候选读取未完成');
       return references;
     });
-    if (this.snapshot(input, true) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开选值');
+    if (this.active.has(key) || this.snapshot(input, true) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开选值');
     return result;
   }
 
@@ -490,30 +494,40 @@ export class PostgresTableWorkspace {
     return { previewToken: token, statements: writes.map(write => write.sql), counts };
   }
 
-  /** 提交先锁住关系并复核全部待修改原行，任何一行冲突都回滚整批。 */
+  /** 先消费预览。只有确认回滚且原页仍有效时，才保留跨页草稿引用的快照。 */
   async apply(input: Scoped<PostgresTableApplyInput>, connect: Connect): Promise<PostgresTableOutcome> {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot(input), preview = snapshot.preview;
     if (!preview || preview.token !== input.previewToken || preview.expires <= Date.now()) throw Error('PostgreSQL提交预览已失效');
-    this.snapshots.delete(key);
+    const group = this.snapshots.get(key);
+    snapshot.preview = undefined;
     this.active.add(key);
     let receipt: PostgresTableOutcome | undefined;
+    let draftsRetained = false;
     try {
-      await connect(async connection => {
-        receipt = await this.applyTransaction(connection, snapshot.relation, input.table, preview.writes);
-      }, true);
-      return receipt!;
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      if (receipt) return { ...receipt, message: receipt.message + '；连接收尾异常：' + message };
-      return { outcome: 'notSent', affected: 0, message };
-    } finally { this.active.delete(key); }
+      try {
+        await connect(async connection => {
+          receipt = await this.applyTransaction(connection, snapshot.relation, input.table, preview.writes);
+        }, true);
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        receipt = receipt
+          ? { ...receipt, message: receipt.message + '；连接收尾异常：' + message }
+          : { outcome: 'notSent', affected: 0, message };
+      }
+      draftsRetained = receipt?.outcome === 'rolledBack' && this.snapshots.get(key) === group && preview.expires > Date.now();
+      return draftsRetained ? { ...receipt!, draftsRetained: true } : receipt!;
+    } finally {
+      if (!draftsRetained && this.snapshots.get(key) === group) this.snapshots.delete(key);
+      this.active.delete(key);
+    }
   }
 
   /** 提交回执以实际命令标签及空闲状态为准，断线时保留未知终态。 */
   private async applyTransaction(connection: PostgresConnection, expected: Relation, table: string, writes: Write[]): Promise<PostgresTableOutcome> {
     let sent = false;
+    let commitAttempted = false;
     try {
       await begin(connection);
       const current = await readRelation(connection, table);
@@ -537,23 +551,26 @@ export class PostgresTableWorkspace {
         const result = await connection.query(write.sql, write.values, small());
         if (result.postgresCommand !== write.kind.toUpperCase() || result.affectedRows !== 1) throw Error('数据库未确认该语句恰好影响一行');
       }
+      commitAttempted = true;
       const result = await connection.query('COMMIT', undefined, small());
       if (result.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen) {
         throw Error('PostgreSQL未确认提交');
       }
       return { outcome: 'committed', affected: writes.length, message: 'PostgreSQL已确认整批提交' };
     } catch (reason) {
-      return this.rollbackWrite(connection, sent, reason);
+      return this.rollbackWrite(connection, sent, commitAttempted, reason);
     }
   }
 
-  /** 只依据原连接的事务状态及 ROLLBACK 回执区分已回滚和待核对。 */
-  private async rollbackWrite(connection: PostgresConnection, sent: boolean, reason: unknown): Promise<PostgresTableOutcome> {
+  /** COMMIT 发出后，单凭连接已空闲无法确定这批写入的结果。 */
+  private async rollbackWrite(connection: PostgresConnection, sent: boolean, commitAttempted: boolean, reason: unknown): Promise<PostgresTableOutcome> {
     const message = connection.error(reason).message;
     if (!sent) return { outcome: 'notSent', affected: 0, message };
-    if (!connection.state().transactionKnown) return { outcome: 'unknown', affected: 0, message: '提交状态待核对：' + message };
+    const state = connection.state();
+    if (!state.transactionKnown || (commitAttempted && !state.transactionOpen))
+      return { outcome: 'unknown', affected: 0, message: '提交状态待核对：' + message };
     try {
-      if (connection.state().transactionOpen) {
+      if (state.transactionOpen) {
         const rollback = await connection.query('ROLLBACK', undefined, small());
         if (rollback.postgresCommand !== 'ROLLBACK') throw Error('未收到回滚确认');
       }

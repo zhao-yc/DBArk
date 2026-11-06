@@ -35,5 +35,6 @@ export const postgresTableZh = {
   previewHint: '确认前请核对原行和草稿。提交时先复核原记录，任何一项失败会结束整批事务。',
   unknown: '提交结果待核对。请检查数据库中的实际记录，再刷新表页。',
   refreshAfterFailure: '原预览已消费。请核对结果并刷新后重新编辑。',
+  retryAfterRollback: '草稿已保留。修正后请重新生成提交预览。',
   change: { insert: '新增', update: '更新', delete: '删除' },
 } as const;

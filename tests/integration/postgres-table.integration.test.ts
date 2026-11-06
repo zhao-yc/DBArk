@@ -342,11 +342,30 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       const multiConflict = await preview(conflictB, [update(conflictA, '不能写入'), update(conflictB, '旧乙')], cross);
       await client.query(`UPDATE ${cross.table} SET note='外部变动' WHERE id=2`);
       expect(await apply(conflictB, multiConflict, cross)).toMatchObject({ outcome: 'notSent', affected: 0 });
+      await expect(preview(conflictB, [update(conflictA, '不能写入')], cross)).rejects.toThrow('快照');
       const rollbackA = await crossPage(0);
       const rollbackB = await crossPage(1, [pin(rollbackA)]);
       const multiRollback = await preview(rollbackB, [update(rollbackA, '应回滚'), update(rollbackB, '拒绝')], cross);
-      expect(await apply(rollbackB, multiRollback, cross)).toMatchObject({ outcome: 'rolledBack', affected: 0 });
+      expect(await apply(rollbackB, multiRollback, cross)).toMatchObject({ outcome: 'rolledBack', affected: 0, draftsRetained: true });
+      await expect(apply(rollbackB, multiRollback, cross)).rejects.toThrow('预览已失效');
+      const repaired = await preview(rollbackB, [update(rollbackA, '应回滚'), update(rollbackB, '修正乙')], cross);
+      expect(repaired.previewToken).not.toBe(multiRollback.previewToken);
       expect(await crossRows()).toEqual([{ id: '1', note: '已改甲' }, { id: '2', note: '外部变动' }, { id: '3', note: '原丙' }]);
+      expect(await apply(rollbackB, repaired, cross)).toMatchObject({ outcome: 'committed', affected: 2 });
+      expect(await crossRows()).toEqual([{ id: '1', note: '应回滚' }, { id: '2', note: '修正乙' }, { id: '3', note: '原丙' }]);
+
+      const deferred = { table: '"浏览"."延迟约束"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE ${deferred.table} (id bigint PRIMARY KEY, code text UNIQUE DEFERRABLE INITIALLY DEFERRED);
+        INSERT INTO ${deferred.table} VALUES (1, '原甲'), (2, '原乙')`);
+      const deferredPage = await read(deferred);
+      const deferredPreview = await preview(deferredPage, [update(deferredPage, '原乙')], deferred);
+      // 延迟约束在 COMMIT 时出错，连接转为空闲也不能代替明确的回滚回执。
+      const unconfirmed = await apply(deferredPage, deferredPreview, deferred);
+      expect(unconfirmed).toMatchObject({ outcome: 'unknown', affected: 0 });
+      expect(unconfirmed.draftsRetained).toBeUndefined();
+      await expect(apply(deferredPage, deferredPreview, deferred)).rejects.toThrow('快照');
+      expect((await client.query(`SELECT code FROM ${deferred.table} ORDER BY id`)).rows)
+        .toEqual([{ code: '原甲' }, { code: '原乙' }]);
 
       await expect(preview(current, [{ kind: 'update', row: 0, fields: [field('c4', '禁止修改')] }])).rejects.toThrow('数据库生成');
       const prepared = await preview(current, [

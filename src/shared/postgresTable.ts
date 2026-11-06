@@ -232,6 +232,7 @@ export interface PostgresTableOutcome {
   outcome: 'committed' | 'rolledBack' | 'notSent' | 'unknown';
   affected: number;
   message: string;
+  draftsRetained?: true;
 }
 
 /** 标识列可以显式保留原值，计算生成列由恢复目标重新计算。 */

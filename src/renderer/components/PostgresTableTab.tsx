@@ -294,7 +294,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     });
   }
 
-  /** 每个预览只发送一次；任何未确认回执都要先刷新核对，避免重复提交。 */
+  /** 原预览只用一次。确认回滚后保留草稿，终态待核对时冻结编辑。 */
   function apply() {
     const pageToken = page?.exportToken;
     if (!pageToken || !preview || !active) return;
@@ -302,8 +302,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     void run(async isCurrent => {
       const result = await invoke('postgres.table.apply', { ...target, pageToken, previewToken });
       if (!isCurrent()) return;
-      issued.current = undefined;
       setPreview(undefined);
+      if (result.outcome === 'rolledBack' && result.draftsRetained && issued.current === pageToken) {
+        setMessage(result.message + ' ' + text.retryAfterRollback);
+        return;
+      }
+      issued.current = undefined;
       setRequiresRefresh(true);
       setMessage(result.outcome === 'unknown' ? text.unknown + ' ' + result.message : result.message);
       if (result.outcome === 'committed') {

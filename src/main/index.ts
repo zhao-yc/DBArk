@@ -885,7 +885,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (connection?.dialect !== 'postgresql') throw Error('表页需要已保存的PostgreSQL连接');
     const credentials = command === 'postgres.table.preview' ? {} : { profile: store.resolveConnection(input.connectionId) };
     const result = await broker.request(command, { ...request, ...credentials });
-    if (command !== 'postgres.table.apply') {
+    if (command !== 'postgres.table.apply' || result?.draftsRetained) {
       try {
         columnsMain.assertCapturedOwner(columns);
         connectionConfig.assertAvailable(input.connectionId);
@@ -897,6 +897,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           const { connectionId, database, table, tabId, connectionRevision } = request;
           await broker.request('postgres.table.release', { connectionId, database, table, tabId, connectionRevision, owner, pageToken }).catch(() => {});
         }
+        // 来源已经撤销时仍交付实际回滚结果，避免界面误判事务终态。
+        if (command === 'postgres.table.apply') return { ...result, draftsRetained: undefined };
         throw error;
       }
     }

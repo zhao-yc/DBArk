@@ -236,6 +236,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 「[复制勾选记录](development/postgres-batch-duplicate-20261106.md)」可逐条编辑本页副本，整批暂存或撤销，再通过表页预览确认新增。
 
+PostgreSQL 表页同时显示「整批已回滚」和「草稿已保留」时，可直接修正各页草稿，再生成提交预览。若显示提交状态待核对，先核对数据库实际记录，再刷新表页。[回滚后修正草稿](development/postgres-rollback-recovery-20261106.md)
+
 在 PostgreSQL 表或视图的记录网格右键单元格，或聚焦后按 `Shift+F10`，可以[按此值筛选或排除此值](development/postgres-table-cell-filter-20261106.md)。检查带入的列、操作符和原值，点击「添加条件」，再点击「应用高级筛选」。
 
 在同一入口可修改已有字段的数据类型、默认值、空值约束和注释，或删除字段。删除在 SQL 预览后需额外确认，本表内引用该字段的索引和约束可能随之移除。详见[已有字段属性与删除](development/postgres-column-alter-20261105.md)。
