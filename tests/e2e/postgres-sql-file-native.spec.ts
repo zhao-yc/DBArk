@@ -26,8 +26,14 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
   const bad = info.outputPath('执行失败.sql'), cancel = info.outputPath('服务端取消.sql'), changed = info.outputPath('更换文件.sql');
   const deferred = info.outputPath('延迟约束.sql');
   const nativeDump = process.env.DBARK_POSTGRES_NATIVE_DUMP;
+  const wholeDump = process.env.DBARK_POSTGRES_DATABASE_DUMP;
+  const freshName = target + ' 恢复"库';
+  const failedName = target + '_failed', staleName = target + '_stale';
+  const fresh = client(freshName);
+  const failedFresh = client(failedName);
   const csv = info.outputPath('内联CSV.sql'), missing = info.outputPath('缺少结束标记.sql');
   const invalidCopy = info.outputPath('无效COPY记录.sql'), cancelCopy = info.outputPath('取消COPY.sql');
+  const failedDatabaseFile = info.outputPath('新库脚本错误.sql'), staleDatabaseFile = info.outputPath('新库文件失效.sql');
   try {
     await source.connect(); await observer.connect();
     await source.query(`
@@ -59,6 +65,10 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
       await writeFile(cancelCopy, 'CREATE TABLE public.inline_cancel(id int CHECK (pg_sleep(30) IS NULL));\n' +
         'COPY public.inline_cancel FROM STDIN;\n1\n\\.\n');
     }
+    if (wholeDump) {
+      await writeFile(failedDatabaseFile, 'CREATE TABLE should_rollback(id int); SELECT * FROM missing_object;');
+      await writeFile(staleDatabaseFile, 'CREATE TABLE should_not_create(id int);');
+    }
     for (const [title, db] of [['大备份来源', database], ['文件恢复目标', target]] as const) {
       await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, own)).click();
       const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
@@ -87,7 +97,8 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
         return { canceled: false, filePaths: [path] };
       }) as typeof open;
     }, { backup, title: text.title, paths: [backup, bad, deferred, cancel, changed,
-      ...(nativeDump ? [nativeDump, csv, missing, invalidCopy, cancelCopy] : [])] });
+      ...(nativeDump ? [nativeDump, csv, missing, invalidCopy, cancelCopy] : []),
+      ...(wholeDump ? [wholeDump, wholeDump, failedDatabaseFile, staleDatabaseFile] : [])] });
     const tool = async (name: string) => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name, exact: true }, own)).click();
     await tool(backupText.title);
     const backupDialog = page.getByRole('dialog', { name: backupText.title, exact: true });
@@ -194,6 +205,63 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
       await expect(status).toContainText(text.reason.cancelled);
       expect(await exists('public.inline_cancel')).toBeNull();
     }
+    if (wholeDump) {
+      const facts = 'SELECT (SELECT count(*) FROM "迁移验收".events) AS rows, ' +
+        '(SELECT array_agg(ROW(id, customer_id, payload, state)::text ORDER BY id) FROM "迁移验收".events) AS records, ' +
+        '(SELECT array_agg(ROW(customer_id, total)::text ORDER BY customer_id) FROM "迁移验收".summary) AS materialized, ' +
+        '(SELECT array_agg(display ORDER BY id) FROM "迁移验收".customer_labels) AS view, ' +
+        "encode(lo_get(65001),'hex') AS large_object, octet_length(lo_get(65002)) AS empty_lo, " +
+        "octet_length(lo_get(65003)) AS large_bytes, md5(lo_get(65003)) AS large_digest, " +
+        "(SELECT last_value FROM \"迁移验收\".customers_id_seq) AS sequence, " +
+        "(SELECT count(*) FROM pg_inherits WHERE inhparent='\"迁移验收\".events'::regclass) AS partitions, " +
+        "(SELECT count(*) FROM pg_constraint WHERE conrelid='\"迁移验收\".events'::regclass AND contype='f') AS foreign_keys";
+      const databaseOid = async (name: string) => (await observer.query('SELECT oid::text FROM pg_database WHERE datname=$1', [name])).rows[0]?.oid;
+      await modal.getByRole('checkbox', { name: text.createMode, exact: true }).check();
+      await modal.getByLabel(text.maintenance, { exact: true }).selectOption(target);
+      const name = modal.getByLabel(text.newDatabase, { exact: true });
+      const createAndRestore = () => modal.getByRole('button', { name: text.createAndExecute, exact: true }).click();
+      await name.fill(freshName);
+      await choose();
+      expect(await databaseOid(freshName)).toBeUndefined();
+      await page.screenshot({ path: info.outputPath('PostgreSQL整库恢复确认.png') });
+      await createAndRestore();
+      await expect(status).toContainText(text.databaseCreation.created, { timeout: 30000 });
+      await expect(status).toContainText(text.outcome.committed);
+      const originalOid = await databaseOid(freshName);
+      expect(originalOid).toMatch(/^\d+$/);
+      await fresh.connect();
+      const originalFacts = (await source.query(facts)).rows;
+      expect(originalFacts[0]).toMatchObject({ rows: '3', partitions: '2', foreign_keys: '1',
+        large_object: '000aff80', empty_lo: 0, large_bytes: 150000, sequence: '2' });
+      expect((await fresh.query(facts)).rows).toEqual(originalFacts);
+      await page.screenshot({ path: info.outputPath('PostgreSQL整库恢复完成.png') });
+
+      await choose();
+      await createAndRestore();
+      await expect(status).toContainText(text.databaseCreation.refused);
+      await expect(status).toContainText(text.outcome['not-started']);
+      await expect(status).toContainText(text.reason['database-exists']);
+      await expect(status).toContainText('SQLSTATE 42P04');
+      expect(await databaseOid(freshName)).toBe(originalOid);
+      expect((await fresh.query(facts)).rows).toEqual(originalFacts);
+
+      await name.fill(failedName);
+      await choose();
+      await createAndRestore();
+      await expect(status).toContainText(text.databaseCreation.created);
+      await expect(status).toContainText(text.outcome['rolled-back']);
+      await failedFresh.connect();
+      expect((await failedFresh.query("SELECT to_regclass('public.should_rollback') AS name")).rows).toEqual([{ name: null }]);
+
+      await name.fill(staleName);
+      await choose();
+      await expect(modal).toContainText('新库文件失效.sql');
+      await writeFile(staleDatabaseFile, 'CREATE TABLE replaced(id int, note text);');
+      await createAndRestore();
+      await expect(status).toContainText(text.outcome['not-started']);
+      await expect(status).toContainText(text.reason.file);
+      expect(await databaseOid(staleName)).toBeUndefined();
+    }
     const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
     expect(JSON.stringify(tasks)).not.toMatch(/stream_missing|执行失败\.sql|服务端取消\.sql|不能回显的输入值|无效COPY记录\.sql/);
     expect(pageErrors).toEqual([]);
@@ -202,5 +270,5 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
   } catch (error) {
     retainOwnedDesktopResources(info);
     throw error;
-  } finally { await Promise.allSettled([source.end(), observer.end()]); }
+  } finally { await Promise.allSettled([source.end(), observer.end(), fresh.end(), failedFresh.end()]); }
 });

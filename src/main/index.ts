@@ -858,7 +858,7 @@ async function runTableFilteredDelete(command: 'table.filteredDelete.preview' | 
 
 const postgresTableOwners = new WeakMap<object, string>();
 const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
-const postgresSqlFileSources = new WeakMap<object, { token: string; connectionId: string; database: string; revision: number; source: PostgresSqlFileSource; expires: number }>();
+const postgresSqlFileSources = new WeakMap<object, { token: string; connectionId: string; database: string; newDatabase?: string; revision: number; source: PostgresSqlFileSource; expires: number }>();
 const postgresSqlFileChoosing = new WeakSet<object>();
 const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
@@ -1121,7 +1121,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'postgres.sqlFile.choose') {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document, revision = store.connectionRevision();
-    const { connectionId, database } = input;
+    const { connectionId, database, newDatabase } = input;
     const check = () => {
       columnsMain.assertCapturedOwner(columns);
       connectionConfig.assertAvailable(connectionId);
@@ -1141,7 +1141,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const source = await inspectPostgresSqlFile(chosen.filePaths[0]);
         check();
         const token = randomUUID();
-        postgresSqlFileSources.set(document, { token, connectionId, database, revision, source, expires: Date.now() + 5 * 60 * 1000 });
+        postgresSqlFileSources.set(document, { token, connectionId, database, newDatabase, revision, source, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(source.path), bytes: source.bytes };
       } finally { postgresSqlFileChoosing.delete(document); }
     });
@@ -2170,7 +2170,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       columnsMain.assertCapturedOwner(columns);
       const document = columns!.owner.document, file = postgresSqlFileSources.get(document);
       if (shuttingDown || !file || file.token !== input.fileToken || file.expires <= Date.now() ||
-        file.revision !== store.connectionRevision() || file.connectionId !== input.connectionId || file.database !== input.database)
+        file.revision !== store.connectionRevision() || file.connectionId !== input.connectionId ||
+        file.database !== input.database || file.newDatabase !== input.newDatabase)
         throw Error('PostgreSQL SQL 文件或目标已变化，请重新选择文件');
       const profile = store.resolveConnection(input.connectionId);
       if (profile.dialect !== 'postgresql') throw Error('SQL 文件执行需要已保存的 PostgreSQL 连接');

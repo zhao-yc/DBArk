@@ -34,8 +34,9 @@ import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
 import { exportPostgresBackupSet, type PostgresBackupSetRequest } from './tableBackupSet';
 import { readPostgresBackupCatalogue } from './tableBackup';
-import { executePostgresSqlFile, type PostgresSqlFileSource } from './sqlFile';
-import type { PostgresSqlFileResult } from '../../shared/postgresSqlFile';
+import { assertPostgresSqlFileSource, executePostgresSqlFile, postgresRestoreDatabaseCommand, readPostgresRestoreDatabaseOid,
+  type PostgresSqlFileControl, type PostgresSqlFileSource } from './sqlFile';
+import { postgresRestoreDatabaseName, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { comparePostgresSnapshots, configurePostgresCompare, inPostgresCompareSnapshot, readPostgresCompareTable, type PostgresSyncEvidence, type PostgresSyncRow } from './dataCompare';
@@ -314,31 +315,85 @@ export class PostgresEngine {
   private async runSqlFile(input: Input, profile: PostgresConnectionProfile): Promise<PostgresSqlFileResult> {
     if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 文件任务已存在、连接关闭中或已达并发上限');
+    const target = input.newDatabase === undefined ? undefined : postgresRestoreDatabaseName.parse(input.newDatabase);
+    const source = input.source as PostgresSqlFileSource;
     const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true };
     this.transfers.set(input.taskId, task);
     let receipt: PostgresSqlFileResult | undefined;
-    const operation = this.use(profile, input.database, async connection => {
-      task.connection = connection;
-      receipt = await executePostgresSqlFile(connection, input.source as PostgresSqlFileSource, {
-        check: () => { if (task.cancelled) throw Error('PostgreSQL 文件执行已取消'); },
-        cancelled: () => task.cancelled,
-        active: value => { task.commandActive = value; },
-        protect: () => { task.publishing = true; },
-        settleCancel: async () => { await task.cancelPending?.catch(() => undefined); },
-        progress: statements => this.emit({ taskId: input.taskId, status: 'running', progress: 50,
-          message: 'PostgreSQL 文件已读取并执行 ' + statements + ' 条语句' }),
-      });
-      return receipt;
-    }, false, false, true);
+    let databaseCreation: PostgresSqlFileResult['databaseCreation'], sqlState: string | undefined, started = false;
+    let setupFailure: NonNullable<PostgresSqlFileResult['failure']>['reason'] = 'connection';
+    const control: PostgresSqlFileControl = {
+      check: () => { if (task.cancelled) throw Error('PostgreSQL 文件执行已取消'); },
+      cancelled: () => task.cancelled,
+      active: value => { task.commandActive = value; },
+      protect: () => { task.publishing = true; },
+      settleCancel: async () => { await task.cancelPending?.catch(() => undefined); },
+      progress: statements => this.emit({ taskId: input.taskId, status: 'running', progress: 50,
+        message: 'PostgreSQL 文件已读取并执行 ' + statements + ' 条语句' }),
+    };
+    const operation = (async () => {
+      let newOid: string | undefined;
+      if (target) {
+        setupFailure = 'file';
+        await assertPostgresSqlFileSource(source);
+        control.check();
+        setupFailure = 'create-database';
+        newOid = await this.use(profile, input.database, async connection => {
+          const sql = await postgresRestoreDatabaseCommand(connection, target);
+          // CREATE DATABASE 必须独立提交，发出后单独记录状态，文件事务失败也不删除数据库。
+          setupFailure = 'file';
+          await assertPostgresSqlFileSource(source);
+          control.check();
+          setupFailure = 'create-database';
+          task.connection = connection;
+          control.active(true);
+          databaseCreation = 'unknown';
+          try {
+            const created = await connection.query(sql, undefined, { rows: 0, bytes: 0 }, undefined, 'extended');
+            // pg 的 command 为标签首词。扩展协议只执行上面生成的一条 CREATE DATABASE。
+            if (created.postgresCommand !== 'CREATE' ||
+                !connection.state().transactionKnown || connection.state().transactionOpen)
+              throw Error('PostgreSQL 未确认创建数据库');
+            databaseCreation = 'created';
+          } catch (reason) {
+            sqlState = (reason as { postgresSqlState?: string } | undefined)?.postgresSqlState;
+            if (sqlState && connection.state().transactionKnown && !connection.state().transactionOpen) {
+              databaseCreation = 'refused';
+              if (sqlState === '42P04') setupFailure = 'database-exists';
+            }
+            throw reason;
+          } finally {
+            control.active(false);
+            await control.settleCancel();
+            task.connection = undefined;
+          }
+          control.check();
+          setupFailure = 'connection';
+          return readPostgresRestoreDatabaseOid(connection, target);
+        }, false, false, true);
+        control.check();
+      }
+      setupFailure = 'connection';
+      return this.use(profile, target ?? input.database, async connection => {
+        if (target && (connection.database !== target || await readPostgresRestoreDatabaseOid(connection, target) !== newOid))
+          throw Error('PostgreSQL 恢复目标已变化');
+        control.check();
+        task.connection = connection;
+        started = true;
+        receipt = await executePostgresSqlFile(connection, source, control);
+        return receipt;
+      }, false, false, true);
+    })();
     const done = task.done = operation.catch((): PostgresSqlFileResult => receipt ? { ...receipt, cleanupWarning: true } : {
-      outcome: task.connection ? 'unknown' : 'not-started', completed: 0, cancelled: task.cancelled,
-      failure: { reason: task.cancelled ? 'cancelled' : 'connection' },
+      outcome: started ? 'unknown' : 'not-started', completed: 0, cancelled: task.cancelled,
+      failure: { reason: task.cancelled ? 'cancelled' : setupFailure, ...(sqlState ? { sqlState } : {}) },
     });
     try {
       const result = await done;
-      const status = result.outcome === 'committed' ? 'completed' : result.cancelled && result.outcome !== 'unknown' ? 'cancelled' : 'failed';
+      const status = result.outcome === 'committed' ? 'completed' :
+        result.cancelled && result.outcome !== 'unknown' && databaseCreation !== 'unknown' ? 'cancelled' : 'failed';
       this.emit({ taskId: input.taskId, status, progress: status === 'completed' ? 100 : 0, message: 'PostgreSQL 文件执行已结算' });
-      return result;
+      return databaseCreation ? { ...result, databaseCreation } : result;
     } finally {
       this.transfers.delete(input.taskId);
       this.rememberCompleted(input.taskId);

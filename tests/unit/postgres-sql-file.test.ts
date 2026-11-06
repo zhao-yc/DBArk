@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
-import { executePostgresSqlFile, inspectPostgresSqlFile } from '../../src/engine/postgres/sqlFile';
-import { postgresSqlFileExecuteSchema } from '../../src/shared/postgresSqlFile';
+import { executePostgresSqlFile, inspectPostgresSqlFile, postgresRestoreDatabaseCommand,
+  readPostgresRestoreDatabaseOid } from '../../src/engine/postgres/sqlFile';
+import { postgresRestoreDatabaseName, postgresSqlFileExecuteSchema } from '../../src/shared/postgresSqlFile';
 
 async function fixture(sql: string | Buffer, action: (path: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'tabrelio-postgres-file-'));
@@ -16,7 +17,7 @@ async function fixture(sql: string | Buffer, action: (path: string) => Promise<v
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
-function connection(onQuery?: (sql: string) => Promise<void>) {
+function connection(onQuery?: (sql: string) => Promise<void>, loResult?: (sql: string) => string | undefined) {
   const calls: string[] = [];
   const copies: { sql: string; data: Buffer[] }[] = [];
   let open = false;
@@ -36,7 +37,8 @@ function connection(onQuery?: (sql: string) => Promise<void>) {
       if (sql === 'ROLLBACK' || sql === 'COMMIT') open = false;
       await onQuery?.(sql);
       if (sql.trim() === "SET standard_conforming_strings = off") fake.standardStrings = false;
-      return { postgresCommand: sql };
+      const c0 = loResult?.(sql.trim());
+      return c0 === undefined ? { postgresCommand: sql } : { postgresCommand: 'SELECT', rows: [{ c0 }] };
     },
   };
   const control = { check() {}, cancelled: () => false, active() {}, protect() {}, async settleCancel() {}, progress() {} };
@@ -66,6 +68,7 @@ describe('PostgreSQL SQL 文件流式执行', () => {
     ["SELECT 1; COPY sample FROM '/tmp/input';", 'command'],
     ['SELECT 1; COPY sample TO STDOUT;', 'command'],
     ['SELECT 1; COPY sample FROM STDIN WITH (FORMAT binary);', 'command'],
+    ['SELECT 1; BEGIN; SELECT 2; COMMIT;', 'command'],
     ["SELECT 1; COPY sample FROM STDIN WITH (ENCODING 'LATIN1');", 'command'],
     ['SELECT 1; \\i sample.sql', 'command'],
     ['SELECT 1; SELECT $$截断', 'syntax'],
@@ -75,6 +78,23 @@ describe('PostgreSQL SQL 文件流式执行', () => {
       const result = await executePostgresSqlFile(session, await inspectPostgresSqlFile(path), control);
       expect(result).toMatchObject({ outcome: 'rolled-back', completed: 1, failure: { reason } });
       expect(calls.map(sql => sql.trim())).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK']);
+    });
+  });
+
+  it('大对象块复用文件事务，并核对描述符及实际写入长度', async () => {
+    const data = "SELECT pg_catalog.lo_open('65001', 131072);\nSELECT pg_catalog.lowrite(0, '\\x0011');\n" +
+      'SELECT pg_catalog.lo_close(0);';
+    await fixture('SELECT 1; BEGIN;\n' + data + '\nCOMMIT; SELECT 2;', async path => {
+      const report = (sql: string) => sql.includes('lowrite(') ? '2' : sql.includes('pg_catalog.lo_') ? '0' : undefined;
+      const successful = connection(undefined, report);
+      const source = await inspectPostgresSqlFile(path);
+      await expect(executePostgresSqlFile(successful.connection, source, successful.control))
+        .resolves.toMatchObject({ outcome: 'committed', completed: 5 });
+      expect(successful.calls.filter(sql => ['BEGIN', 'COMMIT'].includes(sql.trim()))).toEqual(['BEGIN', 'COMMIT']);
+      const shortWrite = connection(undefined, sql => sql.includes('lowrite(') ? '1' : report(sql));
+      await expect(executePostgresSqlFile(shortWrite.connection, source, shortWrite.control))
+        .resolves.toMatchObject({ outcome: 'rolled-back', completed: 2, failure: { reason: 'transaction', statement: 3 } });
+      expect(shortWrite.calls.at(-1)).toBe('ROLLBACK');
     });
   });
 
@@ -151,5 +171,24 @@ describe('PostgreSQL SQL 文件流式执行', () => {
     expect(postgresSqlFileExecuteSchema.parse(input)).toEqual(input);
     for (const field of [{ path: '/tmp/file.sql' }, { sql: 'SELECT 1' }, { source: {} }])
       expect(postgresSqlFileExecuteSchema.safeParse({ ...input, ...field }).success).toBe(false);
+  });
+
+  it('接受可精确引用的新库名称，拒绝可能截断或被替换的字节', () => {
+    expect(postgresRestoreDatabaseName.parse('备份 恢复"库')).toBe('备份 恢复"库');
+    expect(postgresRestoreDatabaseName.safeParse('库'.repeat(21)).success).toBe(true);
+    for (const name of ['库'.repeat(22), ' 前置', '含\n换行', '\uD800'])
+      expect(postgresRestoreDatabaseName.safeParse(name).success).toBe(false);
+  });
+
+  it('在服务器核对名称及两次库身份时分别保留独立结果预算', async () => {
+    const target = '恢复"库';
+    const session = { async query(sql: string, values: unknown[], budget: { rows: number }) {
+      expect(values).toEqual([target]);
+      expect(budget.rows--).toBe(1);
+      return { rows: [{ c0: sql.includes('max_identifier_length') ? 't' : '16400' }] };
+    } } as unknown as PostgresConnection;
+    expect(await postgresRestoreDatabaseCommand(session, target)).toBe('CREATE DATABASE "恢复""库" WITH TEMPLATE template0');
+    expect(await readPostgresRestoreDatabaseOid(session, target)).toBe('16400');
+    expect(await readPostgresRestoreDatabaseOid(session, target)).toBe('16400');
   });
 });

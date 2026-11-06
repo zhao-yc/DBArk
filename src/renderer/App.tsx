@@ -1154,7 +1154,9 @@ function WorkspaceApp() {
     {sqliteDataCompare && <SqliteDataCompareDialog connections={connections.filter(profile => profile.dialect === 'sqlite' && !!profile.sqlite.filePath && !profile.pendingFiles?.length)} onClose={() => setSqliteDataCompare(false)}/>}
     {backupArchive && <DatabaseBackupArchiveDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)} onClose={() => setBackupArchive(false)}/>}
     {postgresBackup && <PostgresTableBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresBackup(false)}/>}
-    {postgresSqlFile && <PostgresSqlFileDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresSqlFile(false)}/>}
+    {postgresSqlFile && <PostgresSqlFileDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)}
+      onDatabaseCreated={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}
+      onClose={() => setPostgresSqlFile(false)}/>}
     {resultSnapshot && <QueryResultSnapshotDialog onClose={closeResultSnapshot}/>}
     {routineInvocationTarget && <RoutineInvocationDialog target={routineInvocationTarget} onClose={() => closeRoutineInvocation(routineInvocationTarget)} onOpenGeneratedQuery={sql => finishRoutineInvocation(routineInvocationTarget, sql)}/>}
     {tabSearch && <OpenTabSearchDialog key={tabSearch.id} registry={tabSearch.registry} onClose={() => closeTabSearch(tabSearch)} onActivate={entry => activateSearchedTab(tabSearch, entry)}/>}

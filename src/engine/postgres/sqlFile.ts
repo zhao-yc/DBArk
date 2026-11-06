@@ -2,7 +2,7 @@ import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { Readable } from 'node:stream';
-import { firstPostgresFileStatement, IncompletePostgresSql, isBarePostgresFileControl,
+import { firstPostgresFileStatement, IncompletePostgresSql, isBarePostgresFileControl, postgresIdentifier,
   isPostgresInlineCopy, skipPostgresTrivia, type PostgresStatement } from '../../shared/postgresSql';
 import { postgresSqlFileLimits as limits, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
 import type { PostgresConnection } from './connection';
@@ -14,7 +14,24 @@ type FilePart = PostgresStatement | { directive: 'restrict' | 'unrestrict' | 'un
 const budget = () => ({ rows: 0, bytes: 0 });
 const chunkSize = 128 * 1024;
 const allowed = new Set(['CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'COMMENT', 'GRANT', 'REVOKE',
-  'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'SELECT', 'WITH', 'VALUES', 'SET', 'RESET', 'LOCK', 'DO', 'CALL']);
+  'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'SELECT', 'WITH', 'VALUES', 'SET', 'RESET', 'LOCK', 'DO', 'CALL',
+  'REFRESH', 'SECURITY']);
+type LargeObjectState = 'empty' | 'open' | 'closed';
+
+/** 识别 pg_dump 生成的顺序大对象读写块，保留文件事务，逐条核对描述符和写入长度。 */
+function largeObjectStep(sql: string, state: LargeObjectState, standardStrings: boolean): {
+  next: LargeObjectState; result: string;
+} {
+  const command = sql.slice(skipPostgresTrivia(sql)).trimEnd();
+  if (state !== 'open' && /^SELECT pg_catalog\.lo_open\('[0-9]+', 131072\)$/i.test(command))
+    return { next: 'open', result: '0' };
+  if (state === 'open' && /^SELECT pg_catalog\.lo_close\(0\)$/i.test(command))
+    return { next: 'closed', result: '0' };
+  const write = standardStrings && state === 'open' &&
+    /^SELECT pg_catalog\.lowrite\(0, '\\x((?:[0-9a-f]{2})+)'\)$/i.exec(command);
+  if (write) return { next: 'open', result: String(write[1].length / 2) };
+  throw new FileFailure('command');
+}
 
 /** 只接受普通文件，物理身份和文件修改代次共同约束授权。 */
 function version(stat: BigIntStats) {
@@ -31,6 +48,36 @@ export async function inspectPostgresSqlFile(path: string): Promise<PostgresSqlF
 async function assertVersion(source: PostgresSqlFileSource, file: FileHandle) {
   if (version(await file.stat({ bigint: true })) !== source.version ||
       version(await lstat(source.path, { bigint: true })) !== source.version) throw new FileFailure('file');
+}
+
+/** 在发出 CREATE DATABASE 等事务外操作前重新确认本机源文件。 */
+export async function assertPostgresSqlFileSource(source: PostgresSqlFileSource) {
+  if (!isAbsolute(source.path) || version(await lstat(source.path, { bigint: true })) !== source.version)
+    throw new FileFailure('file');
+}
+
+const databaseBudget = () => ({ rows: 1, bytes: 2048 });
+
+/** 用服务器字节长度复核名称，避免 CREATE DATABASE 静默截断标识符。 */
+export async function postgresRestoreDatabaseCommand(connection: PostgresConnection, name: string): Promise<string> {
+  const result = await connection.query(
+    "SELECT pg_catalog.octet_length($1::text) <= pg_catalog.current_setting('max_identifier_length')::int",
+    [name], databaseBudget(),
+  );
+  if (result.rows[0]?.c0 !== 't') throw Error('目标数据库名称超过服务器允许的字节长度');
+  return 'CREATE DATABASE ' + postgresIdentifier(name) + ' WITH TEMPLATE template0';
+}
+
+/** 读取创建后的库 OID，连接目标库时再次核对，防止同名对象在两次连接之间被替换。 */
+export async function readPostgresRestoreDatabaseOid(connection: PostgresConnection, name: string): Promise<string> {
+  const result = await connection.query(
+    'SELECT oid::text FROM pg_catalog.pg_database WHERE datname = $1 AND datallowconn AND NOT datistemplate ' +
+    'AND datdba = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)',
+    [name], databaseBudget(),
+  );
+  const oid = result.rows[0]?.c0;
+  if (typeof oid !== 'string' || !/^[1-9][0-9]*$/.test(oid)) throw Error('无法确认新建 PostgreSQL 数据库的身份');
+  return oid;
 }
 
 /** 每轮只保留尚未执行的缓冲。超长单句按倍增补块，避免每块重扫整句。 */
@@ -162,10 +209,11 @@ export async function executePostgresSqlFile(connection: PostgresConnection, sou
   control: PostgresSqlFileControl): Promise<PostgresSqlFileResult> {
   let file: FileHandle | undefined, opened = false, sent = false, commitSent = false, completed = 0, wrapped = false, wrapperEnded = false;
   let restrictionKey: string | undefined, restrictionEnded = false;
+  let largeObject: LargeObjectState | undefined;
   let failure: Failure = { reason: 'file' };
-  const query = async (sql: string) => {
+  const query = async (sql: string, readResult = false) => {
     control.active(true);
-    try { return await connection.query(sql, undefined, budget(), undefined, 'extended'); }
+    try { return await connection.query(sql, undefined, readResult ? { rows: 1, bytes: 1024 } : budget(), undefined, 'extended'); }
     finally { control.active(false); }
   };
   const settled = (outcome: PostgresSqlFileResult['outcome'], problem?: Failure): PostgresSqlFileResult =>
@@ -173,8 +221,7 @@ export async function executePostgresSqlFile(connection: PostgresConnection, sou
   const state = () => connection.state();
   try {
     control.check();
-    if (!isAbsolute(source.path) || version(await lstat(source.path, { bigint: true })) !== source.version)
-      throw new FileFailure('file');
+    await assertPostgresSqlFileSource(source);
     file = await open(source.path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
     await assertVersion(source, file);
     const statements = new FileStatements(file, source.bytes, () => control.check());
@@ -189,23 +236,27 @@ export async function executePostgresSqlFile(connection: PostgresConnection, sou
       if (!part) break;
       failure = { reason: 'command', statement: completed + 1 };
       if ('directive' in part) {
+        if (largeObject) throw new FileFailure('command');
         if (part.directive === 'restrict' && !restrictionKey && !completed && !wrapped) restrictionKey = part.key;
         else if (part.directive === 'unrestrict' && restrictionKey && restrictionKey === part.key &&
             !restrictionEnded && completed && wrapped === wrapperEnded) restrictionEnded = true;
         else throw new FileFailure('command');
         continue;
       }
-      if (restrictionEnded) throw new FileFailure('command');
-      if (!completed && !wrapped && part.keyword === 'BEGIN' && isBarePostgresFileControl(part.sql, 'BEGIN')) {
-        wrapped = true;
+      if (restrictionEnded || wrapperEnded) throw new FileFailure('command');
+      if (!largeObject && part.keyword === 'BEGIN' && isBarePostgresFileControl(part.sql, 'BEGIN')) {
+        if (!completed && !wrapped) wrapped = true;
+        else largeObject = 'empty';
         continue;
       }
-      if (wrapped && completed && !wrapperEnded && part.keyword === 'COMMIT' && isBarePostgresFileControl(part.sql, 'COMMIT')) {
-        wrapperEnded = true;
-        continue;
+      if (part.keyword === 'COMMIT' && isBarePostgresFileControl(part.sql, 'COMMIT')) {
+        if (largeObject === 'closed') { largeObject = undefined; continue; }
+        if (!largeObject && wrapped && completed) { wrapperEnded = true; continue; }
+        throw new FileFailure('command');
       }
+      const lo = largeObject && largeObjectStep(part.sql, largeObject, connection.standardStrings);
       const copy = part.keyword === 'COPY';
-      if (wrapperEnded || part.parameters.length ||
+      if (part.parameters.length ||
           !(copy ? isPostgresInlineCopy(part.sql, connection.standardStrings) : allowed.has(part.keyword)))
         throw new FileFailure('command');
       if (completed >= limits.statements) throw new FileFailure('budget');
@@ -223,12 +274,19 @@ export async function executePostgresSqlFile(connection: PostgresConnection, sou
           failure = { ...failure, ...(safe.postgresSqlState ? { sqlState: safe.postgresSqlState } : {}) };
           throw new FileFailure('server');
         } finally { control.active(false); }
-      } else await query(part.sql);
+      } else {
+        const result = await query(part.sql, Boolean(lo));
+        if (lo) {
+          if (result.postgresCommand !== 'SELECT' || result.rows[0]?.c0 !== lo.result) throw new FileFailure('transaction');
+          largeObject = lo.next;
+        }
+      }
       if (!state().transactionKnown || !state().transactionOpen || state().transactionFailed)
         throw new FileFailure('transaction');
       if (++completed % 128 === 0) control.progress(completed);
     }
-    if (!completed || wrapped !== wrapperEnded || Boolean(restrictionKey) !== restrictionEnded) throw new FileFailure('command');
+    if (!completed || wrapped !== wrapperEnded || Boolean(restrictionKey) !== restrictionEnded || largeObject)
+      throw new FileFailure('command');
     failure = { reason: 'file' };
     await assertVersion(source, file);
     await file.close(); file = undefined;

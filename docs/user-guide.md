@@ -322,6 +322,8 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 回放大备份时，在「工具 → 执行 PostgreSQL SQL 文件」选择目标连接、数据库和 UTF-8 文件，再确认执行。客户端在独立事务里逐条读取，显示提交、回滚或结果未知的回执。可选择 `pg_dump` 生成的 UTF-8 纯文本 SQL，内联文本或 CSV 数据通过 PostgreSQL 的 COPY 协议写入。详见[恢复 PostgreSQL 原生纯文本备份](development/postgres-copy-script-restore-20261107.md)。
 
+要恢复到空库，勾选「恢复到新数据库」，选择维护数据库，填写新库名称并选择 SQL 文件，再点「确认创建并恢复」。连接角色须能创建数据库。同名库存在时会停止，文件事务失败时会保留已建库并显示两步的结果。详见[恢复 PostgreSQL 整库到新数据库](development/postgres-restore-new-database-20261107.md)。
+
 要把数据交给 PostgreSQL 的 `COPY FROM`，在表页「导出数据」中选择「COPY CSV（PostgreSQL 原生）」。选择输出列及逗号、分号或 Tab，再指定 `.csv` 保存位置。文件含列名，固定 UTF-8，按 PostgreSQL 的 CSV 规则区分 NULL 和空字符串。导入时使用相同分隔符，并按文件列顺序指定目标列。详见[PostgreSQL 表页原生 COPY 导出](development/postgres-copy-export-20261105.md)。
 
 在有写入权限的 PostgreSQL 普通表或分区表打开「导入 CSV」。选择与源文件一致的分隔符和首行模式，再选 UTF-8 文件。核对数据样本和目标字段后，点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。详见[PostgreSQL CSV 导入及样本预览](development/postgres-copy-preview-20261105.md)。
