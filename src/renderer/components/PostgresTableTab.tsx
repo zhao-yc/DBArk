@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { ColumnWidths } from 'react-data-grid';
 import type { TablePreferences } from '../../shared/tablePreferences';
 import { exactTableLayoutProjection, postgresLayoutSchemas, type PostgresLayoutTarget } from '../../shared/sqliteTableLayout';
@@ -66,13 +66,17 @@ import { postgresBatchDuplicateZh as batchDuplicateText } from '../locales/postg
 import { RecordTemplatesDialog } from './RecordTemplatesDialog';
 import { RecordTemplateLease, postgresTemplateCandidate, postgresTemplateColumns, postgresTemplateRows } from '../recordTemplates';
 import { recordTemplatesZh as templateText } from '../locales/recordTemplates.zh-CN';
+import { PostgresDraftHistory, type PostgresDraftEntry as DraftEntry, type PostgresDraftGroup } from '../postgresDraftHistory';
+import { draftHistoryKey } from '../draftHistory';
+import { draftHistoryZh as draftHistoryText } from '../locales/draftHistory.zh-CN';
+import { tableCellKeyIsComposing } from '../tableCellKeyboard';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
 type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 'sort'>;
 type PageMovement = { recordEdge?: 'last'; navigation?: PostgresTablePageInput['navigation'] };
-type PageRead = PageMovement & { retainPageTokens?: string[]; checkFilterColumns?: true; presetLayout?: TablePreferences };
-type DraftEntry = { change: PostgresTableChange & { pageToken: string }; rowKey?: string; offset: number };
+type PageRead = PageMovement & Pick<PostgresTablePageInput, 'retainPageTokens' | 'retainHistoryPageTokens'> &
+  { keepHistory?: boolean; checkFilterColumns?: true; presetLayout?: TablePreferences };
 type BatchSelection = {
   scope: object; page: PostgresTablePage; selected: ReadonlySet<number>;
   originalDraft: DraftEntry[]; gridCurrent(): boolean;
@@ -80,7 +84,7 @@ type BatchSelection = {
   { kind: 'duplicate'; plan: ReturnType<typeof postgresBatchDuplicatePlan> });
 const batchLabels = { fill: fillText, delete: deleteText, edit: batchEditText, duplicate: batchDuplicateText, template: templateText };
 type TemplateDialog = {
-  lease: RecordTemplateLease; target: RecordTemplateTarget; page: PostgresTablePage; originalDraft: DraftEntry[];
+  lease: RecordTemplateLease; target: RecordTemplateTarget; page: PostgresTablePage;
   columns: ReturnType<typeof postgresTemplateColumns>; candidate?: ReturnType<typeof postgresTemplateCandidate>;
 };
 type DuplicateSource = {
@@ -110,7 +114,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const draftRef = useRef(draft);
   const [batch, setBatch] = useState<BatchSelection>();
   const batchOwner = useRef<BatchSelection>(undefined);
-  const [batchUndo, setBatchUndo] = useState<{ kind: keyof typeof batchLabels; before: DraftEntry[]; after: DraftEntry[] }>();
+  const [history] = useState(() => new PostgresDraftHistory());
   const [pasteScope, setPasteScope] = useState<object>();
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
@@ -191,20 +195,22 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 只发布完整回包，旧组件迟到的原页能力显式释放。 */
   async function read(next: PageOptions, isCurrent: () => boolean, extra: PageRead = {}) {
-    const { presetLayout, recordEdge, ...readOptions } = extra;
+    const { presetLayout, recordEdge, keepHistory, ...readOptions } = extra;
     const result = await invoke('postgres.table.page', { ...target, ...next, ...readOptions });
-    return publishPage(result, next, isCurrent, presetLayout, recordEdge);
+    const retained = keepHistory ? new Set([...readOptions.retainPageTokens ?? [], ...result.retainedHistoryPageTokens ?? []]) : undefined;
+    return publishPage(result, next, isCurrent, presetLayout, recordEdge, retained);
   }
 
-  async function publishPage(result: PostgresTablePage, next: PageOptions, isCurrent: () => boolean, presetLayout?: TablePreferences, recordEdge?: 'last') {
+  async function publishPage(result: PostgresTablePage, next: PageOptions, isCurrent: () => boolean, presetLayout?: TablePreferences,
+    recordEdge?: 'last', retained?: ReadonlySet<string>) {
     if (!isCurrent()) {
       const token = result.exportToken ?? result.pageToken;
       if (token) await invoke('postgres.table.release', { ...target, pageToken: token }).catch(() => {});
       return false;
     }
     issued.current = result.exportToken ?? result.pageToken;
-    // 逐条编辑可撤回原草稿，翻页后引擎可能已释放被撤回的旧令牌。
-    if (batchUndo?.kind === 'edit') setBatchUndo(undefined);
+    if (retained) history.retain(retained);
+    else history.reset(draftRef.current);
     if (presetLayout) layout.applyPreset(presetLayout, result.columns.map(column => column.name));
     setPage(result);
     setPageConnectionVersion(connectionVersion);
@@ -258,21 +264,27 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
     if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || columnDialog || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
-    const retainPageTokens = [...new Set(draft.map(entry => entry.change.pageToken))];
-    void run(isCurrent => read(next, isCurrent, { ...movement, ...(retainPageTokens.length ? { retainPageTokens } : {}) }));
+    const pins = keepDraft ? history.pins() : {};
+    void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
   }
 
   /** 更新草稿及标签退出保护。 */
-  function setChanges(next: DraftEntry[]) {
-    setBatchUndo(undefined);
+  function publishChanges(next: DraftEntry[]) {
     draftRef.current = next;
     setDraft(next);
     recordDirty.current = next.length > 0;
     useWorkspace.getState().setDirty(tab.id, recordDirty.current || !!inlineOwner.current || !!recordInput.current || layout.view.dirty);
   }
 
+  function setChanges(next: DraftEntry[], group?: PostgresDraftGroup) {
+    if (next.length === draftRef.current.length && next.every((entry, index) => entry === draftRef.current[index])) return;
+    history.record(next, group);
+    publishChanges(next);
+  }
+
   /** 单格和矩形共用一次整批校验，重编同一主键时继续使用首次暂存的原行版本。 */
-  function stageChanges(changes: readonly PostgresTableChange[], owner?: InlineEdit, remove?: ReadonlySet<string>) {
+  function stageChanges(changes: readonly PostgresTableChange[],
+    { owner, remove, group }: { owner?: InlineEdit; remove?: ReadonlySet<string>; group?: PostgresDraftGroup } = {}) {
     if (!page?.pageToken || requiresRefresh || lease.current || inlineOwner.current !== owner) return false;
     const next = draftRef.current.filter(entry => !entry.rowKey || !remove?.has(entry.rowKey));
     for (const change of changes) {
@@ -288,12 +300,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       const checked = postgresTablePreviewSchema.safeParse({ ...target, pageToken: page.pageToken, changes: next.map(item => item.change) });
       if (!checked.success) throw Error(checked.error.issues[0]?.message ?? text.noChange);
     }
-    setChanges(next);
+    setChanges(next, group);
     return true;
   }
 
   function stage(change: PostgresTableChange, owner?: InlineEdit) {
-    if (stageChanges([change], owner)) setForm(undefined);
+    if (stageChanges([change], { owner })) setForm(undefined);
   }
 
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
@@ -320,15 +332,18 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         return;
       }
       issued.current = undefined;
+      history.reset(draftRef.current);
       setRequiresRefresh(true);
       setMessage(result.outcome === 'unknown' ? text.unknown + ' ' + result.message : result.message);
       if (result.outcome === 'committed') {
-        setChanges([]);
+        history.reset([]);
+        publishChanges([]);
         await read(options, isCurrent);
       }
     }, () => {
       setPreview(undefined);
       if (!issued.current) return;
+      history.reset(draftRef.current);
       setRequiresRefresh(true);
       setMessage(text.unknown);
     });
@@ -341,6 +356,33 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
+  const historyStatus = history.status;
+  const historyEnabled = active && writable && pageConnectionVersion === connectionVersion;
+
+  /** 只在当前表页的草稿账本移动，不执行查询或提交，也不接管输入控件的撤销。 */
+  function moveDraftHistory(direction: 'undo' | 'redo') {
+    if (!historyEnabled || issued.current !== page?.pageToken || !layoutScope.current.current() ||
+        draftRef.current !== draft || lease.current || batchOwner.current || templateOwner.current ||
+        inlineOwner.current || pasteOwner.current || recordInput.current ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const next = history.move(direction);
+    if (!next) return;
+    closeCellMenu(cellMenuOwner.current, false);
+    publishChanges(next);
+    setMessage('');
+    setError('');
+  }
+
+  function handleDraftHistoryKey(event: KeyboardEvent<HTMLDivElement>) {
+    if (!historyEnabled || event.defaultPrevented || tableCellKeyIsComposing(event.nativeEvent)) return;
+    const element = event.target;
+    const action = draftHistoryKey(event, element instanceof HTMLElement && !!element.closest('[role="grid"]') &&
+      !element.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]'));
+    if (!action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) moveDraftHistory(action);
+  }
   const firstPage = { ...options, offset: 0, limit: pageSize };
   const appliedAdvanced = options.filter && 'rules' in options.filter ? options.filter : undefined;
   const sortRules = postgresTableSortRules(options.sort);
@@ -461,12 +503,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     if (batchOwner.current !== intent || intent.page !== page || cellScope !== intent.scope ||
         !intent.gridCurrent() || issued.current !== intent.page.pageToken || !layoutScope.current.current() ||
         lease.current || requiresRefresh || draftRef.current !== intent.originalDraft) throw Error(batchText.stale);
-    const before = draftRef.current;
     const { changes, remove } = build(), count = changes.length + (remove?.size ?? 0);
-    if (count) {
-      if (!stageChanges(changes, undefined, remove)) throw Error(batchText.stale);
-      setBatchUndo({ kind: intent.kind, before, after: draftRef.current });
-    }
+    if (count && !stageChanges(changes, { remove, group: intent.kind })) throw Error(batchText.stale);
     closeBatch(intent);
     setError('');
     setMessage(count ? batchText.staged(count) : intent.kind === 'edit' ? batchEditText.unchanged : fillText.unchanged);
@@ -715,15 +753,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     closeCellMenu(cellMenuOwner.current, false);
     templateOwner.current = owner;
     setTemplateDialog({ lease: owner, target: { ...layoutTarget, table: postgresIdentifier(schema) + '.' + postgresIdentifier(name) },
-      page, originalDraft, columns: postgresTemplateColumns(page.columns),
+      page, columns: postgresTemplateColumns(page.columns),
       candidate: row === null ? undefined : postgresTemplateCandidate(page, row, prior) });
   }
 
   /** 用原页账本一次性接收全部副本，撤销时恢复应用前的整份草稿。 */
   function stageRecordTemplate(intent: TemplateDialog, content: RecordTemplateContent, count: number) {
     if (intent.page !== page || !intent.lease.current()) throw Error(templateText.stale);
-    if (!stageChanges(postgresTemplateRows(content, intent.page.columns, count))) throw Error(templateText.stale);
-    setBatchUndo({ kind: 'template', before: intent.originalDraft, after: draftRef.current });
+    if (!stageChanges(postgresTemplateRows(content, intent.page.columns, count), { group: 'template' })) throw Error(templateText.stale);
     closeRecordTemplates(intent.lease);
     setError('');
     setMessage(templateText.staged(count));
@@ -918,7 +955,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {canEditGrid && <span title={pasteText.overwriteHint}>{text.cellEditHint} {pasteText.overwriteHint}</span>}
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
-    <div className="pg-table-grid" inert={!!inlineEdit}>
+    <div className="pg-table-grid" inert={!!inlineEdit} onKeyDownCapture={handleDraftHistoryKey}>
       {page && recordView && <PostgresTableRecordView page={page} row={row} offset={options.offset} visible={gridLayout.columns}
         draft={viewDraft?.kind === 'update' || viewDraft?.kind === 'delete' ? viewDraft : undefined}
         editable={recordEditable} reference={referenceSource(recordEditable, recordViewCurrent)}
@@ -992,12 +1029,20 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     {templateDialog && <RecordTemplatesDialog key={templateDialog.lease.id} lease={templateDialog.lease}
       target={templateDialog.target} dialect="postgresql" columns={templateDialog.columns} candidate={templateDialog.candidate}
       onStage={(content, count) => stageRecordTemplate(templateDialog, content, count)} onClose={() => closeRecordTemplates(templateDialog.lease)}/>}
-    {(draft.length > 0 || batchUndo) && <div className="pg-table-draft" aria-label={text.draft}>
+    {!!(historyStatus.undo || historyStatus.redo) && <div className="pg-table-controls" role="group" aria-label={draftHistoryText.postgresTitle}>
+      <button aria-label={draftHistoryText.undo} title={draftHistoryText.postgresLimit} disabled={!historyEnabled || !historyStatus.undo}
+        onClick={() => moveDraftHistory('undo')}>{draftHistoryText.undo} ({historyStatus.undo})</button>
+      <button aria-label={draftHistoryText.redo} title={draftHistoryText.postgresLimit} disabled={!historyEnabled || !historyStatus.redo}
+        onClick={() => moveDraftHistory('redo')}>{draftHistoryText.redo} ({historyStatus.redo})</button>
+    </div>}
+    {(draft.length > 0 || historyStatus.undoGroup) && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong>{draft.length > 0 &&
-        <button disabled={blocked} onClick={() => { setChanges([]); setMessage(''); }}>{text.discard}</button>}
-      {batchUndo && <button disabled={blocked || requiresRefresh} onClick={() => {
-        if (draftRef.current === batchUndo.after) { setChanges(batchUndo.before); setMessage(''); }
-      }}>{batchLabels[batchUndo.kind].undo}</button>}
+        <button disabled={blocked} onClick={() => {
+          if (requiresRefresh) { history.reset([]); publishChanges([]); }
+          else setChanges([]);
+          setMessage('');
+        }}>{text.discard}</button>}
+      {historyStatus.undoGroup && <button disabled={!historyEnabled} onClick={() => moveDraftHistory('undo')}>{batchLabels[historyStatus.undoGroup].undo}</button>}
       <ol>{draft.map(({ change, offset }, index) => <li key={index}>
         <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</span>
         {change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {
@@ -1005,7 +1050,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
           const value = 'value' in field.value ? cellPreview(field.value.value) : field.value.mode.toUpperCase();
           return name + '=' + value;
         }).join('，')}</span>}
-        <button disabled={blocked} onClick={() => { setChanges(draft.filter((_, other) => index !== other)); setMessage(''); }}>{text.undo}</button>
+        <button disabled={blocked || requiresRefresh} onClick={() => { setChanges(draft.filter((_, other) => index !== other)); setMessage(''); }}>{text.undo}</button>
       </li>)}</ol>
     </div>}
     {exportPage && <PostgresTableExportDialog target={target} page={exportPage} filtered={isPostgresTableFiltered(options.filter)}
@@ -1043,6 +1088,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         !recordDirty.current} onClose={() => setImportPage(undefined)}
       onOutcome={(outcome, committed) => {
         if (!lifetime.current || issued.current !== importPage.exportToken) return;
+        history.reset(draftRef.current);
         setImportPage(undefined); setRequiresRefresh(true); setMessage(outcome);
         if (committed) void run(isCurrent => read(options, isCurrent));
       }}/>}

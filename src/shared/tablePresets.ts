@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { filterRuleSchema, filterGroupSchema, assertFilterGroupInput, sortRulesSchema, validateFilterGroup, FILTER_LIMITS } from './filtering';
 import { tablePreferencesLimits, tablePreferenceTargetSchema, type TablePreferences } from './tablePreferences';
-import { postgresAdvancedTableFilterSchema, postgresQuickTableFilterSchema, postgresTableLayoutPreferencesSchema, postgresTablePageSchema, postgresTableSortRules, postgresTableSortSchema, type PostgresTablePage, type PostgresTablePageInput } from './postgresTable';
+import { postgresAdvancedTableFilterSchema, postgresQuickTableFilterSchema, postgresTableLayoutPreferencesSchema, postgresTablePageSchema, postgresTableSortRules, postgresTableSortSchema, postgresTableTargetSchema, type PostgresTablePage, type PostgresTablePageInput } from './postgresTable';
 import { postgresPresetIdFromTab } from './postgresPresetTab';
 
 export const tablePresetLimits = { name:80, perTarget:20, targets:500, entries:500, entryBytes:65536, totalBytes:4*1024*1024 } as const;
@@ -55,7 +55,7 @@ const checked = tablePreferenceTargetSchema.extend({expectedRevision:revision,so
 export const tablePresetSaveSchema = checked.extend({name,configuration:tablePresetConfigurationSchema,replaceId:z.string().uuid().optional()}).strict();
 export const tablePresetSelectSchema = checked.extend({id:z.string().uuid()}).strict();
 export const tablePresetApplySchema = tablePresetSelectSchema.extend({taskId:z.string().uuid()}).strict();
-export const postgresTablePresetListSchema = postgresTablePageSchema.pick({ connectionId: true, database: true, table: true });
+export const postgresTablePresetListSchema = postgresTableTargetSchema.pick({ connectionId: true, database: true, table: true });
 const postgresChecked = postgresTablePresetListSchema.extend({ expectedRevision: revision, source: tablePresetSourceSchema, bindingToken: z.string().uuid() }).strict();
 export const postgresTablePresetSaveSchema = postgresChecked.extend({ name, configuration: postgresTablePresetConfigurationSchema, replaceId: z.string().uuid().optional() });
 export const postgresTablePresetSelectSchema = postgresChecked.extend({ id: z.string().uuid() });

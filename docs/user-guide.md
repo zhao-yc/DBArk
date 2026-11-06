@@ -240,6 +240,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 PostgreSQL 表页同时显示「整批已回滚」和「草稿已保留」时，可直接修正各页草稿，再生成提交预览。若显示提交状态待核对，先核对数据库实际记录，再刷新表页。[回滚后修正草稿](development/postgres-rollback-recovery-20261106.md)
 
+PostgreSQL 表页可用「撤销上一步」和「重做下一步」恢复暂存的编辑。网格获得焦点时也可用 `Ctrl/⌘+Z` 和 `Ctrl/⌘+Shift+Z`，Windows 另可用 `Ctrl+Y`。同一批操作按一步处理，翻页后仍可恢复有效原页上的草稿。写库继续使用 SQL 预览和明确确认。[PostgreSQL 草稿撤销与重做](development/postgres-draft-history-20261106.md)
+
 在 PostgreSQL 网格选中一行，或定位到记录表单中的一条记录后，点击「查看引用记录」。窗口按数据库中的原外键值显示当前账号可读的父记录，可切换约束并展开字段原值。关闭后保留源表草稿。[PostgreSQL 查看引用记录](development/postgres-browse-parent-20261106.md)
 
 在 PostgreSQL 表页选中一条父记录后，点击「查看子记录」。按子表和外键约束切换，可搜索当前父记录的关联结果、翻页和查看单条原值。查询使用父记录在数据库中的原值，关闭窗口后草稿仍可继续编辑。[PostgreSQL 查看子记录](development/postgres-browse-children-20261106.md)

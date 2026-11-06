@@ -11,7 +11,8 @@ const relation = z.string().min(1).max(512).refine(value => !value.includes('\0'
 export const postgresTableLayoutPreferencesSchema = strictTableLayoutPreferences(relation, 1022);
 const token = z.uuid();
 const column = z.string().regex(/^c[0-9]{1,4}$/);
-const target = z.object({ connectionId: identity, database: identity, table: relation, tabId: identity }).strict();
+export const postgresTableTargetSchema = z.object({ connectionId: identity, database: identity, table: relation, tabId: identity }).strict();
+const target = postgresTableTargetSchema;
 export const postgresQuickTableFilterSchema = z.object({ column: relation, text: z.string().max(4096).refine(value => !value.includes('\0')) }).strict();
 export const postgresAdvancedTableFilterSchema = z.object({
   rules: z.array(filterRuleSchema).min(1).max(FILTER_LIMITS.conditions),
@@ -53,7 +54,12 @@ export const postgresTablePageSchema = target.extend({
   navigation: z.enum(['count', 'last']).optional(),
   retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
     .refine(value => new Set(value).size === value.length, '保留的草稿原页不能重复').optional(),
-}).strict();
+  retainHistoryPageTokens: z.array(token).max(postgresTableLimits.draftPages).optional(),
+}).strict().superRefine(({ retainPageTokens, retainHistoryPageTokens }, context) => {
+  const pins = [...retainPageTokens ?? [], ...retainHistoryPageTokens ?? []];
+  if (pins.length > postgresTableLimits.draftPages || new Set(pins).size !== pins.length)
+    context.addIssue({ code: 'custom', message: '草稿与撤销历史的原页不能重复或超过保留上限' });
+});
 
 /** 精确计数始终以十进制字符串传输，只有已限制到浏览窗口的偏移和行数才转换为 number。 */
 export function postgresCountedWindow(matchingRows: unknown, limit: number, offset: number, navigation: 'count' | 'last') {
@@ -241,6 +247,7 @@ export interface PostgresTableColumn extends ResultColumn {
 export interface PostgresTablePage {
   pageToken?: string;
   exportToken?: string;
+  retainedHistoryPageTokens?: string[];
   canImport?: true;
   canBrowseReferences?: true;
   columns: PostgresTableColumn[];

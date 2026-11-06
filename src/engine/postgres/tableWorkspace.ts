@@ -223,7 +223,7 @@ export class PostgresTableWorkspace {
 
   private key(scope: Scoped<PostgresTableTarget>): string { return JSON.stringify([scope.owner, scope.tabId]); }
 
-  /** 仅保留本标签仍有草稿的原页，导入和导出继续绑定当前页。 */
+  /** 当前草稿必须保留。只在同一目录和筛选范围内尽量保留撤销历史，过期历史不阻断翻页。 */
   async page(input: Scoped<PostgresTablePageInput>, connect: Connect): Promise<PostgresTablePage> {
     if (isPostgresRelatedTabId(input.tabId)) throw Error('关联表页必须按原外键范围读取');
     const key = this.key(input);
@@ -231,11 +231,21 @@ export class PostgresTableWorkspace {
     this.active.add(key);
     try {
       const options = { filter: input.filter, sort: postgresTableSortSchema.parse(input.sort) };
-      const pins = input.retainPageTokens ?? [];
-      if (pins.length > postgresTableLimits.draftPages) throw Error('草稿原页超过保留上限');
+      const pins = input.retainPageTokens ?? [], historyPins = input.retainHistoryPageTokens ?? [];
+      const allPins = [...pins, ...historyPins];
+      if (allPins.length > postgresTableLimits.draftPages || new Set(allPins).size !== allPins.length)
+        throw Error('草稿及历史原页不能重复或超过保留上限');
       const retained = new Map(pins.map(pageToken => [pageToken, this.snapshot({ ...input, pageToken }, true, true)]));
-      for (const snapshot of retained.values()) if (pageScope(snapshot.options) !== pageScope(options))
+      const scopeKey = pageScope(options);
+      for (const snapshot of retained.values()) if (pageScope(snapshot.options) !== scopeKey)
         throw Error('请先处理草稿，再更改筛选或排序');
+      const history = new Map<string, Snapshot>();
+      for (const pageToken of historyPins) {
+        try {
+          const snapshot = this.snapshot({ ...input, pageToken }, true, true);
+          if (pageScope(snapshot.options) === scopeKey) history.set(pageToken, snapshot);
+        } catch { /* 原页已过期或不属于本工作区，忽略对应历史。 */ }
+      }
       const result = await connect(async connection => {
         await begin(connection, 'page');
         const relation = await readRelation(connection, input.table);
@@ -281,17 +291,24 @@ export class PostgresTableWorkspace {
       const exportToken = randomUUID();
       const writeEligible = Object.values(capabilities).some(Boolean);
       const { owner, tabId, connectionRevision, connectionId, database, table } = input;
-      for (const snapshot of retained.values()) snapshot.preview = undefined;
       const current: Snapshot = {
         token: exportToken, scope: { owner, tabId, connectionRevision, connectionId, database, table },
         expires: now + 30 * 60 * 1000, relation: retained.values().next().value?.relation ?? result.relation,
         rows: result.truncated ? [] : result.originals, options, writeEligible,
       };
+      const retainedHistoryPageTokens: string[] = [];
+      for (const [pageToken, snapshot] of history) {
+        if (snapshot.expires <= now || snapshot.relation.fingerprint !== result.relation.fingerprint) continue;
+        retained.set(pageToken, snapshot);
+        retainedHistoryPageTokens.push(pageToken);
+      }
+      for (const snapshot of retained.values()) snapshot.preview = undefined;
       this.snapshots.set(key, { current, retained });
       return {
         columns: result.relation.columns, rows: result.rows, hasNext: result.hasNext, truncated: result.truncated,
         order: result.relation.keys.length ? 'primary' : ['r','p'].includes(result.relation.kind) ? 'physical' : 'unstable',
         relationKind: result.relation.kind, capabilities, exportToken, ...(writeEligible ? { pageToken: exportToken } : {}),
+        ...(retainedHistoryPageTokens.length ? { retainedHistoryPageTokens } : {}),
         ...(result.counted ? { counted: { matchingRows: result.counted.matchingRows, offset: result.counted.offset } } : {}),
         ...(result.originals.length && (capabilities.update || capabilities.delete)
           ? { rowKeys: result.originals.map(row => row.key) } : {}),

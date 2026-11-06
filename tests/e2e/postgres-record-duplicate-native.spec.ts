@@ -7,6 +7,7 @@ import { postgresRecordViewZh as viewText } from '../../src/renderer/locales/pos
 import { postgresBatchDuplicateZh as batchText } from '../../src/renderer/locales/postgresBatchDuplicate.zh-CN';
 import { postgresBatchEditZh as editText } from '../../src/renderer/locales/postgresBatchEdit.zh-CN';
 import { recordTemplatesZh as templateText } from '../../src/renderer/locales/recordTemplates.zh-CN';
+import { draftHistoryZh as historyText } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
@@ -17,7 +18,7 @@ test.skip(!enabled, '仅使用本轮隔离 PostgreSQL 实库');
 test.use({ trace: 'off', video: 'off', screenshot: 'off', ...(enabled ? { preserveOnUnconfirmedExit: true } : {}) });
 test.describe.configure({ timeout: 120000, retries: 0 });
 
-test('PostgreSQL 复制记录、回滚后修正草稿和记录模板', async ({}, info) => {
+test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿历史', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Runtime;
   const { page, application } = runtime.ownedDesktopResources(info);
   const directory = runtime.dataDir, pid = application.process().pid;
@@ -266,6 +267,63 @@ test('PostgreSQL 复制记录、回滚后修正草稿和记录模板', async ({}
       ...templateOriginals[0], id, legacy: String(index + 2), note: '暂存模板值', raw: 'ff00', fallback: '数据库默认', tag: '暂存模板值-生成',
     }))]);
     await mark('刷新无选中记录也可生成，明确提交后仅新增两条精确值、NULL 和默认值正确的记录');
+
+    const beforeHistory = await readTemplateRows();
+    const history = tab.getByRole('group', { name: historyText.postgresTitle, exact: true });
+    const undo = history.getByRole('button', { name: historyText.undo, exact: true });
+    const redo = history.getByRole('button', { name: historyText.redo, exact: true });
+    await expect(history).toHaveCount(0);
+    await tab.getByLabel(tableText.pageSize, { exact: true }).fill('1');
+    await button(tableText.refresh).click();
+    // 原网格在读完前仍可见，确认新页投影生效后再选中原行。
+    await expect(grid.getByRole('gridcell', { name: '暂存模板值', exact: true })).toHaveCount(0);
+    await expect(button(tableText.next)).toBeEnabled();
+    const stageNote = async (original: string, next: string, verifyHistoryBlocked = false) => {
+      await grid.getByRole('gridcell', { name: original, exact: true }).click();
+      await button(tableText.edit).click();
+      await mode(edit, 'note').selectOption('text');
+      await value(edit, 'note').fill(next);
+      if (verifyHistoryBlocked) await expect(undo).toBeDisabled();
+      await edit.getByRole('button', { name: tableText.stage, exact: true }).click();
+    };
+    await stageNote('模板原行', '跨页草稿甲');
+    await button(tableText.next).click();
+    await expect(tab.getByText(tableText.currentPage(2), { exact: true })).toBeVisible();
+    await stageNote('暂存模板值', '跨页草稿乙', true);
+    await expect(draft).toContainText(tableText.changes(2));
+    const gridNote = grid.getByRole('gridcell', { name: '暂存模板值', exact: true });
+    const shortcut = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await gridNote.press(shortcut + '+z');
+    await expect(draft).toContainText('跨页草稿甲');
+    await expect(draft).not.toContainText('跨页草稿乙');
+    await undo.click();
+    await expect(draft).toHaveCount(0);
+    expect(await readTemplateRows()).toEqual(beforeHistory);
+    await mark('两个原页分别暂存，网格快捷键和按钮连续撤销至空账本，实库原行保持');
+
+    await button(tableText.next).click();
+    await expect(tab.getByText(tableText.currentPage(3), { exact: true })).toBeVisible();
+    await redo.click();
+    await gridNote.press(shortcut + '+Shift+z');
+    await expect(draft).toContainText(tableText.changes(2));
+    await expect(draft).toContainText('跨页草稿甲');
+    await expect(draft).toContainText('跨页草稿乙');
+    await page.screenshot({ path: info.outputPath('PostgreSQL跨页草稿历史.png') });
+    await button(tableText.preview).click();
+    await expect(review).toContainText('UPDATE');
+    await expect(undo).toBeDisabled();
+    expect(await readTemplateRows()).toEqual(beforeHistory);
+    await mark('空账本翻页后仍可重做两个原页，SQL 预览和模态拦截期间实库保持');
+
+    await review.getByRole('button', { name: tableText.apply, exact: true }).click();
+    await expect(tab.getByText(/已确认整批提交/)).toBeVisible();
+    await expect(history).toHaveCount(0);
+    expect(await readTemplateRows()).toEqual([
+      { ...beforeHistory[0], note: '跨页草稿甲', tag: '跨页草稿甲-生成' },
+      { ...beforeHistory[1], note: '跨页草稿乙', tag: '跨页草稿乙-生成' },
+      beforeHistory[2],
+    ]);
+    await mark('明确提交只更新两个原页目标，第三行保持，提交后清空撤销和重做');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

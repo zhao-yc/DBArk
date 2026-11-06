@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 表页新增跨页草稿撤销与重做，覆盖单格、表单和批量暂存。重做保留原行快照，写入前沿用原事务复核。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 草稿撤销与重做](development/postgres-draft-history-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 表页可按字段保存本机记录模板，保留精确数值、字节和 NULL。应用时生成一组新增草稿，可单独撤销，再沿原预览与事务提交。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 记录模板](development/postgres-record-templates-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 独立关联页可编辑选中的现有记录，沿用普通表单、暂存、SQL 预览和事务确认。目标行、源记录及外键在提交前复核。D02、D04、D05 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 编辑关联记录](development/postgres-related-edit-20261106.md)

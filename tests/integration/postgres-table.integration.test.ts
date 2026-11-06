@@ -482,6 +482,19 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect([legacy.rows[0].c0, normalized.rows[0].c0]).toEqual(['3', '2']);
       const update = (page: PostgresTablePage, note: string): PostgresTableChange =>
         ({ kind: 'update', pageToken: pin(page), row: 0, fields: [field('c1', note)] });
+      const historyScope = { table: '"浏览"."草稿历史"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE ${historyScope.table} (id bigint PRIMARY KEY, note text);
+        INSERT INTO ${historyScope.table} VALUES (1,'原甲'),(2,'原乙')`);
+      const historyFirst = await read({ ...historyScope, limit: 1 });
+      const historySecond = await read({ ...historyScope, offset: 1, limit: 1, retainHistoryPageTokens: [pin(historyFirst), pin(a), randomUUID()] });
+      expect(historySecond.retainedHistoryPageTokens).toEqual([pin(historyFirst)]);
+      expect((await preview(historySecond, [update(historyFirst, '历史可恢复')], historyScope)).counts).toEqual({ insert: 0, update: 1, delete: 0 });
+      await expect(preview(historySecond, [update(a, '别的标签不可恢复')], historyScope)).rejects.toThrow('快照');
+      await client.query(`ALTER TABLE ${historyScope.table} ADD COLUMN extra text`);
+      await expect(read({ ...historyScope, offset: 1, limit: 1, retainPageTokens: [pin(historyFirst)] })).rejects.toThrow('结构或权限');
+      const changedHistory = await read({ ...historyScope, offset: 1, limit: 1, retainHistoryPageTokens: [pin(historyFirst)] });
+      expect(changedHistory.retainedHistoryPageTokens).toBeUndefined();
+      await expect(preview(changedHistory, [update(historyFirst, '旧目录不能恢复')], historyScope)).rejects.toThrow('快照');
       await expect(preview(revisited, [update(a, '重复'), update(revisited, '重复')], cross)).rejects.toThrow('同一原记录');
       await expect(preview(revisited, [update(first, '他表')], cross)).rejects.toThrow('快照');
       const multiple = await preview(revisited, [update(a, '已改甲'), update(b, '已改乙')], cross);
