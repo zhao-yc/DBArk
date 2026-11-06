@@ -19,6 +19,9 @@ import { postgresColumnStatisticsZh as statisticsText } from '../../src/renderer
 import { tableHistogramZh as histogramText } from '../../src/renderer/locales/tableHistogram.zh-CN';
 import { postgresReadonlyRecordZh as originalText } from '../../src/renderer/locales/postgresReadonlyRecord.zh-CN';
 import { postgresRecordJsonZh as recordJsonText } from '../../src/renderer/locales/postgresRecordJson.zh-CN';
+import { recordJsonNodeInputZh as nodeText } from '../../src/renderer/locales/recordJsonNodeInput.zh-CN';
+import { recordJsonStructureInputZh as structureText } from '../../src/renderer/locales/recordJsonStructureInput.zh-CN';
+import { recordProjectionZh as projectionText } from '../../src/renderer/locales/recordProjections.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 type Runtime = typeof import('./desktop-fixture');
@@ -769,6 +772,34 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await expect(value(recordView, 'amount')).toHaveValue(exact);
     await expect(value(recordView, 'raw')).toHaveValue('ff00');
     await expect(mode(recordView, 'state')).toHaveValue('default');
+    await viewButton(recordJsonText.tree).click();
+    const editTree = recordView.getByRole('region', { name: recordJsonText.tree, exact: true });
+    const treeButton = (name: string) => editTree.getByRole('button', { name, exact: true });
+    await treeButton(recordJsonText.parse).click();
+    const lexicalRows = editTree.getByRole('list', { name: projectionText.lexicalTree, exact: true }).getByRole('listitem');
+    await expect(lexicalRows).toHaveCount(3);
+    await lexicalRows.nth(2).getByRole('button', { name: nodeText.edit, exact: true }).click();
+    const nodeInput = editTree.getByRole('textbox', { name: nodeText.label, exact: true });
+    await expect(nodeInput).toHaveValue('0.000000000000000001');
+    await nodeInput.fill('{');
+    await treeButton(recordJsonText.applyNode).click();
+    await expect(editTree.getByRole('alert')).toBeVisible();
+    await nodeInput.fill('0.000000000000000002');
+    await treeButton(recordJsonText.applyNode).click();
+    await expect(lexicalRows.nth(2)).toContainText('0.000000000000000002');
+    await lexicalRows.first().getByRole('button', { name: structureText.more, exact: true }).click();
+    await treeButton(structureText.actions['append-member']).click();
+    await editTree.getByRole('textbox', { name: structureText.keyLabel, exact: true }).fill('"数组"');
+    await editTree.getByRole('textbox', { name: structureText.valueLabel, exact: true }).fill('[1,2]');
+    await treeButton(recordJsonText.applyNode).click();
+    await expect(lexicalRows).toHaveCount(4);
+    await lexicalRows.nth(3).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('PostgreSQL节点和结构编辑.png') });
+    await treeButton(recordJsonText.back).click();
+    const editedJson = '{"重复":9007199254740993,"重复":0.000000000000000002,"数组":[1,2]}';
+    await expect(value(recordView, 'doc')).toHaveValue(editedJson);
+    expect(await readJsonRows()).toEqual(beforeJson);
+    await mark('可写 JSON 记录树从当前赋值定位重复键，拒绝非法值，替换第二个节点和追加结构后返回表单');
     await viewButton(viewText.stage).click();
     await expect(draft).toContainText('amount=' + exact);
     expect(await readJsonRows()).toEqual(beforeJson);
@@ -776,7 +807,7 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await expect(review).toContainText('"state" = DEFAULT');
     await review.getByRole('button', { name: tableText.apply, exact: true }).click();
     await expect(tab.getByRole('status')).toContainText('已确认整批提交');
-    const afterJson = [{ id: '9007199254740993', amount: exact, doc: lexicalJson, raw: 'ff00', nullable_text: null,
+    const afterJson = [{ id: '9007199254740993', amount: exact, doc: editedJson, raw: 'ff00', nullable_text: null,
       state: '恢复默认', derived: '恢复默认-生成' }];
     expect(await readJsonRows()).toEqual(afterJson);
     await mark('整行 JSON 拒绝重复编辑键，字段表单和草稿保留精度；确认事务后才写入原值、字节及 DEFAULT');
@@ -787,7 +818,18 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     const addJsonInput = addJson.getByRole('textbox', { name: recordJsonText.input, exact: true });
     const insert = JSON.parse(await addJsonInput.inputValue());
     insert.fields[0].assignment = { mode: 'text', value: '9007199254740994' };
+    insert.fields[2].assignment = { mode: 'text', value: '{}' };
     await addJsonInput.fill(JSON.stringify(insert));
+    const addButton = (name: string) => addJson.getByRole('button', { name, exact: true });
+    await addButton(recordJsonText.back).click();
+    await addButton(recordJsonText.tree).click();
+    await addButton(recordJsonText.parse).click();
+    await addButton(nodeText.edit).click();
+    await addJson.getByRole('textbox', { name: nodeText.label, exact: true }).fill('{"创建":true}');
+    await addButton(recordJsonText.applyNode).click();
+    await addButton(recordJsonText.back).click();
+    await addButton(recordJsonText.open).click();
+    expect(JSON.parse(await addJsonInput.inputValue()).fields[2].assignment).toEqual({ mode: 'text', value: '{"创建":true}' });
     await addJson.getByRole('button', { name: tableText.stage, exact: true }).click();
     await expect(draft).toContainText('id=9007199254740994');
     await expect(tab.getByText('已确认整批提交', { exact: false })).toHaveCount(0);
@@ -797,7 +839,7 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await expect(review).toHaveCount(0);
     await expect(draft).toHaveCount(0);
     await expect(tab.getByRole('status')).toContainText('已确认整批提交');
-    expect(await readJsonRows()).toEqual([...afterJson, { id: '9007199254740994', amount: null, doc: null, raw: null,
+    expect(await readJsonRows()).toEqual([...afterJson, { id: '9007199254740994', amount: null, doc: '{"创建":true}', raw: null,
       nullable_text: null, state: '恢复默认', derived: '恢复默认-生成' }]);
     await mark('新增窗口可直接暂存整行 JSON，省略字段使用数据库默认值且独立读回一致');
 

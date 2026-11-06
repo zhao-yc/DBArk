@@ -19,6 +19,23 @@ interface RecordJsonColumn { key: string; name: string; type: string; generated:
 export interface PostgresRecordJsonInput { initial: string; columns: readonly RecordJsonColumn[]; }
 export interface PostgresRecordJsonBuffer { input: PostgresRecordJsonInput; source: string; }
 
+export function isPostgresJsonTextType(type: string): boolean {
+  return /^(?:jsonb?|text|character(?: varying)?(?:\(\d+\))?)$/.test(type);
+}
+
+/** 已有赋值优先。NULL、DEFAULT 和字节赋值没有可编辑的 JSON 原文。 */
+export function postgresJsonFieldText(original: DataRow | undefined, values: Values, key: string): string | undefined {
+  const assignment = values.get(key);
+  const value = assignment ? assignment.mode === 'text' ? assignment.value : undefined : original && ownCell(original, key);
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** 父表单在接受新原文前再次比对当前字段，迟到节点不能覆盖新的赋值。 */
+export function replacePostgresJsonField(original: DataRow | undefined, values: Values, key: string, previous: string, next: string): Values {
+  if (postgresJsonFieldText(original, values, key) !== previous) throw Error(text.treeStale);
+  return new Map(values).set(key, { mode: 'text', value: next });
+}
+
 /** 原值与待赋值分别保存。原始 JSON 字段作为文本，重复成员或大数字不会经过 JSON 对象转换。 */
 export function beginPostgresRecordJson(columns: readonly PostgresTableColumn[], original: DataRow | undefined, values: Values): PostgresRecordJsonBuffer {
   if (!columns.length || columns.length > 1022 || new Set(columns.map(column => column.key)).size !== columns.length) throw Error(text.invalid);

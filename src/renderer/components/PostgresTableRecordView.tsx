@@ -6,10 +6,11 @@ import { postgresReadonlyRecordZh as projectionText } from '../locales/postgresR
 import { postgresRecordJsonZh as jsonText } from '../locales/postgresRecordJson.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
 import { postgresReadonlyRecord } from '../postgresReadonlyRecord';
-import { beginPostgresRecordJson, readPostgresRecordJson, type PostgresRecordJsonBuffer } from '../postgresRecordJson';
+import { beginPostgresRecordJson, isPostgresJsonTextType, readPostgresRecordJson, replacePostgresJsonField, type PostgresRecordJsonBuffer } from '../postgresRecordJson';
 import { PostgresRecordFields, PostgresRecordJsonEditor, type PostgresRecordValues } from './PostgresRecordFields';
 import type { PostgresReferenceSource } from './PostgresReferencePicker';
 import { ReadonlyRecordView } from './ReadonlyRecordView';
+import { PostgresRecordJsonTree } from './PostgresRecordJsonTree';
 import { Empty, ErrorBox } from './ui';
 
 export type PostgresRecordMove = 'first' | 'previous' | 'next' | 'last';
@@ -32,6 +33,7 @@ function RecordInput({ page, row, columns, draft, editable, reference, onDirty, 
     ? draft.fields.map(field => [field.column, field.value]) : []), [draft]);
   const [input, setInput] = useState<PostgresRecordValues>();
   const [json, setJson] = useState<PostgresRecordJsonBuffer>();
+  const [tree, setTree] = useState(false);
   const pending = useRef<PostgresRecordValues>(undefined);
   const [error, setError] = useState('');
 
@@ -80,6 +82,18 @@ function RecordInput({ page, row, columns, draft, editable, reference, onDirty, 
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
+  if (tree) return <PostgresRecordJsonTree columns={page.columns} original={page.rows[row]} values={input ?? saved}
+    current={() => editable} onAccept={(column, previous, next) => {
+      const values = replacePostgresJsonField(page.rows[row], pending.current ?? saved, column, previous, next);
+      onDirty(true);
+      pending.current = values;
+      setInput(values);
+    }} onClose={() => {
+      if (!pending.current) onDirty(false);
+      setTree(false);
+      setError('');
+    }}/>;
+
   if (json) return <div className="pg-record-json-editor">
     <p role="status">{jsonText.pending}</p>
     <div className="pg-record-pending">
@@ -94,6 +108,10 @@ function RecordInput({ page, row, columns, draft, editable, reference, onDirty, 
     {draft && <p className="muted">{draft.kind === 'delete' ? text.deleted : text.staged}</p>}
     {!editable && !draft && <p className="muted">{tableText.noWrite}</p>}
     {editable && <button type="button" onClick={openJson}>{jsonText.open}</button>}
+    {editable && page.columns.some(column => isPostgresJsonTextType(column.type)) && <button type="button" onClick={() => {
+      try { onDirty(true); setTree(true); setError(''); }
+      catch (reason) { setError(errorMessage(reason)); }
+    }}>{jsonText.tree}</button>}
     {input && <div className="pg-record-pending">
       <span role="status">{editable ? text.pending : text.expired}</span>
       <button type="button" onClick={reset}>{text.discard}</button>

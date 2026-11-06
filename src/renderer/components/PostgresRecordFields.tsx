@@ -7,9 +7,10 @@ import { postgresRecordViewZh as viewText } from '../locales/postgresRecordView.
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
 import { postgresRecordDuplicateZh as duplicateText } from '../locales/postgresRecordDuplicate.zh-CN';
 import { postgresRecordJsonZh as jsonText } from '../locales/postgresRecordJson.zh-CN';
-import { beginPostgresRecordJson, postgresRecordJsonBudget, readPostgresRecordJson, type PostgresRecordJsonBuffer } from '../postgresRecordJson';
+import { beginPostgresRecordJson, isPostgresJsonTextType, postgresRecordJsonBudget, readPostgresRecordJson, replacePostgresJsonField, type PostgresRecordJsonBuffer } from '../postgresRecordJson';
 import { BoundedRecordTextarea } from './BoundedRecordTextarea';
 import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
+import { PostgresRecordJsonTree } from './PostgresRecordJsonTree';
 import { ErrorBox, Modal } from './ui';
 import '../recordProjections.css';
 
@@ -100,11 +101,16 @@ export function PostgresRecordForm({ page, row, initial, reference, duplicate, e
   const [origin] = useState(() => ({ page, row }));
   const [fields, setFields] = useState<PostgresRecordValues>(() => new Map(initial?.fields.map(field => [field.column, field.value])));
   const [json, setJson] = useState<PostgresRecordJsonBuffer>();
+  const [tree, setTree] = useState(false);
   const [error, setError] = useState('');
   const original = row === null ? undefined : page.rows[row];
 
+  function sourceCurrent() {
+    return current() && origin.page === page && origin.row === row && (row === null || !!original);
+  }
+
   function valid() {
-    if (!current() || origin.page !== page || origin.row !== row || row !== null && !original) throw Error(viewText.expired);
+    if (!sourceCurrent()) throw Error(viewText.expired);
   }
 
   function changeMode() {
@@ -117,6 +123,7 @@ export function PostgresRecordForm({ page, row, initial, reference, duplicate, e
   }
 
   function submit() {
+    if (tree) return;
     try {
       valid();
       const values = json ? readPostgresRecordJson(json) : fields;
@@ -132,15 +139,24 @@ export function PostgresRecordForm({ page, row, initial, reference, duplicate, e
         <p>{duplicateText.source(duplicate.rowNumber)} {duplicateText.notice}</p>
         {!!duplicate.omitted.length && <p>{duplicateText.omitted(duplicate.omitted.join('、'))}</p>}
       </>}
-      <div className="pg-table-controls">
+      {!tree && <div className="pg-table-controls">
         <button type="button" onClick={changeMode}>{json ? jsonText.back : jsonText.open}</button>
         {json && <button type="button" onClick={() => { setJson(undefined); setError(''); }}>{jsonText.discard}</button>}
-      </div>
-      {json ? <PostgresRecordJsonEditor buffer={json} onChange={value => { setJson(value); setError(''); }}/>
+        {!json && page.columns.some(column => isPostgresJsonTextType(column.type)) && <button type="button" onClick={() => {
+          try { valid(); setTree(true); setError(''); }
+          catch (reason) { setError(errorMessage(reason)); }
+        }}>{jsonText.tree}</button>}
+      </div>}
+      {tree ? <PostgresRecordJsonTree columns={page.columns} original={original} values={fields}
+        current={sourceCurrent} onAccept={(column, previous, next) => {
+          valid();
+          setFields(replacePostgresJsonField(original, fields, column, previous, next));
+        }} onClose={() => setTree(false)}/>
+        : json ? <PostgresRecordJsonEditor buffer={json} onChange={value => { setJson(value); setError(''); }}/>
         : <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference}
           explicitDefault={editingDraft} onChange={setFields}/>}
       <ErrorBox message={error}/>
     </div>
-    <footer className="modal-footer"><button onClick={onClose}>{text.cancel}</button><button className="primary" onClick={submit}>{editingDraft ? text.saveInsertDraft : text.stage}</button></footer>
+    <footer className="modal-footer"><button onClick={onClose}>{text.cancel}</button><button className="primary" disabled={tree} onClick={submit}>{editingDraft ? text.saveInsertDraft : text.stage}</button></footer>
   </Modal>;
 }

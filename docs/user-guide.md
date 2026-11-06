@@ -224,6 +224,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 可写记录的字段表单和记录弹窗支持「编辑整行 JSON」。改动字段的 `assignment` 后，可以带回字段表单核对。暂存、SQL 预览及确认提交沿用原流程。详见[PostgreSQL 整行 JSON 编辑](development/postgres-record-json-edit-20261106.md)。
 
+点「编辑 JSON 记录树」，选字段后点「解析当前字段」，可修改节点值、调整成员和数组结构。修改先应用到字段输入，带回表单后再暂存。详见[PostgreSQL JSON 节点与结构编辑](development/postgres-record-json-tree-20261106.md)。
+
 在 PostgreSQL 可写表单中用[外键选值](development/postgres-reference-picker-20261106.md)搜索引用记录，并将单列或复合键一并带入当前表单。
 
 在 PostgreSQL 记录页可[精确计数、跳页或定位末页](development/postgres-table-pagination-20261106.md)。计数沿用当前筛选，末页在同一读取快照内定位。

@@ -5,6 +5,7 @@ import type { ReadonlyRecordViewSource } from './components/ReadonlyRecordView';
 import { ownCell } from './lib';
 import { postgresReadonlyRecordZh as text } from './locales/postgresReadonlyRecord.zh-CN';
 import { canonicalBinaryBytes } from './recordProjections';
+import { isPostgresJsonTextType } from './postgresRecordJson';
 
 const budget = { units: 2 * 1024 * 1024, bytes: 2 * 1024 * 1024, message: text.limited };
 
@@ -42,7 +43,7 @@ export function postgresReadonlyRecord(page: PostgresTablePage, index: number, s
     current,
     fields: documentFields.map(({ name, type, generated, value }) => ({ name, type, generated, kind: value.kind,
       raw: value.kind === 'null' ? null : value.value,
-      parse: value.kind === 'text' && /^(?:jsonb?|text|character(?: varying)?(?:\(\d+\))?)$/.test(type),
+      parse: value.kind === 'text' && isPostgresJsonTextType(type),
       ...(value.kind === 'blob' ? { bytes: value.bytes } : {}),
     })),
     json() {

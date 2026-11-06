@@ -7,4 +7,11 @@ export const postgresRecordJsonZh = {
   duplicate: '整行文档含重复成员，请修正后再继续。',
   locked: (name: string) => `数据库生成列不能赋值：${name}`,
   value: (name: string) => `字段赋值无效：${name}`,
+  tree: '编辑 JSON 记录树', treeField: 'JSON 结构字段', parse: '解析当前字段', applyNode: '应用节点或结构修改',
+  treeHint: '解析当前字段输入，未赋值时读取已加载的原值。修改按原文位置应用到字段输入，返回表单后仍需暂存、预览和确认。',
+  treePending: '请先应用或取消当前节点编辑，再返回字段表单。',
+  treeInvalid: '字段原文不是有效 JSON 或超过结构查看预算。',
+  treeStale: '字段或原文已变化，请重新解析。',
+  treeReadonly: '生成列或超过原字段编辑长度的值可查看结构。',
+  treeScope: '保留其他原文和精确数字，修改后的完整字段最多 65,536 个 UTF-16 单元。SQL NULL 请在字段表单中设置。',
 };

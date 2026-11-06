@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTableColumn } from '../../src/shared/postgresTable';
-import { beginPostgresRecordJson, readPostgresRecordJson } from '../../src/renderer/postgresRecordJson';
+import { beginPostgresRecordJson, postgresJsonFieldText, readPostgresRecordJson, replacePostgresJsonField } from '../../src/renderer/postgresRecordJson';
 
 const columns: PostgresTableColumn[] = ['精度', '字节', '生成', '空值'].map((name, index) => ({ key: 'c' + index, name,
   type: ['numeric', 'bytea', 'text', 'text'][index], generated: index === 2, nullable: index !== 0, binary: index === 1,
@@ -8,6 +8,17 @@ const columns: PostgresTableColumn[] = ['精度', '字节', '生成', '空值'].
 const original = { c0: '9007199254740993.000000000000000001', c1: { type: 'binary' as const, base64: 'AP8=' }, c2: '', c3: null };
 
 describe('PostgreSQL 整行编辑 JSON', () => {
+  it('节点编辑以当前赋值为准，拒绝跨赋值更新', () => {
+    const row = { c0: '{"a":1}' };
+    const none = beginPostgresRecordJson(columns, undefined, new Map());
+    const fields = readPostgresRecordJson(none);
+    expect(postgresJsonFieldText(row, fields, 'c0')).toBe('{"a":1}');
+    const next = replacePostgresJsonField(row, fields, 'c0', '{"a":1}', '{"a":2}');
+    expect(() => replacePostgresJsonField(row, next, 'c0', '{"a":1}', '{"a":3}')).toThrow('已变化');
+    expect(postgresJsonFieldText(row, next, 'c0')).toBe('{"a":2}');
+    next.set('c0', { mode: 'default' });
+    expect(postgresJsonFieldText(row, next, 'c0')).toBeUndefined();
+  });
   it('保留原值和未提交赋值，只返回明确指定的字段', () => {
     const buffer = beginPostgresRecordJson(columns, original, new Map([['c0', { mode: 'text', value: '9007199254740994.000000000000000002' }]]));
     const doc = JSON.parse(buffer.source);
