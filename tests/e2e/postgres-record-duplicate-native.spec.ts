@@ -17,6 +17,7 @@ import { tableQueryTemplateZh as sqlTemplateText } from '../../src/renderer/loca
 import { tableFilteredSelectZh as filteredSelectText } from '../../src/renderer/locales/tableFilteredSelect.zh-CN';
 import { postgresColumnStatisticsZh as statisticsText } from '../../src/renderer/locales/postgresColumnStatistics.zh-CN';
 import { tableHistogramZh as histogramText } from '../../src/renderer/locales/tableHistogram.zh-CN';
+import { postgresReadonlyRecordZh as originalText } from '../../src/renderer/locales/postgresReadonlyRecord.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 type Runtime = typeof import('./desktop-fixture');
@@ -60,7 +61,10 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
         legacy bigserial, note text, amount numeric(40,18), raw bytea, nullable_text text DEFAULT '数据库默认',
         fallback text DEFAULT '数据库默认', tag text GENERATED ALWAYS AS (note || '-生成') STORED);
       INSERT INTO "回归"."模板.""记录" (note,amount,raw,nullable_text,fallback)
-        VALUES ('模板原行',90071992547409931234.012345678901234567,decode('00ff','hex'),NULL,'原行专用')`);
+        VALUES ('模板原行',90071992547409931234.012345678901234567,decode('00ff','hex'),NULL,'原行专用');
+      CREATE VIEW "回归"."原值结构" AS SELECT 9007199254740993::bigint AS id,
+        '{"重复":9007199254740993,"重复":0.000000000000000001}'::json AS doc,
+        decode('00ff','hex') AS raw, NULL::text AS missing, ''::text AS empty`);
     const readRows = async () => (await reader!.query(`SELECT id::text, legacy::text, code, note, encode(raw,'hex') AS raw, tag
       FROM "回归"."复制记录" ORDER BY id`)).rows;
     const originals = await readRows();
@@ -673,6 +677,55 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await draft.getByRole('button', { name: tableText.undo, exact: true }).click();
     expect(await readTemplateRows()).toEqual(beforeSql);
     await mark('字段概况从筛选后第二页读取五个精确分布区间，保留原页与草稿且零写库');
+
+    await button(viewText.view).click();
+    const recordView = tab.getByRole('region', { name: viewText.title, exact: true });
+    const viewButton = (name: string) => recordView.getByRole('button', { name, exact: true });
+    const whole = recordView.getByRole('textbox', { name: originalText.jsonText, exact: true });
+    await mode(recordView, 'note').selectOption('text');
+    await value(recordView, 'note').fill('保留的表单输入');
+    await viewButton(originalText.json).click();
+    await expect(recordView.getByRole('status')).toHaveText(originalText.pending);
+    await expect(viewButton(viewText.previous)).toBeDisabled();
+    await expect(whole).toHaveValue(/文件恢复乙/);
+    await expect(whole).not.toHaveValue(/保留的表单输入/);
+    await viewButton(originalText.form).click();
+    await expect(value(recordView, 'note')).toHaveValue('保留的表单输入');
+    await viewButton(viewText.stage).click();
+    await viewButton(originalText.json).click();
+    await expect(recordView.getByRole('status')).toHaveText(originalText.staged);
+    await expect(whole).toHaveValue(/文件恢复乙/);
+    await expect(draft).toContainText('保留的表单输入');
+    await draft.getByRole('button', { name: tableText.undo, exact: true }).click();
+    await viewButton(viewText.previous).click();
+    await expect(whole).toHaveValue(/文件恢复甲/);
+    await expect(whole).not.toHaveValue(/文件恢复乙/);
+    expect(await readTemplateRows()).toEqual(beforeSql);
+    await mark('表单输入跨只读展示保留，暂存值与原值隔离，跨页整行 JSON 更新且零写库');
+
+    await page.locator('.object-row .tree-label').getByText('"回归"."原值结构"', { exact: true }).click();
+    await button(viewText.view).click();
+    await viewButton(originalText.tree).click();
+    await recordView.getByRole('searchbox', { name: viewText.search, exact: true }).fill('doc');
+    await viewButton(originalText.parse('doc')).click();
+    const lexical = recordView.getByRole('region', { name: 'doc', exact: true });
+    await expect(lexical.getByText('"重复"', { exact: false })).toHaveCount(2);
+    await expect(lexical.getByText('9007199254740993', { exact: true })).toBeVisible();
+    await expect(lexical.getByText('0.000000000000000001', { exact: true })).toBeVisible();
+    await lexical.getByText('0.000000000000000001', { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('PostgreSQL原值记录树.png') });
+    await viewButton(originalText.json).click();
+    await expect(viewButton(originalText.json)).toHaveAttribute('aria-pressed', 'true');
+    await expect(whole).toHaveValue(/tabrelio-postgresql-record-view/);
+    const document = JSON.parse(await whole.inputValue());
+    expect(document.fields.map((field: { name: string; value: unknown }) => [field.name, field.value])).toEqual([
+      ['id', { kind: 'text', value: '9007199254740993' }],
+      ['doc', { kind: 'text', value: '{"重复":9007199254740993,"重复":0.000000000000000001}' }],
+      ['raw', { kind: 'blob', encoding: 'base64', value: 'AP8=', bytes: 2 }],
+      ['missing', { kind: 'null' }], ['empty', { kind: 'text', value: '' }],
+    ]);
+    await page.screenshot({ path: info.outputPath('PostgreSQL原值整行JSON.png'), animations: 'disabled' });
+    await mark('只读视图的原值树保留重复 JSON 成员和精确数字，搜索后完整 JSON 仍包含全部列');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

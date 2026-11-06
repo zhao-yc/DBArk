@@ -2,9 +2,12 @@ import { useMemo, useRef, useState } from 'react';
 import type { PostgresTableColumn, PostgresTableField, PostgresTablePage } from '../../shared/postgresTable';
 import { errorMessage } from '../lib';
 import { postgresRecordViewZh as text } from '../locales/postgresRecordView.zh-CN';
+import { postgresReadonlyRecordZh as projectionText } from '../locales/postgresReadonlyRecord.zh-CN';
 import { postgresTableZh as tableText } from '../locales/postgresTable.zh-CN';
+import { postgresReadonlyRecord } from '../postgresReadonlyRecord';
 import { PostgresRecordFields, type PostgresRecordValues } from './PostgresRecordFields';
 import type { PostgresReferenceSource } from './PostgresReferencePicker';
+import { ReadonlyRecordView } from './ReadonlyRecordView';
 import { Empty, ErrorBox } from './ui';
 
 export type PostgresRecordMove = 'first' | 'previous' | 'next' | 'last';
@@ -66,12 +69,15 @@ function RecordInput({ page, row, columns, draft, editable, reference, onDirty, 
   </>;
 }
 
-export function PostgresTableRecordView({ page, row, offset, visible, draft, editable, reference, moves, onMove, onDirty, onStage }: {
+export function PostgresTableRecordView({ page, row, offset, visible, draft, editable, reference, pending, projectionAvailable,
+  projectionCurrent, moves, onMove, onDirty, onStage }: {
   page: PostgresTablePage; row: number | null; offset: number; visible: PostgresTableColumn[]; draft?: RecordDraft; editable: boolean;
   reference?: PostgresReferenceSource;
+  pending: boolean; projectionAvailable: boolean; projectionCurrent(): boolean;
   moves: Record<PostgresRecordMove, boolean>; onMove(move: PostgresRecordMove): void;
   onDirty(row: number, dirty: boolean): void; onStage(row: number, fields: PostgresTableField[]): void;
 }) {
+  const [mode, setMode] = useState<'form' | 'tree' | 'json'>('form');
   const [showNavigation, setShowNavigation] = useState(true), [showHidden, setShowHidden] = useState(false), [query, setQuery] = useState('');
   const fieldArea = useRef<HTMLDivElement>(null);
   const columns = useMemo(() => {
@@ -80,24 +86,46 @@ export function PostgresTableRecordView({ page, row, offset, visible, draft, edi
     return candidates.filter(column => column.name.toLowerCase().includes(needle));
   }, [showHidden, visible, page.columns, query]);
 
+  /** 新展示从顶部开始，原表单实例和已展开的结构仍留在当前行。 */
+  function changeMode(next: typeof mode) {
+    if (next === mode) return;
+    if (fieldArea.current) fieldArea.current.scrollTop = 0;
+    setMode(next);
+  }
+
   return <section className="pg-record-view" aria-label={text.title}>
     <div className="pg-table-controls pg-record-nav">
       {(['first', 'previous', 'next', 'last'] as const).map(move =>
         <button type="button" key={move} disabled={!moves[move]} onClick={() => onMove(move)}>{text[move]}</button>)}
       {row !== null && <strong>{text.position(row, offset, page.rows.length)}</strong>}
-      <button type="button" aria-expanded={showNavigation} onClick={() => setShowNavigation(value => !value)}>{text.fields}</button>
-      <label className="check"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/>{text.hidden}</label>
-      <input type="search" aria-label={text.search} placeholder={text.search} value={query} onChange={event => setQuery(event.target.value)}/>
+      <div role="group" aria-label={projectionText.modes} className="pg-view-switch">
+        {(['form', 'tree', 'json'] as const).map(kind => <button key={kind} type="button" aria-pressed={mode === kind}
+          disabled={kind !== 'form' && (row === null || !projectionAvailable)} onClick={() => changeMode(kind)}>{projectionText[kind]}</button>)}
+      </div>
+      {mode === 'form' && <>
+        <button type="button" aria-expanded={showNavigation} onClick={() => setShowNavigation(value => !value)}>{text.fields}</button>
+        <label className="check"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/>{text.hidden}</label>
+      </>}
+      {mode !== 'json' && <input type="search" aria-label={text.search} placeholder={text.search} value={query} onChange={event => setQuery(event.target.value)}/>}
     </div>
     {row === null || !page.rows[row] ? <Empty title={tableText.noSelection}/> : <div className="pg-record-body">
-      {showNavigation && <nav aria-label={text.fields}>{columns.map(column => <button type="button" key={column.key} onClick={() => {
+      {mode === 'form' && showNavigation && <nav aria-label={text.fields}>{columns.map(column => <button type="button" key={column.key} onClick={() => {
         const heading = fieldArea.current?.querySelector<HTMLElement>(`[data-record-column="${column.key}"] > strong`);
         heading?.scrollIntoView({ block: 'nearest' });
         heading?.focus({ preventScroll: true });
       }}>{column.name}</button>)}</nav>}
       <div className="pg-record-content" ref={fieldArea}>
-        <RecordInput key={page.exportToken + ':' + row} page={page} row={row} columns={columns} draft={draft}
-          editable={editable} reference={reference} onDirty={dirty => onDirty(row, dirty)} onStage={fields => onStage(row, fields)}/>
+        {/* 切换只读展示时保留原表单实例，未暂存输入仍由原页和原行持有。 */}
+        <div hidden={mode !== 'form'}>
+          <RecordInput key={page.exportToken + ':' + row} page={page} row={row} columns={columns} draft={draft}
+            editable={editable} reference={reference} onDirty={dirty => onDirty(row, dirty)} onStage={fields => onStage(row, fields)}/>
+        </div>
+        {mode !== 'form' && <>
+          {pending ? <p role="status">{projectionText.pending}</p> : draft && <p role="status">{projectionText.staged}</p>}
+          {projectionAvailable ? <ReadonlyRecordView key={page.exportToken + ':' + row} identity={[page, row]}
+            capture={() => postgresReadonlyRecord(page, row, projectionCurrent)} text={projectionText} mode={mode} filter={query}/>
+            : <ErrorBox message={projectionText.stale}/>}
+        </>}
       </div>
     </div>}
   </section>;

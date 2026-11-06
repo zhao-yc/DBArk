@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 表和视图的记录表单支持原值记录树和整行 JSON。跨页沿原记录导航，表单输入和草稿与数据库原值分开保留。D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 原值记录视图](development/postgres-record-projections-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 字段概况支持当前筛选范围的数值直方图。整数及 numeric 保留精确边界，NULL 与非有限值独立计数。D09 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 数值直方图](development/postgres-table-histogram-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 不同值筛选支持最多及最少次数优先。全范围分组排序后限量，明确重读前保留勾选。D09 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 不同值次数排序](development/postgres-value-frequency-20261106.md)

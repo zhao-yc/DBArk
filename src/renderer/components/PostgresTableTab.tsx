@@ -1104,6 +1104,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {page && recordView && <PostgresTableRecordView page={page} row={row} offset={options.offset} visible={gridLayout.columns}
         draft={viewDraft?.kind === 'update' || viewDraft?.kind === 'delete' ? viewDraft : undefined}
         editable={recordEditable} reference={referenceSource(recordEditable, recordViewCurrent)}
+        pending={recordInputDirty} projectionAvailable={active && !requiresRefresh && pageConnectionVersion === connectionVersion &&
+          !!page.exportToken && issued.current === page.exportToken}
+        projectionCurrent={() => !!page.exportToken && issued.current === page.exportToken && layoutScope.current.current()}
         moves={moves} onMove={moveRecord} onDirty={changeRecordInput} onStage={stageRecordView}/>}
       {page ? <div className="pg-record-grid-host" hidden={recordView}><PostgresTableFindPanel request={findRequest} scope={findScope} pageKey={page.exportToken} enabled={canFind} writable={canEditGrid}
         rows={findRows} columns={gridLayout.columns} isCurrent={findIsCurrent}
