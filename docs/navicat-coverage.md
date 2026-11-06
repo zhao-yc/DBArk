@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 网格直接显示已暂存字段值、DEFAULT 和待删除行，复制使用当前显示的完整值。跨页、撤销和重做按原记录身份匹配。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 网格草稿值](development/postgres-grid-draft-values-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 表页可显式保存和恢复跨页草稿文件，保留已暂存的增删改、活动页及浏览条件。只读核验全部原行后一次恢复，写入继续使用原预览和事务。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 跨页草稿文件](development/postgres-draft-files-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 表页新增跨页草稿撤销与重做，覆盖单格、表单和批量暂存。重做保留原行快照，写入前沿用原事务复核。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 草稿撤销与重做](development/postgres-draft-history-20261106.md)

@@ -71,6 +71,7 @@ import { draftHistoryKey } from '../draftHistory';
 import { draftHistoryZh as draftHistoryText } from '../locales/draftHistory.zh-CN';
 import { tableCellKeyIsComposing } from '../tableCellKeyboard';
 import { postgresDraftFilesZh as draftFilesText } from '../locales/postgresDraftFiles.zh-CN';
+import { postgresDraftGrid } from '../postgresDraftGrid';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -538,6 +539,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
   const canFind = !recordView && active && !!page?.exportToken && !blocked && !requiresRefresh && pageConnectionVersion === connectionVersion;
   const findScope = useMemo(() => ({}), [cellScope, draft]);
+  const draftGrid = useMemo(() => page && draft.length ? postgresDraftGrid(page, draft) : undefined, [page, draft]);
   const latestFindScope = useRef(findScope);
   latestFindScope.current = findScope;
   const findRows = useMemo(() => page && findRequest
@@ -982,6 +984,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       {layoutView.fromPreset && <span>{layoutText.fromPreset}</span>}
       {!page.pageToken && <span>{text.noWrite}</span>}
       {canEditGrid && <span title={pasteText.overwriteHint}>{text.cellEditHint} {pasteText.overwriteHint}</span>}
+      {!recordView && draftGrid?.hasChanges && <span>{text.gridDraftHint}</span>}
       {requiresRefresh && <span>{text.refreshAfterFailure}</span>}
     </div>}
     <div className="pg-table-grid" inert={!!inlineEdit} onKeyDownCapture={handleDraftHistoryKey}>
@@ -999,6 +1002,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump
+        presentCell={draftGrid?.cell}
         renderRowSelectionAction={page.capabilities.insert || page.capabilities.delete || page.capabilities.update && editColumns.length ? (selected, current) =>
           <div className="pg-table-controls pg-batch-actions">
             {!!fillColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('fill', selected)}

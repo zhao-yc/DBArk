@@ -89,6 +89,8 @@
 @media (max-width: 800px) { .pg-find-review dl > div { grid-template-columns: 1fr; gap: 2px; } }
 .pg-table-draft { max-height: 26%; overflow: auto; padding: 8px 12px; border-top: 1px solid var(--border); }
 .pg-table-draft button { margin-left: 10px; }
+.postgres-table-tab .pg-grid-staged { border-inline-start: 2px solid var(--accent); padding-inline-start: 5px; font-weight: 600; }
+.postgres-table-tab .pg-grid-deleted { text-decoration: line-through; }
 .pg-record-form, .pg-table-preview { overflow: auto; max-height: min(60vh, 640px); }
 .pg-record-field { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .pg-batch-actions { flex: none; }

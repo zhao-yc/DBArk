@@ -11,6 +11,8 @@ import { draftHistoryZh as historyText } from '../../src/renderer/locales/draftH
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import { postgresDraftFilesZh as draftFilesText } from '../../src/renderer/locales/postgresDraftFiles.zh-CN';
 import { decodePostgresDraft } from '../../src/shared/postgresTableDraft';
+import { cellClipboardType, decodeClipboard } from '../../src/renderer/gridClipboard';
+import { binaryCellZh } from '../../src/renderer/locales/binaryCell.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 type Runtime = typeof import('./desktop-fixture');
@@ -85,6 +87,7 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await mode(edit, 'note').selectOption('text');
     await value(edit, 'note').fill('复制自草稿');
     await edit.getByRole('button', { name: tableText.stage, exact: true }).click();
+    await expect(grid.getByRole('gridcell', { name: '复制自草稿', exact: true }).locator('.pg-grid-staged')).toBeVisible();
     const duplicate = page.getByRole('dialog', { name: text.title, exact: true });
     await button(text.action).click();
     await expect(duplicate).toContainText('id、legacy、tag');
@@ -209,6 +212,34 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await value(edit, 'raw').fill('ff00');
     await mode(edit, 'fallback').selectOption('default');
     await edit.getByRole('button', { name: tableText.stage, exact: true }).click();
+    await expect(grid.getByRole('gridcell', { name: '暂存模板值', exact: true }).locator('.pg-grid-staged')).toBeVisible();
+    await expect(grid.getByRole('gridcell', { name: '0xff00', exact: true }).locator('.pg-grid-staged')).toBeVisible();
+    await expect(grid.getByRole('gridcell', { name: tableText.gridDraftDefault, exact: true }).locator('.pg-grid-staged')).toBeVisible();
+    await page.screenshot({ path: info.outputPath('PostgreSQL网格草稿值.png') });
+    const copyCell = async (name: string) => {
+      const cell = grid.getByRole('gridcell', { name, exact: true });
+      await cell.click();
+      return cell.evaluate((element, mime) => {
+        // 验证网格真实复制事件，测试数据留在本次事件的 DataTransfer。
+        const clipboardData = new DataTransfer();
+        element.dispatchEvent(new ClipboardEvent('copy', { clipboardData, bubbles: true, cancelable: true }));
+        return { plain: clipboardData.getData('text/plain'), typed: clipboardData.getData(mime) };
+      }, cellClipboardType);
+    };
+    expect((await copyCell('暂存模板值')).plain).toBe('暂存模板值');
+    const copiedBinary = await copyCell('0xff00');
+    expect(decodeClipboard(copiedBinary.typed, copiedBinary.plain)).toEqual([[{ type: 'binary', base64: '/wA=' }]]);
+    expect(await copyCell(tableText.gridDraftDefault)).toEqual({ plain: '', typed: '' });
+    const defaultNotice = page.getByRole('alert').filter({ hasText: tableText.gridDraftDefaultCopy });
+    await expect(defaultNotice).toBeVisible();
+    await defaultNotice.getByRole('button', { name: zh.app.text018, exact: true }).click();
+    await grid.getByRole('gridcell', { name: '0xff00', exact: true }).dblclick();
+    const viewer = page.getByRole('dialog', { name: binaryCellZh.title + '：raw', exact: true });
+    await expect(viewer.getByLabel(binaryCellZh.hexLabel, { exact: true })).toHaveValue('ff 00');
+    await page.keyboard.press('Escape');
+    await expect(viewer).toBeHidden();
+    expect(await readTemplateRows()).toEqual(templateOriginals);
+    await mark('原格直接显示暂存文本、二进制和 DEFAULT，数据库原值保持');
     const template = page.getByRole('dialog', { name: templateText.title, exact: true });
     const templateButton = (name: string) => template.getByRole('button', { name, exact: true });
     const templateField = (name: string) => template.getByRole('checkbox', { name: templateText.field(name), exact: true });
@@ -293,11 +324,11 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await expect(tab.getByText(tableText.currentPage(2), { exact: true })).toBeVisible();
     await stageNote('暂存模板值', '跨页草稿乙', true);
     await expect(draft).toContainText(tableText.changes(2));
-    const gridNote = grid.getByRole('gridcell', { name: '暂存模板值', exact: true });
     const shortcut = process.platform === 'darwin' ? 'Meta' : 'Control';
-    await gridNote.press(shortcut + '+z');
+    await grid.getByRole('gridcell', { name: '跨页草稿乙', exact: true }).press(shortcut + '+z');
     await expect(draft).toContainText('跨页草稿甲');
     await expect(draft).not.toContainText('跨页草稿乙');
+    await expect(grid.getByRole('gridcell', { name: '暂存模板值', exact: true })).toBeVisible();
     await undo.click();
     await expect(draft).toHaveCount(0);
     expect(await readTemplateRows()).toEqual(beforeHistory);
@@ -306,7 +337,7 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await button(tableText.next).click();
     await expect(tab.getByText(tableText.currentPage(3), { exact: true })).toBeVisible();
     await redo.click();
-    await gridNote.press(shortcut + '+Shift+z');
+    await grid.getByRole('gridcell', { name: '暂存模板值', exact: true }).press(shortcut + '+Shift+z');
     await expect(draft).toContainText(tableText.changes(2));
     await expect(draft).toContainText('跨页草稿甲');
     await expect(draft).toContainText('跨页草稿乙');
@@ -424,6 +455,16 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
       chooserCalls = await application.evaluate(() => (globalThis as typeof globalThis & { finishPostgresDraft(): string[] }).finishPostgresDraft());
     }
     expect(chooserCalls).toEqual(['save', 'open', 'open']);
+
+    const beforeDelete = await readTemplateRows();
+    const visibleNote = grid.getByRole('gridcell', { name: '文件恢复乙', exact: true });
+    await visibleNote.click();
+    await button(tableText.remove).click();
+    await expect(visibleNote.locator('.pg-grid-deleted')).toBeVisible();
+    await undo.click();
+    await expect(visibleNote.locator('.pg-grid-deleted')).toHaveCount(0);
+    expect(await readTemplateRows()).toEqual(beforeDelete);
+    await mark('待删除行原位划线并可撤销，数据库未提前删除');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

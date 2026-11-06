@@ -242,6 +242,8 @@ PostgreSQL 表页同时显示「整批已回滚」和「草稿已保留」时，
 
 PostgreSQL 表页可用「撤销上一步」和「重做下一步」恢复暂存的编辑。网格获得焦点时也可用 `Ctrl/⌘+Z` 和 `Ctrl/⌘+Shift+Z`，Windows 另可用 `Ctrl+Y`。同一批操作按一步处理，翻页后仍可恢复有效原页上的草稿。写库继续使用 SQL 预览和明确确认。[PostgreSQL 草稿撤销与重做](development/postgres-draft-history-20261106.md)
 
+PostgreSQL 网格会在原格显示已暂存的值，标记待应用 DEFAULT，并划线显示待删除行。撤销后原值立即恢复。复制可获得当前显示的完整文本、NULL 或字节，包含待应用 DEFAULT 时会提示等待数据库生成实际值。[PostgreSQL 网格草稿值](development/postgres-grid-draft-values-20261106.md)
+
 PostgreSQL 表页可将所有已暂存的增删改保存为 `.pg-draft` 文件。重新打开同一连接、数据库和表后，在没有待提交修改时点击「恢复 PostgreSQL 草稿」。核对通过后恢复活动页、已应用筛选和排序，以及各原页的草稿。文件未加密，包含暂存值和筛选条件。[PostgreSQL 跨页草稿文件](development/postgres-draft-files-20261106.md)
 
 在 PostgreSQL 网格选中一行，或定位到记录表单中的一条记录后，点击「查看引用记录」。窗口按数据库中的原外键值显示当前账号可读的父记录，可切换约束并展开字段原值。关闭后保留源表草稿。[PostgreSQL 查看引用记录](development/postgres-browse-parent-20261106.md)
