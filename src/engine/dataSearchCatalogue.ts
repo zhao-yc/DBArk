@@ -10,6 +10,7 @@ const binaryType=/^(?:binary|varbinary|tinyblob|blob|mediumblob|longblob|bit|geo
 /** 使用同账号、参数化、有界目录查询；列目录不执行视图或SELECT原数据。 */
 export async function readDataSearchCatalogue(context:StructureTaskContext,raw:unknown):Promise<DataSearchCataloguePage>{
   const input=dataSearchCatalogueSchema.parse(raw),parameters:(string|number)[]=[];
+  if (input.dialect) throw Error('搜索目录方言与保存的连接不匹配');
   const read=async(sql:string,params:(string|number)[])=>{const result=(await completionQuery<Record<string,unknown>[]>(context.managed,context,sql,params)).rows;context.checkCancelled();if(Buffer.byteLength(JSON.stringify(result))>dataSearchCatalogueLimits.pageBytes)throw Error('搜索范围目录超过128KiB，请缩小前缀');return result;};
   let sql:string;
   if(input.kind==='databases'){

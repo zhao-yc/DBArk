@@ -1,5 +1,5 @@
 import {Buffer} from 'node:buffer';
-import {dataSearchInputSchema,dataSearchNextSchema,dataSearchReleaseSchema,dataSearchLimits,dataSearchBlocks,type DataSearchInput,type DataSearchNext,type DataSearchReply,type DataSearchProgress,type DataSearchHit,type DataSearchTargetMetadata} from '../shared/dataSearch';
+import {dataSearchInputSchema,dataSearchNextSchema,dataSearchReleaseSchema,dataSearchLimits,dataSearchBlocks,type DataSearchInput,type DataSearchNext,type DataSearchReply,type DataSearchProgress,type DataSearchHit,type DataSearchTargetMetadata,type DataSearchTarget,type DataSearchRow} from '../shared/dataSearch';
 import type {TaskEvent} from '../shared/contracts';
 import type {ManagedConnection} from './connection';
 import type {StructureTaskContext} from './structureDefinition';
@@ -13,6 +13,13 @@ interface Deferred<T>{promise:Promise<T>;resolve(value:T):void;reject(error:Erro
 function deferred<T>():Deferred<T>{let resolve!:(value:T)=>void,reject!:(error:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});void promise.catch(()=>{});return{promise,resolve,reject};}
 export interface DataSearchTaskControl extends Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>{managed:ManagedConnection;stop():Promise<void>}
 export type DataSearchRun=(action:(control:DataSearchTaskControl)=>Promise<void>)=>Promise<void>;
+type OpenBlock = (metadata: DataSearchTargetMetadata, capture?: (row: DataSearchRow) => Pick<DataSearchHit, 'recordRef' | 'navigationReason'>) => (row: DataSearchRow) => Promise<void>;
+export interface DataSearchScanSource {
+  checkCancelled(): void;
+  broken(): boolean;
+  read(target: DataSearchTarget, rows: number, open: OpenBlock, peak: (rows: number, bytes: number) => void): Promise<void>;
+}
+type ScanRun = (scan: (source: DataSearchScanSource) => Promise<void>) => Promise<void>;
 interface Search{input:DataSearchInput;progress:DataSearchProgress;reply:Deferred<DataSearchReply>;ack?:Deferred<void>;ackTimer?:ReturnType<typeof setTimeout>;offer?:DataSearchReply;lastPull?:{sequence:number;promise:Promise<DataSearchReply>};done:Promise<void>;cancelled:boolean;terminal?:DataSearchReply&{kind:'terminal'};status?:'completed'|'failed'|'cancelled';error?:string;expires?:number;}
 class SearchLimit extends Error{}
 /** 确认期限已失去客户端，不能再发布另一个需要确认的错误批次。 */
@@ -39,7 +46,38 @@ export class DataSearchTasks{
   assertOwner(raw:unknown):boolean{const input=dataSearchReleaseSchema.parse(raw);if(!this.searches.has(input.taskId))return false;this.owner(input);return true;}
   /** 首批或终态回复只在对应阶段发布；异常回复必须等后台连接实际收尾。 */
   async start(raw:unknown,run:DataSearchRun):Promise<DataSearchReply>{
-    const input=dataSearchInputSchema.parse(raw);this.prune();if(this.searches.has(input.taskId))throw Error('数据搜索编号已使用');
+    const input = dataSearchInputSchema.parse(raw);
+    if (input.dialect) throw Error('数据搜索方言与保存的连接不匹配');
+    return this.startScan(input, scan => run(async control => {
+      const { managed } = control;
+      if (this.records) await completionQuery(managed, control, 'START TRANSACTION READ ONLY', []);
+      const preparations = new Map<string, RecordPreparation>();
+      await scan({
+        checkCancelled: () => control.checkCancelled(), broken: () => managed.broken,
+        read: async (target, rows, open, peak) => {
+          const metadata = await readDataSearchTarget(managed, target, control, { allowViews: input.allowViews });
+          const key = JSON.stringify([target.database, target.table]);
+          let prepared = preparations.get(key);
+          if (this.records && !prepared) {
+            prepared = metadata.keyColumns.length ? await prepareDataSearchRecord(control, target) : { reason: 'no-key' };
+            preparations.set(key, prepared);
+          }
+          const captured = prepared;
+          const receive = open(metadata, captured && this.records ? row => this.records!.capture(input.connectionId, input.taskId, metadata, row, captured) : undefined);
+          const plan = buildDataSearchPlan(metadata, input.matcher, rows);
+          await consumeQueryFrames(managed, plan.sql, 'binary', {
+            statementOrdinal: 1, ordinals: { results: 0, rows: 0 }, checkCancelled: () => control.checkCancelled(),
+            commandStarted: () => control.commandStarted(), stop: () => control.stop(), queuePeak: peak,
+            consume: async frame => { if (frame.kind === 'row') await receive(decodeDataSearchRow(metadata, frame.values)); },
+          }, plan.params);
+        },
+      });
+    }));
+  }
+
+  /** 方言宿主提供真实连接和有界读取，所有驱动共用同一个确认与释放协议。 */
+  async startScan(input: DataSearchInput, run: ScanRun): Promise<DataSearchReply> {
+    this.prune();if(this.searches.has(input.taskId))throw Error('数据搜索编号已使用');
     this.records?.assertNewSource(input);
     if(this.searches.size>=dataSearchLimits.retained||[...this.searches.values()].filter(state=>!state.terminal).length>=dataSearchLimits.active)throw Error('数据搜索繁忙，请关闭旧搜索后重试');
     const state:Search={input,progress:{phase:'preparing',targetIndex:0,targets:input.targets.length,processedBlocks:0,blocks:input.targets.reduce((count,target)=>count+Math.ceil(target.columns.length/dataSearchLimits.projectionColumns),0),failedBlocks:0,hits:0,bytes:0,sequence:0,limitReached:false,peakBufferedRows:0,peakBufferedBytes:0},reply:deferred(),done:Promise.resolve(),cancelled:false};
@@ -57,7 +95,7 @@ export class DataSearchTasks{
     const ack=state.ack;state.ack=undefined;state.offer=undefined;clearTimeout(state.ackTimer);state.reply=deferred();state.lastPull={sequence:input.sequence,promise:state.reply.promise};ack.resolve();return state.reply.promise;
   }
   /** 发送前登记确认等待；客户端收到前不会继续消费服务器行。 */
-  private async offer(state:Search,page:Extract<DataSearchReply,{kind:'batch'|'error'}>,control:DataSearchTaskControl){
+  private async offer(state:Search,page:Extract<DataSearchReply,{kind:'batch'|'error'}>,control:DataSearchScanSource){
     control.checkCancelled();if(state.cancelled)throw Error('数据搜索已取消');if(state.ack)throw Error('上一数据搜索批次尚未确认');
     if(Buffer.byteLength(JSON.stringify(page))>dataSearchLimits.batchBytes)throw Error('数据搜索批次超过128KiB');
     const ack=deferred<void>();state.ack=ack;state.offer=page;state.progress.phase='waiting';
@@ -66,46 +104,73 @@ export class DataSearchTasks{
     try{await ack.promise;control.checkCancelled();if(state.cancelled)throw Error('数据搜索已取消');}finally{clearTimeout(state.ackTimer);if(state.ack===ack)state.ack=undefined;}
   }
   /** 每个目标和字段块显式记录范围；中断不自动重连，不再执行后续对象。 */
-  private async scan(state:Search,control:DataSearchTaskControl){
-    const {managed}=control,input=state.input;
-    // 独立只读事务保留已读取对象的元数据锁，身份证明与真实命中之间不能被DDL替换。
-    // 完成、失败和取消均由宿主真正关闭连接；这里不保留用于后续导航的数据库会话。
-    if(this.records)await completionQuery(managed,control,'START TRANSACTION READ ONLY',[]);
-    const preparations=new Map<string,RecordPreparation>();
-    outer:for(let targetIndex=0;targetIndex<input.targets.length;targetIndex++)for(const block of dataSearchBlocks(input.targets[targetIndex])){
-      control.checkCancelled();state.progress.targetIndex=targetIndex;state.progress.phase='preparing';this.report(state);let pending:DataSearchHit[]=[],pendingBytes=0,metadata:DataSearchTargetMetadata|undefined,charged=false,metadataBytes=0;
-      /** 元数据只在首次命中计入保留预算；每批复用同一个描述，不积累服务器行。 */
-      const flush=async()=>{if(!pending.length||!metadata)return;state.progress.hits+=pending.length;state.progress.bytes+=pendingBytes+(charged?0:metadataBytes);charged=true;const hits=pending;pending=[];pendingBytes=0;state.progress.sequence++;await this.offer(state,{kind:'batch',sequence:state.progress.sequence,targetIndex,columnOffset:block.columnOffset,metadata,hits,progress:{...state.progress,phase:'waiting'}},control);};
-      try{
-        metadata=await readDataSearchTarget(managed,block.target,control,{allowViews:input.allowViews});metadataBytes=Buffer.byteLength(JSON.stringify(metadata));
-        const targetKey=JSON.stringify([block.target.database,block.target.table]);let prepared=preparations.get(targetKey);
-        if(this.records&&!prepared){prepared=metadata.keyColumns.length?await prepareDataSearchRecord(control,block.target):{reason:'no-key'};preparations.set(targetKey,prepared);}
-        const plan=buildDataSearchPlan(metadata,input.matcher,Math.max(1,input.maxResults-state.progress.hits+1));state.progress.phase='scanning';this.report(state);
-        await consumeQueryFrames(managed,plan.sql,'binary',{
-          statementOrdinal:1,ordinals:{results:0,rows:0},checkCancelled:()=>{control.checkCancelled();if(state.cancelled)throw Error('数据搜索已取消');},commandStarted:()=>control.commandStarted(),stop:()=>control.stop(),
-          queuePeak:(rows,bytes)=>{state.progress.peakBufferedRows=Math.max(state.progress.peakBufferedRows,rows);state.progress.peakBufferedBytes=Math.max(state.progress.peakBufferedBytes,bytes);},
-          consume:async frame=>{
-            if(frame.kind!=='row')return;const row=decodeDataSearchRow(metadata!,frame.values);
-            for(let index=0;index<row.cells.length;index++)if(row.cells[index].matched){
-              if(state.progress.hits+pending.length>=input.maxResults){state.progress.limitReached=true;state.progress.limitReason='hits';throw new SearchLimit('已达到数据搜索命中上限');}
-              const navigation=this.records&&prepared?this.records.capture(input.connectionId,input.taskId,metadata!,row,prepared):{};
-              const hit:DataSearchHit={columnIndex:block.columnOffset+index,cell:row.cells[index],keyValues:row.keyValues,...(row.keyUnavailableReason?{keyUnavailableReason:row.keyUnavailableReason}:{}),...navigation},bytes=Buffer.byteLength(JSON.stringify(hit));
-              if(state.progress.bytes+pendingBytes+bytes+(charged?0:metadataBytes)>dataSearchLimits.resultBytes){state.progress.limitReached=true;state.progress.limitReason='bytes';throw new SearchLimit('已达到数据搜索结果内存上限');}
-              if(pending.length&&(pending.length>=dataSearchLimits.batchRows||pendingBytes+bytes+metadataBytes+4096>dataSearchLimits.batchBytes))await flush();
-              if(bytes+metadataBytes+4096>dataSearchLimits.batchBytes)throw Error('单处数据搜索命中及描述超过批次预算');pending.push(hit);pendingBytes+=bytes;
-            }
-          },
-        },plan.params);
-        await flush();state.progress.processedBlocks++;
-      }catch(error){
-        if(error instanceof SearchLimit){await flush();break outer;}
-        if(error instanceof SearchAcknowledgementError)throw error;
-        control.checkCancelled();if(state.cancelled||managed.broken)throw error;state.progress.failedBlocks++;state.progress.processedBlocks++;state.progress.sequence++;
-        await this.offer(state,{kind:'error',sequence:state.progress.sequence,targetIndex,columnOffset:block.columnOffset,message:(error instanceof Error?error.message:String(error)).slice(0,1024),discardedHits:pending.length,progress:{...state.progress,phase:'waiting'}},control);
-        if(input.onError==='stop')throw error;
+  private async scan(state: Search, control: DataSearchScanSource) {
+    const { input } = state;
+    const check = () => { control.checkCancelled(); if (state.cancelled) throw Error('数据搜索已取消'); };
+    outer: for (let targetIndex = 0; targetIndex < input.targets.length; targetIndex++) {
+      for (const block of dataSearchBlocks(input.targets[targetIndex], input.dialect)) {
+        check();
+        state.progress.targetIndex = targetIndex;
+        state.progress.phase = 'preparing';
+        this.report(state);
+        let pending: DataSearchHit[] = [], pendingBytes = 0, metadata: DataSearchTargetMetadata | undefined;
+        let charged = false, metadataBytes = 0;
+        const flush = async () => {
+          if (!pending.length || !metadata) return;
+          state.progress.hits += pending.length;
+          state.progress.bytes += pendingBytes + (charged ? 0 : metadataBytes);
+          charged = true;
+          const hits = pending;
+          pending = []; pendingBytes = 0; state.progress.sequence++;
+          await this.offer(state, { kind: 'batch', sequence: state.progress.sequence, targetIndex,
+            columnOffset: block.columnOffset, metadata, hits, progress: { ...state.progress, phase: 'waiting' } }, control);
+        };
+        try {
+          await control.read(block.target, Math.max(1, input.maxResults - state.progress.hits + 1), (description, capture) => {
+            metadata = description;
+            metadataBytes = Buffer.byteLength(JSON.stringify(metadata));
+            state.progress.phase = 'scanning';
+            this.report(state);
+            return async row => {
+              check();
+              for (let index = 0; index < row.cells.length; index++) {
+                if (!row.cells[index].matched) continue;
+                if (state.progress.hits + pending.length >= input.maxResults) {
+                  state.progress.limitReached = true; state.progress.limitReason = 'hits';
+                  throw new SearchLimit('已达到数据搜索命中上限');
+                }
+                const hit: DataSearchHit = { columnIndex: block.columnOffset + index, cell: row.cells[index], keyValues: row.keyValues,
+                  ...(row.keyUnavailableReason ? { keyUnavailableReason: row.keyUnavailableReason } : {}), ...capture?.(row) };
+                const bytes = Buffer.byteLength(JSON.stringify(hit));
+                if (state.progress.bytes + pendingBytes + bytes + (charged ? 0 : metadataBytes) > dataSearchLimits.resultBytes) {
+                  state.progress.limitReached = true; state.progress.limitReason = 'bytes';
+                  throw new SearchLimit('已达到数据搜索结果内存上限');
+                }
+                if (pending.length && (pending.length >= dataSearchLimits.batchRows ||
+                    pendingBytes + bytes + metadataBytes + 4096 > dataSearchLimits.batchBytes)) await flush();
+                if (bytes + metadataBytes + 4096 > dataSearchLimits.batchBytes) throw Error('单处数据搜索命中及描述超过批次预算');
+                pending.push(hit); pendingBytes += bytes;
+              }
+            };
+          }, (rows, bytes) => {
+            state.progress.peakBufferedRows = Math.max(state.progress.peakBufferedRows, rows);
+            state.progress.peakBufferedBytes = Math.max(state.progress.peakBufferedBytes, bytes);
+          });
+          check(); await flush(); state.progress.processedBlocks++;
+        } catch (error) {
+          if (error instanceof SearchLimit) { await flush(); break outer; }
+          if (error instanceof SearchAcknowledgementError) throw error;
+          check();
+          if (control.broken()) throw error;
+          state.progress.failedBlocks++; state.progress.processedBlocks++; state.progress.sequence++;
+          await this.offer(state, { kind: 'error', sequence: state.progress.sequence, targetIndex, columnOffset: block.columnOffset,
+            message: (error instanceof Error ? error.message : String(error)).slice(0, 1024),
+            discardedHits: pending.length, progress: { ...state.progress, phase: 'waiting' } }, control);
+          if (input.onError === 'stop') throw error;
+        }
       }
     }
-    state.progress.phase='releasing';this.report(state);
+    state.progress.phase = 'releasing'; this.report(state);
   }
   /** 任务进度始终是轻量快照；数据库值只通过有确认的拉取回复传输。 */
   private report(state:Search){this.emit({taskId:state.input.taskId,status:'running',progress:Math.floor(state.progress.processedBlocks/Math.max(1,state.progress.blocks)*100),message:'正在搜索数据',dataSearch:{...state.progress}});}

@@ -76,7 +76,7 @@ export async function readPostgresDefinitionText(connection: PostgresConnection,
 }
 
 /** 普通匹配保留百分号和下划线，大小写转换与正则均使用服务器语义。 */
-export function postgresSearchPredicate(column: 'match_name' | 'definition_text', pattern: DatabaseSearchPattern) {
+export function postgresSearchPredicate(column: string, pattern: DatabaseSearchPattern) {
   const name = pattern.caseSensitive ? column : `pg_catalog.lower(${column})`;
   const value = pattern.caseSensitive ? '$1::text' : 'pg_catalog.lower($1::text)';
   return pattern.mode === 'regexp' ? `${column} ${pattern.caseSensitive ? '~' : '~*'} $1::text`

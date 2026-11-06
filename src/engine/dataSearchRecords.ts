@@ -1,7 +1,7 @@
 import{Buffer}from'node:buffer';
 import{createHash,randomUUID}from'node:crypto';
 import{dataSearchRecordLimits as limits,dataSearchRecordReadSchema,dataSearchRecordsReleaseSchema,type DataSearchRecord,type DataSearchNavigationReason}from'../shared/dataSearchRecords';
-import type{DataSearchTargetMetadata,DataSearchRow,DataSearchTarget}from'../shared/dataSearch';
+import type{DataSearchTargetMetadata,DataSearchRow,DataSearchTarget,PostgresSearchRowIdentity}from'../shared/dataSearch';
 import type{CellValue}from'../shared/contracts';
 import type{StructureTaskContext}from'./structureDefinition';
 import{completionQuery}from'./completionQuery';
@@ -12,7 +12,7 @@ import{definitionOmittingSqlModes}from'../shared/tableColumnPatches';
 
 interface Identity{server:string;tableId:string;definition:string}
 export type RecordPreparation={identity:Identity}|{reason:DataSearchNavigationReason};
-interface Locator{connectionId:string;sourceTaskId:string;metadata:DataSearchTargetMetadata;keyValues:CellValue[];timestampEpochs?:(string|null)[];identity:Identity;searchedAt:string;expires:number;bytes:number}
+interface Locator{connectionId:string;sourceTaskId:string;metadata:DataSearchTargetMetadata;keyValues:CellValue[];timestampEpochs?:(string|null)[];postgresIdentity?:PostgresSearchRowIdentity;identity:Identity;searchedAt:string;expires:number;bytes:number}
 type Context=Pick<StructureTaskContext,'managed'|'checkCancelled'|'commandStarted'>;
 class IdentityBudgetError extends Error{}
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -87,7 +87,7 @@ export class DataSearchRecords{
  capture(connectionId:string,sourceTaskId:string,metadata:DataSearchTargetMetadata,row:DataSearchRow,prepared:RecordPreparation):{recordRef?:string;navigationReason?:DataSearchNavigationReason}{
   this.prune();if(!row.keyValues)return{navigationReason:'no-key'};if('reason'in prepared)return{navigationReason:prepared.reason};
   if([...this.entries.values()].some(entry=>entry.sourceTaskId===sourceTaskId&&entry.connectionId!==connectionId))throw Error('记录来源不属于此连接');
-  const data={connectionId,sourceTaskId,metadata,keyValues:row.keyValues,timestampEpochs:row.timestampEpochs,identity:prepared.identity,searchedAt:new Date().toISOString(),expires:Date.now()+limits.retentionMs},bytes=Buffer.byteLength(JSON.stringify(data));
+  const data={connectionId,sourceTaskId,metadata,keyValues:row.keyValues,timestampEpochs:row.timestampEpochs,postgresIdentity:row.postgresIdentity,identity:prepared.identity,searchedAt:new Date().toISOString(),expires:Date.now()+limits.retentionMs},bytes=Buffer.byteLength(JSON.stringify(data));
   if(this.entries.size>=limits.references||this.bytes+bytes>limits.bytes)return{navigationReason:'budget'};
   const recordRef=randomUUID();this.entries.set(recordRef,{...structuredClone(data),bytes});this.bytes+=bytes;this.prune();return{recordRef};
  }
@@ -97,9 +97,17 @@ export class DataSearchRecords{
  releaseConnection(connectionId:string){for(const[id,entry]of this.entries)if(entry.connectionId===connectionId){this.entries.delete(id);this.bytes-=entry.bytes;}this.prune();}
  /** 工具进程退出前取消本地到期计时，数据库任务由引擎另行等待。 */
  close(){if(this.timer)clearTimeout(this.timer);this.timer=undefined;this.entries.clear();this.bytes=0;}
+ /** 定位读取先取得原引用，返回前再次核对引用没有被关闭或过期。 */
+ lookup(raw:unknown) {
+  const input=dataSearchRecordReadSchema.parse(raw);this.prune();const entry=this.entries.get(input.recordRef);
+  if(!entry)throw Error('记录定位已过期或已释放，请重新搜索');
+  if(entry.connectionId!==input.connectionId)throw Error('记录引用不属于此连接');
+  return entry;
+ }
  /** 重新持有目标MDL后核身份和定义，读取当前行；结果只有所选字段与键，始终只读。 */
  async read(context:Context,raw:unknown):Promise<DataSearchRecord>{
-  const input=dataSearchRecordReadSchema.parse(raw);this.prune();const entry=this.entries.get(input.recordRef);if(!entry)throw Error('记录定位已过期或已释放，请重新搜索');if(entry.connectionId!==input.connectionId)throw Error('记录引用不属于此连接');
+  const entry=this.lookup(raw);
+  if(entry.postgresIdentity)throw Error('记录定位方言与保存的连接不匹配');
   const query=async(sql:string,values:Parameter[]=[])=>completionQuery<Record<string,unknown>[]>(context.managed,context,sql,values);
   await query('SET SESSION time_zone = \'+00:00\'');await query('START TRANSACTION READ ONLY');
   const metadata=await readDataSearchTarget(context.managed,entry.metadata.target,context),prepared=await prepareDataSearchRecord(context,entry.metadata.target);

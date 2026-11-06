@@ -53,6 +53,12 @@ import { StructureSearches } from '../structureSearch';
 import { readPostgresStructureSearchPage } from './structureSearch';
 import { preparePostgresSearchConnection, readPostgresDefinitionText } from './definitionSearch';
 import { postgresDefinitionTargetSchema } from '../../shared/databaseSearch';
+import { dataSearchInputSchema } from '../../shared/dataSearch';
+import { dataSearchCatalogueSchema } from '../../shared/dataSearchCatalogue';
+import { dataSearchRecordReadSchema } from '../../shared/dataSearchRecords';
+import type { DataSearchTasks } from '../dataSearchTasks';
+import type { DataSearchRecords } from '../dataSearchRecords';
+import { postgresDataSearchSource, readPostgresDataSearchCatalogue, readPostgresDataSearchRecord } from './dataSearch';
 interface Session {
   id: string;
   connectionId: string;
@@ -152,7 +158,8 @@ export class PostgresEngine {
   private readonly leases = new Set<Lease>();
   private readonly closing = new Set<string>();
   private stopping = false;
-  constructor(private readonly emit: (event: TaskEvent) => void, private readonly structureSearches = new StructureSearches()) {}
+  constructor(private readonly emit: (event: TaskEvent) => void, private readonly structureSearches = new StructureSearches(),
+    private readonly dataSearch?: { tasks: DataSearchTasks; records: DataSearchRecords }) {}
   ownsTask(id: string) {
     return this.tasks.has(id) || this.transfers.has(id) || this.completedTasks.has(id);
   }
@@ -333,19 +340,23 @@ export class PostgresEngine {
 
   private async trackedRead<T>(taskId: string, profile: PostgresConnectionProfile, label: string,
     operation: (read: <R>(database: string | undefined, action: (managed: PostgresConnection) => Promise<R>) => Promise<R>,
-      check: () => void) => Promise<T>): Promise<T> {
+      check: () => void) => Promise<T>, acknowledged = false): Promise<T> {
     if (this.stopping || this.closing.has(profile.id) || this.ownsTask(taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL ' + label + '任务已存在、连接关闭中或已达并发上限');
     let opening: PostgresConnection | undefined, timedOut = false;
     const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true,
-      processAbort: () => opening?.abort() };
+      processAbort: () => {
+        opening?.abort();
+        if (acknowledged) this.dataSearch?.tasks.interrupt(taskId);
+      } };
     const check = () => {
       if (timedOut) throw Error('PostgreSQL ' + label + '读取超时');
       if (task.cancelled) throw Error('PostgreSQL ' + label + '读取已取消');
     };
     this.transfers.set(taskId, task);
-    const timer = setTimeout(() => { timedOut = true; this.cancelTransfer(task); }, 30_000);
-    timer.unref();
+    // 数据搜索各语句及确认分别限时，多个批次不争用同一个目录短读期限。
+    const timer = acknowledged ? undefined : setTimeout(() => { timedOut = true; this.cancelTransfer(task); }, 30_000);
+    timer?.unref();
     const read = <R>(database: string | undefined, action: (managed: PostgresConnection) => Promise<R>) =>
       this.use(profile, database, async managed => {
         opening = undefined;
@@ -353,7 +364,7 @@ export class PostgresEngine {
         task.connection = managed; task.commandActive = true;
         try { return await action(managed); }
         finally { task.commandActive = false; await task.cancelPending; }
-      }, false, false, false, managed => { opening = managed; });
+      }, false, false, false, managed => { opening = managed; }).finally(() => { opening = undefined; task.connection = undefined; });
     const done = task.done = operation(read, check);
     try {
       this.emit({ taskId, status: 'running', progress: 0, message: '正在读取 PostgreSQL ' + label });
@@ -742,6 +753,7 @@ export class PostgresEngine {
       }
       await Promise.allSettled(transfers.map(task => task.done));
       this.tables.clear(id);
+      this.dataSearch?.records.releaseConnection(id);
       this.creations.clear(id);
       this.columnEdits.clear(id);
       this.indexEdits.clear(id);
@@ -771,6 +783,7 @@ export class PostgresEngine {
     if (changed) {
       this.invalidateSync(input.id);
       this.structureSearches.releaseConnection(input.id);
+      this.dataSearch?.records.releaseConnection(input.id);
       this.tables.clear(input.id);
       this.creations.clear(input.id);
       this.columnEdits.clear(input.id);
@@ -1200,6 +1213,30 @@ export class PostgresEngine {
           this.trackedRead(request.taskId, profile, '结构搜索', (read, check) => readPostgresStructureSearchPage(state, read, check));
         return command === 'search.structure' ? this.structureSearches.startPage(request, 'postgresql', search)
           : this.structureSearches.nextPage(request, 'postgresql', search);
+      }
+      case 'search.catalogue': case 'search.dataStart': case 'search.recordRead': {
+        const { profile, ...request } = input;
+        const services = this.dataSearch;
+        if (!services || profile?.dialect !== 'postgresql' || profile.id !== request.connectionId)
+          throw Error('数据搜索需要准确的已保存 PostgreSQL 连接');
+        if (command === 'search.catalogue') {
+          const scope = dataSearchCatalogueSchema.parse(request);
+          return this.trackedRead(scope.taskId, profile, '搜索范围', read =>
+            read('database' in scope ? scope.database : undefined, connection => readPostgresDataSearchCatalogue(connection, scope)));
+        }
+        if (command === 'search.dataStart') {
+          const scope = dataSearchInputSchema.parse(request);
+          if (scope.dialect !== 'postgresql') throw Error('数据搜索方言与保存的连接不匹配');
+          return services.tasks.startScan(scope, scan => this.trackedRead(scope.taskId, profile, '数据搜索', (read, check) =>
+            scan(postgresDataSearchSource(scope, services.records, read, check)), true));
+        }
+        const locator = dataSearchRecordReadSchema.parse(request);
+        const entry = services.records.lookup(locator);
+        if (!entry.postgresIdentity) throw Error('记录定位方言与保存的连接不匹配');
+        const result = await this.trackedRead(locator.taskId, profile, '命中记录', read =>
+          read(entry.metadata.target.database, connection => readPostgresDataSearchRecord(connection, entry)));
+        if (services.records.lookup(locator) !== entry) throw Error('原搜索记录引用已变化，请重新搜索');
+        return result;
       }
       case 'serverMonitor.signal': {
         const { profile, signalTarget, ...request } = input;

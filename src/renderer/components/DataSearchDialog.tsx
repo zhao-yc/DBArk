@@ -18,6 +18,7 @@ const emptyPage=(kind:DataSearchCataloguePage['kind']):DataSearchCataloguePage=>
 export function DataSearchDialog({onClose,onStructure,onOpen}:{onClose():void;onStructure():void;onOpen(connectionId:string,target:DataSearchTarget):void}){
  const workspace=useWorkspace(),context=structureSearchContext(workspace.selection,workspace.settings.tabs.find(tab=>tab.id===workspace.settings.activeTabId),workspace.connections[0]?.id??'');
  const [connectionId,setConnectionId]=useState(workspace.connections.some(profile=>profile.id===context.connectionId&&profile.dialect!=='sqlite')?context.connectionId:''),[database,setDatabase]=useState(context.database??''),[object,setObject]=useState(''),[kind,setKind]=useState<'table'|'view'>('table');
+ const postgres = workspace.connections.find(profile => profile.id === connectionId)?.dialect === 'postgresql';
  const [dbPrefix,setDbPrefix]=useState(''),[objectPrefix,setObjectPrefix]=useState(''),[columnPrefix,setColumnPrefix]=useState('');
  const [databases,setDatabases]=useState(emptyPage('databases')),[objects,setObjects]=useState(emptyPage('objects')),[columns,setColumns]=useState(emptyPage('columns'));
  const [scopes,setScopes]=useState<DataSearchSelection[]>([]),scopesRef=useRef<DataSearchSelection[]>([]);
@@ -37,7 +38,7 @@ export function DataSearchDialog({onClose,onStructure,onOpen}:{onClose():void;on
  /** 一次只读取一页目录，名称和字段的省略始终用下一页显式提示。 */
  function read(kindToRead:DataSearchCatalogueInput['kind'],after?:string){
   if(catalogue.current||view.busy||closeRequested.current)return;
-  const taskId=uid(),base={connectionId,taskId,prefix:kindToRead==='databases'?dbPrefix:kindToRead==='objects'?objectPrefix:columnPrefix,...(after?{after}:{})};
+  const taskId=uid(),base={connectionId,taskId,...(postgres?{dialect:'postgresql' as const}:{}),prefix:kindToRead==='databases'?dbPrefix:kindToRead==='objects'?objectPrefix:columnPrefix,...(after?{after}:{})};
   const input:DataSearchCatalogueInput=kindToRead==='databases'?{...base,kind:'databases'}:kindToRead==='objects'?{...base,kind:'objects',database}:{...base,kind:'columns',database,table:object,objectKind:kind};
   setReading(true);setError('');const current={taskId,done:Promise.resolve()};catalogue.current=current;
   current.done=(async()=>{try{const page=await invoke('search.catalogue',input);if(!mounted.current||closeRequested.current)return;if(kindToRead==='databases')setDatabases(page);else if(kindToRead==='objects')setObjects(page);else setColumns(page);}catch(reason){if(mounted.current&&!closeRequested.current)setError(errorMessage(reason));}finally{if(catalogue.current===current)catalogue.current=null;if(mounted.current)setReading(false);}})();
@@ -48,7 +49,7 @@ export function DataSearchDialog({onClose,onStructure,onOpen}:{onClose():void;on
  }
  /** 只传显式对象和列；非法条件不释放现有结果或启动网络查询。 */
  function search(){
-  if(disabled||session.snapshot.busy||closeRequested.current)return;const parsed=dataSearchInputSchema.safeParse({connectionId,taskId:uid(),targets:dataSearchScopes(scopesRef.current),matcher:mode==='null'?{kind:'null'}:{kind:'text',pattern:{mode,text:keyword,caseSensitive}},maxResults:limit,allowViews,onError});
+  if(disabled||session.snapshot.busy||closeRequested.current)return;const parsed=dataSearchInputSchema.safeParse({connectionId,taskId:uid(),...(postgres?{dialect:'postgresql'}:{}),targets:dataSearchScopes(scopesRef.current),matcher:mode==='null'?{kind:'null'}:{kind:'text',pattern:{mode,text:keyword,caseSensitive}},maxResults:limit,allowViews,onError});
   if(!parsed.success){setError(t.invalid);return;}setError('');setSelected(null);void session.start(parsed.data);
  }
  /** 模式切换和打开表都先等待原搜索释放；失败保留窗口，允许再次明确清理。 */

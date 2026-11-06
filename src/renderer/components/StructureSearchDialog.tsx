@@ -81,7 +81,7 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
   const columns:Column<StructureSearchHit>[]=[{key:'database',name:text.databaseColumn,width:170},{key:'kind',name:text.kindColumn,width:100,renderCell:({row})=>text.kinds[row.kind]},{key:'object',name:text.objectColumn,width:220},{key:'name',name:searchIn==='definition'?text.definitionLocation:text.nameColumn,width:260,renderCell:({row})=>row.matchedIn==='definition'?text.definitionMatch(row.definitionCharacters??0):row.name}];
   return <Modal title={searchIn==='definition'?text.definitionsTitle:text.title} wide onClose={()=>void close()}>
     <div className="modal-content database-search-content">
-      {onData&&!postgres&&<div><button disabled={closing} onClick={()=>void close('data')}>{text.dataMode}</button></div>}
+      {onData&&<div><button disabled={closing} onClick={()=>void close('data')}>{text.dataMode}</button></div>}
       {onSavedQueries&&<div><button disabled={closing} onClick={()=>void close('queries')}>{text.savedQueries}</button></div>}
       <fieldset disabled={busy||closing} className="database-search-options">
         <div className="form-grid"><Field label={text.searchIn}><select aria-label={text.searchIn} value={searchIn} onChange={event=>{const value=event.target.value as 'name'|'definition';setSearchIn(value);setKinds([...(value==='definition'?(postgres?postgresDefinitionSearchKinds:definitionSearchKinds):(postgres?postgresStructureSearchKinds:structureSearchKinds))]);}}><option value="name">{text.names}</option><option value="definition">{text.definitions}</option></select></Field><Field label={text.connection}><select aria-label={text.connection} value={connectionId} onChange={event=>{

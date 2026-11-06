@@ -72,8 +72,17 @@ test.describe('200真实数据库：数据搜索界面',()=>{
  });
  test('真实列权限：不可读键仅降为只读命中，明确搜索不可读字段仍报错并可恢复',async({},info)=>{
   test.setTimeout(120000);const suffix=randomUUID().replaceAll('-','').slice(0,12),database='dbark_colperm_'+suffix,user='cp_'+suffix,password=randomUUID()+randomUUID(),port=Number(environment.DBARK_TEST_PORT??13384);
-  if(environment.DBARK_TEST_HOST!=='192.168.31.200'||![13357,13380,13384,13310,13311].includes(port))throw Error('本列权限桌面夹具仅允许已核对的200隔离非TLS端口');
-  const observer=await mysql.createConnection({host:environment.DBARK_TEST_HOST,port,user:environment.DBARK_TEST_USER,password:environment.DBARK_TEST_PASSWORD,charset:'utf8mb4',connectTimeout:15000});
+  const containerHost=process.env.DBARK_MYSQL_SEARCH_CONTAINER??'';
+  if(!environment.DBARK_TEST_HOST)throw Error('缺少隔离 MySQL 地址');
+  const host=environment.DBARK_TEST_HOST;
+  const viaTunnel=host==='127.0.0.1'&&Number.isInteger(port)&&port>1024&&port<=65535&&/^tabrelio-search-[a-f0-9]{12}$/.test(containerHost);
+  if(!viaTunnel&&(host!=='192.168.31.200'||![13357,13380,13384,13310,13311].includes(port)))throw Error('本列权限桌面夹具仅允许已核对的200隔离非TLS端口');
+  const observer=await mysql.createConnection({host,port,user:environment.DBARK_TEST_USER,password:environment.DBARK_TEST_PASSWORD,charset:'utf8mb4',connectTimeout:15000});
+  // 临时回环转发也要确认连到本轮独占容器，核对通过后才能创建账号和数据库。
+  if(viaTunnel){
+   try{const[identity]=await observer.query<RowDataPacket[]>('SELECT @@hostname AS host');if(identity[0]?.host!==containerHost)throw Error('本轮隔离 MySQL 容器身份不符');}
+   catch(reason){await observer.end();throw reason;}
+  }
   try{
    await observer.query('CREATE DATABASE `'+database+'` CHARACTER SET utf8mb4');await observer.query('CREATE TABLE `'+database+'`.subject(id BIGINT PRIMARY KEY,note TEXT) ENGINE=InnoDB');await observer.query('INSERT INTO `'+database+'`.subject VALUES(?,?)',['9007199254740993','权限隔离命中']);if(!/^[a-f0-9-]{72}$/.test(password))throw Error('隔离认证格式无效');
    try{await observer.query("CREATE USER '"+user+"'@'%' IDENTIFIED BY '"+password+"'");}catch{throw Error('隔离账号创建失败，认证内容未写入报告');}

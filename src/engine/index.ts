@@ -150,7 +150,7 @@ type Input = Record<string, any>;
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
 export class Engine {
   private readonly structureSearches = new StructureSearches();
-  private readonly postgres = new PostgresEngine(event => this.emit(event), this.structureSearches);
+  private readonly postgres: PostgresEngine;
   private readonly excelReads = new ExcelReadTasks(event => this.emit(event));
   private readonly importInspections = new ImportFileInspectTasks(event => this.emit(event));
   private readonly fileConnecting = new Map<string, { connectionId: string; controller: AbortController; done: Promise<void> }>();
@@ -197,6 +197,9 @@ export class Engine {
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined,options?:{dataSearchAcknowledgementMs?:number}) {
     this.dataSearches=new DataSearchTasks(emit,options?.dataSearchAcknowledgementMs,this.dataSearchRecords);
+    this.postgres = new PostgresEngine(event => this.emit(event), this.structureSearches, {
+      tasks: this.dataSearches, records: this.dataSearchRecords,
+    });
     this.resultFiles = new ResultFileTasks(emit);
     // 整批写入与结构执行共用目标锁，COMMIT发出后取消只能等待真实结果。
     this.resultInserts = new ResultInsertTasks({ run: (target, taskId, action, progress, execution) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '写入查询结果' : '预览查询结果写入', true, () => ({ resultInsert: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined) });
@@ -233,13 +236,21 @@ export class Engine {
   async handle(command: EngineCommand, input: Input): Promise<any> {
     // 句柄属于共用目录，释放不需要重新解析或打开已删除的连接。
     if (command === 'search.release') return this.structureSearches.release(input);
+    if (command === 'search.dataNext') return this.dataSearches.next(input);
+    if (command === 'search.recordsRelease') return this.dataSearchRecords.release(input);
+    if (command === 'search.dataRelease') {
+      if (!this.dataSearches.assertOwner(input)) return;
+      if (this.postgres.ownsTask(input.taskId)) await this.postgres.handle('query.cancel', input);
+      else await this.cancelTask(input.taskId);
+      return this.dataSearches.release(input);
+    }
     if (command === '__connections.prepareSave') this.postgres.prepareSave(input);
     else if (command.startsWith('postgres.compareData') || command === 'postgres.explain' || command.startsWith('postgres.analyze') || command === 'postgres.completion' || command.startsWith('postgres.routine.') || command.startsWith('postgres.structure.') || command.startsWith('postgres.sequence.') || command.startsWith('postgres.createTable.') || command.startsWith('postgres.createView.') || command.startsWith('postgres.editView.') || command.startsWith('postgres.viewManage.') || command.startsWith('postgres.materializedRefresh.') || command.startsWith('postgres.columnEdit.') || command.startsWith('postgres.indexEdit.') || command.startsWith('postgres.keyEdit.') || command.startsWith('postgres.foreignEdit.') || command.startsWith('postgres.checkEdit.') || command.startsWith('postgres.table.') || this.postgres.accepts(input)) {
       if (this.closing && !['connections.close', 'sessions.close', 'query.cancel', 'query.sessionState', 'postgres.table.release'].includes(command)) {
         throw Error('数据库引擎正在关闭，不能开始新操作');
       }
       // 各驱动共用任务事件和取消入口，必须在分流前保证编号唯一。
-      if ((command === 'postgres.compareData' || command === 'postgres.compareData.syncApply' || command === 'query.execute' || command === 'query.executeParameterized' || command === 'postgres.explain' || command === 'postgres.analyze' || command === 'postgres.table.import' || command.startsWith('serverMonitor.') || command.startsWith('search.structure')) && this.taskIdInUse(input.taskId)) throw Error('任务编号已使用');
+      if ((command === 'postgres.compareData' || command === 'postgres.compareData.syncApply' || command === 'query.execute' || command === 'query.executeParameterized' || command === 'postgres.explain' || command === 'postgres.analyze' || command === 'postgres.table.import' || command.startsWith('serverMonitor.') || command.startsWith('search.')) && this.taskIdInUse(input.taskId)) throw Error('任务编号已使用');
       return this.postgres.handle(command, input);
     }
     if (command.startsWith('sqlite.')) throw Error('SQLite专用接口不能进入MySQL网络引擎');
@@ -436,9 +447,8 @@ export class Engine {
         conflicts.forEach(task => { if (task.phase === 'connecting') task.controller.abort(); });
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
-        // 退出意图必须在首个await前传给所有驱动，不能让PostgreSQL收尾延迟原MySQL建连取消。
-    const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup,
-      ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id)), this.postgres.closeAll()]);
+        const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup,
+          ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
         await Promise.all([...connecting.map(task => task.done), ...conflicts.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         const recovered = await this.independentResources.recover(input.id);
@@ -500,8 +510,6 @@ export class Engine {
         if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
         return this.dataSearches.start(request,action=>this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>action({managed,...control,stop:()=>this.stopIndependentRead(input.taskId)}),undefined,'搜索数据',true,()=>this.dataSearches.detail(input.taskId)));
       }
-      case 'search.dataNext':return this.dataSearches.next(input);
-      case 'search.recordsRelease':return this.dataSearchRecords.release(input);
       case 'search.recordRead':{
         const{profile,...request}=input;if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效记录连接配置');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
         return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>this.dataSearchRecords.read({managed,...control},request),undefined,'正在定位命中记录',true);
@@ -510,8 +518,6 @@ export class Engine {
         const{profile,...request}=input;if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效范围连接配置');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
         return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>readDataSearchCatalogue({managed,...control},request),undefined,'读取搜索范围',true);
       }
-      case 'search.dataRelease':
-        if(!this.dataSearches.assertOwner(input))return;await this.cancelTask(input.taskId);return this.dataSearches.release(input);
       case 'metadata.completion': {
         // 主进程注入保存配置即可启动可取消短读，不额外开一次不可取消的测试连接。
         const profile=input.profile as NetworkConnectionProfile|undefined;
@@ -935,7 +941,9 @@ export class Engine {
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
     const fileCleanup = Promise.all([this.resultFiles.closeAll(), this.excelReads.closeAll(), this.importInspections.closeAll()]);
-    const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+    // 整体退出时，各驱动同时收到取消意图。单连接断开只收尾所属连接。
+    const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup,
+      ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id)), this.postgres.closeAll()]);
     await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
     await fileCleanup;
     // 首个 await 之前已进入的建连也必须收尾，避免退出后迟到注册会话。

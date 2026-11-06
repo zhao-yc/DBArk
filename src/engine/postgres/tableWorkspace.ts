@@ -87,7 +87,7 @@ const pageScope = ({ filter, sort }: Snapshot['options']) =>
   JSON.stringify([filter, postgresTableSortRules(sort).map(({ column, direction, nulls }) => [column, direction, nulls])]);
 
 /** 每次从实际库读取关系、主键顺序、列权限与结构；标识符及类型显示均来自目录。 */
-export async function readRelation(connection: PostgresConnection, table: string): Promise<Relation> {
+export async function readRelation(connection: PostgresConnection, table: string, catalogueOnly = false): Promise<Relation> {
   const { schema, name } = postgresRelationName(table);
   const header = await connection.query(`
     SELECT c.oid, pg_catalog.pg_relation_filenode(c.oid), c.relkind, c.relispartition, c.relhasrules,
@@ -105,6 +105,8 @@ export async function readRelation(connection: PostgresConnection, table: string
   if (!info || typeof info.c0 !== 'string') throw Error('PostgreSQL关系不存在、已改名或无权查看');
   if (info.c2 === 'm' && info.c11 === 'f') throw Error('PostgreSQL 物化视图尚未填充数据，请从「查看结构」执行刷新。');
   // 复制记录根据标识属性和默认表达式的序列依赖省略字段，避免猜测 DEFAULT 文本。
+  // 数据搜索每次只投影少量列，目录可读取宽表的全部列而不放宽表页结果预算。
+  const maxColumns = catalogueOnly ? 1600 : 1022;
   const fields = await connection.query(`
     SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull,
            a.atthasdef, a.attgenerated, a.attidentity, a.atttypid,
@@ -122,8 +124,8 @@ export async function readRelation(connection: PostgresConnection, table: string
     FROM pg_catalog.pg_attribute a
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
     WHERE a.attrelid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
-  `, [info.c0], small());
-  if (!fields.rows.length || fields.truncated || fields.rows.length > 1022) throw Error('PostgreSQL列目录不完整或超过表页预算');
+  `, [info.c0], catalogueOnly ? { rows: maxColumns + 1, bytes: 4 * 1024 * 1024 } : small());
+  if (!fields.rows.length || fields.truncated || fields.rows.length > maxColumns) throw Error('PostgreSQL列目录不完整或超过读取预算');
   const columns = fields.rows.map((field, index): PostgresTableColumn => ({
     key: 'c' + index, name: String(field.c0), type: String(field.c1), nullable: field.c2 !== 't',
     defaultValue: field.c3 === 't' || field.c5 !== '', generated: field.c4 !== '' || field.c5 === 'a',
