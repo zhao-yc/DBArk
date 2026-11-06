@@ -17,7 +17,7 @@ function compile(): Promise<string> {
     builder.onLoad({ filter: /.*/, namespace: 'sidebar-test' }, args => ({ contents: ({
       react: 'export const useState=(...a)=>globalThis.host.state(...a),useRef=(...a)=>globalThis.host.ref(...a),useEffect=(...a)=>globalThis.host.effect(...a);',
       jsx: 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";',
-      icons: 'export const ChevronDown="down",ChevronRight="right",Database="database",Table2="table",Search="search",Plus="plus",Pencil="pencil",RefreshCw="refresh",FileCode2="file",Folder="folder",Unplug="unplug",Trash2="trash",Copy="copy",ListChecks="list-checks",ListFilter="list-filter";',
+      icons: 'export const ChevronDown="down",ChevronRight="right",Database="database",Table2="table",Search="search",Plus="plus",Pencil="pencil",RefreshCw="refresh",FileCode2="file",Folder="folder",Unplug="unplug",Trash2="trash",Copy="copy",HardDriveDownload="backup",HardDriveUpload="restore",ListChecks="list-checks",ListFilter="list-filter";',
       lib: 'export const invoke=(...a)=>globalThis.sidebarIpcInvoke(...a),uid=()=>globalThis.sidebarUid(),errorMessage=e=>e instanceof Error?e.message:String(e),kindLabels={table:"表",view:"视图"};',
       store: 'export const useWorkspace=s=>s(globalThis.store);useWorkspace.getState=()=>globalThis.store;',
       ui: 'export const Spinner="spinner",ErrorBox="error-box",FavoriteButton="favorite",WorkbenchShelf="shelf",SidebarTreeRow="tree-row",SidebarTreeProvider="tree-provider";'

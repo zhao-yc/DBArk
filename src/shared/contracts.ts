@@ -417,6 +417,7 @@ export interface CommandMap {
   'schema.foreignKeys.release': { input: TableForeignKeyReleaseInput; output: void };
   'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query' | 'connection-import' | 'connection-export' | 'sqlite-database'; format?: string; suggestedName?: string; resultSqlPreviewId?: string; queryInsertExport?: true; /** 仅SQLite选择，令牌绑定本表单准确连接ID。 */ sqliteConnectionId?: string }; output: FileChoice | null };
   /** 只接收连接编号；目标路径由Main原生另存对话框选择，不能覆盖现存文件。 */
+  'sqlite.databaseCopy': { input: import('./sqliteDatabaseBackup').SqliteDatabaseCopyInput; output: import('./sqliteDatabaseBackup').SqliteDatabaseCopyOutput | null };
   'files.createSqlite': { input: { connectionId: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
   'excel.sheets': { input: { fileToken: string; taskId: string }; output: ExcelSheet[] };

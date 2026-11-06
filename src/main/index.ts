@@ -54,6 +54,9 @@ import { EngineBroker } from './broker';
 import { SqliteConnectionFiles } from './sqliteConnectionFiles';
 import { closeSqliteDatabaseCreates, createSqliteDatabaseFile } from './sqliteDatabaseCreate';
 import { assertSqliteExportDestination } from './sqliteExportDestination';
+import { sqliteBackupFileIdentity } from '../engine/sqlite/backup';
+import { closeSqliteDatabaseCopies, publishSqliteDatabaseCopy } from './sqliteDatabaseBackup';
+import { sqliteDatabaseCopyZh, type SqliteDatabaseCopyInput } from '../shared/sqliteDatabaseBackup';
 import { sqliteTableExportMessages } from '../shared/sqliteTableExport';
 import { SqliteTableEditOwners, type SqliteEditLease } from './sqliteTableEditOwners';
 import { SqliteWriteRecords } from './sqliteWriteRecords';
@@ -146,6 +149,7 @@ const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatem
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
+let sqliteCopyTask: { id: string; owner: MainInvocation; abort: AbortController } | undefined;
 let binaryCellFileActive = false;
 const exportReservations = new ExportReservations();
 const preparingTasks = new Map<string, { cancelled: boolean; failure?: string; connectionIds?: string[] }>();
@@ -633,6 +637,64 @@ async function createSqliteFile(owner: MainInvocation | undefined, connectionId:
     try { assertOwner(); return sqliteFiles.register(owner!, created.path, connectionId, created); }
     catch (reason) { throw Error('SQLite文件已创建，但原选择已失效，连接未保存；请重新选择已创建文件，勿重复新建', { cause: reason }); }
   });
+}
+
+/**
+ * 备份只接受已授权连接。恢复只接受本次原生选择的文件。两者统一发布到用户选中的全新路径，
+ * 不借通用令牌或渲染进程传入的绝对路径获得文件权限。
+ */
+async function copySqliteFile(input: SqliteDatabaseCopyInput, owner: MainInvocation | undefined) {
+  columnsMain.assertCapturedOwner(owner);
+  if (sqliteCopyTask || shuttingDown) throw Error('已有 SQLite 整库任务或客户端正在退出');
+  const revision = store.connectionRevision(), text = sqliteDatabaseCopyZh;
+  const task = { id: randomUUID(), owner: owner!, abort: new AbortController() };
+  const assertOwner = () => {
+    columnsMain.assertCapturedOwner(owner);
+    if (revision !== store.connectionRevision() || sqliteCopyTask !== task || task.abort.signal.aborted) throw Error('原窗口或连接配置已变化');
+    if (input.mode === 'backup') connectionConfig.assertAvailable(input.connectionId);
+  };
+  sqliteCopyTask = task;
+  try {
+    return await queryFileOperation(async () => {
+      assertOwner();
+      const filters = [{ name: text.fileType, extensions: ['sqlite', 'sqlite3', 'db', 'db3'] }];
+      let path: string;
+      if (input.mode === 'backup') {
+        const profile = store.connections().find(value => value.id === input.connectionId);
+        if (profile?.dialect !== 'sqlite' || !profile.sqlite.filePath || profile.pendingFiles?.length) throw Error('请先保存已授权的 SQLite 文件连接');
+        path = profile.sqlite.filePath;
+      } else {
+        const chosen = await dialog.showOpenDialog(task.owner.owner.window, { title: text.chooseBackup, properties: ['openFile'], filters });
+        if (chosen.canceled || !chosen.filePaths[0]) return null;
+        path = chosen.filePaths[0];
+      }
+      assertOwner();
+      const source = sqliteBackupFileIdentity(path);
+      if (input.mode === 'backup' && source.path !== path) throw Error('SQLite 连接文件位置已变化，请重新授权');
+      const chosen = await dialog.showSaveDialog(task.owner.owner.window, { title: input.mode === 'backup' ? text.backup : text.restoreAs, defaultPath: input.mode === 'backup' ? text.backupName : text.restoreName, filters });
+      if (chosen.canceled || !chosen.filePath) return null;
+      assertOwner();
+      const target = chosen.filePath;
+      const release = await exportReservations.acquire(target);
+      try {
+        assertOwner();
+        await assertSqliteExportDestination(target, store.connections());
+        assertOwner();
+        const record: TaskRecord = { id: task.id, kind: 'sqlite.databaseCopy.' + input.mode, status: 'running', progress: 0, message: text.running, startedAt: new Date().toISOString() };
+        tasks.set(task.id, record);
+        taskEvent({ taskId: task.id, status: 'running', progress: 0, message: text.running });
+        try {
+          const result = await publishSqliteDatabaseCopy(source, target, { assertOwner, signal: task.abort.signal });
+          taskEvent({ taskId: task.id, status: 'completed', progress: 100, message: result.cleanupPending ? text.cleanupPending : text.finished });
+          return result;
+        } catch (error) {
+          const cancelled = task.abort.signal.aborted && error instanceof Error && error.message === text.cancelled;
+          taskEvent({ taskId: task.id, status: cancelled ? 'cancelled' : 'failed', progress: 0, message: cancelled ? text.cancelled : text.failed });
+          throw error;
+        }
+      } finally { release(); }
+    });
+  } finally { sqliteCopyTask = undefined; }
 }
 
 /** SQL结果文件选择绑定本主文档和准确预览；原生对话框等待中撤销的映射不能领取迟到令牌。 */
@@ -1572,6 +1634,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if (tasks.get(input.taskId)?.kind.startsWith('sqlite.databaseCopy.')) {
+        if (!sqliteCopyTask || sqliteCopyTask.id !== input.taskId) return;
+        columnsMain.assertCapturedOwner(columns);
+        if (!columnsMain.sharesDocumentOwner(sqliteCopyTask.owner, columns!)) throw Error('取消请求与原 SQLite 整库任务窗口不符');
+        sqliteCopyTask.abort.abort();
+        return;
+      }
       if (tasks.get(input.taskId)?.kind === 'postgres.table.import') {
         const postgresImporter = postgresImportTaskOwners.get(input.taskId);
         if (!postgresImporter) return;
@@ -1763,6 +1832,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
+    case 'sqlite.databaseCopy': return copySqliteFile(input, columns);
     case 'files.createSqlite': return createSqliteFile(columns, input.connectionId);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
@@ -2081,7 +2151,9 @@ app.on('before-quit', event => {
     }
     await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
     await cancelFileImportPreflights();
+    sqliteCopyTask?.abort.abort();
     await Promise.allSettled([...queryFileOperations]);
+    await closeSqliteDatabaseCopies();
     await closeSqliteDatabaseCreates();
     await sqliteTableImports.drain();
     await sqliteObjects.drain();
@@ -2107,8 +2179,9 @@ app.on('before-quit', event => {
     if (answer.response === 1) {
       await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
       await cancelFileImportPreflights();
+      sqliteCopyTask?.abort.abort();
       await Promise.allSettled([...queryFileOperations]);
-      try { await closeSqliteDatabaseCreates(); }
+      try { await closeSqliteDatabaseCopies(); await closeSqliteDatabaseCreates(); }
       catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : 'SQLite新建文件资源尚未确认释放'); return; }
       await sqliteTableImports.drain();
       await sqliteObjects.drain();
@@ -2308,6 +2381,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
+        if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind === 'postgres.table.import') columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
             payload.command === 'postgres.completion' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||

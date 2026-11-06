@@ -92,6 +92,7 @@ export function copySqliteWorkerOpenOptions(input: unknown): SqliteWorkerOpenOpt
 export interface SqliteFileIdentity { path: string; device: string; inode: string; }
 
 export type SqliteWorkerRequest =
+  | { kind: 'backupFile'; id: string; source: SqliteFileIdentity; staging: SqliteFileIdentity }
   | { kind: 'open'; id: string; options: SqliteWorkerOpenOptions }
   | { kind: 'execute'; id: string; sql: string; parameters?: SqliteValue[]; namedParameters?: Record<string, SqliteValue>; createGuard?: SqliteCreateGuard; options: SqliteExecutionOptions }
   | { kind: 'streamRead'; id: string; sql: string; parameters: SqliteValue[]; namedParameters?: never; createGuard?: never; options: SqliteStreamReadOptions }
@@ -103,6 +104,7 @@ export type SqliteWorkerRequest =
 
 export type SqliteWorkerResponse =
   | { kind: 'ready' }
+  | { kind: 'backupFileFinished'; id: string; verified: boolean }
   | { kind: 'opened'; id: string; version: string; transaction: boolean; readOnly: boolean; identity?: SqliteFileIdentity; copySourceIdentity?: SqliteFileIdentity; mode?: SqliteWorkerOpenOptions['mode'] }
   | { kind: 'statement'; id: string; frame: number; index: number; sql: string; columns: SqliteColumn[]; title?: string }
   | { kind: 'batch'; id: string; frame: number; index: number; rows: SqliteValue[][] }

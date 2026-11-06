@@ -1,5 +1,6 @@
 import { SqliteWorkerCore } from './workerCore';
-import type { SqliteWorkerResponse } from './protocol';
+import type { SqliteWorkerRequest, SqliteWorkerResponse } from './protocol';
+import { copySqliteDatabase } from './backup';
 
 /** 同一原生驱动同时接收Electron utility和Node子进程IPC，不启用stdout协议。 */
 const utility = process.parentPort;
@@ -23,7 +24,26 @@ const send = (message: SqliteWorkerResponse): void => {
 const exit = (code: number): void => { requestedExit ??= code; finishExit(); };
 const core = new SqliteWorkerCore({ send, exit });
 /** 未预期的生命周期故障也只退出，不将堆栈或数据库请求打印到标准流。 */
-const receive = (message: unknown): void => { try { core.receive(message); } catch { exit(1); } };
+let firstRequest = true;
+let backupId: string | undefined, backupFinished = false;
+const receive = (message: unknown): void => {
+  try {
+    const request = message as SqliteWorkerRequest | null;
+    // 备份只能独占尚未打开会话的进程。确认回执送达后才正常退出。
+    if (firstRequest && request?.kind === 'backupFile') {
+      firstRequest = false; backupId = request.id;
+      const reply = (verified: boolean) => { backupFinished = true; send({ kind: 'backupFileFinished', id: request.id, verified }); };
+      void copySqliteDatabase(request.source, request.staging).then(() => reply(true), () => reply(false)).catch(() => exit(1));
+      return;
+    }
+    if (backupId !== undefined) {
+      if (backupFinished && request?.kind === 'closeAck' && request.id === backupId) exit(0);
+      return;
+    }
+    firstRequest = false;
+    core.receive(message);
+  } catch { exit(1); }
+};
 if (utility) {
   utility.on('message', ({ data }: { data: unknown }) => receive(data));
 } else if (process.send) {
