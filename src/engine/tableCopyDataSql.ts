@@ -5,11 +5,11 @@ import { qualified, identifier } from './sql';
 import type { TableCopyDataTarget } from '../shared/tableCopyData';
 export interface TableCopyDataRead extends TableCopyStructureRead { dataCapability: string; }
 /** 数据仍在服务器内传递；不取出源行，不经JS转换大整数、DECIMAL、NULL或二进制字节。 */
-export function planTableCopyData(read: TableCopyDataRead, target: TableCopyDataTarget, newName: string): { newName: string; createSql: string; insertSql: string; sql: string } {
-  const plan = planTableCopyStructure(target, newName), columns = structureDocumentOf(read).columns;
+export function planTableCopyData(read: TableCopyDataRead, target: TableCopyDataTarget, newName: string, database = target.database): { newName: string; createSql: string; insertSql: string; sql: string } {
+  const plan = planTableCopyStructure(target, newName, database), columns = structureDocumentOf(read).columns;
   if (!columns.length || read.generatedPlan?.columns.length || columns.some(column => !column.access.type.editable)) throw Error('数据复制仅支持已证明的普通可写列');
   const names = columns.map(column => identifier(column.name)).join(', ');
-  const insertSql = `INSERT INTO ${qualified(target.database, plan.newName)} (${names}) SELECT ${names} FROM ${qualified(target.database, target.table)};`;
+  const insertSql = `INSERT INTO ${qualified(database, plan.newName)} (${names}) SELECT ${names} FROM ${qualified(target.database, target.table)};`;
   return { newName: plan.newName, createSql: plan.sql, insertSql, sql: plan.sql + '\n' + insertSql };
 }
 /** 保留空表用途全部身份与依赖守卫，再收窄准确版本和数据用途权限；角色/部分撤销不推测。 */

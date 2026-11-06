@@ -3,16 +3,15 @@ import type { ResultSetHeader } from 'mysql2';
 import { StructurePatchCache, structureCacheLimits, type StructureCacheScope } from './structurePatchCache';
 import { structureTaskQuery, type StructureTaskHost } from './structureDefinition';
 import { readTableCopyData, assertTableCopyDataUnchanged, planTableCopyData, type TableCopyDataRead } from './tableCopyDataSql';
-import { verifyTableCopyStructureStructure } from './tableCopyStructureSql';
-import { assertRenameDestinationAbsent } from './tableRenameRead';
+import { readTableCopyDestination, verifyTableCopyStructureStructure } from './tableCopyStructureSql';
 import { tableCommentHash } from './tableCommentRead';
 import { qualified } from './sql';
 import { tableCopyDataMode, tableCopyDataRequiredAcknowledgements, tableCopyDataConfirmation, type TableCopyDataGetInput, type TableCopyDataGetOutput, type TableCopyDataPreviewInput, type TableCopyDataPreviewOutput, type TableCopyDataApplyInput, type TableCopyDataApplyOutput, type TableCopyDataReleaseInput, type TableCopyDataProgress, type TableCopyDataTarget } from '../shared/tableCopyData';
 interface Snapshot extends TableCopyDataRead { id: string; target: TableCopyDataTarget; revision: number; expires: number; }
-interface Preview { snapshot: Snapshot; mode: typeof tableCopyDataMode; newName: string; createSql: string; insertSql: string; sql: string; bytes: number; expires: number; }
+interface Preview { snapshot: Snapshot; destination: TableCopyDataTarget; destinationStamp?: string; mode: typeof tableCopyDataMode; newName: string; createSql: string; insertSql: string; sql: string; bytes: number; expires: number; }
 const progress = (): TableCopyDataProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, dataSubmitted: false, insertCompleted: false, commitSubmitted: false, dataCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 const warnings = [
-  '仅准确MySQL 8.4.11同库普通InnoDB表；不复制生成列、外键、触发器、视图依赖、授权或跨连接数据。',
+  '仅准确MySQL 8.4.11同一连接的普通InnoDB表；不复制生成列、外键、触发器、视图依赖、授权或跨连接数据。',
   'CREATE LIKE与数据事务分开，整体不是原子操作。失败或取消可能留下空表；提交结果未知可能已有数据，不自动重放、覆盖或补DROP。',
   '预览只读元数据，不读行、不固定数据快照。执行使用READ COMMITTED，INSERT SELECT读取该语句执行时可见的已提交数据；源读不加行锁，目标行仍加锁并消耗空间、日志和IO。',
   '请在维护窗口暂停两端写入及并行DDL；建表与取得事务元数据锁之间存在外部窗口，身份重核不能消除该窗口。',
@@ -43,12 +42,14 @@ export class TableCopyDataTasks {
   async preview(input: TableCopyDataPreviewInput, revision: unknown): Promise<TableCopyDataPreviewOutput> {
     const snapshot = this.snapshots.get(input.snapshotId); if (!snapshot || snapshot.expires <= this.now() || snapshot.revision !== this.revision(revision, input.mode)) throw Error('数据复制快照失效或连接变化，请重新读取');
     if (snapshot.reasons.length) throw Error(snapshot.reasons.join('；'));
-    const plan = planTableCopyData(snapshot, snapshot.target, input.newName), state = progress(), token = randomUUID(); let value!: Preview;
+    const database = input.newDatabase ?? snapshot.target.database;
+    const plan = planTableCopyData(snapshot, snapshot.target, input.newName, database), state = progress(), token = randomUUID(); let value!: Preview;
+    const destination = { ...snapshot.target, database, table: plan.newName };
     const result = await this.host.run(snapshot.target.connectionId, input.taskId, async context => {
-      state.phase = 'rechecking'; context.report(); assertTableCopyDataUnchanged(snapshot, await readTableCopyData(context, snapshot.target)); await assertRenameDestinationAbsent(context, snapshot.target, plan.newName);
+      state.phase = 'rechecking'; context.report(); assertTableCopyDataUnchanged(snapshot, await readTableCopyData(context, snapshot.target)); const destinationStamp = await readTableCopyDestination(context, snapshot.target, destination);
       if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw Error('数据复制快照已释放或过期，未发布预览');
-      value = { snapshot, mode: tableCopyDataMode, ...plan, bytes: snapshot.bytes + Buffer.byteLength(plan.sql) + 4096, expires: snapshot.expires }; this.cache.capacity(value.bytes, 'preview');
-      return { mode: tableCopyDataMode, target: { ...snapshot.target }, newName: plan.newName, previewToken: token, expiresAt: new Date(value.expires).toISOString(), ddlHash: tableCommentHash(snapshot.source), sql: plan.sql, warnings: [...warnings], requiredAcknowledgements: [...tableCopyDataRequiredAcknowledgements()] };
+      value = { snapshot, destination, destinationStamp, mode: tableCopyDataMode, ...plan, bytes: snapshot.bytes + Buffer.byteLength(plan.sql) + 4096, expires: snapshot.expires }; this.cache.capacity(value.bytes, 'preview');
+      return { mode: tableCopyDataMode, target: { ...snapshot.target }, newName: plan.newName, ...(database === snapshot.target.database ? {} : { newDatabase: database }), previewToken: token, expiresAt: new Date(value.expires).toISOString(), ddlHash: tableCommentHash(snapshot.source), sql: plan.sql, warnings: [...warnings], requiredAcknowledgements: [...tableCopyDataRequiredAcknowledgements()] };
     }, { label: '只读预览结构及数据复制', purpose: 'tableCopyData', progress: state });
     if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw Error('数据复制快照已释放或过期，未发布预览'); this.previews.set(token, value); return result;
   }
@@ -58,10 +59,10 @@ export class TableCopyDataTasks {
     const snapshot = value.snapshot; this.releaseTokens({ snapshotId: snapshot.id });
     if (value.mode !== tableCopyDataMode || snapshot.revision !== this.revision(revision, input.mode)) throw Error('连接或用途已变化，未发送DDL');
     const required = tableCopyDataRequiredAcknowledgements();
-    if (input.confirmation !== tableCopyDataConfirmation(snapshot.target, value.newName) || !Array.isArray(input.acknowledgements) || input.acknowledgements.length !== required.length || new Set(input.acknowledgements).size !== required.length || required.some(id => !input.acknowledgements.includes(id))) throw Error('准确新名或数据复制确认项不一致；预览已消费，未发送DDL');
-    const newTarget = { ...snapshot.target, table: value.newName }, state = progress();
+    if (input.confirmation !== tableCopyDataConfirmation(value.destination, value.newName) || !Array.isArray(input.acknowledgements) || input.acknowledgements.length !== required.length || new Set(input.acknowledgements).size !== required.length || required.some(id => !input.acknowledgements.includes(id))) throw Error('准确新名或数据复制确认项不一致；预览已消费，未发送DDL');
+    const newTarget = value.destination, state = progress();
     return this.host.run(snapshot.target.connectionId, input.taskId, async context => {
-      state.phase = 'rechecking'; context.report(); assertTableCopyDataUnchanged(snapshot, await readTableCopyData(context, snapshot.target)); await assertRenameDestinationAbsent(context, snapshot.target, value.newName); if (value.expires <= this.now()) throw Error('预览已过期，未发送DDL');
+      state.phase = 'rechecking'; context.report(); assertTableCopyDataUnchanged(snapshot, await readTableCopyData(context, snapshot.target)); if (await readTableCopyDestination(context, snapshot.target, newTarget) !== value.destinationStamp) throw Error('目标数据库目录选项已变化，请重新预览，未发送DDL'); if (value.expires <= this.now()) throw Error('预览已过期，未发送DDL');
       state.phase = 'executing'; context.report();
       const created = (await structureTaskQuery<ResultSetHeader>(context, value.createSql, () => { state.ddlSubmitted = true; state.outcome = 'unknown'; context.report(); })).rows;
       if (!created || created.affectedRows !== 0) throw Error('建表未返回无警告成功响应；请核对目标，不会补DROP或重试');

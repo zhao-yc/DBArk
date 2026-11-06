@@ -14,6 +14,7 @@ export function assertTableCopyDataTargetAvailable(target: TableCopyDataTarget, 
 }
 /** 生产适配器不接收SQL，不借查询标签会话，没有失败fallback或重放。 */
 export const tableCopyDataServices: TableCopyDataServices = {
+  databases: connectionId => invoke('metadata.databases', { connectionId }),
   get: input => invoke('schema.tableCopyData.get', input), preview: input => invoke('schema.tableCopyData.preview', input),
   apply: input => invoke('schema.tableCopyData.apply', input), release: input => invoke('schema.tableCopyData.release', input), cancel: input => invoke('query.cancel', input),
   subscribe: listener => window.dbark?.onTask(event => { if (event.tableCopyData) listener({ taskId: event.taskId, progress: event.tableCopyData }); }) ?? (() => {}),

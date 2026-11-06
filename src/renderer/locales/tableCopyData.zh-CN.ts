@@ -1,9 +1,9 @@
 /** 只表达本用途的分阶段事实，建表成功不能代表数据已经提交。 */
 export const tableCopyDataZh = {
-  title: '复制表结构及数据', newName: '准确新表名（同一数据库）', read: '重新读取来源', preview: '只读预览结构及数据复制', apply: '确认创建并复制数据', back: '返回名称编辑', cancel: '取消复制任务', close: '关闭',
+  title: '复制表结构及数据', newName: '准确新表名', targetDatabase: '目标数据库', read: '重新读取来源', preview: '只读预览结构及数据复制', apply: '确认创建并复制数据', back: '返回名称编辑', cancel: '取消复制任务', close: '关闭',
   version: '数据库版本', unset: '未知', sourceDdl: '来源完整定义（只读）', fixedSql: '固定建表及数据语句（分阶段执行，只读）', after: '准确目标', confirmation: '请输入准确的数据库名.新表名', readonly: '当前来源仅可查看',
   ackImplicit: '我确认建表DDL与数据事务分开，整体不原子；数据失败或取消仍可能留下空表。',
-  ackScope: '我确认复制同库普通InnoDB表的全部普通列数据，包含自增0、准确数值、NULL和字节；不复制生成列、外键、触发器、授权等依赖，不继承源下一自增计数。',
+  ackScope: '我确认复制同一连接内普通InnoDB表的全部普通列数据，包含自增0、准确数值、NULL和字节；不复制生成列、外键、触发器、授权等依赖，不继承源下一自增计数。',
   ackWindow: '我确认维护窗口内暂停两端写入及并行DDL；身份重核不能消除建表后取得事务元数据锁之前的外部窗口。',
   ackSnapshot: '我确认预览不固定数据快照；READ COMMITTED复制数据语句执行时所见的已提交数据，目标行锁、空间、日志和IO可能影响服务器。',
   ackRetain: '我确认取消ACK不表示完成；断线或提交结果未知时保留目标，先人工核查，不自动重放、覆盖或补DROP。',

@@ -3,8 +3,8 @@ import type { TableCopyStructureCounterPlan } from '../shared/tableCopyStructure
 import type { TableAutoIncrementPolicy } from '../shared/tableAutoIncrement';
 import { tableCopyStructureServerProfile, tableCopyStructureProfileText } from '../shared/tableCopyStructureProfiles';
 import { createHash } from 'node:crypto';
-import { qualified } from './sql';
-import { readTableRename, assertTableRenameUnchanged, proveRenamePrivileges } from './tableRenameRead';
+import { qualified, stringLiteral } from './sql';
+import { readTableRename, assertTableRenameUnchanged, proveRenamePrivileges, assertRenameDestinationAbsent } from './tableRenameRead';
 import { renameDefinitionBody } from './tableRenameSql';
 import { structureDocumentOf, structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { tableDefinitionTokens } from './tableColumnDefinition';
@@ -12,14 +12,30 @@ import { readTableIndexDefinition } from './tableIndexDefinition';
 import type { TableCommentRead } from './tableCommentRead';
 import { readTableCopyGenerated, type TableCopyGeneratedPlan } from './tableCopyStructureGenerated';
 import { tableCopyGeneratedText } from '../shared/tableCopyStructureGenerated';
-import { validateTableCopyStructureName, type TableCopyStructureTarget } from '../shared/tableCopyStructure';
+import { validateTableCopyDatabase, validateTableCopyStructureName, type TableCopyStructureTarget } from '../shared/tableCopyStructure';
 export interface TableCopyStructureRead extends TableCommentRead { serverUuid: string; capability: string; serverProfileId: string; autoIncrementPlan?: TableCopyStructureCounterPlan; autoIncrementPolicy?: TableAutoIncrementPolicy; generatedPlan?: TableCopyGeneratedPlan; }
 
-/** 只生成一条同库CREATE LIKE；不含IF NOT EXISTS、替换、复制数据或客户端SQL。 */
-export function planTableCopyStructure(target: TableCopyStructureTarget, value: unknown): { sql: string; newName: string } {
-  if (['mysql', 'sys', 'information_schema', 'performance_schema'].includes(target.database.toLowerCase()) || !/^[A-Za-z0-9_]{1,64}$/.test(target.database) || !/^[A-Za-z0-9_]{1,64}$/.test(target.table)) throw Error('复制结构首片只支持非系统库的ASCII普通表名称');
-  const newName = validateTableCopyStructureName(value); if (newName.toLowerCase() === target.table.toLowerCase()) throw Error('新名称不能与源表相同或仅大小写不同');
-  return { sql: `CREATE TABLE ${qualified(target.database, newName)} LIKE ${qualified(target.database, target.table)};`, newName };
+/** 同一连接内分别引用来源和目标，只有同库时要求换名。 */
+export function planTableCopyStructure(target: TableCopyStructureTarget, value: unknown, database = target.database): { sql: string; newName: string } {
+  validateTableCopyDatabase(target.database); validateTableCopyDatabase(database);
+  if (!/^[A-Za-z0-9_]{1,64}$/.test(target.table)) throw Error('复制结构只支持ASCII普通表名称');
+  if (database !== target.database && database.toLowerCase() === target.database.toLowerCase()) throw Error('来源和目标库不能仅大小写不同');
+  const newName = validateTableCopyStructureName(value);
+  if (database === target.database && newName.toLowerCase() === target.table.toLowerCase()) throw Error('新名称不能与源表相同或仅大小写不同');
+  return { sql: `CREATE TABLE ${qualified(database, newName)} LIKE ${qualified(target.database, target.table)};`, newName };
+}
+
+/** 跨库时要求目标真实存在，并将目录选项绑定预览。表名占用仍由元数据和 CREATE 双重检查。 */
+export async function readTableCopyDestination(context: StructureTaskContext, source: TableCopyStructureTarget, destination: TableCopyStructureTarget): Promise<string | undefined> {
+  let stamp: string | undefined;
+  if (source.database !== destination.database) {
+    const name = stringLiteral(validateTableCopyDatabase(destination.database));
+    const rows = (await structureTaskQuery<Record<string, unknown>[]>(context, `SELECT SCHEMA_NAME AS name, DEFAULT_CHARACTER_SET_NAME AS charset, DEFAULT_COLLATION_NAME AS collation, DEFAULT_ENCRYPTION AS encryption FROM information_schema.SCHEMATA WHERE CAST(SCHEMA_NAME AS BINARY)=CAST(${name} AS BINARY) LIMIT 2`)).rows;
+    if (rows.length !== 1 || rows[0].name !== destination.database || typeof rows[0].charset !== 'string' || typeof rows[0].collation !== 'string' || !['YES', 'NO'].includes(String(rows[0].encryption))) throw Error('目标数据库不存在或目录选项无法核对，未发送DDL');
+    stamp = JSON.stringify(rows[0]);
+  }
+  await assertRenameDestinationAbsent(context, destination, destination.table);
+  return stamp;
 }
 /** 显式全局读取可见性与CREATE；首片不展开角色、部分撤销、通配库授权，也不会请求扩权。 */
 function copyPrivileges(grants: string[], target: TableCopyStructureTarget, read: TableCommentRead): boolean {

@@ -7,8 +7,8 @@ export interface TableCopyDataProgress extends TableColumnApplyProgress {
 }
 export interface TableCopyDataGetInput extends TableCopyDataTarget { taskId: string; mode: typeof tableCopyDataMode; }
 export interface TableCopyDataGetOutput { mode: typeof tableCopyDataMode; target: TableCopyDataTarget; snapshotId: string; expiresAt: string; ddlHash: string; sourceDdl: string; tableId?: string; serverVersion: string; writable: boolean; reasons: string[]; warnings: string[]; }
-export interface TableCopyDataPreviewInput { snapshotId: string; newName: string; taskId: string; mode: typeof tableCopyDataMode; }
-export interface TableCopyDataPreviewOutput { mode: typeof tableCopyDataMode; target: TableCopyDataTarget; newName: string; previewToken: string; expiresAt: string; ddlHash: string; sql: string; warnings: string[]; requiredAcknowledgements: string[]; }
+export interface TableCopyDataPreviewInput { snapshotId: string; newName: string; newDatabase?: string; taskId: string; mode: typeof tableCopyDataMode; }
+export interface TableCopyDataPreviewOutput { mode: typeof tableCopyDataMode; target: TableCopyDataTarget; newName: string; newDatabase?: string; previewToken: string; expiresAt: string; ddlHash: string; sql: string; warnings: string[]; requiredAcknowledgements: string[]; }
 export interface TableCopyDataApplyInput { previewToken: string; confirmation: string; acknowledgements: string[]; taskId: string; mode: typeof tableCopyDataMode; }
 export interface TableCopyDataReleaseInput { snapshotId?: string; previewToken?: string; }
 export interface TableCopyDataApplyOutput { mode: typeof tableCopyDataMode; target: TableCopyDataTarget; newTarget: TableCopyDataTarget; ddlSubmitted: true; ddlCompleted: true; dataSubmitted: true; insertCompleted: true; commitSubmitted: true; dataCompleted: true; definitionVerified: boolean; affectedRows?: string; warnings: string[]; }

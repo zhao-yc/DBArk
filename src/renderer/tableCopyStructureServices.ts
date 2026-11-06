@@ -14,6 +14,7 @@ export function assertTableCopyStructureTargetAvailable(target: TableCopyStructu
 }
 /** 生产适配器不接收SQL，不借查询标签会话，没有失败fallback或重放。 */
 export const tableCopyStructureServices: TableCopyStructureServices = {
+  databases: connectionId => invoke('metadata.databases', { connectionId }),
   get: input => invoke('schema.tableCopyStructure.get', input), preview: input => invoke('schema.tableCopyStructure.preview', input),
   apply: input => invoke('schema.tableCopyStructure.apply', input), release: input => invoke('schema.tableCopyStructure.release', input), cancel: input => invoke('query.cancel', input),
   subscribe: listener => window.dbark?.onTask(event => { if (event.tableCopyStructure) listener({ taskId: event.taskId, progress: event.tableCopyStructure }); }) ?? (() => {}),

@@ -9,12 +9,17 @@ export const tableCopyStructureKnownAcknowledgements = [...tableCopyStructureAck
 export function tableCopyStructureRequiredAcknowledgements(counter?: TableCopyStructureCounterPlan, generated?: readonly TableCopyGeneratedColumn[]): readonly string[] { return [...tableCopyStructureAcknowledgements, ...(counter ? ['auto-increment-copy'] : []), ...(generated?.length ? ['generated-columns-copy'] : [])]; }
 export interface TableCopyStructureGetInput extends TableCopyStructureTarget { taskId: string; }
 export interface TableCopyStructureGetOutput { target: TableCopyStructureTarget; snapshotId: string; expiresAt: string; ddlHash: string; sourceDdl: string; tableId?: string; serverVersion: string; writable: boolean; reasons: string[]; warnings: string[]; autoIncrement?: TableCopyStructureCounterPlan; generatedColumns?: TableCopyGeneratedColumn[]; }
-export interface TableCopyStructurePreviewInput { snapshotId: string; newName: string; taskId: string; }
-export interface TableCopyStructurePreviewOutput { target: TableCopyStructureTarget; newName: string; previewToken: string; expiresAt: string; ddlHash: string; sql: string; warnings: string[]; requiredAcknowledgements: string[]; autoIncrement?: TableCopyStructureCounterPlan; generatedColumns?: TableCopyGeneratedColumn[]; }
+export interface TableCopyStructurePreviewInput { snapshotId: string; newName: string; newDatabase?: string; taskId: string; }
+export interface TableCopyStructurePreviewOutput { target: TableCopyStructureTarget; newName: string; newDatabase?: string; previewToken: string; expiresAt: string; ddlHash: string; sql: string; warnings: string[]; requiredAcknowledgements: string[]; autoIncrement?: TableCopyStructureCounterPlan; generatedColumns?: TableCopyGeneratedColumn[]; }
 export interface TableCopyStructureApplyInput { previewToken: string; confirmation: string; acknowledgements: string[]; taskId: string; }
 export interface TableCopyStructureReleaseInput { snapshotId?: string; previewToken?: string; }
 export interface TableCopyStructureApplyOutput { target: TableCopyStructureTarget; newTarget: TableCopyStructureTarget; ddlSubmitted: true; ddlCompleted: true; definitionVerified: boolean; structureVerified?: boolean; counter?: TableCopyStructureCounterResult; warnings: string[]; after?: { tableId: string; ddlHash: string; autoIncrement?: string | null }; verificationError?: string; }
 /** 首片只接受同库ASCII名称，不拆路径、不trim、不自动找空闲后缀。 */
 export function validateTableCopyStructureName(value: unknown): string { if (typeof value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(value)) throw Error('新表名须为1～64个ASCII字母、数字或下划线，首字符不能为数字；不会自动修剪或改名'); return value; }
+/** 两端都使用明确库名，系统库及路径式输入不进入结构复制。 */
+export function validateTableCopyDatabase(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_]{1,64}$/.test(value) || ['mysql', 'sys', 'information_schema', 'performance_schema'].includes(value.toLowerCase())) throw Error('复制表只支持已存在的非系统 ASCII 数据库');
+  return value;
+}
 /** 确认只比较精确的新库名.表名，不从确认输入构造SQL。 */
 export function tableCopyStructureConfirmation(target: TableCopyStructureTarget, newName: string): string { return target.database + '.' + validateTableCopyStructureName(newName); }

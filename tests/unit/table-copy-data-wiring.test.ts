@@ -45,6 +45,11 @@ describe('复制结构实际入口与结果刷新接线', () => {
     const tree = source('App.tsx'), refreshRenameDatabase = vi.fn(), markStructureTarget = vi.fn(), notify = vi.fn(), workspace = { connectionVersions: { c: 1 }, notify };
     const uncertain = evaluate(attribute(tree, 'TableCopyDataDialog', 'copyDataTarget', 'onExecutionUncertain'), { copyDataTarget: target, copyDataVersion: 1, useWorkspace: { getState: () => workspace }, refreshRenameDatabase, markStructureTarget });
     uncertain('结果未知', 'new_t'); expect(refreshRenameDatabase).toHaveBeenCalledExactlyOnceWith(target); expect(markStructureTarget.mock.calls).toEqual([[target, false], [{ ...target, table: 'new_t' }, false]]); expect(notify).toHaveBeenCalledWith('结果未知', true);
+    refreshRenameDatabase.mockClear(); markStructureTarget.mockClear();
+    uncertain('跨库结果未知', 'new_t', 'target_db');
+    const cross = { ...target, database: 'target_db', table: 'new_t' };
+    expect(refreshRenameDatabase).toHaveBeenCalledExactlyOnceWith(cross);
+    expect(markStructureTarget.mock.calls).toEqual([[target, false], [cross, false]]);
   });
   it('P2：创建完成但源物理身份后核失败，真实完成回调必须同时置陈旧源页及新页并保留草稿', () => {
     const tree = source('App.tsx'), refreshRenameDatabase = vi.fn(), markStructureTarget = vi.fn(), notify = vi.fn(), dirtyTabs = { sourceDraft: true }, workspace = { connectionVersions: { c: 1 }, dirtyTabs, notify };

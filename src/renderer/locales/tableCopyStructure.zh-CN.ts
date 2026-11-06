@@ -1,6 +1,6 @@
 /** 复制空表的实际范围独立展示，不能把CREATE LIKE宣传为复制所有依赖。 */
 export const tableCopyStructureZh = {
-  title: '复制表结构', newName: '准确新表名（同一数据库）', read: '重新读取来源', preview: '预览创建空表', apply: '确认创建空表', back: '返回名称编辑', cancel: '取消复制任务', close: '关闭',
+  title: '复制表结构', newName: '准确新表名', targetDatabase: '目标数据库', read: '重新读取来源', preview: '预览创建空表', apply: '确认创建空表', back: '返回名称编辑', cancel: '取消复制任务', close: '关闭',
   version: '数据库版本', unset: '未知', sourceDdl: '来源完整定义（只读）', fixedSql: '固定CREATE TABLE LIKE语句（只读）', after: '准确目标', confirmation: '请输入准确的数据库名.新表名', readonly: '当前来源仅可查看',
   ackImplicit: '我确认DDL会隐式提交；取消、关闭窗口和事务回滚不能撤销已经创建的新表。',
   sourceCounter: '来源当前自增计数（准确观测）', newCounter: '新空表预期下一自增值', actualCounter: '新表实际下一自增值', counterUnverified: '未核验，不能从空表或省略选项推断', counterMatched: '准确一致', counterDifferent: '与预期不符',

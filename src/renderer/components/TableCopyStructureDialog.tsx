@@ -6,8 +6,10 @@ import { tableCopyStructureZh as text } from '../locales/tableCopyStructure.zh-C
 import { errorMessage, uid } from '../lib';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { SqlEditor } from './SqlEditor';
+import { TableCopyDatabaseField } from './TableCopyDatabaseField';
 
 export interface TableCopyStructureServices {
+  databases?(connectionId: string): Promise<string[]>;
   get(input: TableCopyStructureGetInput): Promise<TableCopyStructureGetOutput>;
   preview(input: TableCopyStructurePreviewInput): Promise<TableCopyStructurePreviewOutput>;
   apply(input: TableCopyStructureApplyInput): Promise<TableCopyStructureApplyOutput>;
@@ -17,8 +19,8 @@ export interface TableCopyStructureServices {
 }
 export interface TableCopyStructureDialogProps {
   target: TableCopyStructureTarget; targetVersion: number; services: TableCopyStructureServices;
-  onClose(): void; onCleanupError(message: string): void; onDirtyChange(dirty: boolean): void; beforeApply(newName: string): void;
-  onApplied(result: TableCopyStructureApplyOutput): void; onExecutionUncertain(message: string, newName: string): void;
+  onClose(): void; onCleanupError(message: string): void; onDirtyChange(dirty: boolean): void; beforeApply(newName: string, newDatabase?: string): void;
+  onApplied(result: TableCopyStructureApplyOutput): void; onExecutionUncertain(message: string, newName: string, newDatabase?: string): void;
 }
 type Operation = { guard: TableCopyStructureRequestFence; generation: number; taskId: string };
 const current = (expires: string) => Number.isFinite(Date.parse(expires)) && Date.parse(expires) > Date.now();
@@ -35,6 +37,7 @@ export function TableCopyStructureDialog({ target, targetVersion, services, onCl
   const [snapshot, setSnapshot] = useState<TableCopyStructureGetOutput | null>(null), [preview, setPreview] = useState<TableCopyStructurePreviewOutput | null>(null), [usable, setUsable] = useState(false);
   const [counterResult, setCounterResult] = useState<TableCopyStructureCounterResult>();
   const [confirmation, setConfirmation] = useState('');
+  const [database, setDatabase] = useState(fixed.current.target.database);
   const [newName, setNewName] = useState(''), [busy, setBusy] = useState(false), [cancelling, setCancelling] = useState(false), [uncertain, setUncertain] = useState(false);
   const [acks, setAcks] = useState<ReadonlySet<string>>(new Set()), [error, setError] = useState(''), [outcome, setOutcome] = useState(''), [progress, setProgress] = useState<TableCopyStructureProgress | null>(null), [clock, setClock] = useState(Date.now());
   const mismatch = !sameTableCopyStructureTarget(fixed.current.target, target) || fixed.current.version !== targetVersion, mismatchRef = useRef(mismatch); mismatchRef.current = mismatch;
@@ -89,7 +92,7 @@ export function TableCopyStructureDialog({ target, targetVersion, services, onCl
       await invalidatePreview(); snapshotRef.current = null; setUsable(false); await releaseAll(); if (!accepts(op)) return;
       const next = await service.current.get({ ...fixed.current.target, taskId: op.taskId }); snapshots.current.add(next.snapshotId);
       if (!accepts(op) || !sameTableCopyStructureTarget(next.target, fixed.current.target) || !current(next.expiresAt)) { await releaseOne('snapshotId', next.snapshotId); if (accepts(op)) throw new Error(text.mismatch); return; }
-      snapshotRef.current = next; setSnapshot(next); setNewName(''); setUsable(true); setUncertain(false); consumedRef.current = false; setConsumed(false); setOutcome(''); setCounterResult(undefined); setClock(Date.now());
+      snapshotRef.current = next; setSnapshot(next); setDatabase(fixed.current.target.database); setNewName(''); setUsable(true); setUncertain(false); consumedRef.current = false; setConsumed(false); setOutcome(''); setCounterResult(undefined); setClock(Date.now());
     } catch (reason) { report(reason); } finally { finish(op); }
   }
   /** 返回编辑释放旧预览，输入本身永远不产生SQL执行请求。 */
@@ -101,21 +104,22 @@ export function TableCopyStructureDialog({ target, targetVersion, services, onCl
     try {
       if (!current(original.expiresAt)) throw new Error(text.expired);
       const value = validateTableCopyStructureName(newName); await invalidatePreview(); if (!accepts(op)) return;
-      const next = await service.current.preview({ snapshotId: original.snapshotId, newName: value, taskId: op.taskId }); tokens.current.add(next.previewToken);
-      if (!accepts(op) || !sameTableCopyStructureTarget(next.target, fixed.current.target) || next.ddlHash !== original.ddlHash || next.newName !== value || JSON.stringify(next.autoIncrement ?? null) !== JSON.stringify(original.autoIncrement ?? null) || JSON.stringify(next.generatedColumns ?? null) !== JSON.stringify(original.generatedColumns ?? null) || JSON.stringify(next.requiredAcknowledgements) !== JSON.stringify(tableCopyStructureRequiredAcknowledgements(original.autoIncrement, original.generatedColumns)) || !current(next.expiresAt)) { await releaseOne('previewToken', next.previewToken); if (accepts(op)) throw new Error(text.mismatch); return; }
+      const next = await service.current.preview({ snapshotId: original.snapshotId, newName: value, ...(database === fixed.current.target.database ? {} : { newDatabase: database }), taskId: op.taskId }); tokens.current.add(next.previewToken);
+      if (!accepts(op) || !sameTableCopyStructureTarget(next.target, fixed.current.target) || next.ddlHash !== original.ddlHash || next.newName !== value || (next.newDatabase ?? next.target.database) !== database || JSON.stringify(next.autoIncrement ?? null) !== JSON.stringify(original.autoIncrement ?? null) || JSON.stringify(next.generatedColumns ?? null) !== JSON.stringify(original.generatedColumns ?? null) || JSON.stringify(next.requiredAcknowledgements) !== JSON.stringify(tableCopyStructureRequiredAcknowledgements(original.autoIncrement, original.generatedColumns)) || !current(next.expiresAt)) { await releaseOne('previewToken', next.previewToken); if (accepts(op)) throw new Error(text.mismatch); return; }
       previewRef.current = next; setPreview(next); setAcks(new Set()); setOutcome(''); setClock(Date.now());
     } catch (reason) { report(reason); } finally { finish(op); }
   }
   /** 同步消费防双击；结果回调固定原目标，卸载也不丢执行事实。 */
   async function apply(): Promise<void> {
     const next = previewRef.current, original = snapshotRef.current;
-    if (!next || !original || confirmation !== tableCopyStructureConfirmation(fixed.current.target, next.newName) || consumedRef.current || !tableCopyStructureAcksComplete(next.requiredAcknowledgements, acks)) return;
+    if (!next || !original || confirmation !== tableCopyStructureConfirmation({ ...fixed.current.target, database: next.newDatabase ?? fixed.current.target.database }, next.newName) || consumedRef.current || !tableCopyStructureAcksComplete(next.requiredAcknowledgements, acks)) return;
+    const destination = { ...fixed.current.target, database: next.newDatabase ?? fixed.current.target.database, table: next.newName };
     const op = begin(); if (!op) return; consumedRef.current = true; setConsumed(true); let attempted = false;
     try {
       if (!current(next.expiresAt) || !current(original.expiresAt)) throw new Error(text.expired);
-      callbacks.current.beforeApply(next.newName); if (!accepts(op)) return; attempted = true;
+      callbacks.current.beforeApply(next.newName, next.newDatabase); if (!accepts(op)) return; attempted = true;
       const result = await service.current.apply({ previewToken: next.previewToken, confirmation, acknowledgements: [...next.requiredAcknowledgements], taskId: op.taskId });
-      if (!sameTableCopyStructureTarget(result.target, fixed.current.target) || result.newTarget.table !== next.newName || result.newTarget.database !== fixed.current.target.database || result.newTarget.connectionId !== fixed.current.target.connectionId) throw new Error(text.mismatch);
+      if (!sameTableCopyStructureTarget(result.target, fixed.current.target) || result.newTarget.table !== next.newName || result.newTarget.database !== destination.database || result.newTarget.connectionId !== fixed.current.target.connectionId) throw new Error(text.mismatch);
       if (alive.current && op.guard === fence.current && !mismatchRef.current) { setNewName(''); setCounterResult(result.counter); setUncertain(!result.definitionVerified); setOutcome(result.definitionVerified ? text.succeeded : text.verificationFailed); setError([result.verificationError, ...result.warnings].filter(Boolean).join('\n')); }
       completion.current.onApplied(result);
     } catch (reason) {
@@ -123,8 +127,11 @@ export function TableCopyStructureDialog({ target, targetVersion, services, onCl
       if (alive.current && op.guard === fence.current && !mismatchRef.current) { if (progressRef.current?.ddlCompleted) setNewName(''); setOutcome(text[state]); setUncertain(stale); }
       report(reason);
       // 关闭/传输失败不能抹掉可信进度中的成功事实，刷新仍绑定固定来源与准确新名。
-      if (progressRef.current?.ddlCompleted) completion.current.onApplied({ target: { ...fixed.current.target }, newTarget: { ...fixed.current.target, table: next.newName }, ddlSubmitted: true, ddlCompleted: true, definitionVerified: progressRef.current.definitionVerified, warnings: [errorMessage(reason)] });
-      else if (stale) completion.current.onExecutionUncertain(text[state], next.newName);
+      if (progressRef.current?.ddlCompleted) completion.current.onApplied({ target: { ...fixed.current.target }, newTarget: destination, ddlSubmitted: true, ddlCompleted: true, definitionVerified: progressRef.current.definitionVerified, warnings: [errorMessage(reason)] });
+      else if (stale) {
+        if (next.newDatabase) completion.current.onExecutionUncertain(text[state], next.newName, next.newDatabase);
+        else completion.current.onExecutionUncertain(text[state], next.newName);
+      }
     } finally { finish(op); }
   }
   /** 取消只发控制请求，原任务finally到来前保持编辑和关闭禁用。 */
@@ -141,10 +148,13 @@ export function TableCopyStructureDialog({ target, targetVersion, services, onCl
     {snapshot && <><p>{text.version}：{snapshot.serverVersion} · TABLE_ID：{snapshot.tableId ?? text.unset}</p><h3>{text.sourceDdl}</h3><SqlEditor value={snapshot.sourceDdl} readOnly height={180}/>
       {!snapshot.writable && <div role="status"><strong>{text.readonly}</strong>{snapshot.reasons.map((reason, index) => <p key={index}>{reason}</p>)}</div>}
       {snapshot.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}
+      {services.databases && <TableCopyDatabaseField label={text.targetDatabase} connectionId={fixed.current.target.connectionId}
+        original={fixed.current.target.database} value={database} disabled={busy || !writable || !!preview} load={services.databases}
+        onChange={value => { if (!fence.current.busy && !previewRef.current && writable) setDatabase(value); }}/>}
       <Field label={text.newName}><textarea aria-label={text.newName} rows={1} value={newName} disabled={busy || !writable || !!preview} onChange={event => { if (!fence.current.busy && !previewRef.current && writable) setNewName(event.target.value); }}/></Field>
     </>}
     {mismatch && <p role="alert">{text.targetChanged}</p>}{expired && <p role="status">{text.expired}</p>}
-    {preview && <>{preview.generatedColumns?.length ? <><h3>{text.generated}</h3>{preview.generatedColumns.map(column => <p key={column.name}><strong>{column.name}</strong> · {column.storage === 'VIRTUAL' ? text.generatedVirtual : text.generatedStored} · <code>{column.expression}</code> · {text.generatedReferences}：{column.referencedColumns.join(', ')}</p>)}</> : null}<h3>{text.fixedSql}</h3>{preview.autoIncrement && <p>{text.sourceCounter}：{preview.autoIncrement.sourceValue} · {text.newCounter}：{preview.autoIncrement.expectedNewValue}</p>}<p>{text.after}：{preview.target.database}.{preview.newName}</p><SqlEditor value={preview.sql} readOnly height={180}/><Field label={text.confirmation}><textarea aria-label={text.confirmation} rows={1} value={confirmation} disabled={busy || consumed} onChange={event => setConfirmation(event.target.value)}/></Field>{preview.requiredAcknowledgements.map(id => <label className="check" key={id}><input type="checkbox" disabled={busy || consumed || !tableCopyStructureAckLabel(id)} checked={acks.has(id)} onChange={event => { const checked = event.target.checked; setAcks(old => { const next = new Set(old); if (checked) next.add(id); else next.delete(id); return next; }); }}/>{tableCopyStructureAckLabel(id) ?? text.unsupportedAck}</label>)}</>}
+    {preview && <>{preview.generatedColumns?.length ? <><h3>{text.generated}</h3>{preview.generatedColumns.map(column => <p key={column.name}><strong>{column.name}</strong> · {column.storage === 'VIRTUAL' ? text.generatedVirtual : text.generatedStored} · <code>{column.expression}</code> · {text.generatedReferences}：{column.referencedColumns.join(', ')}</p>)}</> : null}<h3>{text.fixedSql}</h3>{preview.autoIncrement && <p>{text.sourceCounter}：{preview.autoIncrement.sourceValue} · {text.newCounter}：{preview.autoIncrement.expectedNewValue}</p>}<p>{text.after}：{preview.newDatabase ?? preview.target.database}.{preview.newName}</p><SqlEditor value={preview.sql} readOnly height={180}/><Field label={text.confirmation}><textarea aria-label={text.confirmation} rows={1} value={confirmation} disabled={busy || consumed} onChange={event => setConfirmation(event.target.value)}/></Field>{preview.requiredAcknowledgements.map(id => <label className="check" key={id}><input type="checkbox" disabled={busy || consumed || !tableCopyStructureAckLabel(id)} checked={acks.has(id)} onChange={event => { const checked = event.target.checked; setAcks(old => { const next = new Set(old); if (checked) next.add(id); else next.delete(id); return next; }); }}/>{tableCopyStructureAckLabel(id) ?? text.unsupportedAck}</label>)}</>}
     {counterResult && counterResult.state !== 'not-applicable' && <p>{text.actualCounter}：{counterResult.actualValue ?? text.counterUnverified}（{counterResult.state === 'matched' ? text.counterMatched : counterResult.state === 'different' ? text.counterDifferent : text.counterUnverified}）</p>}{busy && <Spinner/>}{progress && <p className="table-copy-structure-state" role="status">{text[progress.phase]}</p>}{cancelling && <p>{text.cancelling}</p>}{outcome && <p className="table-copy-structure-outcome" role="status">{outcome}</p>}{consumed && <p>{text.consumed}</p>}<ErrorBox message={error}/>
-  </div><footer className="modal-footer"><button disabled={busy || mismatch} onClick={() => void read()}>{text.read}</button><span className="grow"/>{busy && <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button>}{preview && !consumed && <button disabled={busy || mismatch} onClick={() => void back()}>{text.back}</button>}{!preview && <button disabled={busy || !writable || !dirty} onClick={() => void makePreview()}>{text.preview}</button>}{preview && <button className="primary" disabled={busy || consumed || mismatch || expired || unsupportedAck || confirmation !== tableCopyStructureConfirmation(fixed.current.target, preview.newName) || !tableCopyStructureAcksComplete(preview.requiredAcknowledgements, acks)} onClick={() => void apply()}>{text.apply}</button>}<button disabled={busy} onClick={() => void close()}>{text.close}</button></footer></Modal>;
+  </div><footer className="modal-footer"><button disabled={busy || mismatch} onClick={() => void read()}>{text.read}</button><span className="grow"/>{busy && <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button>}{preview && !consumed && <button disabled={busy || mismatch} onClick={() => void back()}>{text.back}</button>}{!preview && <button disabled={busy || !writable || !dirty} onClick={() => void makePreview()}>{text.preview}</button>}{preview && <button className="primary" disabled={busy || consumed || mismatch || expired || unsupportedAck || confirmation !== tableCopyStructureConfirmation({ ...fixed.current.target, database: preview.newDatabase ?? fixed.current.target.database }, preview.newName) || !tableCopyStructureAcksComplete(preview.requiredAcknowledgements, acks)} onClick={() => void apply()}>{text.apply}</button>}<button disabled={busy} onClick={() => void close()}>{text.close}</button></footer></Modal>;
 }
