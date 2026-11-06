@@ -7,7 +7,10 @@ import { postgresRecordTransferZh as text } from './locales/postgresRecordTransf
 import { postgresClipboardFieldValue } from './postgresGridPaste';
 
 export type PostgresTransferTable = Pick<PostgresTableTarget, 'connectionId' | 'database' | 'table'> & { label: string };
-type PostgresTransferQuery = Omit<PostgresTransferTable, 'table'> & { title: string; result: number; truncated: boolean; dialect?: 'sqlite' };
+type MysqlTransferDialect = 'mysql' | 'mariadb';
+type PostgresTransferQuery = Omit<PostgresTransferTable, 'table' | 'database'> & {
+  database?: string; title: string; result: number; truncated: boolean; dialect?: 'sqlite' | MysqlTransferDialect;
+};
 export type PostgresTransferSource = PostgresTransferTable | PostgresTransferQuery;
 export type PostgresTransferColumn = ResultColumn & { binary?: boolean; position?: number; mixedBinary?: true; automaticType?: string };
 export interface PostgresRecordTransfer {
@@ -35,14 +38,42 @@ export function capturePostgresRecordTransfer(
 export function capturePostgresQueryTransfer(
   source: Omit<PostgresTransferQuery, 'truncated'>, selected: QueryResult, columns: readonly ResultColumn[],
 ): PostgresRecordTransfer {
-  if (selected.columns.length !== columns.length ||
-      columns.some((column, index) => selected.columns[index].key !== column.key || selected.columns[index].name !== column.name))
-    throw Error(text.stale);
-  const fields = columns.map((column, index) => ({
+  const fields = queryTransferColumns(selected, columns).map((column, index) => ({
     ...column, type: column.type.toLowerCase(), binary: column.type === 'BYTEA', position: index + 1,
   }));
   const { connectionId, database, label, title, result } = source;
   return captureRows({ connectionId, database, label, title, result, truncated: selected.truncated },
+    selected.rows, fields, selected.rows.map((_, index) => index));
+}
+
+function queryTransferColumns(selected: QueryResult, columns: readonly ResultColumn[]) {
+  if (!selected.rows.length || selected.rows.length > postgresTableLimits.changes ||
+      !columns.length || columns.length > postgresTableLimits.fields) throw Error(text.limits);
+  if (selected.columns.length !== columns.length ||
+      columns.some((column, index) => selected.columns[index].key !== column.key || selected.columns[index].name !== column.name))
+    throw Error(text.stale);
+  return columns;
+}
+
+/** 网络结果的二进制以协议包装为准。整数和定点数自动匹配 numeric，避免假设有符号范围。 */
+export function captureMysqlQueryTransfer(
+  source: Omit<PostgresTransferQuery, 'truncated' | 'dialect'>, dialect: MysqlTransferDialect,
+  selected: QueryResult, columns: readonly ResultColumn[],
+): PostgresRecordTransfer {
+  const fields = queryTransferColumns(selected, columns).map((column, index): PostgresTransferColumn => {
+    const values = selected.rows.map(row => ownCell(row, column.key)).filter(value => value !== null);
+    const bytes = values.some(value => typeof value === 'object');
+    const mixedBinary = bytes && values.some(value => typeof value !== 'object');
+    const type = column.type.toUpperCase();
+    const automaticType = !values.length || mixedBinary ? undefined :
+      bytes ? (/^(?:BIT|GEOMETRY)$/.test(type) ? undefined : 'bytea') :
+      /^(?:TINY|SHORT|INT24|LONG|LONGLONG|DECIMAL|NEWDECIMAL)$/.test(type) ? 'numeric' :
+      /^(?:VARCHAR|VAR_STRING|STRING)$/.test(type) ? 'text' : undefined;
+    return { ...column, position: index + 1, binary: values.length ? bytes : undefined,
+      ...(mixedBinary ? { mixedBinary: true } : {}), automaticType };
+  });
+  const { connectionId, label, title, result } = source;
+  return captureRows({ connectionId, label, title, result, truncated: selected.truncated, dialect },
     selected.rows, fields, selected.rows.map((_, index) => index));
 }
 
@@ -71,7 +102,7 @@ export function captureSqliteQueryTransfer(
     selected.rows, columns, selected.rows.map((_, index) => index));
 }
 
-/** 两种来源共用预算及原值复制。暂存不包含 SQL 正文。 */
+/** 所有来源共用预算及原值复制。暂存不包含 SQL 正文。 */
 function captureRows(source: PostgresTransferSource, original: readonly DataRow[], columns: readonly PostgresTransferColumn[], indices: readonly number[]): PostgresRecordTransfer {
   if (!indices.length || indices.length > postgresTableLimits.changes || !columns.length || columns.length > postgresTableLimits.fields)
     throw Error(text.limits);
@@ -98,10 +129,10 @@ export function postgresTransferColumnsCompatible(source: PostgresTransferColumn
 export function defaultPostgresTransferMapping(source: PostgresRecordTransfer, targets: readonly PostgresTableColumn[]) {
   const fields = new Map<string, PostgresTransferColumn | undefined>();
   for (const column of source.columns) fields.set(column.name, fields.has(column.name) ? undefined : column);
-  const sqlite = 'dialect' in source.source && source.source.dialect === 'sqlite';
+  const crossEngine = 'dialect' in source.source && !!source.source.dialect;
   return new Map(targets.flatMap(target => {
     const column = fields.get(target.name);
-    return column && (sqlite ? column.automaticType : column.type) === target.type && !target.sequenceDefault && postgresTransferColumnsCompatible(column, target)
+    return column && (crossEngine ? column.automaticType : column.type) === target.type && !target.sequenceDefault && postgresTransferColumnsCompatible(column, target)
       ? [[target.key, column.key] as const] : [];
   }).slice(0, postgresTableLimits.fields));
 }

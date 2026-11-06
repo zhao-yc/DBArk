@@ -1,8 +1,9 @@
 export const postgresRecordTransferZh = {
   capture: '暂存勾选记录以跨库复制', open: '从另一张表复制记录', title: '跨库复制 PostgreSQL 记录',
   queryCapture: '暂存勾选结果以跨库复制', openQuery: '从查询结果复制记录',
-  sqliteCapture: '暂存勾选结果到 PostgreSQL', sqliteSource: 'SQLite 查询结果',
-  mixedBinary: (columns: string) => `以下来源列同时含 BLOB 和标量，无法统一映射。可跳过，或筛选为同一存储类型后重新暂存。 ${columns}`,
+  captureToPostgres: '暂存勾选结果到 PostgreSQL', sqliteSource: 'SQLite 查询结果',
+  mysqlSource: 'MySQL 查询结果', mariadbSource: 'MariaDB 查询结果',
+  mixedBinary: (columns: string) => `以下来源列同时含二进制和标量，无法统一映射。可跳过，或拆成同类型结果后重新暂存。 ${columns}`,
   queryResult: (title: string, result: number) => `${title} · 结果集 ${result}`,
   queryColumn: (position: number) => `第 ${position} 列`,
   truncated: '源结果已截断。此批只包含已返回且勾选的记录。',

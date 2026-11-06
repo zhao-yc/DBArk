@@ -20,13 +20,16 @@ export function PostgresRecordTransferDialog({ snapshot, target, columns, onStag
   const selectedTarget = available.find(column => column.key === targetKey) ?? available[0];
   const sources = selectedTarget ? snapshot.columns.filter(column => postgresTransferColumnsCompatible(column, selectedTarget)) : [];
   const selectedSource = sources.find(column => column.key === sourceKey) ?? sources[0];
-  const display = (source: PostgresTransferSource) => `${source.label} / ${source.database} / ${'table' in source ? source.table : text.queryResult(source.title, source.result)}`;
+  const display = (source: PostgresTransferSource) => [source.label, source.database,
+    'table' in source ? source.table : text.queryResult(source.title, source.result)].filter(Boolean).join(' / ');
   const field = (column: PostgresTransferColumn) => `${column.name} (${column.type})${column.position ? ' · ' + text.queryColumn(column.position) : ''}`;
   const mixed = snapshot.columns.filter(column => column.mixedBinary).map(field).join('、');
+  const dialect = 'dialect' in snapshot.source ? snapshot.source.dialect : undefined;
+  const sourceLabel = dialect ? { sqlite: text.sqliteSource, mysql: text.mysqlSource, mariadb: text.mariadbSource }[dialect] : text.source;
   return <Modal title={text.title} onClose={onClose} wide>
     <div className="modal-content pg-record-form">
       <p>{text.notice}</p>
-      <dl><dt>{'dialect' in snapshot.source && snapshot.source.dialect === 'sqlite' ? text.sqliteSource : text.source}</dt>
+      <dl><dt>{sourceLabel}</dt>
         <dd>{display(snapshot.source)}</dd><dt>{text.target}</dt><dd>{display(target)}</dd></dl>
       {'truncated' in snapshot.source && snapshot.source.truncated && <p className="warning-text">{text.truncated}</p>}
       {mixed && <p className="warning-text">{text.mixedBinary(mixed)}</p>}

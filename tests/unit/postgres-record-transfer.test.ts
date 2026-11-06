@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PostgresTableColumn, PostgresTablePage } from '../../src/shared/postgresTable';
-import { capturePostgresQueryTransfer, capturePostgresRecordTransfer, captureSqliteQueryTransfer, defaultPostgresTransferMapping, postgresTransferChanges, samePostgresTransferTable } from '../../src/renderer/postgresRecordTransfer';
+import { captureMysqlQueryTransfer, capturePostgresQueryTransfer, capturePostgresRecordTransfer, captureSqliteQueryTransfer, defaultPostgresTransferMapping, postgresTransferChanges, samePostgresTransferTable } from '../../src/renderer/postgresRecordTransfer';
 import { ResultExportSelection } from '../../src/renderer/resultExport';
 
 const relation = { connectionId: '源连接', database: '源库', table: '"样本"."记录"', label: '来源' };
@@ -21,6 +21,39 @@ const target: PostgresTablePage = {
 const capture = () => capturePostgresRecordTransfer(relation, source, source.columns, new Set([1, 0]));
 
 describe('PostgreSQL 跨库记录草稿', () => {
+  it.each(['mysql', 'mariadb'] as const)('%s 以实际协议值匹配目标，未用类型名猜测二进制或整数范围', dialect => {
+    const columns = [
+      { key: 'c0', name: '大整数', type: 'LONGLONG' },
+      { key: 'c1', name: '金额', type: 'NEWDECIMAL' },
+      { key: 'c2', name: '字节', type: 'BLOB' },
+      { key: 'c3', name: '文本', type: 'BLOB' },
+      { key: 'c4', name: '混合', type: 'VAR_STRING' },
+    ];
+    const rows = [
+      { c0: '18446744073709551615', c1: '1.000000000000000001', c2: { type: 'binary' as const, base64: 'AP8=' }, c3: '0007', c4: 'text' },
+      { c0: '0', c1: '0.000000000000000001', c2: null, c3: '', c4: { type: 'binary' as const, base64: '' } },
+    ];
+    const snapshot = captureMysqlQueryTransfer({ ...relation, title: '网络查询', result: 2 }, dialect,
+      { columns, rows, truncated: false, elapsedMs: 0, statement: 'USE other;' }, columns);
+    expect(snapshot.source).toMatchObject({ dialect, result: 2 });
+    expect(snapshot.source).not.toHaveProperty('database');
+    expect(snapshot.columns.map(column => [column.binary, column.automaticType])).toEqual([
+      [false, 'numeric'], [false, 'numeric'], [true, 'bytea'], [false, undefined], [true, undefined],
+    ]);
+    const destinations = [{ ...amount, key: 'c0', name: '大整数', type: 'numeric' },
+      { ...amount, key: 'c1', type: 'numeric' }, bytes, { ...note, key: 'c3', name: '文本' }];
+    const mapping = defaultPostgresTransferMapping(snapshot, destinations);
+    expect([...mapping]).toEqual([['c0', 'c0'], ['c1', 'c1'], ['c2', 'c2']]);
+    mapping.set('c3', 'c3');
+    expect(postgresTransferChanges(snapshot, { ...target, columns: destinations }, mapping)[0]).toEqual({
+      kind: 'insert', fields: [{ column: 'c0', value: { mode: 'text', value: '18446744073709551615' } },
+        { column: 'c1', value: { mode: 'text', value: '1.000000000000000001' } },
+        { column: 'c2', value: { mode: 'binary', value: '00ff' } }, { column: 'c3', value: { mode: 'text', value: '0007' } }],
+    });
+    mapping.set('c2', 'c4');
+    expect(() => postgresTransferChanges(snapshot, { ...target, columns: destinations }, mapping)).toThrow('不匹配');
+  });
+
   it('SQLite 类型随勾选行及可见列投影，整数原文、BLOB 与文本分别映射', () => {
     const columns = ['整数', '隐藏', '字节', '原备注'].map((name, index) => ({ key: 'c' + index, name, type: 'SQLITE' }));
     const result = { columns, rows: [

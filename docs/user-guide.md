@@ -304,6 +304,8 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 SQLite 查询结果也可在结果菜单中点「暂存勾选结果到 PostgreSQL」。到目标 PostgreSQL 表核对实际存储类型与映射，再加入草稿。详见[SQLite 到 PostgreSQL 的记录复制](development/sqlite-postgres-record-transfer-20261106.md)。
 
+MySQL 和 MariaDB 的当前查询结果也可通过同一菜单暂存勾选行，再到 PostgreSQL 目标表映射和提交。无符号大整数可映射到 `numeric`。详见[MySQL／MariaDB 到 PostgreSQL 的记录复制](development/mysql-postgres-record-transfer-20261106.md)。
+
 PostgreSQL 查询结果可点击支持排序的列头切换升序、降序和原返回顺序，也可用「多列排序」指定优先级和 NULL 位置。排序作用于当前已返回行，导出按当前显示顺序写入。详见[PostgreSQL 查询结果排序](development/postgres-query-result-sort-20261105.md)。
 
 在 PostgreSQL 查询结果区点「筛选已返回结果」，可以组合条件、从结果选值或手动填写比较值。应用和清除筛选都会保留当前排序。导出按筛选后的显示范围和顺序写入。详见[PostgreSQL 查询结果筛选](development/postgres-query-result-filter-20261105.md)。

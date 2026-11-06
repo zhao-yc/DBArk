@@ -17,7 +17,7 @@ import { connectionDatabase, connectionOverview } from '../sqliteWorkspace';
 import { sqliteZh } from '../locales/sqlite.zh-CN';
 import { postgresTableLimits } from '../../shared/postgresTable';
 import { postgresRecordTransferZh as transferText } from '../locales/postgresRecordTransfer.zh-CN';
-import { captureSqliteQueryTransfer, usePostgresRecordTransfer } from '../postgresRecordTransfer';
+import { captureMysqlQueryTransfer, captureSqliteQueryTransfer, usePostgresRecordTransfer } from '../postgresRecordTransfer';
 import { QueryRowDetails, type QueryRowDetailsBinding, type QueryRowDetailsView } from '../queryRowDetails';
 import { QueryRowDetailsPanel } from './QueryRowDetailsPanel';
 import { queryRowDetailsZh as rowDetailsText } from '../locales/queryRowDetails.zh-CN';
@@ -1535,13 +1535,14 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if(!resultSelectionAllowed(selectionBinding))return;
     try{const snapshot=resultSelection.allSnapshot(selectionBinding);invalidateResultSelection();setExportSelected(false);setExportResult(snapshot);}catch(reason){setError(errorMessage(reason));}
   }
-  /** 从本次 SQLite 结果取选中数据和同一视图的存储类型，不再执行源查询。 */
-  function captureSqliteTransfer() {
-    if (!sqlite || pin || !selectionBinding || !resultSelectionAllowed(selectionBinding)) return;
+  /** 使用本次勾选的协议值和同一视图的类型证据，不重新执行源查询。 */
+  function capturePostgresTransfer() {
+    if (!connection || connection.dialect === 'postgresql' || pin || !selectionBinding || !resultSelectionAllowed(selectionBinding)) return;
     try {
-      const snapshot = captureSqliteQueryTransfer({
-        connectionId: tab.connectionId, label: connection.name, database: 'main', title: tab.title, result: resultIndex + 1,
-      }, resultSelection.sqliteSnapshot(selectionBinding));
+      const source = { connectionId: tab.connectionId, label: connection.name, title: tab.title, result: resultIndex + 1 };
+      const snapshot = connection.dialect === 'sqlite'
+        ? captureSqliteQueryTransfer({ ...source, database: 'main' }, resultSelection.sqliteSnapshot(selectionBinding))
+        : captureMysqlQueryTransfer(source, connection.dialect, resultSelection.snapshot(selectionBinding), selectionBinding.visibleColumns);
       usePostgresRecordTransfer.setState({ snapshot });
       useWorkspace.getState().notify(transferText.queryCaptured(snapshot.rows.length));
     } catch (reason) { setError(errorMessage(reason)); }
@@ -2028,9 +2029,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 <button title={historyText.hint} disabled={!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!resultHistory.target(historyBinding,1)} onClick={()=>travelResultHistory(1)}>{historyText.redo}</button>{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!filterView?.rules.length||!!activeFilterLease||!!activeColumnLease||!!activeSortLease} onClick={clearResultFilter}>{filterText.clear}</button>:null}{sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={presetsText.hint} onClick={openResultPresets}>{presetsText.open}</button>:null}
 {sourceResult?.columns.length&&(pin||!(outcome?.explain||outcome?.analysis||outcome?.sqliteExplain))?<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease} title={memoryText.hint} onClick={rememberResultOrganization}>{memoryText.save}</button></>:null}{resultMemory&&<><button disabled={!historyBinding||!selectionBinding||busy||!!activeColumnLease||!!activeFilterLease||!!activeSortLease||!queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)} title={queryResultMemoryMatches(resultMemory,viewSource,visibleColumns)?memoryText.scope:memoryText.mismatch} onClick={applyRememberedOrganization}>{memoryText.apply}</button><button disabled={!rememberedOrganizationCanDiscard()} onClick={discardRememberedOrganization}>{memoryText.clear}</button></>}<div className="action-menu-field" role="group" aria-label={zh.app.text020}><label className="inline-field">{zh.query.text020}<input aria-label={zh.query.text021} type="number" min="1" max="100000" value={settings.resultLimit} onChange={event => useWorkspace.getState().updateSettings({ resultLimit: Math.max(1, Math.min(100000, Number(event.target.value))) })}/>{zh.query.text022}</label></div></ActionMenuSection>
           <ActionMenuSection label={menuText.resultTransfer}><button disabled={!selectedExportCount || busy} onClick={exportSelectedRows}>{zh.resultExport.selectedTitle}</button>
-{sqlite && !pin && <button disabled={busy || !selectionBinding?.result.sqliteStorage || !selectedExportCount ||
+{connection && connection.dialect !== 'postgresql' && !pin && <button disabled={busy || !selectionBinding ||
+  sqlite && !selectionBinding.result.sqliteStorage || !selectedExportCount ||
   selectedExportCount > postgresTableLimits.changes || selectionBinding.visibleColumns.length > postgresTableLimits.fields}
-  title={transferText.limits} onClick={captureSqliteTransfer}>{transferText.sqliteCapture}</button>}
+  title={transferText.limits} onClick={capturePostgresTransfer}>{transferText.captureToPostgres}</button>}
 {!sqlite && <button aria-label={resultInsertZh.open} disabled={!selectionBinding || !exportable?.rows.length || busy || !!resultInsertSource || !!activeColumnLease || !!activeFilterLease || !!activeSortLease} onClick={() => openResultInsert(false)}>{resultInsertZh.open}</button>}
 {!sqlite && <button aria-label={resultInsertZh.selected} disabled={!selectedExportCount || busy || !!resultInsertSource} onClick={() => openResultInsert(true)}>{resultInsertZh.selected}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.snapshots}>{snapshotActions}</ActionMenuSection>
