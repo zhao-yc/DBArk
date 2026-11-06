@@ -226,6 +226,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 在「高级筛选」可[按不同值筛选](development/postgres-table-value-options-20261106.md)。按字段读取当前筛选范围内的服务器候选及次数，勾选包含或排除的值，加入草稿后显式应用。
 
+在「按不同值筛选」中，可选「按字段值」「出现次数最多」或「出现次数最少」，再点「读取不同值」。PostgreSQL 排完所有匹配分组后返回前 500 项。已有勾选时，重新读取前会请你确认清除。详见[PostgreSQL 不同值次数排序](development/postgres-value-frequency-20261106.md)。
+
 点击「字段概况」可[统计筛选范围内的已提交记录](development/postgres-column-statistics-20261106.md)，查看 NULL、不同值、极值和相应字段的数值聚合。
 
 勾选 PostgreSQL 网格中的记录后，可[批量填充指定字段](development/postgres-batch-fill-20261106.md)，整批暂存、撤销，并通过原表页预览确认后提交。

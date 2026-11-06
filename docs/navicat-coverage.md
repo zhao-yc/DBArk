@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 不同值筛选支持最多及最少次数优先。全范围分组排序后限量，明确重读前保留勾选。D09 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 不同值次数排序](development/postgres-value-frequency-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 可从表页已应用的筛选和排序生成独立 SELECT，沿用条件树、NULL 排序、主键补序及查询结果上限。R01 仍为部分覆盖，暂不发布。[PostgreSQL 当前筛选 SELECT](development/postgres-filtered-select-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 表页可按目录选列生成 SELECT、INSERT、UPDATE 和 DELETE 草稿。写模板保留位置参数，UPDATE 和 DELETE 使用完整主键并限定原表。D02 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 表页 SQL 模板](development/postgres-table-sql-templates-20261106.md)

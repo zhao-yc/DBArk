@@ -10,7 +10,10 @@ export const postgresTableZh = {
   advancedFilter: '高级筛选', applyAdvancedFilter: '应用高级筛选', filterGroups: '编辑条件分组', filterGrouped: '已编排条件分组',
   valueOptions: {
     open: '按不同值筛选', column: '不同值字段', search: '搜索不同值', read: '读取不同值', add: '加入筛选草稿',
-    hint: '从当前已应用筛选的全部记录读取。搜索区分大小写，按原文匹配，重新读取会清除勾选。',
+    hint: '从当前已应用筛选的全部记录读取。搜索区分大小写，按原文匹配。排序覆盖所有匹配分组，再取前 500 项。',
+    order: '候选排序', orderValue: '按字段值', orderMost: '出现次数最多', orderLeast: '出现次数最少',
+    pending: '字段、搜索或排序有变化。重新读取后可勾选并加入筛选草稿。',
+    discardRead: '重新读取会清除当前勾选。', confirmRead: '清除勾选并读取', keep: '保留当前勾选',
     label: '字段值', frequency: '记录数', empty: '没有匹配的不同值', exclude: '排除勾选值',
     emptyString: '空字符串', clipped: '超过筛选值长度上限', expired: '原表页或连接已变化，请重新打开不同值。',
     truncated: '仅显示前 500 个不同值，可搜索其余值。',

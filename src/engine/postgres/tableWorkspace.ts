@@ -19,6 +19,7 @@ import { readPostgresCopySource, type PostgresCopySource } from './copyImportFil
 import { postgresTableCondition, postgresTableReadOrder } from '../../shared/postgresTableReadSql';
 import { readPostgresTableReferences, type PostgresReferenceSourceRow, type PostgresReferenceRowVersion } from './tableReferences';
 import { readPostgresColumnStatistics } from './tableStatistics';
+import { readTableValueOptionsOrder } from '../../shared/tableValueOptions';
 import {
   postgresDraftSchema, type PostgresDraftDocument, type PostgresDraftRestored,
 } from '../../shared/postgresTableDraft';
@@ -617,7 +618,9 @@ export class PostgresTableWorkspace {
       const name = postgresIdentifier(column.name), args: unknown[] = [input.search];
       const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
       const maximum = postgresTableValueLimits.groups + 1;
-      // 原生相等的值只保留一个可重复选取的文本代表，搜索在计数之后执行。
+      const order = readTableValueOptionsOrder(input.order);
+      const frequencyOrder = order === 'value' ? '' : order === 'count-desc' ? 'grouped_values.frequency DESC, ' : 'grouped_values.frequency ASC, ';
+      // 次数使用原 bigint 排序，搜索与排序覆盖所有分组；同次数沿用原显示顺序。
       const rows = await connection.query(`
         SELECT pg_catalog.left(display, ${FILTER_LIMITS.valueLength + 1}), frequency::text
         FROM (SELECT pg_catalog.min(${name}::text COLLATE pg_catalog."C") AS display,
@@ -625,7 +628,7 @@ export class PostgresTableWorkspace {
               FROM ${only(relation)} ${condition ? 'WHERE ' + condition : ''}
               GROUP BY ${name}) AS grouped_values
         WHERE $1::text = '' OR pg_catalog.strpos(display, $1) > 0
-        ORDER BY display NULLS FIRST LIMIT ${maximum}
+        ORDER BY ${frequencyOrder}display NULLS FIRST LIMIT ${maximum}
       `, args, { rows: maximum, bytes: 12 * 1024 * 1024 });
       if (rows.truncated) throw Error('PostgreSQL 不同值超过读取预算，请缩小搜索范围');
       const options = rows.rows.slice(0, postgresTableValueLimits.groups).map(row => {

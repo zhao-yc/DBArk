@@ -134,6 +134,7 @@ export type PostgresTableColumnReadInput = z.infer<typeof postgresTableColumnRea
 export const postgresTableValueLimits = { groups: 500, page: 50, search: 256 } as const;
 export const postgresTableValuesSchema = postgresTableColumnReadSchema.extend({
   search: z.string().max(postgresTableValueLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
+  order: z.enum(['value', 'count-desc', 'count-asc']).optional(),
 }).strict();
 export type PostgresTableValuesInput = z.infer<typeof postgresTableValuesSchema>;
 export interface PostgresTableValues {

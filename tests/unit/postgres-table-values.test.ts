@@ -25,10 +25,13 @@ describe('PostgreSQL 不同值筛选草稿', () => {
     expect(appendPostgresValueFilter(empty, 'note', [null], true).rules).toEqual([{ column: 'note', operator: 'IS NOT NULL' }]);
   });
 
-  it('候选查询只允许原页能力、目录列编号与文本搜索', () => {
+  it('候选查询只允许原页能力、目录列编号、文本搜索与固定排序', () => {
     const input = { connectionId: '连接', database: '库', table: '表', tabId: '页',
       pageToken: 'd312a72b-fdfd-4a6e-8770-f5f1637af235', column: 'c1', search: '_%😀' };
     expect(postgresTableValuesSchema.safeParse(input).success).toBe(true);
+    for (const order of ['value', 'count-desc', 'count-asc'])
+      expect(postgresTableValuesSchema.parse({ ...input, order }).order).toBe(order);
+    expect(postgresTableValuesSchema.safeParse({ ...input, order: 'frequency DESC' }).success).toBe(false);
     expect(postgresTableValuesSchema.safeParse({ ...input, filter: {} }).success).toBe(false);
     expect(postgresTableValuesSchema.safeParse({ ...input, search: '\0' }).success).toBe(false);
     expect(postgresTableValuesSchema.safeParse({ ...input, column: '字段名' }).success).toBe(false);

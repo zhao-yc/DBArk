@@ -275,10 +275,11 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       await client.query(`CREATE TABLE ${valueTable.table}
         (id bigint PRIMARY KEY, note text, amount numeric(40,18), raw bytea, doc jsonb, hidden json);
         INSERT INTO ${valueTable.table}
-        SELECT i, CASE i WHEN 1 THEN NULL WHEN 2 THEN '' WHEN 3 THEN '换' || chr(13) || chr(10) || '行'
-          WHEN 4 THEN repeat('大',4100) WHEN 502 THEN '末尾_%' WHEN 503 THEN '末尾_%'
-          ELSE '候选' || i END, 1234567890123456789012.123456789012345678, decode('00ff','hex'), '{"n":9007199254740993}', '{}'
-        FROM generate_series(1, 503) i;`);
+        SELECT i, CASE WHEN i = 1 THEN NULL WHEN i = 2 THEN '' WHEN i = 3 THEN '换' || chr(13) || chr(10) || '行'
+          WHEN i = 4 THEN repeat('大',4100) WHEN i BETWEEN 502 AND 513 OR i = 518 THEN '末尾_%'
+            WHEN i IN (514,515) THEN '' WHEN i IN (516,517) THEN '次要' ELSE '候选' || i END
+          END, 1234567890123456789012.123456789012345678, decode('00ff','hex'), '{"n":9007199254740993}', '{}'
+        FROM generate_series(1, 518) i;`);
       const originalFilter = { rules: [{ column: 'id', operator: '<', value: '503' }], mode: 'all' } as const;
       const valuePage = await read({ ...valueTable, filter: originalFilter, limit: 1 });
       const values = (column: string, search = '', extra = {}): Promise<PostgresTableValues> =>
@@ -288,6 +289,28 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(bounded.options).toHaveLength(500);
       expect(bounded.options.slice(0, 2)).toEqual([{ value: null, count: '1', clipped: false }, { value: '', count: '1', clipped: false }]);
       expect(await values('c1', '_%')).toEqual({ truncated: false, options: [{ value: '末尾_%', count: '1', clipped: false }] });
+      const frequencyTab = { ...valueTable, tabId: randomUUID() };
+      const frequencyPage = await read({ ...frequencyTab, limit: 1,
+        filter: { mode: 'all', rules: [{ column: 'id', operator: '<', value: '518' }] } });
+      const frequency = (order: string, search = '') => values('c1', search,
+        { ...frequencyTab, pageToken: frequencyPage.exportToken, order });
+      const byValue = await frequency('value');
+      expect(byValue).toMatchObject({ truncated: true });
+      expect(byValue.options.map(option => option.value)).not.toContain('末尾_%');
+      const most = await frequency('count-desc');
+      expect(most).toMatchObject({ truncated: true });
+      expect(most.options).toHaveLength(500);
+      expect(most.options.slice(0, 4)).toEqual([
+        { value: '末尾_%', count: '12', clipped: false }, { value: '', count: '3', clipped: false },
+        { value: '次要', count: '2', clipped: false }, { value: null, count: '1', clipped: false },
+      ]);
+      const least = await frequency('count-asc');
+      expect(least.truncated).toBe(true);
+      expect(least.options).toHaveLength(500);
+      expect(least.options[0]).toEqual({ value: null, count: '1', clipped: false });
+      expect(least.options.every(option => option.count === '1')).toBe(true);
+      expect(await frequency('count-asc', '_%')).toEqual({ truncated: false, options: [{ value: '末尾_%', count: '12', clipped: false }] });
+      await expect(frequency('frequency DESC')).rejects.toThrow();
       expect((await values('c1', '大')).options).toEqual([{ value: '大'.repeat(200), count: '1', clipped: true }]);
       expect((await values('c2')).options).toEqual([{ value: '1234567890123456789012.123456789012345678', count: '502', clipped: false }]);
       expect((await values('c3')).options).toEqual([{ value: '\\x00ff', count: '502', clipped: false }]);
