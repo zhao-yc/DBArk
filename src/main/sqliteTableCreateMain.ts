@@ -12,7 +12,7 @@ interface Ports {
   task(id: string): TaskRecord | undefined; replace(task: TaskRecord): void; save(task: TaskRecord): void;
   event(event: TaskEvent): void;
 }
-interface Source { owner: ColumnsInvocation; revision: number; epoch: object; profile: string; target: SqliteTableCreateTarget; expires: number; expected?: { fingerprint: string; statements: number }; cancelled?(): boolean; }
+interface Source { owner: ColumnsInvocation; revision: number; epoch: object; profile: string; target: SqliteTableCreateTarget; expires: number; expected?: { fingerprint: string; statements: number }; attachment?: { id: string; epoch: object; profile: string }; cancelled?(): boolean; }
 interface Preview extends Source { id: string; statements: number; }
 interface Operation { owner: ColumnsInvocation; cancelled: boolean; sent: boolean; check(): void; stop?: Promise<void>; settled: Promise<void>; settle(): void; }
 /** 摘要只比较来源，不把路径或完整SQL复制到Main预览表。 */
@@ -32,6 +32,12 @@ export class SqliteTableCreateMain {
     this.ports.assert(source.owner); this.ports.available(source.target.connectionId);
     const profile = this.ports.profile(source.target.connectionId);
     if (this.ports.closing() || source.cancelled?.() || source.expires <= Date.now() || source.revision !== this.ports.revision() || source.epoch !== this.ports.epoch(source.target.connectionId) || !profile || profile.pendingFiles?.length || !profile.sqlite.filePath || profileKey(profile) !== source.profile) throw Error(text.stale);
+    if (source.attachment) {
+      const { id, epoch, profile: expected } = source.attachment;
+      this.ports.available(id);
+      const actual = this.ports.profile(id);
+      if (!actual || actual.pendingFiles?.length || !actual.sqlite.filePath || epoch !== this.ports.epoch(id) || profileKey(actual) !== expected) throw Error('SQLite 复制来源连接已变化，请重新预览');
+    }
   }
   /** 同一webContents只监听一次；导航或销毁立即检查旧来源。 */
   private watch(owner: ColumnsInvocation): void {
@@ -56,8 +62,16 @@ export class SqliteTableCreateMain {
     if (!profile || profile.pendingFiles?.length || !profile.sqlite.filePath) throw Error('请先保存并授权准确SQLite文件连接');
     const plan = 'design' in input ? buildSqliteTableCreate(input.design) : undefined;
     const table = 'design' in input ? input.design.name : input.copy.name;
+    const sourceId = 'copy' in input ? input.copy.sourceConnectionId : undefined;
+    let attachment: Source['attachment'];
+    if (sourceId) {
+      this.ports.available(sourceId);
+      const original = this.ports.profile(sourceId);
+      if (!original || original.pendingFiles?.length || !original.sqlite.filePath) throw Error('请先保存并授权 SQLite 复制来源文件');
+      attachment = { id: sourceId, epoch: this.ports.epoch(sourceId), profile: profileKey(original) };
+    }
     const source: Source = { owner, revision: this.ports.revision(), epoch: this.ports.epoch(input.connectionId), profile: profileKey(profile), target: { connectionId: input.connectionId, database: 'main', table }, expires: Date.now() + limits.previewLifetimeMs,
-      expected: plan && { fingerprint: fingerprint(plan.sql), statements: plan.sql.length } };
+      attachment, expected: plan && { fingerprint: fingerprint(plan.sql), statements: plan.sql.length } };
     this.valid(source); return source;
   }
   /** 首个await之前占住任务编号，取消和退出始终指向原操作。 */

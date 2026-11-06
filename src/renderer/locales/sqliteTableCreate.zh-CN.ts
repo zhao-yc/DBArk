@@ -2,7 +2,9 @@
 export const sqliteTableCreateZh = {
   title: '新建 SQLite 表', name: '表名称', columns: '字段', addColumn: '添加字段',
   copyTitle: '复制 SQLite 表', copyMode: '复制范围', structureOnly: '仅结构', structureAndData: '结构和数据',
-  copyHint: '在同一 SQLite 文件中创建新表。数据模式读取完整来源，不受当前筛选和分页限制。',
+  copyHint: '可在来源文件或另一个已配置的 SQLite 文件中创建新表。数据模式读取完整来源。',
+  copySource: '来源表', copyDestination: '目标 SQLite 连接', sameFile: '来源连接（本文件）',
+  copyDestinationHint: '切换目标会清除当前名称和预览。跨文件复制暂不重新绑定外部表的外键。',
   copyPreview: '预览 SQLite 复制 SQL', copyApply: '确认复制 SQLite 表', copyDiscard: '关闭会放弃当前副本名称、范围和预览。',
   columnName: (row: number) => `字段名称 ${row}`, declaredType: (row: number) => `声明类型 ${row}`,
   nullable: (row: number) => `允许 NULL ${row}`, defaultKind: (row: number) => `默认值类型 ${row}`,

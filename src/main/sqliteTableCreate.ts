@@ -13,7 +13,8 @@ export interface SqliteTableCreateControl extends SqliteTableBrowseControl { beg
 type Compiled = ReturnType<typeof buildSqliteTableCreate>;
 export interface SqliteCreateSnapshot {
   target: SqliteTableCreatePreviewOutput['target']; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
-  schemaVersion: string; version: string; compiled: Compiled; copy?: { draft: SqliteCopyDraft; sourceKey: string };
+  schemaVersion: string; version: string; compiled: Compiled;
+  copy?: { draft: SqliteCopyDraft; sourceKey: string; attachment?: { profile: SqliteConnectionProfile; identity: SqliteFileIdentity } };
 }
 export interface SqliteCreateClaim extends SqliteCreateSnapshot { id: string; expires: number; confirmation: string; bytes: number; }
 const stale = 'SQLite建表预览已失效，请重新读取并明确预览';
@@ -45,21 +46,26 @@ async function assertNamesAvailable(driver: SqliteDriverSession, compiled: Compi
 }
 
 /** 原只读连接BEGIN取目录快照；不执行任何CREATE，也不借用用户标签事务。 */
-export async function prepareSqliteCreateSnapshot(driver: SqliteDriverSession, input: SqliteTableCreatePreviewInput, profile: SqliteConnectionProfile, control: SqliteTableBrowseControl): Promise<SqliteCreateSnapshot> {
+export async function prepareSqliteCreateSnapshot(driver: SqliteDriverSession, input: SqliteTableCreatePreviewInput, profile: SqliteConnectionProfile, control: SqliteTableBrowseControl, sourceProfile?: SqliteConnectionProfile): Promise<SqliteCreateSnapshot> {
   if (!driver.readOnly || !driver.identity) throw Error('SQLite建表预览必须使用有真实文件身份的独立只读连接');
   const version = /^(\d+)\.(\d+)\.(\d+)/.exec(driver.version), versionNumber = version ? Number(version[1]) * 1000000 + Number(version[2]) * 1000 + Number(version[3]) : 0;
   if ('design' in input && (input.design.strict && versionNumber < 3037000 || input.design.withoutRowid && versionNumber < 3008002)) throw Error('当前SQLite版本不支持设计使用的表选项');
   const context = { profile: structuredClone(profile), identity: driver.identity };
+  const sourceId = 'copy' in input ? input.copy.sourceConnectionId : undefined, sourceIdentity = driver.copySourceIdentity;
+  if (sourceId ? sourceProfile?.id !== sourceId || !sourceIdentity : !!sourceProfile || !!sourceIdentity) throw Error('SQLite 复制源连接与实际文件不一致');
+  const attachment = sourceProfile && sourceIdentity ? { profile: structuredClone(sourceProfile), identity: sourceIdentity } : undefined;
   let snapshot: SqliteCreateSnapshot | undefined;
   let failure: unknown, failed = false;
   try {
-    await assertFile(context, control); await driver.execute('BEGIN'); control.check();
+    await assertFile(context, control); if (attachment) await assertFile(attachment, control);
+    await driver.execute('BEGIN'); control.check();
     const schemaVersion = integer((await read(driver, 'PRAGMA main.schema_version', [], 1, control))[0]?.[0]);
     const table = 'design' in input ? input.design.name : input.copy.name;
     const { compiled, copy } = 'design' in input ? { compiled: buildSqliteTableCreate(input.design), copy: undefined } :
-      await prepareSqliteTableCopy(driver, input.copy, control).then(({ sourceKey, ...compiled }) => ({ compiled, copy: { draft: { ...input.copy }, sourceKey } }));
+      await prepareSqliteTableCopy(driver, input.copy, control).then(({ sourceKey, ...compiled }) => ({ compiled, copy: { draft: { ...input.copy }, sourceKey, attachment } }));
     snapshot = { ...context, target: { connectionId: profile.id, database: 'main', table }, schemaVersion, version: driver.version, compiled: immutable(compiled), copy: immutable(copy) };
     await assertNamesAvailable(driver, snapshot.compiled, control); await assertFile(snapshot, control);
+    if (attachment) await assertFile(attachment, control);
   } catch (reason) { failed = true; failure = reason; }
   control.beginCleanup();
   if (driver.isUsable && driver.transaction === true) try { await driver.execute('ROLLBACK'); } catch (reason) { control.cleanupFailed(reason); failure = failed ? new AggregateError([failure, reason], 'SQLite建表预览失败且读事务回滚未确认') : reason; failed = true; }
@@ -77,13 +83,13 @@ export class SqliteTableCreates {
   publish(snapshot: SqliteCreateSnapshot): SqliteTableCreatePreviewOutput {
     this.prune(); const bytes = Buffer.byteLength(JSON.stringify(snapshot)); if (this.previews.size >= limits.previews || this.bytes + bytes > limits.previewBytes) throw Error('SQLite建表预览预算已满，请释放旧预览');
     const value = { ...snapshot, id: randomUUID(), confirmation: 'main.' + snapshot.target.table, expires: Date.now() + limits.previewLifetimeMs, bytes }; this.previews.set(value.id, value); this.bytes += bytes;
-    const warnings = value.copy ? ['外键保留原引用，自引用改为副本。显式索引生成新名称，触发器需单独配置。'] : [];
+    const warnings = value.copy ? [value.copy.attachment ? '来源文件只读打开。自引用改为副本，显式索引生成新名称，触发器需单独配置。' : '外键保留原引用，自引用改为副本。显式索引生成新名称，触发器需单独配置。'] : [];
     if (value.copy?.draft.mode === 'data') warnings.push('确认时读取完整来源。生成列重新计算，AUTOINCREMENT 按副本现有行重新建立高水位。');
     if (value.profile.sqlite.readOnly) warnings.push('当前SQLite连接为只读，仅可预览，不能创建表');
     return { previewId: value.id, target: { ...value.target }, expiresAt: new Date(value.expires).toISOString(), confirmation: value.confirmation, sql: [...value.compiled.sql], warnings };
   }
   release(id: string): void { this.drop(id); }
-  releaseConnection(id: string): void { for (const value of this.previews.values()) if (value.target.connectionId === id) this.drop(value.id); }
+  releaseConnection(id: string): void { for (const value of this.previews.values()) if (value.target.connectionId === id || value.copy?.draft.sourceConnectionId === id) this.drop(value.id); }
   /** 确认文字错误同样立即消费原ID；重复apply不能重放。 */
   claim(input: SqliteTableCreateApplyInput): SqliteCreateClaim {
     const parsed = sqliteTableCreateApplySchema.parse(input); this.prune(); const value = this.previews.get(parsed.previewId); if (!value) throw Error(stale); this.drop(value.id); if (parsed.confirmation !== value.confirmation) throw Error(stale); return value;
@@ -105,10 +111,13 @@ export async function applySqliteTableCreate(driver: SqliteDriverSession, claim:
   const record = (phase: SqliteTableCreateFact['phase']) => { const value: unknown = input.recordCreateFact(fact(phase)); if (value && typeof (value as { then?: unknown }).then === 'function') throw Error('SQLite建表事实必须同步持久化'); };
   try {
     control.check(); if (driver.readOnly || JSON.stringify(driver.identity) !== JSON.stringify(claim.identity) || driver.version !== claim.version) throw Error('SQLite建表实际连接或版本已变化');
-    await assertFile(claim, control); record('not-sent');
+    const attachment = claim.copy?.attachment;
+    if (JSON.stringify(attachment?.identity) !== JSON.stringify(driver.copySourceIdentity)) throw Error('SQLite 复制源文件已变化');
+    await assertFile(claim, control); if (attachment) await assertFile(attachment, control);
+    record('not-sent');
     try { await driver.execute('BEGIN IMMEDIATE'); begun = true; }
     catch (reason) { if (reason instanceof SqliteDriverError && reason.completedStatements === 1 && reason.completedResults[0]?.transaction === true) begun = true; throw reason; }
-    control.check(); await assertFile(claim, control);
+    control.check(); await assertFile(claim, control); if (attachment) await assertFile(attachment, control);
     if (integer((await read(driver, 'PRAGMA main.schema_version', [], 1, control))[0]?.[0]) !== claim.schemaVersion) throw Error('SQLite目录版本已变化，请重新预览');
     if (claim.copy && (await prepareSqliteTableCopy(driver, claim.copy.draft, control)).sourceKey !== claim.copy.sourceKey) throw Error('SQLite复制来源定义已变化');
     await assertNamesAvailable(driver, claim.compiled, control); record('writing');
@@ -132,7 +141,8 @@ export async function applySqliteTableCreate(driver: SqliteDriverSession, claim:
       if (rows.length !== 1 || rows[0][0] !== expected.type || rows[0][1] !== expected.name || rows[0][2] !== claim.target.table || rows[0][3] !== expected.sql) throw Error('SQLite真实storedSql与原预览定义不一致');
     }
     if (claim.copy) await verifySqliteTableCopy(driver, claim.copy.draft, copiedRows, control);
-    verified = true; await assertFile(claim, control); record('commit-pending'); control.check(); control.beginCommit(); commitSent = true;
+    verified = true; await assertFile(claim, control); if (attachment) await assertFile(attachment, control);
+    record('commit-pending'); control.check(); control.beginCommit(); commitSent = true;
     await driver.execute('COMMIT'); committed = true; try { record('committed'); } catch { warning = true; }
   } catch (reason) {
     // 单条COMMIT的statementEnd是真实ACK；不能因最终completed/进程随后丢失而冒充unknown。

@@ -95,11 +95,11 @@ export type SqliteTableCreateDesign = z.infer<typeof sqliteTableCreateDesignSche
 const target = z.object({ connectionId: id, database: z.literal('main'), table: objectName }).strict();
 export type SqliteTableCreateTarget = z.infer<typeof target>;
 const previewScope = { connectionId: id, database: z.literal('main'), taskId: id };
-export const sqliteTableCopyDraftSchema = z.object({ source: objectName, name: objectName, mode: z.enum(['structure', 'data']) }).strict()
-  .refine(value => fold(value.source) !== fold(value.name), 'SQLite来源和副本名称必须不同');
+export const sqliteTableCopyDraftSchema = z.object({ source: objectName, name: objectName, mode: z.enum(['structure', 'data']), sourceConnectionId: id.optional() }).strict()
+  .refine(value => value.sourceConnectionId !== undefined || fold(value.source) !== fold(value.name), 'SQLite来源和副本名称必须不同');
 export const sqliteTableCreatePreviewSchema = budget.pipe(z.union([
   z.object({ ...previewScope, design: sqliteTableCreateDesignSchema }).strict(),
-  z.object({ ...previewScope, copy: sqliteTableCopyDraftSchema }).strict(),
+  z.object({ ...previewScope, copy: sqliteTableCopyDraftSchema }).strict().refine(value => value.copy.sourceConnectionId !== value.connectionId, '同一连接请选择本文件复制'),
 ]));
 export const sqliteTableCreateApplySchema = z.object({ previewId: id, taskId: id, confirmation: z.string().min(1).max(1024) }).strict();
 export const sqliteTableCreateReleaseSchema = z.object({ previewId: id }).strict();

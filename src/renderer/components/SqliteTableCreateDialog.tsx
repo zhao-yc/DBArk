@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { sqliteTableCreateDesignSchema, sqliteTableCreateOutcomeSchema, sqliteTableCreatePreviewSchema, type SqliteTableCreateDesign, type SqliteTableCreatePreviewInput, type SqliteTableCreatePreviewOutput, type SqliteTableCreateApplyInput, type SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease } from '../store';
 import { errorMessage, invoke, uid } from '../lib';
@@ -18,6 +18,7 @@ export const sqliteTableCreateServices: SqliteTableCreateServices = {
 };
 interface Props {
   connectionId: string; database: string; initialDesign?: SqliteTableCreateDesign; copySource?: string; unsupportedSeed?: boolean; invalidated?: boolean; isParentCurrent?(): boolean;
+  copyDestination?: { sourceId: string; sourceLabel: string; choices: { id: string; label: string }[]; select(id: string): void };
   onClose(): void; onCreated?(result: SqliteTableCreateOutcome, version: number): void; onDirtyChange?(dirty: boolean): void;
   services?: SqliteTableCreateServices;
 }
@@ -28,9 +29,9 @@ const emptyDesign = (): SqliteTableCreateDesign => ({ name: '', columns: [{ name
 function moved<T>(items: T[], index: number, delta: -1 | 1): T[] { const next = [...items], to = index + delta; if (to >= 0 && to < next.length) [next[index], next[to]] = [next[to], next[index]]; return next; }
 
 /** SQLite新表独立设计器：本地草稿→真实只读预览→单次明确提交，不使用MySQL元数据或SQL执行器。 */
-export function SqliteTableCreateDialog({ connectionId, database, initialDesign, copySource, unsupportedSeed = false, invalidated = false, isParentCurrent, onClose, onCreated, onDirtyChange, services = sqliteTableCreateServices }: Props) {
+export function SqliteTableCreateDialog({ connectionId, database, initialDesign, copySource, copyDestination, unsupportedSeed = false, invalidated = false, isParentCurrent, onClose, onCreated, onDirtyChange, services = sqliteTableCreateServices }: Props) {
   const profile = useWorkspace(state => state.connections.find(value => value.id === connectionId)), version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
-  const fixed = useRef({ connectionId, database, profile, version, initialDesign, copySource, unsupportedSeed, parent: isParentCurrent, services, onClose, onCreated, onDirtyChange, busyKey: 'sqlite-table-create:' + uid() }).current;
+  const fixed = useRef({ connectionId, database, profile, version, initialDesign, copySource, copySourceId: copyDestination?.sourceId, unsupportedSeed, parent: isParentCurrent, services, onClose, onCreated, onDirtyChange, busyKey: 'sqlite-table-create:' + uid() }).current;
   const closeSourceRef = useRef({ connectionId, database, profile, version, initialDesign, copySource, isParentCurrent, unsupportedSeed, invalidated });
   if (closeSourceRef.current.connectionId !== connectionId || closeSourceRef.current.database !== database || closeSourceRef.current.profile !== profile || closeSourceRef.current.version !== version || closeSourceRef.current.initialDesign !== initialDesign || closeSourceRef.current.copySource !== copySource || closeSourceRef.current.isParentCurrent !== isParentCurrent || closeSourceRef.current.unsupportedSeed !== unsupportedSeed || closeSourceRef.current.invalidated !== invalidated) closeSourceRef.current = { connectionId, database, profile, version, initialDesign, copySource, isParentCurrent, unsupportedSeed, invalidated };
   const closeSource = closeSourceRef.current, sourceEpoch = useRef(0), observed = useRef({ profile, version });
@@ -101,7 +102,8 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
   /** 真实预览仅由明确按钮触发，完整草稿固定后每个await都核对原来源。 */
   function prepare(): void {
     if (!editable()) return;
-    const intent = fixed.copySource === undefined ? { design } : { copy: { source: fixed.copySource, name: design.name, mode: copyMode } };
+    const sourceConnectionId = fixed.copySourceId === fixed.connectionId ? undefined : fixed.copySourceId;
+    const intent = fixed.copySource === undefined ? { design } : { copy: { source: fixed.copySource, name: design.name, mode: copyMode, ...(sourceConnectionId ? { sourceConnectionId } : {}) } };
     const scope = { connectionId: fixed.connectionId, database: 'main' as const };
     const parsed = sqliteTableCreatePreviewSchema.safeParse({ ...scope, ...intent, taskId: 'validate' });
     if (!parsed.success) { setError(fixed.copySource === undefined ? text.designInvalid : parsed.error.issues[0]?.message ?? text.designInvalid); return; }
@@ -174,8 +176,11 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
   const columnOptions = design.columns.map((column, index) => <option key={index} value={column.name}>{column.name}</option>);
   const copying = fixed.copySource !== undefined;
   return <Modal title={copying ? text.copyTitle : text.title} wide onClose={() => close()}><div className="modal-content sqlite-table-create" aria-busy={busy}>
-    <p>{fixed.profile?.name ?? fixed.connectionId} / {fixed.database}{copying && ' / ' + fixed.copySource}</p>{copying ? <p>{text.copyHint}</p> : <UsageHelp><p>{text.affinity}</p><p>{text.defaultHint}</p></UsageHelp>}
+    {copying ? <><p>{text.copySource} · {copyDestination?.sourceLabel ?? fixed.profile?.name} / {fixed.database} / {fixed.copySource}</p><p>{text.copyHint}</p></> : <><p>{fixed.profile?.name ?? fixed.connectionId} / {fixed.database}</p><UsageHelp><p>{text.affinity}</p><p>{text.defaultHint}</p></UsageHelp></>}
     {readOnly && <p className="warning-text">{text.readonly}</p>}{(!valid || unsupportedSeed) && <ErrorBox message={unsupportedSeed ? text.unsupportedSeed : text.invalid}/>}
+    {copyDestination && <Field label={text.copyDestination}><select aria-label={text.copyDestination} value={connectionId} disabled={!canEdit} onChange={event => { if (editable()) copyDestination.select(event.target.value); }}>
+      {copyDestination.choices.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+    </select><span className="muted small">{text.copyDestinationHint}</span></Field>}
     <Field label={text.name}><input aria-label={text.name} value={design.name} disabled={!canEdit} onChange={event => change({ ...design, name: event.target.value })}/></Field>
     {copying ? <Field label={text.copyMode}><select aria-label={text.copyMode} disabled={!canEdit} value={copyMode} onChange={event => {
       if (editable()) { setCopyMode(event.target.value === 'data' ? 'data' : 'structure'); change({ ...design }); }
@@ -209,4 +214,21 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
     {preview && <section aria-label={text.sql}><h3>{preview.target.database}.{preview.target.table}</h3><p>{text.previewHint}</p><pre className="sqlite-create-sql" tabIndex={0} aria-label={text.sql}>{preview.sql.join('\n\n')}</pre>{preview.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}<Field label={text.confirmHint(preview.confirmation)}><input aria-label={text.confirmation} value={confirmation} disabled={!canEdit || expired} onChange={event => { if (editable() && accepted.current === preview) { confirmationRef.current = event.target.value; setConfirmation(event.target.value); } }}/></Field>{expired && <ErrorBox message={text.expired}/>}</section>}
     {busy && <Spinner text={text.working}/>}<ErrorBox message={error}/>{message && <p role="status" className={complete ? 'success-box' : 'warning-text'}>{message}</p>}{closing && <p className="warning-text">{copying ? text.copyDiscard : text.discard}</p>}
   </div><footer className="modal-footer">{closing ? <><button type="button" disabled={busy} onClick={() => { if (localCurrent() && !operation.current) setClosing(false); }}>{text.keep}</button><button type="button" disabled={busy} onClick={() => close(true)}>{text.discardClose}</button></> : <><button type="button" disabled={busy} onClick={() => close()}>{text.close}</button><span className="grow"/>{busy && renderedOperation && <button type="button" onClick={() => { if (localCurrent() && operation.current === renderedOperation) cancel(renderedOperation); }}>{text.stop}</button>}<button type="button" disabled={!canEdit} onClick={prepare}>{copying ? text.copyPreview : text.preview}</button><button type="button" className="primary" disabled={!canEdit || !preview || expired || readOnly || confirmation !== preview.confirmation || consumed.current.has(preview.previewId)} onClick={apply}>{copying ? text.copyApply : text.apply}</button></>}</footer></Modal>;
+}
+
+/** 目标切换会卸载旧事务表单并释放旧预览，来源配置始终绑定最初的普通表。 */
+export function SqliteTableCopyDialog({ connectionId, database, copySource, ...callbacks }: Pick<Props, 'connectionId' | 'database' | 'onClose' | 'onCreated' | 'onDirtyChange'> & { copySource: string }) {
+  const connections = useWorkspace(state => state.connections);
+  const original = useRef({ profile: connections.find(profile => profile.id === connectionId), version: useWorkspace.getState().connectionVersions[connectionId] ?? 0 }).current;
+  const [destination, setDestination] = useState(connectionId);
+  const currentSource = useCallback(() => {
+    const state = useWorkspace.getState();
+    return state.connections.find(profile => profile.id === connectionId) === original.profile && (state.connectionVersions[connectionId] ?? 0) === original.version;
+  }, [connectionId, original]);
+  const choices = [{ id: connectionId, label: text.sameFile }, ...connections.flatMap(profile =>
+    profile.id !== connectionId && profile.dialect === 'sqlite' && !profile.sqlite.readOnly && !profile.pendingFiles?.length && profile.sqlite.filePath
+      ? [{ id: profile.id, label: profile.name + (profile.sqlite.fileName ? ' · ' + profile.sqlite.fileName : '') }] : [])];
+  return <SqliteTableCreateDialog key={destination} {...callbacks} connectionId={destination} database={database} copySource={copySource}
+    copyDestination={{ sourceId: connectionId, sourceLabel: original.profile?.name ?? connectionId, choices, select: id => { if (choices.some(choice => choice.id === id)) setDestination(id); } }}
+    isParentCurrent={currentSource}/>;
 }

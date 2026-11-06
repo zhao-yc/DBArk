@@ -67,18 +67,24 @@ export interface SqliteStreamReadOptions { batchRows: number; }
 export interface SqliteStatementResult { index: number; rows: number; truncated: boolean; changes: string; transaction: boolean; }
 export interface SqliteExecutionResult { statements: SqliteStatementResult[]; transaction: boolean; comparison?: SqliteRebuildComparisonResult; }
 export interface SqliteOpenOptions { path: string; readOnly: boolean; busyTimeoutMs: number; }
-/** 固定模式仅由openRebuild注入；普通open和渲染IPC不能选择连接保护选项。 */
-export interface SqliteWorkerOpenOptions extends SqliteOpenOptions { mode?: 'table-rebuild'; }
+export const sqliteCopySourceSchema = 'dbark_copy_source';
+/** 固定模式由 Main 独立任务注入，普通查询不能附加文件。 */
+export interface SqliteWorkerOpenOptions extends SqliteOpenOptions { mode?: 'table-rebuild' | 'table-copy'; sourcePath?: string; }
 /** 纯自有数据复制，普通入口即使mode为undefined也拒绝，避免扩展字段被透传到特权writer。 */
 function copyOpenOptions(input: unknown, allowRebuild: boolean): SqliteWorkerOpenOptions {
   const fail = () => Error('SQLite连接参数或私有模式无效');
   if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw fail();
-  const keys = Reflect.ownKeys(input), allowed = allowRebuild ? ['path', 'readOnly', 'busyTimeoutMs', 'mode'] : ['path', 'readOnly', 'busyTimeoutMs'];
+  const keys = Reflect.ownKeys(input), allowed = allowRebuild ? ['path', 'readOnly', 'busyTimeoutMs', 'mode', 'sourcePath'] : ['path', 'readOnly', 'busyTimeoutMs'];
   if (keys.length < 3 || keys.length > allowed.length || keys.some(key => typeof key !== 'string' || !allowed.includes(key))) throw fail();
   const values = Object.create(null) as Record<string, unknown>;
   for (const key of keys) { const item = Object.getOwnPropertyDescriptor(input, key); if (!item || !item.enumerable || !('value' in item)) throw fail(); values[key as string] = item.value; }
-  if (typeof values.path !== 'string' || !values.path || values.path.includes('\0') || typeof values.readOnly !== 'boolean' || !Number.isInteger(values.busyTimeoutMs) || Number(values.busyTimeoutMs) < 0 || Number(values.busyTimeoutMs) > 5000 || keys.includes('mode') && (values.mode !== 'table-rebuild' || values.readOnly)) throw fail();
-  return { path: values.path, readOnly: values.readOnly, busyTimeoutMs: values.busyTimeoutMs as number, ...(values.mode === 'table-rebuild' ? { mode: 'table-rebuild' as const } : {}) };
+  const mode = values.mode;
+  if (typeof values.path !== 'string' || !values.path || values.path.includes('\0') || typeof values.readOnly !== 'boolean' || !Number.isInteger(values.busyTimeoutMs) || Number(values.busyTimeoutMs) < 0 || Number(values.busyTimeoutMs) > 5000) throw fail();
+  const base = { path: values.path, readOnly: values.readOnly, busyTimeoutMs: values.busyTimeoutMs as number };
+  if (mode === 'table-copy' && typeof values.sourcePath === 'string' && values.sourcePath && !values.sourcePath.includes('\0')) return { ...base, mode, sourcePath: values.sourcePath };
+  if (mode === 'table-rebuild' && !values.readOnly && !keys.includes('sourcePath')) return { ...base, mode };
+  if (keys.includes('mode') || keys.includes('sourcePath')) throw fail();
+  return base;
 }
 export function copySqliteOpenOptions(input: unknown): SqliteOpenOptions { return copyOpenOptions(input, false); }
 export function copySqliteWorkerOpenOptions(input: unknown): SqliteWorkerOpenOptions { return copyOpenOptions(input, true); }
@@ -97,7 +103,7 @@ export type SqliteWorkerRequest =
 
 export type SqliteWorkerResponse =
   | { kind: 'ready' }
-  | { kind: 'opened'; id: string; version: string; transaction: boolean; readOnly: boolean; identity?: SqliteFileIdentity; mode?: 'table-rebuild' }
+  | { kind: 'opened'; id: string; version: string; transaction: boolean; readOnly: boolean; identity?: SqliteFileIdentity; copySourceIdentity?: SqliteFileIdentity; mode?: SqliteWorkerOpenOptions['mode'] }
   | { kind: 'statement'; id: string; frame: number; index: number; sql: string; columns: SqliteColumn[]; title?: string }
   | { kind: 'batch'; id: string; frame: number; index: number; rows: SqliteValue[][] }
   | { kind: 'rebuildProgress'; id: string; frame: number; comparedRows: string; columnGroups: number }

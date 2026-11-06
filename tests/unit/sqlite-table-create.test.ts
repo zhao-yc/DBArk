@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { fork, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -34,16 +34,79 @@ function transport(observe?: (message: SqliteWorkerResponse, forward: () => void
   const record: ProcessRecord = { child, sent: [], kills: 0, exited: new Promise<SqliteProcessExit>(yes => child.once('exit', (code, signal) => yes({ code, signal }))) }; processes.push(record);
   return { send: message => { record.sent.push(message); if (!intercept?.(message)) child.send(message, error => { if (error) child.kill(); }); }, onMessage(listener) { const receive = (message: SqliteWorkerResponse) => observe ? observe(message, () => listener(message), record) : listener(message); child.on('message', receive); return () => child.off('message', receive); }, terminate: () => { record.kills++; return child.kill(); }, exited: record.exited };
 }
-function runtime(profile: SqliteConnectionProfile, createTransport: () => SqliteProcessTransport = transport) { const events: TaskEvent[] = [], app = new SqliteRuntime({ resolveProfile: id => id === profile.id ? profile : undefined, createTransport, emit: event => events.push(structuredClone(event)) }); applications.add(app); return { app, events }; }
+function runtime(profile: SqliteConnectionProfile, createTransport: () => SqliteProcessTransport = transport, sources: SqliteConnectionProfile[] = []) { const events: TaskEvent[] = [], app = new SqliteRuntime({ resolveProfile: id => [profile, ...sources].find(value => value.id === id), createTransport, emit: event => events.push(structuredClone(event)) }); applications.add(app); return { app, events }; }
 function design(name = '新"表中文'): SqliteTableCreateDesign { return { name, columns: [{ name: 'id', declaredType: 'INTEGER', nullable: false, default: { kind: 'none' } }, { name: 'note', declaredType: 'TEXT', nullable: true, default: { kind: 'text', value: "默认'中文\0🚢" } }, { name: 'payload', declaredType: 'BLOB', nullable: true, default: { kind: 'blob', value: '00ff' } }], primaryKey: ['id'], autoIncrement: true, indexes: [{ name: '索引_' + name, unique: false, columns: [{ name: 'note', order: 'asc' }] }], foreignKeys: [], strict: true, withoutRowid: false }; }
 function preview(app: SqliteRuntime, profile: SqliteConnectionProfile, value = design(), assertCurrent = () => {}): Promise<SqliteTableCreatePreviewOutput> { return app.request('sqlite.tableCreate.preview', { connectionId: profile.id, database: 'main', taskId: '建表预览' + ++serial, design: value, assertCurrent }); }
-function copyPreview(app: SqliteRuntime, profile: SqliteConnectionProfile, source: string, name: string, mode: 'structure' | 'data' = 'data'): Promise<SqliteTableCreatePreviewOutput> {
-  return app.request('sqlite.tableCreate.preview', { connectionId: profile.id, database: 'main', taskId: '复制预览' + ++serial, copy: { source, name, mode }, assertCurrent: () => {} });
+function copyPreview(app: SqliteRuntime, profile: SqliteConnectionProfile, source: string, name: string, mode: 'structure' | 'data' = 'data', sourceConnectionId?: string): Promise<SqliteTableCreatePreviewOutput> {
+  return app.request('sqlite.tableCreate.preview', { connectionId: profile.id, database: 'main', taskId: '复制预览' + ++serial, copy: { source, name, mode, ...(sourceConnectionId ? { sourceConnectionId } : {}) }, assertCurrent: () => {} });
 }
 function apply(app: SqliteRuntime, value: SqliteTableCreatePreviewOutput, record?: (fact: SqliteTableCreateFact) => void) { const facts: SqliteTableCreateFact[] = [], input: SqliteTableCreateApplyRequest = { previewId: value.previewId, taskId: '建表提交' + ++serial, confirmation: value.confirmation, operationId: '操作' + serial, assertCurrent: () => {}, recordCreateFact: fact => { record?.(fact); facts.push(structuredClone(fact)); } }; return { input, facts, result: app.request('sqlite.tableCreate.apply', input) as Promise<SqliteTableCreateOutcome> }; }
 function exists(profile: SqliteConnectionProfile, name: string): number { return disk(profile, db => Number(db.prepare('SELECT count(*) AS n FROM sqlite_schema WHERE name=?').get(name)!.n)); }
 
 describe('SQLite可视化建表真实只读预览、准确原子提交与一次性能力', () => {
+  it('从只读源跨文件创建同名副本，保留精确类型并确认来源文件无写入', async () => {
+    const target = fixture(), source = fixture(); source.id = '已保存只读来源'; source.sqlite.readOnly = true;
+    const original = source.sqlite.filePath!, special = join(dirname(original), '带#和%来源.sqlite');
+    renameSync(original, special); source.sqlite.filePath = special;
+    disk(source, db => db.exec(`CREATE TABLE shared(id INTEGER PRIMARY KEY, parent INTEGER REFERENCES shared(id), value ANY,
+      generated TEXT AS (typeof(value)) STORED) STRICT;
+      CREATE INDEX original_index ON shared(id) WHERE parent IS NULL;
+      INSERT INTO shared VALUES(9007199254740993,NULL,-0.0),(9223372036854775807,9007199254740993,X'00FF');`));
+    const { app } = runtime(target, transport, [source]);
+    const structure = await copyPreview(app, target, 'shared', 'empty_copy', 'structure', source.id);
+    expect(exists(target, 'empty_copy')).toBe(0);
+    expect(await apply(app, structure).result).toMatchObject({ outcome: 'committed' });
+    expect(disk(target, db => db.prepare('SELECT count(*) AS n FROM empty_copy').get()?.n)).toBe(0);
+    const plan = await copyPreview(app, target, 'shared', 'shared', 'data', source.id);
+    expect(plan.sql.at(-1)).toContain('FROM dbark_copy_source."shared"');
+    expect(plan.sql.join('\n')).not.toContain(special);
+    expect(exists(target, 'shared')).toBe(0);
+    disk(source, db => db.exec("INSERT INTO shared VALUES(-9223372036854775808,NULL,'0007')"));
+    const sourceBytes = readFileSync(special);
+    expect(await apply(app, plan).result).toMatchObject({ outcome: 'committed', definitionVerified: true, message: expect.stringContaining('已复制 3 行') });
+    expect(readFileSync(special)).toEqual(sourceBytes);
+    const read = (profile: SqliteConnectionProfile) => disk(profile, db => db.prepare('SELECT CAST(id AS TEXT) AS id, value, generated FROM shared ORDER BY shared.id').all());
+    expect(read(target)).toEqual(read(source));
+    expect(Object.is(read(target)[1].value, -0)).toBe(true);
+    expect(disk(source, db => db.prepare('SELECT name FROM sqlite_schema WHERE type=\'index\'').all())).toEqual([{ name: 'original_index' }]);
+    expect(processes.every(process => process.kills === 0)).toBe(true);
+  });
+
+  it('拒绝跨文件外键误绑、同物理文件别名和预览后更换原文件', async () => {
+    const target = fixture(), source = fixture(); source.id = '迁移来源';
+    const alias = { ...target, id: '目标别名' };
+    disk(source, db => db.exec('CREATE TABLE external_ref(id INTEGER REFERENCES base(id))'));
+    const { app } = runtime(target, transport, [source, alias]);
+    await expect(copyPreview(app, target, 'external_ref', '误绑', 'structure', source.id)).rejects.toThrow('外部表');
+    await expect(copyPreview(app, target, 'base', '别名副本', 'structure', alias.id)).rejects.toThrow('同一 SQLite 文件');
+    const stale = await copyPreview(app, target, 'base', '陈旧目录', 'data', source.id);
+    disk(source, db => db.exec('CREATE INDEX changed_source ON base(note)'));
+    expect(await apply(app, stale).result).toMatchObject({ outcome: 'rolled-back', fact: { completedStatements: 0 } });
+    const replaced = await copyPreview(app, target, 'base', '换文件', 'data', source.id);
+    renameSync(source.sqlite.filePath!, join(dirname(source.sqlite.filePath!), 'original.sqlite'));
+    disk(source, db => db.exec('CREATE TABLE base(id INTEGER PRIMARY KEY,note TEXT)'));
+    expect(await apply(app, replaced).result).toMatchObject({ outcome: 'not-sent', fact: { completedStatements: 0 } });
+    expect(exists(target, '换文件')).toBe(0);
+  });
+
+  it('关闭复制来源会等待原跨文件事务回滚并撤销旧预览', async () => {
+    const target = fixture(), source = fixture(), reached = deferred<void>(); source.id = '关闭中的来源';
+    disk(source, db => db.exec("INSERT INTO base VALUES(6,'保留')"));
+    const { app } = runtime(target, () => transport((message, forward) => {
+      if (message.kind === 'statement' && message.sql.startsWith('INSERT OR ABORT INTO')) reached.resolve();
+      else forward();
+    }), [source]);
+    const stale = await copyPreview(app, target, 'base', '旧预览', 'structure', source.id);
+    const plan = await copyPreview(app, target, 'base', '停止副本', 'data', source.id);
+    const operation = apply(app, plan);
+    await reached.promise;
+    await app.request('connections.close', { id: source.id });
+    expect(await operation.result).toMatchObject({ outcome: 'rolled-back', fact: { completedStatements: 1, rollbackAcknowledged: true } });
+    await expect(apply(app, stale).result).rejects.toThrow('失效');
+    expect(exists(target, '停止副本')).toBe(0);
+    expect(disk(source, db => db.prepare('SELECT id,note FROM base').get())).toEqual({ id: 6, note: '保留' });
+  });
+
   it('同文件复制精确结构和当前完整数据，重新绑定自引用且独立分配 AUTOINCREMENT', async () => {
     const profile = fixture(), { app } = runtime(profile);
     disk(profile, db => db.exec(`CREATE TABLE [原.表](id INTEGER PRIMARY KEY AUTOINCREMENT, parent INTEGER REFERENCES [原.表](id),

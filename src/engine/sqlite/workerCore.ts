@@ -2,7 +2,7 @@ import { closeSync, fstatSync, openSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { constants, DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteWorkerOpenOptions, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteWorkerOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
+import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteWorkerOpenOptions, sqliteCopySourceSchema, sqliteDriverLimits as limits, sqliteExportTextFunction, type SqliteCreateGuard, type SqliteColumn, type SqliteExecutionOptions, type SqliteWorkerOpenOptions, type SqliteStatementResult, type SqliteValue, type SqliteWorkerRequest, type SqliteWorkerResponse } from './protocol';
 import { queryResultTitle, queryResultTitlePrefixLimit } from '../../shared/queryResultTitle';
 import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, compareSqliteRebuildTables, SqliteRebuildComparisonError } from './rebuildComparison';
 import { queryParameterLimits } from '../../shared/queryParameters';
@@ -154,7 +154,7 @@ export class SqliteWorkerCore {
   /** 只接受现存绝对普通文件；URI mode=rw/ro禁止SQLite默认的缺文件自动创建。 */
   private open(id: string, rawOptions: SqliteWorkerOpenOptions): void {
     if (this.db) { this.failure(id, invalid()); return; }
-    let descriptor: number | undefined, opened: DatabaseSync | undefined;
+    let descriptor: number | undefined, sourceDescriptor: number | undefined, opened: DatabaseSync | undefined;
     try {
       const options = copySqliteWorkerOpenOptions(rawOptions), rebuild = options.mode === 'table-rebuild';
       if (!object(options) || typeof options.path !== 'string' || !unicode(options.path) || !isAbsolute(options.path) || typeof options.readOnly !== 'boolean' || !integer(options.busyTimeoutMs, 0, 5000)) throw invalid();
@@ -184,6 +184,23 @@ export class SqliteWorkerCore {
       const schema = opened.prepare('PRAGMA main.schema_version').get(); if (!schema || typeof Object.values(schema)[0] !== 'number') throw invalid();
       const versionRow = opened.prepare('SELECT sqlite_version() AS version').get();
       if (!versionRow || typeof versionRow.version !== 'string' || versionRow.version.length > 100) throw invalid();
+      let copySourceIdentity;
+      if (options.sourcePath) {
+        if (!unicode(options.sourcePath) || !isAbsolute(options.sourcePath)) throw invalid();
+        const sourcePath = realpathSync.native(options.sourcePath);
+        sourceDescriptor = openSync(sourcePath, 'r');
+        const sourceBefore = fstatSync(sourceDescriptor, { bigint: true });
+        if (!sourceBefore.isFile() || sourceBefore.dev === before.dev && sourceBefore.ino === before.ino)
+          throw new DriverFailure('SQLITE_COPY_SAME_FILE', '来源和目标指向同一 SQLite 文件，请选择本文件复制');
+        // 只在独立任务启动时运行固定 ATTACH，URI 和磁盘路径均来自已授权的 Main 配置。
+        const sourceUri = pathToFileURL(sourcePath); sourceUri.searchParams.set('mode', 'ro');
+        try { opened.prepare('ATTACH ? AS ' + sqliteCopySourceSchema).run(sourceUri.href); }
+        catch { throw new DriverFailure('SQLITE_COPY_SOURCE_OPEN', 'SQLite 复制来源无法只读打开，请核对文件、锁状态和两端数据库编码'); }
+        const location = opened.location(sqliteCopySourceSchema);
+        const sourceAfter = statSync(sourcePath, { bigint: true });
+        if (!location || realpathSync.native(location) !== sourcePath || !sourceAfter.isFile() || sourceBefore.dev !== sourceAfter.dev || sourceBefore.ino !== sourceAfter.ino) throw invalid();
+        copySourceIdentity = { path: sourcePath, device: sourceBefore.dev.toString(), inode: sourceBefore.ino.toString() };
+      }
       {
         const encoding = Object.values(opened.prepare('PRAGMA encoding').get() ?? {})[0];
         const label = encoding === 'UTF-8' ? 'utf-8' : encoding === 'UTF-16le' ? 'utf-16le' : encoding === 'UTF-16be' ? 'utf-16be' : undefined;
@@ -203,7 +220,7 @@ export class SqliteWorkerCore {
         });
       }
       // 读写连接也须在原生prepare之前拦截副作用PRAGMA；多句参数检查和消费者ACK都发生得更晚。
-      // 所有连接只拥有Main选中的单个磁盘库；ATTACH/DETACH及VACUUM INTO不能另取文件能力。
+      // 执行阶段仍拒绝任何 ATTACH/DETACH。私有来源即使存在，也只授权读取。
       opened.setAuthorizer((action, first, second, database, source) => {
         const nativeControl = second?.toLowerCase() === sqliteNativeFunction;
         // 内部只编译固定的SELECT函数壳；函数内用户SQL的prepare必须重新经过原权限判断。
@@ -214,17 +231,18 @@ export class SqliteWorkerCore {
           const restoring = this.restoringRebuildFlags && rebuild && source === null && (first === 'foreign_keys' && second === 'ON' || first === 'legacy_alter_table' && second === 'OFF');
           return restoring || readablePragma(first, second) ? constants.SQLITE_OK : constants.SQLITE_DENY;
         }
+        if (database === sqliteCopySourceSchema && action !== constants.SQLITE_READ) return constants.SQLITE_DENY;
         if (options.readOnly && ![constants.SQLITE_READ, constants.SQLITE_SELECT, constants.SQLITE_FUNCTION, constants.SQLITE_RECURSIVE, constants.SQLITE_TRANSACTION, constants.SQLITE_SAVEPOINT].includes(action)) return constants.SQLITE_DENY;
         if (this.guardedCreate) return this.authorizeCreate(action, first, second, database, source);
         return constants.SQLITE_OK;
       });
       this.nativeInvoke = createSqliteNativeInvoke(opened, value => { this.preparingNativeControl = value; });
       this.db = opened; this.readOnly = options.readOnly; this.rebuildWriter = rebuild; opened = undefined;
-      this.port.send({ kind: 'opened', id, version: versionRow.version, transaction: this.transaction(), readOnly: options.readOnly, identity: { path, device: before.dev.toString(), inode: before.ino.toString() }, ...(rebuild ? { mode: 'table-rebuild' as const } : {}) });
+      this.port.send({ kind: 'opened', id, version: versionRow.version, transaction: this.transaction(), readOnly: options.readOnly, identity: { path, device: before.dev.toString(), inode: before.ino.toString() }, ...(options.mode ? { mode: options.mode } : {}), ...(copySourceIdentity ? { copySourceIdentity } : {}) });
     } catch (error) {
       try { opened?.close(); } catch {}
       this.failure(id, error instanceof DriverFailure ? error : new DriverFailure('SQLITE_OPEN_FAILED', 'SQLite文件打开失败或当前运行时不支持所需原生能力'));
-    } finally { if (descriptor !== undefined) { try { closeSync(descriptor); } catch { this.port.exit(1); } } }
+    } finally { for (const file of [descriptor, sourceDescriptor]) if (file !== undefined) { try { closeSync(file); } catch { this.port.exit(1); } } }
   }
 
   /** 正常关闭前恢复保护必须位于事务外；恢复失败不发送closed，更不冒充COMMIT/ROLLBACK。 */

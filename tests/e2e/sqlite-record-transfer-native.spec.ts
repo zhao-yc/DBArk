@@ -178,6 +178,47 @@ test('只读 SQLite 查询逐格保留存储类型并跨文件追加', async ({}
     await expect(table.getByRole('grid', { name: editText.grid, exact: true })).toHaveAttribute('aria-rowcount', '3');
     await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).filter(task => task.status === 'running')).toEqual([]);
     await mark('SQLite 同文件整表复制，预览零写入，确认后独立读回两行并打开副本');
+    await sourceTable.locator('.tree-label').dblclick();
+    await (await navigationMenuItem(table, { name: copyText.copyTitle, exact: true }, check)).click();
+    const destination = copy.getByLabel(copyText.copyDestination, { exact: true });
+    const writable = destination.getByRole('option', { name: /跨文件 SQLite 写入目标/ });
+    await expect(writable).toHaveCount(1);
+    await destination.selectOption({ label: (await writable.textContent())! });
+    await expect(copy).toContainText('跨文件 SQLite 只读源');
+    await copy.getByLabel(copyText.name, { exact: true }).fill('跨文件整表副本');
+    await copy.getByLabel(copyText.copyMode, { exact: true }).selectOption('data');
+    await copy.getByRole('button', { name: copyText.copyPreview, exact: true }).click();
+    await expect(copy).toContainText('FROM dbark_copy_source."records"');
+    const inspectCopy = (file: string, name: 'records' | '跨文件整表副本') => {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try {
+        if (!db.prepare('SELECT 1 FROM sqlite_schema WHERE name=?').get(name)) return null;
+        return db.prepare(`SELECT rowid, memo, CAST(exact AS TEXT) AS exact, typeof(mixed) AS kind, hex(mixed) AS bytes,
+          signed_zero, exceptional, note FROM "${name}" ORDER BY rowid`).all().map(row => ({ ...row,
+          signed_zero: Object.is(row.signed_zero, -0) ? '-0' : String(row.signed_zero),
+          exceptional: row.exceptional === null ? null : String(row.exceptional),
+        }));
+      } finally { db.close(); }
+    };
+    const originalRows = inspectCopy(sourceFile, 'records');
+    expect(originalRows).toHaveLength(3);
+    expect(inspectCopy(targetFile, '跨文件整表副本')).toBeNull();
+    await expect(page.locator('.toast')).toBeHidden({ timeout: 10000 });
+    await page.screenshot({ path: info.outputPath('SQLite跨文件整表复制预览.png') });
+    await copy.getByLabel(copyText.confirmation, { exact: true }).fill('main.跨文件整表副本');
+    await copy.getByRole('button', { name: copyText.copyApply, exact: true }).click();
+    await expect(copy.getByRole('status')).toContainText('已复制 3 行');
+    const targetRows = inspectCopy(targetFile, '跨文件整表副本');
+    expect(targetRows).toEqual(originalRows);
+    expect(inspectCopy(sourceFile, 'records')).toEqual(originalRows);
+    expect(readTarget()).toHaveLength(2);
+    await writeFile(info.outputPath('SQLite跨文件整表独立读回.json'), JSON.stringify(targetRows, null, 2));
+    await copy.getByRole('button', { name: copyText.close, exact: true }).click();
+    await expect(copy).toBeHidden();
+    await expect(page.locator('.tab-select').getByText('跨文件整表副本', { exact: true })).toBeVisible();
+    await expect(table.getByRole('grid', { name: editText.grid, exact: true })).toHaveAttribute('aria-rowcount', '4');
+    await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).filter(task => task.status === 'running')).toEqual([]);
+    await mark('SQLite 从只读连接跨文件整表复制，预览零写入，独立读回三行并确认来源保持');
     const quitDialogs: string[] = [];
     const observeDialog = (message: { text(): string }) => {
       if (message.text().startsWith('DBARK_E2E_DIALOG:')) quitDialogs.push(message.text());

@@ -2,7 +2,7 @@ import type { DataRow, QueryResult } from '../shared/contracts';
 import { createHash } from 'node:crypto';
 import { sqliteTableBrowseLimits as limits, sqliteLastPagePosition, sqliteRowCountSchema, sqliteTablePageSchema, type SqliteTableColumn, type SqliteTableFilter, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
-import { sqliteExportTextFunction, type SqliteColumn, type SqliteValue } from '../engine/sqlite/protocol';
+import { sqliteCopySourceSchema, sqliteExportTextFunction, type SqliteColumn, type SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import type { SqliteTableEditPage } from '../shared/sqliteTableEdit';
 import { buildSqliteReadPlan, buildSqliteRelationPredicate, quoteSqliteIdentifier } from '../shared/sqliteReadSql';
@@ -91,10 +91,11 @@ export async function countSqliteMatchingRows(driver: SqliteDriverSession, input
 }
 
 /** 调用方已BEGIN；精确目录和完整xinfo属于同一物理读快照，导出和分页共享来源指纹。 */
-export async function readSqliteTableCatalogue(driver: SqliteDriverSession, table: string, control: SqliteTableBrowseControl): Promise<SqliteTableCatalogue> {
-  const objects = await rows(driver, "SELECT name,type,sql FROM main.sqlite_schema WHERE name = ? COLLATE BINARY AND type IN ('table','view') LIMIT 2", [table], 2, control);
+export async function readSqliteTableCatalogue(driver: SqliteDriverSession, table: string, control: SqliteTableBrowseControl, schema: 'main' | typeof sqliteCopySourceSchema = 'main'): Promise<SqliteTableCatalogue> {
+  const actualSchema = schema === sqliteCopySourceSchema ? sqliteCopySourceSchema : 'main';
+  const objects = await rows(driver, `SELECT name,type,sql FROM ${actualSchema}.sqlite_schema WHERE name = ? COLLATE BINARY AND type IN ('table','view') LIMIT 2`, [table], 2, control);
   if (objects.length !== 1 || objects[0][0] !== table || !['table', 'view'].includes(String(objects[0][1])) || typeof objects[0][2] !== 'string') throw Error('SQLite目标表或视图已不存在，请刷新对象目录');
-  const catalogue = await rows(driver, 'SELECT cid,name,type,"notnull",dflt_value,pk,hidden FROM pragma_table_xinfo(?, \'main\') ORDER BY cid LIMIT ?', [table, { type: 'integer', value: String(limits.columns + 1) }], limits.columns + 1, control);
+  const catalogue = await rows(driver, `SELECT cid,name,type,"notnull",dflt_value,pk,hidden FROM pragma_table_xinfo(?, '${actualSchema}') ORDER BY cid LIMIT ?`, [table, { type: 'integer', value: String(limits.columns + 1) }], limits.columns + 1, control);
   if (!catalogue.length || catalogue.length > limits.columns) throw Error('SQLite表没有可浏览列或列目录超过预算');
   const columns: SqliteTableColumn[] = [];
   for (const row of catalogue) {

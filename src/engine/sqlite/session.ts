@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteOpenOptions, sqliteDriverLimits as limits, type SqliteCreateGuard, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteWorkerOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
+import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteOpenOptions, copySqliteWorkerOpenOptions, sqliteDriverLimits as limits, type SqliteCreateGuard, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteWorkerOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
 import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, type SqliteRebuildComparisonInput, type SqliteRebuildComparisonResult } from './rebuildComparison';
 
 /** 进程中断只证明连接已释放；事务/提交结果未知时不能伪造ROLLBACK成功。 */
@@ -51,6 +51,7 @@ export class SqliteDriverSession {
   private transactionValue: boolean | null = null;
   private versionValue = '';
   private identityValue?: SqliteFileIdentity;
+  private copySourceIdentityValue?: SqliteFileIdentity;
 
   private constructor(private readonly transport: SqliteProcessTransport, private readonly options: SqliteWorkerOpenOptions) {
     this.unsubscribe = transport.onMessage(message => this.receive(message));
@@ -79,6 +80,10 @@ export class SqliteDriverSession {
     const normal = copySqliteOpenOptions(options); if (normal.readOnly) throw Error('SQLite重建writer不能以只读模式打开');
     return this.openOwned(create, { ...normal, mode: 'table-rebuild' });
   }
+  /** 只有复制任务能在启动时给原生连接附加一个只读文件。 */
+  static async openTableCopy(create: () => SqliteProcessTransport, options: SqliteOpenOptions, sourcePath: string): Promise<SqliteDriverSession> {
+    return this.openOwned(create, copySqliteWorkerOpenOptions({ ...copySqliteOpenOptions(options), mode: 'table-copy', sourcePath }));
+  }
   private static async openOwned(create: () => SqliteProcessTransport, options: SqliteWorkerOpenOptions): Promise<SqliteDriverSession> {
     const session = new SqliteDriverSession(create(), options);
     try { await session.openResult.promise; return session; }
@@ -97,6 +102,7 @@ export class SqliteDriverSession {
   get isRebuildWriter(): boolean { return this.options.mode === 'table-rebuild'; }
   /** 返回副本防调用方改写，旧无身份协议只允许原查询，不能签发编辑能力。 */
   get identity(): SqliteFileIdentity | undefined { return this.identityValue ? { ...this.identityValue } : undefined; }
+  get copySourceIdentity(): SqliteFileIdentity | undefined { return this.copySourceIdentityValue ? { ...this.copySourceIdentityValue } : undefined; }
   private error(message: string, code: string, completed = this.active?.results.length ?? 0, results: readonly SqliteStatementResult[] = this.active?.results ?? []): SqliteDriverError { return new SqliteDriverError(message, code, this.exited ? null : this.transactionValue, completed, this.exited, results); }
 
   /** 同一物理连接不并行执行；每个批次等消费者完成后才确认，不无限积压结果。 */
@@ -190,6 +196,9 @@ export class SqliteDriverSession {
       if (message.kind === 'opened') {
         if (message.id !== this.openId || this.opened || message.readOnly !== this.options.readOnly || typeof message.version !== 'string' || message.mode !== this.options.mode || this.isRebuildWriter && message.transaction !== false) throw Error('SQLite打开回执不匹配');
         if (message.identity && (typeof message.identity.path !== 'string' || !message.identity.path || !/^[0-9]+$/.test(message.identity.device) || !/^[0-9]+$/.test(message.identity.inode))) throw Error('SQLite打开文件身份无效');
+        const source = message.copySourceIdentity;
+        if (this.options.mode === 'table-copy' ? !message.identity || message.transaction !== false || !source || typeof source.path !== 'string' || !source.path || !/^[0-9]+$/.test(source.device) || !/^[0-9]+$/.test(source.inode) || source.device === message.identity.device && source.inode === message.identity.inode : source !== undefined) throw Error('SQLite复制源文件身份无效');
+        this.copySourceIdentityValue = source ? { ...source } : undefined;
         this.identityValue = message.identity ? { ...message.identity } : undefined;
         this.opened = true; this.versionValue = message.version; this.transactionValue = message.transaction; this.openResult.resolve(); return;
       }

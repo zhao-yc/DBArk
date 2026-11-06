@@ -80,7 +80,7 @@ import { TableCopyDataDialog } from './components/TableCopyDataDialog';
 import { tableCopyDataServices, assertTableCopyDataTargetAvailable } from './tableCopyDataServices';
 import { tableCopyDataZh } from './locales/tableCopyData.zh-CN';
 import type { TableCreateApplyOutput } from '../shared/tableCreate';
-import { SqliteTableCreateDialog } from './components/SqliteTableCreateDialog';
+import { SqliteTableCopyDialog } from './components/SqliteTableCreateDialog';
 import type { SqliteTableCreateOutcome } from '../shared/sqliteTableCreate';
 import { sqliteTableCreateZh } from './locales/sqliteTableCreate.zh-CN';
 import { tableCreateZh } from './locales/tableCreate.zh-CN';
@@ -1077,7 +1077,7 @@ function WorkspaceApp() {
         if ((current.connectionVersions[schema.connectionId] ?? 0) !== version) return;
         refreshRenameDatabase({ connectionId: schema.connectionId, database: schema.database, table: name });
         setDdl({ connectionId: schema.connectionId, database: schema.database, object: { kind: 'sequence', name } });
-      }}/> : schema.copySqliteTable ? <SqliteTableCreateDialog key={JSON.stringify([schema.connectionId, schema.copySqliteTable])}
+      }}/> : schema.copySqliteTable ? <SqliteTableCopyDialog key={JSON.stringify([schema.connectionId, schema.copySqliteTable])}
       connectionId={schema.connectionId} database={schema.database} copySource={schema.copySqliteTable}
       onDirtyChange={setTableCreateEdits} onCreated={finishSqliteTableCreate}
       onClose={() => { setSchema(null); setTableCreateEdits(false); }}/> : schema.copyPostgresTable ? <PostgresTableCopyDialog key={JSON.stringify([schema.connectionId, schema.database, schema.copyPostgresTable])}
