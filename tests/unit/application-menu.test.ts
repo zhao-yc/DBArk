@@ -25,7 +25,8 @@ describe('原生菜单状态与原文档命令归属', () => {
     expect(fixture('darwin').current().map(item => item.label)).toEqual(['tabrelio', '文件', '编辑', '查看', '收藏夹', '工具', '窗口', '帮助']);
     expect(windows.find('execute')?.enabled).toBe(false);
     expect(windows.find('backup-archive')).toMatchObject({ label: '打开数据库备份归档', enabled: false });
-    expect(JSON.stringify(windows.current()).replace('"label":"打开数据库备份归档"', '')).not.toMatch(/BI|自动运行|用户管理|模型|备份/);
+    expect(windows.find('postgres-table-backup')).toMatchObject({ label: 'PostgreSQL 多表备份', enabled: false });
+    expect(JSON.stringify(windows.current()).replace('"label":"打开数据库备份归档"', '').replace('"label":"PostgreSQL 多表备份"', '')).not.toMatch(/BI|自动运行|用户管理|模型|备份/);
     const edit = windows.current().find(item => item.label === '编辑')!.submenu as MenuItemConstructorOptions[];
     expect(edit.filter(item => item.role).map(item => item.role)).toEqual(['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);
     expect(edit.filter(item => item.id?.startsWith('sql-')).map(item => [item.id, item.enabled])).toEqual([['sql-goto-line', false], ['sql-goto-bracket', false], ['sql-select-bracket', false], ['sql-toggle-comment', false], ['sql-uppercase', false], ['sql-lowercase', false], ['sql-selection-to-snippet', false]]);

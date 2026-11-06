@@ -7,6 +7,23 @@ import type { PostgresTableBackupSql } from './sqlExport';
 const budget = { rows: 2048, bytes: 2 * 1024 * 1024 };
 const integer = /^-?\d{1,19}$/;
 const qualify = (schema: string, name: string) => postgresIdentifier(schema) + '.' + postgresIdentifier(name);
+const eligibleTable = `c.relkind = 'r' AND c.relpersistence = 'p'
+  AND NOT c.relispartition AND NOT c.relrowsecurity AND NOT c.relhasrules
+  AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid)
+  AND pg_catalog.has_table_privilege(c.oid, 'SELECT')`;
+
+/** 目录只列出可备份的普通表，包括没有主键的表。执行仍在真实锁和事务下复核。 */
+export async function readPostgresBackupCatalogue(connection: PostgresConnection): Promise<string[]> {
+  const result = await connection.query(`
+    SELECT n.nspname, c.relname FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+      AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND ${eligibleTable}
+    ORDER BY n.nspname, c.relname LIMIT 10001
+  `, undefined, { rows: 10001, bytes: 4 * 1024 * 1024 });
+  if (result.truncated || result.rows.length > 10000) throw Error('PostgreSQL 备份目录超出显示预算');
+  return result.rows.map(row => qualify(String(row.c0), String(row.c1)));
+}
 
 /** 只重建由当前表拥有的序列。其它默认值依赖目标库现有对象，不由备份改写。 */
 async function ownedSequences(connection: PostgresConnection, oid: string) {
@@ -47,10 +64,7 @@ export async function readPostgresTableBackup(connection: PostgresConnection, ta
   const guard = await connection.query(`
     SELECT am.amname
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_am am ON am.oid = c.relam
-    WHERE c.oid = $1::oid AND c.relkind = 'r' AND c.relpersistence = 'p'
-      AND NOT c.relispartition AND NOT c.relrowsecurity AND NOT c.relhasrules
-      AND NOT EXISTS (SELECT FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid)
-      AND pg_catalog.has_table_privilege(c.oid, 'SELECT')
+    WHERE c.oid = $1::oid AND ${eligibleTable}
   `, [expectedOid], budget);
   const method = guard.rows[0]?.c0;
   if (guard.truncated || guard.rows.length !== 1 || typeof method !== 'string')
@@ -67,9 +81,9 @@ export async function readPostgresTableBackup(connection: PostgresConnection, ta
 
   const name = qualify(output.schema, output.name);
   const sequences = await ownedSequences(connection, oid);
-  const beforeData: string[] = [], afterData: string[] = [];
+  const sequenceDdl: string[] = [], defaults: string[] = [], afterData: string[] = [], foreignKeys: string[] = [], finalize: string[] = [];
   for (const sequence of sequences.values()) {
-    if (!sequence.identity) beforeData.push(`CREATE SEQUENCE ${sequence.name} AS ${sequence.type} ${sequence.options}`);
+    if (!sequence.identity) sequenceDdl.push(`CREATE SEQUENCE ${sequence.name} AS ${sequence.type} ${sequence.options}`);
   }
   const definitions = output.columns.map(column => {
     const identifier = postgresIdentifier(column.name), sequence = sequences.get(column.name);
@@ -81,13 +95,16 @@ export async function readPostgresTableBackup(connection: PostgresConnection, ta
     } else if (column.generation) {
       if (!column.generationExpression) throw Error('PostgreSQL 生成列表达式未完整读取');
       declaration += ` GENERATED ALWAYS AS (${column.generationExpression}) ${column.generation === 's' ? 'STORED' : 'VIRTUAL'}`;
-    } else if (column.defaultExpression !== null) declaration += ' DEFAULT ' + column.defaultExpression;
+    } else if (column.defaultExpression !== null) {
+      // 多表的默认值可能引用另一所选表的标识序列，所有建表完成后再装配默认值。
+      defaults.push(`ALTER TABLE ONLY ${name} ALTER COLUMN ${identifier} SET DEFAULT ${column.defaultExpression}`);
+    }
     if (!column.nullable) declaration += ' NOT NULL';
     if (sequence && !sequence.identity) afterData.push(`ALTER SEQUENCE ${sequence.name} OWNED BY ${name}.${identifier}`);
     if (column.comment !== null) afterData.push(`COMMENT ON COLUMN ${name}.${identifier} IS ${postgresDdlLiteral(column.comment)}`);
     return declaration;
   });
-  beforeData.push(`CREATE TABLE ${name} (\n  ${definitions.join(',\n  ')}\n) USING ${postgresIdentifier(method)}`);
+  const createTable = `CREATE TABLE ${name} (\n  ${definitions.join(',\n  ')}\n) USING ${postgresIdentifier(method)}`;
   if (output.comment !== null) afterData.push(`COMMENT ON TABLE ${name} IS ${postgresDdlLiteral(output.comment)}`);
   const constraints = output.constraints.filter(item => item.kind !== 'n');
   for (const item of constraints.filter(item => item.kind !== 'f')) {
@@ -98,7 +115,7 @@ export async function readPostgresTableBackup(connection: PostgresConnection, ta
   }
   // 自引用外键可以依赖本表单独创建的唯一索引，必须在索引之后恢复。
   for (const item of constraints.filter(item => item.kind === 'f')) {
-    afterData.push(`ALTER TABLE ONLY ${name} ADD CONSTRAINT ${postgresIdentifier(item.name)} ${item.definition}`);
+    foreignKeys.push(`ALTER TABLE ONLY ${name} ADD CONSTRAINT ${postgresIdentifier(item.name)} ${item.definition}`);
   }
   const triggers = await connection.query(`
     SELECT tgname, pg_catalog.pg_get_triggerdef(oid, false), tgenabled
@@ -109,10 +126,10 @@ export async function readPostgresTableBackup(connection: PostgresConnection, ta
   for (const row of triggers.rows) {
     if (typeof row.c0 !== 'string' || typeof row.c1 !== 'string' || !states.has(String(row.c2)))
       throw Error('PostgreSQL 用户触发器定义未完整返回');
-    afterData.push(row.c1);
+    finalize.push(row.c1);
     const state = states.get(String(row.c2));
-    if (state) afterData.push(`ALTER TABLE ONLY ${name} ${state} TRIGGER ${postgresIdentifier(row.c0)}`);
+    if (state) finalize.push(`ALTER TABLE ONLY ${name} ${state} TRIGGER ${postgresIdentifier(row.c0)}`);
   }
-  for (const sequence of sequences.values()) afterData.push(sequence.state);
-  return { beforeData, afterData };
+  for (const sequence of sequences.values()) finalize.push(sequence.state);
+  return { sequences: sequenceDdl, table: createTable, defaults, afterData, foreignKeys, finalize };
 }

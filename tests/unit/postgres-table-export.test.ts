@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { postgresTableExportChooseSchema, postgresTableExportExtension, postgresTableExportSchema } from '../../src/shared/postgresTable';
+import { postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportExtension, postgresTableExportSchema } from '../../src/shared/postgresTable';
 
 const request = {
   connectionId: '连接', database: '库', table: '"模式"."表"', tabId: '标签', taskId: randomUUID(), fileToken: randomUUID(),
@@ -35,5 +35,15 @@ describe('PostgreSQL 表页导出协议', () => {
     for (const suggestedName of ['../表.json', 'C:\\表.json', '/表.json']) {
       expect(postgresTableExportChooseSchema.safeParse({ format: 'json', suggestedName }).success).toBe(false);
     }
+  });
+
+  it('多表备份只接收唯一、限定 schema 的目录表名和文件令牌', () => {
+    const { connectionId, database, fileToken, taskId } = request;
+    const backup = { connectionId, database, fileToken, taskId, format: 'sql-backup-set', tables: ['"归档"."带""引号"'] };
+    expect(postgresBackupSetSchema.parse(backup)).toEqual(backup);
+    for (const tables of [[], ['public.t'], [backup.tables[0], backup.tables[0]], ['"public"."x"; DROP TABLE foo'], ['"public"."x\0y"']])
+      expect(postgresBackupSetSchema.safeParse({ ...backup, tables }).success).toBe(false);
+    expect(postgresBackupSetSchema.safeParse({ ...backup, filePath: '/private/out.sql' }).success).toBe(false);
+    expect(postgresTableExportExtension('sql-backup-set')).toBe('sql');
   });
 });

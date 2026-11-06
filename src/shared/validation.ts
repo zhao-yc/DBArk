@@ -15,7 +15,7 @@ import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema, postgre
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresTableCopyApplySchema, postgresTableCopyPreviewSchema } from './postgresTableCopy';
 import { postgresStructureInputSchema } from './postgresStructure';
-import { postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
+import { postgresBackupCatalogueSchema, postgresBackupSetSchema, postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
 import { postgresTableHistogramSchema } from './postgresTable';
 import { postgresFilteredUpdateSchema } from './postgresTable';
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
@@ -281,7 +281,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.foreignEdit.targets': postgresForeignTargetsSchema, 'postgres.foreignEdit.preview': postgresForeignPreviewSchema,
   'postgres.foreignEdit.apply': postgresForeignApplySchema,
   'postgres.checkEdit.preview': postgresCheckPreviewSchema, 'postgres.checkEdit.apply': postgresCheckApplySchema,
-  'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': postgresTableExportSchema,
+  'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': z.union([postgresTableExportSchema, postgresBackupSetSchema]),
+  'postgres.backup.catalogue': postgresBackupCatalogueSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,
   'postgres.table.draft.save': postgresTablePreviewSchema,

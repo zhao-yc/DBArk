@@ -32,6 +32,8 @@ import type { PostgresForeignPreviewInput } from '../../shared/postgresForeignKe
 import { preparePostgresCheckEdit } from './checkEdit';
 import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
+import { exportPostgresBackupSet, type PostgresBackupSetRequest } from './tableBackupSet';
+import { readPostgresBackupCatalogue } from './tableBackup';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
 import { comparePostgresSnapshots, configurePostgresCompare, inPostgresCompareSnapshot, readPostgresCompareTable, type PostgresSyncEvidence, type PostgresSyncRow } from './dataCompare';
@@ -432,19 +434,21 @@ export class PostgresEngine {
   }
 
   /** 在第一个等待之前登记文件任务，只有原子替换成功才报告已保存。 */
-  private async exportTable(input: PostgresTableExportRequest, profile: PostgresConnectionProfile) {
+  private async exportTable(input: PostgresTableExportRequest | PostgresBackupSetRequest, profile: PostgresConnectionProfile) {
     if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 导出任务已存在、连接关闭中或已达并发上限');
     const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false };
     const check = () => { if (task.cancelled) throw Error('PostgreSQL 导出已取消'); };
     this.transfers.set(input.taskId, task);
-    const done = task.done = exportPostgresTable(this.tables, input,
-      action => this.use(profile, input.database, async managed => {
-        task.connection = managed;
-        check();
-        return action(managed);
-      }), check, () => { task.publishing = true; },
-      rows => this.emit({ taskId: input.taskId, status: 'running', progress: 50, message: 'PostgreSQL 导出已读取 ' + rows + ' 行' }));
+    const connect = <T>(action: (connection: PostgresConnection) => Promise<T>) => this.use(profile, input.database, async managed => {
+      task.connection = managed;
+      check();
+      return action(managed);
+    });
+    const publish = () => { task.publishing = true; };
+    const progress = (rows: number) => this.emit({ taskId: input.taskId, status: 'running', progress: 50, message: 'PostgreSQL 导出已读取 ' + rows + ' 行' });
+    const done = task.done = input.format === 'sql-backup-set' ? exportPostgresBackupSet(input, connect, check, publish, progress)
+      : exportPostgresTable(this.tables, input, connect, check, publish, progress);
     try {
       const result = await done;
       this.emit({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 导出文件已保存，共 ' + result.rows + ' 行' });
@@ -860,6 +864,11 @@ export class PostgresEngine {
       case 'postgres.compareData': return this.compareData(input);
       case 'postgres.compareData.syncPreview': return this.previewSync(input);
       case 'postgres.compareData.syncApply': return this.applySync(input);
+      case 'postgres.backup.catalogue': {
+        const profile = input.profile as PostgresConnectionProfile;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 备份连接');
+        return this.use(profile, input.database, readPostgresBackupCatalogue);
+      }
       case 'postgres.compareData.catalogue': {
         const profile = input.profile as PostgresConnectionProfile;
         if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 比较连接');
@@ -896,7 +905,8 @@ export class PostgresEngine {
         if (command === 'postgres.table.related' && input.operation === 'close')
           return this.tables.closeRelated(input as Parameters<PostgresTableWorkspace['closeRelated']>[0]);
         const profile = input.profile as PostgresConnectionProfile | undefined;
-        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.owner ||
+        const backupSet = command === 'postgres.table.export' && input.format === 'sql-backup-set';
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !backupSet && !input.owner ||
             !Number.isSafeInteger(input.connectionRevision)) throw Error('缺少可信的PostgreSQL表页连接及原文档');
         const connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing = false) =>
           this.use(profile, input.database, action, false, false, writing);
@@ -905,7 +915,7 @@ export class PostgresEngine {
         if (command === 'postgres.table.related') return input.operation === 'edit'
           ? this.tables.relatedEdit(input as Parameters<PostgresTableWorkspace['relatedEdit']>[0], connect)
           : this.tables.relatedPage(input as Parameters<PostgresTableWorkspace['relatedPage']>[0], connect);
-        if (command === 'postgres.table.export') return this.exportTable(input as PostgresTableExportRequest, profile);
+        if (command === 'postgres.table.export') return this.exportTable(input as PostgresTableExportRequest | PostgresBackupSetRequest, profile);
         if (command === 'postgres.table.import') return this.importTable(input as PostgresTableImportRequest, profile);
         if (command === 'postgres.table.references') return this.tables.references(input as Parameters<PostgresTableWorkspace['references']>[0], connect);
         if (command === 'postgres.table.values') return this.tables.values(input as Parameters<PostgresTableWorkspace['values']>[0], connect);

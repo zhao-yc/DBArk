@@ -226,6 +226,7 @@ async function begin(connection: PostgresConnection, mode: 'page' | 'export' | '
     await connection.query(sql, undefined, small());
   }
 }
+export { begin as beginPostgresTableTransaction };
 
 /** 预览和锁内复核都读完整匹配集合。排序只规范行版本签名，不改变筛选集合。 */
 async function filteredWriteVersions(connection: PostgresConnection, sql: string, values: unknown[]) {
@@ -1034,7 +1035,7 @@ export class PostgresTableWorkspace {
 }
 
 /** 每次读取有界行批，消费完才取下一批，任何截断都使整份文件失败。 */
-async function* readExportCursor(connection: PostgresConnection, columns: PostgresTableColumn[], check: () => void) {
+export async function* readExportCursor(connection: PostgresConnection, columns: PostgresTableColumn[], check: () => void) {
   for (;;) {
     check();
     const batch = await connection.query('FETCH FORWARD 64 FROM dbark_table_export', undefined, { rows: 64, bytes: 64 * 1024 * 1024 });

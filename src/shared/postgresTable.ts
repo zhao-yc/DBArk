@@ -5,6 +5,7 @@ import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, va
 import { strictTableLayoutPreferences } from './tablePreferences';
 import { postgresRelatedTabPrefix } from './postgresRelatedTab';
 import { postgresHistogramBins } from './postgresTableHistogram';
+import { postgresIdentifier, postgresRelationName } from './postgresSql';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -201,14 +202,29 @@ export interface PostgresRelatedTablePage {
   editToken?: string;
 }
 const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup']);
+export const postgresBackupTableLimit = 64;
+export const postgresBackupSetTitle = 'PostgreSQL 多表备份';
+const backupSource = z.object({ connectionId: identity, database: identity }).strict();
+const backupRelation = relation.refine(value => {
+  if (value.includes('\0')) return false;
+  const { schema, name } = postgresRelationName(value);
+  return !!schema && !!name && postgresIdentifier(schema) + '.' + postgresIdentifier(name) === value;
+});
+export const postgresBackupCatalogueSchema = backupSource;
+export const postgresBackupSetSchema = backupSource.extend({
+  taskId: identity, fileToken: token, format: z.literal('sql-backup-set'),
+  tables: z.array(backupRelation).min(1).max(postgresBackupTableLimit).refine(tables => new Set(tables).size === tables.length),
+}).strict();
+export type PostgresBackupSetInput = z.infer<typeof postgresBackupSetSchema>;
+export type PostgresBackupCatalogueInput = z.infer<typeof postgresBackupCatalogueSchema>;
 
 /** 原生 COPY 使用 CSV 扩展名，文件能力仍按具体导出格式绑定。 */
-export function postgresTableExportExtension(format: PostgresTableExportInput['format']) {
-  return format === 'copy' ? 'csv' : format === 'sql-backup' ? 'sql' : format;
+export function postgresTableExportExtension(format: PostgresTableExportChooseInput['format']) {
+  return format === 'copy' ? 'csv' : format === 'sql-backup' || format === 'sql-backup-set' ? 'sql' : format;
 }
 /** 文件能力只由主进程签发，筛选和排序只从原服务端表页读取。 */
 export const postgresTableExportChooseSchema = z.object({
-  format: exportFormat, suggestedName: z.string().min(1).max(240).refine(value => !/[\/\\\u0000-\u001f]/.test(value)),
+  format: exportFormat.or(z.literal('sql-backup-set')), suggestedName: z.string().min(1).max(240).refine(value => !/[\/\\\u0000-\u001f]/.test(value)),
 }).strict();
 export const postgresTableExportSchema = target.extend({
   exportToken: token, taskId: identity, fileToken: token, format: exportFormat,

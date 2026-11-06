@@ -13,7 +13,7 @@ type Source = Parameters<PostgresTableWorkspace['exportData']>;
 export type PostgresTableExportRequest = Source[0] & { filePath: string };
 
 /** PostgreSQL 驱动保留精确文本和字节值，字段超过预算则终止整份文件。 */
-function validateExportRow(row: CellValue[]) {
+export function validatePostgresExportRow(row: CellValue[]) {
   for (const value of row) {
     if (value !== null && typeof value !== 'string' && !(typeof value === 'object' && typeof value.base64 === 'string'))
       throw Error('PostgreSQL 导出字段类型不完整');
@@ -44,7 +44,7 @@ export async function exportPostgresTable(workspace: PostgresTableWorkspace, inp
       /** 各格式共享真实游标值校验及原消费背压。 */
       async function* validatedRows() {
         for await (const row of cursor) {
-          validateExportRow(row);
+          validatePostgresExportRow(row);
           yield row;
         }
       }
