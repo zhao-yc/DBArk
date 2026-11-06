@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { serverMonitorStatusNames } from '../../shared/serverMonitor';
+import { postgresMonitorStatusNames, serverMonitorStatusNames } from '../../shared/serverMonitor';
+import type { ServerMonitorSummary } from '../../shared/serverMonitor';
 import { ServerMonitorController, type ServerMonitorServices, type ServerMonitorViewState } from '../serverMonitorController';
 import { serverMonitorZhCN as t } from '../serverMonitorZh';
 import { Modal, UsageHelp } from './ui';
@@ -30,6 +31,10 @@ export function ServerMonitorDialog(props: ServerMonitorDialogProps) {
   };
   const sameTarget = view.target?.connectionId === connectionId && view.target.connectionRevision === connectionRevision;
   const snapshot = sameTarget ? view.snapshot : undefined, busy = !sameTarget || view.busy;
+  const postgres = snapshot?.dialect === 'postgresql';
+  const names = postgres ? postgresMonitorStatusNames : serverMonitorStatusNames;
+  const counters = { ...t.counters, ...t.postgres.counters };
+  const fields = postgres ? { ...t.fields, hostname: t.postgres.host, connectionId: t.postgres.connectionId, database: t.postgres.database } : t.fields;
   const value = (source: string | null) => source === null ? t.null : source === '' ? t.emptyString : source;
   return <Modal title={t.title} wide onClose={close}>
     <section className="server-monitor-dialog" aria-busy={busy}>
@@ -38,16 +43,20 @@ export function ServerMonitorDialog(props: ServerMonitorDialogProps) {
         <button type="button" disabled={!busy || view.waiting || closing} onClick={() => void controller.cancel()}>{t.cancel}</button>
         <label><input type="checkbox" checked={sameTarget && view.automatic} disabled={view.waiting || closing || !sameTarget} onChange={event => controller.setAutomatic(event.target.checked)} />{t.auto}</label>
       </div>
-      <p>{t.notice}</p><UsageHelp><p>{t.snapshot}</p><p>{t.scope}</p><p>{t.autoBudget}</p></UsageHelp>
+      <p>{t.notice}</p><UsageHelp><p>{t.snapshot}</p><p>{postgres ? t.postgres.scope : t.scope}</p><p>{t.autoBudget}</p></UsageHelp>
       {closing ? <p role="status">{t.closing}</p> : view.waiting && <p role="status">{t.waiting}</p>}
       {sameTarget && view.error && <p role="alert">{view.error}</p>}
       {!snapshot && <p role="status">{t.empty}</p>}
       {snapshot && <>
         <p className="server-monitor-time"><time>{snapshot.startedAt}</time> — <time>{snapshot.completedAt}</time></p>
-        <h3>{t.summary}</h3>{snapshot.summary.status === 'unavailable' ? <p>{t.unavailable}：{snapshot.summary.reason}</p> : <dl>{Object.entries(t.fields).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{value(snapshot.summary.status === 'available' ? snapshot.summary.value[key as keyof typeof t.fields] : null)}</dd></div>)}</dl>}
-        <h3>{t.status}</h3>{snapshot.globalStatus.status === 'unavailable' ? <p>{t.unavailable}：{snapshot.globalStatus.reason}</p> : <><dl>{snapshot.globalStatus.value.map(item => <div key={item.name}><dt>{t.counters[item.name]}（{item.name}）</dt><dd>{item.value}</dd></div>)}</dl><p>{t.missing}{serverMonitorStatusNames.filter(name => snapshot.globalStatus.status === 'available' && !snapshot.globalStatus.value.some(item => item.name === name)).join('、') || '—'}</p></>}
+        <h3>{t.summary}</h3>{snapshot.summary.status === 'unavailable' ? <p>{t.unavailable}：{snapshot.summary.reason}</p> : <dl>{Object.entries(fields).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{value(snapshot.summary.status === 'available' ? snapshot.summary.value[key as keyof ServerMonitorSummary] ?? null : null)}</dd></div>)}</dl>}
+        <h3>{postgres ? t.postgres.status : t.status}</h3>{snapshot.globalStatus.status === 'unavailable' ? <p>{t.unavailable}：{snapshot.globalStatus.reason}</p> : <>
+          <dl>{snapshot.globalStatus.value.map(item => <div key={item.name}><dt>{counters[item.name]}（{item.name}）</dt><dd>{item.value}</dd></div>)}</dl>
+          {postgres && <p>{t.postgres.reset}　{value(snapshot.statisticsReset ?? null)}</p>}
+          <p>{t.missing}{names.filter(name => snapshot.globalStatus.status === 'available' && !snapshot.globalStatus.value.some(item => item.name === name)).join('、') || '—'}</p>
+        </>}
       </>}
-      <ServerMonitorSessions key={JSON.stringify([connectionId,connectionRevision])} section={snapshot?.sessions} disabled={closing || !sameTarget}/>
+      <ServerMonitorSessions key={JSON.stringify([connectionId,connectionRevision])} section={snapshot?.sessions} postgres={postgres} disabled={closing || !sameTarget}/>
       <footer><button type="button" disabled={closing} onClick={close}>{t.close}</button></footer>
     </section>
   </Modal>;

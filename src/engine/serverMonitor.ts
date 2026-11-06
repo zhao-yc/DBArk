@@ -63,11 +63,16 @@ export async function readServerMonitor(context: StructureTaskContext, input: Se
     });
     return { rows: mapped, limit, truncated: rows.length > limit, visibility: 'account-visible-unconfirmed' as const };
   });
-  const result: ServerMonitorSnapshot = { startedAt, completedAt: new Date().toISOString(), summary, globalStatus, sessions, bytes: 0 };
+  context.checkCancelled();
+  return finalizeServerMonitorSnapshot({ startedAt, summary, globalStatus, sessions });
+}
+
+/** 回包预算包括计数字段自身，两个驱动用同一序列化口径。 */
+export function finalizeServerMonitorSnapshot(snapshot: Omit<ServerMonitorSnapshot, 'completedAt' | 'bytes'>): ServerMonitorSnapshot {
+  const result: ServerMonitorSnapshot = { ...snapshot, completedAt: new Date().toISOString(), bytes: 0 };
   // 有界字符串投影后仍核对序列化总字节，避免跨 IPC 传递无界快照。
   // bytes 自身也属于 JSON；收敛到包含计数字段自身的精确字节数。
   for (let previous = -1; previous !== result.bytes;) { previous = result.bytes; result.bytes = Buffer.byteLength(JSON.stringify(result), 'utf8'); }
   if (result.bytes > serverMonitorLimits.snapshotBytes) throw new Error('服务器监控快照超过字节预算');
-  context.checkCancelled();
   return result;
 }

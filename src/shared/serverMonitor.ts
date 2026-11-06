@@ -1,14 +1,18 @@
 /** 首阶段只读监控的固定预算；渲染进程不能提交 SQL 或扩大字段范围。 */
 export const serverMonitorLimits = { sessions: 100, defaultSessions: 50, sqlCharacters: 512, snapshotBytes: 512 * 1024, refreshMilliseconds: 5000 } as const;
 export const serverMonitorStatusNames = ['Uptime', 'Threads_connected', 'Threads_running', 'Connections', 'Aborted_connects', 'Questions', 'Queries', 'Slow_queries', 'Bytes_received', 'Bytes_sent', 'Com_select', 'Com_insert', 'Com_update', 'Com_delete', 'Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads', 'Innodb_row_lock_waits', 'Innodb_row_lock_time'] as const;
+export const postgresMonitorStatusNames = ['numbackends', 'xact_commit', 'xact_rollback', 'blks_read', 'blks_hit', 'tup_returned', 'tup_fetched', 'tup_inserted', 'tup_updated', 'tup_deleted', 'conflicts', 'temp_files', 'temp_bytes', 'deadlocks'] as const;
+export type ServerMonitorCounterName = typeof serverMonitorStatusNames[number] | typeof postgresMonitorStatusNames[number];
 export interface ServerMonitorInput { connectionId: string; taskId: string; sessionLimit?: number; }
-export interface ServerMonitorSummary { version: string; versionComment: string; hostname: string; port: string; currentUser: string; connectionId: string; }
-export interface ServerMonitorSession { id: string; user: string | null; host: string | null; database: string | null; command: string | null; seconds: string | null; state: string | null; sql: string | null; sqlLength: string | null; sqlTruncated: boolean; }
+export interface ServerMonitorSummary { version: string; versionComment: string; hostname: string | null; port: string | null; currentUser: string; connectionId: string; database?: string; }
+export interface ServerMonitorSession { id: string; user: string | null; host: string | null; database: string | null; command: string | null; seconds: string | null; state: string | null; sql: string | null; sqlLength: string | null; sqlTruncated: boolean; waitEvent?: string | null; }
 export type ServerMonitorSection<T> = { status: 'available'; value: T } | { status: 'unavailable'; reason: string };
 export interface ServerMonitorSnapshot {
+  dialect?: 'postgresql';
   startedAt: string; completedAt: string;
   summary: ServerMonitorSection<ServerMonitorSummary>;
-  globalStatus: ServerMonitorSection<{ name: typeof serverMonitorStatusNames[number]; value: string }[]>;
+  globalStatus: ServerMonitorSection<{ name: ServerMonitorCounterName; value: string }[]>;
+  statisticsReset?: string | null;
   sessions: ServerMonitorSection<{ rows: ServerMonitorSession[]; limit: number; truncated: boolean; visibility: 'account-visible-unconfirmed' }>;
   bytes: number;
 }

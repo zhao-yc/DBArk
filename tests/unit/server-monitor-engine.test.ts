@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
 import { readServerMonitor, serverMonitorSessionsSql } from '../../src/engine/serverMonitor';
-import { validateServerMonitorInput } from '../../src/shared/serverMonitor';
+import { readPostgresServerMonitor } from '../../src/engine/postgres/serverMonitor';
+import type { PostgresConnection } from '../../src/engine/postgres/connection';
+import { postgresMonitorStatusNames, validateServerMonitorInput } from '../../src/shared/serverMonitor';
 const query = vi.hoisted(() => vi.fn());
 vi.mock('../../src/engine/structureDefinition', () => ({ structureTaskQuery: query }));
 const summary = { version: '8.0', versionComment: '测试', hostname: '主机', port: '3306', currentUser: '只读账号@%', connectionId: '9007199254740993' };
@@ -61,5 +63,37 @@ describe('服务器监控固定只读查询与快照', () => {
     const row = { ...session, user: '\u0000'.repeat(128), host: '\u0000'.repeat(255), databaseName: '\u0000'.repeat(128), command: '\u0000'.repeat(64), state: '\u0000'.repeat(255), sqlText: '\u0000'.repeat(512), sqlLength: '512' };
     replies(Array.from({ length: 100 }, (_, index) => ({ ...row, id: String(index) })));
     await expect(readServerMonitor(context(), { connectionId: '连接', taskId: '任务', sessionLimit: 100 })).rejects.toThrow('字节预算');
+  });
+});
+
+describe('PostgreSQL 监控投影', () => {
+  const input = { connectionId: 'postgres', taskId: 'snapshot', sessionLimit: 1 };
+  const postgresSummary = { c0: '18.6', c1: 'PostgreSQL', c2: '127.0.0.1', c3: '5432', c4: 'readonly', c5: '10', c6: 'ledger' };
+  const restricted = { c0: '20', c1: 'other', c2: null, c3: 'ledger', c4: null, c5: null, c6: null, c7: null, c8: null, c9: null };
+  it('只读固定目录，保留大整数及受限会话，额外行仅用于确认列表截断', async () => {
+    const stats = Object.fromEntries(postgresMonitorStatusNames.map((_, index) => ['c' + index, '9223372036854775807']));
+    const read = vi.fn().mockResolvedValueOnce({ rows: [postgresSummary] })
+      .mockResolvedValueOnce({ rows: [{ ...stats, ['c' + postgresMonitorStatusNames.length]: null }] })
+      .mockResolvedValueOnce({ rows: [restricted, { ...restricted, c0: '21' }] });
+    const snapshot = await readPostgresServerMonitor({ query: read } as unknown as PostgresConnection, input, () => {});
+    expect(snapshot).toMatchObject({ dialect: 'postgresql', statisticsReset: null,
+      summary: { value: { database: 'ledger', connectionId: '10' } },
+      globalStatus: { value: expect.arrayContaining([{ name: 'xact_commit', value: '9223372036854775807' }]) },
+      sessions: { value: { truncated: true, rows: [{ id: '20', user: 'other', sql: null, sqlLength: null, seconds: null, waitEvent: null }] } } });
+    expect(snapshot.bytes).toBe(Buffer.byteLength(JSON.stringify(snapshot)));
+    expect(read.mock.calls.every(([sql]) => sql.startsWith('SELECT '))).toBe(true);
+    expect(read.mock.calls[2][0]).toContain('LIMIT 2');
+  });
+
+  it('权限不足只影响对应段，连接错误仍终止快照', async () => {
+    const read = vi.fn().mockResolvedValueOnce({ rows: [postgresSummary] })
+      .mockRejectedValueOnce(Object.assign(Error('内部权限报错'), { postgresSqlState: '42501' })).mockResolvedValueOnce({ rows: [] });
+    const connection = { query: read } as unknown as PostgresConnection;
+    expect(await readPostgresServerMonitor(connection, input, () => {})).toMatchObject({
+      globalStatus: { status: 'unavailable', reason: '当前账号没有读取此项的权限' }, sessions: { status: 'available' },
+    });
+    read.mockRejectedValueOnce(Object.assign(Error('连接中断'), { postgresSqlState: '08006' }));
+    await expect(readPostgresServerMonitor(connection, input, () => {})).rejects.toThrow('连接中断');
+    expect(read).toHaveBeenCalledTimes(4);
   });
 });

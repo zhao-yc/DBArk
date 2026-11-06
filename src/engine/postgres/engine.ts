@@ -46,6 +46,8 @@ import { postgresDataCompareLimits, postgresDataCompareSchema, postgresDataCompa
   postgresDataSyncApplySchema, postgresDataSyncLimits, postgresDataSyncPreviewSchema, postgresDataSyncZh,
   type PostgresDataCompareEndpoint, type PostgresDataSyncPreview } from '../../shared/postgresDataCompare';
 import { explainLimits } from '../../shared/explain';
+import { validateServerMonitorInput, type ServerMonitorInput } from '../../shared/serverMonitor';
+import { readPostgresServerMonitor } from './serverMonitor';
 interface Session {
   id: string;
   connectionId: string;
@@ -175,6 +177,7 @@ export class PostgresEngine {
     retain = false,
     control = false,
     writing = false,
+    registerOpening?: (managed: PostgresConnection) => void,
   ): Promise<T> {
     if (
       !control &&
@@ -192,11 +195,12 @@ export class PostgresEngine {
       }),
       finish: () => finish(),
       failed: false,
-      protectedFromAbort: control || writing,
+      protectedFromAbort: control || writing || !!registerOpening,
     };
     this.leases.add(lease);
     let kept = false;
     try {
+      registerOpening?.(managed);
       await managed.open();
       if (!control && (this.stopping || this.closing.has(profile.id))) throw Error('PostgreSQL连接已取消');
       const result = await action(managed);
@@ -313,6 +317,47 @@ export class PostgresEngine {
     });
     void task.cancelPending.catch(() => undefined);
     return task.cancelPending;
+  }
+
+  /** 监控独占短连接。建连阶段中止原传输，读取阶段按原后端身份取消并等待原资源结束。 */
+  private async monitor(input: ServerMonitorInput, profile: PostgresConnectionProfile) {
+    validateServerMonitorInput(input);
+    if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
+      throw Error('PostgreSQL 监控任务已存在、连接关闭中或已达并发上限');
+    let opening: PostgresConnection | undefined, timedOut = false;
+    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true,
+      processAbort: () => opening?.abort() };
+    const check = () => {
+      if (timedOut) throw Error('PostgreSQL 监控读取超时');
+      if (task.cancelled) throw Error('PostgreSQL 监控读取已取消');
+    };
+    this.transfers.set(input.taskId, task);
+    const timer = setTimeout(() => { timedOut = true; this.cancelTransfer(task); }, 30_000);
+    timer.unref();
+    const done = task.done = this.use(profile, undefined, async managed => {
+      opening = undefined;
+      check();
+      task.connection = managed; task.commandActive = true;
+      try { return await readPostgresServerMonitor(managed, input, check); }
+      finally {
+        task.commandActive = false;
+        await task.cancelPending;
+      }
+    }, false, false, false, managed => { opening = managed; });
+    try {
+      this.emit({ taskId: input.taskId, status: 'running', progress: 0, message: '正在读取 PostgreSQL 监控' });
+      const result = await done;
+      check();
+      this.emit({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 监控快照读取完成' });
+      return result;
+    } catch (reason) {
+      this.emit({ taskId: input.taskId, status: task.cancelled && !timedOut ? 'cancelled' : 'failed', progress: 0, message: 'PostgreSQL 监控读取未完成' });
+      throw reason;
+    } finally {
+      clearTimeout(timer);
+      this.transfers.delete(input.taskId);
+      this.rememberCompleted(input.taskId);
+    }
   }
 
   /** 文件写入和取消使用独占连接，COMMIT 或回滚阶段不接受新的取消。 */
@@ -1091,6 +1136,11 @@ export class PostgresEngine {
         return this.tables.captureDraft(input as Parameters<PostgresTableWorkspace['captureDraft']>[0]);
       case 'postgres.table.release':
         return this.tables.release(input as Parameters<PostgresTableWorkspace['release']>[0]);
+      case 'serverMonitor.read': {
+        const { profile, ...request } = input;
+        if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId) throw Error('监控需要准确的已保存 PostgreSQL 连接');
+        return this.monitor(request as ServerMonitorInput, profile);
+      }
       case 'connections.test':
         return this.use(input as PostgresConnectionProfile, undefined, async (m) => ({
           version: m.version,

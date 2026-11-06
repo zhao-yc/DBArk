@@ -21,7 +21,7 @@ function compare(left: string | null, right: string | null, direction: ServerMon
 export function serverMonitorSessionView(rows: readonly ServerMonitorSession[], query: string, sort: ServerMonitorSessionSort, direction: ServerMonitorSessionDirection) {
   const needle = query.slice(0,serverMonitorSessionSearchLimit).toLowerCase();
   const bounded = rows.slice(0,serverMonitorLimits.sessions);
-  const selected = bounded.map((row,index)=>({row,index})).filter(({row}) => !needle || [row.user,row.host,row.database,row.state,row.sql].some(value => value !== null && value.toLowerCase().includes(needle)));
+  const selected = bounded.map((row,index)=>({row,index})).filter(({row}) => !needle || [row.user,row.host,row.database,row.state,row.waitEvent,row.sql].some(value => value != null && value.toLowerCase().includes(needle)));
   selected.sort((left,right)=>compare(left.row[sort],right.row[sort],direction)||left.index-right.index);
   return { rows: selected.map(value=>value.row), returned: rows.length, filtered: selected.length, capped: rows.length > serverMonitorLimits.sessions };
 }

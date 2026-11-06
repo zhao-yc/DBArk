@@ -1935,7 +1935,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       }catch(reason){release();throw reason;}
     }
     // 监控使用主进程解密的目标配置，避免为了打开只读窗口另建一次不受任务管理的测试连接。
-    case 'serverMonitor.read': input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
+    case 'serverMonitor.read': {
+      const profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect === 'sqlite') throw Error('服务器监控需要 MySQL、MariaDB 或 PostgreSQL 连接');
+      input = { ...input, profile };
+      break;
+    }
     // 无 await、无引擎调用：全部校验和生成通过后才一次写入系统剪贴板。
     case 'table.copyInsertSql': return copyInsertSql(input, sql => clipboard.writeText(sql));
     case 'workbench.get': return store.workbench();
