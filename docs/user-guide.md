@@ -226,6 +226,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 点击「字段概况」可[统计筛选范围内的已提交记录](development/postgres-column-statistics-20261106.md)，查看 NULL、不同值、极值和相应字段的数值聚合。
 
+勾选 PostgreSQL 网格中的记录后，可[批量填充指定字段](development/postgres-batch-fill-20261106.md)，整批暂存、撤销，并通过原表页预览确认后提交。
+
 在 PostgreSQL 表或视图的记录网格右键单元格，或聚焦后按 `Shift+F10`，可以[按此值筛选或排除此值](development/postgres-table-cell-filter-20261106.md)。检查带入的列、操作符和原值，点击「添加条件」，再点击「应用高级筛选」。
 
 在同一入口可修改已有字段的数据类型、默认值、空值约束和注释，或删除字段。删除在 SQL 预览后需额外确认，本表内引用该字段的索引和约束可能随之移除。详见[已有字段属性与删除](development/postgres-column-alter-20261105.md)。

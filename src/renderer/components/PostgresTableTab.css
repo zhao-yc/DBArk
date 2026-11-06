@@ -78,6 +78,12 @@
 .pg-table-draft button { margin-left: 10px; }
 .pg-record-form, .pg-table-preview { overflow: auto; max-height: min(60vh, 640px); }
 .pg-record-field { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.pg-batch-fill-actions { flex: none; }
+.pg-batch-fill-field { display: flex; align-items: start; gap: 12px; }
+.pg-batch-fill-field .pg-record-field { flex: 1; min-width: 0; }
+.pg-batch-fill-field .pg-record-inputs select { flex: none; width: min(170px, 40%); }
+.pg-batch-fill-field .pg-record-inputs textarea { min-width: 0; }
+.pg-batch-fill-field > button { max-width: 28%; overflow-wrap: anywhere; }
 .pg-record-inputs { display: flex; align-items: start; gap: 8px; }
 .pg-record-inputs textarea { flex: 1; }
 .pg-table-preview dd, .pg-table-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }

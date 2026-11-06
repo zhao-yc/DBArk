@@ -48,6 +48,9 @@ import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
 import { postgresColumnStatisticsZh } from '../locales/postgresColumnStatistics.zh-CN';
 import type { PostgresColumnReadSource } from '../postgresColumnRead';
 import { PostgresColumnStatisticsDialog } from './PostgresColumnStatisticsDialog';
+import { PostgresBatchFillDialog } from './PostgresBatchFillDialog';
+import { postgresBatchFillChanges, postgresBatchFillColumn } from '../postgresBatchFill';
+import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -55,6 +58,10 @@ type PageOptions = Pick<PostgresTablePageInput, 'offset' | 'limit' | 'filter' | 
 type PageMovement = { recordEdge?: 'last'; navigation?: PostgresTablePageInput['navigation'] };
 type PageRead = PageMovement & { retainPageTokens?: string[]; checkFilterColumns?: true; presetLayout?: TablePreferences };
 type DraftEntry = { change: PostgresTableChange & { pageToken: string }; rowKey?: string; offset: number };
+interface BatchFill {
+  scope: object; page: PostgresTablePage; selected: ReadonlySet<number>;
+  originalDraft: DraftEntry[]; gridCurrent(): boolean;
+}
 interface InlineEdit {
   scope: object; cell: QueryResultCopyCell; column: PostgresTableColumn; rowKey: string;
   anchor: HTMLElement; originalText: string; initial: PostgresInlineCellValue; typed?: string;
@@ -77,6 +84,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [gridReturn, setGridReturn] = useState<{ page: PostgresTablePage; position: GridFindTarget }>();
   const [draft, setDraft] = useState<DraftEntry[]>([]);
   const draftRef = useRef(draft);
+  const [batchFill, setBatchFill] = useState<BatchFill>();
+  const batchOwner = useRef<BatchFill>(undefined);
+  const [batchUndo, setBatchUndo] = useState<{ before: DraftEntry[]; after: DraftEntry[] }>();
   const [pasteScope, setPasteScope] = useState<object>();
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
@@ -216,7 +226,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || columnDialog || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || columnDialog || batchOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const retainPageTokens = [...new Set(draft.map(entry => entry.change.pageToken))];
     void run(isCurrent => read(next, isCurrent, { ...movement, ...(retainPageTokens.length ? { retainPageTokens } : {}) }));
@@ -224,6 +234,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 更新草稿及标签退出保护。 */
   function setChanges(next: DraftEntry[]) {
+    setBatchUndo(undefined);
     draftRef.current = next;
     setDraft(next);
     recordDirty.current = next.length > 0;
@@ -256,7 +267,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh || inlineOwner.current || pasteOwner.current || recordInput.current) return;
+    if (!pageToken || !draft.length || requiresRefresh || batchOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -289,7 +300,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batchFill || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -365,6 +376,52 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   const canEditGrid = !recordView && active && writable && !!page?.capabilities.update && pageConnectionVersion === connectionVersion;
+  const fillColumns = gridLayout.columns.filter(postgresBatchFillColumn);
+
+  function closeBatchFill(intent: BatchFill) {
+    if (batchOwner.current !== intent) return;
+    batchOwner.current = undefined;
+    setBatchFill(undefined);
+  }
+
+  useLayoutEffect(() => {
+    if (batchFill && (!active || batchFill.scope !== cellScope || !layoutScope.current.current())) closeBatchFill(batchFill);
+  }, [active, cellScope, batchFill]);
+
+  function canBatchFill(selected: ReadonlySet<number>): boolean {
+    return canEditGrid && !!fillColumns.length && !!selected.size && selected.size <= postgresTableLimits.changes &&
+      [...selected].every(row => {
+        const key = page?.rowKeys?.[row];
+        return !!key && !draft.some(entry => entry.rowKey === key && entry.change.kind === 'delete');
+      });
+  }
+
+  /** 窗口绑定已勾选的网格代次、原表页与完整草稿，确认前没有数据库请求。 */
+  function openBatchFill(selected: ReadonlySet<number>, gridCurrent: () => boolean) {
+    if (!page?.pageToken || !canBatchFill(selected) || !gridCurrent() || batchOwner.current ||
+        !layoutScope.current.current() || lease.current || inlineOwner.current || recordInput.current ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    const intent = { scope: cellScope, page, selected, originalDraft: draftRef.current, gridCurrent };
+    closeCellMenu(cellMenuOwner.current, false);
+    batchOwner.current = intent;
+    setBatchFill(intent);
+  }
+
+  function stageBatchFill(intent: BatchFill, fields: PostgresTableField[]) {
+    if (batchOwner.current !== intent || intent.page !== page || cellScope !== intent.scope ||
+        !intent.gridCurrent() || issued.current !== intent.page.pageToken || !layoutScope.current.current() ||
+        lease.current || requiresRefresh || draftRef.current !== intent.originalDraft) throw Error(fillText.stale);
+    const before = draftRef.current;
+    const changes = postgresBatchFillChanges(intent.page, gridLayout.columns, intent.selected, fields,
+      key => before.find(entry => entry.rowKey === key)?.change);
+    if (changes.length) {
+      if (!stageChanges(changes)) throw Error(fillText.stale);
+      setBatchUndo({ before, after: draftRef.current });
+    }
+    closeBatchFill(intent);
+    setError('');
+    setMessage(changes.length ? fillText.staged(changes.length) : fillText.unchanged);
+  }
   const canFind = !recordView && active && !!page?.exportToken && !blocked && !requiresRefresh && pageConnectionVersion === connectionVersion;
   const findScope = useMemo(() => ({}), [cellScope, draft]);
   const latestFindScope = useRef(findScope);
@@ -729,6 +786,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
             key => draftRef.current.find(entry => entry.rowKey === key)?.change);
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump
+        renderRowSelectionAction={page.capabilities.update && fillColumns.length ? (selected, current) =>
+          <div className="pg-table-controls pg-batch-fill-actions">
+            <button type="button" title={fillText.rows} disabled={!canBatchFill(selected)}
+              onClick={() => openBatchFill(selected, current)}>{fillText.action}</button>
+            {!!selected.size && <span>{fillText.count(selected.size)}</span>}
+          </div> : undefined}
         onActiveRowIndexChange={recordView ? undefined : setRow}
         findTarget={findTarget} findMarks={findMarks} navigateTo={gridReturn?.page === page ? gridReturn.position : undefined}
         onGridAnchor={value => { findAnchor.current = { scope: cellScope, value }; if (gridReturn) setGridReturn(undefined); }}
@@ -757,8 +820,13 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       onStage={value => stageInlineEdit(inlineEdit, value)} onCancel={() => closeInlineEdit(inlineEdit)}/>}
     {pasteScope && <PostgresGridPasteDialog columns={gridLayout.columns} onClose={() => closePasteAppend(pasteScope)}
       onStage={(start, source) => stageGridPaste(start, source, undefined, pasteScope)}/>}
+    {batchFill && <PostgresBatchFillDialog columns={fillColumns} count={batchFill.selected.size}
+      onStage={fields => stageBatchFill(batchFill, fields)} onClose={() => closeBatchFill(batchFill)}/>}
     {draft.length > 0 && <div className="pg-table-draft" aria-label={text.draft}>
       <strong>{text.changes(draft.length)}</strong><button disabled={blocked} onClick={() => { setChanges([]); setMessage(''); }}>{text.discard}</button>
+      {batchUndo && <button disabled={blocked || requiresRefresh} onClick={() => {
+        if (draftRef.current === batchUndo.after) { setChanges(batchUndo.before); setMessage(''); }
+      }}>{fillText.undo}</button>}
       <ol>{draft.map(({ change, offset }, index) => <li key={index}>
         <span>{text.change[change.kind]}{change.kind === 'insert' ? '' : ' · ' + text.originalRow(offset + change.row + 1)}</span>
         {change.kind !== 'delete' && <span className="muted">　{change.fields.map(field => {

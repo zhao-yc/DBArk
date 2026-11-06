@@ -13,9 +13,10 @@ export type PostgresRecordValues = Map<string, PostgresTableField['value']>;
 type Mode = PostgresTableField['value']['mode'] | 'unchanged';
 
 /** 网格弹窗和记录视图共用字段模式，分别管理自己的输入和暂存。 */
-export function PostgresRecordFields({ columns, original, fields, editable, disabled, inspect, reference, onChange }: {
+export function PostgresRecordFields({ columns, original, fields, editable, disabled, inspect, reference, batch, onChange }: {
   columns: readonly PostgresTableColumn[]; original?: DataRow; fields: PostgresRecordValues; editable: boolean; disabled?: boolean; inspect?: boolean;
   reference?: PostgresReferenceSource;
+  batch?: true;
   onChange(change: (current: PostgresRecordValues) => PostgresRecordValues): void;
 }) {
   const [expanded, setExpanded] = useState<string>();
@@ -58,11 +59,11 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
       {inspect && expanded === column.key && <textarea readOnly aria-label={viewText.raw(column.name)} rows={3} value={cellText(originalValue)}/>}
       {column.generated ? <span className="muted">{text.generated}</span> : editable && <div className="pg-record-inputs">
         <select aria-label={column.name + ' ' + text.valueMode} value={value?.mode ?? 'unchanged'} disabled={disabled} onChange={event => changeMode(column.key, event.target.value as Mode)}>
-          <option value="unchanged">{original ? text.unchanged : text.default}</option>
+          <option value="unchanged">{original || batch ? text.unchanged : text.default}</option>
           <option value="text">{text.text}</option>
           {column.binary && <option value="binary">{text.hex}</option>}
           {column.nullable && <option value="null">{text.null}</option>}
-          {original && <option value="default">{text.default}</option>}
+          {(original || batch) && <option value="default">{text.default}</option>}
         </select>
         {value && 'value' in value && <textarea aria-label={column.name + ' ' + text.value} value={value.value}
           maxLength={postgresTableLimits.value} readOnly={disabled} rows={2} onChange={event => {

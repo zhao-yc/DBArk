@@ -399,6 +399,27 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       expect(await notes()).toEqual(['新增甲', '新增乙']);
     } finally { await findReadback.end(); }
     await mark('PostgreSQL 表页查找字段和数据、F3 导航、单处及全部替换、取消与字面回读');
+    const fillAction = tableButton('批量填充字段');
+    await expect(fillAction).toBeDisabled();
+    const chooseForFill = (note: string) => grid.getByRole('row')
+      .filter({ has: page.getByRole('gridcell', { name: note, exact: true }) }).getByRole('checkbox');
+    await chooseForFill('新增甲').check();
+    await chooseForFill('新增乙').check();
+    await fillAction.click();
+    const fillDialog = page.getByRole('dialog', { name: '批量填充 PostgreSQL 勾选记录', exact: true });
+    await expect(fillDialog).toContainText('本页勾选 2 条记录');
+    await fillDialog.getByRole('combobox', { name: 'note ' + postgresTableZh.valueMode, exact: true }).selectOption('text');
+    const fillInput = fillDialog.getByRole('textbox', { name: 'note ' + postgresTableZh.value, exact: true });
+    await fillInput.fill('统一填充');
+    expect((await fillInput.boundingBox())?.width ?? 0).toBeGreaterThan(120);
+    await page.screenshot({ path: info.outputPath('PostgreSQL批量填充.png') });
+    await fillDialog.getByRole('button', { name: '暂存整批填充', exact: true }).click();
+    await expect(recordDraft.getByText('note=统一填充', { exact: true })).toHaveCount(2);
+    await recordDraft.getByRole('button', { name: '撤销整批填充', exact: true }).click();
+    await expect(recordDraft).toHaveCount(0);
+    await expect(tableCell('新增甲')).toBeVisible();
+    await expect(tableCell('新增乙')).toBeVisible();
+    await mark('PostgreSQL 网格勾选批量填充原记录，整批暂存及撤销保持服务器原值');
 
     const formSize = gridTab.getByRole('spinbutton', { name: postgresTableZh.pageSize, exact: true });
     const originalFormSize = await formSize.inputValue();

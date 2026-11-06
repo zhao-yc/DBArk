@@ -11,6 +11,7 @@ import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult, PostgresTableValues } from '../../src/shared/postgresTable';
 import { appendPostgresValueFilter } from '../../src/renderer/postgresTableValues';
+import { postgresBatchFillChanges } from '../../src/renderer/postgresBatchFill';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { inspectPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
 
@@ -201,6 +202,25 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       const current = await read();
       await expect(preview(first, [{ kind: 'delete', row: 0 }])).rejects.toThrow('快照');
       await expect(preview(current, [{ kind: 'delete', row: 0 }], { owner: randomUUID() })).rejects.toThrow('快照');
+      const fill = { table: '"浏览"."批量填充"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE ${fill.table} (id bigint PRIMARY KEY, note text, flag text DEFAULT '默认值', raw bytea);
+        INSERT INTO ${fill.table} VALUES (9007199254740993,'原一','原标记',NULL),
+          (9007199254740994,'原二','原标记',NULL),(9007199254740995,'原三','原标记',NULL)`);
+      const fillPage = await read({ ...fill, limit: 3 });
+      const fillChanges = postgresBatchFillChanges(fillPage, fillPage.columns, new Set([2, 0]), [
+        { column: 'c1', value: { mode: 'null' } }, { column: 'c2', value: { mode: 'default' } },
+        { column: 'c3', value: { mode: 'binary', value: '00ff' } },
+      ], () => undefined);
+      const filledRows = () => client.query(`SELECT id::text, note, flag, encode(raw, 'hex') AS raw FROM ${fill.table} ORDER BY id`).then(result => result.rows);
+      const unchangedFill = await filledRows();
+      const fillPreview = await preview(fillPage, fillChanges, fill);
+      expect(fillPreview.statements).toHaveLength(2);
+      expect(await filledRows()).toEqual(unchangedFill);
+      expect(await apply(fillPage, fillPreview, fill)).toMatchObject({ outcome: 'committed', affected: 2 });
+      expect(await filledRows()).toEqual([
+        { id: '9007199254740993', note: null, flag: '默认值', raw: '00ff' }, unchangedFill[1],
+        { id: '9007199254740995', note: null, flag: '默认值', raw: '00ff' },
+      ]);
       const cross = { table: '"浏览"."跨页编辑"', tabId: randomUUID() };
       await client.query(`CREATE TABLE ${cross.table} (id bigint PRIMARY KEY, note text CHECK (note <> '拒绝'));
         INSERT INTO ${cross.table} VALUES (1,'原甲'),(2,'原乙'),(3,'原丙')`);

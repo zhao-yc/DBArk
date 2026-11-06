@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量：[PostgreSQL 批量填充字段](development/postgres-batch-fill-20261106.md)支持当前页勾选、统一多字段赋值、整批暂存与撤销，沿用原版本核对及事务提交。D02 和 R01 仍为部分覆盖，暂不发布。
+
 2026-11-06 源码增量：[PostgreSQL 字段概况](development/postgres-column-statistics-20261106.md)沿已应用筛选统计总数、NULL、空字符串、不同值、极值及有限数值聚合。D09 和 R01 仍为部分覆盖，暂不发布。
 
 2026-11-06 源码增量：[PostgreSQL 按不同值筛选](development/postgres-table-value-options-20261106.md)沿已应用条件对全范围分组，支持字面搜索、精确次数、包含及排除，并在明确应用前只加入高级筛选草稿。R01 仍为部分覆盖，暂不发布。
