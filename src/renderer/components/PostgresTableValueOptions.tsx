@@ -1,58 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { FILTER_LIMITS } from '../../shared/filtering';
-import { postgresTableValueLimits as limits, type PostgresTableColumn, type PostgresTableValues, type PostgresTableValuesInput } from '../../shared/postgresTable';
+import { postgresTableValueLimits as limits, type PostgresTableValues } from '../../shared/postgresTable';
 import { errorMessage, invoke } from '../lib';
 import { postgresTableZh } from '../locales/postgresTable.zh-CN';
-import { acquireWorkspaceBusy, type WorkspaceBusyLease } from '../store';
+import { usePostgresColumnRead, type PostgresColumnReadSource } from '../postgresColumnRead';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 const text = postgresTableZh.valueOptions;
-export interface PostgresTableValueSource {
-  input: Omit<PostgresTableValuesInput, 'column' | 'search'>;
-  columns: readonly PostgresTableColumn[];
-  initialColumn?: string;
-  current(): boolean;
-}
-
 /** 读取仅使用打开时的原页能力，翻阅已读候选和加入筛选草稿均不访问数据库。 */
 export function PostgresTableValueOptions({ source, onAdd, onClose }: {
-  source: PostgresTableValueSource;
+  source: PostgresColumnReadSource;
   onAdd(column: string, values: (string | null)[], exclude: boolean): void;
   onClose(): void;
 }) {
-  const origin = useRef(source).current;
+  const { origin, result, busy, error, setError, reading, read, reset } = usePostgresColumnRead<PostgresTableValues>(source, text.expired);
   const [column, setColumn] = useState(origin.initialColumn ?? origin.columns[0]?.key ?? '');
   const [search, setSearch] = useState('');
-  const [result, setResult] = useState<PostgresTableValues>();
   const [selected, setSelected] = useState<readonly number[]>([]);
   const [exclude, setExclude] = useState(false);
   const [offset, setOffset] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const live = useRef(false), reading = useRef(false);
-  useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
-
-  /** 同一个弹窗只允许一个在途读取，关闭后忽略旧回包并等原连接收尾。 */
-  async function read() {
-    if (reading.current) return;
-    if (!origin.current()) { setError(text.expired); return; }
-    setResult(undefined); setSelected([]); setOffset(0); setError('');
-    reading.current = true;
-    setBusy(true);
-    let lease: WorkspaceBusyLease | undefined;
-    try {
-      lease = acquireWorkspaceBusy(origin.input.tabId);
-      const next = await invoke('postgres.table.values', { ...origin.input, column, search });
-      if (!live.current) return;
-      if (!origin.current()) throw Error(text.expired);
-      setResult(next);
-    } catch (reason) { if (live.current) setError(errorMessage(reason)); }
-    finally {
-      reading.current = false;
-      lease?.release();
-      if (live.current) setBusy(false);
-    }
-  }
 
   function add() {
     if (!result || !selected.length || reading.current) return;
@@ -70,10 +36,12 @@ export function PostgresTableValueOptions({ source, onAdd, onClose }: {
       <p className="muted small">{text.hint}</p>
       <form className="pg-table-controls" onSubmit={event => {
         event.preventDefault();
-        if (column) void read();
+        if (!column || reading.current) return;
+        setSelected([]); setOffset(0);
+        void read(() => invoke('postgres.table.values', { ...origin.input, column, search }));
       }}>
         <Field label={text.column}><select aria-label={text.column} value={column} disabled={busy} onChange={event => {
-          setColumn(event.target.value); setResult(undefined); setSelected([]); setOffset(0); setError('');
+          setColumn(event.target.value); reset(); setSelected([]); setOffset(0);
         }}>{origin.columns.map(item => <option key={item.key} value={item.key}>{item.name}</option>)}</select></Field>
         <Field label={text.search}><input type="search" maxLength={limits.search} disabled={busy} value={search}
           onChange={event => setSearch(event.target.value)} onKeyDown={event => {

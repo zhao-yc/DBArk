@@ -9,13 +9,14 @@ import {
   type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
-  type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableValuesInput, type PostgresTableValues,
+  type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableColumnReadInput, type PostgresTableValuesInput, type PostgresTableValues,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
 import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
 import { postgresTableCondition } from './tableFilter';
 import { readPostgresTableReferences } from './tableReferences';
+import { readPostgresColumnStatistics } from './tableStatistics';
 
 type Scoped<T> = T & { owner: string; connectionRevision: number };
 type Connect = <T>(action: (connection: PostgresConnection) => Promise<T>, writing?: boolean) => Promise<T>;
@@ -329,8 +330,9 @@ export class PostgresTableWorkspace {
     return result;
   }
 
-  /** 候选沿原表页已应用条件读全范围，原生分组保留列的比较与排序规则。 */
-  async values(input: Scoped<PostgresTableValuesInput>, connect: Connect): Promise<PostgresTableValues> {
+  /** 字段只读任务复用原表页范围，读前核对列目录，读后拒绝已撤销的原页。 */
+  private async readColumn<T>(input: Scoped<PostgresTableColumnReadInput>, connect: Connect,
+    read: (connection: PostgresConnection, relation: Relation, column: PostgresTableColumn, filter: Snapshot['options']['filter']) => Promise<T>): Promise<T> {
     const original = this.snapshot(input);
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
@@ -340,42 +342,60 @@ export class PostgresTableWorkspace {
         await begin(connection, 'page');
         const relation = await readRelation(connection, input.table);
         if (relation.fingerprint !== original.relation.fingerprint) throw Error('原表页结构或权限已变化，请刷新');
-        const column = relation.columns.find(item => item.key === input.column && item.valueOptions);
-        if (!column) throw Error('当前字段不支持按不同值筛选');
-        if (column.type === 'real' || column.type === 'double precision') {
-          // 改精度会影响已应用的文字筛选。服务端启用舍入时拒绝生成可能失真的候选。
-          const precision = await connection.query("SELECT pg_catalog.current_setting('extra_float_digits')::int >= 3 OR " +
-            "(pg_catalog.current_setting('server_version_num')::int >= 120000 AND pg_catalog.current_setting('extra_float_digits')::int > 0)", undefined, small());
-          if (precision.rows[0]?.c0 !== 't') throw Error('服务器浮点文本输出精度不足，无法准确按不同值筛选');
-        }
-        const name = postgresIdentifier(column.name), args: unknown[] = [input.search];
-        const condition = postgresTableCondition(original.options.filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
-        const maximum = postgresTableValueLimits.groups + 1;
-        // 原生相等的值只保留一个可重复选取的文本代表，搜索在计数之后执行。
-        const rows = await connection.query(`
-          SELECT pg_catalog.left(display, ${FILTER_LIMITS.valueLength + 1}), frequency::text
-          FROM (SELECT pg_catalog.min(${name}::text COLLATE pg_catalog."C") AS display,
-                       pg_catalog.count(*) AS frequency
-                FROM ${only(relation)} ${condition ? 'WHERE ' + condition : ''}
-                GROUP BY ${name}) AS grouped_values
-          WHERE $1::text = '' OR pg_catalog.strpos(display, $1) > 0
-          ORDER BY display NULLS FIRST LIMIT ${maximum}
-        `, args, { rows: maximum, bytes: 12 * 1024 * 1024 });
-        if (rows.truncated) throw Error('PostgreSQL 不同值超过读取预算，请缩小搜索范围');
+        const column = relation.columns.find(item => item.key === input.column);
+        if (!column) throw Error('原表页字段已变化，请刷新');
+        const output = await read(connection, relation, column, original.options.filter);
         const completed = await connection.query('COMMIT', undefined, small());
-        if (completed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 不同值读取事务未完成');
-        const options = rows.rows.slice(0, postgresTableValueLimits.groups).map(row => {
-          const value = row.c0, count = row.c1;
-          if ((value !== null && typeof value !== 'string') || typeof count !== 'string' || !/^[1-9]\d{0,18}$/.test(count))
-            throw Error('PostgreSQL 不同值回包无效');
-          const clipped = value !== null && value.length > FILTER_LIMITS.valueLength;
-          return { value: clipped ? Array.from(value).slice(0, 200).join('') : value, count, clipped };
-        });
-        return { options, truncated: rows.rows.length > postgresTableValueLimits.groups };
+        if (completed.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 字段读取事务未完成');
+        return output;
       });
-      if (this.snapshot(input) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开不同值');
+      if (this.snapshot(input) !== original) throw Error('PostgreSQL 原表页已变化，请重新打开字段读取');
       return result;
     } finally { this.active.delete(key); }
+  }
+
+  /** 候选沿原表页已应用条件读全范围，原生分组保留列的比较与排序规则。 */
+  values(input: Scoped<PostgresTableValuesInput>, connect: Connect): Promise<PostgresTableValues> {
+    return this.readColumn(input, connect, async (connection, relation, column, filter) => {
+      if (!column.valueOptions) throw Error('当前字段不支持按不同值筛选');
+      if (column.type === 'real' || column.type === 'double precision') {
+        // 改精度会影响已应用的文字筛选。服务端启用舍入时拒绝生成可能失真的候选。
+        const precision = await connection.query("SELECT pg_catalog.current_setting('extra_float_digits')::int >= 3 OR " +
+          "(pg_catalog.current_setting('server_version_num')::int >= 120000 AND pg_catalog.current_setting('extra_float_digits')::int > 0)", undefined, small());
+        if (precision.rows[0]?.c0 !== 't') throw Error('服务器浮点文本输出精度不足，无法准确按不同值筛选');
+      }
+      const name = postgresIdentifier(column.name), args: unknown[] = [input.search];
+      const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
+      const maximum = postgresTableValueLimits.groups + 1;
+      // 原生相等的值只保留一个可重复选取的文本代表，搜索在计数之后执行。
+      const rows = await connection.query(`
+        SELECT pg_catalog.left(display, ${FILTER_LIMITS.valueLength + 1}), frequency::text
+        FROM (SELECT pg_catalog.min(${name}::text COLLATE pg_catalog."C") AS display,
+                     pg_catalog.count(*) AS frequency
+              FROM ${only(relation)} ${condition ? 'WHERE ' + condition : ''}
+              GROUP BY ${name}) AS grouped_values
+        WHERE $1::text = '' OR pg_catalog.strpos(display, $1) > 0
+        ORDER BY display NULLS FIRST LIMIT ${maximum}
+      `, args, { rows: maximum, bytes: 12 * 1024 * 1024 });
+      if (rows.truncated) throw Error('PostgreSQL 不同值超过读取预算，请缩小搜索范围');
+      const options = rows.rows.slice(0, postgresTableValueLimits.groups).map(row => {
+        const value = row.c0, count = row.c1;
+        if ((value !== null && typeof value !== 'string') || typeof count !== 'string' || !/^[1-9]\d{0,18}$/.test(count))
+          throw Error('PostgreSQL 不同值回包无效');
+        const clipped = value !== null && value.length > FILTER_LIMITS.valueLength;
+        return { value: clipped ? Array.from(value).slice(0, 200).join('') : value, count, clipped };
+      });
+      return { options, truncated: rows.rows.length > postgresTableValueLimits.groups };
+    });
+  }
+
+  /** 统计全部符合当前条件的已提交数据，不读取分页记录或 Renderer 草稿。 */
+  statistics(input: Scoped<PostgresTableColumnReadInput>, connect: Connect) {
+    return this.readColumn(input, connect, (connection, relation, column, filter) => {
+      const args: unknown[] = [];
+      const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
+      return readPostgresColumnStatistics(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args);
+    });
   }
 
   /** 先声明游标锁住并复核关系。原生 COPY 使用同一事务中的单条 SELECT 快照。 */

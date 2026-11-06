@@ -315,6 +315,7 @@ export interface CommandMap {
   'postgres.table.import': { input: import('./postgresTable').PostgresTableImportInput; output: import('./postgresTable').PostgresTableOutcome };
   'postgres.table.page': { input: import('./postgresTable').PostgresTablePageInput; output: import('./postgresTable').PostgresTablePage };
   'postgres.table.values': { input: import('./postgresTable').PostgresTableValuesInput; output: import('./postgresTable').PostgresTableValues };
+  'postgres.table.statistics': { input: import('./postgresTable').PostgresTableColumnReadInput; output: import('./postgresColumnStatistics').PostgresColumnStatistics };
   'postgres.table.references': { input: import('./postgresTable').PostgresTableReferenceInput; output: import('./postgresTable').PostgresTableReferenceResult };
   'postgres.table.layout.get': { input: import('./sqliteTableLayout').PostgresLayoutTarget; output: import('./sqliteTableLayout').PostgresLayoutSnapshot };
   'postgres.table.layout.save': { input: import('./sqliteTableLayout').PostgresLayoutSave; output: import('./sqliteTableLayout').PostgresLayoutSnapshot };

@@ -6,7 +6,8 @@ import { tableCellFilterZh } from '../locales/tableCellFilter.zh-CN';
 import { appendPostgresValueFilter } from '../postgresTableValues';
 import { tableFilterGroupAfterChange, tableFilterGroupSummary } from '../tableFilterGroups';
 import type { FilterDraft } from '../tableFilters';
-import { PostgresTableValueOptions, type PostgresTableValueSource } from './PostgresTableValueOptions';
+import type { PostgresColumnReadSource } from '../postgresColumnRead';
+import { PostgresTableValueOptions } from './PostgresTableValueOptions';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
 import { TableFilterPanel } from './TableFilterPanel';
 import { ErrorBox } from './ui';
@@ -16,7 +17,7 @@ export function PostgresTableFilterPanel({ initial, columns, disabled, seed, onS
   initial?: PostgresAdvancedTableFilter; columns: string[]; disabled: boolean;
   seed?: FilterDraft; onSeedAdded?(): void; replacesQuick?: boolean;
   onApply(filter?: PostgresAdvancedTableFilter): void;
-  values?: PostgresTableValueSource; canReadValues: boolean; onOpenValues(): void; onCloseValues(): void;
+  values?: PostgresColumnReadSource; canReadValues: boolean; onOpenValues(): void; onCloseValues(): void;
 }) {
   const [rules, setRules] = useState<FilterRule[]>(initial?.rules ?? []);
   const [mode, setMode] = useState<FilterMode>(initial?.mode ?? 'all');

@@ -136,6 +136,36 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect((await values('c4')).options).toEqual([{ value: '{"n": 9007199254740993}', count: '502', clipped: false }]);
       await expect(values('c5')).rejects.toThrow('不支持');
       await expect(values('c1', '', { owner: randomUUID() })).rejects.toThrow('快照');
+      const statistics = (tableSource: typeof valueTable, page: PostgresTablePage, column: string, extra = {}) =>
+        engine.handle('postgres.table.statistics', { ...target, ...tableSource, profile, pageToken: page.exportToken, column, ...extra });
+      expect(await statistics(valueTable, valuePage, 'c1')).toMatchObject({
+        rows: '502', nonNull: '501', nulls: '1', empty: '1', groups: { distinct: '501', unique: '501', repeated: '0' },
+      });
+      expect(await statistics(valueTable, valuePage, 'c5')).toEqual({ rows: '502', nonNull: '502', nulls: '0' });
+      await expect(statistics(valueTable, valuePage, 'c1', { owner: randomUUID() })).rejects.toThrow('快照');
+      const profileTable = { table: '"浏览"."字段概况"', tabId: randomUUID() };
+      await client.query(`CREATE TABLE ${profileTable.table} (id int PRIMARY KEY, amount numeric, label text COLLATE "C");
+        INSERT INTO ${profileTable.table} VALUES (1,9007199254740993,''),(2,9007199254740995,'甲'),
+          (3,'NaN','甲'),(4,'Infinity',repeat('龟',4100)),(5,NULL,NULL);
+        CREATE VIEW "浏览"."字段概况视图" AS SELECT * FROM ${profileTable.table};`);
+      const summary = await read({ ...profileTable, limit: 1 });
+      expect(await statistics(profileTable, summary, 'c1')).toMatchObject({
+        rows: '5', nulls: '1', groups: { distinct: '4', min: { text: '9007199254740993' }, max: { text: 'NaN' } },
+        numeric: { zero: '0', nonFinite: '2', sum: { text: '18014398509481988' },
+          average: { text: expect.stringMatching(/^9007199254740994(?:\.0+)?$/) }, deviation: { text: expect.stringMatching(/^1(?:\.0+)?$/) } },
+      });
+      expect(await statistics(profileTable, summary, 'c2')).toMatchObject({
+        empty: '1', groups: { distinct: '3', unique: '2', repeated: '1', min: { text: '', clipped: false },
+          max: { text: '龟'.repeat(4096), clipped: true } },
+      });
+      const profileView = { ...profileTable, table: '"浏览"."字段概况视图"' };
+      const emptySummary = await read({ ...profileView, filter: { column: 'label', text: '空结果' } });
+      expect(emptySummary.pageToken).toBeUndefined();
+      expect(await statistics(profileView, emptySummary, 'c1')).toMatchObject({
+        rows: '0', nonNull: '0', nulls: '0', groups: { distinct: '0', unique: '0', repeated: '0', min: null, max: null },
+        numeric: { nonFinite: '0', sum: null, average: null, deviation: null },
+      });
+      await expect(statistics(profileTable, summary, 'c1')).rejects.toThrow('快照');
       const preparedFilter = { mode: 'all' as const, rules: [{ column: 'id', operator: '<' as const, value: '6' }] };
       const exactValues = [null, '', '换\r\n行'];
       const filteredIds = async (values: (string | null)[], exclude: boolean) =>
@@ -147,6 +177,7 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       const beforeValuesDdl = await read({ ...valueTable, limit: 1 });
       await client.query(`ALTER TABLE ${valueTable.table} RENAME COLUMN note TO renamed`);
       await expect(values('c1', '', { pageToken: beforeValuesDdl.exportToken })).rejects.toThrow('结构或权限');
+      await expect(statistics(valueTable, beforeValuesDdl, 'c1')).rejects.toThrow('结构或权限');
       const advancedFilter = { mode: 'all', rules: [
         { column: 'amount', operator: '>', value: '2.000000000000000001' },
         { column: 'id', operator: 'IN', values: ['1', '2'] },

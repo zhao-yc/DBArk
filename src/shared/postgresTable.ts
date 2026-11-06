@@ -119,9 +119,10 @@ export const postgresTablePreviewSchema = target.extend({
 });
 export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
+export const postgresTableColumnReadSchema = postgresTableReleaseSchema.extend({ column }).strict();
+export type PostgresTableColumnReadInput = z.infer<typeof postgresTableColumnReadSchema>;
 export const postgresTableValueLimits = { groups: 500, page: 50, search: 256 } as const;
-export const postgresTableValuesSchema = postgresTableReleaseSchema.extend({
-  column,
+export const postgresTableValuesSchema = postgresTableColumnReadSchema.extend({
   search: z.string().max(postgresTableValueLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),
 }).strict();
 export type PostgresTableValuesInput = z.infer<typeof postgresTableValuesSchema>;

@@ -45,7 +45,9 @@ import { setTableColumnWidths } from '../tableColumnPreferences';
 import { postgresTablePresetConfiguration, postgresTablePresetOptions, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { validateTableSort } from '../tableSort';
 import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
-import type { PostgresTableValueSource } from './PostgresTableValueOptions';
+import { postgresColumnStatisticsZh } from '../locales/postgresColumnStatistics.zh-CN';
+import type { PostgresColumnReadSource } from '../postgresColumnRead';
+import { PostgresColumnStatisticsDialog } from './PostgresColumnStatisticsDialog';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -88,7 +90,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [filterColumn, setFilterColumn] = useState('');
   const [filterText, setFilterText] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState(false);
-  const [valueSource, setValueSource] = useState<PostgresTableValueSource>();
+  const [columnDialog, setColumnDialog] = useState<{ kind: 'values' | 'statistics'; source: PostgresColumnReadSource }>();
   const [cellFilterSeed, setCellFilterSeed] = useState<FilterDraft>();
   const [cellMenu, setCellMenu] = useState<{
     scope: object; cell: QueryResultCopyCell; anchor: GridCellMenuAnchor; seed: FilterDraft;
@@ -214,7 +216,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || valueSource || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || form || columnDialog || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const retainPageTokens = [...new Set(draft.map(entry => entry.change.pageToken))];
     void run(isCurrent => read(next, isCurrent, { ...movement, ...(retainPageTokens.length ? { retainPageTokens } : {}) }));
@@ -286,8 +288,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
 
   const layoutOpen = layoutDialog === layoutKey;
-  // 候选弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!valueSource || layoutOpen;
+  // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -474,24 +476,26 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   function closeAdvancedFilters() {
     setAdvancedFilters(false);
     setCellFilterSeed(undefined);
-    setValueSource(undefined);
+    if (columnDialog?.kind === 'values') setColumnDialog(undefined);
   }
 
   const valueColumns = page?.columns.filter(column => column.valueOptions) ?? [];
-  const canReadValues = active && !frozenPage && !requiresRefresh && !!page?.exportToken &&
-    pageConnectionVersion === connectionVersion && !!valueColumns.length;
+  const canReadStatistics = active && !blocked && !requiresRefresh && !!page?.exportToken && pageConnectionVersion === connectionVersion;
+  const canReadValues = canReadStatistics && !frozenPage && !!valueColumns.length;
   useEffect(() => {
-    if (valueSource && !valueSource.current()) setValueSource(undefined);
-  }, [active, connectionVersion, page, valueSource]);
+    if (columnDialog && !columnDialog.source.current()) setColumnDialog(undefined);
+  }, [active, connectionVersion, page, columnDialog]);
 
-  /** 候选绑定原页和连接修订，切换标签或刷新后不得再写筛选草稿。 */
-  function openValueOptions() {
-    const pageToken = page?.exportToken;
-    if (!canReadValues || !pageToken || !layoutScope.current.current() || lease.current ||
+  /** 统计可与草稿共存。候选会加入筛选草稿，仍要求没有待提交记录。 */
+  function openColumnReader(kind: 'values' | 'statistics') {
+    const pageToken = page?.exportToken, allowed = kind === 'values' ? canReadValues : canReadStatistics;
+    if (!allowed || !page || !pageToken || !layoutScope.current.current() || lease.current ||
         document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
-    const current = () => issued.current === pageToken && layoutScope.current.current() && !lease.current && !recordDirty.current;
-    setValueSource({ input: { ...target, pageToken }, columns: valueColumns, current,
-      initialColumn: valueColumns.find(column => column.name === filterColumn)?.key });
+    const columns = kind === 'values' ? valueColumns : page.columns;
+    const current = () => issued.current === pageToken && layoutScope.current.current() && !lease.current &&
+      (kind === 'statistics' || !recordDirty.current);
+    setColumnDialog({ kind, source: { input: { ...target, pageToken }, columns, current,
+      initialColumn: columns.find(column => column.name === filterColumn)?.key } });
   }
 
   /** 仅保存明确调整后的宽度，跳过虚拟网格的自动测量和无变化事件。 */
@@ -613,6 +617,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         ? <button disabled={blocked} onClick={() => void run(openPresetPage)}>{tablePresetsZh.treeRetry}</button>
         : <button disabled={frozenPage} onClick={() => navigate({ ...options, limit: pageSize })}>{text.refresh}</button>}
       <button disabled={blocked} onClick={onInspect}>{postgresStructureZh.open}</button>
+      <button disabled={!canReadStatistics} onClick={() => openColumnReader('statistics')}>{postgresColumnStatisticsZh.title}</button>
       <button disabled={frozenPage || requiresRefresh || !page?.exportToken}
         onClick={() => setExportPage(page)}>{postgresTableExportZh.open}</button>
       <button disabled={frozenPage || requiresRefresh || !page?.exportToken || !page.canImport}
@@ -689,9 +694,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
     </div>
     {advancedFilters && <PostgresTableFilterPanel columns={page?.columns.map(column => column.name) ?? []}
       initial={appliedAdvanced} seed={cellFilterSeed} onSeedAdded={() => setCellFilterSeed(undefined)}
-      values={valueSource} canReadValues={canReadValues} onOpenValues={openValueOptions} onCloseValues={() => setValueSource(undefined)}
+      values={columnDialog?.kind === 'values' ? columnDialog.source : undefined} canReadValues={canReadValues}
+      onOpenValues={() => openColumnReader('values')} onCloseValues={() => setColumnDialog(undefined)}
       replacesQuick={!!(options.filter && 'text' in options.filter && options.filter.text)}
       disabled={frozenPage} onApply={filter => navigate({ ...firstPage, filter })}/>}
+    {columnDialog?.kind === 'statistics' && <PostgresColumnStatisticsDialog source={columnDialog.source} onClose={() => setColumnDialog(undefined)}/>}
     {message && <div className="info-strip" role="status">{message}</div>}
     <ErrorBox message={error}/>
     {page?.truncated && <div className="warning-text">{text.truncated}</div>}
