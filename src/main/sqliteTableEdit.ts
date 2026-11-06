@@ -27,7 +27,7 @@ interface Locator { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: strin
 interface Snapshot {
   relation?: SqliteTableRelation;
   id: string; pageOffset: number; pageLimit: number; restoredGroup?: boolean; target: SqliteEditTarget; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
-  catalogue: SqliteTableCatalogue; columns: SqliteEditColumn[]; schemaVersion: string; locator: Locator;
+  catalogue: SqliteTableCatalogue; columns: SqliteTableDraftDocument['columns']; schemaVersion: string; locator: Locator;
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
 }
 interface Statement { sql: string; parameters: SqliteValue[]; row?: number; source?: number; kind: SqliteTableChange['kind']; }
@@ -123,10 +123,11 @@ export class SqliteTableEdits {
   async preparePage(driver: SqliteDriverSession, input: SqliteTablePageInput, profile: SqliteConnectionProfile, catalogue: SqliteTableCatalogue, control: SqliteTableBrowseControl, inspectLocator?: (value: Locator) => void): Promise<SqliteEditReadPlan> {
     const readonly = (reason = text.readonly): SqliteEditReadPlan => ({ capture: () => ({ kind: 'readonly', reason }) });
     if (profile.sqlite.readOnly || catalogue.kind !== 'table' || /^sqlite_/i.test(input.table) || !driver.identity) return readonly();
-    const facts = await read(driver, "SELECT type,wr FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY", [input.table], control, 2);
+    const facts = await read(driver, "SELECT type,wr,strict FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY", [input.table], control, 2);
     if (facts.length !== 1 || facts[0][0] !== 'table') return readonly();
-    const withoutRowid = integer(facts[0][1]) === '1';
-    const columns: SqliteEditColumn[] = catalogue.xinfo.filter(row => integer(row[6]) !== '1').map(row => ({ name: row[1] as string, declaredType: row[2] as string, generated: ['2', '3'].includes(integer(row[6])), nullable: integer(row[3]) === '0', hasDefault: row[4] !== null }));
+    const withoutRowid = integer(facts[0][1]) === '1', strict = integer(facts[0][2]) === '1';
+    const fields = catalogue.xinfo.filter(row => integer(row[6]) !== '1');
+    const columns = fields.map(row => ({ name: row[1] as string, declaredType: row[2] as string, generated: ['2', '3'].includes(integer(row[6])), nullable: integer(row[3]) === '0', hasDefault: row[4] !== null }));
     let locator: Locator | undefined;
     const fieldNames = new Set(columns.map(column => column.name.toLowerCase())), rowid = ['rowid', '_rowid_', 'oid'].find(name => !fieldNames.has(name));
     if (!withoutRowid && rowid && columns.length < 1024) locator = { kind: 'rowid', columns: [], rowid, collations: ['BINARY'] };
@@ -154,7 +155,9 @@ export class SqliteTableEdits {
         if (this.snapshots.size >= limits.snapshots || this.bytes + size > limits.snapshotBytes) return { kind: 'readonly', reason: 'SQLite编辑快照预算已满，请关闭旧编辑来源后重新读取' };
         const snapshot: Snapshot = { ...data, id: randomUUID(), expires: Date.now() + limits.snapshotLifetimeMs, bytes: size, active: 0, revoked: false };
         this.snapshots.set(snapshot.id, snapshot); this.bytes += size;
-        return { kind: 'editable', snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), columns: structuredClone(columns), rows: rows.map(row => row.map(original)), locator: { kind: chosen.kind, columns: [...chosen.columns] } };
+        // 主键标记仅供界面判断映射兼容性，磁盘草稿继续使用既有字段格式。
+        const pageColumns: SqliteEditColumn[] = columns.map((column, index) => ({ ...column, ...(integer(fields[index][5]) !== '0' ? { primary: true } : {}) }));
+        return { kind: 'editable', snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), columns: pageColumns, rows: rows.map(row => row.map(original)), ...(strict ? { strict: true } : {}), locator: { kind: chosen.kind, columns: [...chosen.columns] } };
       },
     };
   }
@@ -218,8 +221,9 @@ export class SqliteTableEdits {
           storageTypes: rows.map(row => row.map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join('')),
           result: { columns: catalogue!.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' })), rows: rows.map(row => Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)]))), elapsedMs: performance.now() - started, truncated: false, statement: '' } };
         restored.push({ page, changes: sqliteDraftChanges({ ...document, changes: group.changes }) });
-        if (!equal(edit.columns, document.columns)) throw Error(sqliteTableDraftMessages.changed);
-        if (document.workspace) this.snapshots.get(edit.snapshotId)!.restoredGroup = true;
+        const snapshot = this.snapshots.get(edit.snapshotId)!;
+        if (!equal(snapshot.columns, document.columns)) throw Error(sqliteTableDraftMessages.changed);
+        if (document.workspace) snapshot.restoredGroup = true;
       }
       const primary = restored.find(item => item.page.offset === document.workspace?.activeOffset) ?? restored[0], others = restored.filter(item => item !== primary);
       return { ...primary, ...(document.workspace ? { additionalPages: others } : {}) };

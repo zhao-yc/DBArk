@@ -8,6 +8,9 @@ import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { postgresTableZh as tableText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { postgresRecordTransferZh as transferText } from '../../src/renderer/locales/postgresRecordTransfer.zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
+import { sqliteRecordTransferZh as sqliteTransferText } from '../../src/renderer/locales/sqliteRecordTransfer.zh-CN';
+import { sqliteTableClipboardZh as clipboardText } from '../../src/renderer/locales/sqliteTableClipboard.zh-CN';
+import { sqliteTableEditZh as sqliteEditText } from '../../src/renderer/locales/sqliteTableEdit.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { sidebarMenuItem } from './sidebar-menu';
 
@@ -239,6 +242,78 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
     finally { sqliteCheck.close(); }
     expect(runtime.pageErrors).toEqual([]);
     await mark('SQLite 只读查询按逐格类型跨引擎映射，确认后精确写入两条且源库保持');
+
+    await expect(tab.getByRole('gridcell', { name: 'SQLite乙', exact: true })).toBeVisible();
+    await button(tableText.query).click();
+    await query.locator('.monaco-editor').getByRole('textbox').focus();
+    await page.keyboard.press((process.platform === 'darwin' ? 'Meta' : 'Control') + '+A');
+    await page.keyboard.insertText(`SELECT memo, exact_integer, amount AS precise, raw, missing
+      FROM "迁移回归"."目标表" WHERE exact_integer IS NOT NULL ORDER BY id`);
+    await run.click();
+    for (const name of ['SQLite乙', 'SQLite甲']) {
+      await query.getByRole('row').filter({ has: page.getByRole('gridcell', { name, exact: true }) }).getByRole('checkbox').check();
+    }
+    await captureQuery.click();
+    const targetPath = join(directory, 'transfer-target.sqlite');
+    const sqliteTarget = new DatabaseSync(targetPath);
+    try {
+      sqliteTarget.exec(`CREATE TABLE transfer_target(id INTEGER PRIMARY KEY, memo TEXT, exact_integer INTEGER,
+        precise ANY, raw BLOB, missing TEXT, lossy REAL) STRICT`);
+    } finally { sqliteTarget.close(); }
+    await application.evaluate(({ dialog }, file) => {
+      const original = dialog.showOpenDialog;
+      dialog.showOpenDialog = (async (...args: unknown[]) => {
+        dialog.showOpenDialog = original;
+        if (!(args.at(-1) as Electron.OpenDialogOptions).properties?.includes('openFile')) throw Error('拒绝与本例无关的文件对话框');
+        return { canceled: false, filePaths: [file] };
+      }) as typeof dialog.showOpenDialog;
+    }, targetPath);
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click();
+    await form.getByLabel(zh.connections.text006, { exact: true }).fill('跨引擎 SQLite 写入目标');
+    await form.getByRole('combobox').selectOption('sqlite');
+    await form.getByRole('checkbox', { name: sqliteZh.readOnly, exact: true }).uncheck();
+    await form.getByRole('button', { name: sqliteZh.choose, exact: true }).click();
+    await expect(form.locator('input[readonly]')).toHaveValue('transfer-target.sqlite');
+    await form.getByRole('button', { name: zh.connections.text036, exact: true }).click();
+    await expect(form).toBeHidden();
+    const sqliteTargetNode = page.locator('.connection-node').filter({ hasText: '跨引擎 SQLite 写入目标' });
+    await sqliteTargetNode.locator('.connection-row .tree-label').click();
+    await sqliteTargetNode.locator('.database-row .tree-label').getByText('main', { exact: true }).click();
+    await sqliteTargetNode.locator('.object-row .tree-label').getByText('transfer_target', { exact: true }).dblclick();
+    const sqliteTab = page.locator('.sqlite-table-tab:visible');
+    await expect(sqliteTab.getByRole('grid', { name: sqliteEditText.grid, exact: true })).toBeVisible();
+    const readSqliteTarget = () => {
+      const db = new DatabaseSync(targetPath, { readOnly: true });
+      try { return db.prepare(`SELECT memo, CAST(exact_integer AS TEXT) AS exact_integer, typeof(exact_integer) AS integer_type,
+        precise, typeof(precise) AS precise_type, hex(raw) AS raw, typeof(raw) AS raw_type, missing FROM transfer_target ORDER BY id`).all(); }
+      finally { db.close(); }
+    };
+    await (await navigationMenuItem(sqliteTab, { name: sqliteTransferText.entry, exact: true }, check)).click();
+    const sqliteMapping = page.getByRole('dialog', { name: sqliteTransferText.title, exact: true });
+    await expect(sqliteMapping).toContainText('跨引擎 SQLite 写入目标');
+    await sqliteMapping.getByLabel(sqliteTransferText.sourceColumn, { exact: true }).selectOption('2');
+    await expect(sqliteMapping.getByLabel(sqliteTransferText.targetColumn, { exact: true })).toHaveValue('precise');
+    await expect(sqliteMapping.getByRole('option', { name: 'lossy (REAL)', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('PostgreSQL到SQLite字段映射.png') });
+    await sqliteMapping.getByRole('button', { name: clipboardText.stage, exact: true }).click();
+    await expect(sqliteMapping).toHaveCount(0);
+    expect(readSqliteTarget()).toEqual([]);
+    await sqliteTab.getByRole('button', { name: sqliteEditText.preview, exact: true }).click();
+    const sqliteReview = page.getByRole('dialog', { name: sqliteEditText.previewTitle, exact: true });
+    const confirm = sqliteReview.getByRole('checkbox', { name: sqliteEditText.confirmation, exact: true });
+    await expect(confirm).toBeEnabled();
+    expect(readSqliteTarget()).toEqual([]);
+    await confirm.check();
+    await sqliteReview.getByRole('button', { name: sqliteEditText.submit, exact: true }).click();
+    const expected = [
+      { memo: 'SQLite甲', exact_integer: '9223372036854775807', integer_type: 'integer', precise: '9007199254740993.000000000000000001', precise_type: 'text', raw: '00FF', raw_type: 'blob', missing: null },
+      { memo: 'SQLite乙', exact_integer: '-9223372036854775808', integer_type: 'integer', precise: '0.000000000000000001', precise_type: 'text', raw: '', raw_type: 'blob', missing: '' },
+    ];
+    await expect.poll(readSqliteTarget).toEqual(expected);
+    expect(await readTarget()).toHaveLength(6);
+    expect(runtime.pageErrors).toEqual([]);
+    await writeFile(info.outputPath('SQLite独立读回.json'), JSON.stringify(readSqliteTarget(), null, 2));
+    await mark('PostgreSQL 勾选结果到 STRICT SQLite，排除会丢精度的 REAL 目标，确认后独立读回原类型');
     await runtime.confirmOwnedDesktopExit(info);
     await mark('窗口正常退出');
   } catch (error) {

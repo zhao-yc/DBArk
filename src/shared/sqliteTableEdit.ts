@@ -61,8 +61,8 @@ export type SqliteTableEditPreviewInput = z.infer<typeof sqliteTableEditPreviewS
 export type SqliteTableEditApplyInput = z.infer<typeof sqliteTableEditApplySchema>;
 export type SqliteTableEditReleaseInput = z.infer<typeof sqliteTableEditReleaseSchema>;
 export interface SqliteEditTarget { connectionId: string; database: 'main'; table: string; }
-export interface SqliteEditColumn { name: string; declaredType: string; generated: boolean; nullable: boolean; hasDefault: boolean; }
-export type SqliteTableEditPage = { kind: 'readonly'; reason: string } | { kind: 'editable'; snapshotId: string; expiresAt: string; columns: SqliteEditColumn[]; rows: SqliteOriginalValue[][]; locator: { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[] } };
+export interface SqliteEditColumn { name: string; declaredType: string; generated: boolean; nullable: boolean; hasDefault: boolean; primary?: true; }
+export type SqliteTableEditPage = { kind: 'readonly'; reason: string } | { kind: 'editable'; snapshotId: string; expiresAt: string; columns: SqliteEditColumn[]; rows: SqliteOriginalValue[][]; strict?: true; locator: { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[] } };
 export interface SqliteTableEditCounts { insert: number; update: number; delete: number; }
 export interface SqliteTableEditPreview { /** 多页预览按请求顺序回显准确快照集合；单页保持原合同。 */
   previewId: string; snapshotId: string; snapshotIds?: string[]; target: SqliteEditTarget; schemaKey: string; expiresAt: string; confirmation: string; sql: string[]; counts: SqliteTableEditCounts; }

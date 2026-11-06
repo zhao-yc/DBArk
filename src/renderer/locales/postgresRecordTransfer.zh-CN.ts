@@ -10,6 +10,7 @@ export const postgresRecordTransferZh = {
   notice: '使用源页已读到的原始记录。当前步骤只生成目标表新增草稿。',
   captured: (count: number) => `已暂存 ${count} 行原始记录。打开另一张 PostgreSQL 表，点击「从另一张表复制记录」。`,
   queryCaptured: (count: number) => `已暂存 ${count} 行查询结果。打开目标 PostgreSQL 表，点击「从查询结果复制记录」。`,
+  pgQueryCaptured: (count: number) => `已暂存 ${count} 行查询结果，可在 PostgreSQL 或 SQLite 目标表中复制。`,
   replaced: '此操作会替换当前暂存的跨库记录。', discard: '清除跨库暂存',
   source: '来源', target: '目标', sourceColumn: '来源字段', targetColumn: '目标字段',
   rows: (count: number) => `${count} 行`, add: '添加映射', remove: (name: string) => `移除目标字段 ${name}`,
