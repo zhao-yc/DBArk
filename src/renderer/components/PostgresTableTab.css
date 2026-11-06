@@ -93,6 +93,9 @@
 .pg-batch-edit-records .pg-record-inputs textarea { min-width: 0; }
 .pg-record-inputs { display: flex; align-items: start; gap: 8px; }
 .pg-record-inputs textarea { flex: 1; }
+.pg-record-duplicate { overflow-wrap: anywhere; }
+.pg-record-duplicate .pg-record-inputs select { flex: none; width: min(170px, 40%); }
+.pg-record-duplicate .pg-record-inputs textarea { min-width: 0; }
 .pg-table-preview dd, .pg-table-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .pg-inline-cell-editor {

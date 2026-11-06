@@ -205,6 +205,7 @@ export interface PostgresTableColumn extends ResultColumn {
   defaultValue: boolean;
   generated: boolean;
   identityAlways?: boolean;
+  sequenceDefault?: true;
   primary: boolean;
   binary: boolean;
 }

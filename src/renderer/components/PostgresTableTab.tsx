@@ -58,6 +58,8 @@ import { postgresBatchDeleteZh as deleteText } from '../locales/postgresBatchDel
 import { PostgresBatchEditDialog } from './PostgresBatchEditDialog';
 import { postgresBatchEditPlan, type PostgresBatchEditInput } from '../postgresBatchEdit';
 import { postgresBatchEditZh as batchEditText } from '../locales/postgresBatchEdit.zh-CN';
+import { postgresRecordDuplicatePlan } from '../postgresRecordDuplicate';
+import { postgresRecordDuplicateZh as duplicateText } from '../locales/postgresRecordDuplicate.zh-CN';
 import { Empty, ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresTableTab.css';
 
@@ -70,6 +72,9 @@ type BatchSelection = {
   originalDraft: DraftEntry[]; gridCurrent(): boolean;
 } & ({ kind: 'fill' } | { kind: 'delete'; plan: PostgresBatchDeletePlan } | { kind: 'edit'; rows: PostgresBatchRow[] });
 const batchLabels = { fill: fillText, delete: deleteText, edit: batchEditText };
+type DuplicateSource = {
+  page: PostgresTablePage; scope: object; row: number; rowNumber: number; originalDraft: DraftEntry[];
+} & ReturnType<typeof postgresRecordDuplicatePlan>;
 interface InlineEdit {
   scope: object; cell: QueryResultCopyCell; column: PostgresTableColumn; rowKey: string;
   anchor: HTMLElement; originalText: string; initial: PostgresInlineCellValue; typed?: string;
@@ -99,7 +104,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
   const findAnchor = useRef<{ scope: object; value?: GridFindTarget }>(undefined);
-  const [form, setForm] = useState<{ row: number | null }>();
+  const [form, setForm] = useState<{ row: number | null; duplicate?: DuplicateSource }>();
+  const duplicateOwner = useRef<DuplicateSource>(undefined);
   const [preview, setPreview] = useState<PostgresTablePreview>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -618,6 +624,48 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const stagedChange = formKey ? draft.find(entry => entry.rowKey === formKey)?.change : undefined;
   const viewKey = row === null ? undefined : page?.rowKeys?.[row];
   const viewDraft = viewKey ? draft.find(entry => entry.rowKey === viewKey)?.change : undefined;
+  const canDuplicate = active && writable && pageConnectionVersion === connectionVersion && !!page?.capabilities.insert &&
+    !page.truncated && row !== null && !!page.rows[row] && viewDraft?.kind !== 'delete';
+
+  function closeDuplicate(source: DuplicateSource) {
+    if (duplicateOwner.current !== source) return;
+    duplicateOwner.current = undefined;
+    setForm(undefined);
+  }
+
+  useLayoutEffect(() => {
+    const source = duplicateOwner.current;
+    if (source && (!active || source.scope !== cellScope || source.row !== row)) closeDuplicate(source);
+  }, [active, cellScope, row]);
+
+  /** 复制表单只取当前快照，窗内改动及取消都不会改变原记录草稿。 */
+  function openDuplicate() {
+    if (!canDuplicate || !page || row === null || duplicateOwner.current || issued.current !== page.pageToken ||
+        !layoutScope.current.current() || lease.current || recordInput.current ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    try {
+      const originalDraft = draftRef.current;
+      const prior = viewKey ? originalDraft.find(entry => entry.rowKey === viewKey)?.change : undefined;
+      const source = { ...postgresRecordDuplicatePlan(page, row, prior), page, scope: cellScope,
+        row, rowNumber: options.offset + row + 1, originalDraft };
+      closeCellMenu(cellMenuOwner.current, false);
+      duplicateOwner.current = source;
+      setForm({ row: null, duplicate: source });
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  function duplicateCurrent(source: DuplicateSource): boolean {
+    return duplicateOwner.current === source && page === source.page && cellScope === source.scope &&
+      row === source.row && draftRef.current === source.originalDraft && issued.current === page.pageToken &&
+      layoutScope.current.current() && !lease.current && !requiresRefresh;
+  }
+
+  function stageDuplicate(source: DuplicateSource, change: PostgresTableChange) {
+    if (change.kind !== 'insert' || !duplicateCurrent(source) || !stageChanges([change])) throw Error(duplicateText.stale);
+    closeDuplicate(source);
+    setError('');
+    setMessage(duplicateText.staged);
+  }
 
   function recordViewCurrent(): boolean {
     return !!(recordView && page?.exportToken && issued.current === page.exportToken && !modalBlocked && !requiresRefresh &&
@@ -705,6 +753,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         kind: 'query', title: tab.title, connectionId: target.connectionId, database: target.database, sql: postgresRelationSelect(target.table),
       })}>{text.query}</button>
       <button disabled={!writable || !page?.capabilities.insert} onClick={() => setForm({ row: null })}>{text.add}</button>
+      <button disabled={!canDuplicate} onClick={openDuplicate}>{duplicateText.action}</button>
       <button disabled={!canPasteAppend} onClick={() => {
         if (!canPasteAppend || lease.current || inlineOwner.current || !layoutScope.current.current() ||
           document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
@@ -912,10 +961,12 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         if (committed) void run(isCurrent => read(options, isCurrent));
       }}/>}
     {form && page && <PostgresRecordForm page={page} row={form.row}
-      initial={stagedChange?.kind === 'update' ? stagedChange : undefined}
+      duplicate={form.duplicate}
+      initial={form.duplicate ? { kind: 'insert', fields: form.duplicate.fields } : stagedChange?.kind === 'update' ? stagedChange : undefined}
       reference={referenceSource(active && stagedChange?.kind !== 'delete' &&
-        (form.row === null ? page.capabilities.insert : page.capabilities.update), () => !!form)}
-      onSave={stage} onClose={() => setForm(undefined)}/>}
+        (form.row === null ? page.capabilities.insert : page.capabilities.update), () => form.duplicate ? duplicateCurrent(form.duplicate) : !!form)}
+      onSave={change => form.duplicate ? stageDuplicate(form.duplicate, change) : stage(change)}
+      onClose={() => form.duplicate ? closeDuplicate(form.duplicate) : setForm(undefined)}/>}
     {preview && <Modal title={text.preview} onClose={() => { if (!busy) setPreview(undefined); }} wide>
       <div className="modal-content pg-table-preview">
         <p>{text.previewHint}</p>

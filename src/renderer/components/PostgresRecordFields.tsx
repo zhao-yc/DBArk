@@ -5,6 +5,7 @@ import { cellPreview, cellText, errorMessage, ownCell } from '../lib';
 import { postgresTableZh as text } from '../locales/postgresTable.zh-CN';
 import { postgresRecordViewZh as viewText } from '../locales/postgresRecordView.zh-CN';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
+import { postgresRecordDuplicateZh as duplicateText } from '../locales/postgresRecordDuplicate.zh-CN';
 import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
 import { ErrorBox, Modal } from './ui';
 
@@ -75,9 +76,10 @@ export function PostgresRecordFields({ columns, original, fields, editable, disa
   })}</>;
 }
 
-export function PostgresRecordForm({ page, row, initial, reference, onSave, onClose }: {
+export function PostgresRecordForm({ page, row, initial, reference, duplicate, onSave, onClose }: {
   page: PostgresTablePage; row: number | null; initial?: PostgresEditableRecord;
   reference?: PostgresReferenceSource;
+  duplicate?: { rowNumber: number; omitted: readonly string[] };
   onSave(change: PostgresEditableRecord): void; onClose(): void;
 }) {
   const [fields, setFields] = useState<PostgresRecordValues>(() => new Map(initial?.fields.map(field => [field.column, field.value])));
@@ -91,8 +93,12 @@ export function PostgresRecordForm({ page, row, initial, reference, onSave, onCl
     catch (reason) { setError(errorMessage(reason)); }
   }
 
-  return <Modal title={row === null ? text.add : text.edit} onClose={onClose} wide>
-    <div className="modal-content pg-record-form">
+  return <Modal title={duplicate ? duplicateText.title : row === null ? text.add : text.edit} onClose={onClose} wide>
+    <div className={duplicate ? 'modal-content pg-record-form pg-record-duplicate' : 'modal-content pg-record-form'}>
+      {duplicate && <>
+        <p>{duplicateText.source(duplicate.rowNumber)} {duplicateText.notice}</p>
+        {!!duplicate.omitted.length && <p>{duplicateText.omitted(duplicate.omitted.join('、'))}</p>}
+      </>}
       <PostgresRecordFields columns={page.columns} original={original} fields={fields} editable reference={reference} onChange={setFields}/>
       <ErrorBox message={error}/>
     </div>

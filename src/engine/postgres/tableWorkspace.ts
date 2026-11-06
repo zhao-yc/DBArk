@@ -77,6 +77,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
   const info = header.rows[0];
   if (!info || typeof info.c0 !== 'string') throw Error('PostgreSQL关系不存在、已改名或无权查看');
   if (info.c2 === 'm' && info.c11 === 'f') throw Error('PostgreSQL 物化视图尚未填充数据，请从「查看结构」执行刷新。');
+  // 复制记录根据标识属性和默认表达式的序列依赖省略字段，避免猜测 DEFAULT 文本。
   const fields = await connection.query(`
     SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull,
            a.atthasdef, a.attgenerated, a.attidentity, a.atttypid,
@@ -84,7 +85,13 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
              LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
              WHERE i.indrelid = a.attrelid AND i.indisprimary AND i.indisvalid AND k.attnum = a.attnum
                AND k.position <= i.indnkeyatts), 0),
-           a.attnum, a.attcollation, pg_catalog.pg_get_expr(d.adbin, d.adrelid)
+           a.attnum, a.attcollation, pg_catalog.pg_get_expr(d.adbin, d.adrelid),
+           a.attidentity <> '' OR EXISTS (
+             SELECT 1 FROM pg_catalog.pg_depend dependency
+             JOIN pg_catalog.pg_class sequence ON sequence.oid = dependency.refobjid AND sequence.relkind = 'S'
+             WHERE dependency.classid = 'pg_catalog.pg_attrdef'::regclass AND dependency.objid = d.oid
+               AND dependency.refclassid = 'pg_catalog.pg_class'::regclass AND dependency.refobjsubid = 0
+           )
     FROM pg_catalog.pg_attribute a
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
     WHERE a.attrelid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
@@ -95,6 +102,7 @@ async function readRelation(connection: PostgresConnection, table: string): Prom
     defaultValue: field.c3 === 't' || field.c5 !== '', generated: field.c4 !== '' || field.c5 === 'a',
     primary: Number(field.c7) > 0, binary: field.c6 === '17', ...(field.c5 === 'a' ? { identityAlways: true } : {}),
     ...(valueOptionTypes.has(String(field.c6)) ? { valueOptions: true } : {}),
+    ...(field.c11 === 't' ? { sequenceDefault: true } : {}),
   }));
   const keys = fields.rows.map((field, index) => ({ index, position: Number(field.c7) }))
     .filter(item => item.position > 0).sort((a, b) => a.position - b.position)
