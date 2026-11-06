@@ -28,5 +28,10 @@ export function createServerMonitorServices(connectionId: string, isCurrent: () 
       if (!owned.submitted) return Promise.resolve();
       return owned.cancellation ??= Promise.resolve().then(() => request('query.cancel', { taskId }));
     },
+    signal(input) {
+      check();
+      if (input.connectionId !== connectionId || active.size) throw Error(t.targetUnavailable);
+      return request('serverMonitor.signal', input);
+    },
   };
 }

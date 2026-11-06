@@ -1,4 +1,6 @@
-/** 首阶段只读监控的固定预算；渲染进程不能提交 SQL 或扩大字段范围。 */
+import { z } from 'zod';
+
+/** 监控的固定预算；渲染进程不能提交 SQL 或扩大字段范围。 */
 export const serverMonitorLimits = { sessions: 100, defaultSessions: 50, sqlCharacters: 512, snapshotBytes: 512 * 1024, refreshMilliseconds: 5000 } as const;
 export const serverMonitorStatusNames = ['Uptime', 'Threads_connected', 'Threads_running', 'Connections', 'Aborted_connects', 'Questions', 'Queries', 'Slow_queries', 'Bytes_received', 'Bytes_sent', 'Com_select', 'Com_insert', 'Com_update', 'Com_delete', 'Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads', 'Innodb_row_lock_waits', 'Innodb_row_lock_time'] as const;
 export const postgresMonitorStatusNames = ['numbackends', 'xact_commit', 'xact_rollback', 'blks_read', 'blks_hit', 'tup_returned', 'tup_fetched', 'tup_inserted', 'tup_updated', 'tup_deleted', 'conflicts', 'temp_files', 'temp_bytes', 'deadlocks'] as const;
@@ -13,9 +15,23 @@ export interface ServerMonitorSnapshot {
   summary: ServerMonitorSection<ServerMonitorSummary>;
   globalStatus: ServerMonitorSection<{ name: ServerMonitorCounterName; value: string }[]>;
   statisticsReset?: string | null;
+  signal?: { token: string; targets: { pid: string; canCancel: boolean }[] };
   sessions: ServerMonitorSection<{ rows: ServerMonitorSession[]; limit: number; truncated: boolean; visibility: 'account-visible-unconfirmed' }>;
   bytes: number;
 }
+
+const monitorId = z.string().min(1).max(200).refine(value => !!value.trim() && !value.includes('\0'));
+const monitorPid = z.string().regex(/^[1-9]\d{0,9}$/).refine(value => Number(value) <= 2_147_483_647);
+export const serverMonitorSignalSchema = z.object({
+  connectionId: monitorId, taskId: monitorId, token: z.uuid(), pid: monitorPid,
+  action: z.enum(['cancel-query', 'terminate-session']), confirmedPid: monitorPid,
+}).strict().refine(input => input.pid === input.confirmedPid, '请输入准确的会话 PID');
+export type ServerMonitorSignalInput = z.infer<typeof serverMonitorSignalSchema>;
+export type ServerMonitorSignalAction = ServerMonitorSignalInput['action'];
+export type ServerMonitorSignalResult = (
+  | { status: 'stale' | 'denied' | 'rejected' | 'unknown' }
+  | { status: 'accepted'; observation: 'ended' | 'still-present' | 'unknown' }
+) & { cleanupUnconfirmed?: true };
 /** IPC 与引擎共用校验，拒绝额外执行范围和非整数预算。 */
 export function validateServerMonitorInput(input: ServerMonitorInput): void {
   if (!input || typeof input !== 'object' || Object.keys(input).some(key => !['connectionId', 'taskId', 'sessionLimit'].includes(key))) throw new Error('服务器监控参数无效');

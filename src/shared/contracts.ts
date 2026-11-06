@@ -199,6 +199,7 @@ export interface CommandMap {
   'connections.close': { input: { id: string }; output: void };
   'metadata.databases': { input: { connectionId: string }; output: string[] };
   'serverMonitor.read': { input: import('./serverMonitor').ServerMonitorInput; output: import('./serverMonitor').ServerMonitorSnapshot };
+  'serverMonitor.signal': { input: import('./serverMonitor').ServerMonitorSignalInput; output: import('./serverMonitor').ServerMonitorSignalResult };
   'metadata.completion': { input: CompletionMetadataInput; output: CompletionMetadataOutput };
   'query.objectDefinition': { input: ObjectDefinitionInput; output: ObjectDefinitionOutput };
   'sqlite.completion': { input: SqliteCompletionInput; output: SqliteCompletionOutput };

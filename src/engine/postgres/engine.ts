@@ -46,8 +46,9 @@ import { postgresDataCompareLimits, postgresDataCompareSchema, postgresDataCompa
   postgresDataSyncApplySchema, postgresDataSyncLimits, postgresDataSyncPreviewSchema, postgresDataSyncZh,
   type PostgresDataCompareEndpoint, type PostgresDataSyncPreview } from '../../shared/postgresDataCompare';
 import { explainLimits } from '../../shared/explain';
-import { validateServerMonitorInput, type ServerMonitorInput } from '../../shared/serverMonitor';
-import { readPostgresServerMonitor } from './serverMonitor';
+import { serverMonitorSignalSchema, validateServerMonitorInput, type ServerMonitorInput, type ServerMonitorSignalInput,
+  type ServerMonitorSignalResult } from '../../shared/serverMonitor';
+import { readPostgresServerMonitor, signalPostgresMonitorTarget, type PostgresMonitorSignalTarget } from './serverMonitor';
 interface Session {
   id: string;
   connectionId: string;
@@ -355,6 +356,36 @@ export class PostgresEngine {
       throw reason;
     } finally {
       clearTimeout(timer);
+      this.transfers.delete(input.taskId);
+      this.rememberCompleted(input.taskId);
+    }
+  }
+
+  /** 信号投递后保护原控制连接。晚到的取消或退出只能等待同一回执，不能重发。 */
+  private async monitorSignal(input: ServerMonitorSignalInput, profile: PostgresConnectionProfile, target: PostgresMonitorSignalTarget) {
+    if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
+      throw Error('PostgreSQL 会话操作已存在、连接关闭中或已达并发上限');
+    let control: PostgresConnection | undefined, receipt: ServerMonitorSignalResult | undefined;
+    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, processAbort: () => control?.abort() };
+    this.transfers.set(input.taskId, task);
+    const done = task.done = this.use(profile, undefined, async managed => {
+      receipt = await signalPostgresMonitorTarget(managed, target, input.action, () => {
+        if (task.cancelled || this.stopping || this.closing.has(profile.id)) throw Error('会话操作在发送信号前已取消');
+        task.publishing = true;
+      });
+      return receipt;
+    }, false, false, true, managed => { control = managed; });
+    try {
+      this.emit({ taskId: input.taskId, status: 'running', progress: 0, message: '正在复核 PostgreSQL 会话' });
+      let result: ServerMonitorSignalResult;
+      try { result = await done; }
+      catch (reason) { if (!receipt) throw reason; result = { ...receipt, cleanupUnconfirmed: true }; }
+      this.emit({ taskId: input.taskId, status: result.status === 'accepted' ? 'completed' : 'failed', progress: 100, message: 'PostgreSQL 会话操作已结算' });
+      return result;
+    } catch (reason) {
+      this.emit({ taskId: input.taskId, status: task.cancelled ? 'cancelled' : 'failed', progress: 0, message: 'PostgreSQL 会话操作未完成' });
+      throw reason;
+    } finally {
       this.transfers.delete(input.taskId);
       this.rememberCompleted(input.taskId);
     }
@@ -1140,6 +1171,13 @@ export class PostgresEngine {
         const { profile, ...request } = input;
         if (profile?.dialect !== 'postgresql' || profile.id !== request.connectionId) throw Error('监控需要准确的已保存 PostgreSQL 连接');
         return this.monitor(request as ServerMonitorInput, profile);
+      }
+      case 'serverMonitor.signal': {
+        const { profile, signalTarget, ...request } = input;
+        const action = serverMonitorSignalSchema.parse(request);
+        if (profile?.dialect !== 'postgresql' || profile.id !== action.connectionId || signalTarget?.pid !== action.pid)
+          throw Error('会话操作需要主进程核准的 PostgreSQL 快照和目标');
+        return this.monitorSignal(action, profile, signalTarget);
       }
       case 'connections.test':
         return this.use(input as PostgresConnectionProfile, undefined, async (m) => ({

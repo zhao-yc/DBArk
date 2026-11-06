@@ -1,6 +1,6 @@
 # 使用指南
 
-从「工具 → 服务器监控」选择已保存的 PostgreSQL 连接，可以查看当前数据库统计、会话状态、等待事件和权限范围内的 SQL 摘要。可手动刷新、启用自动刷新，或取消本次读取。[PostgreSQL 服务器监控](development/postgres-server-monitor-20261107.md)
+从「工具 → 服务器监控」选择已保存的 PostgreSQL 连接，可以查看当前数据库统计、会话状态、等待事件和权限范围内的 SQL 摘要。可手动刷新、启用自动刷新，或取消本次读取。对可核对身份的会话，可选择取消查询或断开会话，输入目标 PID 后确认。[PostgreSQL 服务器监控](development/postgres-server-monitor-20261107.md) · [会话操作说明](development/postgres-monitor-session-actions-20261107.md)
 
 对支持写入的 MySQL／MariaDB InnoDB 表做完整比较后，可以勾选差异，预览并确认同步到右侧。[MySQL／MariaDB 差异同步](development/mysql-data-sync-20261107.md)
 

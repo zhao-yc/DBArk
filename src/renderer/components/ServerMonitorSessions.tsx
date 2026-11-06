@@ -1,18 +1,23 @@
 import { UsageHelp } from './ui';
 import { useMemo, useState } from 'react';
-import type { ServerMonitorSnapshot } from '../../shared/serverMonitor';
+import type { ServerMonitorSession, ServerMonitorSignalAction, ServerMonitorSnapshot } from '../../shared/serverMonitor';
 import { serverMonitorSessionSearchLimit, serverMonitorSessionView, type ServerMonitorSessionDirection, type ServerMonitorSessionSort } from '../serverMonitorSessions';
 import { serverMonitorSessionsZh as t } from '../serverMonitorSessionsZh';
 import { serverMonitorZhCN as monitor } from '../serverMonitorZh';
 import '../serverMonitorSessions.css';
 
-interface Props { section?: ServerMonitorSnapshot['sessions']; disabled?: boolean; postgres?: boolean; }
+interface Props {
+  section?: ServerMonitorSnapshot['sessions']; disabled?: boolean; postgres?: boolean;
+  signal?: ServerMonitorSnapshot['signal'];
+  onSignal?: (row: ServerMonitorSession, action: ServerMonitorSignalAction) => void;
+}
 /** 目标key由Dialog提供；同目标刷新/暂时不可用保留选择，目标换代或关闭卸载即丢弃旧回调。 */
-export function ServerMonitorSessions({section,disabled=false,postgres=false}: Props) {
+export function ServerMonitorSessions({section,disabled=false,postgres=false,signal,onSignal}: Props) {
   const [query,setQuery] = useState(''), [sort,setSort] = useState<ServerMonitorSessionSort>('id'), [direction,setDirection] = useState<ServerMonitorSessionDirection>('asc');
   const view = useMemo(()=>serverMonitorSessionView(section?.status === 'available' ? section.value.rows : [],query,sort,direction),[section,query,sort,direction]);
   if (!section) return null;
   const value = (text: string | null) => text === null ? monitor.null : text === '' ? monitor.emptyString : text;
+  const targets = new Map(signal?.targets.map(target => [target.pid, target]));
   return <section className="server-monitor-sessions">
     <h3>{monitor.sessions}</h3>
     <UsageHelp><p>{t.scope}</p><p>{t.sqlScope}</p>{postgres && <p>{monitor.postgres.duration}</p>}</UsageHelp>
@@ -29,10 +34,14 @@ export function ServerMonitorSessions({section,disabled=false,postgres=false}: P
       <p aria-live="polite">{t.counts(view.filtered,view.returned)}</p>
       {(section.value.truncated || view.capped) && <p>{monitor.limited}</p>}
       {!view.returned ? <p>{monitor.noSessions}</p> : !view.filtered && <p>{t.noMatches}</p>}
-      <div className="server-monitor-table"><table><thead><tr>{(postgres ? monitor.postgres.sessionFields : monitor.sessionFields).map(label=><th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{view.rows.map(row=><tr key={row.id}>
+      <div className="server-monitor-table"><table><thead><tr>{(postgres ? monitor.postgres.sessionFields : monitor.sessionFields).map(label=><th key={label} scope="col">{label}</th>)}{signal && <th scope="col">{monitor.signal.actions}</th>}</tr></thead><tbody>{view.rows.map(row=><tr key={row.id}>
         <td>{row.id}</td><td>{value(row.user)}</td><td>{value(row.host)}</td><td>{value(row.database)}</td><td>{value(row.command)}</td><td>{value(row.seconds)}</td><td>{value(row.state)}</td>
         {postgres && <td>{value(row.waitEvent ?? null)}</td>}
         <td><details><summary>{monitor.sqlDetail}</summary><pre>{value(row.sql)}</pre></details><span>{value(row.sqlLength)}{row.sqlTruncated?` · ${monitor.sqlLimited}`:''}</span></td>
+        {signal && <td>{targets.has(row.id) && <div className="server-monitor-signal-actions">
+          {targets.get(row.id)?.canCancel && <button disabled={disabled} onClick={() => onSignal?.(row, 'cancel-query')}>{monitor.signal['cancel-query']}</button>}
+          <button className="danger" disabled={disabled} onClick={() => onSignal?.(row, 'terminate-session')}>{monitor.signal['terminate-session']}</button>
+        </div>}</td>}
       </tr>)}</tbody></table></div>
     </>}
   </section>;

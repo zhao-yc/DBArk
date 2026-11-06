@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
 import { readServerMonitor, serverMonitorSessionsSql } from '../../src/engine/serverMonitor';
-import { readPostgresServerMonitor } from '../../src/engine/postgres/serverMonitor';
+import { readPostgresServerMonitor, signalPostgresMonitorTarget } from '../../src/engine/postgres/serverMonitor';
+import { ServerMonitorSignals } from '../../src/main/serverMonitorSignals';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
-import { postgresMonitorStatusNames, validateServerMonitorInput } from '../../src/shared/serverMonitor';
+import { postgresMonitorStatusNames, serverMonitorSignalSchema, validateServerMonitorInput, type ServerMonitorSignalInput } from '../../src/shared/serverMonitor';
 const query = vi.hoisted(() => vi.fn());
 vi.mock('../../src/engine/structureDefinition', () => ({ structureTaskQuery: query }));
 const summary = { version: '8.0', versionComment: '测试', hostname: '主机', port: '3306', currentUser: '只读账号@%', connectionId: '9007199254740993' };
@@ -63,6 +64,70 @@ describe('服务器监控固定只读查询与快照', () => {
     const row = { ...session, user: '\u0000'.repeat(128), host: '\u0000'.repeat(255), databaseName: '\u0000'.repeat(128), command: '\u0000'.repeat(64), state: '\u0000'.repeat(255), sqlText: '\u0000'.repeat(512), sqlLength: '512' };
     replies(Array.from({ length: 100 }, (_, index) => ({ ...row, id: String(index) })));
     await expect(readServerMonitor(context(), { connectionId: '连接', taskId: '任务', sessionLimit: 100 })).rejects.toThrow('字节预算');
+  });
+});
+
+describe('PostgreSQL 监控会话信号', () => {
+  const target = { pid: '20', user: 'owner', database: 'ledger', backendStart: '1760000000.123456',
+    instance: 'original-instance', query: { start: '1760000010.123456', digest: 'a'.repeat(32) } };
+
+  it('匹配失效时不重试，SQL 的 PID、后端代次及查询指纹走原绑定参数', async () => {
+    const read = vi.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
+    const connection = { query: read } as unknown as PostgresConnection;
+    const before = vi.fn();
+    await expect(signalPostgresMonitorTarget(connection, target, 'cancel-query', before)).resolves.toEqual({ status: 'stale' });
+    expect(before).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[1][0]).toContain('pg_cancel_backend(pid)');
+    expect(read.mock.calls[1][0]).toContain('EXTRACT(EPOCH FROM query_start) = $6::numeric');
+    expect(read.mock.calls[1][1]).toEqual([target.pid, target.user, target.database, target.backendStart, target.instance, target.query.start, target.query.digest]);
+  });
+
+  it('收到信号确认后只进行观察，读取失败保留原确认', async () => {
+    const read = vi.fn().mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ c0: 't' }] })
+      .mockRejectedValueOnce(Error('原连接断开'));
+    const connection = { query: read } as unknown as PostgresConnection;
+    await expect(signalPostgresMonitorTarget(connection, target, 'terminate-session', () => {}))
+      .resolves.toEqual({ status: 'accepted', observation: 'unknown' });
+    expect(read.mock.calls.filter(([sql]) => sql.includes('pg_terminate_backend'))).toHaveLength(1);
+    expect(read.mock.calls[2][0]).toContain('backend_start IS NULL');
+  });
+
+  it('观察查询独占回包预算，信号确认消费预算后仍能确认目标消失', async () => {
+    const read = vi.fn(async (sql: string, _values: unknown, budget: { rows: number }) => {
+      if (sql.startsWith('SET ')) return { rows: [] };
+      if (budget.rows-- <= 0) return { rows: [], truncated: true };
+      return { rows: [{ c0: sql.includes('pg_terminate_backend') ? 't' : 'f' }] };
+    });
+    const connection = { query: read } as unknown as PostgresConnection;
+    await expect(signalPostgresMonitorTarget(connection, target, 'terminate-session', () => {}))
+      .resolves.toEqual({ status: 'accepted', observation: 'ended' });
+  });
+
+  it('快照只给原文档和原配置，单次使用，拒绝覆盖后的旧快照与迟到快照', () => {
+    let connectionEpoch = {};
+    const permits = new ServerMonitorSignals(() => connectionEpoch), document = {}, connectionId = 'postgres', revision = 1;
+    const issue = () => permits.begin(document, connectionId, revision);
+    const privateSnapshot = { dialect: 'postgresql' as const, startedAt: '', completedAt: '', bytes: 0, signalTargets: [target],
+      summary: { status: 'unavailable' as const, reason: '' }, globalStatus: { status: 'unavailable' as const, reason: '' },
+      sessions: { status: 'unavailable' as const, reason: '' } };
+    const old = issue(), current = issue();
+    expect(old(privateSnapshot)).not.toHaveProperty('signal');
+    const view = current(privateSnapshot);
+    expect(view).not.toHaveProperty('signalTargets');
+    expect(view.signal?.targets).toEqual([{ pid: '20', canCancel: true }]);
+    expect(view.bytes).toBe(Buffer.byteLength(JSON.stringify(view)));
+    const input: ServerMonitorSignalInput = { connectionId, taskId: 'signal', token: view.signal!.token, pid: '20',
+      confirmedPid: '20', action: 'cancel-query' };
+    expect(serverMonitorSignalSchema.safeParse({ ...input, confirmedPid: '21' }).success).toBe(false);
+    expect(serverMonitorSignalSchema.safeParse({ ...input, backendStart: target.backendStart }).success).toBe(false);
+    expect(() => permits.claim({}, revision, input)).toThrow('失效');
+    expect(() => permits.claim(document, revision + 1, input)).toThrow('失效');
+    expect(permits.claim(document, revision, input)).toEqual(target);
+    expect(() => permits.claim(document, revision, input)).toThrow('失效');
+    const next = issue()(privateSnapshot).signal!;
+    connectionEpoch = {};
+    expect(() => permits.claim(document, revision, { ...input, token: next.token })).toThrow('失效');
   });
 });
 

@@ -12,3 +12,7 @@
 .server-monitor-note, .server-monitor-time { color: var(--muted, #969da9); font-size: 12px; }
 .server-monitor-table summary { cursor: pointer; }
 .server-monitor-dialog footer { display: flex; justify-content: flex-end; padding-top: 16px; }
+.server-monitor-signal-confirmation{display:grid;justify-items:start;gap:8px;padding:12px;border:1px solid var(--line);border-radius:var(--radius);scroll-margin-top:80px}
+.server-monitor-signal-confirmation p{margin:0}
+.server-monitor-signal-confirmation label{display:grid;gap:4px}
+.server-monitor-signal-actions{display:flex;flex-wrap:wrap;gap:6px}

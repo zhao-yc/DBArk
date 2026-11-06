@@ -84,7 +84,7 @@ import { sqliteCompletionInputSchema } from './sqliteCompletion';
 import { tableValueOptionsSearchPattern } from './tableValueOptions';
 import { tableFilteredExportLimits, tableFilteredExportText } from './tableFilteredExport';
 import { queryInsertTargetSchema, queryInsertConfirmationSchema } from './queryInsertExport';
-import { serverMonitorLimits, validateServerMonitorInput } from './serverMonitor';
+import { serverMonitorLimits, serverMonitorSignalSchema, validateServerMonitorInput } from './serverMonitor';
 import { csvExportFieldLimits } from './csvExportFields';
 import { csvImportDelimiters } from './csvImport';
 import { csvExportDelimiters } from './csvExport';
@@ -407,6 +407,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     // IPC先拒绝额外范围，内核继续复用同一标识及预算校验。
     try { validateServerMonitorInput(value); } catch { context.addIssue({ code: z.ZodIssueCode.custom, message: '服务器监控参数无效' }); }
   }),
+  'serverMonitor.signal': serverMonitorSignalSchema,
   'metadata.databases': z.object({ connectionId: id }).strict(),
   'search.structure':structureSearchInputSchema,
   'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,'queries.readText':savedQueryReadTextSchema,'queries.exportSql':savedQueryReadTextSchema,

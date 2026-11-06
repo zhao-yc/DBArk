@@ -23,6 +23,8 @@ test('PostgreSQL 监控读取数据库统计、区分会话权限并取消原读
   const client = (userName: string, password: string | undefined) => new Client({ host: '127.0.0.1', port, user: userName,
     password, database: user, connectionTimeoutMillis: 5000 });
   const ownQuery = client(user, passwords[0]), otherQuery = client(user + '_other', passwords[1]);
+  // 会话操作用例会断开该夹具连接；实际终态由独立管理连接核对。
+  otherQuery.on('error', () => {});
   const admin = client('postgres', passwords[2]), lock = client('postgres', passwords[2]);
   const connected: Client[] = [];
   let sleepers: Promise<unknown>[] = [], ownPid = 0, otherPid = 0;
@@ -33,8 +35,9 @@ test('PostgreSQL 监控读取数据库统计、区分会话权限并取消原读
     ownPid = (await ownQuery.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
     otherPid = (await otherQuery.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
     const ownMarker = '监控本账号长查询', otherMarker = '其他账号受限标记';
+    const ownSql = 'SELECT pg_sleep(90) /*' + ownMarker + 'A'.repeat(640) + '*/';
     sleepers = [
-      ownQuery.query('SELECT pg_sleep(90) /*' + ownMarker + 'A'.repeat(640) + '*/').catch(() => undefined),
+      ownQuery.query(ownSql).catch(() => undefined),
       otherQuery.query('SELECT pg_sleep(90) /*' + otherMarker + '*/').catch(() => undefined),
     ];
     const count = async (sql: string, params: (number | string)[] = []) => Number((await admin.query(sql, params)).rows[0].n);
@@ -135,6 +138,61 @@ test('PostgreSQL 监控读取数据库统计、区分会话权限并取消原读
     expect(JSON.stringify(monitorTasks)).not.toContain(ownMarker);
     expect(JSON.stringify(monitorTasks)).not.toContain(otherMarker);
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+
+    const chooseAction = async (pid: number, action: 'cancel-query' | 'terminate-session') => {
+      await row(pid).getByRole('button', { name: text.signal[action], exact: true }).click();
+      const confirm = modal.getByRole('region', { name: text.signal.target });
+      await expect(confirm).toContainText('PID ' + pid);
+      const send = confirm.getByRole('button', { name: text.signal.confirm, exact: true });
+      await expect(send).toBeDisabled();
+      await confirm.getByRole('textbox', { name: text.signal.pid }).fill(String(pid));
+      return send;
+    };
+    const waitAction = async (message: string) => {
+      await expect(modal.getByRole('status').filter({ hasText: message })).toBeVisible();
+      await expect(refresh).toBeEnabled();
+    };
+    await expect(row(otherPid).getByRole('button', { name: text.signal['terminate-session'] })).toHaveCount(0);
+    const staleCancel = await chooseAction(ownPid, 'cancel-query');
+    const queryStart = async () => (await admin.query(
+      "SELECT EXTRACT(EPOCH FROM query_start)::text AS started FROM pg_catalog.pg_stat_activity WHERE pid = $1 AND state = 'active'", [ownPid])).rows[0]?.started;
+    const originalStart = await queryStart();
+    expect(originalStart).toMatch(/^\d+\.\d+$/);
+    await admin.query('SELECT pg_catalog.pg_cancel_backend($1)', [ownPid]);
+    await sleepers[0];
+    // 同一进程重发完全相同的 SQL；旧确认仍须由查询启动时间拦截。
+    const successor = ownQuery.query(ownSql).then(() => 'completed', (reason: { code?: string }) => reason.code);
+    sleepers.push(successor);
+    await expect.poll(async () => { const start = await queryStart(); return typeof start === 'string' && start !== originalStart; }).toBe(true);
+    await staleCancel.click();
+    await waitAction(text.signal.stale);
+    expect(await activeSleepers()).toBe(2);
+    const liveCancel = await chooseAction(ownPid, 'cancel-query');
+    await page.screenshot({ path: info.outputPath('确认取消查询.png') });
+    await liveCancel.click();
+    await waitAction(text.signal.ended);
+    expect(await successor).toBe('57014');
+    expect((await ownQuery.query('SELECT 42 AS value')).rows[0].value).toBe(42);
+
+    await admin.query('GRANT pg_read_all_stats TO ' + user);
+    await refresh.click();
+    await (await chooseAction(otherPid, 'terminate-session')).click();
+    await waitAction(text.signal.denied);
+    expect(await activeSleepers()).toBe(1);
+    await admin.query('GRANT pg_signal_backend TO ' + user);
+    await admin.query('SELECT pg_catalog.pg_cancel_backend($1)', [otherPid]);
+    await sleepers[1];
+    await admin.query('CREATE TABLE public.monitor_terminate_evidence(id integer)');
+    await admin.query('GRANT INSERT ON public.monitor_terminate_evidence TO ' + user + '_other');
+    await otherQuery.query('BEGIN');
+    await otherQuery.query('INSERT INTO public.monitor_terminate_evidence VALUES (1)');
+    await refresh.click();
+    await (await chooseAction(otherPid, 'terminate-session')).click();
+    await waitAction(text.signal.ended);
+    await expect.poll(() => count('SELECT count(*) AS n FROM pg_catalog.pg_stat_activity WHERE pid = $1', [otherPid])).toBe(0);
+    expect(await count('SELECT count(*) AS n FROM public.monitor_terminate_evidence')).toBe(0);
+    await page.screenshot({ path: info.outputPath('断开会话-服务器回执.png') });
+
     await modal.getByRole('button', { name: text.close, exact: true }).click();
     await expect(modal).toBeHidden();
     expect(await count("SELECT count(*) AS n FROM pg_catalog.pg_stat_activity WHERE application_name = 'tabrelio' AND datname = $1", [user])).toBe(0);

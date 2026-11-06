@@ -53,6 +53,7 @@ export function persistedTaskMessage(command: string, event: TaskEvent): string 
   if (command === 'table.incomingReferences' || command === 'table.childReferencePage') return event.status === 'completed' ? '子记录只读任务已完成；关联值、记录和错误原文未保存。' : event.status === 'running' ? '正在读取子记录；关联值和记录仅在当前窗口保留。' : '子记录读取未完成；关联值、记录和错误原文未保存，请在当前窗口核对。';
   if (command.startsWith('queryFileSources.')) return event.queryFileSource?.wrote === 'unknown' ? 'SQL文件替换结果不确定，请核对原文件；不自动重试，正文与路径未保存。' : event.queryFileSource?.wrote === 'yes' && event.status !== 'completed' ? 'SQL文件已写入，但附加处理未完成，请核对文件与来源状态，不要自动重试。' : event.status === 'completed' ? 'SQL文件任务已完成，正文与路径未写入任务概要。' : event.status === 'running' ? '正在处理SQL文件，正文与路径未写入任务概要。' : 'SQL文件任务未写入即已结束，输入保持；正文与路径未写入任务概要。';
   if (command === 'serverMonitor.read') return event.status === 'completed' ? '服务器监控快照读取完成；会话SQL、账号和错误原文未保存。' : event.status === 'running' ? '正在读取只读服务器监控；快照只留在当前窗口。' : '服务器监控读取未正常完成；会话SQL、账号和错误原文未保存，请在当前窗口核对。';
+  if (command === 'serverMonitor.signal') return event.status === 'completed' ? '服务器已接受会话信号，请在原窗口核对观测结果。' : event.status === 'running' ? '正在处理服务器会话操作。' : '未确认服务器接受会话信号，请在原窗口核对回执。';
   if (command.startsWith('schema.tableCopyData.')) {
     const progress = event.tableCopyData;
     return progress?.dataCompleted ? '复制数据事务已收到提交成功响应；源行、确认文字及错误原文未保存。' : progress?.ddlCompleted ? '目标表已创建，数据未确认提交；保留目标，请人工核对，不重放或补DROP。' : progress?.ddlSubmitted ? '建表结果未知，保留目标，请人工核对，不自动重放。' : '结构及数据复制尚未确认发送DDL；行内容与错误原文未保存。';

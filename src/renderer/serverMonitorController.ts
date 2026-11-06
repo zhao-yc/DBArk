@@ -1,4 +1,4 @@
-import { serverMonitorLimits, type ServerMonitorInput, type ServerMonitorSnapshot } from '../shared/serverMonitor';
+import { serverMonitorLimits, type ServerMonitorInput, type ServerMonitorSignalInput, type ServerMonitorSignalResult, type ServerMonitorSnapshot } from '../shared/serverMonitor';
 import { serverMonitorZhCN as t } from './serverMonitorZh';
 
 export interface ServerMonitorServices {
@@ -6,6 +6,7 @@ export interface ServerMonitorServices {
   read(input: ServerMonitorInput): Promise<ServerMonitorSnapshot>;
   /** 仅取消本组件的taskId；返回本身不能替代原read的资源收尾证明。 */
   cancel(taskId: string): Promise<unknown>;
+  signal?(input: ServerMonitorSignalInput): Promise<ServerMonitorSignalResult>;
 }
 export interface ServerMonitorTarget { connectionId: string; connectionRevision: number; }
 export interface ServerMonitorViewState {

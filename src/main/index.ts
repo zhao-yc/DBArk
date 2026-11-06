@@ -72,6 +72,7 @@ import { SqliteConnectionFiles } from './sqliteConnectionFiles';
 import { closeSqliteDatabaseCreates, createSqliteDatabaseFile } from './sqliteDatabaseCreate';
 import { assertSqliteExportDestination } from './sqliteExportDestination';
 import { DatabaseBackupArchiveFiles } from './databaseBackupArchiveFiles';
+import { ServerMonitorSignals } from './serverMonitorSignals';
 import { databaseBackupArchiveZh } from '../shared/databaseBackupArchiveFiles';
 import { sqliteBackupFileIdentity } from '../engine/sqlite/backup';
 import { closeSqliteDatabaseCopies, publishSqliteDatabaseCopy } from './sqliteDatabaseBackup';
@@ -884,6 +885,11 @@ async function runTableFilteredDelete(command: 'table.filteredDelete.preview' | 
 }
 
 const postgresTableOwners = new WeakMap<object, string>();
+const monitorSignals = new ServerMonitorSignals(id => {
+  const epoch = tableValueOptionsConnectionOwners.get(id) ?? {};
+  tableValueOptionsConnectionOwners.set(id, epoch);
+  return epoch;
+});
 const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
 const mysqlSqlFileSources = new WeakMap<object, MysqlSqlFileChooseInput & { token: string; revision: number; source: MysqlSqlFileSource; expires: number }>();
 const postgresSqlFileSources = new WeakMap<object, { token: string; connectionId: string; database: string; newDatabase?: string; revision: number; source: PostgresSqlFileSource; expires: number }>();
@@ -1803,7 +1809,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
   if (command === 'schema.databaseDefaultEncoding.apply' || command === 'schema.tableCreate.apply' || command === 'schema.tableCopyData.apply') structureTokens.delete(input.previewToken);
   if (command.startsWith('schema.compare') && shuttingDown) throw new Error('客户端正在退出，不能开始结构比较');
-  if (command === 'serverMonitor.read' && shuttingDown) throw new Error('客户端正在退出，不能刷新服务器监控');
+  if (command.startsWith('serverMonitor.') && shuttingDown) throw new Error('客户端正在退出，不能开始服务器监控操作');
+  let publishMonitor: ReturnType<ServerMonitorSignals['begin']> | undefined;
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
     case 'result.presets.list':
@@ -1936,9 +1943,27 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     // 监控使用主进程解密的目标配置，避免为了打开只读窗口另建一次不受任务管理的测试连接。
     case 'serverMonitor.read': {
+      columnsMain.assertCapturedOwner(columns);
+      if (tableValueOptionsClosing.has(input.connectionId)) throw Error('监控连接正在关闭');
       const profile = store.resolveConnection(input.connectionId);
       if (profile.dialect === 'sqlite') throw Error('服务器监控需要 MySQL、MariaDB 或 PostgreSQL 连接');
+      const revision = store.connectionRevision(), publish = monitorSignals.begin(columns!.owner.document, profile.id, revision);
+      publishMonitor = snapshot => {
+        columnsMain.assertCapturedOwner(columns);
+        if (shuttingDown || store.connectionRevision() !== revision || tableValueOptionsClosing.has(profile.id))
+          throw Error('监控连接配置已变化，请重新刷新');
+        return publish(snapshot);
+      };
       input = { ...input, profile };
+      break;
+    }
+    case 'serverMonitor.signal': {
+      columnsMain.assertCapturedOwner(columns);
+      if (tableValueOptionsClosing.has(input.connectionId)) throw Error('监控连接正在关闭');
+      const profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect !== 'postgresql') throw Error('会话操作需要已保存的 PostgreSQL 连接');
+      const signalTarget = monitorSignals.claim(columns!.owner.document, store.connectionRevision(), input);
+      input = { ...input, profile, signalTarget };
       break;
     }
     // 无 await、无引擎调用：全部校验和生成通过后才一次写入系统剪贴板。
@@ -2512,6 +2537,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'sessions.close' && session?.postgres) session.postgres.closing = true;
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
+    if (publishMonitor) result = publishMonitor(result);
     if (command === 'query.objectDefinition') columns!.objectDefinitionPublication!(result);
     if (command === 'sqliteDraftFiles.restore') try { sqliteEditLease!.check(); } catch (reason) { await sqliteEdits.rejectRestored(result).catch(() => {}); throw reason; }
     if (sqlitePage) result = command === 'sqliteDraftFiles.restore' ? await sqlitePage.acceptRestored(result) : await sqlitePage.accept(result);
@@ -2934,7 +2960,7 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
-        if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('mysql.compareData') || payload.command.startsWith('backupArchive.') || payload.command.startsWith('postgres.archive.') || payload.command.startsWith('serverMonitor.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') || payload.command.startsWith('mysql.backup.') ||
             payload.command === 'query.cancel' && (['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
