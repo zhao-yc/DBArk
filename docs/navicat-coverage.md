@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 源表或视图可暂存勾选行的原值，在另一张 PostgreSQL 表核对目标和字段映射并生成新增草稿。M04 为部分覆盖，暂不发布。[PostgreSQL 跨库复制记录](development/postgres-record-transfer-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 可写普通表支持按已应用筛选跨页删除，预览列出目标表、条件及准确行数，提交时复核完整匹配集合和行版本。D02 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 按筛选批量删除](development/postgres-filtered-delete-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 可写普通表支持跨页更新已应用筛选的全部匹配记录。预览显示准确行数，提交前重新核对匹配集合及行版本。D02 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 按筛选批量更新](development/postgres-filtered-update-20261106.md)
@@ -811,7 +813,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | M01 | 同类/跨类型传输 | 待做 | 结构数据映射、预览、批次、取消、错误与精度 |
 | M02 | 结构比较同步 | 部分 | 0.17开发中已有两表原定义比较、差异分类及受限SQL审查稿，六实例读取/预览保护24项通过，见[首批集成](../tests/integration/acceptance-parallel-integration-20261016.md)。尚不能执行同步；完整对象/方向/依赖及目标再检查继续，外键全库名称可用性未知时拒绝危险混合脚本 |
 | M03 | 数据比较同步 | 待做 | 键/筛选、差异分页、冲突，选择增删改 |
-| M04 | 跨库记录复制 | 待做 | 类型映射，形成目标草稿，避免误贴原连接 |
+| M04 | 跨库记录复制 | 部分 | PostgreSQL 可在表页暂存勾选行并映射到另一张 PostgreSQL 表的新增草稿。跨引擎复制和整表传输待做。[验收范围](development/postgres-record-transfer-20261106.md) |
 | B01 | 常用数据库备份恢复 | 待做 | MySQL/MariaDB/PostgreSQL/SQLite/Redis 分别验证；表导出不能代替整库备份 |
 | B02 | 备份转 SQL/SQL 与 Redis 文件 | 部分 | SQL 执行已验；补转换及 Redis 命令任务 |
 | S01 | 用户/角色/授权撤销 | 待做 | 真实权限、预览、权限不足与当前账号保护 |

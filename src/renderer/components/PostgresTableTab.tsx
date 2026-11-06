@@ -21,6 +21,7 @@ import { PostgresTableFilterPanel } from './PostgresTableFilterPanel';
 import { PostgresTableCellFilterMenu } from './PostgresTableCellFilterMenu';
 import { PostgresInlineCellEditor, type PostgresInlineCellValue } from './PostgresInlineCellEditor';
 import { PostgresGridPasteDialog } from './PostgresGridPasteDialog';
+import { PostgresRecordTransferDialog } from './PostgresRecordTransferDialog';
 import { PostgresRecordForm } from './PostgresRecordFields';
 import { PostgresReferencePicker, type PostgresReferenceSource } from './PostgresReferencePicker';
 import { postgresReferencePickerZh as referenceText } from '../locales/postgresReferencePicker.zh-CN';
@@ -28,6 +29,8 @@ import { PostgresTableRecordView, type PostgresRecordMove } from './PostgresTabl
 import { postgresRecordViewZh as recordText } from '../locales/postgresRecordView.zh-CN';
 import { postgresClipboardInput, postgresGridPasteChanges } from '../postgresGridPaste';
 import { postgresGridPasteZh as pasteText } from '../locales/postgresGridPaste.zh-CN';
+import { postgresRecordTransferZh as transferText } from '../locales/postgresRecordTransfer.zh-CN';
+import { capturePostgresRecordTransfer, postgresTransferChanges, samePostgresTransferTable, usePostgresRecordTransfer, type PostgresRecordTransfer } from '../postgresRecordTransfer';
 import { PostgresTableFindPanel, type PostgresFindRequest } from './PostgresTableFindPanel';
 import { postgresFindPlan, postgresFindRows, type PostgresFindPlan } from '../postgresTableFind';
 import { postgresTableFindZh as findText } from '../locales/postgresTableFind.zh-CN';
@@ -133,6 +136,9 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [queryTemplate, setQueryTemplate] = useState<QueryTemplateIntent>();
   const queryTemplateOwner = useRef<QueryTemplateIntent>(undefined);
   const [pasteScope, setPasteScope] = useState<object>();
+  const transfer = usePostgresRecordTransfer(state => state.snapshot);
+  const [transferIntent, setTransferIntent] = useState<{ snapshot: PostgresRecordTransfer; scope: object }>();
+  const connectionName = useWorkspace(state => state.connections.find(item => item.id === tab.connectionId)?.name);
   const pasteOwner = useRef<object>(undefined);
   const [findRequest, setFindRequest] = useState<PostgresFindRequest>();
   const findAnchor = useRef<{ scope: object; value?: GridFindTarget }>(undefined);
@@ -176,6 +182,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const recordDirty = useRef(false);
   const started = useRef(false);
   const target: PostgresTableTarget = { connectionId: tab.connectionId, database: tab.database ?? 'postgres', table: tab.table ?? '', tabId: tab.id };
+  const transferTable = { ...target, label: connectionName ?? target.connectionId };
   const presetTab = isPostgresPresetTabId(tab.id);
   const layoutTarget = useMemo(() => ({ connectionId: target.connectionId, database: target.database, table: target.table }), [target.connectionId, target.database, target.table]);
   const layoutKey = useMemo(() => ({}), [layoutTarget, connectionVersion]);
@@ -284,7 +291,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   /** 有草稿时只翻页，明确把仍有草稿的原页交给引擎保留。 */
   function navigate(next: PageOptions, keepDraft = false, movement: PageMovement = {}) {
-    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
+    if ((presetTab && !page) || (!keepDraft && draft.length) || (requiresRefresh && draft.length) || preview || draftFile || form || transferIntent || columnDialog || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current || lease.current) return;
     setMessage('');
     const pins = keepDraft ? history.pins() : {};
     void run(isCurrent => read(next, isCurrent, { ...movement, ...pins, keepHistory: keepDraft }));
@@ -364,7 +371,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   /** 预览包含服务端构建的参数语句，点击确认前没有写库。 */
   function prepare() {
     const pageToken = page?.exportToken;
-    if (!pageToken || !draft.length || requiresRefresh || filteredUpdate || draftFile || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
+    if (!pageToken || !draft.length || requiresRefresh || filteredUpdate || draftFile || transferIntent || queryTemplateOwner.current || insertDraftOwner.current || batchOwner.current || templateOwner.current || inlineOwner.current || pasteOwner.current || recordInput.current) return;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.preview', { ...target, pageToken, changes: draft.map(item => item.change) });
       if (isCurrent()) setPreview(result);
@@ -409,7 +416,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
 
   const layoutOpen = layoutDialog === layoutKey;
   // 字段弹窗关闭后，原只读请求收尾前继续阻止表页发起另一个作业。
-  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!preview || !!filteredUpdate || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
+  const modalBlocked = busy || workspaceBusy || !!form || !!inlineEdit || !!pasteScope || !!transferIntent || !!preview || !!filteredUpdate || !!exportPage || !!importPage || !!sortPageToken || !!presetPage || !!columnDialog || !!batch || !!templateDialog || !!draftFile || !!queryTemplate || !!browsedReference || layoutOpen;
   const blocked = modalBlocked || recordInputDirty;
   const frozenPage = blocked || draft.length > 0 || (presetTab && !page);
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
@@ -676,6 +683,38 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   }
   const canPasteAppend = active && writable && !!page?.capabilities.insert && pageConnectionVersion === connectionVersion &&
     gridLayout.columns.some(column => !column.generated);
+  const canCaptureTransfer = cellMenuEnabled && !page?.truncated && gridLayout.columns.length > 0 &&
+    gridLayout.columns.length <= postgresTableLimits.fields;
+  const canReceiveTransfer = active && writable && pageConnectionVersion === connectionVersion && page?.capabilities.insert &&
+    page.columns.some(column => !column.generated) && !!transfer && !samePostgresTransferTable(transfer.source, transferTable);
+
+  useLayoutEffect(() => {
+    if (transferIntent && (!active || transferIntent.scope !== cellScope || transferIntent.snapshot !== transfer))
+      setTransferIntent(undefined);
+  }, [active, cellScope, transfer, transferIntent]);
+
+  /** 只保留可见字段的数据库原值，源页草稿及操作状态保持独立。 */
+  function captureTransfer(selected: ReadonlySet<number>, gridCurrent: () => boolean) {
+    if (!canCaptureTransfer || !page || issued.current !== page.exportToken || !layoutScope.current.current() ||
+        lease.current || recordInput.current || !gridCurrent()) return;
+    try {
+      const snapshot = capturePostgresRecordTransfer(transferTable, page, gridLayout.columns, selected);
+      usePostgresRecordTransfer.setState({ snapshot });
+      setError(''); setMessage(transferText.captured(snapshot.rows.length));
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+
+  /** 目标页、会话快照及活动标签都核对后才加入一组可撤销的新增草稿。 */
+  function stageTransfer(mapping: ReadonlyMap<string, string>) {
+    if (!transferIntent || !page?.pageToken || issued.current !== page.pageToken || transferIntent.scope !== cellScope ||
+        transferIntent.snapshot !== usePostgresRecordTransfer.getState().snapshot || !layoutScope.current.current() ||
+        recordInput.current || lease.current || samePostgresTransferTable(transferIntent.snapshot.source, transferTable)) throw Error(transferText.stale);
+    const changes = postgresTransferChanges(transferIntent.snapshot, page, mapping);
+    if (!stageChanges(changes)) throw Error(transferText.stale);
+    setTransferIntent(undefined);
+    usePostgresRecordTransfer.setState({ snapshot: undefined });
+    setError(''); setMessage(transferText.staged(changes.length));
+  }
 
   function closePasteAppend(owner: object) {
     if (pasteOwner.current !== owner) return;
@@ -1068,6 +1107,14 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         pasteOwner.current = cellScope;
         setPasteScope(cellScope);
       }}>{pasteText.append}</button>
+      <button disabled={!canReceiveTransfer} onClick={() => {
+        if (canReceiveTransfer && transfer && page?.pageToken === issued.current && layoutScope.current.current() && !lease.current && !recordInput.current)
+          setTransferIntent({ snapshot: transfer, scope: cellScope });
+      }}>{transferText.open}</button>
+      {transfer && <button disabled={blocked || !active} onClick={() => {
+        if (layoutScope.current.current() && usePostgresRecordTransfer.getState().snapshot === transfer)
+          usePostgresRecordTransfer.setState({ snapshot: undefined });
+      }}>{transferText.discard}</button>}
       {!recordView && <button disabled={!writable || !page?.capabilities.update || row === null} onClick={() => setForm({ row })}>{text.edit}</button>}
       <button disabled={!writable || !page?.capabilities.delete || row === null} onClick={() => {
         if (row === null) return;
@@ -1169,7 +1216,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         }}
         renderGrid={(findTarget, findMarks) => <ResultsGrid key={page.exportToken} columns={gridLayout.columns} rows={page.rows} rowJump
         presentCell={draftGrid?.cell}
-        renderRowSelectionAction={page.capabilities.insert || page.capabilities.delete || page.capabilities.update && editColumns.length ? (selected, current) =>
+        renderRowSelectionAction={(selected, current) =>
           <div className="pg-table-controls pg-batch-actions">
             {!!fillColumns.length && page.capabilities.update && <button type="button" title={fillText.rows} disabled={!canBatch('fill', selected)}
               onClick={() => openBatch('fill', selected, current)}>{fillText.action}</button>}
@@ -1179,8 +1226,11 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
               onClick={() => openBatch('duplicate', selected, current)}>{batchDuplicateText.action}</button>}
             {page.capabilities.delete && <button type="button" title={fillText.rows} disabled={!canBatch('delete', selected)}
               onClick={() => openBatch('delete', selected, current)}>{deleteText.action}</button>}
+            <button type="button" title={transfer ? transferText.replaced : transferText.limits}
+              disabled={!canCaptureTransfer || !selected.size || selected.size > postgresTableLimits.changes}
+              onClick={() => captureTransfer(selected, current)}>{transferText.capture}</button>
             {!!selected.size && <span>{fillText.count(selected.size)}</span>}
-          </div> : undefined}
+          </div>}
         onActiveRowIndexChange={recordView ? undefined : setRow}
         findTarget={findTarget} findMarks={findMarks} navigateTo={gridReturn?.page === page ? gridReturn.position : undefined}
         onGridAnchor={value => { findAnchor.current = { scope: cellScope, value }; if (gridReturn) setGridReturn(undefined); }}
@@ -1209,6 +1259,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       onStage={value => stageInlineEdit(inlineEdit, value)} onCancel={() => closeInlineEdit(inlineEdit)}/>}
     {pasteScope && <PostgresGridPasteDialog columns={gridLayout.columns} onClose={() => closePasteAppend(pasteScope)}
       onStage={(start, source) => stageGridPaste(start, source, undefined, pasteScope)}/>}
+    {transferIntent && page && <PostgresRecordTransferDialog snapshot={transferIntent.snapshot} target={transferTable} columns={page.columns}
+      onStage={stageTransfer} onClose={() => setTransferIntent(undefined)}/>}
     {batch?.kind === 'fill' && <PostgresBatchFillDialog columns={fillColumns} count={batch.selected.size}
       onStage={fields => stageBatch(batch, () => ({
         changes: postgresBatchFillChanges(batch.page, gridLayout.columns, batch.selected, fields,

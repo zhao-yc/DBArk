@@ -232,6 +232,8 @@ PostgreSQL 记录表单的 BYTEA 字段可查看 Hex、严格解码文本或图�
 
 PostgreSQL 表页的「按当前筛选删除」会预览目标表中所有匹配记录，最多 1,000 行。核对已应用筛选并输入准确行数后才能删除。预览计数覆盖直接匹配的行，外键动作和触发器可能影响其他记录。详见[PostgreSQL 按筛选批量删除](development/postgres-filtered-delete-20261106.md)。
 
+在 PostgreSQL 源表或视图勾选记录后点「暂存勾选记录以跨库复制」。到另一张可写 PostgreSQL 表点「从另一张表复制记录」，核对连接、数据库和字段映射，再加入新增草稿。草稿仍需预览并确认提交。详见[PostgreSQL 跨库复制记录](development/postgres-record-transfer-20261106.md)。
+
 在 PostgreSQL 可写表单中用[外键选值](development/postgres-reference-picker-20261106.md)搜索引用记录，并将单列或复合键一并带入当前表单。
 
 在 PostgreSQL 记录页可[精确计数、跳页或定位末页](development/postgres-table-pagination-20261106.md)。计数沿用当前筛选，末页在同一读取快照内定位。

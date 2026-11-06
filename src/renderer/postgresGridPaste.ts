@@ -9,7 +9,7 @@ export function postgresClipboardInput(data: Pick<DataTransfer, 'getData' | 'typ
   return { typed, plain: data.getData('text/plain') };
 }
 
-function fieldValue(value: ClipboardCell, column: PostgresTableColumn): PostgresTableField['value'] {
+export function postgresClipboardFieldValue(value: ClipboardCell, column: PostgresTableColumn): PostgresTableField['value'] {
   if (value === undefined) return { mode: 'default' };
   if (value === null) {
     if (!column.nullable) throw Error(text.notNull(column.name));
@@ -46,7 +46,7 @@ export function postgresGridPasteChanges(
   }
   const replaced = new Set(targets.map(column => column.key));
   return matrix.map((values, index) => {
-    const fields = values.map((value, column) => ({ column: targets[column].key, value: fieldValue(value, targets[column]) }));
+    const fields = values.map((value, column) => ({ column: targets[column].key, value: postgresClipboardFieldValue(value, targets[column]) }));
     if (startRow === undefined) return { kind: 'insert', fields };
     const row = startRow + index, key = page.rowKeys?.[row];
     if (!key) throw Error(text.expired);
