@@ -144,24 +144,97 @@ export function firstPostgresFileStatement(source: string, standardStrings: bool
   return scanPostgresSql(source, standardStrings, true)[0];
 }
 
+/** 仅跳过 SQL 空白和注释，保留后续标识符、字面量及文件指令的位置。 */
+export function skipPostgresTrivia(source: string, from = 0): number {
+  let i = from;
+  while (i < source.length) {
+    if (whitespace.test(source[i])) { i++; continue; }
+    if (source.startsWith('/*', i)) { i = blockCommentEnd(source, i); continue; }
+    if (source.startsWith('--', i)) {
+      i += 2;
+      while (i < source.length && source[i] !== '\r' && source[i] !== '\n') i++;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
 /** 只接纳裸 BEGIN/COMMIT 作为文件外壳。忽略真实注释，不移除字符串内部的字符。 */
 export function isBarePostgresFileControl(source: string, keyword: 'BEGIN' | 'COMMIT'): boolean {
-  const trivia = (from: number) => {
-    let i = from;
-    while (i < source.length) {
-      if (whitespace.test(source[i])) { i++; continue; }
-      if (source.startsWith('/*', i)) { i = blockCommentEnd(source, i); continue; }
-      if (source.startsWith('--', i)) {
-        i += 2;
-        while (i < source.length && source[i] !== '\r' && source[i] !== '\n') i++;
-        continue;
-      }
-      break;
-    }
-    return i;
+  const start = skipPostgresTrivia(source);
+  return source.slice(start, start + keyword.length).toUpperCase() === keyword &&
+    skipPostgresTrivia(source, start + keyword.length) === source.length;
+}
+
+/** COPY 使用简单协议。只允许完整匹配单条从 STDIN 读取 UTF-8 文本的命令，再原样交给服务端解释。 */
+export function isPostgresInlineCopy(source: string, standardStrings: boolean): boolean {
+  const word = /[A-Za-z_\u0080-\uFFFF][A-Za-z_0-9$\u0080-\uFFFF]*/y;
+  const stringOptions = new Set(['DELIMITER', 'NULL', 'QUOTE', 'ESCAPE', 'DEFAULT']);
+  let offset = 0;
+  const peek = () => (offset = skipPostgresTrivia(source, offset), source[offset]);
+  const take = (punctuation: string) => {
+    if (peek() !== punctuation) return false;
+    offset++;
+    return true;
   };
-  const start = trivia(0);
-  return source.slice(start, start + keyword.length).toUpperCase() === keyword && trivia(start + keyword.length) === source.length;
+  const readWord = () => {
+    peek();
+    word.lastIndex = offset;
+    const token = word.exec(source)?.[0] ?? '';
+    offset += token.length;
+    return token;
+  };
+  const readString = () => {
+    const start = offset;
+    const escaped = /^[eE]'/.test(source.slice(start, start + 2));
+    const quote = start + Number(escaped);
+    if (source[quote] !== "'") return '';
+    offset = quotedEnd(source, quote, escaped || !standardStrings);
+    return source.slice(start, offset);
+  };
+  const identifier = () => {
+    if (peek() !== '"') return Boolean(readWord());
+    const start = offset;
+    offset = quotedEnd(source, start, false);
+    return offset > start + 2;
+  };
+  const columns = () => {
+    do { if (!identifier()) return false; } while (take(','));
+    return take(')');
+  };
+  const keyword = () => readWord().toUpperCase();
+  try {
+    if (keyword() !== 'COPY' || !identifier() || (take('.') && !identifier()) ||
+        (take('(') && !columns()) || keyword() !== 'FROM' || keyword() !== 'STDIN') return false;
+    if (peek() === undefined) return true;
+    if (peek() !== '(') {
+      const option = keyword();
+      if (option === 'CSV') return peek() === undefined || (keyword() === 'HEADER' && peek() === undefined);
+      if (option !== 'WITH') return false;
+    }
+    if (!take('(')) return false;
+    do {
+      const name = keyword();
+      const next = peek();
+      if (name === 'FORMAT' || name === 'ENCODING') {
+        const value = readString() || readWord();
+        if (name === 'FORMAT' ? !/^(?:text|csv|'text'|'csv')$/i.test(value) :
+          !/^(?:utf8|'utf8'|'utf-8')$/i.test(value)) return false;
+      } else if (stringOptions.has(name)) {
+        if (!readString()) return false;
+      } else if (name === 'HEADER' || name === 'FREEZE') {
+        if (next !== ',' && next !== ')' &&
+            !['TRUE', 'FALSE', 'ON', 'OFF', ...(name === 'HEADER' ? ['MATCH'] : [])].includes(keyword())) return false;
+      } else if (name === 'FORCE_NULL' || name === 'FORCE_NOT_NULL') {
+        if (!take('*') && !(take('(') && columns())) return false;
+      } else return false;
+    } while (take(','));
+    return take(')') && peek() === undefined;
+  } catch (reason) {
+    if (reason instanceof IncompletePostgresSql) return false;
+    throw reason;
+  }
 }
 
 /** 目录复合名逐段还原；每段的成对双引号仅解码一次。 */

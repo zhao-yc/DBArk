@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import { executePostgresSqlFile, inspectPostgresSqlFile } from '../../src/engine/postgres/sqlFile';
@@ -17,10 +18,17 @@ async function fixture(sql: string | Buffer, action: (path: string) => Promise<v
 
 function connection(onQuery?: (sql: string) => Promise<void>) {
   const calls: string[] = [];
+  const copies: { sql: string; data: Buffer[] }[] = [];
   let open = false;
   const fake = {
     standardStrings: true,
+    error: (reason: unknown) => reason,
     state: () => ({ transactionKnown: true, transactionOpen: open, transactionFailed: false }),
+    async copyIn(sql: string, data: Readable) {
+      const copy = { sql, data: [] as Buffer[] };
+      copies.push(copy);
+      for await (const chunk of data) copy.data.push(chunk);
+    },
     async query(sql: string, _params: unknown, _budget: unknown, _progress: unknown, protocol: string) {
       expect(protocol).toBe('extended');
       calls.push(sql);
@@ -32,7 +40,7 @@ function connection(onQuery?: (sql: string) => Promise<void>) {
     },
   };
   const control = { check() {}, cancelled: () => false, active() {}, protect() {}, async settleCancel() {}, progress() {} };
-  return { calls, connection: fake as unknown as PostgresConnection, control };
+  return { calls, copies, connection: fake as unknown as PostgresConnection, control };
 }
 
 describe('PostgreSQL SQL 文件流式执行', () => {
@@ -54,7 +62,11 @@ describe('PostgreSQL SQL 文件流式执行', () => {
     ['BEGIN; SELECT 1; COMMIT; SELECT 2;', 'command'],
     ['BEGIN; SELECT 1; -- 丢失结尾', 'command'],
     ['SELECT 1; COMMIT;', 'command'],
-    ['SELECT 1; COPY sample FROM STDIN;', 'command'],
+    ["SELECT 1; COPY sample FROM PROGRAM 'example';", 'command'],
+    ["SELECT 1; COPY sample FROM '/tmp/input';", 'command'],
+    ['SELECT 1; COPY sample TO STDOUT;', 'command'],
+    ['SELECT 1; COPY sample FROM STDIN WITH (FORMAT binary);', 'command'],
+    ["SELECT 1; COPY sample FROM STDIN WITH (ENCODING 'LATIN1');", 'command'],
     ['SELECT 1; \\i sample.sql', 'command'],
     ['SELECT 1; SELECT $$截断', 'syntax'],
   ] as const)('拒绝无效事务或客户端指令，并确认回滚', async (sql, reason) => {
@@ -63,6 +75,38 @@ describe('PostgreSQL SQL 文件流式执行', () => {
       const result = await executePostgresSqlFile(session, await inspectPostgresSqlFile(path), control);
       expect(result).toMatchObject({ outcome: 'rolled-back', completed: 1, failure: { reason } });
       expect(calls.map(sql => sql.trim())).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK']);
+    });
+  });
+
+  it.each([0, 1, 2, 3])('跨块读取文本和 CSV，保留 Unicode 与 SQL 字样的记录并继续执行尾部', async split => {
+    const start = '\\' + 'restrict T2026\r\n-- 原生转储\r\nCOPY public."表""名" ("编号", note) FROM STDIN;\r\n';
+    const prefix = 'a'.repeat(128 * 1024 - Buffer.byteLength(start) - split - 2) + '\r\n';
+    const marker = '\\.\r\n';
+    const csv = 'id,note\r\n1,"甲;\r\nSELECT 2;""引号"""\r\n2,"\\."\r\n';
+    await fixture(start + prefix + marker + "COPY public.csv FROM STDIN WITH (FORMAT csv, HEADER, DELIMITER ','); -- CSV\r\n" +
+      csv + marker + 'SELECT 1;\r\n\\unrestrict T2026\r\n-- 末尾', async path => {
+      const { connection: session, control, calls, copies } = connection();
+      const result = await executePostgresSqlFile(session, await inspectPostgresSqlFile(path), control);
+      expect(result).toMatchObject({ outcome: 'committed', completed: 3 });
+      expect(copies.map(copy => Buffer.concat(copy.data).toString())).toEqual([prefix, csv]);
+      expect(calls).toEqual(['BEGIN', 'SELECT 1', 'COMMIT']);
+    });
+  });
+
+  it.each([
+    ['COPY target FROM STDIN;\n123\n', 0, 'syntax'],
+    ['COPY target FROM STDIN; SELECT 7;\n\\.\n', 0, 'syntax'],
+    ['COPY target FROM STDIN;\n123\r\\.\r456\n\\.\n', 0, 'syntax'],
+    ['\\restrict One\nSELECT 1;\n\\unrestrict Two\n', 1, 'command'],
+    ['\\restrict One\nSELECT 1;\n', 1, 'command'],
+    ['\\restrict One\nSELECT 1;\n\\unrestrict One\nSELECT 7;', 1, 'command'],
+    ['\\restrict One\nSELECT 1;\n\\! ls\n\\unrestrict One\n', 1, 'command'],
+  ] as const)('拒绝截断的数据或不成对的备份标记并回滚', async (sql, completed, reason) => {
+    await fixture(sql, async path => {
+      const { connection: session, control, calls } = connection();
+      await expect(executePostgresSqlFile(session, await inspectPostgresSqlFile(path), control))
+        .resolves.toMatchObject({ outcome: 'rolled-back', completed, failure: { reason } });
+      expect(calls.at(-1)).toBe('ROLLBACK');
     });
   });
 

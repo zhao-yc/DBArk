@@ -25,6 +25,9 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
   const backup = info.outputPath('PostgreSQL多表大备份.sql');
   const bad = info.outputPath('执行失败.sql'), cancel = info.outputPath('服务端取消.sql'), changed = info.outputPath('更换文件.sql');
   const deferred = info.outputPath('延迟约束.sql');
+  const nativeDump = process.env.DBARK_POSTGRES_NATIVE_DUMP;
+  const csv = info.outputPath('内联CSV.sql'), missing = info.outputPath('缺少结束标记.sql');
+  const invalidCopy = info.outputPath('无效COPY记录.sql'), cancelCopy = info.outputPath('取消COPY.sql');
   try {
     await source.connect(); await observer.connect();
     await source.query(`
@@ -44,6 +47,18 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
     await writeFile(changed, 'CREATE TABLE stream_changed(id int);');
     await writeFile(deferred, 'BEGIN; CREATE TABLE stream_deferred(id int REFERENCES stream_parent(id) DEFERRABLE INITIALLY DEFERRED); ' +
       'INSERT INTO stream_deferred VALUES(9999); COMMIT;');
+    if (nativeDump) {
+      expect((await stat(nativeDump)).size).toBeGreaterThan(4 * 1024 * 1024);
+      await writeFile(csv, 'CREATE TABLE public.inline_csv(id int, body text);\r\n' +
+        "COPY public.inline_csv (id, body) FROM STDIN WITH (FORMAT CSV, HEADER, DELIMITER ';');\r\n" +
+        'id;body\r\n1;"中;\r\n间""引号"""\r\n2;""\r\n3;\r\n4;"\\."\r\n\\.\r\n' +
+        "COMMENT ON TABLE public.inline_csv IS 'COPY 后的语句';\r\n");
+      await writeFile(missing, 'CREATE TABLE public.inline_missing(id int);\nCOPY public.inline_missing FROM STDIN;\n1\n');
+      await writeFile(invalidCopy, 'CREATE TABLE public.inline_invalid(id int);\nCOPY public.inline_invalid FROM STDIN;\n' +
+        '1\n不能回显的输入值\n\\.\n');
+      await writeFile(cancelCopy, 'CREATE TABLE public.inline_cancel(id int CHECK (pg_sleep(30) IS NULL));\n' +
+        'COPY public.inline_cancel FROM STDIN;\n1\n\\.\n');
+    }
     for (const [title, db] of [['大备份来源', database], ['文件恢复目标', target]] as const) {
       await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, own)).click();
       const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
@@ -71,7 +86,8 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
         if (!input.paths.length) dialog.showOpenDialog = open;
         return { canceled: false, filePaths: [path] };
       }) as typeof open;
-    }, { backup, title: text.title, paths: [backup, bad, deferred, cancel, changed] });
+    }, { backup, title: text.title, paths: [backup, bad, deferred, cancel, changed,
+      ...(nativeDump ? [nativeDump, csv, missing, invalidCopy, cancelCopy] : [])] });
     const tool = async (name: string) => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name, exact: true }, own)).click();
     await tool(backupText.title);
     const backupDialog = page.getByRole('dialog', { name: backupText.title, exact: true });
@@ -130,8 +146,56 @@ test('从工具菜单流式恢复大备份并核对失败与服务端取消回�
     await expect(status).toContainText(text.outcome['not-started']);
     expect(await exists('public.stream_changed')).toBeNull();
     expect((await source.query(facts)).rows).toEqual(expected);
+
+    if (nativeDump) {
+      const copyFacts = "SELECT count(*)::int AS rows, sum(octet_length(note))::text AS bytes, " +
+        "md5(string_agg(md5(ROW(id,note,raw)::text),'' ORDER BY id)) AS digest, " +
+        "(SELECT last_value::text FROM public.native_copy_id_seq) AS sequence " +
+        "FROM public.native_copy";
+      await choose();
+      await execute();
+      await expect(status).toContainText(text.outcome.committed, { timeout: 25000 });
+      expect((await observer.query(copyFacts)).rows).toEqual((await source.query(copyFacts)).rows);
+      const constraints = "SELECT conname, contype, pg_get_constraintdef(oid) AS definition " +
+        "FROM pg_constraint WHERE conrelid='public.native_copy'::regclass ORDER BY conname";
+      expect((await observer.query(constraints)).rows).toEqual((await source.query(constraints)).rows);
+      await page.screenshot({ path: info.outputPath('原生pg_dump恢复.png') });
+
+      await choose();
+      await execute();
+      await expect(status).toContainText(text.outcome.committed);
+      expect((await observer.query('SELECT body FROM public.inline_csv ORDER BY id')).rows)
+        .toEqual([{ body: '中;\r\n间"引号"' }, { body: '' }, { body: null }, { body: '\\.' }]);
+      expect((await observer.query("SELECT obj_description('public.inline_csv'::regclass) AS note")).rows)
+        .toEqual([{ note: 'COPY 后的语句' }]);
+
+      await choose();
+      await execute();
+      await expect(status).toContainText(text.outcome['rolled-back']);
+      await expect(status).toContainText(text.reason.syntax);
+      await expect(status).toContainText(text.failedAt(2));
+      expect(await exists('public.inline_missing')).toBeNull();
+
+      await choose();
+      await execute();
+      await expect(status).toContainText(text.outcome['rolled-back']);
+      await expect(status).toContainText('SQLSTATE 22P02');
+      await expect(status).not.toContainText('不能回显的输入值');
+      expect(await exists('public.inline_invalid')).toBeNull();
+      await page.screenshot({ path: info.outputPath('内联COPY失败回滚.png') });
+
+      await choose();
+      await execute();
+      await expect.poll(async () => (await observer.query("SELECT count(*)::int AS hits FROM pg_stat_activity " +
+        "WHERE datname=current_database() AND usename=current_user AND pid<>pg_backend_pid() AND wait_event='PgSleep' " +
+        "AND position('COPY public.inline_cancel' in query) > 0")).rows[0].hits).toBe(1);
+      await modal.getByRole('button', { name: text.cancel, exact: true }).click();
+      await expect(status).toContainText(text.outcome['rolled-back']);
+      await expect(status).toContainText(text.reason.cancelled);
+      expect(await exists('public.inline_cancel')).toBeNull();
+    }
     const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
-    expect(JSON.stringify(tasks)).not.toMatch(/stream_missing|执行失败\.sql|服务端取消\.sql/);
+    expect(JSON.stringify(tasks)).not.toMatch(/stream_missing|执行失败\.sql|服务端取消\.sql|不能回显的输入值|无效COPY记录\.sql/);
     expect(pageErrors).toEqual([]);
     await modal.getByRole('button', { name: text.close, exact: true }).click();
     await confirmOwnedDesktopExit(info);
