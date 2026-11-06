@@ -24,7 +24,7 @@ import { importPresetsZh } from '../locales/importPresets.zh-CN';
 import { fileImportTransactionZh } from '../locales/fileImportTransaction.zh-CN';
 import type { FileImportTransactionMode } from '../../shared/fileImportTransaction';
 import { sqlFileImportReceiptSchema, type SqlFileImportReceipt } from '../../shared/sqlFileImport';
-import { sqlFileImportZh as sqlText } from '../locales/sqlFileImport.zh-CN';
+import { SqlFileImportReport } from './SqlFileImportReport';
 import { fileImportConflictReportSchema, type FileImportConflictReport } from '../../shared/fileImportConflict';
 import { ImportConflictController, initialImportConflictState, type ImportConflictMode, type ImportConflictSource, type ImportConflictState } from '../importConflict';
 import { ImportConflictFields } from './ImportConflictFields';
@@ -43,22 +43,6 @@ const newTableImportText = {
   preflight:'请先完成本次映射的整文件预检，要求完整读取、没有任何问题且原SHA-256及字节数一致。',
   consumed:'本次新表导入已发送过一次，不会再次发送；失败或未知结果请先核对准确新表。',
 };
-
-/** SQL结果只展示结构化执行事实，不用兼容行数推断提交、保留或整文件成功。 */
-function SqlFileImportReport({ receipt }: { receipt: SqlFileImportReceipt | null }) {
-  if (!receipt) return <section className="error-box" role="status" aria-label={sqlText.title}><strong>{sqlText.unconfirmed}</strong><p>{sqlText.unconfirmedHint}</p></section>;
-  const failure = receipt.failure, position = failure?.statement?.location;
-  const warning = receipt.termination !== 'completed' || !!receipt.cleanupWarning || receipt.rollback.state === 'unconfirmed' || receipt.transaction !== 'closed';
-  return <section className={warning ? 'info-strip' : 'sql-import-result'} role="status" aria-label={sqlText.title} style={{ overflowWrap: 'anywhere' }}>
-    <strong>{receipt.termination === 'completed' ? sqlText.completed : receipt.termination === 'cancelled' ? sqlText.cancelled : sqlText.failed}</strong>
-    <p>{sqlText.completedStatements}：{receipt.completedStatements}</p><p>{sqlText.affected}：{receipt.serverReportedAffectedRows === null ? sqlText.unknown : receipt.serverReportedAffectedRows}</p><p className="muted small">{sqlText.affectedHint}</p>
-    <p>{sqlText.encoding}：{sqlText.encodings[receipt.encoding]}</p>
-    {failure && <><p>{sqlText.phase}：{sqlText.phases[failure.phase]}{failure.statement && ` · ${sqlText.ordinal(failure.statement.ordinal)}`}</p><p>{sqlText.location}：{position ? sqlText.position(position.start, position.end) : sqlText.positionUnavailable}</p><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{failure.message}</pre></>}
-    <p className="muted small">{sqlText.positionHint}</p><p>{sqlText.rollback}：{sqlText.rollbackStates[receipt.rollback.state]}</p>{receipt.rollback.message && <p>{receipt.rollback.message}</p>}<p>{sqlText.transaction}：{sqlText.transactions[receipt.transaction]}</p>
-    {(receipt.rollback.state === 'unconfirmed' || receipt.transaction !== 'closed') && <p className="warning-text">{sqlText.unknownHint}</p>}
-    {receipt.cleanupWarning && <p className="warning-text">{sqlText.cleanup}：{receipt.cleanupWarning}</p>}
-  </section>;
-}
 
 interface TransferExecution { taskId: string; key: string; revision: number; connectionVersion: number; target: string; valid: boolean; cancellation?:Promise<void>; }
 interface TransferDialogProps { mode:'import'|'export'; connectionId:string; database:string; table:string; initialImport?:ImportNewTableSeed; isParentCurrent?():boolean; invalidated?:boolean; onClose():void; }

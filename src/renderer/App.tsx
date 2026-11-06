@@ -1,3 +1,4 @@
+import { MysqlSqlFileDialog } from './components/MysqlSqlFileDialog';
 import { ServerDataCompareDialog } from './components/ServerDataCompareDialog';
 import { SqliteDataCompareDialog } from './components/SqliteDataCompareDialog';
 import { DatabaseBackupArchiveDialog } from './components/DatabaseBackupArchiveDialog';
@@ -212,6 +213,7 @@ function WorkspaceApp() {
   const [editorFontPreferences, setEditorFontPreferences] = useState(false);
   const [explainSnapshot, setExplainSnapshot] = useState(false);
   const [resultSnapshot, setResultSnapshot] = useState(false);
+  const [mysqlSqlFile, setMysqlSqlFile] = useState(false);
   const [backupArchive, setBackupArchive] = useState(false);
   const [postgresBackup, setPostgresBackup] = useState(false);
   const [postgresSqlFile, setPostgresSqlFile] = useState(false);
@@ -1005,6 +1007,10 @@ function WorkspaceApp() {
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       workbenchNavigation.invalidate(); setPostgresBackup(true);
     }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
+    'mysql-sql-file': handler(() => {
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      workbenchNavigation.invalidate(); setMysqlSqlFile(true);
+    }, networkConnections.some(profile => !profile.pendingFiles?.length)),
     'postgres-sql-file': handler(() => {
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
       workbenchNavigation.invalidate(); setPostgresSqlFile(true);
@@ -1166,6 +1172,9 @@ function WorkspaceApp() {
     {serverDataCompare && <ServerDataCompareDialog dialect={serverDataCompare} connections={connections.filter(profile => !profile.pendingFiles?.length &&
       (serverDataCompare === 'postgres' ? profile.dialect === 'postgresql' : profile.dialect === 'mysql' || profile.dialect === 'mariadb'))} onClose={() => setServerDataCompare(undefined)}/>}
     {sqliteDataCompare && <SqliteDataCompareDialog connections={connections.filter(profile => profile.dialect === 'sqlite' && !!profile.sqlite.filePath && !profile.pendingFiles?.length)} onClose={() => setSqliteDataCompare(false)}/>}
+    {mysqlSqlFile && <MysqlSqlFileDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)}
+      onRefresh={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}
+      onClose={() => setMysqlSqlFile(false)}/>}
     {backupArchive && <DatabaseBackupArchiveDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)} onClose={() => setBackupArchive(false)}/>}
     {postgresBackup && <PostgresTableBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresBackup(false)}/>}
     {postgresDatabaseBackup && <PostgresDatabaseBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresDatabaseBackup(false)}/>}

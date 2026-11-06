@@ -1,3 +1,4 @@
+import { mysqlSqlFileChooseSchema, mysqlSqlFileExecuteSchema } from './mysqlSqlFile';
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
 import { postgresSqlFileChooseSchema, postgresSqlFileExecuteSchema } from './postgresSqlFile';
 import { postgresDatabaseBackupChooseSchema, postgresDatabaseBackupExecuteSchema, postgresDatabaseBackupToolSchema } from './postgresDatabaseBackup';
@@ -289,6 +290,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.backup.chooseDumpTool': postgresDatabaseBackupToolSchema,
   'postgres.backup.chooseDatabaseFile': postgresDatabaseBackupChooseSchema,
   'postgres.backup.database': postgresDatabaseBackupExecuteSchema,
+  'mysql.sqlFile.choose': mysqlSqlFileChooseSchema, 'mysql.sqlFile.execute': mysqlSqlFileExecuteSchema,
   'postgres.sqlFile.choose': postgresSqlFileChooseSchema, 'postgres.sqlFile.execute': postgresSqlFileExecuteSchema,
   'postgres.table.importChoose': postgresTableImportChooseSchema, 'postgres.table.import': postgresTableImportSchema,
   'postgres.table.page': postgresTablePageSchema,

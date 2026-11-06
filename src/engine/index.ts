@@ -1,3 +1,4 @@
+import { readMysqlSqlFile, type MysqlSqlFileSource } from './mysqlSqlFile';
 import { PostgresEngine } from './postgres/engine';
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { verifyTableDraft } from './tableDraftVerify';
@@ -146,7 +147,7 @@ export class Engine {
   private readonly postgres = new PostgresEngine(event => this.emit(event));
   private readonly excelReads = new ExcelReadTasks(event => this.emit(event));
   private readonly importInspections = new ImportFileInspectTasks(event => this.emit(event));
-  private readonly excelConnecting = new Map<string, { connectionId: string; controller: AbortController; done: Promise<void> }>();
+  private readonly fileConnecting = new Map<string, { connectionId: string; controller: AbortController; done: Promise<void> }>();
   private readonly conflictImports = new Map<string, ConflictImportLease>();
   private readonly profiles = new Map<string, NetworkConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
@@ -324,7 +325,28 @@ export class Engine {
           throw Error('缺少可信的 MySQL／MariaDB 比较连接');
         this.copySourceProfile(input);
         return this.withCopySourceTask(input.connectionId, randomUUID(),
-          context => mysqlCompareCatalogue(context, input.database), '读取比较目录');
+          context => mysqlCompareCatalogue(context, input.database), '读取比较目录', 'no-default-database');
+      }
+      case 'mysql.sqlFile.execute': {
+        const profile = input.profile;
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId ||
+          input.acknowledgeScript !== true || !input.source)
+          throw Error('缺少已确认的 MySQL／MariaDB SQL 文件执行参数');
+        const source: MysqlSqlFileSource = input.source;
+        const evidence = createSqlFileImportEvidence(input.taskId, input.encoding);
+        let received = false;
+        try {
+          return await this.withFileTask(input, '执行 SQL 文件', async task => {
+            received = true;
+            task.sqlFileImport = evidence;
+            return this.importSql(task, input, readMysqlSqlFile(source, input.encoding, task.managed.status.dialect as 'mysql' | 'mariadb',
+              () => this.checkCancelled(task)));
+          }, profile);
+        } catch (reason) {
+          if (!received) throw reason;
+          return finishSqlFileImportEvidence(evidence, evidence.result.sql?.termination === 'cancelled',
+            'SQL 文件执行回执已保留，连接或任务收尾未确认；请核对服务器状态');
+        }
       }
       case 'backupArchive.auditTarget': {
         const profile = input.profile;
@@ -358,7 +380,7 @@ export class Engine {
         this.tableCopySources.releaseConnection(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
-        const connecting = [...this.excelConnecting.values()].filter(task => task.connectionId === input.id);
+        const connecting = [...this.fileConnecting.values()].filter(task => task.connectionId === input.id);
         connecting.forEach(task => task.controller.abort());
         const conflicts = [...this.conflictImports.values()].filter(task => task.connectionId === input.id);
         conflicts.forEach(task => { if (task.phase === 'connecting') task.controller.abort(); });
@@ -778,8 +800,8 @@ export class Engine {
         if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
         return this.excelReads.run(command, input as any);
       }
-      case 'excel.import': fileImportConflict('xlsx', input); fileImportTransactionMode('xlsx', input); this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
-      case 'excel.export': this.assertFile(input); return this.withExcelTask(input, '导出 Excel', task => this.exportExcel(task, input));
+      case 'excel.import': fileImportConflict('xlsx', input); fileImportTransactionMode('xlsx', input); this.assertFile(input); return this.withFileTask(input, '导入 Excel', task => this.importExcel(task, input));
+      case 'excel.export': this.assertFile(input); return this.withFileTask(input, '导出 Excel', task => this.exportExcel(task, input));
       case 'files.importKeys': return this.readImportKeys(input);
       case 'files.import': {
         this.assertFile(input); const mode = fileImportTransactionMode(input.format, input);
@@ -837,13 +859,13 @@ export class Engine {
   }
 
   /** 所有任务通道共用编号占用检查，避免集成后取消误命中另一种活动任务。 */
-  private taskIdInUse(id: string): boolean { return this.postgres.ownsTask(id) || this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.importInspections.has(id) || this.excelConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id) || this.mysqlDataComparisons.has(id); }
+  private taskIdInUse(id: string): boolean { return this.postgres.ownsTask(id) || this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.importInspections.has(id) || this.fileConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id) || this.mysqlDataComparisons.has(id); }
 
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
     this.closing = true;
     try {
-    this.excelConnecting.forEach(task => task.controller.abort());
+    this.fileConnecting.forEach(task => task.controller.abort());
     this.conflictImports.forEach(task => { if (task.phase === 'connecting') task.controller.abort(); });
     const comparisonCleanup = Promise.all([this.schemaComparisons.close(), this.mysqlDataComparisons.close()]);
     const filteredUpdateCleanup = this.tableFilteredUpdates.close();
@@ -921,29 +943,30 @@ export class Engine {
     finally { const remaining = (this.connectionUses.get(id) ?? 1) - 1; if (remaining) this.connectionUses.set(id, remaining); else this.connectionUses.delete(id); this.pendingUses.delete(done); finish(); }
   }
 
-  /** Excel 在建连前占用任务编号并绑定 AbortSignal，取消、断开与退出不能漏掉尚未创建的运行任务。 */
-  private async withExcelTask<T>(input: Input, label: string, action: (task: RunningTask) => Promise<T>): Promise<T> {
+  /** 文件任务在建连前占用任务编号并绑定 AbortSignal，取消、断开与退出不能漏掉尚未创建的运行任务。 */
+  private async withFileTask<T>(input: Input, label: string, action: (task: RunningTask) => Promise<T>, profile?: ConnectionProfile): Promise<T> {
     const id = input.taskId;
     if (this.closing || !id || this.taskIdInUse(id)) throw new Error('任务编号为空或任务已在执行');
     const controller = new AbortController(); let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
-    this.excelConnecting.set(id, { connectionId: input.connectionId, controller, done });
+    this.fileConnecting.set(id, { connectionId: input.connectionId, controller, done });
     let submitted = false;
+    const cancelled = (profile ? 'SQL 文件' : 'Excel ') + '任务在建连阶段已取消，尚未读取或写入数据';
     try {
       return await this.withConnectionUse(input.connectionId, async () => {
-        const managed = await connect(this.profile(input.connectionId), input.database, controller.signal);
+        const managed = await connect(profile ?? this.profile(input.connectionId), input.database, controller.signal);
         try {
-          if (controller.signal.aborted || this.closing) throw new Error('Excel 任务在建连阶段已取消，尚未读取或写入数据');
+          if (controller.signal.aborted || this.closing) throw new Error(cancelled);
           // 同步交接编号，中间没有 await；取消必定命中建连或实际运行任务之一。
-          this.excelConnecting.delete(id); submitted = true;
+          this.fileConnecting.delete(id); submitted = true;
           return await this.runTask(id, managed, label, action);
-        } finally { await managed.close(); }
+        } finally { await managed.close(profile ? { strict: true } : undefined); }
       });
     } catch (reason) {
-      if (!submitted) this.emit({ taskId: id, status: controller.signal.aborted ? 'cancelled' : 'failed', progress: 0, message: controller.signal.aborted ? 'Excel 任务在建连阶段已取消，尚未读取或写入数据' : this.errorMessage(reason) });
-      if (controller.signal.aborted) throw new Error('Excel 任务在建连阶段已取消，尚未读取或写入数据');
+      if (!submitted) this.emit({ taskId: id, status: controller.signal.aborted ? 'cancelled' : 'failed', progress: 0, message: controller.signal.aborted ? cancelled : this.errorMessage(reason) });
+      if (controller.signal.aborted) throw new Error(cancelled);
       throw reason;
-    } finally { this.excelConnecting.delete(id); finish(); }
+    } finally { this.fileConnecting.delete(id); finish(); }
   }
 
   /** 新策略建连前独占编号，迟到连接先复核取消；租约覆盖真实运行及严格关闭，不改变旧Excel/默认导入。 */
@@ -1295,7 +1318,7 @@ export class Engine {
     const conflict = this.conflictImports.get(id);
     if (conflict?.phase === 'connecting') { conflict.controller.abort(); finishFileImportConflictEvidence(conflict.evidence, true); await conflict.done; return; }
     if (conflict?.phase === 'closing') { await conflict.done; return; }
-    const connecting = this.excelConnecting.get(id);
+    const connecting = this.fileConnecting.get(id);
     if (connecting) { connecting.controller.abort(); await connecting.done; return; }
     if (this.excelReads.has(id)) return this.excelReads.cancel(id);
     if (this.importInspections.has(id)) return this.importInspections.cancel(id);
@@ -1379,7 +1402,8 @@ export class Engine {
       if (!task.inFlight) return;
       let control: ManagedConnection | undefined;
       try {
-        control = await connect(task.managed.profile);
+        // 脚本可以创建、切换或删除初始库。控制连接只需连实例，避免原默认库失效时无法取消。
+        control = task.sqlFileImport ? await connect(task.managed.profile, null) : await connect(task.managed.profile);
         if (!task.inFlight || task.generation !== generation || this.tasks.get(task.id) !== task || task.managed.broken) return;
         const threadId = task.managed.connection.threadId;
         if (!Number.isSafeInteger(threadId) || (threadId ?? 0) < 1) throw new Error('无法确认待取消的连接编号');
@@ -2169,7 +2193,7 @@ export class Engine {
   }
 
   /** SQL 脚本遵循其自身事务语义；DDL 隐式提交与此前已提交语句不能回滚。 */
-  private async importSql(task: RunningTask, input: Input): Promise<FileImportResult> {
+  private async importSql(task: RunningTask, input: Input, chunks = readText(input.filePath, input.encoding)): Promise<FileImportResult> {
     const evidence = task.sqlFileImport ??= createSqlFileImportEvidence(task.id, input.encoding);
     const receipt = evidence.result.sql!, positions = new SqlFileImportPositions();
     let phase: NonNullable<SqlFileImportReceipt['failure']>['phase'] = 'initial-mode';
@@ -2229,7 +2253,7 @@ export class Engine {
         }
       };
       phase = 'read';
-      for await (const chunk of readText(input.filePath, input.encoding)) { await drain(chunk); phase = 'read'; current = undefined; }
+      for await (const chunk of chunks) { await drain(chunk); phase = 'read'; current = undefined; }
       await drain('', true); phase = 'finalize'; current = undefined; this.checkCancelled(task);
       receipt.transaction = sqlFileImportTransaction(task.managed);
       if (receipt.transaction === 'unknown') throw Error('无法确认SQL脚本结束时的服务器事务状态');

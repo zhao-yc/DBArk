@@ -1,3 +1,5 @@
+import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
+import { inspectMysqlSqlFile, type MysqlSqlFileSource } from '../engine/mysqlSqlFile';
 import { mysqlDataCompareZh, mysqlDataSyncZh } from '../shared/mysqlDataCompare';
 import { postgresDataCompareZh, postgresDataSyncZh, postgresDataSyncLimits,
   type PostgresDataCompareInput, type PostgresDataSyncApplyInput, type PostgresDataSyncPreviewInput } from '../shared/postgresDataCompare';
@@ -881,8 +883,9 @@ async function runTableFilteredDelete(command: 'table.filteredDelete.preview' | 
 
 const postgresTableOwners = new WeakMap<object, string>();
 const postgresExportFiles = new WeakMap<object, { token: string; format: string; path: string; expires: number }>();
+const mysqlSqlFileSources = new WeakMap<object, MysqlSqlFileChooseInput & { token: string; revision: number; source: MysqlSqlFileSource; expires: number }>();
 const postgresSqlFileSources = new WeakMap<object, { token: string; connectionId: string; database: string; newDatabase?: string; revision: number; source: PostgresSqlFileSource; expires: number }>();
-const postgresSqlFileChoosing = new WeakSet<object>();
+const sqlFileChoosing = new WeakSet<object>();
 const postgresDumpTools = new WeakMap<object, { token: string; tool: PostgresNativeTool<'pg_dump'> }>();
 const postgresDatabaseBackupFiles = new WeakMap<object, PostgresDatabaseBackupChooseInput & {
   path: string; token: string; revision: number; expires: number;
@@ -892,7 +895,7 @@ const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
 const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
-const postgresSqlTaskOwners = new Map<string, ColumnsInvocation>();
+const sqlFileTaskOwners = new Map<string, ColumnsInvocation>();
 
 function networkCompareOwner(owner: MainInvocation): string {
   const document = owner.owner.document;
@@ -1194,6 +1197,35 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       } finally { postgresDatabaseBackupChoosing.delete(document); }
     });
   }
+  if (command === 'mysql.sqlFile.choose') {
+    columnsMain.assertCapturedOwner(columns);
+    const document = columns!.owner.document, revision = store.connectionRevision();
+    const target: MysqlSqlFileChooseInput = input;
+    const check = () => {
+      columnsMain.assertCapturedOwner(columns);
+      connectionConfig.assertAvailable(target.connectionId);
+      const { dialect } = store.resolveConnection(target.connectionId);
+      if (shuttingDown || revision !== store.connectionRevision() || dialect !== 'mysql' && dialect !== 'mariadb')
+        throw Error('SQL 文件执行的目标连接已变化');
+    };
+    check();
+    if (sqlFileChoosing.has(document)) throw Error('原窗口仍在选择 SQL 文件');
+    sqlFileChoosing.add(document);
+    mysqlSqlFileSources.delete(document);
+    return queryFileOperation(async () => {
+      try {
+        const chosen = await dialog.showOpenDialog(columns!.owner.window, { title: mysqlSqlFileTitle,
+          properties: ['openFile'], filters: [{ name: 'SQL', extensions: ['sql'] }] });
+        check();
+        if (chosen.canceled || !chosen.filePaths[0]) return null;
+        const source = await inspectMysqlSqlFile(chosen.filePaths[0]);
+        check();
+        const token = randomUUID();
+        mysqlSqlFileSources.set(document, { ...target, token, revision, source, expires: Date.now() + 5 * 60 * 1000 });
+        return { token, name: basename(source.path), bytes: source.bytes };
+      } finally { sqlFileChoosing.delete(document); }
+    });
+  }
   if (command === 'postgres.sqlFile.choose') {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document, revision = store.connectionRevision();
@@ -1205,8 +1237,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         throw Error('PostgreSQL 文件执行的目标连接已变化');
     };
     check();
-    if (postgresSqlFileChoosing.has(document)) throw Error('原窗口仍在选择 SQL 文件');
-    postgresSqlFileChoosing.add(document);
+    if (sqlFileChoosing.has(document)) throw Error('原窗口仍在选择 SQL 文件');
+    sqlFileChoosing.add(document);
     postgresSqlFileSources.delete(document);
     return queryFileOperation(async () => {
       try {
@@ -1219,7 +1251,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const token = randomUUID();
         postgresSqlFileSources.set(document, { token, connectionId, database, newDatabase, revision, source, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(source.path), bytes: source.bytes };
-      } finally { postgresSqlFileChoosing.delete(document); }
+      } finally { sqlFileChoosing.delete(document); }
     });
   }
   if (command === 'postgres.table.importChoose') {
@@ -1953,11 +1985,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     case 'query.cancel': {
       if (['postgres.compareData', 'mysql.compareData'].includes(tasks.get(input.taskId)?.kind ?? '')) return cancelNetworkCompare(input.taskId, columns);
-      if (['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database'].includes(tasks.get(input.taskId)?.kind ?? '')) {
-        const backupOwner = postgresSqlTaskOwners.get(input.taskId);
+      if (['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute'].includes(tasks.get(input.taskId)?.kind ?? '')) {
+        const backupOwner = sqlFileTaskOwners.get(input.taskId);
         if (backupOwner) {
           columnsMain.assertCapturedOwner(columns);
-          if (!columnsMain.sharesDocumentOwner(backupOwner, columns!)) throw Error('取消请求与原 PostgreSQL 文件任务窗口不符');
+          if (!columnsMain.sharesDocumentOwner(backupOwner, columns!)) throw Error('取消请求与原文件任务窗口不符');
         }
       }
       if (tasks.get(input.taskId)?.kind.startsWith('sqlite.databaseCopy.')) {
@@ -2265,6 +2297,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       input = { ...input, profile, tool: tool.tool, filePath: selected.path, connectionRevision: selected.revision };
       break;
     }
+    case 'mysql.sqlFile.execute': {
+      columnsMain.assertCapturedOwner(columns);
+      const document = columns!.owner.document, file = mysqlSqlFileSources.get(document);
+      if (shuttingDown || !file || file.token !== input.fileToken || file.expires <= Date.now() ||
+        file.revision !== store.connectionRevision() || file.connectionId !== input.connectionId ||
+        file.database !== input.database || file.encoding !== input.encoding)
+        throw Error('SQL 文件、编码或目标已变化，请重新选择文件');
+      const profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect !== 'mysql' && profile.dialect !== 'mariadb') throw Error('需要已保存的 MySQL 或 MariaDB 连接');
+      mysqlSqlFileSources.delete(document);
+      input = { ...input, profile, source: file.source, connectionRevision: file.revision };
+      break;
+    }
     case 'postgres.sqlFile.execute': {
       columnsMain.assertCapturedOwner(columns);
       if (input.archive) {
@@ -2334,7 +2379,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
   try {
     if (command === 'postgres.table.import') postgresImportTaskOwners.set(taskId!, columns!);
-    if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database') || command === 'postgres.table.export' && input.format === 'sql-backup-set') postgresSqlTaskOwners.set(taskId!, columns!);
+    if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database' || command === 'mysql.sqlFile.execute') || command === 'postgres.table.export' && input.format === 'sql-backup-set') sqlFileTaskOwners.set(taskId!, columns!);
     if (command === 'sqliteDraftFiles.restore') sqliteEditLease = sqliteEdits.begin(taskId!, columns!, sqlitePage!.check);
     if (sqliteApplySource) {
       sqliteClaim = sqliteEdits.claim(columns!, input.previewId);
@@ -2351,7 +2396,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (shuttingDown || tableValueOptionsClosing.has(requestConnectionId) || input.connectionRevision !== store.connectionRevision())
         throw Error('PostgreSQL 导出的原连接已变化，请重新选择');
     }
-    if (command === 'postgres.sqlFile.execute') {
+    if (command === 'postgres.sqlFile.execute' || command === 'mysql.sqlFile.execute') {
       columnsMain.assertCapturedOwner(columns);
       if (shuttingDown || input.connectionRevision !== store.connectionRevision()) throw Error('SQL 文件执行的目标连接已变化');
     }
@@ -2502,7 +2547,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableChecks' ? 'tableChecks' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId), ...(structurePurpose === 'tableChecks' ? tableChecksFailureProgress(sentToEngine && command === structurePrefix + 'apply', structureProgress.get(taskId)) : {}) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  } finally { if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); if (command === 'postgres.table.import') postgresImportTaskOwners.delete(taskId); if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database') || command === 'postgres.table.export' && input.format === 'sql-backup-set') postgresSqlTaskOwners.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
+  } finally { if (sqliteEditLease) await sqliteEditLease.release(); if (sqliteClaim && !sentToEngine) await broker.request('sqlite.tableEdit.release', { previewId: input.previewId }).catch(() => {}); if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); if (command === 'postgres.table.import') postgresImportTaskOwners.delete(taskId); if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database' || command === 'mysql.sqlFile.execute') || command === 'postgres.table.export' && input.format === 'sql-backup-set') sqlFileTaskOwners.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); if (sqliteDestinationRecovery) void sqliteDestinationRecovery.then(() => releaseTarget?.(), () => { /* 恢复失败不释放原路径占用，等待客户端退出后人工核对。 */ }); else releaseTarget?.(); }
 }
 
 /** 菜单模板只接纳固定命令，执行资格由当前文档的准确修订决定。 */
@@ -2818,10 +2863,10 @@ else {
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') ||
             payload.command === 'query.cancel' && (['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
-              ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && postgresSqlTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
+              ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
             payload.command === 'postgres.completion' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
-            payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') ||
+            payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') || payload.command.startsWith('mysql.sqlFile.') ||
             payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
