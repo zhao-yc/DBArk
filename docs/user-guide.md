@@ -230,6 +230,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 「[删除勾选记录](development/postgres-batch-delete-20261106.md)」可按原行号和主键核对本页多条记录，暂存后可整批撤销，最后从表页预览确认提交。
 
+「[逐条编辑勾选记录](development/postgres-batch-edit-20261106.md)」可给本页勾选的记录分别填写不同值，切换时保留各自输入，再整批暂存、撤销或预览提交。
+
 在 PostgreSQL 表或视图的记录网格右键单元格，或聚焦后按 `Shift+F10`，可以[按此值筛选或排除此值](development/postgres-table-cell-filter-20261106.md)。检查带入的列、操作符和原值，点击「添加条件」，再点击「应用高级筛选」。
 
 在同一入口可修改已有字段的数据类型、默认值、空值约束和注释，或删除字段。删除在 SQL 预览后需额外确认，本表内引用该字段的索引和约束可能随之移除。详见[已有字段属性与删除](development/postgres-column-alter-20261105.md)。

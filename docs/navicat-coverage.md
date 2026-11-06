@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量：[PostgreSQL 逐条编辑勾选记录](development/postgres-batch-edit-20261106.md)支持当前页记录独立输入、原字段草稿撤回、整批暂存及撤销，沿用原行版本和单事务。D02、D04 和 R01 仍为部分覆盖，暂不发布。
+
 2026-11-06 源码增量：[PostgreSQL 删除勾选记录](development/postgres-batch-delete-20261106.md)支持当前页多行勾选、原主键确认、整批暂存及撤销恢复更新草稿，沿用原行核对与单事务。D02 和 R01 仍为部分覆盖，暂不发布。
 
 2026-11-06 源码增量：[PostgreSQL 批量填充字段](development/postgres-batch-fill-20261106.md)支持当前页勾选、统一多字段赋值、整批暂存与撤销，沿用原版本核对及事务提交。D02 和 R01 仍为部分覆盖，暂不发布。

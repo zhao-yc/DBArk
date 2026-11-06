@@ -84,6 +84,13 @@
 .pg-batch-fill-field .pg-record-inputs select { flex: none; width: min(170px, 40%); }
 .pg-batch-fill-field .pg-record-inputs textarea { min-width: 0; }
 .pg-batch-fill-field > button { max-width: 28%; overflow-wrap: anywhere; }
+.pg-batch-edit-records { display: grid; grid-template-columns: minmax(90px, 22%) minmax(0, 1fr); gap: 16px; }
+.pg-batch-edit-records > :is(nav, section) { max-height: min(52vh, 520px); overflow: auto; }
+.pg-batch-edit-records nav { display: grid; align-content: start; gap: 6px; }
+.pg-batch-edit-records nav button { text-align: left; }
+.pg-batch-edit-records nav button[aria-pressed="true"] { border-color: var(--accent); }
+.pg-batch-edit-records .pg-record-inputs select { flex: none; width: min(170px, 40%); }
+.pg-batch-edit-records .pg-record-inputs textarea { min-width: 0; }
 .pg-record-inputs { display: flex; align-items: start; gap: 8px; }
 .pg-record-inputs textarea { flex: 1; }
 .pg-table-preview dd, .pg-table-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }

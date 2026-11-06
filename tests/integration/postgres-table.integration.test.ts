@@ -13,6 +13,8 @@ import type { PostgresTableChange, PostgresTableExportInput, PostgresTablePage, 
 import { appendPostgresValueFilter } from '../../src/renderer/postgresTableValues';
 import { postgresBatchFillChanges } from '../../src/renderer/postgresBatchFill';
 import { postgresBatchDeletePlan } from '../../src/renderer/postgresBatchDelete';
+import { postgresBatchEditPlan, type PostgresBatchEditValues } from '../../src/renderer/postgresBatchEdit';
+import { postgresBatchRows } from '../../src/renderer/postgresBatchSelection';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { inspectPostgresCopySource } from '../../src/engine/postgres/copyImportFile';
 
@@ -221,6 +223,22 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(await filledRows()).toEqual([
         { id: '9007199254740993', note: null, flag: '默认值', raw: '00ff' }, unchangedFill[1],
         { id: '9007199254740995', note: null, flag: '默认值', raw: '00ff' },
+      ]);
+      const editBatchPage = await read({ ...fill, limit: 3 });
+      const selectedEdits = postgresBatchRows(editBatchPage, new Set([0, 2]), () => undefined);
+      const editInputs = new Map<number, PostgresBatchEditValues>([
+        [2, new Map([['c1', { mode: 'text', value: '' }], ['c3', { mode: 'binary', value: 'ff00' }]])],
+        [0, new Map([['c1', { mode: 'text', value: '逐条甲' }], ['c3', { mode: 'null' }]])],
+      ]);
+      const editBatchPlan = postgresBatchEditPlan(editBatchPage, selectedEdits, editInputs);
+      expect(editBatchPlan.remove.size).toBe(0);
+      const beforeBatchEdit = await filledRows();
+      const editBatchPreview = await preview(editBatchPage, editBatchPlan.changes, fill);
+      expect(editBatchPreview.counts).toEqual({ insert: 0, update: 2, delete: 0 });
+      expect(await filledRows()).toEqual(beforeBatchEdit);
+      expect(await apply(editBatchPage, editBatchPreview, fill)).toMatchObject({ outcome: 'committed', affected: 2 });
+      expect(await filledRows()).toEqual([
+        { ...beforeBatchEdit[0], note: '逐条甲', raw: null }, beforeBatchEdit[1], { ...beforeBatchEdit[2], note: '', raw: 'ff00' },
       ]);
       const batchDelete = { table: '"浏览"."勾选删除"', tabId: randomUUID() };
       await client.query(`CREATE TABLE ${batchDelete.table} (id bigint, label text, note text, PRIMARY KEY(id,label));
