@@ -52,8 +52,8 @@ const permissionNames = ['SELECT', 'SHOW VIEW', 'SHOW DATABASES', 'TRIGGER', 'EV
 function name(value: unknown): string { if (typeof value !== 'string') throw Error('源对象名称类型无效'); identifier(value); return value; }
 /** 只从未引用词识别语法；字符串、注释与包含关键字的名称不能伪造权限或依赖。 */
 function word(token: TableDefinitionToken | undefined): string { return token?.kind === 'word' ? token.value.toUpperCase() : ''; }
-/** 当前账号的简单全局授权才可采信；角色、部分撤销、认证后缀或未知语法整体降为未知。 */
-function grants(rows: readonly Row[], currentUser: string, family: 'mysql' | 'mariadb', context: TableDefinitionContext): { known: boolean; privileges: Set<string> } {
+/** 仅采信本账号直接全局授权。审计可剥离 MariaDB 的标准密码哈希后缀，源备份维持原证明门槛。 */
+export function databaseBackupGlobalGrants(rows: readonly Row[], currentUser: string, family: 'mysql' | 'mariadb', context: TableDefinitionContext, allowMariaPasswordSuffix = false): { known: boolean; privileges: Set<string> } {
   const privileges = new Set<string>(); let known = rows.length > 0;
   for (const row of rows) {
     const values = Object.values(row); if (values.length !== 1 || typeof values[0] !== 'string') { known = false; continue; }
@@ -62,6 +62,8 @@ function grants(rows: readonly Row[], currentUser: string, family: 'mysql' | 'ma
     const on = tokens.findIndex(token => word(token) === 'ON'), to = tokens.findIndex((token, index) => index > on && word(token) === 'TO');
     if (word(tokens[0]) !== 'GRANT' || on < 2 || to < 0) { known = false; continue; }
     const account = tokens.slice(to + 1), isAccount = (token: TableDefinitionToken | undefined) => token && ['identifier', 'string', 'word'].includes(token.kind);
+    if (allowMariaPasswordSuffix && family === 'mariadb' && word(account[3]) === 'IDENTIFIED' &&
+      word(account[4]) === 'BY' && word(account[5]) === 'PASSWORD' && account[6]?.kind === 'string') account.splice(3, 4);
     if (!isAccount(account[0]) || account[1]?.value !== '@' || !isAccount(account[2]) || `${account[0].value}@${account[2].value}` !== currentUser || account.length !== 3 && !(account.length === 6 && word(account[3]) === 'WITH' && word(account[4]) === 'GRANT' && word(account[5]) === 'OPTION')) { known = false; continue; }
     const scope = tokens.slice(on + 1, to);
     // PROXY 只增加其它身份切换能力，不作为备份权限证据；仍严格核本账号和完整语法。
@@ -183,7 +185,7 @@ export async function inspectDatabaseBackupSource(context: DatabaseBackupSourceC
   const normalized = before.quoteShowCreate === 1 && (family !== 'mysql' || before.generatedPrimaryKeyVisible === true) && before.characterSetConnection === 'utf8mb4' && before.collationConnection === 'utf8mb4_bin' && !before.sqlMode.toUpperCase().split(',').some(mode => [...definitionOmittingSqlModes, 'NO_DIR_IN_CREATE'].includes(mode as never));
   if (!normalized) { block('session-definition-incomplete', 'Root 私有会话未提供完整 SHOW CREATE 模式/字符集/引用条件；本模块不会执行 SET 修复'); dependencies.add('完整定义会话条件尚未证明'); }
   const grantRows = await optional('grants', databaseBackupSourceSql.grants, [], 256);
-  const grantProof = grantRows ? grants(grantRows, before.currentUser, family, lexical) : { known: false, privileges: new Set<string>() };
+  const grantProof = grantRows ? databaseBackupGlobalGrants(grantRows, before.currentUser, family, lexical) : { known: false, privileges: new Set<string>() };
   const rolesUnproven = before.currentRole !== null && before.currentRole !== 'NONE';
   if (rolesUnproven || !grantProof.known) block('global-grants-unproven', '当前权限含角色、部分撤销或未识别授权范围，不能证明全局完整可见性');
   const has = (privilege: string) => !rolesUnproven && grantProof.known && grantProof.privileges.has(privilege);
@@ -236,7 +238,7 @@ export async function inspectDatabaseBackupSource(context: DatabaseBackupSourceC
       } else dependencies.add(`${entry.kind} ${JSON.stringify(entry.name)} 的 DEFINER/完整程序依赖待验证`);
     } catch { dependencies.add(`${entry.kind} ${JSON.stringify(entry.name)} 的完整依赖解析未通过`); }
   }
-  const grantsAfter = await optional('grants', databaseBackupSourceSql.grants, [], 256), afterGrantProof = grantsAfter ? grants(grantsAfter, before.currentUser, family, lexical) : { known: false, privileges: new Set<string>() };
+  const grantsAfter = await optional('grants', databaseBackupSourceSql.grants, [], 256), afterGrantProof = grantsAfter ? databaseBackupGlobalGrants(grantsAfter, before.currentUser, family, lexical) : { known: false, privileges: new Set<string>() };
   if (grantProof.known !== afterGrantProof.known || JSON.stringify([...grantProof.privileges].sort()) !== JSON.stringify([...afterGrantProof.privileges].sort())) throw Error('全局权限证据在检查期间变化，未采信该批范围');
   const after = await facts(); if (JSON.stringify(before) !== JSON.stringify(after)) throw Error('源实例、账号或会话事实在检查期间变化；未采信该批证据');
   evidence.objects = objects; evidence.externalDependencies = [...dependencies];

@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { SchemaCompareTasks } from './schemaCompareTasks';
 import type { MysqlPageParameters } from './mysqlDataSync';
 import { MysqlDataCompareTasks, mysqlCompareCatalogue } from './mysqlDataCompare';
+import { auditDatabaseBackupTarget } from './databaseBackupTargetAudit';
 import { mysqlDataCompareSchema } from '../shared/mysqlDataCompare';
 import { readSchemaComparisonTarget } from './schemaCompare';
 import { open, rename, rm } from 'node:fs/promises';
@@ -324,6 +325,14 @@ export class Engine {
         this.copySourceProfile(input);
         return this.withCopySourceTask(input.connectionId, randomUUID(),
           context => mysqlCompareCatalogue(context, input.database), '读取比较目录');
+      }
+      case 'backupArchive.auditTarget': {
+        const profile = input.profile;
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId)
+          throw Error('缺少可信的备份恢复目标连接');
+        this.copySourceProfile(input);
+        return this.withCopySourceTask(input.connectionId, input.taskId,
+          context => auditDatabaseBackupTarget(context, input.manifest), '检查备份恢复目标', 'no-default-database');
       }
       case 'schema.compare': {
         for (const [profile, target] of [[input.sourceProfile, input.source], [input.targetProfile, input.target]]) {
@@ -881,9 +890,9 @@ export class Engine {
   }
 
   /** 新增只读任务受15秒总期限及原KILL/关闭终态保护，不以Promise超时抢先返回。 */
-  private async withCopySourceTask<T>(connectionId: string, taskId: string, action: (context: Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>) => Promise<T>, label = '读取完整复制源'): Promise<T> {
+  private async withCopySourceTask<T>(connectionId: string, taskId: string, action: (context: Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>) => Promise<T>, label = '读取完整复制源', mode: true | 'no-default-database' = true): Promise<T> {
     let expired = false, settled = false, cancelling: Promise<unknown> | undefined;
-    const pending = this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, label, true, () => ({}), true);
+    const pending = this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, label, mode, () => ({}), true);
     // 保留原Promise供finally等待并传播控制失败，旁路处理器仅防止等待期间的未处理拒绝。
     const timer = setTimeout(() => { if (settled) return; expired = true; cancelling = this.cancelTask(taskId); void cancelling.catch(() => undefined); }, tableCopySourceLimits.timeoutMs);
     timer.unref();
@@ -967,7 +976,7 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: { target: { database: string; table: string }; commitProtected(): boolean }, taskFinalizer?: (succeeded: boolean) => Promise<void>): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead: boolean | 'no-default-database' = false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: { target: { database: string; table: string }; commitProtected(): boolean }, taskFinalizer?: (succeeded: boolean) => Promise<void>): Promise<T> {
     let resourcesStarted = false;
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.taskIdInUse(taskId)) throw new Error('任务编号为空或任务已在执行');
@@ -983,7 +992,7 @@ export class Engine {
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
-      const task: IndependentTask = { commitProtected: dataWrite?.commitProtected, connectionId, controller, done, resources, structureTask: Boolean(options)||strictRead, generation: 0, ...(fileFinalizer ? { fileFinalization: true } : {}) };
+      const task: IndependentTask = { commitProtected: dataWrite?.commitProtected, connectionId, controller, done, resources, structureTask: Boolean(options || strictRead), generation: 0, ...(fileFinalizer ? { fileFinalization: true } : {}) };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseDefaultEncoding' ? { databaseDefaultEncoding: { ...options.progress } } : options.purpose === 'databaseDrop' ? { databaseDrop: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableChecks' ? { tableChecks: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
@@ -999,7 +1008,8 @@ export class Engine {
       let failure: unknown; let result!: T;
       try {
         report();
-        managed = await connect(profile, undefined, controller.signal, receipt => resources.capture(receipt));
+        // 恢复审计允许检查缺失的同名库，即使保存的默认数据库就是该库。
+        managed = await connect(profile, strictRead === 'no-default-database' ? null : undefined, controller.signal, receipt => resources.capture(receipt));
         resources.capture(managed.resources);
         task.managed = managed;
         if (controller.signal.aborted) throw new Error('任务已取消');

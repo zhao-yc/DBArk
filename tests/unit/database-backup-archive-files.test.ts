@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DatabaseBackupArchiveFiles } from '../../src/main/databaseBackupArchiveFiles';
+import type { DatabaseBackupRestoreTargetAudit } from '../../src/shared/databaseBackupArchiveFiles';
 import { validateCommand } from '../../src/shared/validation';
 import { makeDatabaseBackupArchive } from '../helpers/databaseBackupArchiveFixture';
 
@@ -16,6 +17,12 @@ afterEach(async context => {
   if (context.task.result?.state !== 'fail') await rm(directory, { recursive: true, force: true });
 });
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 
 function files(onCheck: (path: string) => Promise<void> = async () => {}) {
   return new DatabaseBackupArchiveFiles({
@@ -80,5 +87,42 @@ describe('备份归档检查及无覆盖 SQL 导出', () => {
     expect(validateCommand('backupArchive.open', { operationId: 'job' })).toEqual({ operationId: 'job' });
     expect(() => validateCommand('backupArchive.open', { operationId: 'job', path: source })).toThrow();
     expect(() => validateCommand('backupArchive.exportSql', { operationId: 'job', token: 'archive', path: target })).toThrow();
+    expect(validateCommand('backupArchive.auditTarget', { operationId: 'job', token: 'archive', connectionId: 'saved' }))
+      .toEqual({ operationId: 'job', token: 'archive', connectionId: 'saved' });
+    expect(() => validateCommand('backupArchive.auditTarget', { operationId: 'job', token: 'archive', connectionId: 'saved', manifest: {} })).toThrow();
+  });
+
+  it('目标检查绑定原窗口和文件代次，取消等待原连接收尾', async () => {
+    await writeFile(source, await makeDatabaseBackupArchive(Buffer.from('SELECT 1;'), 'mysql', '测试库'));
+    const owner = files(), view = (await owner.open('window', 'inspect'))!;
+    const report: DatabaseBackupRestoreTargetAudit = { family: 'mysql', version: '8.4.11', versionMatches: true, database: '测试库',
+      actualDatabase: null, state: 'absent', visible: null, scheduler: 'disabled', blockers: [] };
+    const read = vi.fn(async () => report);
+    await expect(owner.auditTarget('other-window', 'foreign', view.token, read)).rejects.toThrow('已变化');
+    expect(read).not.toHaveBeenCalled();
+
+    const started = deferred(), backend = deferred(), stopping = deferred();
+    const stop = vi.fn(() => stopping.promise);
+    const running = owner.auditTarget('window', 'audit', view.token, async (manifest, registerStop) => {
+      expect(manifest.database).toBe('测试库');
+      registerStop(stop); started.resolve();
+      await backend.promise;
+      return report;
+    });
+    await started.promise;
+    await owner.cancel('other-window', 'audit');
+    expect(stop).not.toHaveBeenCalled();
+    const cancel = owner.cancel('window', 'audit');
+    const repeated = owner.cancel('window', 'audit');
+    expect(stop).toHaveBeenCalledTimes(1);
+    backend.resolve();
+    await expect(owner.open('window', 'overlap')).rejects.toThrow('尚未完成');
+    const rejected = expect(running).rejects.toThrow('已取消');
+    stopping.resolve();
+    await Promise.all([cancel, repeated, rejected]);
+    await expect(owner.auditTarget('window', 'replace', view.token, async () => {
+      await writeFile(source, await makeDatabaseBackupArchive(Buffer.from('SELECT 2;')));
+      return report;
+    })).rejects.toThrow('已变化');
   });
 });

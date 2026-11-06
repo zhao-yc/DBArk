@@ -3,3 +3,4 @@
 .database-backup-content fieldset label{display:flex;flex-direction:column;gap:6px;flex:1;min-width:160px}
 .database-backup-content section,.database-backup-content p,.database-backup-content li{overflow-wrap:anywhere}
 .database-backup-content details ul{max-height:240px;overflow:auto}.database-backup-plan{padding:12px;border:1px solid var(--border);border-left:3px solid #4e86c5}
+.database-backup-target{display:flex;flex-wrap:wrap;gap:8px}.database-backup-target select{min-width:0;max-width:100%}

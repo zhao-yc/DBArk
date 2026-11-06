@@ -102,7 +102,7 @@ import { useExternalObjectUris } from './useExternalObjectUris';
 import { EncryptionStatus } from './components/EncryptionStatus';
 import { version as bundledVersion } from '../../package.json';
 import { Activity, ArrowRight, CheckCircle2, CircleHelp, Database, FileCode2, History, Moon, Plus, Search, Settings2, Sun, Table2, TerminalSquare, X } from 'lucide-react';
-import type { ConnectionProfile, DatabaseObject } from '../shared/contracts';
+import type { ConnectionProfile, DatabaseObject, NetworkConnectionProfile } from '../shared/contracts';
 import { errorMessage, invoke,uid } from './lib';
 import { newQueryContext } from './connectionChanges';
 import { copyConnectionOverview } from './connectionsTransfer';
@@ -901,7 +901,7 @@ function WorkspaceApp() {
   const runningCount = state.tasks.filter(task => task.status === 'running').length;
   const activeTab = settings.tabs.find(tab => tab.id === settings.activeTabId) ?? settings.tabs[0];
   const sqliteObjects = connections.find(profile => profile.id === state.selection?.connectionId)?.dialect === 'sqlite';
-  const networkConnections = connections.filter(profile => profile.dialect === 'mysql' || profile.dialect === 'mariadb');
+  const networkConnections = connections.filter((profile): profile is NetworkConnectionProfile => profile.dialect === 'mysql' || profile.dialect === 'mariadb');
   /** 类别入口只使用树中的明确库；没有库时由用户选择，不借当前查询补库。 */
   function openObjectBrowser(category: ObjectCategory, chosen?: { connectionId: string; database: string }) {
     if (!chosen && document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
@@ -1140,7 +1140,7 @@ function WorkspaceApp() {
     {serverDataCompare && <ServerDataCompareDialog dialect={serverDataCompare} connections={connections.filter(profile => !profile.pendingFiles?.length &&
       (serverDataCompare === 'postgres' ? profile.dialect === 'postgresql' : profile.dialect === 'mysql' || profile.dialect === 'mariadb'))} onClose={() => setServerDataCompare(undefined)}/>}
     {sqliteDataCompare && <SqliteDataCompareDialog connections={connections.filter(profile => profile.dialect === 'sqlite' && !!profile.sqlite.filePath && !profile.pendingFiles?.length)} onClose={() => setSqliteDataCompare(false)}/>}
-    {backupArchive && <DatabaseBackupArchiveDialog onClose={() => setBackupArchive(false)}/>}
+    {backupArchive && <DatabaseBackupArchiveDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)} onClose={() => setBackupArchive(false)}/>}
     {resultSnapshot && <QueryResultSnapshotDialog onClose={closeResultSnapshot}/>}
     {routineInvocationTarget && <RoutineInvocationDialog target={routineInvocationTarget} onClose={() => closeRoutineInvocation(routineInvocationTarget)} onOpenGeneratedQuery={sql => finishRoutineInvocation(routineInvocationTarget, sql)}/>}
     {tabSearch && <OpenTabSearchDialog key={tabSearch.id} registry={tabSearch.registry} onClose={() => closeTabSearch(tabSearch)} onActivate={entry => activateSearchedTab(tabSearch, entry)}/>}

@@ -2073,6 +2073,26 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       return;
     case 'backupArchive.open': return queryFileOperation(() => backupArchiveFiles.open(columns!, input.operationId));
     case 'backupArchive.exportSql': return queryFileOperation(() => backupArchiveFiles.export(columns!, input.operationId, input.token));
+    case 'backupArchive.auditTarget': {
+      const { connectionId, operationId, token } = input;
+      const revision = store.connectionRevision();
+      const assertConnection = () => {
+        columnsMain.assertCapturedOwner(columns);
+        if (shuttingDown || revision !== store.connectionRevision()) throw Error('恢复目标的窗口或连接配置已变化，请重新检查');
+        connectionConfig.assertAvailable(connectionId);
+      };
+      const result = await queryFileOperation(() => backupArchiveFiles.auditTarget(columns!, operationId, token,
+        async ({ family, serverVersion, database }, registerStop) => {
+          assertConnection();
+          const profile = store.resolveConnection(connectionId);
+          if (profile.dialect !== 'mysql' && profile.dialect !== 'mariadb') throw Error('恢复目标需要已保存的 MySQL 或 MariaDB 连接');
+          const taskId = randomUUID();
+          registerStop(() => broker.request('query.cancel', { taskId }));
+          return broker.request(command, { connectionId, profile, taskId, manifest: { family, serverVersion, database } });
+        }));
+      assertConnection();
+      return result;
+    }
     case 'backupArchive.cancel': columnsMain.assertCapturedOwner(columns); return backupArchiveFiles.cancel(columns!, input.operationId);
     case 'sqlite.databaseCopy': return copySqliteFile(input, columns);
     case 'files.createSqlite': return createSqliteFile(columns, input.connectionId);

@@ -549,6 +549,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.databaseCopy': z.discriminatedUnion('mode', [z.object({ mode: z.literal('backup'), connectionId: id }).strict(), z.object({ mode: z.literal('restore') }).strict()]),
   'backupArchive.open': z.object({ operationId: id }).strict(),
   'backupArchive.exportSql': z.object({ operationId: id, token: id }).strict(),
+  'backupArchive.auditTarget': z.object({ operationId: id, token: id, connectionId: id }).strict(),
   'backupArchive.cancel': z.object({ operationId: id }).strict(),
   'files.createSqlite': z.object({ connectionId: id }).strict(),
   'files.path': z.object({ token: id }).strict(),

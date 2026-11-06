@@ -12,7 +12,7 @@
 
 在可写右侧表的完整比较中，勾选差异并预览同步，输入准确的目标名确认后提交。[SQLite 差异同步](development/sqlite-data-sync-20261107.md)
 
-从「工具」打开 MySQL 或 MariaDB 的 tabrelio 数据库备份归档，查看清单与摘要，再将原始 SQL 导出到新文件。[归档检查与 SQL 导出](development/database-backup-archive-sql-20261106.md)
+从「工具 → 打开数据库备份归档」选择 MySQL 或 MariaDB 的 tabrelio 归档，可以查看清单与摘要，并将原始 SQL 导出到新文件。也可以选择已保存的连接，点击「检查目标」，查看服务器版本、同名库、可见对象和事件调度器状态。目录权限不足时，状态显示为未知。检查只读取目标目录，恢复可用性仍待验证。[归档检查与 SQL 导出](development/database-backup-archive-sql-20261106.md) · [恢复目标检查](development/backup-restore-target-audit-20261107.md)
 
 SQLite 连接行的操作菜单提供「备份 SQLite 整库」。侧栏标题旁的「从 SQLite 备份恢复」先选择备份，再将其恢复为新文件。恢复后可在新建连接时选择该文件。[SQLite 备份与恢复](development/sqlite-database-backup-20261106.md)
 
