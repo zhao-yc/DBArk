@@ -21,11 +21,11 @@ export function SqliteRecordTransferDialog({ engine, snapshot, page, values, tar
   const [error, setError] = useState('');
   const source = snapshot.source, valid = current();
   const field = (index: number) => `${index + 1}. ${snapshot.columns[index].name} (${snapshot.columns[index].type})`;
-  const destinations = sqliteTransferTargets(page, values, selected)
+  const destinations = sqliteTransferTargets(snapshot, page, values, selected)
     .filter(column => !mapping.some((item, index) => index !== selected && item.column === column.name));
   return <Modal title={text.title(engine)} wide onClose={onClose}>
     <div className="modal-content">
-      <p>{text.scope(values.length)}</p><p>{text.precision}</p>
+      <p>{text.scope(values.length)}</p><p>{engine === 'SQLite' ? text.sqlitePrecision : text.precision}</p>
       <dl><dt>{text.source(engine)}</dt><dd>{source.label} / {source.database && <>{source.database} / </>}{'title' in source ? postgresRecordTransferZh.queryResult(source.title, source.result) : source.table}</dd>
         <dt>{text.target}</dt><dd>{targetName} / {page.target.database}.{page.target.table}</dd></dl>
       <div className="pg-table-controls">
@@ -40,6 +40,7 @@ export function SqliteRecordTransferDialog({ engine, snapshot, page, values, tar
           {destinations.map(column => <option key={column.name} value={column.name}>{column.name} ({column.declaredType})</option>)}
         </select></Field>
       </div>
+      {values.some(row => row[selected] === undefined) && <p className="warning-text">{text.nonfinite}</p>}
       <div className="table-statistics-results"><table>
         <thead><tr><th>{text.sourceColumn}</th><th>{text.targetColumn}</th></tr></thead>
         <tbody>{mapping.map((item, index) => <tr key={snapshot.columns[index].key}><td>{field(index)}</td><td>{item.column ?? text.skip}</td></tr>)}</tbody>
@@ -50,7 +51,7 @@ export function SqliteRecordTransferDialog({ engine, snapshot, page, values, tar
       <button type="button" onClick={onClose}>{clipboardText.cancel}</button>
       <button type="button" className="primary" disabled={!valid || !mapping.some(item => item.column !== null)} onClick={() => {
         if (!current()) return;
-        try { onStage(prepareSqliteRecordTransfer(page, values, mapping)); } catch (reason) { setError(errorMessage(reason)); }
+        try { onStage(prepareSqliteRecordTransfer(snapshot, page, values, mapping)); } catch (reason) { setError(errorMessage(reason)); }
       }}>{clipboardText.stage}</button>
     </footer>
   </Modal>;

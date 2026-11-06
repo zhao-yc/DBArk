@@ -212,7 +212,7 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
     for (const name of ['SQLite乙', 'SQLite甲']) {
       await sqliteQuery.getByRole('row').filter({ has: page.getByRole('gridcell', { name, exact: true }) }).getByRole('checkbox').check();
     }
-    await (await navigationMenuItem(sqliteQuery, { name: transferText.captureToPostgres, exact: true }, check)).click();
+    await (await navigationMenuItem(sqliteQuery, { name: transferText.queryCapture, exact: true }, check)).click();
     await page.locator('.tab-select').getByText('"迁移回归"."目标表"', { exact: true }).click();
     await button(transferText.openQuery).click();
     await expect(tab.getByRole('alert')).toContainText(transferText.refreshTarget);

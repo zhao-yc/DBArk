@@ -1,6 +1,6 @@
 # SQLite 到 PostgreSQL 的记录复制
 
-运行 SQLite 查询，在当前结果集勾选记录，从结果菜单选「暂存勾选结果到 PostgreSQL」。可从只读 SQLite 文件暂存。范围取当前显示的勾选行与可见字段，单批最多 100 行、200 个可见字段和 1 MiB。只使用已返回的结果，不重跑 SQLite 查询。
+运行 SQLite 查询，在当前结果集勾选记录，从结果菜单选「暂存勾选结果以跨库复制」。可从只读 SQLite 文件暂存。范围取当前显示的勾选行与可见字段，单批最多 100 行、200 个可见字段和 1 MiB。只使用已返回的结果，不重跑 SQLite 查询。
 
 打开目标 PostgreSQL 表，点「从查询结果复制记录」。映射区显示勾选记录的实际 SQLite 存储类。唯一同名、非 NULL 值只有一种存储类且目标类型匹配时，可自动配对。INTEGER 对应 bigint，REAL 对应 double precision，TEXT 对应 text，BLOB 对应 bytea。全 NULL 列可手动映射到允许 NULL 的目标列。同列混合 BLOB 和标量时，请跳过该列，或先筛选成单一存储类再暂存。 [SQLite 存储类](https://www.sqlite.org/datatype3.html#storage_classes_and_datatypes) · [PostgreSQL 数值类型](https://www.postgresql.org/docs/18/datatype-numeric.html)
 

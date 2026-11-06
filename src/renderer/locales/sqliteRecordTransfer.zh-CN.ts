@@ -3,6 +3,8 @@ export const sqliteRecordTransferZh = {
   emptyEntry: '从暂存的查询结果复制记录',
   scope: (count: number) => `已勾选 ${count} 行。核对映射后只生成 SQLite 新增草稿。`,
   precision: '精确小数按 TEXT 保存。整数可按原文写入 TEXT，本批超出有符号 64 位范围的整数列须保留文本。字节按 BLOB 保存。',
+  sqlitePrecision: '按每个单元格的原存储类型复制。混合类型优先选择无类型声明的列或 STRICT 表的 ANY 列。',
+  nonfinite: '选中的来源字段含正或负无穷大。本次可以跳过该字段，继续复制其他字段。',
   source: (engine: string) => `${engine} 来源`, target: 'SQLite 目标', sourceColumn: '来源字段', targetColumn: '目标字段',
   skip: '跳过此字段', unavailable: '没有可复制到 SQLite 的暂存查询结果。',
   unsafeInteger: (name: string) => `来源字段「${name}」缺少可验证的精确整数原值。`,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SqliteEditColumn } from '../../src/shared/sqliteTableEdit';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
-import { captureMysqlQueryTransfer, capturePostgresQueryTransfer } from '../../src/renderer/postgresRecordTransfer';
+import { captureMysqlQueryTransfer, capturePostgresQueryTransfer, captureSqliteQueryTransfer } from '../../src/renderer/postgresRecordTransfer';
 import { defaultSqliteTransferMapping, queryToSqliteValues, prepareSqliteRecordTransfer, sqliteTransferTargets } from '../../src/renderer/sqliteRecordTransfer';
 import { sqlitePastePlanValues } from '../../src/renderer/sqliteTableClipboard';
 
@@ -27,7 +27,7 @@ describe('PostgreSQL 查询结果复制到 SQLite', () => {
     const page = destination([column('exact', 'INTEGER'), column('precise', 'ANY'), column('raw', 'BLOB'), column('missing', 'TEXT')], true);
     const mapping = defaultSqliteTransferMapping(snapshot, page, values);
     expect(mapping.map(item => item.column)).toEqual(['exact', 'precise', 'raw', 'missing']);
-    expect(sqlitePastePlanValues(prepareSqliteRecordTransfer(page, values, mapping), page)).toEqual([
+    expect(sqlitePastePlanValues(prepareSqliteRecordTransfer(snapshot, page, values, mapping), page)).toEqual([
       [{ kind: 'integer', value: '9223372036854775807' }, { kind: 'text', value: '9007199254740993.000000000000000001' }, { kind: 'blob', value: '00ff' }, { kind: 'null' }],
       [{ kind: 'integer', value: '-9223372036854775808' }, { kind: 'text', value: '0.000000000000000001' }, { kind: 'blob', value: '' }, { kind: 'text', value: '' }],
     ]);
@@ -38,10 +38,10 @@ describe('PostgreSQL 查询结果复制到 SQLite', () => {
     const page = destination([column('precise', 'NUMERIC'), column('safe', 'TEXT'), column('raw', 'BLOB'), column('missing', 'INTEGER', { primary: true })]);
     const mapping = defaultSqliteTransferMapping(snapshot, page, values);
     expect(mapping.map(item => item.column)).toEqual([null, null, 'raw', null]);
-    expect(sqliteTransferTargets(page, values, 1).map(item => item.name)).toEqual(['safe', 'raw']);
+    expect(sqliteTransferTargets(snapshot, page, values, 1).map(item => item.name)).toEqual(['safe', 'raw']);
     mapping[1].column = 'precise';
-    expect(() => prepareSqliteRecordTransfer(page, values, mapping)).toThrow('不能原样保留');
-    expect(sqliteTransferTargets(page, values, 3).map(item => item.name)).toEqual(['safe', 'raw']);
+    expect(() => prepareSqliteRecordTransfer(snapshot, page, values, mapping)).toThrow('不能原样保留');
+    expect(sqliteTransferTargets(snapshot, page, values, 3).map(item => item.name)).toEqual(['safe', 'raw']);
   });
 });
 
@@ -61,10 +61,10 @@ describe('MySQL 和 MariaDB 查询结果复制到 SQLite', () => {
     const snapshot = capture('18446744073709551615'), values = queryToSqliteValues(snapshot);
     const page = destination([column('unsigned', 'TEXT'), column('signed', 'INTEGER'), column('precise', 'ANY'),
       column('raw', 'BLOB'), column('note', 'TEXT'), column('small', 'INT'), column('lossy', 'REAL')], true);
-    expect(sqliteTransferTargets(page, values, 0).map(item => item.name)).toEqual(['unsigned', 'precise', 'note']);
+    expect(sqliteTransferTargets(snapshot, page, values, 0).map(item => item.name)).toEqual(['unsigned', 'precise', 'note']);
     const mapping = defaultSqliteTransferMapping(snapshot, page, values);
     expect(mapping.map(item => item.column)).toEqual(['unsigned', 'signed', 'precise', 'raw', 'note', 'small']);
-    expect(sqlitePastePlanValues(prepareSqliteRecordTransfer(page, values, mapping), page)).toEqual([
+    expect(sqlitePastePlanValues(prepareSqliteRecordTransfer(snapshot, page, values, mapping), page)).toEqual([
       [{ kind: 'text', value: '18446744073709551615' }, { kind: 'integer', value: '-9223372036854775808' },
         { kind: 'text', value: '9007199254740993.00000000000000000001' }, { kind: 'blob', value: '00ff' }, { kind: 'text', value: '0007' }, { kind: 'integer', value: '17' }, undefined],
       [{ kind: 'text', value: '0' }, { kind: 'integer', value: '9223372036854775807' },
@@ -72,9 +72,33 @@ describe('MySQL 和 MariaDB 查询结果复制到 SQLite', () => {
     ]);
     const inRange = capture('9223372036854775807'), inRangeValues = queryToSqliteValues(inRange);
     expect(inRangeValues[0][0]).toEqual({ kind: 'integer', value: '9223372036854775807' });
-    const nextBatch = prepareSqliteRecordTransfer(page, inRangeValues, defaultSqliteTransferMapping(inRange, page, inRangeValues));
+    const nextBatch = prepareSqliteRecordTransfer(inRange, page, inRangeValues, defaultSqliteTransferMapping(inRange, page, inRangeValues));
     expect(sqlitePastePlanValues(nextBatch, page).map(row => row[0]))
       .toEqual([{ kind: 'text', value: '9223372036854775807' }, { kind: 'text', value: '0' }]);
     expect(() => queryToSqliteValues(capture(9007199254740992))).toThrow('缺少可验证的精确整数原值');
   });
+});
+
+it('SQLite 复制沿用逐格存储类，保留混合值与负零，含无穷大的列可以跳过', () => {
+  const columns = ['mixed', 'negative', 'amount', 'exact', 'exceptional'].map((name, index) => ({ key: 'c' + index, name, type: 'SQLITE' }));
+  const snapshot = captureSqliteQueryTransfer({ connectionId: 'src', label: '只读库', title: '源', result: 1 }, {
+    columns, rows: [{ c0: '0007', c1: '-0', c2: '2', c3: '9223372036854775807', c4: 'Infinity' },
+      { c0: { type: 'binary', base64: '' }, c1: '0', c2: '0.25', c3: '-9223372036854775808', c4: null }],
+    sqliteStorage: { version: 1, rows: ['trrir', 'brrin'] }, truncated: false, elapsedMs: 0, statement: '',
+  });
+  const values = queryToSqliteValues(snapshot);
+  const page = destination([column('mixed', 'ANY'), column('negative', 'ANY'), column('amount', 'REAL'),
+    column('exact', 'INTEGER'), column('exceptional', 'ANY'), column('textOnly', 'TEXT')], true);
+  expect(sqliteTransferTargets(snapshot, page, values, 0).map(item => item.name)).toEqual(['mixed', 'negative', 'exceptional']);
+  expect(sqliteTransferTargets(snapshot, page, values, 1).map(item => item.name)).toEqual(['mixed', 'negative', 'exceptional']);
+  expect(sqliteTransferTargets(snapshot, page, values, 3).map(item => item.name)).toEqual(['mixed', 'negative', 'exact', 'exceptional']);
+  expect(sqliteTransferTargets(snapshot, page, values, 4)).toEqual([]);
+  const mapping = defaultSqliteTransferMapping(snapshot, page, values);
+  expect(mapping.map(item => item.column)).toEqual(['mixed', 'negative', 'amount', 'exact', null]);
+  expect(sqlitePastePlanValues(prepareSqliteRecordTransfer(snapshot, page, values, mapping), page)).toEqual([
+    [{ kind: 'text', value: '0007' }, { kind: 'real', value: '-0' }, { kind: 'real', value: '2' }, { kind: 'integer', value: '9223372036854775807' }, undefined, undefined],
+    [{ kind: 'blob', value: '' }, { kind: 'real', value: '0' }, { kind: 'real', value: '0.25' }, { kind: 'integer', value: '-9223372036854775808' }, undefined, undefined],
+  ]);
+  mapping[1].column = 'amount';
+  expect(() => prepareSqliteRecordTransfer(snapshot, page, values, mapping)).toThrow('不能原样保留');
 });

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。SQLite 勾选查询结果支持跨文件复制为新增草稿。逐格保留存储类型，目标列须能保留混合类型及负零。M04 为部分覆盖，暂不发布。[SQLite 跨文件记录复制](development/sqlite-sqlite-record-transfer-20261106.md)
+
 2026-11-06 源码增量。MySQL 和 MariaDB 的勾选查询结果可直接映射为 SQLite 新增草稿，超出有符号 64 位范围的整数列与定点数以原文保存。M04 为部分覆盖，暂不发布。[MySQL 和 MariaDB 到 SQLite 的记录复制](development/mysql-sqlite-record-transfer-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 查询结果可把勾选行映射成 SQLite 新增草稿。预先检查目标亲和性，防止精确小数文本被隐式转为 REAL。M04 为部分覆盖，暂不发布。[PostgreSQL 到 SQLite 的记录复制](development/postgres-sqlite-record-transfer-20261106.md)
@@ -823,7 +825,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | M01 | 同类/跨类型传输 | 待做 | 结构数据映射、预览、批次、取消、错误与精度 |
 | M02 | 结构比较同步 | 部分 | 0.17开发中已有两表原定义比较、差异分类及受限SQL审查稿，六实例读取/预览保护24项通过，见[首批集成](../tests/integration/acceptance-parallel-integration-20261016.md)。尚不能执行同步；完整对象/方向/依赖及目标再检查继续，外键全库名称可用性未知时拒绝危险混合脚本 |
 | M03 | 数据比较同步 | 待做 | 键/筛选、差异分页、冲突，选择增删改 |
-| M04 | 跨库记录复制 | 部分 | PostgreSQL 可从[表页](development/postgres-record-transfer-20261106.md)或[当前查询结果](development/postgres-query-record-transfer-20261106.md)暂存勾选行，映射到另一张 PostgreSQL 表的新增草稿。也支持 [SQLite](development/sqlite-postgres-record-transfer-20261106.md) 和 [MySQL／MariaDB](development/mysql-postgres-record-transfer-20261106.md) 查询结果到 PostgreSQL，以及 [PostgreSQL](development/postgres-sqlite-record-transfer-20261106.md) 和 [MySQL／MariaDB](development/mysql-sqlite-record-transfer-20261106.md) 查询结果到 SQLite。其他跨引擎方向和整表传输待做。 |
+| M04 | 跨库记录复制 | 部分 | PostgreSQL 可从[表页](development/postgres-record-transfer-20261106.md)或[当前查询结果](development/postgres-query-record-transfer-20261106.md)暂存勾选行，映射到另一张 PostgreSQL 表的新增草稿。也支持 [SQLite](development/sqlite-postgres-record-transfer-20261106.md) 和 [MySQL／MariaDB](development/mysql-postgres-record-transfer-20261106.md) 查询结果到 PostgreSQL，以及 [PostgreSQL](development/postgres-sqlite-record-transfer-20261106.md)、[MySQL／MariaDB](development/mysql-sqlite-record-transfer-20261106.md) 和 [SQLite](development/sqlite-sqlite-record-transfer-20261106.md) 查询结果到 SQLite。其他跨引擎方向和整表传输待做。 |
 | B01 | 常用数据库备份恢复 | 待做 | MySQL/MariaDB/PostgreSQL/SQLite/Redis 分别验证；表导出不能代替整库备份 |
 | B02 | 备份转 SQL/SQL 与 Redis 文件 | 部分 | SQL 执行已验；补转换及 Redis 命令任务 |
 | S01 | 用户/角色/授权撤销 | 待做 | 真实权限、预览、权限不足与当前账号保护 |

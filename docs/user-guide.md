@@ -302,7 +302,9 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 在 PostgreSQL 当前查询结果勾选行并点「暂存勾选结果以跨库复制」，可在目标表点击「从查询结果复制记录」。重复别名按列序号手动映射。核对后加入新增草稿，再预览并确认提交。[查询结果跨库复制](development/postgres-query-record-transfer-20261106.md)
 
-SQLite 查询结果也可在结果菜单中点「暂存勾选结果到 PostgreSQL」。到目标 PostgreSQL 表核对实际存储类型与映射，再加入草稿。详见[SQLite 到 PostgreSQL 的记录复制](development/sqlite-postgres-record-transfer-20261106.md)。
+SQLite 查询结果也可在结果菜单中点「暂存勾选结果以跨库复制」。可在目标 PostgreSQL 表核对实际存储类型和映射，再加入草稿。详见[SQLite 到 PostgreSQL 的记录复制](development/sqlite-postgres-record-transfer-20261106.md)。
+
+也可以打开另一个可写 SQLite 文件的表，在「更多」菜单选「从 SQLite 查询结果复制记录」。同一来源列内的文本、数值和字节仍按各单元格的存储类型映射。暂存后预览 SQL，再确认提交。详见[SQLite 跨文件记录复制](development/sqlite-sqlite-record-transfer-20261106.md)。
 
 MySQL 和 MariaDB 的当前查询结果可点「暂存勾选结果以跨库复制」，再到 PostgreSQL 目标表映射和提交。无符号大整数可映射到 `numeric`。详见[MySQL／MariaDB 到 PostgreSQL 的记录复制](development/mysql-postgres-record-transfer-20261106.md)。
 

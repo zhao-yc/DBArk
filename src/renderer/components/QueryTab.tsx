@@ -1544,7 +1544,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         ? captureSqliteQueryTransfer({ ...source, database: 'main' }, resultSelection.sqliteSnapshot(selectionBinding))
         : captureMysqlQueryTransfer(source, connection.dialect, resultSelection.snapshot(selectionBinding), selectionBinding.visibleColumns);
       usePostgresRecordTransfer.setState({ snapshot });
-      useWorkspace.getState().notify(connection.dialect === 'sqlite' ? transferText.queryCaptured(snapshot.rows.length) : transferText.queryCapturedToEither(snapshot.rows.length));
+      useWorkspace.getState().notify(transferText.queryCapturedToEither(snapshot.rows.length));
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -2032,7 +2032,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 {connection && connection.dialect !== 'postgresql' && !pin && <button disabled={busy || !selectionBinding ||
   sqlite && !selectionBinding.result.sqliteStorage || !selectedExportCount ||
   selectedExportCount > postgresTableLimits.changes || selectionBinding.visibleColumns.length > postgresTableLimits.fields}
-  title={transferText.limits} onClick={captureQueryTransfer}>{sqlite ? transferText.captureToPostgres : transferText.queryCapture}</button>}
+  title={transferText.limits} onClick={captureQueryTransfer}>{transferText.queryCapture}</button>}
 {!sqlite && <button aria-label={resultInsertZh.open} disabled={!selectionBinding || !exportable?.rows.length || busy || !!resultInsertSource || !!activeColumnLease || !!activeFilterLease || !!activeSortLease} onClick={() => openResultInsert(false)}>{resultInsertZh.open}</button>}
 {!sqlite && <button aria-label={resultInsertZh.selected} disabled={!selectedExportCount || busy || !!resultInsertSource} onClick={() => openResultInsert(true)}>{resultInsertZh.selected}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.snapshots}>{snapshotActions}</ActionMenuSection>

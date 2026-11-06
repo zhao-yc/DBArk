@@ -1,7 +1,7 @@
 export const postgresRecordTransferZh = {
   capture: '暂存勾选记录以跨库复制', open: '从另一张表复制记录', title: '跨库复制 PostgreSQL 记录',
   queryCapture: '暂存勾选结果以跨库复制', openQuery: '从查询结果复制记录',
-  captureToPostgres: '暂存勾选结果到 PostgreSQL', sqliteSource: 'SQLite 查询结果',
+  sqliteSource: 'SQLite 查询结果',
   mysqlSource: 'MySQL 查询结果', mariadbSource: 'MariaDB 查询结果',
   mixedBinary: (columns: string) => `以下来源列同时含二进制和标量，无法统一映射。可跳过，或拆成同类型结果后重新暂存。 ${columns}`,
   queryResult: (title: string, result: number) => `${title} · 结果集 ${result}`,
@@ -9,7 +9,6 @@ export const postgresRecordTransferZh = {
   truncated: '源结果已截断。此批只包含已返回且勾选的记录。',
   notice: '使用源页已读到的原始记录。当前步骤只生成目标表新增草稿。',
   captured: (count: number) => `已暂存 ${count} 行原始记录。打开另一张 PostgreSQL 表，点击「从另一张表复制记录」。`,
-  queryCaptured: (count: number) => `已暂存 ${count} 行查询结果。打开目标 PostgreSQL 表，点击「从查询结果复制记录」。`,
   queryCapturedToEither: (count: number) => `已暂存 ${count} 行查询结果，可在 PostgreSQL 或 SQLite 目标表中复制。`,
   replaced: '此操作会替换当前暂存的跨库记录。', discard: '清除跨库暂存',
   source: '来源', target: '目标', sourceColumn: '来源字段', targetColumn: '目标字段',

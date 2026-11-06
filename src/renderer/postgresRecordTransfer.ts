@@ -17,6 +17,7 @@ export interface PostgresRecordTransfer {
   readonly source: PostgresTransferSource;
   readonly columns: readonly PostgresTransferColumn[];
   readonly rows: readonly ReadonlyMap<string, CellValue>[];
+  readonly sqliteStorage?: readonly string[];
 }
 
 // 每个窗口只保留一批有界快照。原值不进入持久化状态或系统剪贴板。
@@ -98,8 +99,8 @@ export function captureSqliteQueryTransfer(
       automaticType: nonNull.length === 1 ? sqliteAutomaticTypes[nonNull[0]] : undefined };
   });
   const { connectionId, database, label, title, result } = source;
-  return captureRows({ connectionId, database, label, title, result, truncated: selected.truncated, dialect: 'sqlite' },
-    selected.rows, columns, selected.rows.map((_, index) => index));
+  return { ...captureRows({ connectionId, database, label, title, result, truncated: selected.truncated, dialect: 'sqlite' },
+    selected.rows, columns, selected.rows.map((_, index) => index)), sqliteStorage: storage.rows };
 }
 
 /** 所有来源共用预算及原值复制。暂存不包含 SQL 正文。 */
