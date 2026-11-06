@@ -4,6 +4,7 @@ import { postgresIdentifier } from '../../shared/postgresSql';
 import { postgresTableCondition } from '../../shared/postgresTableReadSql';
 import type { PostgresConnection } from './connection';
 import { readRelation } from './tableWorkspace';
+import { compareTableData, type TableDataSnapshot } from '../tableDataDifferences';
 
 export interface PostgresCompareVersion { tid: string; version: string; tableOid: string; }
 export interface PostgresSyncRow { before?: CellValue[]; after?: CellValue[]; version?: PostgresCompareVersion; }
@@ -12,10 +13,7 @@ export interface PostgresSyncEvidence {
   columns: string[];
   rows: PostgresSyncRow[];
 }
-interface Snapshot {
-  keys: string[];
-  columns: PostgresDataCompareOutput['columns'];
-  rows: CellValue[][];
+interface Snapshot extends TableDataSnapshot {
   sync?: { relation: PostgresSyncEvidence['relation']; versions: PostgresCompareVersion[] };
 }
 
@@ -89,53 +87,11 @@ export async function readPostgresCompareTable(connection: PostgresConnection, e
   return { keys: relation.keys, columns, rows, sync: { relation, versions } };
 }
 
-export const postgresCompareValueEqual = (a: CellValue, b: CellValue) => a === b || (
-  a !== null && b !== null && typeof a === 'object' && typeof b === 'object' && a.base64 === b.base64
-);
-
-/** 数值主键消除无意义的小数尾零用于匹配。字段对照仍保留各侧原始精度和显示形式。 */
-function keyValue(value: CellValue, type: string): CellValue {
-  if (typeof value !== 'string') return value;
-  if (/^numeric(?:\(|$)/.test(type) && value.includes('.')) return value.replace(/0+$/, '').replace(/\.$/, '');
-  if ((type === 'real' || type === 'double precision') && value === '-0') return '0';
-  return value;
-}
-
 export function comparePostgresSnapshots(left: Snapshot, right: Snapshot, sharedSnapshot: boolean, capture?: (evidence: PostgresSyncEvidence) => void): PostgresDataCompareOutput {
-  if (JSON.stringify(left.columns) !== JSON.stringify(right.columns)) throw Error('两侧字段名及 PostgreSQL 声明类型须一致');
-  if (JSON.stringify([...left.keys].sort()) !== JSON.stringify([...right.keys].sort())) throw Error('两侧主键字段须一致');
-  const keyColumns = left.keys.map(name => left.columns.findIndex(column => column.name === name));
-  const index = (rows: CellValue[][]) => {
-    const result = new Map<string, { key: CellValue[]; values: CellValue[]; position: number }>();
-    for (const [position, values] of rows.entries()) {
-      const key = keyColumns.map(column => values[column]);
-      if (key.some(value => value == null)) throw Error('PostgreSQL 比较发现空主键');
-      const id = JSON.stringify(key.map((value, position) => keyValue(value, left.columns[keyColumns[position]].type)));
-      if (result.has(id)) throw Error('PostgreSQL 比较发现重复的主键表示');
-      result.set(id, { key, values, position });
-    }
-    return result;
-  };
-  const a = index(left.rows), b = index(right.rows);
-  const counts = { 'source-only': 0, 'target-only': 0, different: 0 };
-  const differences: PostgresDataCompareOutput['differences'] = [];
-  const syncRows: PostgresSyncRow[] = [];
-  let equal = 0;
-  for (const id of [...new Set([...a.keys(), ...b.keys()])].sort()) {
-    const source = a.get(id), target = b.get(id);
-    if (!source && !target) continue;
-    const kind = !target ? 'source-only' : !source ? 'target-only' : 'different';
-    const cells = left.columns.flatMap((_, column) => {
-      const before = source?.values[column], after = target?.values[column];
-      if (before !== undefined && after !== undefined && postgresCompareValueEqual(before, after)) return [];
-      return [{ column, ...(source ? { source: before } : {}), ...(target ? { target: after } : {}) }];
-    });
-    if (!cells.length) { equal++; continue; }
-    counts[kind]++;
-    differences.push({ kind, key: (source ?? target)!.key, cells });
-    if (capture && right.sync) syncRows.push({ before: target?.values, after: source?.values, version: target && right.sync.versions[target.position] });
-  }
-  if (Buffer.byteLength(JSON.stringify(differences)) > limits.bytes * 2) throw Error('PostgreSQL 差异结果超过显示预算，请缩小筛选范围');
-  if (right.sync && syncRows.length) capture?.({ relation: right.sync.relation, columns: right.columns.map(column => column.name), rows: syncRows });
-  return { sharedSnapshot, columns: left.columns, keyColumns: left.keys, sourceRows: a.size, targetRows: b.size, equal, counts, differences };
+  const sync = right.sync, rows: PostgresSyncRow[] = [];
+  const result = compareTableData(left, right, sharedSnapshot, 'PostgreSQL', capture && sync ? (after, before, position) => {
+    rows.push({ before, after, version: position === undefined ? undefined : sync.versions[position] });
+  } : undefined);
+  if (sync && rows.length) capture?.({ relation: sync.relation, columns: right.columns.map(column => column.name), rows });
+  return result;
 }

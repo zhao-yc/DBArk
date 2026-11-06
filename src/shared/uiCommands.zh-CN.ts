@@ -1,3 +1,4 @@
+import { mysqlDataCompareZh } from './mysqlDataCompare';
 import { postgresDataCompareZh } from './postgresDataCompare';
 import { sqliteDataCompareZh } from './sqliteDataCompare';
 import { databaseBackupArchiveZh } from './databaseBackupArchiveFiles';
@@ -24,7 +25,7 @@ export const uiCommandLabels: Record<UiCommandId, string> = {
   'statement-navigation': '语句导航',
   'select-current-statement': '选中当前语句',
   'previous-statement': '上一条语句', 'next-statement': '下一条语句',
-  'import': '导入数据', 'export': '导出数据', 'sqlite-data-compare': sqliteDataCompareZh.title, 'postgres-data-compare': postgresDataCompareZh.title, 'schema-compare': '结构比较', 'structure-search': '全库搜索',
+  'import': '导入数据', 'export': '导出数据', 'sqlite-data-compare': sqliteDataCompareZh.title, 'postgres-data-compare': postgresDataCompareZh.title, 'mysql-data-compare': mysqlDataCompareZh.title, 'schema-compare': '结构比较', 'structure-search': '全库搜索',
   'server-monitor': '服务器监控', 'backup-archive': databaseBackupArchiveZh.title, 'explain-snapshot': '打开计划快照', 'result-snapshot': '打开结果快照',
   'task-center': '任务中心', 'tab-search': '查找已打开标签', 'close-tab': '关闭当前标签', 'reopen-query': '重新打开上个保留查询',
   'close-other-queries': '关闭其他查询', 'close-left-queries': '关闭左侧查询', 'close-right-queries': '关闭右侧查询',

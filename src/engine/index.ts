@@ -20,6 +20,8 @@ import type { TableApplyEvidence } from '../shared/tableApplyReceipt';
 import type { TableApplyBinding } from '../shared/tableApplyReceipt';
 import { randomUUID } from 'node:crypto';
 import { SchemaCompareTasks } from './schemaCompareTasks';
+import { MysqlDataCompareTasks, mysqlCompareCatalogue } from './mysqlDataCompare';
+import { mysqlDataCompareSchema } from '../shared/mysqlDataCompare';
 import { readSchemaComparisonTarget } from './schemaCompare';
 import { open, rename, rm } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
@@ -175,6 +177,7 @@ export class Engine {
   private readonly databaseDefaultEncodings: DatabaseDefaultEncodingTasks;
   private readonly tableDefaultEncodings: TableDefaultEncodingTasks;
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
+  private readonly mysqlDataComparisons: MysqlDataCompareTasks;
   private readonly schemaComparisons: SchemaCompareTasks;
   private readonly structureCache = new StructurePatchCache();
   private readonly csvExportFields = new CsvExportFieldCatalogs(this.structureCache);
@@ -193,6 +196,12 @@ export class Engine {
     this.tableFilteredUpdates = new TableFilteredUpdateTasks({ run: (target, taskId, action, progress, execution, finalize) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '填充全部筛选匹配行' : '快照全部筛选匹配行', true, () => ({ tableFilteredUpdate: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined, finalize), stop: taskId => this.stopIndependentRead(taskId) });
     // 删除在独立用途和目标执行锁中运行；提交可能发送后只等待原ACK，不重放或KILL。
     this.tableFilteredDeletes = new TableFilteredDeleteTasks({ run: (target, taskId, action, progress, execution, finalize) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '删除全部筛选匹配行' : '快照全部筛选匹配行', true, () => ({ tableFilteredDelete: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined, finalize), stop: taskId => this.stopIndependentRead(taskId) });
+    this.mysqlDataComparisons = new MysqlDataCompareTasks({
+      run: (connectionId, taskId, action) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({
+        managed, ...control, page: (sql, params) => this.readPage(managed, sql, 1, 10000, true, true, params),
+      }), undefined, '只读表数据比较', true, undefined, true),
+      cancel: taskId => this.cancelTask(taskId),
+    }, emit);
     this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -260,7 +269,7 @@ export class Engine {
         const changed = input.transportChanged || (previous && connectionTransportChanged(previous, next, { preserveMissingSecrets: false }));
         if (changed && (this.connectionUses.has(input.id) || this.independentResources.retained(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，或存在待确认的连接资源；请先关闭相关标签并显式断开连接，再修改地址或认证配置，现有任务未被取消');
         if (changed || !previous) this.profiles.delete(input.id);
-        await this.schemaComparisons.close(input.id);
+        await Promise.all([this.schemaComparisons.close(input.id), this.mysqlDataComparisons.close(input.id)]);
         this.resultInserts.releaseConnection(input.id);
         await this.tableFilteredUpdates.releaseConnection(input.id);
         await this.tableFilteredDeletes.releaseConnection(input.id);
@@ -282,6 +291,27 @@ export class Engine {
         const managed = await connect(profile);
         try { this.profiles.set(profile.id, profile); return managed.status; } finally { await managed.close(); }
       });
+      case 'mysql.compareData': {
+        const request = mysqlDataCompareSchema.parse({ source: input.source, target: input.target, taskId: input.taskId, filter: input.filter });
+        if (this.taskIdInUse(request.taskId)) throw Error('任务编号已使用');
+        for (const [profile, target] of [[input.sourceProfile, request.source], [input.targetProfile, request.target]]) {
+          if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== target.connectionId)
+            throw Error('主进程未提供有效的 MySQL／MariaDB 比较连接配置');
+        }
+        return this.withConnectionUse(request.source.connectionId, () => this.withConnectionUse(request.target.connectionId, () => {
+          this.copySourceProfile({ connectionId: request.source.connectionId, profile: input.sourceProfile });
+          this.copySourceProfile({ connectionId: request.target.connectionId, profile: input.targetProfile });
+          return this.mysqlDataComparisons.compare(request);
+        }));
+      }
+      case 'mysql.compareData.catalogue': {
+        const profile = input.profile;
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId)
+          throw Error('缺少可信的 MySQL／MariaDB 比较连接');
+        this.copySourceProfile(input);
+        return this.withCopySourceTask(input.connectionId, randomUUID(),
+          context => mysqlCompareCatalogue(context, input.database), '读取比较目录');
+      }
       case 'schema.compare': {
         for (const [profile, target] of [[input.sourceProfile, input.source], [input.targetProfile, input.target]]) {
           if (!profile || profile.id !== target.connectionId) throw new Error('主进程未提供有效结构比较连接配置');
@@ -296,7 +326,7 @@ export class Engine {
         if (this.disconnecting.has(input.id)) throw Error('该连接正在断开，请等待本次资源回收完成');
         this.disconnecting.add(input.id);
         try {
-        const comparisonCleanup = this.schemaComparisons.close(input.id);
+        const comparisonCleanup = Promise.all([this.schemaComparisons.close(input.id), this.mysqlDataComparisons.close(input.id)]);
         const filteredUpdateCleanup = this.tableFilteredUpdates.releaseConnection(input.id);
         const filteredDeleteCleanup = this.tableFilteredDeletes.releaseConnection(input.id);
         this.resultInserts.releaseConnection(input.id);
@@ -785,7 +815,7 @@ export class Engine {
   }
 
   /** 所有任务通道共用编号占用检查，避免集成后取消误命中另一种活动任务。 */
-  private taskIdInUse(id: string): boolean { return this.postgres.ownsTask(id) || this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.importInspections.has(id) || this.excelConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id); }
+  private taskIdInUse(id: string): boolean { return this.postgres.ownsTask(id) || this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.importInspections.has(id) || this.excelConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id) || this.mysqlDataComparisons.has(id); }
 
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
@@ -793,7 +823,7 @@ export class Engine {
     try {
     this.excelConnecting.forEach(task => task.controller.abort());
     this.conflictImports.forEach(task => { if (task.phase === 'connecting') task.controller.abort(); });
-    const comparisonCleanup = this.schemaComparisons.close();
+    const comparisonCleanup = Promise.all([this.schemaComparisons.close(), this.mysqlDataComparisons.close()]);
     const filteredUpdateCleanup = this.tableFilteredUpdates.close();
     const filteredDeleteCleanup = this.tableFilteredDeletes.close();
     this.resultInserts.close();
@@ -1016,15 +1046,16 @@ export class Engine {
   }
 
   /** 普通表页与关联表页共用流式预算和按真实字段名序列化的规则。 */
-  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false, waitTerminal = false) {
+  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false, waitTerminal = false, compareParams?: string[]) {
     if (managed.signal?.aborted) throw new Error('任务已取消');
     // 文本协议会截短 FLOAT 的有效位，二进制协议保留相邻 FLOAT/DOUBLE 候选的真实值。
-    const query = binaryRows ? managed.connection.execute({ sql, rowsAsArray: true }) : managed.connection.query({ sql, rowsAsArray: true });
+    const query = binaryRows ? managed.connection.execute({ sql, rowsAsArray: true, ...(compareParams ? { values: compareParams } : {}) }) : managed.connection.query({ sql, rowsAsArray: true });
     // 新来源路径在流预算失败时仍等驱动命令/连接真实终态；原表页行为不变。
     let finishTerminal!: () => void; let terminalError: Error | undefined;
     const terminal = waitTerminal ? new Promise<void>(resolve => { finishTerminal = resolve; }) : undefined;
     const commandEnded = () => finishTerminal();
-    const commandFailed = (error: Error) => { terminalError = error; finishTerminal(); };
+    // 驱动断开可能只发连接事件。流也要结束，否则严格取消会与命令收尾互等。
+    const commandFailed = (error: Error) => { terminalError = error; finishTerminal(); stream.destroy(error); };
     const connectionEnded = () => commandFailed(new Error('表页连接在读取完成前断开'));
     if (terminal) { query.once('end', commandEnded); query.once('error', commandFailed); managed.connection.once('end', connectionEnded); managed.connection.once('error', commandFailed); managed.signal?.addEventListener('abort', connectionEnded, { once: true }); }
     let fields: FieldPacket[] = [];
@@ -1036,8 +1067,9 @@ export class Engine {
     try {
       for await (const raw of stream) {
         const values = raw as unknown[];
-        if (this.rawRowBytes(values) > 256 * 1024) throw new Error('当前页包含超过 256 KiB 的大字段行，未返回可编辑数据；请筛选该行之外的数据，或使用文件导出读取完整内容');
+        if (!compareParams && this.rawRowBytes(values) > 256 * 1024) throw new Error('当前页包含超过 256 KiB 的大字段行，未返回可编辑数据；请筛选该行之外的数据，或使用文件导出读取完整内容');
         const row = Object.fromEntries(fields.map((field, index) => [field.name, serializeCell(values[index])])); bytes += Buffer.byteLength(JSON.stringify(row));
+        if (compareParams && bytes > 8 * 1024 * 1024) throw Error('MySQL／MariaDB 比较超过每侧 8 MiB，请缩小筛选范围');
         if (bytes > 16 * 1024 * 1024) throw new Error('当前页数据超过 16 MiB，未返回可编辑数据；请减小页大小或使用文件导出');
         rows.push(row);
       }
@@ -1244,6 +1276,7 @@ export class Engine {
     if (connecting) { connecting.controller.abort(); await connecting.done; return; }
     if (this.excelReads.has(id)) return this.excelReads.cancel(id);
     if (this.importInspections.has(id)) return this.importInspections.cancel(id);
+    if (this.mysqlDataComparisons.has(id)) return this.mysqlDataComparisons.cancel(id);
     if (this.schemaComparisons.has(id)) return this.schemaComparisons.cancel(id);
     const independent = this.independentTasks.get(id);
     // 结果插入的COMMIT已发送时不再KILL，避免把已提交误报为已撤销。

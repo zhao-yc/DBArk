@@ -1,21 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CellValue } from '../../shared/contracts';
 import {
-  postgresDataCompareLimits as limits, postgresDataCompareSchema, postgresDataCompareZh as text,
+  postgresDataCompareLimits as limits, postgresDataCompareSchema, postgresDataCompareZh,
   postgresDataSyncLimits, postgresDataSyncZh as sync, type PostgresDataSyncPreview,
   type PostgresDataCompareEndpoint as Endpoint, type PostgresDataCompareKind, type PostgresDataCompareOutput, type PostgresDataCompareRow,
 } from '../../shared/postgresDataCompare';
+import { mysqlDataCompareSchema, mysqlDataCompareZh } from '../../shared/mysqlDataCompare';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Field, Modal } from './ui';
 import '../sqliteDataCompare.css';
 
 type Connection = { id: string; name: string };
+type Dialect = 'mysql' | 'postgres';
+const compareLabels = { mysql: mysqlDataCompareZh, postgres: postgresDataCompareZh } as const;
 const kinds = ['source-only', 'target-only', 'different'] as const;
 const syncActions = { 'source-only': sync.insert, 'target-only': sync.delete, different: sync.update };
 
-function CompareEndpoint({ label, connections, disabled, value, change }: {
-  label: string; connections: readonly Connection[]; disabled: boolean; value: Endpoint; change(next: Endpoint): void;
+function CompareEndpoint({ label, connections, disabled, value, change, dialect }: {
+  label: string; connections: readonly Connection[]; disabled: boolean; dialect: Dialect; value: Endpoint; change(next: Endpoint): void;
 }) {
+  const text = compareLabels[dialect], command = dialect === 'postgres' ? 'postgres.compareData.catalogue' : 'mysql.compareData.catalogue';
   const { connectionId, database, table } = value;
   const [databases, setDatabases] = useState<{ id: string; items: string[] }>();
   const [tables, setTables] = useState<{ id: string; database: string; items: string[] }>();
@@ -24,19 +28,19 @@ function CompareEndpoint({ label, connections, disabled, value, change }: {
   useEffect(() => {
     if (!connectionId) return;
     let current = true;
-    void invoke('postgres.compareData.catalogue', { connectionId }).then(items => {
+    void invoke(command, { connectionId }).then(items => {
       if (current) setDatabases({ id: connectionId, items });
     }).catch(reason => { if (current) setDatabaseError(errorMessage(reason)); });
     return () => { current = false; };
-  }, [connectionId]);
+  }, [connectionId, command]);
   useEffect(() => {
     if (!connectionId || !database) return;
     let current = true;
-    void invoke('postgres.compareData.catalogue', { connectionId, database }).then(items => {
+    void invoke(command, { connectionId, database }).then(items => {
       if (current) setTables({ id: connectionId, database, items });
     }).catch(reason => { if (current) setTableError(errorMessage(reason)); });
     return () => { current = false; };
-  }, [connectionId, database]);
+  }, [connectionId, database, command]);
   const databaseItems = databases?.id === connectionId ? databases.items : [];
   const tableItems = tables?.id === connectionId && tables.database === database ? tables.items : [];
   return <fieldset disabled={disabled} className="sqlite-data-compare-endpoint">
@@ -58,18 +62,19 @@ function CompareEndpoint({ label, connections, disabled, value, change }: {
   </fieldset>;
 }
 
-function display(value: CellValue | undefined): string {
-  if (value === undefined) return text.absent;
+function display(value: CellValue | undefined, dialect: Dialect): string {
+  if (value === undefined) return compareLabels[dialect].absent;
   if (value === null) return 'NULL';
-  return typeof value === 'object' ? 'BYTEA Base64 ' + value.base64 : JSON.stringify(value);
+  return typeof value === 'object' ? (dialect === 'postgres' ? 'BYTEA Base64 ' : '字节 Base64 ') + value.base64 : JSON.stringify(value);
 }
 
-function keyLabel(row: PostgresDataCompareRow) {
-  const label = row.key.map(display).join(' / ');
+function keyLabel(row: PostgresDataCompareRow, dialect: Dialect) {
+  const label = row.key.map(value => display(value, dialect)).join(' / ');
   return label.length <= 200 ? label : label.slice(0, 200) + '…';
 }
 
-export function PostgresDataCompareDialog({ connections, onClose }: { connections: readonly Connection[]; onClose(): void }) {
+export function ServerDataCompareDialog({ connections, onClose, dialect }: { connections: readonly Connection[]; onClose(): void; dialect: Dialect }) {
+  const text = compareLabels[dialect], postgres = dialect === 'postgres';
   const initial = { connectionId: connections.length === 1 ? connections[0].id : '', database: '', table: '' };
   const [source, setSource] = useState<Endpoint>(initial), [target, setTarget] = useState<Endpoint>(initial);
   const [filter, setFilter] = useState({ column: '', text: '' });
@@ -93,12 +98,12 @@ export function PostgresDataCompareDialog({ connections, onClose }: { connection
   const rows = report?.differences.filter(row => kind === 'all' || row.kind === kind) ?? [];
   async function compare() {
     if (!ready || task.current || syncing.current) return;
-    const parsed = postgresDataCompareSchema.safeParse({ source, target, taskId: uid(), ...(filter.text ? { filter } : {}) });
+    const parsed = (postgres ? postgresDataCompareSchema : mysqlDataCompareSchema).safeParse({ source, target, taskId: uid(), ...(filter.text ? { filter } : {}) });
     if (!parsed.success) { setError(errorMessage(parsed.error)); return; }
     const active = { id: parsed.data.taskId, cancelled: false };
     task.current = active; setBusy(true); clear();
     try {
-      const result = await invoke('postgres.compareData', parsed.data);
+      const result = await invoke(postgres ? 'postgres.compareData' : 'mysql.compareData', parsed.data);
       if (!active.cancelled) setReport(result); else setError(text.cancelled);
     } catch (reason) { setError(errorMessage(reason)); }
     finally { task.current = undefined; setBusy(false); }
@@ -107,7 +112,7 @@ export function PostgresDataCompareDialog({ connections, onClose }: { connection
     const active = task.current;
     if (!active || active.cancelled) return;
     active.cancelled = true;
-    void invoke('postgres.compareData.cancel', { taskId: active.id }).catch(reason => {
+    void invoke(postgres ? 'postgres.compareData.cancel' : 'mysql.compareData.cancel', { taskId: active.id }).catch(reason => {
       if (task.current === active) { active.cancelled = false; setError(errorMessage(reason)); }
     });
   }
@@ -137,8 +142,8 @@ export function PostgresDataCompareDialog({ connections, onClose }: { connection
     <div className="modal-content sqlite-data-compare">
       <p>{text.intro}</p>
       <div className="sqlite-data-compare-pair">
-        <CompareEndpoint label={text.source} connections={connections} disabled={locked} value={source} change={next => { setSource(next); clear(); }}/>
-        <CompareEndpoint label={text.target} connections={connections} disabled={locked} value={target} change={next => { setTarget(next); clear(); }}/>
+        <CompareEndpoint dialect={dialect} label={text.source} connections={connections} disabled={locked} value={source} change={next => { setSource(next); clear(); }}/>
+        <CompareEndpoint dialect={dialect} label={text.target} connections={connections} disabled={locked} value={target} change={next => { setTarget(next); clear(); }}/>
       </div>
       <fieldset disabled={locked} className="sqlite-data-compare-filter">
         <legend>{text.filter}</legend>
@@ -153,13 +158,13 @@ export function PostgresDataCompareDialog({ connections, onClose }: { connection
         <p>{report.sharedSnapshot ? text.shared : text.split}</p>
         <p role="status">{text.key}　{report.keyColumns.join('，')}　{[[text.sourceRows, report.sourceRows], [text.targetRows, report.targetRows], [text.equal, report.equal], ...kinds.map(item => [text[item], report.counts[item]])].map(([label, count]) => label + ' ' + count).join(' · ')}</p>
         {report.syncSnapshotId ? <p>{sync.scope}　{sync.count(marked.size)}</p> :
-          report.differences.length > 0 && <p>{sync.unavailable}</p>}
+          postgres && report.differences.length > 0 && <p>{sync.unavailable}</p>}
         {preview && <fieldset disabled={syncBusy}>
           <legend>{sync.preview}</legend>
           <p>{connections.find(item => item.id === target.connectionId)?.name}　{preview.confirmation}</p>
           <p>{sync.insert} {preview.counts.insert} · {sync.update} {preview.counts.update} · {sync.delete} {preview.counts.delete}</p>
           <div className="sqlite-data-sync-preview-rows">
-            <ul>{[...marked].map((row, index) => <li key={index}>{syncActions[row.kind]}　{keyLabel(row)}</li>)}</ul>
+            <ul>{[...marked].map((row, index) => <li key={index}>{syncActions[row.kind]}　{keyLabel(row, dialect)}</li>)}</ul>
           </div>
           <Field label={sync.confirm}><input aria-label={sync.confirm} value={confirmation} onChange={event => setConfirmation(event.target.value)}/></Field>
         </fieldset>}
@@ -169,12 +174,12 @@ export function PostgresDataCompareDialog({ connections, onClose }: { connection
         {rows.length ? <>
           <table><thead><tr>{report.syncSnapshotId && <th>{sync.select}</th>}<th>{text.kind}</th><th>{text.key}</th><th>{text.details}</th></tr></thead>
             <tbody>{rows.slice(page * limits.page, (page + 1) * limits.page).map((row, index) => <tr key={index}>
-              {report.syncSnapshotId && <td><input type="checkbox" aria-label={sync.select + ' ' + keyLabel(row)} checked={marked.has(row)}
+              {report.syncSnapshotId && <td><input type="checkbox" aria-label={sync.select + ' ' + keyLabel(row, dialect)} checked={marked.has(row)}
                 disabled={locked || (!marked.has(row) && marked.size >= postgresDataSyncLimits.selected)} onChange={event => {
                   const checked = event.target.checked;
                   setMarked(previous => { const next = new Set(previous); if (checked) next.add(row); else next.delete(row); return next; });
                 }}/></td>}
-              <td>{text[row.kind]}</td><td className="sqlite-data-compare-key">{keyLabel(row)}</td>
+              <td>{text[row.kind]}</td><td className="sqlite-data-compare-key">{keyLabel(row, dialect)}</td>
               <td><button onClick={() => setSelected(row)}>{text.details}</button></td>
             </tr>)}</tbody>
           </table>
@@ -184,11 +189,11 @@ export function PostgresDataCompareDialog({ connections, onClose }: { connection
             <button disabled={locked || (page + 1) * limits.page >= rows.length} onClick={() => { setPage(page + 1); setSelected(undefined); }}>{text.next}</button>
           </div>
           {selected && <div ref={detail} role="group" aria-label={text.details}>
-            <h3>{text.details}</h3><pre>{selected.key.map(display).join(' / ')}</pre>
+            <h3>{text.details}</h3><pre>{selected.key.map(value => display(value, dialect)).join(' / ')}</pre>
             <table><thead><tr><th>{text.field}</th><th>{text.source}</th><th>{text.target}</th></tr></thead><tbody>
               {selected.cells.map(({ column, source, target }) => <tr key={column}>
                 <th>{report.columns[column].name}<br/>{report.columns[column].type}</th>
-                <td><pre>{display(source)}</pre></td><td><pre>{display(target)}</pre></td>
+                <td><pre>{display(source, dialect)}</pre></td><td><pre>{display(target, dialect)}</pre></td>
               </tr>)}
             </tbody></table>
           </div>}

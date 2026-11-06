@@ -1,3 +1,4 @@
+import { mysqlDataCompareSchema } from './mysqlDataCompare';
 import { postgresDataCompareCatalogueSchema, postgresDataCompareSchema, postgresDataSyncPreviewSchema, postgresDataSyncApplySchema } from './postgresDataCompare';
 import { sqliteDataCompareSchema, sqliteDataSyncPreviewSchema } from './sqliteDataCompare';
 import { postgresRoutineCreateSchema, postgresRoutineDependencySchema, postgresRoutineManageSchema,
@@ -308,6 +309,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.statistics': sqliteStatisticsInputSchema,
   'postgres.compareData.syncPreview': postgresDataSyncPreviewSchema,
   'postgres.compareData.syncApply': postgresDataSyncApplySchema,
+  'mysql.compareData': mysqlDataCompareSchema,
+  'mysql.compareData.catalogue': postgresDataCompareCatalogueSchema,
+  'mysql.compareData.cancel': z.object({ taskId: z.uuid() }).strict(),
   'postgres.compareData': postgresDataCompareSchema,
   'postgres.compareData.catalogue': postgresDataCompareCatalogueSchema,
   'postgres.compareData.cancel': z.object({ taskId: z.uuid() }).strict(),

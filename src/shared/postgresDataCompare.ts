@@ -3,9 +3,10 @@ import type { CellValue } from './contracts';
 import { postgresQuickTableFilterSchema, postgresTableTargetSchema } from './postgresTable';
 
 const endpoint = postgresTableTargetSchema.omit({ tabId: true });
-export const postgresDataCompareSchema = z.object({
+export const tableDataCompareRequestSchema = z.object({
   source: endpoint, target: endpoint, taskId: z.uuid(), filter: postgresQuickTableFilterSchema.optional(),
-}).strict().refine(({ source, target }) =>
+}).strict();
+export const postgresDataCompareSchema = tableDataCompareRequestSchema.refine(({ source, target }) =>
   source.connectionId !== target.connectionId || source.database !== target.database || source.table !== target.table,
 '请选择不同的 PostgreSQL 比较目标');
 
