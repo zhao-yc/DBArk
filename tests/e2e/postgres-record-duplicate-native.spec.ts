@@ -15,6 +15,7 @@ import { cellClipboardType, decodeClipboard } from '../../src/renderer/gridClipb
 import { binaryCellZh } from '../../src/renderer/locales/binaryCell.zh-CN';
 import { binaryCellFilesZh as binaryFilesText } from '../../src/renderer/locales/binaryCellFiles.zh-CN';
 import { postgresByteaZh as byteaText } from '../../src/renderer/locales/postgresBytea.zh-CN';
+import { postgresFilteredUpdateZh as filteredUpdateText } from '../../src/renderer/locales/postgresFilteredUpdate.zh-CN';
 import { tableQueryTemplateZh as sqlTemplateText } from '../../src/renderer/locales/tableQueryTemplate.zh-CN';
 import { tableFilteredSelectZh as filteredSelectText } from '../../src/renderer/locales/tableFilteredSelect.zh-CN';
 import { postgresColumnStatisticsZh as statisticsText } from '../../src/renderer/locales/postgresColumnStatistics.zh-CN';
@@ -74,7 +75,10 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
       CREATE TABLE "回归"."整行编辑" (id bigint PRIMARY KEY, amount numeric(40,18), doc json, raw bytea,
         nullable_text text, state text DEFAULT '恢复默认', derived text GENERATED ALWAYS AS (state || '-生成') STORED);
       INSERT INTO "回归"."整行编辑" (id, amount, doc, raw, nullable_text, state)
-        VALUES (9007199254740993, 9007199254740993.000000000000000001, '{}', decode('00ff','hex'), '保留到提交', '原状态')`);
+        VALUES (9007199254740993, 9007199254740993.000000000000000001, '{}', decode('00ff','hex'), '保留到提交', '原状态');
+      CREATE TABLE "回归"."按筛选更新" (id int PRIMARY KEY, state text, scope text);
+      INSERT INTO "回归"."按筛选更新" SELECT i, '原状态', CASE WHEN i < 5 THEN '已匹配' ELSE '范围外' END
+        FROM generate_series(1, 5) i`);
     const readRows = async () => (await reader!.query(`SELECT id::text, legacy::text, code, note, encode(raw,'hex') AS raw, tag
       FROM "回归"."复制记录" ORDER BY id`)).rows;
     const originals = await readRows();
@@ -933,6 +937,40 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
       }).finishPgBytea());
     }
     expect(fileCalls).toEqual({ open: 4, save: 3 });
+
+    await page.locator('.object-row').getByRole('button', { name: '"回归"."按筛选更新"', exact: true }).click();
+    const readFiltered = async () => (await reader!.query('SELECT state FROM "回归"."按筛选更新" ORDER BY id')).rows.map(row => row.state);
+    const filteredUpdateButton = button(filteredUpdateText.entry);
+    await expect(filteredUpdateButton).toBeDisabled();
+    await tab.getByLabel(tableText.pageSize, { exact: true }).fill('1');
+    await tab.getByLabel(tableText.filterColumn, { exact: true }).selectOption('scope');
+    await quickFilter.fill('已匹配');
+    await button(tableText.filter).click();
+    await button(tableText.next).click();
+    await expect(tab.getByText(tableText.currentPage(2), { exact: true })).toBeVisible();
+    await quickFilter.fill('未应用输入');
+    await filteredUpdateButton.click();
+    const filteredEditor = page.getByRole('dialog', { name: filteredUpdateText.title, exact: true });
+    await mode(filteredEditor, 'state').selectOption('text');
+    await value(filteredEditor, 'state').fill('整批完成');
+    await filteredEditor.getByRole('button', { name: filteredUpdateText.preview, exact: true }).click();
+    await expect(review).toContainText(filteredUpdateText.affected(4));
+    await expect(review).toContainText('已匹配');
+    await expect(review).not.toContainText('未应用输入');
+    const confirmRows = review.getByLabel(filteredUpdateText.confirmation, { exact: true });
+    const applyFiltered = review.getByRole('button', { name: tableText.apply, exact: true });
+    await expect(applyFiltered).toBeDisabled();
+    await confirmRows.fill('3');
+    await expect(applyFiltered).toBeDisabled();
+    expect(await readFiltered()).toEqual(Array(5).fill('原状态'));
+    await confirmRows.fill('4');
+    await confirmRows.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('PostgreSQL按筛选更新预览.png') });
+    await applyFiltered.click();
+    await expect(review).toHaveCount(0);
+    await expect(tab.getByRole('status')).toContainText('已确认整批提交');
+    expect(await readFiltered()).toEqual(['整批完成', '整批完成', '整批完成', '整批完成', '原状态']);
+    await mark('从第二页按已应用筛选预览四行，确认前零写入，输入准确行数后整批提交且范围外保持');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

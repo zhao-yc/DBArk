@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-06 源码增量。PostgreSQL 可写普通表支持跨页更新已应用筛选的全部匹配记录。预览显示准确行数，提交前重新核对匹配集合及行版本。D02 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL 按筛选批量更新](development/postgres-filtered-update-20261106.md)
+
 2026-11-06 源码增量。PostgreSQL 记录表单支持 BYTEA 原字节查看、图片预览和另存，支持从文件载入十六进制赋值并沿原事务提交。D02、D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL BYTEA 文件操作](development/postgres-bytea-files-20261106.md)
 
 2026-11-06 源码增量。PostgreSQL 可写记录表单与弹窗支持 JSON 节点替换、对象成员和数组结构操作，沿用当前字段赋值及既有事务。D04 和 R01 仍为部分覆盖，暂不发布。[PostgreSQL JSON 节点与结构编辑](development/postgres-record-json-tree-20261106.md)

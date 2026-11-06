@@ -13,6 +13,7 @@ import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postg
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
 import { postgresTableHistogramSchema } from './postgresTable';
+import { postgresFilteredUpdateSchema } from './postgresTable';
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
 import { sqliteIncomingInputSchema } from './sqliteIncoming';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema } from './sqliteTablePresets';
@@ -293,6 +294,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.presets.read': postgresTablePresetSelectSchema,
   'postgres.table.presets.open': postgresTablePresetOpenSchema,
   'postgres.table.preview': postgresTablePreviewSchema,
+  'postgres.table.filteredUpdate': postgresFilteredUpdateSchema,
   'postgres.table.apply': postgresTableApplySchema,
   'postgres.table.release': postgresTableReleaseSchema,
   'sqlite.tablePage': sqliteTablePageSchema,

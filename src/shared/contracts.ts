@@ -330,6 +330,7 @@ export interface CommandMap {
   'postgres.table.presets.read': { input: TablePresetSelect; output: TablePresetConfiguration };
   'postgres.table.presets.open': { input: import('./tablePresets').PostgresTablePresetOpen; output: import('./tablePresets').PostgresTablePresetOpening };
   'postgres.table.preview': { input: import('./postgresTable').PostgresTablePreviewInput; output: import('./postgresTable').PostgresTablePreview };
+  'postgres.table.filteredUpdate': { input: import('./postgresTable').PostgresFilteredUpdateInput; output: import('./postgresTable').PostgresTablePreview };
   'postgres.table.apply': { input: import('./postgresTable').PostgresTableApplyInput; output: import('./postgresTable').PostgresTableOutcome };
   'postgres.table.release': { input: import('./postgresTable').PostgresTableReleaseInput; output: void };
   'sqlite.tablePage': { input: import('./sqliteTableBrowse').SqliteTablePageInput; output: import('./sqliteTableBrowse').SqliteTablePage };

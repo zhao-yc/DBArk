@@ -6,12 +6,14 @@ import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import { FILTER_LIMITS } from '../../shared/filtering';
 import {
-  isPostgresSqlExportColumn, isPostgresSqlExportRelation, postgresCountedWindow, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema, postgresTableValueLimits,
+  isPostgresSqlExportColumn, isPostgresSqlExportRelation, isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresCountedWindow, postgresFilteredUpdateMaxRows,
+  postgresFilteredUpdateSchema, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema, postgresTableValueLimits,
   type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
   type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableColumnReadInput, type PostgresTableValuesInput, type PostgresTableValues, type PostgresTableHistogramInput,
   type PostgresRelatedTableInput, type PostgresRelatedTablePage,
+  type PostgresFilteredUpdateInput,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings } from './sqlExport';
@@ -41,6 +43,7 @@ interface Relation {
 }
 interface Original extends PostgresReferenceRowVersion { digest: string; key: string; }
 interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; }
+interface FilteredUpdateMatch { sql: string; values: unknown[]; signature: string; count: number; }
 type ExportSource = { kind: 'copy'; write: (sink: (chunk: Buffer) => Promise<void>) => Promise<number> } |
   { kind: 'cursor'; columns: PostgresTableColumn[]; rows: AsyncIterable<CellValue[]>;
     replay?: { table: string; settings: PostgresSqlExportSettings } };
@@ -54,7 +57,7 @@ interface Snapshot {
   window?: Pick<PostgresTablePageInput, 'offset' | 'limit'>;
   writeEligible: boolean;
   related?: RelatedScope;
-  preview?: { token: string; expires: number; writes: Write[] };
+  preview?: { token: string; expires: number; writes: Write[]; filtered?: FilteredUpdateMatch };
 }
 interface TableSnapshots { current: Snapshot; retained: Map<string, Snapshot>; }
 interface RelatedScope {
@@ -208,12 +211,25 @@ async function referenceSource(connection: PostgresConnection, relation: Relatio
 }
 
 /** 控制表页事务锁及每条语句的数据库端等待上限。 */
-async function begin(connection: PostgresConnection, mode: 'page' | 'export' | 'write' = 'write'): Promise<void> {
+async function begin(connection: PostgresConnection, mode: 'page' | 'export' | 'write' | 'filteredWrite' = 'write'): Promise<void> {
   await connection.query(mode === 'page' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' :
-    mode === 'export' ? 'BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY' : 'BEGIN', undefined, small());
+    mode === 'export' ? 'BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY' :
+      mode === 'filteredWrite' ? 'BEGIN ISOLATION LEVEL READ COMMITTED' : 'BEGIN', undefined, small());
   for (const sql of ["SET LOCAL statement_timeout = '15s'", "SET LOCAL lock_timeout = '5s'", "SET LOCAL idle_in_transaction_session_timeout = '20s'"]) {
     await connection.query(sql, undefined, small());
   }
+}
+
+/** 预览和锁内复核都读完整匹配集合。排序只规范行版本签名，不改变筛选集合。 */
+async function filteredUpdateVersions(connection: PostgresConnection, sql: string, values: unknown[]) {
+  const limit = postgresFilteredUpdateMaxRows;
+  const result = await connection.query(sql, values, { rows: limit + 1, bytes: 256 * 1024 });
+  if (result.truncated || result.rows.length > limit) throw Error(`按筛选更新最多 ${limit} 行，请缩小筛选范围`);
+  const versions = result.rows.map(row => {
+    if (typeof row.c0 !== 'string' || typeof row.c1 !== 'string') throw Error('按筛选更新的原行版本未完整返回');
+    return [row.c0, row.c1] as const;
+  }).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  return { positions: versions.map(([position]) => position), signature: digest(versions) };
 }
 
 /** 页面、预览、提交绑定同一文档和表标签；所有真实数据修改使用独立事务。 */
@@ -767,12 +783,54 @@ export class PostgresTableWorkspace {
     return { previewToken: token, statements: writes.map(write => write.sql), counts };
   }
 
+  /** 只用原页已应用的筛选计算预览。普通表的行版本与赋值保留在一次性能力里。 */
+  async previewFilteredUpdate(input: Scoped<PostgresFilteredUpdateInput>, connect: Connect): Promise<PostgresTablePreview> {
+    const { connectionId, database, table, tabId, pageToken } = input;
+    const { fields } = postgresFilteredUpdateSchema.parse({ connectionId, database, table, tabId, pageToken, fields: input.fields });
+    const snapshot = this.snapshot(input, true);
+    const key = this.key(input), { relation, options } = snapshot;
+    if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
+    if (relation.kind !== 'r' || !relation.capabilities.update || !relation.canReadSystemColumns || !isPostgresTableFiltered(options.filter))
+      throw Error('按筛选更新需要已应用筛选的可写普通表及主键');
+    const values: string[] = [], updateValues: unknown[] = [];
+    const condition = postgresTableCondition(options.filter, name => columnIdentifier(relation, name), value => '$' + values.push(value));
+    if (!condition) throw Error('请先应用筛选再批量更新');
+    const assignments = fields.map(field => {
+      const column = relation.columns.find(item => item.key === field.column);
+      if (!column || !isPostgresFilteredUpdateColumn(column)) throw Error('按筛选更新不能写主键或生成列');
+      const { column: name, expression } = fieldExpression(field, relation, updateValues);
+      return `${name} = ${expression}`;
+    });
+    const matchSql = `SELECT ctid::text, xmin::text FROM ${only(relation)} WHERE ${condition} LIMIT ${postgresFilteredUpdateMaxRows + 1}`;
+    snapshot.preview = undefined;
+    this.active.add(key);
+    try {
+      const match = await connect(async connection => {
+        await begin(connection, 'page');
+        if ((await readRelation(connection, input.table)).fingerprint !== relation.fingerprint) throw Error('原表结构或权限已变化，请刷新');
+        const result = await filteredUpdateVersions(connection, matchSql, values);
+        if ((await connection.query('COMMIT', undefined, small())).postgresCommand !== 'COMMIT') throw Error('按筛选更新预览事务未完成');
+        return result;
+      });
+      if (this.snapshot(input, true) !== snapshot) throw Error('原表页已变化，请重新预览');
+      const count = match.positions.length;
+      if (!count) throw Error('当前筛选没有匹配记录');
+      const sql = `UPDATE ${only(relation)} SET ${assignments.join(', ')} WHERE ctid = ANY($${updateValues.push(match.positions)}::tid[])`;
+      const token = randomUUID();
+      snapshot.preview = { token, expires: Math.min(snapshot.expires, Date.now() + 5 * 60 * 1000),
+        writes: [{ kind: 'update', sql, values: updateValues }], filtered: { sql: matchSql, values, signature: match.signature, count } };
+      return { previewToken: token, statements: [sql], counts: { insert: 0, update: count, delete: 0 },
+        filteredUpdate: { fields, condition, parameters: values } };
+    } finally { this.active.delete(key); }
+  }
+
   /** 先消费预览。只有确认回滚且原页仍有效时，才保留跨页草稿引用的快照。 */
   async apply(input: Scoped<PostgresTableApplyInput>, connect: Connect): Promise<PostgresTableOutcome> {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot(input, false, false, true), preview = snapshot.preview;
     if (!preview || preview.token !== input.previewToken || preview.expires <= Date.now()) throw Error('PostgreSQL提交预览已失效');
+    if (input.confirmedRows !== preview.filtered?.count) throw Error('确认行数与按筛选更新的预览不一致');
     const group = this.snapshots.get(key);
     snapshot.preview = undefined;
     this.active.add(key);
@@ -781,7 +839,7 @@ export class PostgresTableWorkspace {
     try {
       try {
         await connect(async connection => {
-          receipt = await this.applyTransaction(connection, snapshot.relation, input.table, preview.writes, snapshot.related);
+          receipt = await this.applyTransaction(connection, snapshot.relation, input.table, preview.writes, snapshot.related, preview.filtered);
         }, true);
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);
@@ -799,14 +857,16 @@ export class PostgresTableWorkspace {
 
   /** 提交回执以实际命令标签及空闲状态为准，断线时保留未知终态。 */
   private async applyTransaction(connection: PostgresConnection, expected: Relation, table: string, writes: Write[],
-    related?: RelatedScope): Promise<PostgresTableOutcome> {
+    related?: RelatedScope, filtered?: FilteredUpdateMatch): Promise<PostgresTableOutcome> {
     let sent = false;
     let commitAttempted = false;
     try {
-      await begin(connection);
+      // 等锁期间可能有事务提交。显式使用读已提交，锁后的复核才能取得新快照。
+      await begin(connection, filtered ? 'filteredWrite' : 'write');
       const current = await readRelation(connection, table);
       if (current.fingerprint !== expected.fingerprint || current.sql !== expected.sql) throw Error('关系结构或权限已变化，请重新读取');
-      await connection.query('LOCK TABLE ' + only(current) + ' IN ROW EXCLUSIVE MODE', undefined, small());
+      // 筛选集合复核和写入期间阻止其他事务增删改，避免新匹配行在核对后进入原范围。
+      await connection.query('LOCK TABLE ' + only(current) + (filtered ? ' IN SHARE ROW EXCLUSIVE MODE' : ' IN ROW EXCLUSIVE MODE'), undefined, small());
       const locked = await readRelation(connection, table);
       if (locked.fingerprint !== expected.fingerprint || writes.some(write => !locked.capabilities[write.kind])) {
         throw Error('锁定后的关系结构或权限已变化，请重新读取');
@@ -821,17 +881,22 @@ export class PostgresTableWorkspace {
         }
       }
       if (related) await this.verifyRelated(connection, related);
+      if (filtered) {
+        const match = await filteredUpdateVersions(connection, filtered.sql, filtered.values);
+        if (match.signature !== filtered.signature) throw Error('筛选匹配集合或原行版本已变化，整批未写入，请重新预览');
+      }
       for (const write of writes) {
         sent = true;
         const result = await connection.query(write.sql, write.values, small());
-        if (result.postgresCommand !== write.kind.toUpperCase() || result.affectedRows !== 1) throw Error('数据库未确认该语句恰好影响一行');
+        if (result.postgresCommand !== write.kind.toUpperCase() || result.affectedRows !== (filtered?.count ?? 1))
+          throw Error(filtered ? '数据库确认的影响行数与筛选预览不一致' : '数据库未确认该语句恰好影响一行');
       }
       commitAttempted = true;
       const result = await connection.query('COMMIT', undefined, small());
       if (result.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen) {
         throw Error('PostgreSQL未确认提交');
       }
-      return { outcome: 'committed', affected: writes.length, message: 'PostgreSQL已确认整批提交' };
+      return { outcome: 'committed', affected: filtered?.count ?? writes.length, message: 'PostgreSQL已确认整批提交' };
     } catch (reason) {
       return this.rollbackWrite(connection, sent, commitAttempted, reason);
     }

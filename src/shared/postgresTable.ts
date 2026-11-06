@@ -128,8 +128,17 @@ export const postgresTablePreviewSchema = target.extend({
   if (pages.size > postgresTableLimits.draftPages) context.addIssue({ code: 'custom', message: '草稿最多来自 16 个原页' });
   if (size > postgresTableLimits.draft) context.addIssue({ code: 'custom', message: '编辑草稿超过大小预算' });
 });
-export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token }).strict();
+export const postgresFilteredUpdateMaxRows = 1000;
+const filteredUpdateRows = z.number().int().min(1).max(postgresFilteredUpdateMaxRows);
+export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token, confirmedRows: filteredUpdateRows.optional() }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
+export const postgresFilteredUpdateSchema = postgresTableReleaseSchema.extend({ fields: z.array(field).min(1).max(postgresTableLimits.fields) })
+  .strict().superRefine(({ fields }, context) => {
+    if (new Set(fields.map(item => item.column)).size !== fields.length)
+      context.addIssue({ code: 'custom', message: '批量赋值字段不能重复' });
+    if (fields.reduce((size, item) => size + 32 + ('value' in item.value ? 4 * item.value.value.length : 0), 0) > postgresTableLimits.draft)
+      context.addIssue({ code: 'custom', message: '批量赋值超过大小预算' });
+  });
 export const postgresTableColumnReadSchema = postgresTableReleaseSchema.extend({ column }).strict();
 export type PostgresTableColumnReadInput = z.infer<typeof postgresTableColumnReadSchema>;
 export const postgresTableHistogramSchema = postgresTableColumnReadSchema.extend({ bins: postgresHistogramBins }).strict();
@@ -239,6 +248,7 @@ export type PostgresTablePageInput = z.infer<typeof postgresTablePageSchema>;
 export type PostgresTableChange = z.infer<typeof postgresTableChangeSchema>;
 export type PostgresTableField = z.infer<typeof field>;
 export type PostgresTablePreviewInput = z.infer<typeof postgresTablePreviewSchema>;
+export type PostgresFilteredUpdateInput = z.infer<typeof postgresFilteredUpdateSchema>;
 export type PostgresTableApplyInput = z.infer<typeof postgresTableApplySchema>;
 export type PostgresTableReleaseInput = z.infer<typeof postgresTableReleaseSchema>;
 export interface PostgresTableColumn extends ResultColumn {
@@ -272,6 +282,12 @@ export interface PostgresTablePreview {
   previewToken: string;
   statements: string[];
   counts: { insert: number; update: number; delete: number };
+  filteredUpdate?: { fields: PostgresTableField[]; condition: string; parameters: string[] };
+}
+
+/** 批量赋值保留主键，生成列仍由数据库维护。 */
+export function isPostgresFilteredUpdateColumn(column: PostgresTableColumn): boolean {
+  return !column.primary && !column.generated;
 }
 export interface PostgresTableOutcome {
   outcome: 'committed' | 'rolledBack' | 'notSent' | 'unknown';

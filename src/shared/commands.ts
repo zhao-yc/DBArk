@@ -37,6 +37,7 @@ export const publicCommands: Record<Command, true> = {
   'postgres.table.exportChoose': true, 'postgres.table.export': true,
   'postgres.table.importChoose': true, 'postgres.table.import': true,
   'postgres.table.page': true, 'postgres.table.values': true, 'postgres.table.statistics': true, 'postgres.table.histogram': true, 'postgres.table.references': true, 'postgres.table.related': true, 'postgres.table.preview': true, 'postgres.table.apply': true, 'postgres.table.release': true,
+  'postgres.table.filteredUpdate': true,
   'postgres.table.draft.save': true, 'postgres.table.draft.restore': true,
   'postgres.table.layout.get': true, 'postgres.table.layout.save': true, 'postgres.table.layout.reset': true,
   'postgres.table.presets.list': true, 'postgres.table.presets.save': true, 'postgres.table.presets.delete': true, 'postgres.table.presets.read': true,

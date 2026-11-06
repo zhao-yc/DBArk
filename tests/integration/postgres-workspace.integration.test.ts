@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import { PostgresConnection } from '../../src/engine/postgres/connection';
 import type { PostgresConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
-import type { PostgresTablePage, PostgresTablePageInput } from '../../src/shared/postgresTable';
+import type { PostgresTablePage, PostgresTablePageInput, PostgresTablePreview } from '../../src/shared/postgresTable';
 import type { QueryParameter } from '../../src/shared/queryParameters';
 import { buildPostgresTableQueryTemplate } from '../../src/renderer/postgresTableQueryTemplate';
 
@@ -14,6 +15,87 @@ const password = process.env.DBARK_POSTGRES_TEST_PASSWORD;
 const port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
 
 describe.skipIf(!enabled)('PostgreSQL真实连接、查询、事务及取消', () => {
+  it('按筛选更新完整匹配集，回滚失败赋值并拒绝匹配集和版本漂移', async () => {
+    if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) ||
+        user !== database || !password || !Number.isInteger(port) || port <= 1024 || port > 65535)
+      throw Error('按筛选更新实库仅允许本轮隔离角色与 SSH 回环入口');
+    const id = randomUUID(), profile: PostgresConnectionProfile = { id, name: '隔离筛选更新', group: '', color: '#123456', dialect: 'postgresql',
+      host: '127.0.0.1', port, user, password, database, rememberPassword: false };
+    const engine = new Engine(), reader = new PostgresConnection(profile, database);
+    const table = '"筛选更新"."匹配集合"', target = { profile, connectionId: id, database, table, tabId: randomUUID(), owner: randomUUID(), connectionRevision: 1 };
+    const sql = (statement: string) => reader.query(statement, undefined, { rows: 1100, bytes: 256 * 1024 });
+    const filter = { column: 'scope', text: '分组甲' };
+    const page = (extra = {}): Promise<PostgresTablePage> => engine.handle('postgres.table.page', { ...target, filter, offset: 1, limit: 1, ...extra });
+    const preview = (original: PostgresTablePage, value: string, column = 'c2'): Promise<PostgresTablePreview> =>
+      engine.handle('postgres.table.filteredUpdate', { ...target, pageToken: original.pageToken, fields: [{ column, value: { mode: 'text', value } }] });
+    const apply = (original: PostgresTablePage, plan: PostgresTablePreview, confirmedRows = plan.counts.update) =>
+      engine.handle('postgres.table.apply', { ...target, pageToken: original.pageToken, previewToken: plan.previewToken, confirmedRows });
+    const values = async () => (await sql(`SELECT id, state FROM ${table} WHERE id < 100 ORDER BY id`)).rows.map(row => row.c1);
+    await reader.open();
+    try {
+      // 读回连接按单条命令消费结果，逐条准备夹具，确保每步拿到实际回执。
+      await sql('CREATE SCHEMA "筛选更新"');
+      await sql(`CREATE TABLE ${table} (id int PRIMARY KEY, scope text, state text DEFAULT '默认', CHECK (id <> 3 OR state <> '禁止'))`);
+      await sql(`INSERT INTO ${table} SELECT i, CASE WHEN i <= 4 THEN '分组甲' ELSE '其他组' END, '原值' FROM generate_series(1, 6) i`);
+      await expect(preview(await page({ filter: undefined }), '新值')).rejects.toThrow('已应用筛选');
+      const original = await page();
+      expect(original.rows.map(row => row.c0)).toEqual(['2']);
+      await expect(preview(original, '1', 'c0')).rejects.toThrow('主键');
+      const plan = await preview(original, '新值');
+      expect(plan.counts).toEqual({ insert: 0, update: 4, delete: 0 });
+      expect(plan.statements).toHaveLength(1);
+      expect(await values()).toEqual(Array(6).fill('原值'));
+      await expect(apply(original, plan, 3)).rejects.toThrow('确认行数');
+      expect(await apply(original, plan)).toMatchObject({ outcome: 'committed', affected: 4 });
+      expect(await values()).toEqual(['新值', '新值', '新值', '新值', '原值', '原值']);
+      await expect(apply(original, plan)).rejects.toThrow();
+
+      const rollbackPage = await page();
+      expect(await apply(rollbackPage, await preview(rollbackPage, '禁止'))).toMatchObject({ outcome: 'rolledBack', affected: 0 });
+      expect(await values()).toEqual(['新值', '新值', '新值', '新值', '原值', '原值']);
+      const phantom = await page(), beforeInsert = await preview(phantom, '拒绝新增后写入');
+      await sql(`INSERT INTO ${table} VALUES (7, '分组甲', '外部新增')`);
+      expect(await apply(phantom, beforeInsert)).toMatchObject({ outcome: 'notSent', affected: 0, message: expect.stringContaining('匹配集合') });
+      const version = await page(), beforeChange = await preview(version, '拒绝修改后写入');
+      await sql(`UPDATE ${table} SET state = '外部修改' WHERE id = 2`);
+      expect(await apply(version, beforeChange)).toMatchObject({ outcome: 'notSent', affected: 0, message: expect.stringContaining('行版本') });
+      expect(await values()).toEqual(['新值', '外部修改', '新值', '新值', '原值', '原值', '外部新增']);
+      // 让新连接默认使用可重复读，确认锁后的复核能看见等待期间刚提交的匹配行。
+      await sql(`ALTER DATABASE "${database}" SET default_transaction_isolation = 'repeatable read'`);
+      try {
+        const lockPage = await page(), beforeWait = await preview(lockPage, '拒绝等锁后写入');
+        await sql('BEGIN ISOLATION LEVEL READ COMMITTED');
+        await sql(`INSERT INTO ${table} VALUES (8, '分组甲', '等锁时新增')`);
+        const unlock = async () => {
+          const until = Date.now() + 4000;
+          try {
+            do {
+              const waiting = await sql(`SELECT EXISTS (
+                SELECT FROM pg_catalog.pg_locks WHERE relation = '${table}'::regclass
+                  AND mode = 'ShareRowExclusiveLock' AND NOT granted)`);
+              if (waiting.rows[0]?.c0 === 't') return true;
+              await delay(25);
+            } while (Date.now() < until);
+            return false;
+          } finally { await sql('COMMIT'); }
+        };
+        const [receipt, waited] = await Promise.all([apply(lockPage, beforeWait), unlock()]);
+        expect(waited).toBe(true);
+        expect(receipt).toMatchObject({ outcome: 'notSent', affected: 0, message: expect.stringContaining('匹配集合') });
+        expect(await values()).toEqual(['新值', '外部修改', '新值', '新值', '原值', '原值', '外部新增', '等锁时新增']);
+      } finally { await sql(`ALTER DATABASE "${database}" RESET default_transaction_isolation`); }
+      await sql(`ALTER DATABASE "${database}" SET default_transaction_read_only = on`);
+      try {
+        const readOnly = await page();
+        // PostgreSQL 允许在只读事务中取得该表锁，由 UPDATE 的拒绝触发回滚。
+        expect(await apply(readOnly, await preview(readOnly, '拒绝只读库写入'))).toMatchObject({ outcome: 'rolledBack', affected: 0 });
+        expect(await values()).toEqual(['新值', '外部修改', '新值', '新值', '原值', '原值', '外部新增', '等锁时新增']);
+      } finally { await sql(`ALTER DATABASE "${database}" RESET default_transaction_read_only`); }
+      await sql(`INSERT INTO ${table} SELECT i, '超限', '原值' FROM generate_series(100, 1100) i`);
+      await expect(preview(await page({ filter: { column: 'scope', text: '超限' } }), '拒绝超限')).rejects.toThrow('1000 行');
+    } finally { await engine.closeAll(); await reader.close(); }
+  }, 60000);
+
   it('从统一引擎使用隔离角色和库，保留类型精度、错误终态及原事务', async () => {
     if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) ||
         user !== database || !password || !Number.isInteger(port) || port <= 1024 || port > 65535) {

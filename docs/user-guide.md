@@ -228,6 +228,8 @@ PostgreSQL 源码版支持连接、数据库与关系目录、SQL 查询及事�
 
 PostgreSQL 记录表单的 BYTEA 字段可查看 Hex、严格解码文本或图片，也可另存原字节。选十六进制赋值后，点「查看或载入 BYTEA」可载入本地文件，再按原流程暂存。详见[PostgreSQL BYTEA 文件操作](development/postgres-bytea-files-20261106.md)。
 
+在带主键的 PostgreSQL 可写普通表应用筛选后，可点「按当前筛选更新」，为全部匹配记录设置相同的字段值。预览显示已应用条件和准确行数，输入该行数后才可提交。一次最多更新 1,000 行，其他页的匹配记录也计入。详见[PostgreSQL 按筛选批量更新](development/postgres-filtered-update-20261106.md)。
+
 在 PostgreSQL 可写表单中用[外键选值](development/postgres-reference-picker-20261106.md)搜索引用记录，并将单列或复合键一并带入当前表单。
 
 在 PostgreSQL 记录页可[精确计数、跳页或定位末页](development/postgres-table-pagination-20261106.md)。计数沿用当前筛选，末页在同一读取快照内定位。
