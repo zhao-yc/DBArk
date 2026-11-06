@@ -1,6 +1,9 @@
 /** SQLite新表设计、确认与提交事实的集中中文文案。 */
 export const sqliteTableCreateZh = {
   title: '新建 SQLite 表', name: '表名称', columns: '字段', addColumn: '添加字段',
+  copyTitle: '复制 SQLite 表', copyMode: '复制范围', structureOnly: '仅结构', structureAndData: '结构和数据',
+  copyHint: '在同一 SQLite 文件中创建新表。数据模式读取完整来源，不受当前筛选和分页限制。',
+  copyPreview: '预览 SQLite 复制 SQL', copyApply: '确认复制 SQLite 表', copyDiscard: '关闭会放弃当前副本名称、范围和预览。',
   columnName: (row: number) => `字段名称 ${row}`, declaredType: (row: number) => `声明类型 ${row}`,
   nullable: (row: number) => `允许 NULL ${row}`, defaultKind: (row: number) => `默认值类型 ${row}`,
   defaultValue: (row: number) => `默认值内容 ${row}`, collation: (row: number) => `排序规则 ${row}`,
@@ -30,8 +33,8 @@ export const sqliteTableCreateZh = {
   unsupportedSeed: 'SQLite 新建表不能使用 MySQL 导入结构草稿；请在此独立设计，不会转换或执行原草稿。',
   previewTask: 'SQLite 新建表只读预览', applyTask: 'SQLite 新建表事务',
   previewTaskMessages: { running: '正在只读准备 SQLite 建表预览，尚未执行 DDL。', completed: 'SQLite 建表只读预览已完成，尚未执行 DDL。', cancelled: 'SQLite 建表预览已取消，未执行 DDL。', failed: 'SQLite 建表预览未交付，未执行 DDL。' },
-  factTitle: 'SQLite 新建表事务回执', factOperation: '操作编号', factTarget: '准确目标', factRequested: '请求的 DDL 语句数', factCompleted: '已处理的 DDL 语句数',
-  factHint: '已处理语句数不代表已提交；只有 COMMIT 确认才表示表和索引已提交。回执不包含设计、SQL、默认值或文件路径。',
-  factPhases: { 'not-sent': '尚未发送 DDL', writing: '事务内处理 DDL，尚未提交', 'commit-pending': 'COMMIT 已可能发送，等待确认', committed: 'COMMIT 已确认，表和索引已提交', 'rolled-back': 'ROLLBACK 已确认，整批 DDL 已回滚', unknown: '结果未知，请核对原库；禁止重复提交' },
+  factTitle: 'SQLite 新建表事务回执', factOperation: '操作编号', factTarget: '准确目标', factRequested: '请求的写入语句数', factCompleted: '已处理的写入语句数',
+  factHint: '已处理语句数不代表已提交。只有 COMMIT 确认才表示本批操作已提交。回执不包含设计、SQL、默认值或文件路径。',
+  factPhases: { 'not-sent': '尚未发送写入语句', writing: '事务内处理写入，尚未提交', 'commit-pending': 'COMMIT 已可能发送，等待确认', committed: 'COMMIT 已确认，本批操作已提交', 'rolled-back': 'ROLLBACK 已确认，整批写入已回滚', unknown: '结果未知，请核对原库；禁止重复提交' },
   cancelCommit: '正在确认 SQLite 建表提交结果；停止不能撤销已经提交的 DDL。', cancelUnknown: 'SQLite 建表结果未知，请核对原库；此处不能撤销或重试。',
 } as const;

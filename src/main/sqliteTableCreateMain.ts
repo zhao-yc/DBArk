@@ -12,8 +12,8 @@ interface Ports {
   task(id: string): TaskRecord | undefined; replace(task: TaskRecord): void; save(task: TaskRecord): void;
   event(event: TaskEvent): void;
 }
-interface Source { owner: ColumnsInvocation; revision: number; epoch: object; profile: string; target: SqliteTableCreateTarget; expires: number; fingerprint: string; statements: number; cancelled?(): boolean; }
-interface Preview extends Source { id: string; }
+interface Source { owner: ColumnsInvocation; revision: number; epoch: object; profile: string; target: SqliteTableCreateTarget; expires: number; expected?: { fingerprint: string; statements: number }; cancelled?(): boolean; }
+interface Preview extends Source { id: string; statements: number; }
 interface Operation { owner: ColumnsInvocation; cancelled: boolean; sent: boolean; check(): void; stop?: Promise<void>; settled: Promise<void>; settle(): void; }
 /** 摘要只比较来源，不把路径或完整SQL复制到Main预览表。 */
 const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -54,8 +54,10 @@ export class SqliteTableCreateMain {
     this.watch(owner); this.observe(); this.ports.assert(owner); this.ports.available(input.connectionId);
     const profile = this.ports.profile(input.connectionId);
     if (!profile || profile.pendingFiles?.length || !profile.sqlite.filePath) throw Error('请先保存并授权准确SQLite文件连接');
-    const plan = buildSqliteTableCreate(input.design);
-    const source: Source = { owner, revision: this.ports.revision(), epoch: this.ports.epoch(input.connectionId), profile: profileKey(profile), target: { connectionId: input.connectionId, database: 'main', table: input.design.name }, expires: Date.now() + limits.previewLifetimeMs, fingerprint: fingerprint(plan.sql), statements: plan.sql.length };
+    const plan = 'design' in input ? buildSqliteTableCreate(input.design) : undefined;
+    const table = 'design' in input ? input.design.name : input.copy.name;
+    const source: Source = { owner, revision: this.ports.revision(), epoch: this.ports.epoch(input.connectionId), profile: profileKey(profile), target: { connectionId: input.connectionId, database: 'main', table }, expires: Date.now() + limits.previewLifetimeMs,
+      expected: plan && { fingerprint: fingerprint(plan.sql), statements: plan.sql.length } };
     this.valid(source); return source;
   }
   /** 首个await之前占住任务编号，取消和退出始终指向原操作。 */
@@ -107,8 +109,10 @@ export class SqliteTableCreateMain {
   private accept(source: Source, value: unknown): SqliteTableCreatePreviewOutput {
     this.valid(source); const preview = value as SqliteTableCreatePreviewOutput;
     const expires = Date.parse(preview?.expiresAt);
-    if (!preview || typeof preview.previewId !== 'string' || !preview.previewId || preview.previewId.length > 200 || this.previews.has(preview.previewId) || this.previews.size >= limits.previews || !preview.target || !sameTarget(preview.target, source.target) || !Number.isFinite(expires) || expires <= Date.now() || expires > source.expires + 5000 || preview.confirmation !== `main.${source.target.table}` || !Array.isArray(preview.sql) || preview.sql.length !== source.statements || fingerprint(preview.sql) !== source.fingerprint || !Array.isArray(preview.warnings) || preview.warnings.length > 64 || preview.warnings.some(item => typeof item !== 'string' || item.length > 4096)) throw Error(text.stale);
-    const binding: Preview = { ...source, id: preview.previewId, expires: Math.min(source.expires, expires) }; this.previews.set(binding.id, binding);
+    if (!preview || typeof preview.previewId !== 'string' || !preview.previewId || preview.previewId.length > 200 || this.previews.has(preview.previewId) || this.previews.size >= limits.previews || !preview.target || !sameTarget(preview.target, source.target) || !Number.isFinite(expires) || expires <= Date.now() || expires > source.expires + 5000 || preview.confirmation !== `main.${source.target.table}` || !Array.isArray(preview.sql) || preview.sql.length < 1 || preview.sql.length > limits.statements || preview.sql.some(statement => typeof statement !== 'string' || !statement || statement.includes('\0')) || !Array.isArray(preview.warnings) || preview.warnings.length > 64 || preview.warnings.some(item => typeof item !== 'string' || item.length > 4096)) throw Error(text.stale);
+    // 复制 SQL 来自同一 Main 内的运行时目录，表单创建仍需与预编译摘要逐字匹配。
+    if (source.expected && (preview.sql.length !== source.expected.statements || fingerprint(preview.sql) !== source.expected.fingerprint)) throw Error(text.stale);
+    const binding: Preview = { ...source, id: preview.previewId, statements: preview.sql.length, expires: Math.min(source.expires, expires) }; this.previews.set(binding.id, binding);
     return { ...preview, expiresAt: new Date(binding.expires).toISOString() };
   }
   /** 只读请求的迟到回包必须释放，不能交给后继连接或文档。 */

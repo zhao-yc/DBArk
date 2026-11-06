@@ -7,6 +7,7 @@ import { sqliteTableEditZh as editText } from '../../src/renderer/locales/sqlite
 import { sqliteRecordTransferZh as transferText } from '../../src/renderer/locales/sqliteRecordTransfer.zh-CN';
 import { postgresRecordTransferZh } from '../../src/renderer/locales/postgresRecordTransfer.zh-CN';
 import { sqliteTableClipboardZh as clipboardText } from '../../src/renderer/locales/sqliteTableClipboard.zh-CN';
+import { sqliteTableCreateZh as copyText } from '../../src/renderer/locales/sqliteTableCreate.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { sidebarMenuItem } from './sidebar-menu';
 
@@ -145,6 +146,38 @@ test('只读 SQLite 查询逐格保留存储类型并跨文件追加', async ({}
     expect(runtime.pageErrors).toEqual([]);
     await writeFile(info.outputPath('SQLite独立读回.json'), JSON.stringify(readTarget(), null, 2));
     await mark('暂存和预览零写入，提交后逐格独立读回，源文件保持');
+    const copy = page.getByRole('dialog', { name: copyText.copyTitle, exact: true });
+    const copied = () => {
+      const db = new DatabaseSync(targetFile, { readOnly: true });
+      try {
+        if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE name='整表副本'").get()) return null;
+        return db.prepare(`SELECT id, memo, CAST(exact AS TEXT) AS exact, typeof(mixed) AS kind, hex(mixed) AS bytes,
+          signed_zero, note FROM 整表副本 ORDER BY id`).all().map(row => ({ ...row, signed_zero: Object.is(row.signed_zero, -0) ? '-0' : String(row.signed_zero) }));
+      } finally { db.close(); }
+    };
+    await (await navigationMenuItem(table, { name: copyText.copyTitle, exact: true }, check)).click();
+    await copy.getByLabel(copyText.name, { exact: true }).fill('整表副本');
+    await copy.getByLabel(copyText.copyMode, { exact: true }).selectOption('data');
+    await copy.getByRole('button', { name: copyText.copyPreview, exact: true }).click();
+    await expect(copy).toContainText('INSERT OR ABORT INTO main."整表副本"');
+    expect(copied()).toBeNull();
+    await expect(page.locator('.toast')).toBeHidden({ timeout: 10000 });
+    await page.screenshot({ path: info.outputPath('SQLite整表复制预览.png') });
+    await copy.getByLabel(copyText.confirmation, { exact: true }).fill('main.整表副本');
+    await copy.getByRole('button', { name: copyText.copyApply, exact: true }).click();
+    await expect(copy.getByRole('status')).toContainText('已复制 2 行');
+    expect(copied()).toEqual([
+      { id: 1, memo: '源甲', exact: '9223372036854775807', kind: 'text', bytes: '30303037', signed_zero: '-0', note: null },
+      { id: 2, memo: '源乙', exact: '-9223372036854775808', kind: 'blob', bytes: '', signed_zero: '0', note: '' },
+    ]);
+    expect(readTarget()).toHaveLength(2);
+    await writeFile(info.outputPath('SQLite整表独立读回.json'), JSON.stringify(copied(), null, 2));
+    await copy.getByRole('button', { name: copyText.close, exact: true }).click();
+    await expect(copy).toBeHidden();
+    await expect(page.locator('.tab-select').getByText('整表副本', { exact: true })).toBeVisible();
+    await expect(table.getByRole('grid', { name: editText.grid, exact: true })).toHaveAttribute('aria-rowcount', '3');
+    await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).filter(task => task.status === 'running')).toEqual([]);
+    await mark('SQLite 同文件整表复制，预览零写入，确认后独立读回两行并打开副本');
     const quitDialogs: string[] = [];
     const observeDialog = (message: { text(): string }) => {
       if (message.text().startsWith('DBARK_E2E_DIALOG:')) quitDialogs.push(message.text());
@@ -155,7 +188,7 @@ test('只读 SQLite 查询逐格保留存储类型并跨文件追加', async ({}
       application.off('console', observeDialog);
       await writeFile(info.outputPath('退出对话框.json'), JSON.stringify(quitDialogs, null, 2));
     }
-    expect(quitDialogs.some(message => message.includes('退出前保存或收尾失败'))).toBe(false);
+    expect(quitDialogs).toEqual([]);
     await mark('窗口正常退出');
   } catch (error) {
     runtime.retainOwnedDesktopResources(info);

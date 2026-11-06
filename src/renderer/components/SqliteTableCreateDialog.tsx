@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { sqliteTableCreateDesignSchema, sqliteTableCreateOutcomeSchema, type SqliteTableCreateDesign, type SqliteTableCreatePreviewInput, type SqliteTableCreatePreviewOutput, type SqliteTableCreateApplyInput, type SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
+import { sqliteTableCreateDesignSchema, sqliteTableCreateOutcomeSchema, sqliteTableCreatePreviewSchema, type SqliteTableCreateDesign, type SqliteTableCreatePreviewInput, type SqliteTableCreatePreviewOutput, type SqliteTableCreateApplyInput, type SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
 import { acquireWorkspaceBusy, useWorkspace, type WorkspaceBusyLease } from '../store';
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteTableCreateZh as text } from '../locales/sqliteTableCreate.zh-CN';
@@ -17,7 +17,7 @@ export const sqliteTableCreateServices: SqliteTableCreateServices = {
   release: input => invoke('sqlite.tableCreate.release', input), cancel: taskId => invoke('query.cancel', { taskId }),
 };
 interface Props {
-  connectionId: string; database: string; initialDesign?: SqliteTableCreateDesign; unsupportedSeed?: boolean; invalidated?: boolean; isParentCurrent?(): boolean;
+  connectionId: string; database: string; initialDesign?: SqliteTableCreateDesign; copySource?: string; unsupportedSeed?: boolean; invalidated?: boolean; isParentCurrent?(): boolean;
   onClose(): void; onCreated?(result: SqliteTableCreateOutcome, version: number): void; onDirtyChange?(dirty: boolean): void;
   services?: SqliteTableCreateServices;
 }
@@ -28,15 +28,16 @@ const emptyDesign = (): SqliteTableCreateDesign => ({ name: '', columns: [{ name
 function moved<T>(items: T[], index: number, delta: -1 | 1): T[] { const next = [...items], to = index + delta; if (to >= 0 && to < next.length) [next[index], next[to]] = [next[to], next[index]]; return next; }
 
 /** SQLite新表独立设计器：本地草稿→真实只读预览→单次明确提交，不使用MySQL元数据或SQL执行器。 */
-export function SqliteTableCreateDialog({ connectionId, database, initialDesign, unsupportedSeed = false, invalidated = false, isParentCurrent, onClose, onCreated, onDirtyChange, services = sqliteTableCreateServices }: Props) {
+export function SqliteTableCreateDialog({ connectionId, database, initialDesign, copySource, unsupportedSeed = false, invalidated = false, isParentCurrent, onClose, onCreated, onDirtyChange, services = sqliteTableCreateServices }: Props) {
   const profile = useWorkspace(state => state.connections.find(value => value.id === connectionId)), version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
-  const fixed = useRef({ connectionId, database, profile, version, initialDesign, unsupportedSeed, parent: isParentCurrent, services, onClose, onCreated, onDirtyChange, busyKey: 'sqlite-table-create:' + uid() }).current;
-  const closeSourceRef = useRef({ connectionId, database, profile, version, initialDesign, isParentCurrent, unsupportedSeed, invalidated });
-  if (closeSourceRef.current.connectionId !== connectionId || closeSourceRef.current.database !== database || closeSourceRef.current.profile !== profile || closeSourceRef.current.version !== version || closeSourceRef.current.initialDesign !== initialDesign || closeSourceRef.current.isParentCurrent !== isParentCurrent || closeSourceRef.current.unsupportedSeed !== unsupportedSeed || closeSourceRef.current.invalidated !== invalidated) closeSourceRef.current = { connectionId, database, profile, version, initialDesign, isParentCurrent, unsupportedSeed, invalidated };
+  const fixed = useRef({ connectionId, database, profile, version, initialDesign, copySource, unsupportedSeed, parent: isParentCurrent, services, onClose, onCreated, onDirtyChange, busyKey: 'sqlite-table-create:' + uid() }).current;
+  const closeSourceRef = useRef({ connectionId, database, profile, version, initialDesign, copySource, isParentCurrent, unsupportedSeed, invalidated });
+  if (closeSourceRef.current.connectionId !== connectionId || closeSourceRef.current.database !== database || closeSourceRef.current.profile !== profile || closeSourceRef.current.version !== version || closeSourceRef.current.initialDesign !== initialDesign || closeSourceRef.current.copySource !== copySource || closeSourceRef.current.isParentCurrent !== isParentCurrent || closeSourceRef.current.unsupportedSeed !== unsupportedSeed || closeSourceRef.current.invalidated !== invalidated) closeSourceRef.current = { connectionId, database, profile, version, initialDesign, copySource, isParentCurrent, unsupportedSeed, invalidated };
   const closeSource = closeSourceRef.current, sourceEpoch = useRef(0), observed = useRef({ profile, version });
   // 正式SQLite草案只接受共享设计合同；解析会复制数据，不把父级可变对象作为编辑模型。
   const seed = useRef(initialDesign === undefined ? undefined : sqliteTableCreateDesignSchema.safeParse(initialDesign)).current;
   const [design, setDesign] = useState(() => seed?.success ? seed.data : emptyDesign()), live = useRef(design); live.current = design;
+  const [copyMode, setCopyMode] = useState<'structure' | 'data'>('structure');
   const initial = useRef(JSON.stringify(design)).current;
   const [preview, setPreview] = useState<SqliteTableCreatePreviewOutput>(), accepted = useRef<SqliteTableCreatePreviewOutput | undefined>(undefined);
   const [confirmation, setConfirmation] = useState(''), confirmationRef = useRef(confirmation); confirmationRef.current = confirmation;
@@ -46,7 +47,7 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
   const lifetime = useRef<object | null>(null), operation = useRef<Operation | undefined>(undefined), previews = useRef(new Set<string>()), releasing = useRef(new Map<string, Promise<void>>());
   const renderTicket = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; }; });
-  if (fixed.connectionId !== connectionId || fixed.database !== database || fixed.profile !== profile || fixed.version !== version || fixed.initialDesign !== initialDesign || fixed.parent !== isParentCurrent || fixed.unsupportedSeed !== unsupportedSeed || fixed.services !== services || invalidated || seed && !seed.success) invalid.current = true;
+  if (fixed.connectionId !== connectionId || fixed.database !== database || fixed.profile !== profile || fixed.version !== version || fixed.initialDesign !== initialDesign || fixed.copySource !== copySource || fixed.parent !== isParentCurrent || fixed.unsupportedSeed !== unsupportedSeed || fixed.services !== services || invalidated || seed && !seed.success) invalid.current = true;
 
   /** 固定原连接对象及修订，父租约首次失效后永久撤权；自己的modal不视为外来modal。 */
   function sourceCurrent(): boolean {
@@ -100,13 +101,16 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
   /** 真实预览仅由明确按钮触发，完整草稿固定后每个await都核对原来源。 */
   function prepare(): void {
     if (!editable()) return;
-    const parsed = sqliteTableCreateDesignSchema.safeParse(design); if (!parsed.success) { setError(text.designInvalid); return; }
+    const intent = fixed.copySource === undefined ? { design } : { copy: { source: fixed.copySource, name: design.name, mode: copyMode } };
+    const scope = { connectionId: fixed.connectionId, database: 'main' as const };
+    const parsed = sqliteTableCreatePreviewSchema.safeParse({ ...scope, ...intent, taskId: 'validate' });
+    if (!parsed.success) { setError(fixed.copySource === undefined ? text.designInvalid : parsed.error.issues[0]?.message ?? text.designInvalid); return; }
     revokePreview(); const op = begin('preview'); if (!op) return;
     op.promise = (async () => {
       try {
         await releaseAll(); if (!accepts(op) || op.cancelled) return;
         op.sent = true;
-        const value = await fixed.services.preview({ connectionId: fixed.connectionId, database: 'main', design: parsed.data, taskId: op.taskId }); previews.current.add(value.previewId);
+        const value = await fixed.services.preview({ ...parsed.data, taskId: op.taskId }); previews.current.add(value.previewId);
         if (!accepts(op) || op.cancelled) { await releaseOne(value.previewId); return; }
         if (value.target.connectionId !== fixed.connectionId || value.target.database !== 'main' || value.target.table !== op.draft.name || value.confirmation !== 'main.' + op.draft.name || !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now() || !value.sql.length) { await releaseOne(value.previewId); throw Error(text.response); }
         accepted.current = value; setPreview(value); confirmationRef.current = ''; setConfirmation('');
@@ -146,7 +150,7 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
   /** 关闭草稿需要明确放弃；运行中不关闭，释放失败仍保留原窗口及能力责任。 */
   function close(discard = false): void {
     if (!localCurrent() || operation.current || closingRef.current) return;
-    if (!discard && !completed.current && (JSON.stringify(live.current) !== initial || preview || locked.current)) { setClosing(true); return; }
+    if (!discard && !completed.current && (JSON.stringify(live.current) !== initial || copyMode !== 'structure' || preview || locked.current)) { setClosing(true); return; }
     const token = lifetime.current, epoch = sourceEpoch.current, draft = live.current;
     closingRef.current = true; setBusy(true);
     void releaseAll().then(() => { if (lifetime.current === token && closeSourceRef.current === closeSource && sourceEpoch.current === epoch && live.current === draft) { fixed.onDirtyChange?.(false); fixed.onClose(); } }).catch(report).finally(() => { closingRef.current = false; if (lifetime.current === token) setBusy(false); });
@@ -162,16 +166,20 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
     return () => { unsubscribe(); if (lifetime.current === token) lifetime.current = null; const op = operation.current; if (op?.lifetime === token) cancel(op); else void releaseAll().catch(report); fixed.onDirtyChange?.(false); };
   }, []);
   useEffect(() => { if (!sourceCurrent()) { if (accepted.current) revokePreview(); cancel(); } });
-  useEffect(() => { fixed.onDirtyChange?.(!complete && (busy || !!preview || unknown || JSON.stringify(design) !== initial)); }, [design, preview, busy, complete, unknown]);
+  useEffect(() => { fixed.onDirtyChange?.(!complete && (busy || !!preview || unknown || copyMode !== 'structure' || JSON.stringify(design) !== initial)); }, [design, copyMode, preview, busy, complete, unknown]);
   useEffect(() => { if (!preview) return; const timer = setTimeout(() => tick(value => value + 1), Math.max(1, Date.parse(preview.expiresAt) - Date.now() + 1)); return () => clearTimeout(timer); }, [preview]);
   const valid = sourceCurrent(), canEdit = !busy && !closing && valid && !complete && !unknown && !locked.current;
   const expired = !!preview && Date.parse(preview.expiresAt) <= Date.now(), readOnly = fixed.profile?.dialect === 'sqlite' && fixed.profile.sqlite.readOnly;
   const directions = (['asc', 'desc'] as const).map(value => <option key={value} value={value}>{value === 'asc' ? text.ascending : text.descending}</option>);
   const columnOptions = design.columns.map((column, index) => <option key={index} value={column.name}>{column.name}</option>);
-  return <Modal title={text.title} wide onClose={() => close()}><div className="modal-content sqlite-table-create" aria-busy={busy}>
-    <p>{fixed.profile?.name ?? fixed.connectionId} / {fixed.database}</p><UsageHelp><p>{text.affinity}</p><p>{text.defaultHint}</p></UsageHelp>
+  const copying = fixed.copySource !== undefined;
+  return <Modal title={copying ? text.copyTitle : text.title} wide onClose={() => close()}><div className="modal-content sqlite-table-create" aria-busy={busy}>
+    <p>{fixed.profile?.name ?? fixed.connectionId} / {fixed.database}{copying && ' / ' + fixed.copySource}</p>{copying ? <p>{text.copyHint}</p> : <UsageHelp><p>{text.affinity}</p><p>{text.defaultHint}</p></UsageHelp>}
     {readOnly && <p className="warning-text">{text.readonly}</p>}{(!valid || unsupportedSeed) && <ErrorBox message={unsupportedSeed ? text.unsupportedSeed : text.invalid}/>}
     <Field label={text.name}><input aria-label={text.name} value={design.name} disabled={!canEdit} onChange={event => change({ ...design, name: event.target.value })}/></Field>
+    {copying ? <Field label={text.copyMode}><select aria-label={text.copyMode} disabled={!canEdit} value={copyMode} onChange={event => {
+      if (editable()) { setCopyMode(event.target.value === 'data' ? 'data' : 'structure'); change({ ...design }); }
+    }}><option value="structure">{text.structureOnly}</option><option value="data">{text.structureAndData}</option></select></Field> : <>
     <section aria-label={text.columns}><h3>{text.columns}</h3><div className="sqlite-create-fields">{design.columns.map((column, index) => <fieldset className="sqlite-create-column" key={index}><legend>{text.columns} {index + 1}</legend>
       <Field label={text.columnName(index + 1)}><input aria-label={text.columnName(index + 1)} value={column.name} disabled={!canEdit} onChange={event => columnAt(column, { name: event.target.value })}/></Field>
       <Field label={text.declaredType(index + 1)}><input aria-label={text.declaredType(index + 1)} value={column.declaredType} disabled={!canEdit} onChange={event => columnAt(column, { declaredType: event.target.value })}/></Field>
@@ -197,7 +205,8 @@ export function SqliteTableCreateDialog({ connectionId, database, initialDesign,
       {(['onDelete', 'onUpdate'] as const).map(action => <Field key={action} label={text[action](index + 1)}><select aria-label={text[action](index + 1)} value={item[action]} disabled={!canEdit} onChange={event => change({ ...design, foreignKeys: design.foreignKeys.map(value => value === item ? { ...item, [action]: event.target.value as SqliteTableCreateDesign['foreignKeys'][number]['onDelete'] } : value) })}>{['NO ACTION', 'RESTRICT', 'SET NULL', 'SET DEFAULT', 'CASCADE'].map(value => <option key={value}>{value}</option>)}</select></Field>)}
       <label><input type="checkbox" aria-label={text.deferred(index + 1)} checked={item.deferred} disabled={!canEdit} onChange={event => change({ ...design, foreignKeys: design.foreignKeys.map(value => value === item ? { ...item, deferred: event.target.checked } : value) })}/>{text.deferred(index + 1)}</label>{rowActions(text.foreignKeys + ' ' + (index + 1), index, design.foreignKeys.length, delta => change({ ...design, foreignKeys: moved(design.foreignKeys, index, delta) }), () => change({ ...design, foreignKeys: design.foreignKeys.filter(value => value !== item) }))}
     </fieldset>)}<button type="button" disabled={!canEdit} onClick={() => change({ ...design, foreignKeys: [...design.foreignKeys, { name: 'fk_' + (design.foreignKeys.length + 1), columns: [design.columns[0]?.name ?? ''], referencedTable: '', referencedColumns: [''], onDelete: 'NO ACTION', onUpdate: 'NO ACTION', deferred: false }] })}>{text.addForeignKey}</button></section>
+    </>}
     {preview && <section aria-label={text.sql}><h3>{preview.target.database}.{preview.target.table}</h3><p>{text.previewHint}</p><pre className="sqlite-create-sql" tabIndex={0} aria-label={text.sql}>{preview.sql.join('\n\n')}</pre>{preview.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}<Field label={text.confirmHint(preview.confirmation)}><input aria-label={text.confirmation} value={confirmation} disabled={!canEdit || expired} onChange={event => { if (editable() && accepted.current === preview) { confirmationRef.current = event.target.value; setConfirmation(event.target.value); } }}/></Field>{expired && <ErrorBox message={text.expired}/>}</section>}
-    {busy && <Spinner text={text.working}/>}<ErrorBox message={error}/>{message && <p role="status" className={complete ? 'success-box' : 'warning-text'}>{message}</p>}{closing && <p className="warning-text">{text.discard}</p>}
-  </div><footer className="modal-footer">{closing ? <><button type="button" disabled={busy} onClick={() => { if (localCurrent() && !operation.current) setClosing(false); }}>{text.keep}</button><button type="button" disabled={busy} onClick={() => close(true)}>{text.discardClose}</button></> : <><button type="button" disabled={busy} onClick={() => close()}>{text.close}</button><span className="grow"/>{busy && renderedOperation && <button type="button" onClick={() => { if (localCurrent() && operation.current === renderedOperation) cancel(renderedOperation); }}>{text.stop}</button>}<button type="button" disabled={!canEdit} onClick={prepare}>{text.preview}</button><button type="button" className="primary" disabled={!canEdit || !preview || expired || readOnly || confirmation !== preview.confirmation || consumed.current.has(preview.previewId)} onClick={apply}>{text.apply}</button></>}</footer></Modal>;
+    {busy && <Spinner text={text.working}/>}<ErrorBox message={error}/>{message && <p role="status" className={complete ? 'success-box' : 'warning-text'}>{message}</p>}{closing && <p className="warning-text">{copying ? text.copyDiscard : text.discard}</p>}
+  </div><footer className="modal-footer">{closing ? <><button type="button" disabled={busy} onClick={() => { if (localCurrent() && !operation.current) setClosing(false); }}>{text.keep}</button><button type="button" disabled={busy} onClick={() => close(true)}>{text.discardClose}</button></> : <><button type="button" disabled={busy} onClick={() => close()}>{text.close}</button><span className="grow"/>{busy && renderedOperation && <button type="button" onClick={() => { if (localCurrent() && operation.current === renderedOperation) cancel(renderedOperation); }}>{text.stop}</button>}<button type="button" disabled={!canEdit} onClick={prepare}>{copying ? text.copyPreview : text.preview}</button><button type="button" className="primary" disabled={!canEdit || !preview || expired || readOnly || confirmation !== preview.confirmation || consumed.current.has(preview.previewId)} onClick={apply}>{copying ? text.copyApply : text.apply}</button></>}</footer></Modal>;
 }

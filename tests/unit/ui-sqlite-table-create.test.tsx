@@ -36,7 +36,10 @@ afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Objec
 function fixture(readOnly = false) {
   const profile: SqliteConnectionProfile = { id: 'create-connection', name: '合成SQLite文件', group: '', color: '#123456', dialect: 'sqlite', sqlite: { filePath: 'D:\\synthetic\\create.sqlite', readOnly, busyTimeoutMs: 1000 } };
   useWorkspace.setState({ connections: [profile], connectionVersions: { [profile.id]: 4 }, activeJobs: {} });
-  const preview: ReturnType<typeof vi.fn<SqliteTableCreateServices['preview']>> = vi.fn<SqliteTableCreateServices['preview']>(async (input): Promise<SqliteTableCreatePreviewOutput> => ({ previewId: 'preview-' + preview.mock.calls.length, target: { connectionId: input.connectionId, database: 'main', table: input.design.name }, confirmation: 'main.' + input.design.name, expiresAt: new Date(Date.now() + 60000).toISOString(), sql: buildSqliteTableCreate(input.design).sql, warnings: ['合成只读预览提示'] }));
+  const preview: ReturnType<typeof vi.fn<SqliteTableCreateServices['preview']>> = vi.fn<SqliteTableCreateServices['preview']>(async (input): Promise<SqliteTableCreatePreviewOutput> => {
+    if (!('design' in input)) throw Error('本例仅允许新建设计');
+    return { previewId: 'preview-' + preview.mock.calls.length, target: { connectionId: input.connectionId, database: 'main', table: input.design.name }, confirmation: 'main.' + input.design.name, expiresAt: new Date(Date.now() + 60000).toISOString(), sql: buildSqliteTableCreate(input.design).sql, warnings: ['合成只读预览提示'] };
+  });
   const apply = vi.fn<SqliteTableCreateServices['apply']>(async () => outcome(preview.mock.results.at(-1) ? await preview.mock.results.at(-1)!.value : undefined));
   const release = vi.fn<SqliteTableCreateServices['release']>(async () => {}), cancel = vi.fn<SqliteTableCreateServices['cancel']>(async () => undefined);
   const services: SqliteTableCreateServices = { preview, apply, release, cancel };
@@ -74,7 +77,9 @@ it('字段typed默认值、排序规则、复合主键、索引方向与有序�
   await click(text.up(text.primary + ' code')); await check(text.strict, true); await check(text.withoutRowid, true);
   await click(text.addIndex); await input(text.indexName(1), 'idx_child'); await check(text.unique(1), true); await click(text.addIndexColumn(1)); await input(text.indexColumn(1, 2), 'code'); await input(text.indexOrder(1, 2), 'desc'); await click(text.up(text.indexColumn(1, 2)));
   await click(text.addForeignKey); await input(text.referenceTable(1), 'parent'); await input(text.referenceColumn(1, 1), 'parent_id'); await click(text.addForeignColumn(1)); await input(text.foreignColumn(1, 2), 'code'); await input(text.referenceColumn(1, 2), 'parent_code'); await input(text.onDelete(1), 'CASCADE'); await input(text.onUpdate(1), 'RESTRICT'); await check(text.deferred(1), true); await click(text.up(text.foreignColumn(1, 2))); await click(text.preview);
-  expect(f.preview).toHaveBeenCalledOnce(); const design = f.preview.mock.calls[0][0].design;
+  expect(f.preview).toHaveBeenCalledOnce(); const request = f.preview.mock.calls[0][0];
+  if (!('design' in request)) throw Error('本例仅允许新建设计');
+  const design = request.design;
   expect(design.columns[1]).toEqual({ name: 'code', declaredType: 'TEXT', nullable: false, default: { kind: 'text', value: "默认\0🚢'值" }, collation: 'NOCASE' }); expect(design.primaryKey).toEqual(['code', 'id']); expect(design.strict).toBe(true); expect(design.withoutRowid).toBe(true);
   expect(design.indexes).toEqual([{ name: 'idx_child', unique: true, columns: [{ name: 'code', order: 'desc' }, { name: 'id', order: 'asc' }] }]);
   expect(design.foreignKeys).toEqual([{ name: 'fk_1', columns: ['code', 'id'], referencedTable: 'parent', referencedColumns: ['parent_code', 'parent_id'], onDelete: 'CASCADE', onUpdate: 'RESTRICT', deferred: true }]); expect(f.apply).not.toHaveBeenCalled();
@@ -111,6 +116,7 @@ it('props/父租约ABA不复活；非法foo数据库不改main且不发请求', 
 
 it('预览迟到失去来源只释放原能力，不发布SQL或自动创建', async () => {
   const f = fixture(), pending = deferred<SqliteTableCreatePreviewOutput>(); f.preview.mockReturnValueOnce(pending.promise); await render(f); await input(text.name, 'late'); await click(text.preview); const inputValue = f.preview.mock.calls[0][0];
+  if (!('design' in inputValue)) throw Error('本例仅允许新建设计');
   await act(async () => useWorkspace.setState({ connectionVersions: { [f.profile.id]: 9 } })); const preview: SqliteTableCreatePreviewOutput = { previewId: 'late-preview', target: { connectionId: f.profile.id, database: 'main', table: 'late' }, confirmation: 'main.late', expiresAt: new Date(Date.now() + 60000).toISOString(), sql: buildSqliteTableCreate(inputValue.design).sql, warnings: [] }; await act(async () => pending.resolve(preview));
   expect(f.release).toHaveBeenCalledWith({ previewId: 'late-preview' }); expect(document.querySelectorAll('pre')).toHaveLength(0); expect(f.apply).not.toHaveBeenCalled(); expect(created).not.toHaveBeenCalled(); expect(control(text.name).value).toBe('late');
 });

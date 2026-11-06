@@ -37,10 +37,85 @@ function transport(observe?: (message: SqliteWorkerResponse, forward: () => void
 function runtime(profile: SqliteConnectionProfile, createTransport: () => SqliteProcessTransport = transport) { const events: TaskEvent[] = [], app = new SqliteRuntime({ resolveProfile: id => id === profile.id ? profile : undefined, createTransport, emit: event => events.push(structuredClone(event)) }); applications.add(app); return { app, events }; }
 function design(name = '新"表中文'): SqliteTableCreateDesign { return { name, columns: [{ name: 'id', declaredType: 'INTEGER', nullable: false, default: { kind: 'none' } }, { name: 'note', declaredType: 'TEXT', nullable: true, default: { kind: 'text', value: "默认'中文\0🚢" } }, { name: 'payload', declaredType: 'BLOB', nullable: true, default: { kind: 'blob', value: '00ff' } }], primaryKey: ['id'], autoIncrement: true, indexes: [{ name: '索引_' + name, unique: false, columns: [{ name: 'note', order: 'asc' }] }], foreignKeys: [], strict: true, withoutRowid: false }; }
 function preview(app: SqliteRuntime, profile: SqliteConnectionProfile, value = design(), assertCurrent = () => {}): Promise<SqliteTableCreatePreviewOutput> { return app.request('sqlite.tableCreate.preview', { connectionId: profile.id, database: 'main', taskId: '建表预览' + ++serial, design: value, assertCurrent }); }
+function copyPreview(app: SqliteRuntime, profile: SqliteConnectionProfile, source: string, name: string, mode: 'structure' | 'data' = 'data'): Promise<SqliteTableCreatePreviewOutput> {
+  return app.request('sqlite.tableCreate.preview', { connectionId: profile.id, database: 'main', taskId: '复制预览' + ++serial, copy: { source, name, mode }, assertCurrent: () => {} });
+}
 function apply(app: SqliteRuntime, value: SqliteTableCreatePreviewOutput, record?: (fact: SqliteTableCreateFact) => void) { const facts: SqliteTableCreateFact[] = [], input: SqliteTableCreateApplyRequest = { previewId: value.previewId, taskId: '建表提交' + ++serial, confirmation: value.confirmation, operationId: '操作' + serial, assertCurrent: () => {}, recordCreateFact: fact => { record?.(fact); facts.push(structuredClone(fact)); } }; return { input, facts, result: app.request('sqlite.tableCreate.apply', input) as Promise<SqliteTableCreateOutcome> }; }
 function exists(profile: SqliteConnectionProfile, name: string): number { return disk(profile, db => Number(db.prepare('SELECT count(*) AS n FROM sqlite_schema WHERE name=?').get(name)!.n)); }
 
 describe('SQLite可视化建表真实只读预览、准确原子提交与一次性能力', () => {
+  it('同文件复制精确结构和当前完整数据，重新绑定自引用且独立分配 AUTOINCREMENT', async () => {
+    const profile = fixture(), { app } = runtime(profile);
+    disk(profile, db => db.exec(`CREATE TABLE [原.表](id INTEGER PRIMARY KEY AUTOINCREMENT, parent INTEGER REFERENCES [原.表](id),
+      value ANY, raw BLOB, memo TEXT DEFAULT 'REFERENCES 原.表', derived TEXT AS (memo || '副本') STORED) STRICT;
+      CREATE UNIQUE INDEX [表达式索引] ON [原.表](lower(memo)) WHERE parent IS NOT NULL;
+      CREATE TABLE log(value); CREATE TRIGGER 原触发 AFTER INSERT ON [原.表] BEGIN INSERT INTO log VALUES(new.id); END;
+      INSERT INTO [原.表](id, value, raw) VALUES(9007199254740993,'0007',X'00FF');
+      INSERT INTO [原.表](id, value, raw) VALUES(9007199254741000,NULL,X'');
+      DELETE FROM [原.表] WHERE id=9007199254741000;`));
+    const structure = await copyPreview(app, profile, '原.表', '仅结构', 'structure');
+    expect(structure.sql).toHaveLength(2);
+    expect(await apply(app, structure).result).toMatchObject({ outcome: 'committed', definitionVerified: true });
+    expect(disk(profile, db => db.prepare('SELECT count(*) AS n FROM 仅结构').get()?.n)).toBe(0);
+    const plan = await copyPreview(app, profile, '原.表', '副"表');
+    expect(exists(profile, '副"表')).toBe(0);
+    expect(plan.sql[0]).toContain('REFERENCES "副""表"(id)');
+    expect(plan.sql[0]).toContain("DEFAULT 'REFERENCES 原.表'");
+    expect(plan.sql[1]).toContain('ON "副""表" (lower(memo)) WHERE parent IS NOT NULL');
+    disk(profile, db => db.exec("INSERT INTO [原.表](id,parent,value,raw,memo) VALUES(9007199254740994,9007199254740993,-0.0,X'','新增')"));
+    expect(await apply(app, plan).result).toMatchObject({ outcome: 'committed', definitionVerified: true, message: expect.stringContaining('已复制 2 行') });
+    disk(profile, db => {
+      const read = (table: string) => db.prepare(`SELECT CAST(id AS TEXT) AS id, typeof(value) AS storage, value, hex(raw) AS raw, derived FROM ${table} ORDER BY id`).all();
+      expect(read('"副""表"')).toEqual(read('[原.表]'));
+      expect(Object.is(read('"副""表"')[1].value, -0)).toBe(true);
+      expect(db.prepare(`SELECT "table" FROM pragma_foreign_key_list('副"表')`).get()?.table).toBe('副"表');
+      expect(db.prepare(`SELECT count(*) AS n FROM sqlite_schema WHERE tbl_name='副"表' AND type='trigger'`).get()?.n).toBe(0);
+      expect(db.prepare('INSERT INTO "副""表" DEFAULT VALUES RETURNING CAST(id AS TEXT) AS id').get()?.id).toBe('9007199254740995');
+      expect(db.prepare("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name='原.表'").get()?.seq).toBe('9007199254741000');
+    });
+  });
+
+  it('保留可访问的隐式 rowid 和 WITHOUT ROWID，失败整批回滚且同名目标无覆盖', async () => {
+    const profile = fixture(), { app } = runtime(profile);
+    disk(profile, db => db.exec(`CREATE TABLE implicit(rowid TEXT, note TEXT CHECK(note <> '禁止'));
+      INSERT INTO implicit(_rowid_,rowid,note) VALUES(-7,'声明字段','原行');
+      CREATE TABLE keyed(a INTEGER, b TEXT, PRIMARY KEY(a,b)) STRICT, WITHOUT ROWID;
+      INSERT INTO keyed VALUES(9223372036854775807,'复合键');`));
+    expect(await apply(app, await copyPreview(app, profile, 'implicit', '隐式副本')).result).toMatchObject({ outcome: 'committed' });
+    expect(await apply(app, await copyPreview(app, profile, 'keyed', '复合副本')).result).toMatchObject({ outcome: 'committed' });
+    disk(profile, db => {
+      expect(db.prepare('SELECT _rowid_ AS id,rowid,note FROM 隐式副本').all()).toEqual([{ id: -7, rowid: '声明字段', note: '原行' }]);
+      expect(db.prepare("SELECT wr,strict FROM pragma_table_list WHERE name='复合副本'").get()).toEqual({ wr: 1, strict: 1 });
+      expect(db.prepare('SELECT CAST(a AS TEXT) AS a,b FROM 复合副本').all()).toEqual([{ a: '9223372036854775807', b: '复合键' }]);
+      db.exec("PRAGMA ignore_check_constraints=ON; INSERT INTO implicit VALUES('坏原行','禁止')");
+    });
+    const invalid = await copyPreview(app, profile, 'implicit', '失败副本');
+    expect(await apply(app, invalid).result).toMatchObject({ outcome: 'rolled-back', fact: { completedStatements: 1, commitAcknowledged: false } });
+    expect(exists(profile, '失败副本')).toBe(0);
+    const conflict = await copyPreview(app, profile, 'keyed', '竞争副本');
+    disk(profile, db => db.exec("CREATE TABLE 竞争副本(marker TEXT); INSERT INTO 竞争副本 VALUES('保留')"));
+    expect(await apply(app, conflict).result).toMatchObject({ outcome: 'rolled-back', fact: { completedStatements: 0 } });
+    expect(disk(profile, db => db.prepare('SELECT marker FROM 竞争副本').get()?.marker)).toBe('保留');
+  });
+
+  it('表已创建但复制尚未执行时停止，回滚副本和索引并保留来源', async () => {
+    const profile = fixture(), reached = deferred<void>();
+    disk(profile, db => db.exec("CREATE INDEX 原索引 ON base(note); INSERT INTO base VALUES(3,'保留来源')"));
+    const { app, events } = runtime(profile, () => transport((message, forward) => {
+      if (message.kind === 'statement' && message.sql.startsWith('INSERT OR ABORT INTO')) reached.resolve();
+      else forward();
+    }));
+    const plan = await copyPreview(app, profile, 'base', '取消副本');
+    const operation = apply(app, plan);
+    await reached.promise;
+    await app.request('query.cancel', { taskId: operation.input.taskId });
+    expect(await operation.result).toMatchObject({ outcome: 'rolled-back', fact: { completedStatements: 2, rollbackAcknowledged: true } });
+    expect(events.at(-1)?.status).toBe('cancelled');
+    expect(exists(profile, '取消副本')).toBe(0);
+    expect(disk(profile, db => db.prepare("SELECT name FROM sqlite_schema WHERE type='index'").all())).toEqual([{ name: '原索引' }]);
+    expect(disk(profile, db => db.prepare('SELECT id,note FROM base').all())).toEqual([{ id: 3, note: '保留来源' }]);
+  });
+
   it('只读预览零DDL、准确exit后发布，独立RW建表/index/storedSql/EXPLAIN检查后提交且默认精度可用', async () => {
     const profile = fixture(), { app, events } = runtime(profile), value = design(), plan = await preview(app, profile, value); expect(exists(profile, value.name)).toBe(0); expect(await processes[0].exited).toEqual({ code: 0, signal: null }); expect(processes[0].sent.find(message => message.kind === 'open')).toMatchObject({ options: { readOnly: true } }); expect(processes[0].sent.some(message => message.kind === 'execute' && /CREATE|INSERT/.test(message.sql))).toBe(false);
     const operation = apply(app, plan), outcome = await operation.result; expect(outcome).toMatchObject({ outcome: 'committed', definitionVerified: true, fact: { requestedStatements: 2, completedStatements: 2, commitAcknowledged: true, commitMayHaveBeenSent: true, rollbackAcknowledged: false } }); expect(await processes[1].exited).toEqual({ code: 0, signal: null }); expect(processes[1].kills).toBe(0); expect(processes[1].sent.find(message => message.kind === 'open')).toMatchObject({ options: { readOnly: false } });

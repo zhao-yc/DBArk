@@ -1,10 +1,10 @@
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteExportTextFunction, type SqliteValue } from '../engine/sqlite/protocol';
-import { readSqliteTableCatalogue, withSqliteReadSnapshot, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
+import { quoteSqliteIdentifier as quote, readSqliteTableCatalogue, withSqliteReadSnapshot, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
 import { assertSqliteSchemaScript, type SqliteSchemaScriptInput, type SqliteSchemaScriptOutput } from '../shared/sqliteSchemaScript';
 
 export const sqliteSchemaExportLimits = { objects: 1000, definitionBytes: 2 * 1024 * 1024, tokens: 300000 } as const;
-interface Token { kind: 'word' | 'quoted' | 'string' | 'symbol'; value: string; }
+interface Token { kind: 'word' | 'quoted' | 'string' | 'symbol'; value: string; start: number; end: number; }
 export interface SqliteSchemaExport { beforeData: string; afterData: string; }
 
 /** 只生成结构草稿，复用结构文件导出的归属、依赖与原字节校验。 */
@@ -35,10 +35,10 @@ function tokens(sql: string): { parts: Token[]; lineCommentAtEnd: boolean } {
     if (["'", '"', '`', '['].includes(character)) {
       const end = character === '[' ? ']' : character; let value = '', closed = false; index++;
       while (index < sql.length) { if (sql[index] === end) { if (end !== ']' && sql[index + 1] === end) { value += end; index += 2; } else { index++; closed = true; break; } } else value += sql[index++]; }
-      if (!closed) throw Error('SQLite结构定义引用未闭合'); output.push({ kind: character === "'" ? 'string' : 'quoted', value });
+      if (!closed) throw Error('SQLite结构定义引用未闭合'); output.push({ kind: character === "'" ? 'string' : 'quoted', value, start, end: index });
     } else if (/[A-Za-z_\u0080-\uFFFF]/.test(character)) {
-      index++; while (index < sql.length && /[A-Za-z0-9_$\u0080-\uFFFF]/.test(sql[index])) index++; output.push({ kind: 'word', value: sql.slice(start, index) });
-    } else { output.push({ kind: 'symbol', value: character }); index++; }
+      index++; while (index < sql.length && /[A-Za-z0-9_$\u0080-\uFFFF]/.test(sql[index])) index++; output.push({ kind: 'word', value: sql.slice(start, index), start, end: index });
+    } else { index++; output.push({ kind: 'symbol', value: character, start, end: index }); }
     if (output.length > sqliteSchemaExportLimits.tokens) throw Error('SQLite结构定义词法目录超过预算');
   }
   return { parts: output, lineCommentAtEnd };
@@ -53,7 +53,7 @@ function name(parts: Token[], index: number): { value: string; next: number } {
 }
 
 /** schema可能被外部writable_schema改坏；不能把额外SQL尾部或不属于目标的DDL当作可信原文发布。 */
-function definition(sql: string, kind: 'table' | 'view' | 'index' | 'trigger', expectedName: string, table: string): boolean {
+function definition(sql: string, kind: 'table' | 'view' | 'index' | 'trigger', expectedName: string, table: string) {
   const { parts } = tokens(sql); let index = 0;
   if (!word(parts[index++], 'CREATE')) throw Error('SQLite结构定义不是可确认的CREATE');
   if (kind === 'index' && word(parts[index], 'UNIQUE')) index++;
@@ -61,6 +61,8 @@ function definition(sql: string, kind: 'table' | 'view' | 'index' | 'trigger', e
   // 不发布静默忽略既有对象的脚本，也不改写原CREATE原文来隐藏这种语义。
   if (word(parts[index], 'IF')) throw Error('SQLite结构原文含IF NOT EXISTS，无法提供严格创建脚本');
   const object = name(parts, index); index = object.next; if (fold(object.value) !== fold(expectedName)) throw Error('SQLite结构定义对象名与实际目录不一致');
+  let unique = false;
+  if (kind === 'index') unique = word(parts[1], 'UNIQUE');
   if (kind === 'index' || kind === 'trigger') {
     if (kind === 'trigger') while (index < parts.length && !word(parts[index], 'ON') && !word(parts[index], 'BEGIN')) index++;
     if (!word(parts[index++], 'ON')) throw Error('SQLite附属结构目标无法确认');
@@ -74,18 +76,37 @@ function definition(sql: string, kind: 'table' | 'view' | 'index' | 'trigger', e
     for (; index < parts.length; index++) if (word(parts[index], 'END') && parts[index - 1]?.kind === 'symbol' && parts[index - 1].value === ';') { end = index; break; }
     if (end < 0 || parts[end - 1]?.value !== ';' || parts.slice(end + 1).some((part, position) => part.kind !== 'symbol' || part.value !== ';' || position > 0)) throw Error('SQLite触发器存在无法确认的SQL尾部');
   } else if (parts.some((part, position) => part.kind === 'symbol' && part.value === ';' && position !== parts.length - 1)) throw Error('SQLite结构定义存在额外SQL语句');
-  return kind === 'table' && parts.some(part => word(part, 'AUTOINCREMENT'));
+  return { parts, body: index, unique, automatic: kind === 'table' && parts.some(part => word(part, 'AUTOINCREMENT')) };
 }
 
 /** 维护操作复用同一DDL归属及词法校验，引用名、文本和注释中的AUTOINCREMENT不授予重置序列能力。 */
-export function sqliteTableHasAutoincrement(sql: string, table: string): boolean { return definition(sql, 'table', table, table); }
+export function sqliteTableHasAutoincrement(sql: string, table: string): boolean { return definition(sql, 'table', table, table).automatic; }
+
+/** 仅替换原目录中可证明的对象名和自引用外键，表达式、注释和约束正文按原位置保留。 */
+export function rewriteSqliteCopyDefinition(sql: string, type: 'table' | 'index', original: string, source: string, table: string, target: string) {
+  const { parts, body, unique } = definition(sql, type, original, source);
+  const first = parts[body];
+  if (first?.kind !== 'symbol' || first.value !== '(') throw Error('SQLite复制只接受具有准确列定义的普通表和索引');
+  const last = parts.at(-1)!;
+  let suffix = '', cursor = first.start, selfReferences = 0;
+  if (type === 'table') for (let index = body; index < parts.length - 1; index++) {
+    const next = parts[index + 1];
+    if (!word(parts[index], 'REFERENCES') || next.kind === 'symbol' || fold(next.value) !== fold(source)) continue;
+    suffix += sql.slice(cursor, next.start) + quote(table); cursor = next.end; selfReferences++;
+  }
+  suffix += sql.slice(cursor, last.kind === 'symbol' && last.value === ';' ? last.start : last.end).trimEnd();
+  const prefix = type === 'table' ? 'CREATE TABLE ' : unique ? 'CREATE UNIQUE INDEX ' : 'CREATE INDEX ';
+  const bodySql = quote(target) + (type === 'index' ? ' ON ' + quote(table) : '') + ' ' + suffix;
+  return { sql: prefix + 'main.' + bodySql, stored: { type, name: target, sql: prefix + bodySql }, selfReferences };
+}
 
 /** 元数据同样不允许截断；不会把有界目录不足当成完整结构。 */
-async function rows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maximum: number, control: SqliteTableBrowseControl): Promise<SqliteValue[][]> {
+export async function readSqliteSchemaRows(driver: SqliteDriverSession, sql: string, parameters: SqliteValue[], maximum: number, control: Pick<SqliteTableBrowseControl, 'check'>): Promise<SqliteValue[][]> {
   control.check(); const result: SqliteValue[][] = [];
   const execution = await driver.execute(sql, { parameters, maxRows: maximum, maxBytes: 8 * 1024 * 1024, onBatch: batch => { control.check(); result.push(...batch.rows); } });
   control.check(); if (execution.statements.length !== 1 || execution.statements[0].truncated || execution.statements[0].rows !== result.length) throw Error('SQLite结构目录超过预算，不能发布不完整脚本'); return result;
 }
+const rows = readSqliteSchemaRows;
 /** 普通定义紧接分号，避免额外换行进入重放后的sqlite_schema。
  * 唯一必要转换：原文以尚未换行的--注释结束时补一个换行，避免吞掉分隔及后续SQL；
  * 原定义仍完整保留，但该情形回放目录可能多出这一个换行，不承诺目录字节完全相等。
@@ -109,7 +130,7 @@ export async function readSqliteSchemaExport(driver: SqliteDriverSession, table:
     if (row.length !== 4) throw Error('SQLite结构目录列数无效'); const [objectName, kind, owner, sql] = row.map(string);
     bytes += Buffer.byteLength(sql); if (bytes > sqliteSchemaExportLimits.definitionBytes) throw Error('SQLite结构定义总量超过2MiB预算');
     if (owner !== table || !['table', 'view', 'index', 'trigger'].includes(kind)) throw Error('SQLite结构归属与实际目标不一致');
-    const auto = definition(sql, kind as 'table' | 'view' | 'index' | 'trigger', objectName, table);
+    const { automatic: auto } = definition(sql, kind as 'table' | 'view' | 'index' | 'trigger', objectName, table);
     if (kind === catalogue.kind && objectName === table) { if (create !== undefined || sql !== catalogue.schemaSql) throw Error('SQLite原CREATE与同快照目录不一致'); create = sql; automatic = auto; }
     else if (kind === 'index' && catalogue.kind === 'table') indexes.push(sql);
     else if (kind === 'trigger') triggers.push(sql); else throw Error('SQLite附属结构类型或归属无法确认');

@@ -1,3 +1,4 @@
+import { sqliteTableCreateZh as copyText } from '../locales/sqliteTableCreate.zh-CN';
 import { SqliteRecordBatchDialog } from './SqliteRecordBatchDialog';
 import { sqliteRecordBatchZh as batchText } from '../locales/sqliteRecordBatch.zh-CN';
 import type { SqliteRecordPatch } from '../sqliteRecordBatch';
@@ -131,7 +132,7 @@ interface FilteredSelectOwner { id: string; intent: SqliteFilteredSelectIntent; 
 /** 初次请求只读取无条件第一页，不恢复未明确应用的草稿条件。 */
 const initialQuery = (): SqliteTableQuery => ({ limit: 100, mode: 'and', filters: [], sort: [] });
 /** 原 table 标签的 SQLite 分支复用分页来源；编辑采用独立快照，不借用查询标签事务。 */
-type SqliteTableTabProps = { tab: WorkspaceTab; active: boolean; refreshVersion?: number; refreshAutomatically?: boolean; onIndexes?(): void; onColumns?(): void; onRename?(): void; onSqliteTableRebuild?(target: SqliteTableRebuildTarget): void; onMaintenance?(action: SqliteTableMaintenanceAction): void; onObject?(action: 'replace' | 'drop'): void };
+type SqliteTableTabProps = { tab: WorkspaceTab; active: boolean; refreshVersion?: number; refreshAutomatically?: boolean; onIndexes?(): void; onColumns?(): void; onRename?(): void; onSqliteTableRebuild?(target: SqliteTableRebuildTarget): void; onCopyTable?(): void; onMaintenance?(action: SqliteTableMaintenanceAction): void; onObject?(action: 'replace' | 'drop'): void };
 /** 重启后关联来源缺失时显示失效状态，绝不自动读取普通全表。 */
 export function SqliteTableTab(props: SqliteTableTabProps) {
   const [related] = useState(() => sqliteRelatedTableScope(props.tab.id));
@@ -139,7 +140,7 @@ export function SqliteTableTab(props: SqliteTableTabProps) {
   return <SqliteTableTabBody {...props} related={related}/>;
 }
 /** 独立关联页复用原浏览及编辑器；固定范围失效只撤权，保留已有草稿供核对。 */
-function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatically = true, onIndexes, onColumns, onRename, onSqliteTableRebuild, onMaintenance, onObject, related }: SqliteTableTabProps & { related?: SqliteRelatedTableScope }) {
+function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatically = true, onIndexes, onColumns, onRename, onSqliteTableRebuild, onCopyTable, onMaintenance, onObject, related }: SqliteTableTabProps & { related?: SqliteRelatedTableScope }) {
   const profile = useWorkspace(state => state.connections.find(item => item.id === tab.connectionId));
   const version = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
   const externalBusy = useWorkspace(state => !!state.activeJobs[tab.id]);
@@ -1290,6 +1291,9 @@ function SqliteTableTabBody({ tab, active, refreshVersion = 0, refreshAutomatica
         { key: 'stop', content: (<button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button>) },
         { key: 'conditions', content: (<button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button>) },
         ...(page?.target.kind === 'table' ? [{ key: 'import', content: (<button aria-label={importText.entry} title={editView?.dirty || editView?.busy || editView?.unknown || externalBusy ? importText.busyDraft : undefined} disabled={!active || invalidTarget || view.busy || externalBusy || !!fullExport || !!exportData || !!tableImport || drafts.dirty || drafts.busy || !!editView?.unknown || !!cellInput || !!previewOpen} onClick={openImport}>{importText.entry}</button>) }] : []),
+        ...(onCopyTable && !related && page?.target.kind === 'table' ? [{ key: 'copy-table', content: (
+          <button aria-label={copyText.copyTitle} disabled={!active || invalidTarget || view.busy || externalBusy || drafts.dirty || drafts.busy || !!editView?.unknown || !!cellInput || !!previewOpen || !!tableImport || !!fullExport || !!exportData}
+            onClick={() => { if (available() && controller.pageCurrent(page) && !drafts.dirty && !editorRef.current?.busy && !editorRef.current?.view.unknown) onCopyTable(); }}>{copyText.copyTitle}</button>) }] : []),
         { key: 'export-page', content: (<button aria-label={text.export} disabled={!page || view.busy || externalBusy} onClick={exportPage}>{text.export}</button>) },
         { key: 'export-all', content: (<button aria-label={exportText.entry} disabled={!page || view.busy || externalBusy || !!fullExport} onClick={openAllExport}>{exportText.entry}</button>) },
         { key: 'columns', content: (<button aria-label={layoutText.entry} disabled={!page || !layoutView.ready || !layoutSourceCurrent()} onClick={() => { if (layoutUiCurrent()) setLayoutDialog({ scope: layoutScope, preferences: layout.view.preferences, dirty: layout.view.dirty }); }}>{layoutText.entry}{layoutView.dirty ? " *" : ""}</button>) },

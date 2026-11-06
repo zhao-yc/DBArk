@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** 可视化新建只生成有界DDL；不接收表达式、查询正文、文件路径或任意SQLite选项。 */
-export const sqliteTableCreateLimits = { columns: 128, indexes: 32, foreignKeys: 32, parts: 32, nameCharacters: 255, typeCharacters: 128, valueBytes: 64 * 1024, designBytes: 2 * 1024 * 1024, inputBytes: 2 * 1024 * 1024, statements: 33, previews: 64, previewBytes: 64 * 1024 * 1024, previewLifetimeMs: 5 * 60 * 1000 } as const;
+export const sqliteTableCreateLimits = { columns: 128, indexes: 32, foreignKeys: 32, parts: 32, nameCharacters: 255, typeCharacters: 128, valueBytes: 64 * 1024, designBytes: 2 * 1024 * 1024, inputBytes: 2 * 1024 * 1024, statements: 34, previews: 64, previewBytes: 64 * 1024 * 1024, previewLifetimeMs: 5 * 60 * 1000 } as const;
 export const sqliteTableCreateActions = ['NO ACTION', 'RESTRICT', 'SET NULL', 'SET DEFAULT', 'CASCADE'] as const;
 const encoder = new TextEncoder();
 const unicode = (value: string) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
@@ -94,7 +94,13 @@ export type SqliteTableCreateDesign = z.infer<typeof sqliteTableCreateDesignSche
 
 const target = z.object({ connectionId: id, database: z.literal('main'), table: objectName }).strict();
 export type SqliteTableCreateTarget = z.infer<typeof target>;
-export const sqliteTableCreatePreviewSchema = budget.pipe(z.object({ connectionId: id, database: z.literal('main'), design: sqliteTableCreateDesignSchema, taskId: id }).strict());
+const previewScope = { connectionId: id, database: z.literal('main'), taskId: id };
+export const sqliteTableCopyDraftSchema = z.object({ source: objectName, name: objectName, mode: z.enum(['structure', 'data']) }).strict()
+  .refine(value => fold(value.source) !== fold(value.name), 'SQLite来源和副本名称必须不同');
+export const sqliteTableCreatePreviewSchema = budget.pipe(z.union([
+  z.object({ ...previewScope, design: sqliteTableCreateDesignSchema }).strict(),
+  z.object({ ...previewScope, copy: sqliteTableCopyDraftSchema }).strict(),
+]));
 export const sqliteTableCreateApplySchema = z.object({ previewId: id, taskId: id, confirmation: z.string().min(1).max(1024) }).strict();
 export const sqliteTableCreateReleaseSchema = z.object({ previewId: id }).strict();
 export type SqliteTableCreatePreviewInput = z.infer<typeof sqliteTableCreatePreviewSchema>;
