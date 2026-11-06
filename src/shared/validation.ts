@@ -12,6 +12,7 @@ import { postgresCreateViewPreviewSchema, postgresEditViewPreviewSchema, postgre
 import { postgresCreateTableApplySchema, postgresCreateTablePreviewSchema, postgresCreateTableSchemasSchema } from './postgresCreateTable';
 import { postgresStructureInputSchema } from './postgresStructure';
 import { postgresTableExportChooseSchema, postgresTableExportSchema, postgresTableImportChooseSchema, postgresTableImportSchema, postgresTablePageSchema, postgresTablePreviewSchema, postgresTableApplySchema, postgresTableReleaseSchema, postgresTableReferenceSchema, postgresRelatedTableSchema, postgresTableValuesSchema, postgresTableColumnReadSchema } from './postgresTable';
+import { postgresTableHistogramSchema } from './postgresTable';
 import { sqliteDraftSaveSchema, sqliteDraftOpenSchema, sqliteDraftRestoreSchema } from './sqliteTableDraft';
 import { sqliteIncomingInputSchema } from './sqliteIncoming';
 import { sqliteTablePresetTargetSchema, sqliteTablePresetSaveSchema, sqliteTablePresetSelectSchema } from './sqliteTablePresets';
@@ -280,6 +281,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.draft.restore': postgresTableReleaseSchema,
   'postgres.table.values': postgresTableValuesSchema,
   'postgres.table.statistics': postgresTableColumnReadSchema,
+  'postgres.table.histogram': postgresTableHistogramSchema,
   'postgres.table.references': postgresTableReferenceSchema,
   'postgres.table.related': postgresRelatedTableSchema,
   'postgres.table.layout.get': postgresLayoutSchemas.target,

@@ -1,12 +1,13 @@
 import { postgresColumnStatistics, postgresStatisticValueLimit } from '../../shared/postgresColumnStatistics';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresTableColumn } from '../../shared/postgresTable';
+import { postgresHistogramKind } from '../../shared/postgresTableHistogram';
 import type { PostgresConnection } from './connection';
 
 /** 只接收已核对的目录列和绑定条件。原始字段只读一次，避免易变视图的计数与极值脱节。 */
 export async function readPostgresColumnStatistics(connection: PostgresConnection, column: PostgresTableColumn, from: string, args: unknown[]) {
   const isText = column.valueOptions && /^(text|character(?: varying)?(?:\(\d+\))?)$/.test(column.type);
-  const isNumeric = column.valueOptions && /^(smallint|integer|bigint|real|double precision|numeric(?:\(.*\))?)$/.test(column.type);
+  const isNumeric = postgresHistogramKind(column) !== undefined;
   const finite = `value::text NOT IN ('NaN', 'Infinity', '-Infinity')`;
   const bounded = (sql: string) => `pg_catalog.left((${sql})::text, ${postgresStatisticValueLimit + 1})`;
   const aggregate = (name: string) => bounded(`pg_catalog.${name}(value) FILTER (WHERE ${finite})`);

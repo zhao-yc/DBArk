@@ -15,6 +15,8 @@ import { cellClipboardType, decodeClipboard } from '../../src/renderer/gridClipb
 import { binaryCellZh } from '../../src/renderer/locales/binaryCell.zh-CN';
 import { tableQueryTemplateZh as sqlTemplateText } from '../../src/renderer/locales/tableQueryTemplate.zh-CN';
 import { tableFilteredSelectZh as filteredSelectText } from '../../src/renderer/locales/tableFilteredSelect.zh-CN';
+import { postgresColumnStatisticsZh as statisticsText } from '../../src/renderer/locales/postgresColumnStatistics.zh-CN';
+import { tableHistogramZh as histogramText } from '../../src/renderer/locales/tableHistogram.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 
 type Runtime = typeof import('./desktop-fixture');
@@ -646,6 +648,31 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await expect(grid.getByRole('gridcell', { name: '文件恢复甲', exact: true })).toBeVisible();
     expect(await readTemplateRows()).toEqual(beforeSql);
     await mark('不同值排序须明确读取，取消保留勾选，最少优先选中原值后仅显式应用且零写库');
+
+    await quickFilter.fill('文件恢复');
+    await button(tableText.filter).click();
+    await button(tableText.next).click();
+    await expect(grid.getByRole('gridcell', { name: '文件恢复乙', exact: true })).toBeVisible();
+    await addDraft('待提交值不进入分布');
+    await button(statisticsText.title).click();
+    const summary = page.getByRole('dialog', { name: statisticsText.title, exact: true });
+    const histogram = summary.getByRole('region', { name: histogramText.title, exact: true });
+    await summary.getByLabel(statisticsText.field, { exact: true }).selectOption('c0');
+    await summary.getByLabel(histogramText.bins, { exact: true }).selectOption('5');
+    await expect(histogram).toHaveCount(0);
+    await summary.getByRole('button', { name: statisticsText.readHistogram, exact: true }).click();
+    const rangeRows = histogram.locator('tbody tr');
+    await expect(rangeRows).toHaveCount(5);
+    await expect(rangeRows.first()).toContainText('[9007199254740993, 9007199254740993.2)');
+    await expect(rangeRows.last()).toContainText('[9007199254740993.8, 9007199254740994]');
+    await expect(rangeRows.locator('td:nth-child(2)')).toHaveText(['1', '0', '0', '0', '1']);
+    await page.screenshot({ path: info.outputPath('PostgreSQL数值直方图.png') });
+    await summary.getByRole('button', { name: statisticsText.close, exact: true }).last().click();
+    await expect(draft).toContainText('待提交值不进入分布');
+    await expect(grid.getByRole('gridcell', { name: '文件恢复乙', exact: true })).toBeVisible();
+    await draft.getByRole('button', { name: tableText.undo, exact: true }).click();
+    expect(await readTemplateRows()).toEqual(beforeSql);
+    await mark('字段概况从筛选后第二页读取五个精确分布区间，保留原页与草稿且零写库');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

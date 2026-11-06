@@ -4,6 +4,7 @@ import { csvExportDelimiters } from './csvExport';
 import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, validateFilterGroup } from './filtering';
 import { strictTableLayoutPreferences } from './tablePreferences';
 import { postgresRelatedTabPrefix } from './postgresRelatedTab';
+import { postgresHistogramBins } from './postgresTableHistogram';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -131,6 +132,8 @@ export const postgresTableApplySchema = target.extend({ pageToken: token, previe
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
 export const postgresTableColumnReadSchema = postgresTableReleaseSchema.extend({ column }).strict();
 export type PostgresTableColumnReadInput = z.infer<typeof postgresTableColumnReadSchema>;
+export const postgresTableHistogramSchema = postgresTableColumnReadSchema.extend({ bins: postgresHistogramBins }).strict();
+export type PostgresTableHistogramInput = z.infer<typeof postgresTableHistogramSchema>;
 export const postgresTableValueLimits = { groups: 500, page: 50, search: 256 } as const;
 export const postgresTableValuesSchema = postgresTableColumnReadSchema.extend({
   search: z.string().max(postgresTableValueLimits.search).refine(value => !/[\u0000\uD800-\uDFFF]/u.test(value)),

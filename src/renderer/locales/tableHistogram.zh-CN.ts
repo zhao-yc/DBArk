@@ -8,5 +8,10 @@ export const tableHistogramZh = {
   range: '数值区间', count: '记录数', percentage: '非NULL占比', bar: '分布', scale: '条形按本图最大记录数缩放，占比向下保留两位小数；准确数量见表格。',
   nulls: 'NULL记录数', nonNull: '非NULL记录数', empty: '没有非NULL数值，不生成假零值区间。',
   mismatch: '数值分布与原请求或统计来源不符，未显示旧分布。',
+  postgresScope: '区间左闭右开，最后一个区间包含最大值。NULL、NaN 和无穷值单独计数。',
+  postgresExact: '整数和 numeric 的边界保持精确十进制。',
+  postgresReduced: '全部有限值相同时只显示一个区间。',
+  finite: '有限值记录数', nonFinite: 'NaN 与无穷值记录数', finitePercentage: '有限值占比',
+  noFinite: '没有有限值区间。',
   actual: (count: number, requested: number) => `实际 ${count} / 目标 ${requested} 个区间`,
 };

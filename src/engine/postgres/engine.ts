@@ -716,6 +716,7 @@ export class PostgresEngine {
       case 'postgres.table.draft.restoreVerified':
       case 'postgres.table.values':
       case 'postgres.table.statistics':
+      case 'postgres.table.histogram':
       case 'postgres.table.references':
       case 'postgres.table.apply':
       case 'postgres.table.import':
@@ -737,6 +738,7 @@ export class PostgresEngine {
         if (command === 'postgres.table.references') return this.tables.references(input as Parameters<PostgresTableWorkspace['references']>[0], connect);
         if (command === 'postgres.table.values') return this.tables.values(input as Parameters<PostgresTableWorkspace['values']>[0], connect);
         if (command === 'postgres.table.statistics') return this.tables.statistics(input as Parameters<PostgresTableWorkspace['statistics']>[0], connect);
+        if (command === 'postgres.table.histogram') return this.tables.histogram(input as Parameters<PostgresTableWorkspace['histogram']>[0], connect);
         return command === 'postgres.table.page' ? this.tables.page(input as Parameters<PostgresTableWorkspace['page']>[0], connect) : this.tables.apply(input as Parameters<PostgresTableWorkspace['apply']>[0], connect);
       }
       case 'postgres.table.preview':

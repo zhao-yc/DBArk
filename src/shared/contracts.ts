@@ -318,6 +318,7 @@ export interface CommandMap {
   'postgres.table.draft.restore': { input: import('./postgresTable').PostgresTableReleaseInput; output: import('./postgresTableDraft').PostgresDraftRestored | null };
   'postgres.table.values': { input: import('./postgresTable').PostgresTableValuesInput; output: import('./postgresTable').PostgresTableValues };
   'postgres.table.statistics': { input: import('./postgresTable').PostgresTableColumnReadInput; output: import('./postgresColumnStatistics').PostgresColumnStatistics };
+  'postgres.table.histogram': { input: import('./postgresTable').PostgresTableHistogramInput; output: import('./postgresTableHistogram').PostgresTableHistogram };
   'postgres.table.references': { input: import('./postgresTable').PostgresTableReferenceInput; output: import('./postgresTable').PostgresTableReferenceResult };
   'postgres.table.related': { input: import('./postgresTable').PostgresRelatedTableInput; output: import('./postgresTable').PostgresRelatedTablePage | import('./postgresTable').PostgresTablePage | null };
   'postgres.table.layout.get': { input: import('./sqliteTableLayout').PostgresLayoutTarget; output: import('./sqliteTableLayout').PostgresLayoutSnapshot };

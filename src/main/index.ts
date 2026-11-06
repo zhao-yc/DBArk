@@ -914,7 +914,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     });
   }
   if (command === 'postgres.table.page' || command === 'postgres.table.preview' || command === 'postgres.table.references' || command === 'postgres.table.related' ||
-      command === 'postgres.table.values' || command === 'postgres.table.statistics' ||
+      command === 'postgres.table.values' || command === 'postgres.table.statistics' || command === 'postgres.table.histogram' ||
       command === 'postgres.table.apply' || command === 'postgres.table.release') {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document;
@@ -941,7 +941,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
             ...result.opened, operation: 'close' }).catch(() => {});
         }
         const pageToken = command === 'postgres.table.related' ? result?.pageToken :
-          command === 'postgres.table.references' || command === 'postgres.table.values' || command === 'postgres.table.statistics' ? undefined :
+          command === 'postgres.table.references' || command === 'postgres.table.values' || command === 'postgres.table.statistics' || command === 'postgres.table.histogram' ? undefined :
           command === 'postgres.table.page' ? result?.exportToken ?? result?.pageToken : input.pageToken;
         if (pageToken) {
           const { connectionId, database, table, tabId, connectionRevision } = request;

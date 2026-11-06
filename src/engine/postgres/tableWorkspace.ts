@@ -10,7 +10,7 @@ import {
   type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
   type PostgresTableReleaseInput, type PostgresTableTarget,
-  type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableColumnReadInput, type PostgresTableValuesInput, type PostgresTableValues,
+  type PostgresTableReferenceInput, type PostgresTableReferenceResult, type PostgresTableColumnReadInput, type PostgresTableValuesInput, type PostgresTableValues, type PostgresTableHistogramInput,
   type PostgresRelatedTableInput, type PostgresRelatedTablePage,
 } from '../../shared/postgresTable';
 import type { PostgresConnection } from './connection';
@@ -19,6 +19,7 @@ import { readPostgresCopySource, type PostgresCopySource } from './copyImportFil
 import { postgresTableCondition, postgresTableReadOrder } from '../../shared/postgresTableReadSql';
 import { readPostgresTableReferences, type PostgresReferenceSourceRow, type PostgresReferenceRowVersion } from './tableReferences';
 import { readPostgresColumnStatistics } from './tableStatistics';
+import { hasPostgresRoundtripFloatText, readPostgresTableHistogram } from './tableHistogram';
 import { readTableValueOptionsOrder } from '../../shared/tableValueOptions';
 import {
   postgresDraftSchema, type PostgresDraftDocument, type PostgresDraftRestored,
@@ -611,9 +612,7 @@ export class PostgresTableWorkspace {
       if (!column.valueOptions) throw Error('当前字段不支持按不同值筛选');
       if (column.type === 'real' || column.type === 'double precision') {
         // 改精度会影响已应用的文字筛选。服务端启用舍入时拒绝生成可能失真的候选。
-        const precision = await connection.query("SELECT pg_catalog.current_setting('extra_float_digits')::int >= 3 OR " +
-          "(pg_catalog.current_setting('server_version_num')::int >= 120000 AND pg_catalog.current_setting('extra_float_digits')::int > 0)", undefined, small());
-        if (precision.rows[0]?.c0 !== 't') throw Error('服务器浮点文本输出精度不足，无法准确按不同值筛选');
+        if (!await hasPostgresRoundtripFloatText(connection)) throw Error('服务器浮点文本输出精度不足，无法准确按不同值筛选');
       }
       const name = postgresIdentifier(column.name), args: unknown[] = [input.search];
       const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
@@ -648,6 +647,15 @@ export class PostgresTableWorkspace {
       const args: unknown[] = [];
       const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
       return readPostgresColumnStatistics(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args);
+    });
+  }
+
+  /** 分布独立于总和及方差计算，沿原表页快照验证与已应用筛选读取。 */
+  histogram(input: Scoped<PostgresTableHistogramInput>, connect: Connect) {
+    return this.readColumn(input, connect, (connection, relation, column, filter) => {
+      const args: unknown[] = [];
+      const condition = postgresTableCondition(filter, field => columnIdentifier(relation, field), value => '$' + args.push(value));
+      return readPostgresTableHistogram(connection, column, only(relation) + (condition ? ' WHERE ' + condition : ''), args, input.bins);
     });
   }
 

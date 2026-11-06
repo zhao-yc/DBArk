@@ -13,6 +13,7 @@ import { postgresRelatedTabPrefix } from '../../src/shared/postgresRelatedTab';
 import type { PostgresRelatedTablePage, PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult, PostgresTableValues } from '../../src/shared/postgresTable';
 import { decodePostgresDraft, encodePostgresDraft, type PostgresDraftDocument, type PostgresDraftRestored } from '../../src/shared/postgresTableDraft';
 import { appendPostgresValueFilter } from '../../src/renderer/postgresTableValues';
+import type { PostgresTableHistogram } from '../../src/shared/postgresTableHistogram';
 import { postgresBatchFillChanges } from '../../src/renderer/postgresBatchFill';
 import { postgresBatchDeletePlan } from '../../src/renderer/postgresBatchDelete';
 import { postgresBatchEditPlan, type PostgresBatchEditValues } from '../../src/renderer/postgresBatchEdit';
@@ -325,11 +326,64 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(await statistics(valueTable, valuePage, 'c5')).toEqual({ rows: '502', nonNull: '502', nulls: '0' });
       await expect(statistics(valueTable, valuePage, 'c1', { owner: randomUUID() })).rejects.toThrow('快照');
       const profileTable = { table: '"浏览"."字段概况"', tabId: randomUUID() };
-      await client.query(`CREATE TABLE ${profileTable.table} (id int PRIMARY KEY, amount numeric, label text COLLATE "C");
-        INSERT INTO ${profileTable.table} VALUES (1,9007199254740993,''),(2,9007199254740995,'甲'),
-          (3,'NaN','甲'),(4,'Infinity',repeat('龟',4100)),(5,NULL,NULL);
+      await client.query(`CREATE TABLE ${profileTable.table} (id int PRIMARY KEY, amount numeric, label text COLLATE "C", f double precision);
+        INSERT INTO ${profileTable.table} VALUES (1,9007199254740993,'','-1.7e308'),(2,9007199254740995,'甲','1.7e308'),
+          (3,'NaN','甲','NaN'),(4,'Infinity',repeat('龟',4100),'-Infinity'),(5,NULL,NULL,NULL);
         CREATE VIEW "浏览"."字段概况视图" AS SELECT * FROM ${profileTable.table};`);
       const summary = await read({ ...profileTable, limit: 1 });
+      const histogram = (tableSource: typeof valueTable, page: PostgresTablePage, column: string, bins = 5, extra = {}): Promise<PostgresTableHistogram> =>
+        engine.handle('postgres.table.histogram', { ...target, ...tableSource, profile, pageToken: page.exportToken, column, bins, ...extra });
+      expect(await histogram(profileTable, summary, 'c1')).toEqual({
+        column: 'amount', requestedBins: 5, approximate: false, finite: '2', nulls: '1', nonFinite: '2',
+        ranges: [
+          { lower: '9007199254740993', upper: '9007199254740993.4', upperInclusive: false, count: '1' },
+          { lower: '9007199254740993.4', upper: '9007199254740993.8', upperInclusive: false, count: '0' },
+          { lower: '9007199254740993.8', upper: '9007199254740994.2', upperInclusive: false, count: '0' },
+          { lower: '9007199254740994.2', upper: '9007199254740994.6', upperInclusive: false, count: '0' },
+          { lower: '9007199254740994.6', upper: '9007199254740995', upperInclusive: true, count: '1' },
+        ],
+      });
+      const extremes = await histogram(profileTable, summary, 'c3');
+      expect(extremes).toMatchObject({ approximate: true, finite: '2', nulls: '1', nonFinite: '2' });
+      expect(extremes.ranges.map(range => range.count)).toEqual(['1', '0', '0', '0', '1']);
+      await client.query('ALTER ROLE CURRENT_USER SET extra_float_digits TO 0');
+      try { await expect(histogram(profileTable, summary, 'c3')).rejects.toThrow('浮点文本输出精度不足'); }
+      finally { await client.query('ALTER ROLE CURRENT_USER RESET extra_float_digits'); }
+      await expect(histogram(profileTable, summary, 'c1', 7)).rejects.toThrow();
+      await expect(histogram(profileTable, summary, 'c1', 5, { owner: randomUUID() })).rejects.toThrow('快照');
+      await expect(histogram(profileTable, summary, 'c2')).rejects.toThrow('不支持');
+      expect((await histogram(valueTable, valuePage, 'c2', 20)).ranges).toEqual([
+        { lower: '1234567890123456789012.123456789012345678', upper: '1234567890123456789012.123456789012345678', upperInclusive: true, count: '502' },
+      ]);
+      const binView = { table: '"浏览"."区间边界"', tabId: randomUUID() };
+      await client.query(`CREATE VIEW ${binView.table} AS
+        SELECT i AS id, 9007199254740993::numeric + i * 0.000000000000000001::numeric AS amount,
+          CASE WHEN i < 3 THEN '5e-324'::float8 ELSE '1e-323'::float8 END AS tiny,
+          ('1' || repeat('0',4096))::numeric AS oversized,
+          CASE WHEN i < 3 THEN '-1e4090'::numeric ELSE '1e-4090'::numeric END AS wide
+        FROM generate_series(0, 6) AS fixture(i)`);
+      const binPage = await read({ ...binView, limit: 1, offset: 2,
+        filter: { mode: 'all', rules: [{ column: 'id', operator: '<', value: '6' }] } });
+      const boundary = await histogram(binView, binPage, 'c1');
+      expect(boundary.ranges.map(range => range.count)).toEqual(['1', '1', '1', '1', '2']);
+      expect(boundary.ranges[1].lower).toBe('9007199254740993.000000000000000001');
+      expect(boundary.ranges.at(-1)?.upper).toBe('9007199254740993.000000000000000005');
+      expect((await histogram(binView, binPage, 'c2')).ranges.map(range => range.count)).toEqual(['3', '0', '0', '0', '3']);
+      await expect(histogram(binView, binPage, 'c3')).rejects.toThrow('极值超过边界长度预算');
+      const wide = await histogram(binView, binPage, 'c4');
+      expect(wide.ranges.map(range => range.count)).toEqual(['3', '0', '0', '0', '3']);
+      expect(wide.ranges[0].upper.length).toBeGreaterThan(4096);
+      const volatileView = { table: '"浏览"."易变区间"', tabId: randomUUID() };
+      await client.query(`CREATE FUNCTION "浏览"."区间计次"() RETURNS integer LANGUAGE plpgsql VOLATILE AS $$
+        DECLARE n int := COALESCE(NULLIF(current_setting('tabrelio.histogram_probe', true), ''), '0')::int + 1;
+        BEGIN
+          IF n > 5 THEN RAISE EXCEPTION '原字段被重复求值'; END IF;
+          PERFORM set_config('tabrelio.histogram_probe', n::text, true);
+          RETURN n;
+        END $$;
+        CREATE VIEW ${volatileView.table} AS SELECT i AS id, "浏览"."区间计次"() AS amount FROM generate_series(1, 5) AS fixture(i);`);
+      const volatilePage = await read({ ...volatileView, limit: 1 });
+      expect((await histogram(volatileView, volatilePage, 'c1')).ranges.map(range => range.count)).toEqual(['1', '1', '1', '1', '1']);
       expect(await statistics(profileTable, summary, 'c1')).toMatchObject({
         rows: '5', nulls: '1', groups: { distinct: '4', min: { text: '9007199254740993' }, max: { text: 'NaN' } },
         numeric: { zero: '0', nonFinite: '2', sum: { text: '18014398509481988' },
@@ -342,6 +396,7 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       const profileView = { ...profileTable, table: '"浏览"."字段概况视图"' };
       const emptySummary = await read({ ...profileView, filter: { column: 'label', text: '空结果' } });
       expect(emptySummary.pageToken).toBeUndefined();
+      expect(await histogram(profileView, emptySummary, 'c1')).toMatchObject({ finite: '0', nulls: '0', nonFinite: '0', ranges: [] });
       expect(await statistics(profileView, emptySummary, 'c1')).toMatchObject({
         rows: '0', nonNull: '0', nulls: '0', groups: { distinct: '0', unique: '0', repeated: '0', min: null, max: null },
         numeric: { nonFinite: '0', sum: null, average: null, deviation: null },
