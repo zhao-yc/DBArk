@@ -14,7 +14,7 @@
 
 从「工具 → 打开数据库备份归档」选择 MySQL 或 MariaDB 的 tabrelio 归档，可以查看清单与摘要，并将原始 SQL 导出到新文件。点击「检查 SQL 对象」，可离线核对脚本定义与清单，查看显式目标库和 `DEFINER`。选择已保存的连接，点击「检查目标」。服务器系列和版本匹配、事件调度器关闭、同名库为空或确认不存在时，可以勾选信任确认并点击「直接恢复归档」。失败或取消后，根据回执核对实际保留的更改。[归档直接恢复](development/mysql-zip-direct-restore-20261107.md) · [SQL 对象检查](development/backup-archive-sql-inventory-20261107.md)
 
-在「工具 → MySQL／MariaDB 整库备份」选择直连或 SSH 来源、数据库和对应的 `mysqldump` 或 `mariadb-dump`，确认后可生成带原库名的整库 SQL。开始前应停止对源库执行 DDL。已生成的 SQL 可以在下方的执行入口恢复。[原生整库备份与验收](development/mysql-native-database-backup-20261107.md) · [SSH 备份与 TLS 条件](development/mysql-ssh-database-backup-20261107.md)
+在「工具 → MySQL／MariaDB 整库备份」选择直连或 SSH 来源、数据库和对应的 `mysqldump` 或 `mariadb-dump`，确认后可生成带原库名的整库 SQL。SSH 连接启用证书身份校验时，证书需覆盖连接配置中的数据库域名或 IP。开始前应停止对源库执行 DDL。已生成的 SQL 可以在下方的执行入口恢复。[原生整库备份与验收](development/mysql-native-database-backup-20261107.md) · [SSH 备份与 TLS 条件](development/mysql-ssh-database-backup-20261107.md)
 
 整库备份的「备份格式」可以选择「tabrelio ZIP 归档」。保存后通过「打开数据库备份归档」校验清单并直接恢复，也可导出原始 SQL 后通过 SQL 文件入口执行。[整库 ZIP 归档与验收](development/mysql-zip-backup-20261107.md)
 

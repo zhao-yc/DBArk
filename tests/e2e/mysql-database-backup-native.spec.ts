@@ -8,6 +8,7 @@ import { databaseBackupArchiveZh as archiveText } from '../../src/shared/databas
 import { mysqlDatabaseBackupZh as backup } from '../../src/renderer/locales/mysqlDatabaseBackup.zh-CN';
 import { mysqlSqlFileZh as restore } from '../../src/renderer/locales/mysqlSqlFile.zh-CN';
 import { sqlFileImportZh as receipt } from '../../src/renderer/locales/sqlFileImport.zh-CN';
+import { tlsCredentialsZh } from '../../src/renderer/locales/tlsCredentials.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { confirmOwnedDesktopExit, dataDir, expect, ownedDesktopResources, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
@@ -24,13 +25,18 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
   const sshPassword = process.env.DBARK_MYSQL_BACKUP_SSH_PASSWORD ?? '';
   const fingerprint = process.env.DBARK_MYSQL_BACKUP_SSH_FINGERPRINT ?? '';
   const caPath = process.env.DBARK_MYSQL_BACKUP_TLS_CA ?? '';
+  const strictNonLoopback = process.env.DBARK_MYSQL_BACKUP_TEST_REMOTE_IDENTITY === '1';
+  const clientCert = process.env.DBARK_MYSQL_BACKUP_TEST_CLIENT_CERT ?? '';
+  const clientKey = process.env.DBARK_MYSQL_BACKUP_TEST_CLIENT_KEY ?? '';
+  const clientPassphrase = process.env.DBARK_MYSQL_BACKUP_TEST_CLIENT_PASSPHRASE ?? '';
   const mysqlTool = process.env.DBARK_MYSQL_DUMP_TOOL ?? '', mariaTool = process.env.DBARK_MARIA_DUMP_TOOL ?? '';
   if (!['darwin', 'win32'].includes(process.platform) || info.config.workers !== 1 || info.retry ||
     process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_aud_[a-f0-9]{12}$/.test(user) || !/^[a-f0-9]{64}$/.test(password) ||
     mysqlPort === mariaPort || ![mysqlPort, mariaPort].every(port => Number.isInteger(port) && port > 1024 && port <= 65535) ||
     sshPort && (!Number.isInteger(sshPort) || sshPort < 1025 || sshPort > 65535 ||
       !/^[a-f0-9]{64}$/.test(sshPassword) || !/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint)) ||
-    caPath && (!isAbsolute(caPath) || process.env.DBARK_MYSQL_BACKUP_REQUIRE_TLS !== '1') ||
+    caPath && (!isAbsolute(caPath) || process.env.DBARK_MYSQL_BACKUP_REQUIRE_TLS !== '1') || strictNonLoopback && (!sshPort || !caPath) ||
+    (clientCert || clientKey || clientPassphrase) && (!caPath || !isAbsolute(clientCert) || !isAbsolute(clientKey) || !/^[a-f0-9]{64}$/.test(clientPassphrase)) ||
     !mysqlTool || !mariaTool || ['DBARK_EXECUTABLE_PATH', 'DBARK_DEV_URL', 'DBARK_USER_DATA'].some(key => process.env[key]))
     throw Error('只允许隔离源码和双端回环实库');
 
@@ -47,9 +53,11 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
     await writeFile(partialPath, await makeDatabaseBackupArchive(Buffer.from(start + 'INSERT INTO missing_table VALUES (1);\n'), 'mysql', partialDb));
     await writeFile(cancelPath, await makeDatabaseBackupArchive(Buffer.from(start + 'SELECT SLEEP(30);\nINSERT INTO ledger VALUES (1);\n'), 'mysql', partialDb));
   }
-  const tls = process.env.DBARK_MYSQL_BACKUP_REQUIRE_TLS === '1'
-    ? caPath ? { rejectUnauthorized: true, ca: await readFile(caPath) } : { rejectUnauthorized: false }
-    : undefined;
+  const tls = process.env.DBARK_MYSQL_BACKUP_REQUIRE_TLS === '1' ? {
+    rejectUnauthorized: Boolean(caPath),
+    ...(caPath ? { ca: await readFile(caPath) } : {}),
+    ...(clientCert ? { cert: await readFile(clientCert), key: await readFile(clientKey), passphrase: clientPassphrase } : {}),
+  } : undefined;
   const targets = [
     { dialect: 'mysql', port: mysqlPort, tool: mysqlTool, path: join(dataDir, 'MySQL.sql'), label: 'MySQL 源与目标' },
     { dialect: 'mariadb', port: mariaPort, tool: mariaTool, path: join(dataDir, 'MariaDB.sql'), label: 'MariaDB 源与目标' },
@@ -69,7 +77,8 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
       await form.getByLabel(zh.connections.text011, { exact: true }).fill(password);
       await form.getByLabel(zh.connections.text016, { exact: true }).uncheck();
       if (sshPort) {
-        if (!caPath) await form.getByLabel(zh.connections.text009, { exact: true }).fill(`backup-${target.dialect}.invalid`);
+        if (!caPath || strictNonLoopback) await form.getByLabel(zh.connections.text009, { exact: true })
+          .fill(strictNonLoopback && target.dialect === 'mariadb' ? '192.0.2.55' : `backup-${target.dialect}.invalid`);
         await form.getByRole('button', { name: zh.connections.text005, exact: true }).click();
         await form.getByRole('checkbox', { name: zh.connections.text017, exact: true }).check();
         await form.getByLabel(zh.connections.text018, { exact: true }).fill('127.0.0.1');
@@ -83,6 +92,11 @@ test('从正式入口生成双方言整库 SQL 并还原', async ({}, info) => {
         await form.getByRole('checkbox', { name: zh.connections.text027, exact: true }).check();
         if (caPath) await form.getByLabel(zh.connections.text029, { exact: true }).fill(caPath);
         else await form.getByRole('checkbox', { name: zh.connections.text028, exact: true }).uncheck();
+        if (clientCert) {
+          await form.getByLabel(zh.connections.text030, { exact: true }).fill(clientCert);
+          await form.getByLabel(zh.connections.text031, { exact: true }).fill(clientKey);
+          await form.getByLabel(tlsCredentialsZh.passphrase, { exact: true }).fill(clientPassphrase);
+        }
       }
       await form.getByRole('button', { name: zh.connections.text036, exact: true }).click();
       await expect(form).toBeHidden();

@@ -2,9 +2,9 @@
 
 在「工具 → MySQL／MariaDB 整库备份」选择已保存的 SSH 连接和数据库，指定对应的 `mysqldump` 或 `mariadb-dump` 后，按原流程保存 SQL。可以通过「执行 MySQL／MariaDB SQL 文件」恢复。
 
-客户端先用已保存的指纹核对跳板身份，再在同一个 SSH 会话中开一条额外的转发通道。通道目标固定为连接里从跳板访问的数据库地址。原生工具使用仅接收一次连接的本机回环端口。它收到原数据库的握手，启用数据库 TLS 时继续与原数据库进行 TLS 协商。客户端检查原库版本及握手声明的 TLS 能力后才交付握手。备份后核对目录与文件终态，最后关闭临时转发和 SSH 会话。[MySQL 原生 TLS 选项](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html) · [MariaDB 原生 TLS 选项](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump)
+客户端先用已保存的指纹核对跳板身份，再在同一个 SSH 会话中开一条额外的转发通道。通道目标固定为连接里从跳板访问的数据库地址。原生工具使用仅接收一次连接的本机回环端口。客户端先核对原库版本和握手声明的 TLS 能力，再交付握手。备份后核对目录与文件终态，最后关闭临时转发和 SSH 会话。[MySQL 原生 TLS 选项](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html) · [MariaDB 原生 TLS 选项](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump)
 
-启用数据库证书身份校验时，原生工具使用其连接的地址校验证书。当前 SSH 备份可保留 `127.0.0.1` 或 `::1` 的身份校验，数据库证书需覆盖配置中的对应 IP。启用证书身份校验的非回环来源在选择保存文件前停止。关闭转发期间若原通道仍在建立，客户端取消这次建立并记录迟到通道，等待原资源收尾。
+开启证书身份校验时，数据库证书需覆盖连接配置中的实际数据库地址。配置为 `127.0.0.1` 或 `::1` 时，原生工具经 SSH 直接校验数据库证书。配置为内网域名或非回环 IP 时，由引擎在原 SSH 通道上按该地址校验数据库证书。[非回环 SSH 严格 TLS](mysql-backup-ssh-tls-identity-20261107.md)
 
 备份范围、InnoDB 快照及源权限约束见[原生整库备份说明](mysql-native-database-backup-20261107.md)。可按[整库 ZIP 归档](mysql-zip-backup-20261107.md)选择归档格式。
 

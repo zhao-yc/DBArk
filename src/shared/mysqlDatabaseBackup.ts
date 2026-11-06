@@ -22,10 +22,12 @@ export function mysqlDatabaseBackupPathMatches(path: string, format: MysqlDataba
   return (format === 'archive' ? /\.zip$/i : /\.sql$/i).test(path);
 }
 
-/** 原生工具按其连接地址核对证书。仅在能保留同一校验地址时启用严格 TLS 隧道。 */
-export function mysqlBackupTunnelHost(profile: Pick<NetworkConnectionProfile, 'host' | 'ssh' | 'tls'>): '127.0.0.1' | '::1' | undefined {
+/** 原地址与原生工具的回环地址不同时，由独立的上游 TLS 会话校验原地址。 */
+export function mysqlBackupTunnelRoute(profile: Pick<NetworkConnectionProfile, 'host' | 'ssh' | 'tls'>): {
+  host: '127.0.0.1' | '::1'; verifyUpstream: boolean;
+} | undefined {
   if (!profile.ssh?.enabled) return;
-  if (!profile.tls?.enabled || !profile.tls.rejectUnauthorized) return '127.0.0.1';
-  if (profile.host === '127.0.0.1' || profile.host === '::1') return profile.host;
-  throw Error('此 SSH 连接要求验证数据库证书。原生备份仅能保留 127.0.0.1 或 ::1 的证书身份校验');
+  if (!profile.tls?.enabled || !profile.tls.rejectUnauthorized) return { host: '127.0.0.1', verifyUpstream: false };
+  if (profile.host === '127.0.0.1' || profile.host === '::1') return { host: profile.host, verifyUpstream: false };
+  return { host: '127.0.0.1', verifyUpstream: true };
 }

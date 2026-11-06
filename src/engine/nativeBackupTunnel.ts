@@ -3,7 +3,8 @@ import type { Duplex } from 'node:stream';
 
 /** 一次只接纳一个本地客户端，首个连接登记后即撤销监听，转发目标由原 SSH 会话固定。 */
 export async function openNativeBackupTunnel(host: '127.0.0.1' | '::1', openChannel: () => Promise<Duplex>,
-  cancelOpening: () => void, inspect?: (channel: Duplex) => Promise<void>) {
+  cancelOpening: () => void, inspect?: (channel: Duplex) => Promise<void>,
+  upgrade?: (socket: Socket, channel: Duplex) => Promise<{ local: Duplex; remote: Duplex }>) {
   let local: Socket | undefined, remote: Duplex | undefined, opening: Promise<void> | undefined;
   let closing: Promise<void> | undefined, stopping = false, failed = false, forwardingStarted = false;
   const stopListening = () => closing ??= new Promise<void>((resolve, reject) => {
@@ -23,9 +24,20 @@ export async function openNativeBackupTunnel(host: '127.0.0.1' | '::1', openChan
         if (stopping || socket.destroyed) { channel.destroy(); return; }
         await inspect?.(channel);
         if (stopping || socket.destroyed) { channel.destroy(); return; }
+        const streams = upgrade ? await upgrade(socket, channel) : { local: socket, remote: channel };
+        if (stopping || socket.destroyed || channel.destroyed || streams.local.destroyed || streams.remote.destroyed) {
+          streams.local.destroy(); streams.remote.destroy();
+          return;
+        }
+        if (upgrade) {
+          streams.local.on('error', () => streams.remote.destroy());
+          streams.remote.on('error', () => streams.local.destroy());
+          streams.local.once('close', () => streams.remote.destroy());
+          streams.remote.once('close', () => streams.local.destroy());
+        }
         forwardingStarted = true;
-        socket.pipe(channel).pipe(socket);
-        socket.resume();
+        streams.local.pipe(streams.remote).pipe(streams.local);
+        streams.local.resume();
       } catch {
         failed = !stopping;
         socket.destroy();

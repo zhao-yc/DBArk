@@ -1,4 +1,4 @@
-import { mysqlDatabaseBackupTitle, mysqlDatabaseBackupPathMatches, mysqlBackupTunnelHost, mysqlDumpToolTitle, type MysqlDatabaseBackupChooseInput } from '../shared/mysqlDatabaseBackup';
+import { mysqlDatabaseBackupTitle, mysqlDatabaseBackupPathMatches, mysqlDumpToolTitle, type MysqlDatabaseBackupChooseInput } from '../shared/mysqlDatabaseBackup';
 import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpTool';
 import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
 import { inspectMysqlSqlFile, type MysqlSqlFileSource } from '../engine/mysqlSqlFile';
@@ -1183,7 +1183,6 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const profile = store.resolveConnection(target.connectionId);
         if (!tool || tool.token !== target.toolToken || profile.dialect !== tool.tool.family)
           throw Error('请选择与 MySQL 或 MariaDB 连接匹配的转储工具');
-        mysqlBackupTunnelHost(profile);
         const name = target.database.replace(/[<>:"/\\|?*]/g, '_');
         const archive = target.format === 'archive';
         const chosen = await dialog.showSaveDialog(columns!.owner.window, { title: mysqlDatabaseBackupTitle,
@@ -2349,7 +2348,6 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         throw Error('备份目标、来源或转储工具已变化，请重新选择');
       const profile = store.resolveConnection(input.connectionId);
       if (profile.dialect !== tool.tool.family) throw Error('请选择与工具匹配的数据库');
-      mysqlBackupTunnelHost(profile);
       mysqlBackupFiles.delete(document);
       input = { ...input, profile, tool: tool.tool, filePath: file.path, connectionRevision: file.revision };
       break;

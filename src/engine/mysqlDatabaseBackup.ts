@@ -3,9 +3,9 @@ import { createPrivateKey, randomUUID } from 'node:crypto';
 import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { getCACertificates } from 'node:tls';
+import { getCACertificates, type SecureContextOptions } from 'node:tls';
 import { promisify } from 'node:util';
-import { mysqlBackupDatabase, mysqlBackupTunnelHost, mysqlDatabaseBackupPathMatches, type MysqlDatabaseBackupFormat, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
+import { mysqlBackupDatabase, mysqlBackupTunnelRoute, mysqlDatabaseBackupPathMatches, type MysqlDatabaseBackupFormat, type MysqlDatabaseBackupResult } from '../shared/mysqlDatabaseBackup';
 import type { DatabaseBackupObject } from '../shared/databaseBackup';
 import type { DatabaseBackupSelectedToolManifest } from '../shared/databaseBackupArchiveFiles';
 import { DatabaseBackupArchiveWriter, databaseBackupArchiveLimits } from './databaseBackupArchive';
@@ -14,6 +14,7 @@ import { execute } from './connection';
 import { mysqlDumpOptionFile } from './databaseBackupNativeOptions';
 import { databaseBackupGlobalGrants, databaseBackupSourceSql as sourceSql } from './databaseBackupSource';
 import { inspectMysqlBackupHandshake } from './mysqlBackupHandshake';
+import { createMysqlBackupLoopbackIdentity, upgradeMysqlBackupTls } from './mysqlBackupTlsRelay';
 import { openNativeBackupTunnel } from './nativeBackupTunnel';
 import { hashMysqlDumpTool, readMysqlDumpVersion, runMysqlDumpTool, type MysqlDumpTool } from './mysqlDumpTool';
 import type { StructureTaskContext } from './structureDefinition';
@@ -58,18 +59,18 @@ async function protectCredentialDirectory(directory: string) {
   if (!after.isDirectory() || before.dev !== after.dev || before.ino !== after.ino) throw Error('备份凭据目录已变化');
 }
 
-async function tlsArgs(profile: Profile, family: MysqlDumpTool['family'], directory: string) {
+async function tlsArgs(profile: Profile, family: MysqlDumpTool['family'], directory: string, relayCert?: string) {
   if (profile.dialect !== family) throw Error('转储工具与连接系列不符');
   const mysql = family === 'mysql', tls = profile.tls;
   if (!tls?.enabled) return mysql ? ['--ssl-mode=DISABLED'] : ['--skip-ssl'];
   const args = mysql ? [tls.rejectUnauthorized ? '--ssl-mode=VERIFY_IDENTITY' : '--ssl-mode=REQUIRED']
     : ['--ssl', tls.rejectUnauthorized ? '--ssl-verify-server-cert' : '--skip-ssl-verify-server-cert'];
   if (tls.rejectUnauthorized) {
-    const ca = tls.caPath || join(directory, 'roots.pem');
-    if (!tls.caPath) await writeFile(ca, getCACertificates('default').join('\n'), { flag: 'wx', mode: 0o600 });
+    const ca = (!relayCert && tls.caPath) || join(directory, 'roots.pem');
+    if (relayCert || !tls.caPath) await writeFile(ca, relayCert ?? getCACertificates('default').join('\n'), { flag: 'wx', mode: 0o600 });
     args.push('--ssl-ca=' + ca);
   }
-  if (tls.certPath || tls.keyPath) {
+  if (!relayCert && (tls.certPath || tls.keyPath)) {
     if (!tls.certPath || !tls.keyPath) throw Error('客户端 TLS 需要成对的证书和私钥');
     const path = join(directory, 'client.key');
     const key = createPrivateKey({ key: await readFile(tls.keyPath), passphrase: tls.passphrase });
@@ -77,6 +78,14 @@ async function tlsArgs(profile: Profile, family: MysqlDumpTool['family'], direct
     args.push('--ssl-cert=' + tls.certPath, '--ssl-key=' + path);
   }
   return args;
+}
+
+/** 双向 TLS 材料只交给校验实际数据库地址的上游会话。 */
+async function upstreamTls(profile: Profile, signal: AbortSignal): Promise<SecureContextOptions> {
+  const tls = profile.tls!;
+  if (Boolean(tls.certPath) !== Boolean(tls.keyPath)) throw Error('客户端 TLS 需要成对的证书和私钥');
+  const [ca, cert, key] = await Promise.all([tls.caPath, tls.certPath, tls.keyPath].map(path => path ? readFile(path, { signal }) : undefined));
+  return { ca, cert, key, passphrase: tls.passphrase };
 }
 
 async function catalogue(context: Context, database: string) {
@@ -161,7 +170,7 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
       const { managed } = context, profile = managed.profile, family = managed.status.dialect;
       if (!mysqlBackupDatabase.safeParse(database).success || !isAbsolute(filePath) || !mysqlDatabaseBackupPathMatches(filePath, format)) throw Error('备份库名或目标文件格式无效');
       if (family !== tool.family || profile.dialect !== family) throw Error('工具需与实际服务器系列匹配');
-      const localHost = mysqlBackupTunnelHost(profile);
+      const route = mysqlBackupTunnelRoute(profile);
       const toolVersion = await readMysqlDumpVersion(tool, signal);
       const serverVersion = managed.status.version;
       if (toolVersion.split('.')[0] !== serverVersion.replace(/^5\.5\.5-/, '').split('.')[0])
@@ -194,15 +203,23 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
         check();
         const defaults = join(directory, 'client.cnf');
         await writeFile(defaults, mysqlDumpOptionFile(profile.user, profile.password ?? ''), { flag: 'wx', mode: 0o600 });
-        const mysql = family === 'mysql', tls = await tlsArgs(profile, family, directory);
+        const relay = route?.verifyUpstream ? {
+          identity: await createMysqlBackupLoopbackIdentity(),
+          upstream: await upstreamTls(profile, signal)
+        } : undefined;
+        const mysql = family === 'mysql', tls = await tlsArgs(profile, family, directory, relay?.identity.cert);
         check();
         const opening = new AbortController();
         const openChannel = managed.openSshChannel;
-        if (localHost && !openChannel) throw Error('原数据库 SSH 会话不可用');
-        const tunnel = localHost ? await openNativeBackupTunnel(localHost,
+        if (route && !openChannel) throw Error('原数据库 SSH 会话不可用');
+        const tunnel = route ? await openNativeBackupTunnel(route.host,
           () => openChannel!(AbortSignal.any([signal, opening.signal, AbortSignal.timeout(15_000)])),
           () => opening.abort(),
-          channel => inspectMysqlBackupHandshake(channel, serverVersion, Boolean(profile.tls?.enabled))) : undefined;
+          relay ? undefined : channel => inspectMysqlBackupHandshake(channel, serverVersion, Boolean(profile.tls?.enabled)),
+          relay ? (socket, channel) => upgradeMysqlBackupTls(socket, channel, {
+            host: profile.host, version: serverVersion, signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+            upstream: relay.upstream, local: relay.identity.context,
+          }) : undefined) : undefined;
         const args = [
           '--defaults-file=' + defaults, ...(mysql ? ['--no-login-paths'] : []),
           '--protocol=TCP', '--host=' + (tunnel?.host ?? profile.host), '--port=' + (tunnel?.port ?? profile.port), ...tls,
@@ -223,7 +240,7 @@ export function createMysqlDatabaseBackup(input: { database: string; filePath: s
               await archive.writeDump(chunk.subarray(offset, offset + databaseBackupArchiveLimits.blockBytes));
           });
         } catch (error) {
-          if (tunnel?.failed && !signal.aborted) throw Error('备份 SSH 转发未建立，或数据库版本与 TLS 能力未通过检查');
+          if (tunnel?.failed && !signal.aborted) throw Error('备份 SSH 转发未建立，或数据库版本、TLS 能力与证书身份未通过检查');
           throw error;
         } finally {
           try { await tunnel?.close(); }
