@@ -2,7 +2,7 @@
 
 在「工具 → PostgreSQL 整库备份」选择「PostgreSQL 自定义归档」，用本机安装的 `pg_dump` 保存 `.dump` 或 `.backup`。归档保留所有者和授权，压缩能力取决于本机 `pg_dump`。备份继续使用原连接的只读快照和原子文件写入。
 
-在「工具 → PostgreSQL 自定义归档」打开 PGDMP 文件，并选择兼容版本的 `pg_restore`。macOS 选择 `pg_restore`，Windows 选择 `pg_restore.exe`。从该入口可离线执行两种操作。
+在「工具 → PostgreSQL 自定义归档」打开 PGDMP 文件，并选择兼容版本的 `pg_restore`。macOS 选择 `pg_restore`，Windows 选择 `pg_restore.exe`。可从同一窗口[直接恢复到目标库](postgres-archive-direct-restore-20261107.md)，也可执行以下两种离线操作。
 
 - 「读取归档目录」显示原生目录，包括归档版本、来源数据库和对象条目。目录预览最多 2 MiB。超过预览上限时仍可直接导出。
 - 「导出 PostgreSQL 归档 SQL」可选择结构和数据、仅结构或仅数据。需要在另一角色环境恢复时，勾选「省略所有者和授权」。转换保留 SQL 原始字节，要求归档输出声明 UTF-8。归档及导出文件各限 10 GiB。

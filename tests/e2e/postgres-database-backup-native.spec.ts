@@ -1,5 +1,5 @@
-import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute } from 'node:path';
 import { Client } from 'pg';
 import { postgresDatabaseBackupZh as text } from '../../src/renderer/locales/postgresDatabaseBackup.zh-CN';
 import { postgresArchiveZh as archiveText } from '../../src/renderer/locales/postgresArchive.zh-CN';
@@ -34,6 +34,10 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
   const client = (db: string) => new Client({ host: '127.0.0.1', port, user, password, database: db });
   const source = client(database), lock = client(database), fresh = client(freshName);
   const archiveDatabase = user + '_archive_restore', archiveTarget = client(archiveDatabase);
+  const directDatabase = user + '_archive_direct', directTarget = client(directDatabase);
+  const partialDatabase = user + '_archive_partial', partialTarget = client(partialDatabase);
+  const rejectedDatabase = user + '_archive_rejected';
+  const cancelledDatabase = user + '_archive_cancelled';
   const backup = info.outputPath('PostgreSQL原生整库备份.sql');
   const sshBackup = info.outputPath('PostgreSQL原生SSH备份.sql');
   const cancel = info.outputPath('取消时保留原文件.sql');
@@ -42,6 +46,8 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
   const converted = info.outputPath('归档完整恢复.sql'), schema = info.outputPath('归档仅结构.sql');
   const data = info.outputPath('归档仅数据.sql'), protectedSql = info.outputPath('归档失败时保留.sql');
   const sentinel = '原目标文件的原始字节\n';
+  const holdTool = restoreTool && process.platform === 'darwin' ? info.outputPath('暂停转换夹具', 'pg_restore') : undefined;
+  const holdMarker = info.outputPath('转换子进程.txt');
   try {
     await source.connect(); await lock.connect();
     await writeFile(cancel, sentinel);
@@ -49,10 +55,16 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
       await writeFile(corrupt, 'PGDMP');
       await writeFile(protectedSql, sentinel);
     }
-    const facts = 'SELECT (SELECT count(*) FROM public.native_copy) AS rows, ' +
+    if (holdTool && restoreTool) {
+      const shellLiteral = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+      await mkdir(dirname(holdTool), { recursive: true });
+      await writeFile(holdTool, '#!/bin/sh\nif [ "$1" = "--version" ]; then exec ' + shellLiteral(restoreTool) +
+        ' --version; fi\nprintf "%s" "$$" > ' + shellLiteral(holdMarker) + '\nexec /bin/sleep 30\n', { mode: 0o700 });
+    }
+    const recordFacts = 'SELECT (SELECT count(*) FROM public.native_copy) AS rows, ' +
       '(SELECT md5(string_agg(md5(ROW(id,note,raw)::text), \'\'' + ' ORDER BY id)) FROM public.native_copy) AS digest, ' +
-      '(SELECT array_agg(total ORDER BY customer_id) FROM "迁移验收".summary) AS view, ' +
       'md5(lo_get(65003)) AS large_object, (SELECT last_value FROM public.native_copy_id_seq) AS sequence';
+    const facts = recordFacts + ', (SELECT array_agg(total ORDER BY customer_id) FROM "迁移验收".summary) AS view';
     const expected = (await source.query(facts)).rows;
     expect(expected[0]).toMatchObject({ rows: '84', sequence: '84' });
 
@@ -72,7 +84,8 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
         const title = (args.at(-1) as Electron.OpenDialogOptions).title;
         if (title === input.toolTitle) return { canceled: false, filePaths: [input.toolPath] };
         if (title === '选择文件' && input.caPath) return { canceled: false, filePaths: [input.caPath] };
-        if (title === input.archiveToolTitle && input.restoreTool) return { canceled: false, filePaths: [input.restoreTool] };
+        if (title === input.archiveToolTitle && input.restoreTools.length)
+          return { canceled: false, filePaths: [input.restoreTools.shift()!] };
         const sources = title === input.restoreTitle ? input.restoreSources : title === input.archiveOpenTitle ? input.archiveSources : [];
         if (!sources.length) throw Error('出现非本例的文件选择');
         const file = sources.shift()!;
@@ -87,9 +100,11 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
         if (!input.targets.length && !input.archiveTargets.length) dialog.showSaveDialog = originalSave;
         return { canceled: false, filePath };
       }) as typeof originalSave;
-    }, { toolTitle: text.tool, toolPath, restoreTitle: restore.title, backupTitle: text.title, caPath, restoreTool,
+    }, { toolTitle: text.tool, toolPath, restoreTitle: restore.title, backupTitle: text.title, caPath,
+      restoreTools: restoreTool ? [restoreTool, ...(holdTool ? [holdTool] : [])] : [],
       archiveToolTitle: archiveText.chooseTool, archiveOpenTitle: archiveText.chooseSource, archiveSaveTitle: archiveText.export,
-      restoreSources: [backup, ...(restoreTool ? [converted] : [])], archiveSources: restoreTool ? [custom, corrupt, changedArchive] : [],
+      restoreSources: [backup, ...(restoreTool ? [converted] : [])],
+      archiveSources: restoreTool ? [custom, corrupt, changedArchive, ...(holdTool ? [custom] : [])] : [],
       archiveTargets: restoreTool ? [schema, data, converted, protectedSql, protectedSql] : [],
       targets: [backup, ...(restoreTool ? [custom] : []), ...(sshPort ? [sshBackup] : []), cancel] });
     if (caPath && sshPort) {
@@ -189,6 +204,23 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
       const archive = page.getByRole('dialog', { name: archiveText.title, exact: true });
       const openSource = () => archive.getByRole('button', { name: archiveText.chooseSource, exact: true }).click();
       const exportSql = () => archive.getByRole('button', { name: archiveText.export, exact: true }).click();
+      const openDirect = async (scope: 'all' | 'schema' | 'data') => {
+        await archive.getByLabel(archiveText.content, { exact: true }).selectOption(scope);
+        await archive.getByRole('button', { name: archiveText.restore, exact: true }).click();
+        const direct = page.getByRole('dialog', { name: restore.archiveTitle, exact: true });
+        await direct.getByLabel(restore.connection, { exact: true }).selectOption({ label: profiles[0].name });
+        return direct;
+      };
+      const confirmNew = async (direct: ReturnType<typeof page.getByRole>, name: string) => {
+        await expect(direct.getByRole('checkbox', { name: restore.createMode, exact: true })).toBeChecked();
+        await direct.getByLabel(restore.maintenance, { exact: true }).selectOption(maintenance);
+        await direct.getByLabel(restore.newDatabase, { exact: true }).fill(name);
+        await direct.getByRole('button', { name: restore.createAndExecute, exact: true }).click();
+      };
+      const closeDirect = async (direct: ReturnType<typeof page.getByRole>) => {
+        await direct.getByRole('button', { name: restore.close, exact: true }).click();
+        await expect(archive).toBeVisible();
+      };
       await openSource();
       await archive.getByRole('button', { name: archiveText.chooseTool, exact: true }).click();
       await archive.getByRole('button', { name: archiveText.list, exact: true }).click();
@@ -209,10 +241,54 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
         expect(sql).toContain(expectedSql);
         expect(sql).not.toContain(excluded);
       }
+      const direct = await openDirect('all');
+      await expect(direct).toContainText('PostgreSQL整库归档.dump');
+      await confirmNew(direct, directDatabase);
+      await expect(direct.getByRole('status')).toContainText(restore.outcome.committed, { timeout: 30000 });
+      await expect(direct.getByRole('button', { name: restore.createAndExecute, exact: true })).toBeDisabled();
+      await directTarget.connect();
+      expect((await directTarget.query(facts)).rows).toEqual(expected);
+      await page.screenshot({ path: info.outputPath('PostgreSQL归档直接恢复.png') });
+      await closeDirect(direct);
+
+      const structure = await openDirect('schema');
+      await confirmNew(structure, partialDatabase);
+      await expect(structure.getByRole('status')).toContainText(restore.outcome.committed);
+      await partialTarget.connect();
+      const count = async () => (await partialTarget.query('SELECT count(*)::int AS total FROM public.native_copy')).rows[0].total;
+      expect(await count()).toBe(0);
+      await closeDirect(structure);
+
+      await partialTarget.query("CREATE FUNCTION public.wait_on_archive_insert() RETURNS trigger LANGUAGE plpgsql AS " +
+        "$$ BEGIN PERFORM pg_sleep(30); RETURN NEW; END $$; CREATE TRIGGER wait_on_archive_insert " +
+        "BEFORE INSERT ON public.native_copy FOR EACH ROW EXECUTE FUNCTION public.wait_on_archive_insert()");
+      const records = await openDirect('data');
+      await expect(records.getByRole('checkbox', { name: restore.createMode, exact: true })).toHaveCount(0);
+      await records.getByLabel(restore.database, { exact: true }).selectOption(partialDatabase);
+      const loadRecords = () => records.getByRole('button', { name: restore.archiveExecute, exact: true }).click();
+      await loadRecords();
+      await expect.poll(async () => (await source.query("SELECT count(*)::int AS waiting FROM pg_stat_activity " +
+        "WHERE datname=$1 AND wait_event='PgSleep' AND query LIKE '%COPY public.native_copy%'", [partialDatabase])).rows[0].waiting).toBe(1);
+      await records.getByRole('button', { name: restore.cancel, exact: true }).click();
+      await expect(records.getByRole('status')).toContainText(restore.outcome['rolled-back']);
+      await expect(records.getByRole('status')).toContainText(restore.reason.cancelled);
+      expect(await count()).toBe(0);
+      await partialTarget.query('DROP TRIGGER wait_on_archive_insert ON public.native_copy; DROP FUNCTION public.wait_on_archive_insert()');
+      await loadRecords();
+      await expect(records.getByRole('status')).toContainText(restore.outcome.committed);
+      expect((await partialTarget.query(recordFacts)).rows).toEqual((await source.query(recordFacts)).rows);
+      await closeDirect(records);
+
       await openSource();
       await exportSql();
       await expect(archive).toContainText('pg_restore 未正常完成');
       expect(await readFile(protectedSql, 'utf8')).toBe(sentinel);
+      const failed = await openDirect('all');
+      await confirmNew(failed, rejectedDatabase);
+      await expect(failed.getByRole('status')).toContainText(restore.outcome['not-started']);
+      await expect(failed.getByRole('status')).toContainText(restore.reason.archive);
+      expect((await source.query('SELECT count(*)::int AS total FROM pg_database WHERE datname=$1', [rejectedDatabase])).rows[0].total).toBe(0);
+      await closeDirect(failed);
       await openSource();
       await expect(archive).toContainText('选择后变化的归档.dump');
       await writeFile(changedArchive, 'PGDMP截断的内容');
@@ -220,6 +296,22 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
       await expect(archive).toContainText('归档已变化');
       expect(await readFile(protectedSql, 'utf8')).toBe(sentinel);
       expect((await readFile(custom)).equals(original)).toBe(true);
+      if (holdTool) {
+        // 让准备阶段保持在可观察窗口，确认取消仅结束本任务子进程且零建库。
+        await openSource();
+        await archive.getByRole('button', { name: archiveText.chooseTool, exact: true }).click();
+        const preparing = await openDirect('all');
+        await confirmNew(preparing, cancelledDatabase);
+        const pid = () => readFile(holdMarker, 'utf8').then(Number, () => 0);
+        await expect.poll(pid).toBeGreaterThan(1);
+        const childPid = await pid();
+        await preparing.getByRole('button', { name: restore.cancel, exact: true }).click();
+        await expect(preparing.getByRole('status')).toContainText(restore.outcome['not-started']);
+        await expect(preparing.getByRole('status')).toContainText(restore.reason.cancelled);
+        expect((await source.query('SELECT count(*)::int AS total FROM pg_database WHERE datname=$1', [cancelledDatabase])).rows[0].total).toBe(0);
+        expect(() => process.kill(childPid, 0)).toThrow(/ESRCH/);
+        await closeDirect(preparing);
+      }
       await archive.getByRole('button', { name: archiveText.close, exact: true }).click();
       await restoreSql(archiveDatabase, archiveTarget, 'PostgreSQL归档恢复完成.png');
     }
@@ -232,6 +324,6 @@ test('生成原生整库备份、恢复新库，并取消等待锁的备份', as
     retainOwnedDesktopResources(info);
     throw error;
   } finally {
-    await Promise.allSettled([source.end(), lock.end(), fresh.end(), archiveTarget.end()]);
+    await Promise.allSettled([source.end(), lock.end(), fresh.end(), archiveTarget.end(), directTarget.end(), partialTarget.end()]);
   }
 });

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
-import { exportPostgresArchiveSql, inspectPostgresArchive, listPostgresArchive, type PostgresArchiveSource } from '../engine/postgres/customArchive';
+import { exportPostgresArchiveSql, inspectPostgresArchive, listPostgresArchive,
+  type PostgresArchiveRestoreSource, type PostgresArchiveSource } from '../engine/postgres/customArchive';
 import { inspectPostgresNativeTool, type PostgresNativeTool } from '../engine/postgres/nativeTool';
-import type { PostgresArchiveExportInput, PostgresArchiveListInput } from '../shared/postgresArchive';
+import type { PostgresArchiveExportInput, PostgresArchiveListInput, PostgresArchiveRestoreInput } from '../shared/postgresArchive';
 
 type PickKind = 'tool' | 'source' | 'export';
 type Choice<T> = { token: string; value: T };
@@ -88,14 +89,17 @@ export class PostgresArchiveFiles<Owner> {
     for (const job of this.jobs.values()) if (!job.publishing) job.abort.abort(cancelled());
   }
 
+  /** 只向主进程分派返回归档和工具能力，转换与恢复由同一个引擎任务负责。 */
+  restoreSource(owner: Owner, input: PostgresArchiveRestoreInput): PostgresArchiveRestoreSource {
+    const { source, tool } = this.resolve(owner, input);
+    return { source: source.value, tool: tool.value, content: input.content, portable: input.portable };
+  }
+
   private assertIdle(key: object) {
     if (this.choosing.has(key) || this.jobs.has(key)) throw Error('原窗口仍有 PostgreSQL 归档操作在执行');
   }
 
-  private async run<T>(owner: Owner, input: PostgresArchiveListInput, action: (
-    tool: PostgresNativeTool<'pg_restore'>, source: PostgresArchiveSource, signal: AbortSignal,
-    check: () => void, publishing: () => void,
-  ) => Promise<T>): Promise<T> {
+  private resolve(owner: Owner, input: Pick<PostgresArchiveListInput, 'sourceToken' | 'toolToken'>) {
     this.ports.assert(owner);
     const key = this.ports.document(owner);
     this.assertIdle(key);
@@ -103,6 +107,14 @@ export class PostgresArchiveFiles<Owner> {
     const { source, tool } = selected ?? {};
     if (source?.token !== input.sourceToken || tool?.token !== input.toolToken || source.expires <= Date.now())
       throw Error('PostgreSQL 归档或 pg_restore 选择已失效，请重新选择');
+    return { key, source, tool };
+  }
+
+  private async run<T>(owner: Owner, input: PostgresArchiveListInput, action: (
+    tool: PostgresNativeTool<'pg_restore'>, source: PostgresArchiveSource, signal: AbortSignal,
+    check: () => void, publishing: () => void,
+  ) => Promise<T>): Promise<T> {
+    const { key, source, tool } = this.resolve(owner, input);
     const job = { id: input.operationId, abort: new AbortController(), publishing: false };
     this.jobs.set(key, job);
     const check = () => { job.abort.signal.throwIfAborted(); this.ports.assert(owner); };

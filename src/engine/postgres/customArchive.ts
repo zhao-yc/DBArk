@@ -1,18 +1,28 @@
 import { constants, type BigIntStats } from 'node:fs';
-import { lstat, open, type FileHandle } from 'node:fs/promises';
-import { basename, isAbsolute } from 'node:path';
+import { lstat, mkdtemp, open, rm, type FileHandle } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, isAbsolute, join } from 'node:path';
 import { postgresArchiveListLimit, type PostgresArchiveExportInput,
   type PostgresArchiveListing, type PostgresArchiveSqlExport } from '../../shared/postgresArchive';
 import { postgresSqlFileLimits } from '../../shared/postgresSqlFile';
 import { AtomicFile, privateAtomicFileIO } from '../atomicFile';
 import { postgresToolEnvironment, readPostgresToolVersion, runPostgresNativeTool, type PostgresNativeTool } from './nativeTool';
+import { inspectPostgresSqlFile, type PostgresSqlFileSource } from './sqlFile';
 
-export interface PostgresArchiveSource { path: string; stamp: BigIntStats }
+type ArchiveStamp = Pick<BigIntStats, 'dev' | 'ino' | 'size' | 'mtimeNs' | 'ctimeNs'>;
+export interface PostgresArchiveSource { path: string; stamp: ArchiveStamp }
 type RestoreTool = PostgresNativeTool<'pg_restore'>;
+export interface PostgresArchiveRestoreSource extends Pick<PostgresArchiveExportInput, 'portable' | 'content'> {
+  source: PostgresArchiveSource;
+  tool: RestoreTool;
+}
+export class PostgresArchiveRestoreCleanupError extends Error {
+  constructor() { super('归档恢复的暂存目录清理尚未确认'); }
+}
 
 const changed = () => Error('PostgreSQL 归档已变化，请重新选择');
-const sameObject = (a: BigIntStats, b: BigIntStats) => a.dev === b.dev && a.ino === b.ino;
-const sameRevision = (a: BigIntStats, b: BigIntStats) => b.isFile() && sameObject(a, b) &&
+const sameObject = (a: ArchiveStamp, b: BigIntStats) => a.dev === b.dev && a.ino === b.ino;
+const sameRevision = (a: ArchiveStamp, b: BigIntStats) => b.isFile() && sameObject(a, b) &&
   a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 
 async function withArchive<T>(source: PostgresArchiveSource, check: () => void, read: (file: FileHandle) => Promise<T>) {
@@ -43,7 +53,9 @@ export async function inspectPostgresArchive(path: string, check: () => void): P
   const stamp = await lstat(path, { bigint: true });
   if (!stamp.isFile() || stamp.ino <= 0n || stamp.size < 5n || stamp.size > BigInt(postgresSqlFileLimits.bytes))
     throw Error('请选择不超过 10 GiB 的普通 PostgreSQL 自定义归档');
-  const source = { path, stamp };
+  // 只传递可结构化克隆的文件代次，恢复任务不会把主进程文件句柄交给渲染进程。
+  const { dev, ino, size, mtimeNs, ctimeNs } = stamp;
+  const source = { path, stamp: { dev, ino, size, mtimeNs, ctimeNs } };
   await withArchive(source, check, async () => undefined);
   return source;
 }
@@ -100,4 +112,22 @@ export async function exportPostgresArchiveSql(source: PostgresArchiveSource, to
     await staged.commit();
     return { name: basename(target), bytes: staged.bytesWritten, toolVersion, ...(warning ? { warning } : {}) };
   } finally { await staged.dispose(); }
+}
+
+/** 先完成私有 SQL 转换，数据库阶段才开始。取消或失败只清理本次创建的暂存目录。 */
+export async function withPostgresArchiveSql<T>(input: PostgresArchiveRestoreSource, signal: AbortSignal,
+  check: () => void, action: (source: PostgresSqlFileSource, warning?: string) => Promise<T>): Promise<T> {
+  check();
+  if (input.tool.kind !== 'pg_restore') throw Error('请选择 PostgreSQL 原生 pg_restore');
+  const directory = await mkdtemp(join(tmpdir(), 'tabrelio-pg-archive-restore-'));
+  try {
+    const target = join(directory, 'restore.sql');
+    // 暂存改名只是内部准备，不能提前关闭外层恢复任务的取消。
+    const prepared = await exportPostgresArchiveSql(input.source, input.tool, target, input, signal, check, check);
+    const sql = await inspectPostgresSqlFile(target);
+    check();
+    return await action(sql, prepared.warning);
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => { throw new PostgresArchiveRestoreCleanupError(); });
+  }
 }

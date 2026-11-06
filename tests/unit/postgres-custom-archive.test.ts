@@ -5,6 +5,7 @@ import { expect, it } from 'vitest';
 import { inspectPostgresArchive } from '../../src/engine/postgres/customArchive';
 import { postgresArchiveExportSchema } from '../../src/shared/postgresArchive';
 import { postgresDatabaseBackupChooseSchema } from '../../src/shared/postgresDatabaseBackup';
+import { postgresSqlFileExecuteSchema } from '../../src/shared/postgresSqlFile';
 
 const token = '1618e886-931a-4c26-aed4-e321ba43a6bd';
 
@@ -32,4 +33,13 @@ it('授权读取前核验普通文件及 PGDMP 标记，拒绝纯文本与链接
       await expect(inspectPostgresArchive(linked, () => {})).rejects.toThrow('普通 PostgreSQL 自定义归档');
     }
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it('同一次恢复只接收一种来源，且仅数据归档需要现有目标库', () => {
+  const input = { connectionId: '连接', database: '目标库', taskId: token,
+    archive: { sourceToken: token, toolToken: token, content: 'data', portable: true } };
+  expect(postgresSqlFileExecuteSchema.parse(input)).toEqual(input);
+  expect(postgresSqlFileExecuteSchema.safeParse({ ...input, newDatabase: '新库' }).success).toBe(false);
+  expect(postgresSqlFileExecuteSchema.safeParse({ ...input, fileToken: token }).success).toBe(false);
+  expect(postgresSqlFileExecuteSchema.safeParse({ ...input, archive: { ...input.archive, path: '/tmp/dump' } }).success).toBe(false);
 });

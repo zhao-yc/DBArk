@@ -5,6 +5,7 @@ import { PostgresTableBackupDialog } from './components/PostgresTableBackupDialo
 import { PostgresSqlFileDialog } from './components/PostgresSqlFileDialog';
 import { PostgresDatabaseBackupDialog } from './components/PostgresDatabaseBackupDialog';
 import { PostgresArchiveDialog } from './components/PostgresArchiveDialog';
+import type { PostgresArchiveRestoreChoice } from '../shared/postgresArchive';
 import { PostgresCreateRoutineDialog } from './components/PostgresCreateRoutineDialog';
 import { PostgresRoutineDialog } from './components/PostgresRoutineDialog';
 import { PostgresCreateSequenceDialog, PostgresSequenceDialog } from './components/PostgresSequenceDialog';
@@ -216,6 +217,7 @@ function WorkspaceApp() {
   const [postgresSqlFile, setPostgresSqlFile] = useState(false);
   const [postgresDatabaseBackup, setPostgresDatabaseBackup] = useState(false);
   const [postgresArchive, setPostgresArchive] = useState(false);
+  const [postgresArchiveRestore, setPostgresArchiveRestore] = useState<PostgresArchiveRestoreChoice>();
   const [serverDataCompare, setServerDataCompare] = useState<'postgres' | 'mysql'>();
   const [sqliteDataCompare, setSqliteDataCompare] = useState(false);
   const [routineInvocationTarget, setRoutineInvocationTarget] = useState<RoutineInvocationTarget | null>(null);
@@ -1167,10 +1169,12 @@ function WorkspaceApp() {
     {backupArchive && <DatabaseBackupArchiveDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)} onClose={() => setBackupArchive(false)}/>}
     {postgresBackup && <PostgresTableBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresBackup(false)}/>}
     {postgresDatabaseBackup && <PostgresDatabaseBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresDatabaseBackup(false)}/>}
-    {postgresArchive && <PostgresArchiveDialog onClose={() => setPostgresArchive(false)}/>}
-    {postgresSqlFile && <PostgresSqlFileDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)}
+    {postgresArchive && <PostgresArchiveDialog onClose={() => setPostgresArchive(false)} paused={!!postgresArchiveRestore}
+      onRestore={connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length) ? setPostgresArchiveRestore : undefined}/>}
+    {(postgresSqlFile || postgresArchiveRestore) && <PostgresSqlFileDialog archive={postgresArchiveRestore}
+      connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)}
       onDatabaseCreated={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}
-      onClose={() => setPostgresSqlFile(false)}/>}
+      onClose={() => { setPostgresSqlFile(false); setPostgresArchiveRestore(undefined); }}/>}
     {resultSnapshot && <QueryResultSnapshotDialog onClose={closeResultSnapshot}/>}
     {routineInvocationTarget && <RoutineInvocationDialog target={routineInvocationTarget} onClose={() => closeRoutineInvocation(routineInvocationTarget)} onOpenGeneratedQuery={sql => finishRoutineInvocation(routineInvocationTarget, sql)}/>}
     {tabSearch && <OpenTabSearchDialog key={tabSearch.id} registry={tabSearch.registry} onClose={() => closeTabSearch(tabSearch)} onActivate={entry => activateSearchedTab(tabSearch, entry)}/>}

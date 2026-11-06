@@ -2267,6 +2267,15 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     case 'postgres.sqlFile.execute': {
       columnsMain.assertCapturedOwner(columns);
+      if (input.archive) {
+        if (shuttingDown) throw Error('客户端正在退出，不能恢复 PostgreSQL 归档');
+        const profile = store.resolveConnection(input.connectionId);
+        if (profile.dialect !== 'postgresql') throw Error('归档恢复需要已保存的 PostgreSQL 连接');
+        const { archive, ...target } = input;
+        const archiveSource = postgresArchiveFiles.restoreSource(columns!, archive);
+        input = { ...target, profile, archiveSource, connectionRevision: store.connectionRevision() };
+        break;
+      }
       const document = columns!.owner.document, file = postgresSqlFileSources.get(document);
       if (shuttingDown || !file || file.token !== input.fileToken || file.expires <= Date.now() ||
         file.revision !== store.connectionRevision() || file.connectionId !== input.connectionId ||

@@ -1,9 +1,11 @@
 import { postgresSqlFileTitle, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
+import { postgresArchiveRestoreTitle } from '../../shared/postgresArchive';
 
 const reason: Record<NonNullable<PostgresSqlFileResult['failure']>['reason'], string> = {
   connection: '未能建立或确认专用数据库连接。',
   'create-database': '未能完成新建数据库，请检查维护库连接和创建数据库权限。',
   'database-exists': '同名数据库已存在。请选择其他名称，或切换到现有数据库后重新选择文件。',
+  archive: '未能准备 PostgreSQL 归档，数据库执行未开始。',
   file: '文件读取失败，或原文件在选择后发生变化。',
   encoding: '文件需为有效 UTF-8，且不能包含空字符。',
   syntax: '无法读取完整的 PostgreSQL 语句或 COPY 数据段。每段 COPY 数据需以独占一行的 \\. 结束。',
@@ -15,6 +17,10 @@ const reason: Record<NonNullable<PostgresSqlFileResult['failure']>['reason'], st
 };
 export const postgresSqlFileZh = {
   title: postgresSqlFileTitle, connection: '目标连接', database: '目标数据库',
+  archiveTitle: postgresArchiveRestoreTitle, archiveExecute: '确认并恢复归档',
+  archiveScope: '先用 pg_restore 离线准备暂存 SQL，再连接目标库恢复。请核对归档、导出范围和目标数据库。',
+  archiveDataOnly: '仅数据归档需恢复到已有匹配表结构的数据库。',
+  archiveRunning: '正在准备或执行归档恢复',
   createMode: '恢复到新数据库', maintenance: '维护数据库', newDatabase: '新数据库名称',
   nameError: '请输入有效名称，UTF-8 最多 63 字节，首尾不要留空白。',
   createWarning: '使用维护数据库创建空目标库，需要 CREATEDB 权限。同名库存在时停止。文件执行失败或取消后，已创建的数据库会保留。',
@@ -35,6 +41,6 @@ export const postgresSqlFileZh = {
     refused: 'PostgreSQL 已拒绝创建目标数据库。',
     unknown: '创建数据库的结果未知，请先核对服务器上的同名数据库。',
   },
-  cleanup: '专用连接的收尾尚未确认。',
+  cleanup: '本次恢复的连接或暂存文件收尾尚未确认。',
   reason,
 } as const;

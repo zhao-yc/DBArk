@@ -34,6 +34,7 @@ import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
 import { exportPostgresBackupSet, type PostgresBackupSetRequest } from './tableBackupSet';
 import { exportPostgresDatabaseBackup, type PostgresDatabaseBackupRequest } from './databaseBackup';
+import { PostgresArchiveRestoreCleanupError, withPostgresArchiveSql, type PostgresArchiveRestoreSource } from './customArchive';
 import { readPostgresBackupCatalogue } from './tableBackup';
 import { assertPostgresSqlFileSource, executePostgresSqlFile, postgresRestoreDatabaseCommand, readPostgresRestoreDatabaseOid,
   type PostgresSqlFileControl, type PostgresSqlFileSource } from './sqlFile';
@@ -84,7 +85,7 @@ interface TransferTask {
   commandActive?: boolean;
   connection?: PostgresConnection;
   done?: Promise<unknown>;
-  processAbort?: AbortController;
+  processAbort?: () => void;
 }
 type Input = Record<string, any>;
 /** PostgreSQL独立网络执行账本，共用utility隔离进程及TaskEvent，不进入mysql2或其SQL生成器。 */
@@ -301,7 +302,7 @@ export class PostgresEngine {
   private cancelTransfer(task: TransferTask): Promise<void> | undefined {
     if (task.publishing || task.cancelled) return task.cancelPending;
     task.cancelled = true;
-    task.processAbort?.abort(Error('PostgreSQL 整库备份已取消'));
+    task.processAbort?.();
     const original = task.connection;
     if (!original) return;
     if (!task.otherConnectionId && !task.gracefulCancel) { original.abort(); return; }
@@ -319,10 +320,12 @@ export class PostgresEngine {
     if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 文件任务已存在、连接关闭中或已达并发上限');
     const target = input.newDatabase === undefined ? undefined : postgresRestoreDatabaseName.parse(input.newDatabase);
-    const source = input.source as PostgresSqlFileSource;
+    const archive = input.archiveSource as PostgresArchiveRestoreSource | undefined;
+    if (archive?.content === 'data' && target) throw Error('仅数据归档需要已有目标表结构');
     const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true };
     this.transfers.set(input.taskId, task);
     let receipt: PostgresSqlFileResult | undefined;
+    let archiveWarning: string | undefined, preparationDetail: string | undefined;
     let databaseCreation: PostgresSqlFileResult['databaseCreation'], sqlState: string | undefined, started = false;
     let setupFailure: NonNullable<PostgresSqlFileResult['failure']>['reason'] = 'connection';
     const control: PostgresSqlFileControl = {
@@ -334,7 +337,7 @@ export class PostgresEngine {
       progress: statements => this.emit({ taskId: input.taskId, status: 'running', progress: 50,
         message: 'PostgreSQL 文件已读取并执行 ' + statements + ' 条语句' }),
     };
-    const operation = (async () => {
+    const restore = async (source: PostgresSqlFileSource) => {
       let newOid: string | undefined;
       if (target) {
         setupFailure = 'file';
@@ -386,17 +389,37 @@ export class PostgresEngine {
         receipt = await executePostgresSqlFile(connection, source, control);
         return receipt;
       }, false, false, true);
-    })();
-    const done = task.done = operation.catch((): PostgresSqlFileResult => receipt ? { ...receipt, cleanupWarning: true } : {
+    };
+    const prepareAndRestore = async (archiveSource: PostgresArchiveRestoreSource) => {
+      const controller = new AbortController();
+      task.processAbort = () => controller.abort(Error('PostgreSQL 归档恢复已取消'));
+      setupFailure = 'archive';
+      this.emit({ taskId: input.taskId, status: 'running', progress: 10, message: '正在离线准备 PostgreSQL 归档恢复' });
+      try {
+        return await withPostgresArchiveSql(archiveSource, controller.signal, control.check, async (source, warning) => {
+          task.processAbort = undefined;
+          archiveWarning = warning;
+          return restore(source);
+        });
+      } catch (reason) {
+        if (setupFailure === 'archive' && reason instanceof Error)
+          preparationDetail = reason.message.slice(0, 2048);
+        throw reason;
+      }
+    };
+    const operation = archive ? prepareAndRestore(archive) : restore(input.source as PostgresSqlFileSource);
+    const done = task.done = operation.catch((reason): PostgresSqlFileResult => receipt ? { ...receipt, cleanupWarning: true } : {
       outcome: started ? 'unknown' : 'not-started', completed: 0, cancelled: task.cancelled,
-      failure: { reason: task.cancelled ? 'cancelled' : setupFailure, ...(sqlState ? { sqlState } : {}) },
+      failure: { reason: task.cancelled ? 'cancelled' : setupFailure, ...(sqlState ? { sqlState } : {}),
+        ...(!task.cancelled && preparationDetail ? { detail: preparationDetail } : {}) },
+      ...(reason instanceof PostgresArchiveRestoreCleanupError ? { cleanupWarning: true } : {}),
     });
     try {
       const result = await done;
       const status = result.outcome === 'committed' ? 'completed' :
         result.cancelled && result.outcome !== 'unknown' && databaseCreation !== 'unknown' ? 'cancelled' : 'failed';
       this.emit({ taskId: input.taskId, status, progress: status === 'completed' ? 100 : 0, message: 'PostgreSQL 文件执行已结算' });
-      return databaseCreation ? { ...result, databaseCreation } : result;
+      return { ...result, ...(databaseCreation ? { databaseCreation } : {}), ...(archiveWarning ? { archiveWarning } : {}) };
     } finally {
       this.transfers.delete(input.taskId);
       this.rememberCompleted(input.taskId);
@@ -566,7 +589,8 @@ export class PostgresEngine {
     if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 整库备份任务已存在、连接关闭中或已达并发上限');
     const abort = new AbortController();
-    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true, processAbort: abort };
+    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel: true,
+      processAbort: () => abort.abort(Error('PostgreSQL 整库备份已取消')) };
     this.transfers.set(input.taskId, task);
     const connect = <T>(action: (connection: PostgresConnection) => Promise<T>) =>
       this.use(profile, input.database, action, false, false, true);
@@ -1000,7 +1024,7 @@ export class PostgresEngine {
       }
       case 'postgres.sqlFile.execute': {
         const profile = input.profile as PostgresConnectionProfile;
-        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !input.source)
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || Boolean(input.source) === Boolean(input.archiveSource))
           throw Error('缺少可信的 PostgreSQL 文件连接及来源');
         return this.runSqlFile(input, profile);
       }

@@ -1,12 +1,16 @@
 import { useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
-import type { PostgresArchiveExportInput, PostgresArchiveListing, PostgresArchiveSqlExport } from '../../shared/postgresArchive';
+import type { PostgresArchiveExportInput, PostgresArchiveListing, PostgresArchiveRestoreChoice, PostgresArchiveSqlExport } from '../../shared/postgresArchive';
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresArchiveZh as text } from '../locales/postgresArchive.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
 import '../databaseBackup.css';
 
-export function PostgresArchiveDialog({ onClose }: { onClose(): void }) {
+export function PostgresArchiveDialog({ onClose, onRestore, paused }: {
+  onClose(): void;
+  onRestore?: (archive: PostgresArchiveRestoreChoice) => void;
+  paused?: boolean;
+}) {
   const [source, setSource] = useState<FileChoice | null>(null), [tool, setTool] = useState<FileChoice | null>(null);
   const [listing, setListing] = useState<PostgresArchiveListing>();
   const [exported, setExported] = useState<PostgresArchiveSqlExport | null>(null);
@@ -55,6 +59,7 @@ export function PostgresArchiveDialog({ onClose }: { onClose(): void }) {
   }
 
   const close = () => { if (!active.current) onClose(); };
+  if (paused) return null;
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content database-backup-content">
       <p>{text.scope}</p>
@@ -89,7 +94,13 @@ export function PostgresArchiveDialog({ onClose }: { onClose(): void }) {
     <footer className="modal-footer">
       <button disabled={!available} onClick={() => void run('list')}>{text.list}</button>
       {operation ? <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button> :
-        <button className="primary" disabled={!available} onClick={() => void run('export')}>{text.export}</button>}
+        <>
+          <button disabled={!available} onClick={() => void run('export')}>{text.export}</button>
+          {onRestore && <button className="primary" disabled={!available} onClick={() => {
+            if (!active.current && source && tool)
+              onRestore({ name: source.name, selection: { sourceToken: source.token, toolToken: tool.token, content, portable } });
+          }}>{text.restore}</button>}
+        </>}
       <span className="grow"/>
       <button disabled={locked} onClick={close}>{text.close}</button>
     </footer>

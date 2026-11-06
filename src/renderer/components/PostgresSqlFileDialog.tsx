@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { postgresRestoreDatabaseName, type PostgresSqlFileChoice, type PostgresSqlFileResult } from '../../shared/postgresSqlFile';
+import type { PostgresArchiveRestoreChoice } from '../../shared/postgresArchive';
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresSqlFileZh as text } from '../locales/postgresSqlFile.zh-CN';
+import { postgresArchiveZh as archiveText } from '../locales/postgresArchive.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
 import '../databaseBackup.css';
 
-export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated }: {
+export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated, archive }: {
   connections: readonly { id: string; name: string }[];
+  archive?: PostgresArchiveRestoreChoice;
   onClose(): void;
   onDatabaseCreated(connectionId: string): void;
 }) {
   const [connectionId, setConnection] = useState(connections.length === 1 ? connections[0].id : '');
   const [database, setDatabase] = useState('');
-  const [create, setCreate] = useState(false);
+  const dataOnly = archive?.selection.content === 'data';
+  const [create, setCreate] = useState(!!archive && !dataOnly);
   const [newDatabase, setNewDatabase] = useState('');
   const [databases, setDatabases] = useState<string[]>([]);
   const [catalogueVersion, setCatalogueVersion] = useState(0);
@@ -23,6 +27,9 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated 
   const occupied = useRef(false);
   const locked = choosing || !!task;
   const validName = !create || postgresRestoreDatabaseName.safeParse(newDatabase).success;
+  const archiveReady = !!archive && !error && result?.outcome !== 'committed' &&
+    result?.outcome !== 'unknown' && result?.databaseCreation !== 'unknown';
+  const ready = !!database && validName && (!!file || archiveReady);
   const target = { connectionId, database, ...(create ? { newDatabase } : {}) };
 
   // 切换连接后的迟到目录不覆盖当前执行目标。
@@ -47,12 +54,13 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated 
     finally { occupied.current = false; setChoosing(false); }
   }
   async function execute() {
-    if (occupied.current || !file || !database || !validName) return;
+    if (occupied.current || !ready) return;
     occupied.current = true;
     const taskId = uid();
     setTask(taskId); setFile(null); setResult(undefined); setError('');
     try {
-      const result = await invoke('postgres.sqlFile.execute', { ...target, fileToken: file.token, taskId });
+      const source = archive ? { archive: archive.selection } : { fileToken: file!.token };
+      const result = await invoke('postgres.sqlFile.execute', { ...target, ...source, taskId });
       setResult(result);
       if (result.databaseCreation === 'created') {
         setCatalogueVersion(version => version + 1);
@@ -69,12 +77,14 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated 
     catch (reason) { setError(errorMessage(reason)); }
   }
   const close = () => { if (!occupied.current) onClose(); };
-  return <Modal title={text.title} wide onClose={close}>
+  return <Modal title={archive ? text.archiveTitle : text.title} wide onClose={close}>
     <div className="modal-content database-backup-content">
-      <p>{text.scope}</p><p>{text.limits}</p><p>{text.warning}</p>
-      <label className="check"><input type="checkbox" checked={create} disabled={locked} onChange={event => {
+      <p>{archive ? text.archiveScope : text.scope}</p>
+      {archive ? <p>{archive.name} · {archiveText[archive.selection.content]}{archive.selection.portable && ' · ' + archiveText.portable}</p> : <p>{text.limits}</p>}
+      <p>{text.warning}</p>
+      {dataOnly ? <p>{text.archiveDataOnly}</p> : <label className="check"><input type="checkbox" checked={create} disabled={locked} onChange={event => {
         setCreate(event.target.checked); resetFile();
-      }}/>{text.createMode}</label>
+      }}/>{text.createMode}</label>}
       <fieldset disabled={locked}>
         <Field label={text.connection}><select aria-label={text.connection} value={connectionId} onChange={event => {
           if (event.target.value === connectionId) return;
@@ -91,21 +101,24 @@ export function PostgresSqlFileDialog({ connections, onClose, onDatabaseCreated 
       </fieldset>
       {create && <p>{newDatabase && !validName ? text.nameError : text.createWarning}</p>}
       {file && <p>{file.name} · {file.bytes.toLocaleString('zh-CN')} B</p>}
-      {task && <p role="status">{cancelling ? text.cancelling : text.running}</p>}
+      {task && <p role="status">{cancelling ? text.cancelling : archive ? text.archiveRunning : text.running}</p>}
       {result && <section className="database-backup-plan" role="status">
         {result.databaseCreation && <p>{text.databaseCreation[result.databaseCreation]}</p>}
         <p>{text.outcome[result.outcome]} {text.completed(result.completed)}</p>
         {result.failure && <p>{result.failure.statement && text.failedAt(result.failure.statement) + ' · '}{text.reason[result.failure.reason]}</p>}
         {result.failure?.detail && <p>{result.failure.detail}</p>}
         {result.failure?.sqlState && <p>SQLSTATE {result.failure.sqlState}</p>}
+        {result.archiveWarning && <details><summary>{archiveText.warnings}</summary><p>{result.archiveWarning}</p></details>}
         {result.cleanupWarning && <p>{text.cleanup}</p>}
       </section>}
       <ErrorBox message={error}/>
     </div>
     <footer className="modal-footer">
-      <button disabled={locked || !database || !validName} onClick={() => void choose()}>{text.choose}</button>
+      {!archive && <button disabled={locked || !database || !validName} onClick={() => void choose()}>{text.choose}</button>}
       {task ? <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button> :
-        <button className="primary" disabled={locked || !file} onClick={() => void execute()}>{create ? text.createAndExecute : text.execute}</button>}
+        <button className="primary" disabled={locked || !ready} onClick={() => void execute()}>
+          {create ? text.createAndExecute : archive ? text.archiveExecute : text.execute}
+        </button>}
       <span className="grow"/>
       <button disabled={locked} onClick={close}>{text.close}</button>
     </footer>
