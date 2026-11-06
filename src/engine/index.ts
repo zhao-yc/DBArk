@@ -215,12 +215,12 @@ export class Engine {
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
     if (command === '__connections.prepareSave') this.postgres.prepareSave(input);
-    else if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command === 'postgres.completion' || command.startsWith('postgres.routine.') || command.startsWith('postgres.structure.') || command.startsWith('postgres.sequence.') || command.startsWith('postgres.createTable.') || command.startsWith('postgres.createView.') || command.startsWith('postgres.editView.') || command.startsWith('postgres.viewManage.') || command.startsWith('postgres.materializedRefresh.') || command.startsWith('postgres.columnEdit.') || command.startsWith('postgres.indexEdit.') || command.startsWith('postgres.keyEdit.') || command.startsWith('postgres.foreignEdit.') || command.startsWith('postgres.checkEdit.') || command.startsWith('postgres.table.') || this.postgres.accepts(input)) {
+    else if (command === 'postgres.compareData' || command === 'postgres.compareData.catalogue' || command === 'postgres.explain' || command.startsWith('postgres.analyze') || command === 'postgres.completion' || command.startsWith('postgres.routine.') || command.startsWith('postgres.structure.') || command.startsWith('postgres.sequence.') || command.startsWith('postgres.createTable.') || command.startsWith('postgres.createView.') || command.startsWith('postgres.editView.') || command.startsWith('postgres.viewManage.') || command.startsWith('postgres.materializedRefresh.') || command.startsWith('postgres.columnEdit.') || command.startsWith('postgres.indexEdit.') || command.startsWith('postgres.keyEdit.') || command.startsWith('postgres.foreignEdit.') || command.startsWith('postgres.checkEdit.') || command.startsWith('postgres.table.') || this.postgres.accepts(input)) {
       if (this.closing && !['connections.close', 'sessions.close', 'query.cancel', 'query.sessionState', 'postgres.table.release'].includes(command)) {
         throw Error('数据库引擎正在关闭，不能开始新操作');
       }
       // 各驱动共用任务事件和取消入口，必须在分流前保证编号唯一。
-      if ((command === 'query.execute' || command === 'query.executeParameterized' || command === 'postgres.explain' || command === 'postgres.analyze' || command === 'postgres.table.import') && this.taskIdInUse(input.taskId)) throw Error('任务编号已使用');
+      if ((command === 'postgres.compareData' || command === 'query.execute' || command === 'query.executeParameterized' || command === 'postgres.explain' || command === 'postgres.analyze' || command === 'postgres.table.import') && this.taskIdInUse(input.taskId)) throw Error('任务编号已使用');
       return this.postgres.handle(command, input);
     }
     if (command.startsWith('sqlite.')) throw Error('SQLite专用接口不能进入MySQL网络引擎');

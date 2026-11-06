@@ -34,6 +34,8 @@ import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
 import type { PostgresCompletionInput, PostgresCompletionResult } from '../../shared/postgresCompletion';
 import { parsePostgresAnalyze, parsePostgresExplain, postgresAnalyzeSql, postgresExplainSql } from '../../shared/postgresExplain';
+import { comparePostgresSnapshots, inPostgresCompareSnapshot, readPostgresCompareTable } from './dataCompare';
+import { postgresDataCompareLimits, postgresDataCompareSchema, postgresDataCompareZh } from '../../shared/postgresDataCompare';
 import { explainLimits } from '../../shared/explain';
 interface Session {
   id: string;
@@ -61,6 +63,8 @@ interface Lease {
 }
 interface TransferTask {
   connectionId: string;
+  otherConnectionId?: string;
+  cancelPending?: Promise<void>;
   cancelled: boolean;
   publishing: boolean;
   connection?: PostgresConnection;
@@ -133,7 +137,7 @@ export class PostgresEngine {
       input.dialect === 'postgresql' ||
       [input.profile, input.sourceProfile, input.targetProfile].some((p) => p?.dialect === 'postgresql') ||
       [input.id, input.connectionId, input.source?.connectionId, input.target?.connectionId].some(
-        (id) => [...this.transfers.values()].some(task => task.connectionId === id) || this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) ||
+        (id) => [...this.transfers.values()].some(task => task.connectionId === id || (id !== undefined && task.otherConnectionId === id)) || this.profiles.has(id) || this.tables.connectionIds().includes(id) || this.creations.connectionIds().includes(id) ||
           this.columnEdits.connectionIds().includes(id) || this.indexEdits.connectionIds().includes(id) || this.keyEdits.connectionIds().includes(id) || this.foreignEdits.connectionIds().includes(id) || this.checkEdits.connectionIds().includes(id) || [...this.leases].some((l) => l.managed.profile.id === id),
       ) ||
       this.sessions.has(input.sessionId) ||
@@ -257,35 +261,38 @@ export class PostgresEngine {
     task.cancelled = true;
     // 尚在等待补全的任务没有后端 SQL，取消只能撤销自己的投递。
     if (!task.sent) return Promise.resolve();
-    const original = task.session.managed;
-    task.cancel = (async () => {
-      const pid = original.processId,
-        backendStart = original.backendStart;
-      if (!pid || !backendStart) throw Error('PostgreSQL原backend身份未知，取消未投递');
-      await this.use(
-        original.profile,
-        original.database,
-        async (managed) => {
-          if (task.terminal || original.broken) return;
-          const result = await managed.query(
-            'SELECT pg_catalog.pg_cancel_backend(pid) FROM pg_catalog.pg_stat_activity ' +
-              'WHERE pid = $1 AND extract(epoch FROM backend_start)::text = $2',
-            [pid, backendStart],
-            { rows: 1, bytes: 1024 },
-          );
-          if (result.rows[0]?.c0 !== 't' && !task.terminal) throw Error('PostgreSQL原查询取消未确认');
-        },
-        false,
-        true,
-      );
-    })();
+    task.cancel = this.cancelBackend(task.session.managed, () => !task.terminal);
     return task.cancel;
   }
-  /** 文件发布或事务提交前接受取消，只终止任务的独占连接。 */
-  private cancelTransfer(task: TransferTask) {
-    if (task.publishing || task.cancelled) return;
+
+  /** 同身份控制连接按 PID 和启动时间请求取消，结束或已替换的后端不再投递。 */
+  private async cancelBackend(original: PostgresConnection, active: () => boolean): Promise<void> {
+    const pid = original.processId, backendStart = original.backendStart;
+    if (!pid || !backendStart) throw Error('PostgreSQL原backend身份未知，取消未投递');
+    await this.use(original.profile, original.database, async managed => {
+      if (!active() || original.broken) return;
+      const result = await managed.query(
+        'SELECT pg_catalog.pg_cancel_backend(pid) FROM pg_catalog.pg_stat_activity ' +
+          'WHERE pid = $1 AND extract(epoch FROM backend_start)::text = $2',
+        [pid, backendStart], { rows: 1, bytes: 1024 },
+      );
+      if (result.rows[0]?.c0 !== 't' && active()) throw Error('PostgreSQL原查询取消未确认');
+    }, false, true);
+  }
+
+  /** 比较可能在服务端等锁，须向准确后端发送取消；文件任务保留原独占连接中止。 */
+  private cancelTransfer(task: TransferTask): Promise<void> | undefined {
+    if (task.publishing || task.cancelled) return task.cancelPending;
     task.cancelled = true;
-    task.connection?.abort();
+    const original = task.connection;
+    if (!original) return;
+    if (!task.otherConnectionId) { original.abort(); return; }
+    task.cancelPending = this.cancelBackend(original, () => task.connection === original).catch(reason => {
+      original.abort();
+      throw reason;
+    });
+    void task.cancelPending.catch(() => undefined);
+    return task.cancelPending;
   }
 
   /** 只保留终态任务编号，避免迟到的取消被分发给其他驱动。 */
@@ -294,6 +301,66 @@ export class PostgresEngine {
     if (this.completedTasks.size > 8192) {
       const oldest = this.completedTasks.values().next().value;
       if (oldest !== undefined) this.completedTasks.delete(oldest);
+    }
+  }
+
+  /** 同库共用一次只读事务。跨库逐侧读取并释放各自租约，取消只触及本轮独占连接。 */
+  private async compareData(raw: Input) {
+    const { source, target, taskId, filter } = postgresDataCompareSchema.parse({
+      source: raw.source, target: raw.target, taskId: raw.taskId, filter: raw.filter,
+    });
+    const left = raw.sourceProfile as PostgresConnectionProfile, right = raw.targetProfile as PostgresConnectionProfile;
+    if (left?.dialect !== 'postgresql' || right?.dialect !== 'postgresql' || left.id !== source.connectionId || right.id !== target.connectionId)
+      throw Error('比较需要两条准确的已保存 PostgreSQL 连接配置');
+    if (this.stopping || this.closing.has(left.id) || this.closing.has(right.id) || this.ownsTask(taskId) || this.transfers.size >= 32)
+      throw Error('PostgreSQL 比较任务已存在、连接关闭中或已达并发上限');
+    const task: TransferTask = { connectionId: left.id, otherConnectionId: right.id, cancelled: false, publishing: false };
+    const shared = left.id === right.id && source.database === target.database;
+    let timedOut = false;
+    const text = postgresDataCompareZh;
+    const check = () => {
+      if (timedOut) throw Error(text.timeout);
+      if (task.cancelled || this.stopping || this.closing.has(left.id) || this.closing.has(right.id)) throw Error(text.cancelled);
+    };
+    const open = <T>(profile: PostgresConnectionProfile, database: string, read: (managed: PostgresConnection) => Promise<T>) => {
+      check();
+      return this.use(profile, database, async managed => {
+        check();
+        task.connection = managed;
+        try { return await inPostgresCompareSnapshot(managed, () => read(managed), check); }
+        finally {
+          // 取消回包先收尾。即使查询先结束，原连接也不会用于第二侧或后续操作。
+          task.connection = undefined;
+          await task.cancelPending;
+        }
+      });
+    };
+    this.transfers.set(taskId, task);
+    const timer = setTimeout(() => { timedOut = true; this.cancelTransfer(task); }, postgresDataCompareLimits.timeoutMs);
+    timer.unref();
+    const done = task.done = Promise.resolve().then(async () => {
+      const [a, b] = shared
+        ? await open(left, source.database, async managed => {
+          const a = await readPostgresCompareTable(managed, source, filter, check);
+          const b = await readPostgresCompareTable(managed, target, filter, check);
+          return [a, b] as const;
+        })
+        : [
+          await open(left, source.database, managed => readPostgresCompareTable(managed, source, filter, check)),
+          await open(right, target.database, managed => readPostgresCompareTable(managed, target, filter, check)),
+        ];
+      check();
+      return comparePostgresSnapshots(a, b, shared);
+    });
+    try { return await done; }
+    catch (reason) {
+      await task.cancelPending;
+      check();
+      throw reason;
+    } finally {
+      clearTimeout(timer);
+      this.transfers.delete(taskId);
+      this.rememberCompleted(taskId);
     }
   }
 
@@ -355,10 +422,11 @@ export class PostgresEngine {
     if (this.closing.has(id)) throw Error('PostgreSQL连接正在关闭');
     this.closing.add(id);
     try {
-      const transfers = [...this.transfers.values()].filter(task => task.connectionId === id);
+      const transfers = [...this.transfers.values()].filter(task => (task.connectionId === id || task.otherConnectionId === id));
       for (const task of transfers) this.cancelTransfer(task);
       const leases = [...this.leases].filter((l) => l.managed.profile.id === id);
-      for (const lease of leases) if (!lease.failed && !lease.protectedFromAbort) lease.managed.abort();
+      for (const lease of leases) if (!lease.failed && !lease.protectedFromAbort &&
+          !transfers.some(task => task.otherConnectionId && task.connection === lease.managed)) lease.managed.abort();
       const sessions = [...this.sessions.values()].filter(session => session.connectionId === id);
       await Promise.all(sessions.map(session => this.closeSession(session)));
       await Promise.all(leases.map(lease => lease.done));
@@ -391,7 +459,7 @@ export class PostgresEngine {
       changed &&
       ([...this.sessions.values()].some((s) => s.connectionId === input.id) ||
         [...this.leases].some((l) => l.managed.profile.id === input.id) ||
-        [...this.transfers.values()].some(task => task.connectionId === input.id))
+        [...this.transfers.values()].some(task => (task.connectionId === input.id || task.otherConnectionId === input.id)))
     )
       throw Error('该PostgreSQL连接仍有会话或未确认资源，请先关闭标签并显式断开');
     if (changed) {
@@ -410,7 +478,7 @@ export class PostgresEngine {
     try {
       for (const id of new Set([
         ...this.profiles.keys(),
-        ...[...this.transfers.values()].map(task => task.connectionId),
+        ...[...this.transfers.values()].flatMap(task => [task.connectionId, task.otherConnectionId ?? task.connectionId]),
         ...this.tables.connectionIds(),
         ...this.creations.connectionIds(),
         ...this.columnEdits.connectionIds(),
@@ -719,6 +787,28 @@ export class PostgresEngine {
           command === 'postgres.foreignEdit.apply' ? this.foreignEdits : this.checkEdits;
         return workspace.apply(input as Parameters<typeof workspace.apply>[0], connect);
       }
+      case 'postgres.compareData': return this.compareData(input);
+      case 'postgres.compareData.catalogue': {
+        const profile = input.profile as PostgresConnectionProfile;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId) throw Error('缺少可信的 PostgreSQL 比较连接');
+        return this.use(profile, input.database, async managed => {
+          const sql = input.database ? `
+            SELECT n.nspname, c.relname
+            FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+            WHERE c.relkind IN ('r','p') AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+              AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND pg_catalog.has_table_privilege(c.oid, 'SELECT')
+              AND EXISTS (SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND i.indisvalid)
+            ORDER BY n.nspname, c.relname LIMIT 10001
+          ` : `
+            SELECT datname FROM pg_catalog.pg_database
+            WHERE datallowconn AND NOT datistemplate AND pg_catalog.has_database_privilege(datname,'CONNECT')
+            ORDER BY datname LIMIT 10001
+          `;
+          const result = await managed.query(sql, undefined, { rows: 10000, bytes: 4 * 1024 * 1024 });
+          if (result.truncated) throw Error('PostgreSQL 比较目录超过显示预算');
+          return result.rows.map(row => input.database ? postgresIdentifier(String(row.c0)) + '.' + postgresIdentifier(String(row.c1)) : String(row.c0));
+        });
+      }
       case 'postgres.table.related':
       case 'postgres.table.page':
       case 'postgres.table.draft.restoreVerified':
@@ -795,7 +885,7 @@ export class PostgresEngine {
       }
       case 'query.cancel': {
         const transfer = this.transfers.get(input.taskId);
-        if (transfer) { this.cancelTransfer(transfer); return; }
+        if (transfer) { await this.cancelTransfer(transfer); return; }
         const task = this.tasks.get(input.taskId);
         if (task) await this.cancel(task);
         return;

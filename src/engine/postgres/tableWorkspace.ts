@@ -84,7 +84,7 @@ const pageScope = ({ filter, sort }: Snapshot['options']) =>
   JSON.stringify([filter, postgresTableSortRules(sort).map(({ column, direction, nulls }) => [column, direction, nulls])]);
 
 /** 每次从实际库读取关系、主键顺序、列权限与结构；标识符及类型显示均来自目录。 */
-async function readRelation(connection: PostgresConnection, table: string): Promise<Relation> {
+export async function readRelation(connection: PostgresConnection, table: string): Promise<Relation> {
   const { schema, name } = postgresRelationName(table);
   const header = await connection.query(`
     SELECT c.oid, pg_catalog.pg_relation_filenode(c.oid), c.relkind, c.relispartition, c.relhasrules,

@@ -1,3 +1,4 @@
+import { postgresDataCompareZh, type PostgresDataCompareInput } from '../shared/postgresDataCompare';
 import { buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync';
 import type { SqliteEditClaim } from './sqliteTableEdit';
 import { sqliteDataCompareLimits, sqliteDataCompareZh, sqliteDataSyncLimits, sqliteDataSyncZh, type SqliteDataCompareInput, type SqliteDataSyncPreviewInput } from '../shared/sqliteDataCompare';
@@ -154,6 +155,7 @@ const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatem
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
+let postgresComparison: { owner: MainInvocation; id: string; cancelled: boolean; done: Promise<unknown> } | undefined;
 let sqliteComparison: { owner: MainInvocation; id: string; controller: AbortController } | undefined;
 interface SqliteSynchronization {
   id: string; owner: MainInvocation; expires: number; revision: number; evidence: SqliteSyncEvidence;
@@ -855,6 +857,49 @@ const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
 const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
+
+/** 比较任务固定原文档和已保存配置，迟到的取消或结果不能越过窗口与连接修订。 */
+async function comparePostgresData(input: PostgresDataCompareInput, owner: MainInvocation | undefined) {
+  columnsMain.assertCapturedOwner(owner);
+  if (postgresComparison || tasks.has(input.taskId) || completionTasks.has(input.taskId) || broker.isSqliteTask(input.taskId))
+    throw Error('已有 PostgreSQL 比较正在运行或任务编号已使用');
+  const revision = store.connectionRevision();
+  const check = () => {
+    columnsMain.assertCapturedOwner(owner);
+    if (shuttingDown || revision !== store.connectionRevision()) throw Error('PostgreSQL 比较的原窗口或连接已变化');
+    connectionConfig.assertAvailable(input.source.connectionId);
+    connectionConfig.assertAvailable(input.target.connectionId);
+  };
+  check();
+  const sourceProfile = store.resolveConnection(input.source.connectionId), targetProfile = store.resolveConnection(input.target.connectionId);
+  if (sourceProfile.dialect !== 'postgresql' || targetProfile.dialect !== 'postgresql') throw Error('两侧须选择已保存的 PostgreSQL 连接');
+  tasks.set(input.taskId, { id: input.taskId, kind: 'postgres.compareData', status: 'running', progress: 0,
+    message: postgresDataCompareZh.running, startedAt: new Date().toISOString() });
+  const done = broker.request('postgres.compareData', { ...input, sourceProfile, targetProfile });
+  const record = { owner: owner!, id: input.taskId, cancelled: false, done };
+  postgresComparison = record;
+  try {
+    const result = await done;
+    if (record.cancelled) throw Error(postgresDataCompareZh.cancelled);
+    check();
+    taskEvent({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 表数据比较完成' });
+    return result;
+  } catch (reason) {
+    if (tasks.get(input.taskId)?.status === 'running') taskEvent({ taskId: input.taskId, status: record.cancelled ? 'cancelled' : 'failed', progress: 0,
+      message: record.cancelled ? postgresDataCompareZh.cancelled : 'PostgreSQL 比较未完成' });
+    throw reason;
+  } finally { postgresComparison = undefined; }
+}
+
+async function cancelPostgresCompare(taskId: string, owner: MainInvocation | undefined) {
+  const record = postgresComparison;
+  if (!record || record.id !== taskId) return;
+  columnsMain.assertCapturedOwner(owner);
+  if (!columnsMain.sharesDocumentOwner(record.owner, owner!)) throw Error('取消请求与原 PostgreSQL 比较窗口不符');
+  record.cancelled = true;
+  try { await broker.request('query.cancel', { taskId }); }
+  finally { await record.done.catch(() => undefined); }
+}
 
 /** 比较只接受保存的两端连接和固定筛选。关闭、改配置或原文档撤销后不发布差异。 */
 async function compareSqliteData(input: SqliteDataCompareInput, owner: MainInvocation | undefined) {
@@ -1745,6 +1790,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if (tasks.get(input.taskId)?.kind === 'postgres.compareData') return cancelPostgresCompare(input.taskId, columns);
       if (tasks.get(input.taskId)?.kind.startsWith('sqlite.databaseCopy.')) {
         if (!sqliteCopyTask || sqliteCopyTask.id !== input.taskId) return;
         columnsMain.assertCapturedOwner(columns);
@@ -1943,6 +1989,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
+    case 'postgres.compareData': return comparePostgresData(input, columns);
+    case 'postgres.compareData.cancel': return cancelPostgresCompare(input.taskId, columns);
+    case 'postgres.compareData.catalogue': {
+      columnsMain.assertCapturedOwner(columns);
+      connectionConfig.assertAvailable(input.connectionId);
+      const revision = store.connectionRevision(), profile = store.resolveConnection(input.connectionId);
+      if (profile.dialect !== 'postgresql' || shuttingDown) throw Error('比较目录需要已保存的 PostgreSQL 连接');
+      const result = await broker.request(command, { ...input, profile });
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown || revision !== store.connectionRevision()) throw Error('PostgreSQL 比较的连接已变化');
+      connectionConfig.assertAvailable(input.connectionId);
+      return result;
+    }
     case 'sqlite.compareSync.preview': return previewSqliteSync(input, columns);
     case 'sqlite.compareSync.apply': return applySqliteSync(input, columns);
     case 'sqlite.compareData': return compareSqliteData(input, columns);
@@ -2503,9 +2562,9 @@ else {
         if (payload.command === 'metadata.schemaScript') columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
-        if (payload.command.startsWith('backupArchive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('postgres.compareData') || payload.command.startsWith('backupArchive.') || payload.command === 'sqlite.compareData' || payload.command === 'sqlite.compareData.cancel' || payload.command.startsWith('sqlite.compareSync.')) columns = columnsMain.capture(event);
         if (payload.command === 'sqlite.databaseCopy' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind.startsWith('sqlite.databaseCopy.')) columns = columnsMain.capture(event);
-        if (payload.command === 'app.menuState' || payload.command === 'query.cancel' && tasks.get((input as { taskId: string }).taskId)?.kind === 'postgres.table.import') columns = columnsMain.capture(event);
+        if (payload.command === 'app.menuState' || payload.command === 'query.cancel' && ['postgres.table.import', 'postgres.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '')) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
             payload.command === 'postgres.completion' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') ||
