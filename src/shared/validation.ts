@@ -295,6 +295,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.table.presets.open': postgresTablePresetOpenSchema,
   'postgres.table.preview': postgresTablePreviewSchema,
   'postgres.table.filteredUpdate': postgresFilteredUpdateSchema,
+  'postgres.table.filteredDelete': postgresTableReleaseSchema,
   'postgres.table.apply': postgresTableApplySchema,
   'postgres.table.release': postgresTableReleaseSchema,
   'sqlite.tablePage': sqliteTablePageSchema,

@@ -915,7 +915,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   }
   if (command === 'postgres.table.page' || command === 'postgres.table.preview' || command === 'postgres.table.references' || command === 'postgres.table.related' ||
       command === 'postgres.table.values' || command === 'postgres.table.statistics' || command === 'postgres.table.histogram' ||
-      command === 'postgres.table.apply' || command === 'postgres.table.filteredUpdate' || command === 'postgres.table.release') {
+      command === 'postgres.table.apply' || command === 'postgres.table.filteredUpdate' || command === 'postgres.table.filteredDelete' || command === 'postgres.table.release') {
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document;
     let owner = postgresTableOwners.get(document);

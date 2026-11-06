@@ -15,7 +15,7 @@ import { cellClipboardType, decodeClipboard } from '../../src/renderer/gridClipb
 import { binaryCellZh } from '../../src/renderer/locales/binaryCell.zh-CN';
 import { binaryCellFilesZh as binaryFilesText } from '../../src/renderer/locales/binaryCellFiles.zh-CN';
 import { postgresByteaZh as byteaText } from '../../src/renderer/locales/postgresBytea.zh-CN';
-import { postgresFilteredUpdateZh as filteredUpdateText } from '../../src/renderer/locales/postgresFilteredUpdate.zh-CN';
+import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../../src/renderer/locales/postgresFilteredUpdate.zh-CN';
 import { tableQueryTemplateZh as sqlTemplateText } from '../../src/renderer/locales/tableQueryTemplate.zh-CN';
 import { tableFilteredSelectZh as filteredSelectText } from '../../src/renderer/locales/tableFilteredSelect.zh-CN';
 import { postgresColumnStatisticsZh as statisticsText } from '../../src/renderer/locales/postgresColumnStatistics.zh-CN';
@@ -941,7 +941,9 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await page.locator('.object-row').getByRole('button', { name: '"回归"."按筛选更新"', exact: true }).click();
     const readFiltered = async () => (await reader!.query('SELECT state FROM "回归"."按筛选更新" ORDER BY id')).rows.map(row => row.state);
     const filteredUpdateButton = button(filteredUpdateText.entry);
+    const filteredDeleteButton = button(filteredDeleteText.entry);
     await expect(filteredUpdateButton).toBeDisabled();
+    await expect(filteredDeleteButton).toBeDisabled();
     await tab.getByLabel(tableText.pageSize, { exact: true }).fill('1');
     await tab.getByLabel(tableText.filterColumn, { exact: true }).selectOption('scope');
     await quickFilter.fill('已匹配');
@@ -971,6 +973,31 @@ test('PostgreSQL 复制记录、回滚修正、记录模板和跨页草稿文件
     await expect(tab.getByRole('status')).toContainText('已确认整批提交');
     expect(await readFiltered()).toEqual(['整批完成', '整批完成', '整批完成', '整批完成', '原状态']);
     await mark('从第二页按已应用筛选预览四行，确认前零写入，输入准确行数后整批提交且范围外保持');
+
+    await expect(tab.getByText(tableText.currentPage(2), { exact: true })).toBeVisible();
+    await quickFilter.fill('未应用输入');
+    await filteredDeleteButton.click();
+    const deletion = page.getByRole('dialog', { name: filteredDeleteText.title, exact: true });
+    await expect(deletion).toContainText(filteredDeleteText.affected('"回归"."按筛选更新"', 4));
+    await expect(deletion).toContainText(filteredDeleteText.sideEffects);
+    await expect(deletion).toContainText('已匹配');
+    await expect(deletion).not.toContainText('未应用输入');
+    await deletion.getByRole('button', { name: tableText.cancel, exact: true }).click();
+    expect(await readFiltered()).toEqual(['整批完成', '整批完成', '整批完成', '整批完成', '原状态']);
+    await filteredDeleteButton.click();
+    const deleteCount = deletion.getByLabel(filteredDeleteText.confirmation, { exact: true });
+    const applyDeletion = deletion.getByRole('button', { name: filteredDeleteText.apply, exact: true });
+    await deleteCount.fill('3');
+    await expect(applyDeletion).toBeDisabled();
+    await deleteCount.fill('4');
+    await deleteCount.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('PostgreSQL按筛选删除预览.png') });
+    await applyDeletion.click();
+    await expect(deletion).toHaveCount(0);
+    await expect(tab.getByRole('status')).toContainText('已确认整批提交');
+    await expect(tab.getByText(tableText.currentPage(1), { exact: true })).toBeVisible();
+    expect(await readFiltered()).toEqual(['原状态']);
+    await mark('从第二页预览全部四条待删除记录，取消零写入，输入准确行数后只删除匹配记录并返回首页');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

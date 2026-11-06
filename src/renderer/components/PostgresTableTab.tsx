@@ -54,7 +54,7 @@ import { PostgresBatchFillDialog } from './PostgresBatchFillDialog';
 import { postgresBatchFillChanges } from '../postgresBatchFill';
 import { postgresBatchEditableColumn, postgresBatchRows, postgresBatchValueEqual, type PostgresBatchRow } from '../postgresBatchSelection';
 import { postgresBatchFillZh as fillText } from '../locales/postgresBatchFill.zh-CN';
-import { postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
+import { postgresFilteredDeleteZh as filteredDeleteText, postgresFilteredUpdateZh as filteredUpdateText } from '../locales/postgresFilteredUpdate.zh-CN';
 import { PostgresBatchDeleteDialog } from './PostgresBatchDeleteDialog';
 import { postgresBatchDeletePlan, type PostgresBatchDeletePlan } from '../postgresBatchDelete';
 import { postgresBatchDeleteZh as deleteText } from '../locales/postgresBatchDelete.zh-CN';
@@ -142,6 +142,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const [templateDialog, setTemplateDialog] = useState<TemplateDialog>();
   const templateOwner = useRef<RecordTemplateLease>(undefined);
   const [preview, setPreview] = useState<PostgresTablePreview>();
+  const filteredPreview = preview?.filteredDelete ?? preview?.filteredUpdate;
+  const filteredCount = preview?.filteredDelete ? preview.counts.delete : preview?.filteredUpdate ? preview.counts.update : undefined;
   const [filteredUpdate, setFilteredUpdate] = useState<{ page: PostgresTablePage; fields?: PostgresTableField[] }>();
   const [confirmedRows, setConfirmedRows] = useState('');
   const [busy, setBusy] = useState(false);
@@ -373,16 +375,17 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   function apply() {
     const pageToken = page?.exportToken;
     if (!pageToken || !preview || !active) return;
-    const confirmation = preview.filteredUpdate ? preview.counts.update : undefined;
-    if (confirmation !== undefined && confirmedRows !== String(confirmation)) return;
+    if (filteredCount !== undefined && (confirmedRows !== String(filteredCount) || issued.current !== pageToken ||
+        !layoutScope.current.current() || requiresRefresh || pageConnectionVersion !== connectionVersion)) return;
     const previewToken = preview.previewToken;
     void run(async isCurrent => {
       const result = await invoke('postgres.table.apply', { ...target, pageToken, previewToken,
-        ...(confirmation === undefined ? {} : { confirmedRows: confirmation }) });
+        ...(filteredCount === undefined ? {} : { confirmedRows: filteredCount }) });
       if (!isCurrent()) return;
       setPreview(undefined);
       if (result.outcome === 'rolledBack' && result.draftsRetained && issued.current === pageToken) {
-        setMessage(result.message + ' ' + (preview.filteredUpdate ? filteredUpdateText.retry : text.retryAfterRollback));
+        setMessage(result.message + ' ' + (preview.filteredDelete ? filteredDeleteText.retry :
+          preview.filteredUpdate ? filteredUpdateText.retry : text.retryAfterRollback));
         if (preview.filteredUpdate && page) setFilteredUpdate({ page, fields: preview.filteredUpdate.fields });
         return;
       }
@@ -393,7 +396,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       if (result.outcome === 'committed') {
         history.reset([]);
         publishChanges([]);
-        await read(options, isCurrent);
+        await read(preview.filteredDelete ? { ...options, offset: 0 } : options, isCurrent);
       }
     }, () => {
       setPreview(undefined);
@@ -412,8 +415,24 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
   const pagingBlocked = blocked || (requiresRefresh && draft.length > 0);
   const writable = !blocked && !requiresRefresh && !!page?.pageToken;
   const filteredColumns = page?.columns.filter(isPostgresFilteredUpdateColumn) ?? [];
-  const canFilteredUpdate = active && writable && !draft.length && page?.relationKind === 'r' && page.capabilities.update &&
-    !!filteredColumns.length && isPostgresTableFiltered(options.filter) && pageConnectionVersion === connectionVersion;
+  const canFilteredWrite = active && writable && !draft.length && page?.relationKind === 'r' &&
+    isPostgresTableFiltered(options.filter) && pageConnectionVersion === connectionVersion;
+  const canFilteredUpdate = canFilteredWrite && page.capabilities.update && !!filteredColumns.length;
+  const canFilteredDelete = canFilteredWrite && page.capabilities.delete;
+
+  /** 删除只向引擎申请原表页的只读预览，确认前没有写入。 */
+  function prepareFilteredDelete() {
+    const pageToken = page?.pageToken;
+    if (!canFilteredDelete || !pageToken || issued.current !== pageToken || recordDirty.current ||
+        recordInput.current || !layoutScope.current.current() || lease.current) return;
+    setMessage('');
+    void run(async isCurrent => {
+      const result = await invoke('postgres.table.filteredDelete', { ...target, pageToken });
+      if (!isCurrent() || issued.current !== pageToken || !layoutScope.current.current()) return;
+      setConfirmedRows('');
+      setPreview(result);
+    });
+  }
 
   /** 原页筛选由引擎持有。编辑器只提交赋值，成功后进入原来的一次性预览。 */
   function prepareFilteredUpdate(fields: PostgresTableField[]) {
@@ -1036,6 +1055,7 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       <button disabled={!canFilteredUpdate} onClick={() => {
         if (canFilteredUpdate && page && layoutScope.current.current() && !lease.current) { setError(''); setFilteredUpdate({ page }); }
       }}>{filteredUpdateText.entry}</button>
+      <button disabled={!canFilteredDelete} onClick={prepareFilteredDelete}>{filteredDeleteText.entry}</button>
       <button disabled={!writable || !page?.capabilities.insert} onClick={() => setForm({ row: null })}>{text.add}</button>
       <button disabled={!canDuplicate} onClick={openDuplicate}>{duplicateText.action}</button>
       <button disabled={!canUseTemplates} onClick={openRecordTemplates}>{templateText.open}</button>
@@ -1309,20 +1329,20 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
       filtered={{ initial: filteredUpdate.fields, busy, error: error || (filteredUpdate.fields ? message : '') }} onStage={prepareFilteredUpdate} onClose={() => {
         if (!busy) { setFilteredUpdate(undefined); setError(''); }
       }}/>}
-    {preview && <Modal title={text.preview} onClose={() => { if (!busy) setPreview(undefined); }} wide>
+    {preview && <Modal title={preview.filteredDelete ? filteredDeleteText.title : text.preview} onClose={() => { if (!busy) setPreview(undefined); }} wide>
       <div className="modal-content pg-table-preview">
-        <p>{text.previewHint}</p>
+        {preview.filteredDelete ? <p>{filteredDeleteText.sideEffects}</p> : <p>{text.previewHint}</p>}
         <p>{text.change.insert} {preview.counts.insert}　{text.change.update} {preview.counts.update}　{text.change.delete} {preview.counts.delete}</p>
-        {preview.filteredUpdate && <>
-          <p>{filteredUpdateText.affected(preview.counts.update)} · {filteredUpdateText.verify}</p>
-          <h3>{filteredUpdateText.conditions}</h3><pre>{preview.filteredUpdate.condition}</pre>
-          {preview.filteredUpdate.parameters.length > 0 && <><p>{filteredUpdateText.parameters}</p><pre>{JSON.stringify(preview.filteredUpdate.parameters, null, 2)}</pre></>}
-          <dl>{preview.filteredUpdate.fields.map(field => <div key={field.column}>
+        {filteredPreview && <>
+          <p>{preview.filteredDelete ? filteredDeleteText.affected(target.table, preview.counts.delete) : filteredUpdateText.affected(preview.counts.update)} {filteredUpdateText.verify}</p>
+          <h3>{filteredUpdateText.conditions}</h3><pre>{filteredPreview.condition}</pre>
+          {filteredPreview.parameters.length > 0 && <><p>{filteredUpdateText.parameters}</p><pre>{JSON.stringify(filteredPreview.parameters, null, 2)}</pre></>}
+          {preview.filteredUpdate && <dl>{preview.filteredUpdate.fields.map(field => <div key={field.column}>
             <dt>{page?.columns.find(column => column.key === field.column)?.name}</dt>
             <dd>{'value' in field.value ? field.value.value : field.value.mode === 'null' ? 'NULL' : 'DEFAULT'}</dd>
-          </div>)}</dl>
+          </div>)}</dl>}
           <pre>{preview.statements[0]}</pre>
-          <Field label={filteredUpdateText.confirmation}><input value={confirmedRows} inputMode="numeric" maxLength={4} disabled={busy}
+          <Field label={preview.filteredDelete ? filteredDeleteText.confirmation : filteredUpdateText.confirmation}><input value={confirmedRows} inputMode="numeric" maxLength={4} disabled={busy}
             onChange={event => setConfirmedRows(event.target.value)}/></Field>
         </>}
         <ol>{draft.map(({ change, offset }, index) => <li key={index}>
@@ -1338,8 +1358,8 @@ export function PostgresTableTab({ tab, active, onInspect }: { tab: WorkspaceTab
         {preview.filteredUpdate && page && <button disabled={busy} onClick={() => {
           setFilteredUpdate({ page, fields: preview.filteredUpdate?.fields }); setPreview(undefined);
         }}>{filteredUpdateText.edit}</button>}
-        <button className="primary" disabled={busy || !active || !!preview.filteredUpdate && confirmedRows !== String(preview.counts.update)}
-          onClick={apply}>{text.apply}</button></footer>
+        <button className={preview.filteredDelete ? 'danger' : 'primary'} disabled={busy || !active || filteredCount !== undefined && confirmedRows !== String(filteredCount)}
+          onClick={apply}>{preview.filteredDelete ? filteredDeleteText.apply : text.apply}</button></footer>
     </Modal>}
   </div>;
 }

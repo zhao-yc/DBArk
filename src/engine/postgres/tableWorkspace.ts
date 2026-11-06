@@ -6,7 +6,7 @@ import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import { FILTER_LIMITS } from '../../shared/filtering';
 import {
-  isPostgresSqlExportColumn, isPostgresSqlExportRelation, isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresCountedWindow, postgresFilteredUpdateMaxRows,
+  isPostgresSqlExportColumn, isPostgresSqlExportRelation, isPostgresFilteredUpdateColumn, isPostgresTableFiltered, postgresCountedWindow, postgresFilteredWriteMaxRows,
   postgresFilteredUpdateSchema, postgresTableLimits, postgresTableSortRules, postgresTableSortSchema, postgresTableValueLimits,
   type PostgresTableApplyInput, type PostgresTableColumn, type PostgresTableExportInput, type PostgresTableField, type PostgresTableImportInput, type PostgresTableOutcome,
   type PostgresTablePage, type PostgresTablePageInput, type PostgresTablePreview, type PostgresTablePreviewInput,
@@ -43,7 +43,8 @@ interface Relation {
 }
 interface Original extends PostgresReferenceRowVersion { digest: string; key: string; }
 interface Write { kind: keyof Capabilities; sql: string; values: unknown[]; original?: Original; }
-interface FilteredUpdateMatch { sql: string; values: unknown[]; signature: string; count: number; }
+interface FilteredWriteMatch { sql: string; values: unknown[]; signature: string; count: number; }
+type FilteredWrite = { kind: 'update'; fields: PostgresTableField[] } | { kind: 'delete' };
 type ExportSource = { kind: 'copy'; write: (sink: (chunk: Buffer) => Promise<void>) => Promise<number> } |
   { kind: 'cursor'; columns: PostgresTableColumn[]; rows: AsyncIterable<CellValue[]>;
     replay?: { table: string; settings: PostgresSqlExportSettings } };
@@ -57,7 +58,7 @@ interface Snapshot {
   window?: Pick<PostgresTablePageInput, 'offset' | 'limit'>;
   writeEligible: boolean;
   related?: RelatedScope;
-  preview?: { token: string; expires: number; writes: Write[]; filtered?: FilteredUpdateMatch };
+  preview?: { token: string; expires: number; writes: Write[]; filtered?: FilteredWriteMatch };
 }
 interface TableSnapshots { current: Snapshot; retained: Map<string, Snapshot>; }
 interface RelatedScope {
@@ -221,12 +222,12 @@ async function begin(connection: PostgresConnection, mode: 'page' | 'export' | '
 }
 
 /** 预览和锁内复核都读完整匹配集合。排序只规范行版本签名，不改变筛选集合。 */
-async function filteredUpdateVersions(connection: PostgresConnection, sql: string, values: unknown[]) {
-  const limit = postgresFilteredUpdateMaxRows;
+async function filteredWriteVersions(connection: PostgresConnection, sql: string, values: unknown[]) {
+  const limit = postgresFilteredWriteMaxRows;
   const result = await connection.query(sql, values, { rows: limit + 1, bytes: 256 * 1024 });
-  if (result.truncated || result.rows.length > limit) throw Error(`按筛选更新最多 ${limit} 行，请缩小筛选范围`);
+  if (result.truncated || result.rows.length > limit) throw Error(`按筛选操作最多 ${limit} 行，请缩小筛选范围`);
   const versions = result.rows.map(row => {
-    if (typeof row.c0 !== 'string' || typeof row.c1 !== 'string') throw Error('按筛选更新的原行版本未完整返回');
+    if (typeof row.c0 !== 'string' || typeof row.c1 !== 'string') throw Error('按筛选操作的原行版本未完整返回');
     return [row.c0, row.c1] as const;
   }).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
   return { positions: versions.map(([position]) => position), signature: digest(versions) };
@@ -783,44 +784,56 @@ export class PostgresTableWorkspace {
     return { previewToken: token, statements: writes.map(write => write.sql), counts };
   }
 
-  /** 只用原页已应用的筛选计算预览。普通表的行版本与赋值保留在一次性能力里。 */
   async previewFilteredUpdate(input: Scoped<PostgresFilteredUpdateInput>, connect: Connect): Promise<PostgresTablePreview> {
     const { connectionId, database, table, tabId, pageToken } = input;
     const { fields } = postgresFilteredUpdateSchema.parse({ connectionId, database, table, tabId, pageToken, fields: input.fields });
+    return this.previewFilteredWrite(input, { kind: 'update', fields }, connect);
+  }
+
+  previewFilteredDelete(input: Scoped<PostgresTableReleaseInput>, connect: Connect): Promise<PostgresTablePreview> {
+    return this.previewFilteredWrite(input, { kind: 'delete' }, connect);
+  }
+
+  /** 只用原页已应用的筛选计算预览。完整匹配的行版本和写入语句保留在一次性凭据中。 */
+  private async previewFilteredWrite(input: Scoped<PostgresTableReleaseInput>, write: FilteredWrite, connect: Connect): Promise<PostgresTablePreview> {
     const snapshot = this.snapshot(input, true);
     const key = this.key(input), { relation, options } = snapshot;
     if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
-    if (relation.kind !== 'r' || !relation.capabilities.update || !relation.canReadSystemColumns || !isPostgresTableFiltered(options.filter))
-      throw Error('按筛选更新需要已应用筛选的可写普通表及主键');
-    const values: string[] = [], updateValues: unknown[] = [];
+    const verb = write.kind === 'update' ? '更新' : '删除';
+    if (relation.kind !== 'r' || !relation.capabilities[write.kind] || !relation.canReadSystemColumns || !isPostgresTableFiltered(options.filter))
+      throw Error(`按筛选${verb}需要已应用筛选的可写普通表及主键`);
+    const values: string[] = [], writeValues: unknown[] = [];
     const condition = postgresTableCondition(options.filter, name => columnIdentifier(relation, name), value => '$' + values.push(value));
-    if (!condition) throw Error('请先应用筛选再批量更新');
-    const assignments = fields.map(field => {
+    if (!condition) throw Error(`请先应用筛选再批量${verb}`);
+    const assignments = write.kind === 'update' ? write.fields.map(field => {
       const column = relation.columns.find(item => item.key === field.column);
       if (!column || !isPostgresFilteredUpdateColumn(column)) throw Error('按筛选更新不能写主键或生成列');
-      const { column: name, expression } = fieldExpression(field, relation, updateValues);
+      const { column: name, expression } = fieldExpression(field, relation, writeValues);
       return `${name} = ${expression}`;
-    });
-    const matchSql = `SELECT ctid::text, xmin::text FROM ${only(relation)} WHERE ${condition} LIMIT ${postgresFilteredUpdateMaxRows + 1}`;
+    }).join(', ') : '';
+    const operation = write.kind === 'update' ? `UPDATE ${only(relation)} SET ${assignments}` : `DELETE FROM ${only(relation)}`;
+    const matchSql = `SELECT ctid::text, xmin::text FROM ${only(relation)} WHERE ${condition} LIMIT ${postgresFilteredWriteMaxRows + 1}`;
     snapshot.preview = undefined;
     this.active.add(key);
     try {
       const match = await connect(async connection => {
         await begin(connection, 'page');
         if ((await readRelation(connection, input.table)).fingerprint !== relation.fingerprint) throw Error('原表结构或权限已变化，请刷新');
-        const result = await filteredUpdateVersions(connection, matchSql, values);
-        if ((await connection.query('COMMIT', undefined, small())).postgresCommand !== 'COMMIT') throw Error('按筛选更新预览事务未完成');
+        const result = await filteredWriteVersions(connection, matchSql, values);
+        if ((await connection.query('COMMIT', undefined, small())).postgresCommand !== 'COMMIT') throw Error(`按筛选${verb}预览事务未完成`);
         return result;
       });
       if (this.snapshot(input, true) !== snapshot) throw Error('原表页已变化，请重新预览');
       const count = match.positions.length;
       if (!count) throw Error('当前筛选没有匹配记录');
-      const sql = `UPDATE ${only(relation)} SET ${assignments.join(', ')} WHERE ctid = ANY($${updateValues.push(match.positions)}::tid[])`;
+      const sql = `${operation} WHERE ctid = ANY($${writeValues.push(match.positions)}::tid[])`;
       const token = randomUUID();
       snapshot.preview = { token, expires: Math.min(snapshot.expires, Date.now() + 5 * 60 * 1000),
-        writes: [{ kind: 'update', sql, values: updateValues }], filtered: { sql: matchSql, values, signature: match.signature, count } };
-      return { previewToken: token, statements: [sql], counts: { insert: 0, update: count, delete: 0 },
-        filteredUpdate: { fields, condition, parameters: values } };
+        writes: [{ kind: write.kind, sql, values: writeValues }], filtered: { sql: matchSql, values, signature: match.signature, count } };
+      const scope = { condition, parameters: values };
+      const counts = { insert: 0, update: 0, delete: 0, [write.kind]: count };
+      return { previewToken: token, statements: [sql], counts,
+        ...(write.kind === 'update' ? { filteredUpdate: { ...scope, fields: write.fields } } : { filteredDelete: scope }) };
     } finally { this.active.delete(key); }
   }
 
@@ -830,7 +843,7 @@ export class PostgresTableWorkspace {
     if (this.active.has(key)) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot(input, false, false, true), preview = snapshot.preview;
     if (!preview || preview.token !== input.previewToken || preview.expires <= Date.now()) throw Error('PostgreSQL提交预览已失效');
-    if (input.confirmedRows !== preview.filtered?.count) throw Error('确认行数与按筛选更新的预览不一致');
+    if (input.confirmedRows !== preview.filtered?.count) throw Error('确认行数与按筛选操作的预览不一致');
     const group = this.snapshots.get(key);
     snapshot.preview = undefined;
     this.active.add(key);
@@ -857,7 +870,7 @@ export class PostgresTableWorkspace {
 
   /** 提交回执以实际命令标签及空闲状态为准，断线时保留未知终态。 */
   private async applyTransaction(connection: PostgresConnection, expected: Relation, table: string, writes: Write[],
-    related?: RelatedScope, filtered?: FilteredUpdateMatch): Promise<PostgresTableOutcome> {
+    related?: RelatedScope, filtered?: FilteredWriteMatch): Promise<PostgresTableOutcome> {
     let sent = false;
     let commitAttempted = false;
     try {
@@ -882,7 +895,7 @@ export class PostgresTableWorkspace {
       }
       if (related) await this.verifyRelated(connection, related);
       if (filtered) {
-        const match = await filteredUpdateVersions(connection, filtered.sql, filtered.values);
+        const match = await filteredWriteVersions(connection, filtered.sql, filtered.values);
         if (match.signature !== filtered.signature) throw Error('筛选匹配集合或原行版本已变化，整批未写入，请重新预览');
       }
       for (const write of writes) {

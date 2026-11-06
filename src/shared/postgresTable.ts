@@ -128,9 +128,9 @@ export const postgresTablePreviewSchema = target.extend({
   if (pages.size > postgresTableLimits.draftPages) context.addIssue({ code: 'custom', message: '草稿最多来自 16 个原页' });
   if (size > postgresTableLimits.draft) context.addIssue({ code: 'custom', message: '编辑草稿超过大小预算' });
 });
-export const postgresFilteredUpdateMaxRows = 1000;
-const filteredUpdateRows = z.number().int().min(1).max(postgresFilteredUpdateMaxRows);
-export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token, confirmedRows: filteredUpdateRows.optional() }).strict();
+export const postgresFilteredWriteMaxRows = 1000;
+const filteredWriteRows = z.number().int().min(1).max(postgresFilteredWriteMaxRows);
+export const postgresTableApplySchema = target.extend({ pageToken: token, previewToken: token, confirmedRows: filteredWriteRows.optional() }).strict();
 export const postgresTableReleaseSchema = target.extend({ pageToken: token }).strict();
 export const postgresFilteredUpdateSchema = postgresTableReleaseSchema.extend({ fields: z.array(field).min(1).max(postgresTableLimits.fields) })
   .strict().superRefine(({ fields }, context) => {
@@ -278,11 +278,13 @@ export interface PostgresTablePage {
   order: 'primary' | 'physical' | 'unstable';
   relationKind: 'r' | 'p' | 'v' | 'm' | 'f';
 }
+interface PostgresFilteredWriteScope { condition: string; parameters: string[]; }
 export interface PostgresTablePreview {
   previewToken: string;
   statements: string[];
   counts: { insert: number; update: number; delete: number };
-  filteredUpdate?: { fields: PostgresTableField[]; condition: string; parameters: string[] };
+  filteredUpdate?: PostgresFilteredWriteScope & { fields: PostgresTableField[] };
+  filteredDelete?: PostgresFilteredWriteScope;
 }
 
 /** 批量赋值保留主键，生成列仍由数据库维护。 */

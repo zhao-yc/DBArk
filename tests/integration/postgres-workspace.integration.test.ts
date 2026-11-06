@@ -96,6 +96,57 @@ describe.skipIf(!enabled)('PostgreSQL真实连接、查询、事务及取消', (
     } finally { await engine.closeAll(); await reader.close(); }
   }, 60000);
 
+  it('按筛选删除跨页匹配集，遇外键限制整批回滚并保留范围外记录', async () => {
+    if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) ||
+        user !== database || !password || !Number.isInteger(port) || port <= 1024 || port > 65535)
+      throw Error('按筛选删除实库仅允许本轮隔离角色与 SSH 回环入口');
+    const id = randomUUID(), profile: PostgresConnectionProfile = { id, name: '隔离筛选删除', group: '', color: '#123456', dialect: 'postgresql',
+      host: '127.0.0.1', port, user, password, database, rememberPassword: false };
+    const engine = new Engine(), reader = new PostgresConnection(profile, database);
+    const table = '"筛选删除"."父表"', child = '"筛选删除"."级联子表"', restrict = '"筛选删除"."受限子表"';
+    const target = { profile, connectionId: id, database, table, tabId: randomUUID(), owner: randomUUID(), connectionRevision: 1 };
+    const sql = (statement: string) => reader.query(statement, undefined, { rows: 16, bytes: 64 * 1024 });
+    const keys = async (relation: string) => (await sql(`SELECT id FROM ${relation} ORDER BY id`)).rows.map(row => row.c0);
+    const filter = { column: 'scope', text: '待删除' };
+    const page = (extra = {}): Promise<PostgresTablePage> => engine.handle('postgres.table.page', { ...target, filter, offset: 1, limit: 1, ...extra });
+    const preview = (original: PostgresTablePage): Promise<PostgresTablePreview> =>
+      engine.handle('postgres.table.filteredDelete', { ...target, pageToken: original.pageToken });
+    const apply = (original: PostgresTablePage, plan: PostgresTablePreview, confirmedRows = plan.counts.delete) =>
+      engine.handle('postgres.table.apply', { ...target, pageToken: original.pageToken, previewToken: plan.previewToken, confirmedRows });
+    await reader.open();
+    try {
+      await sql('CREATE SCHEMA "筛选删除"');
+      await sql(`CREATE TABLE ${table} (id int PRIMARY KEY, scope text)`);
+      await sql(`CREATE TABLE ${child} (id int PRIMARY KEY REFERENCES ${table} ON DELETE CASCADE)`);
+      await sql(`CREATE TABLE ${restrict} (id int PRIMARY KEY REFERENCES ${table} ON DELETE RESTRICT)`);
+      await sql(`INSERT INTO ${table} SELECT i, CASE WHEN i <= 4 THEN '待删除' ELSE '保留' END FROM generate_series(1, 6) i`);
+      await sql(`INSERT INTO ${child} VALUES (1), (5)`);
+      await sql(`INSERT INTO ${restrict} VALUES (3)`);
+      await expect(preview(await page({ filter: undefined }))).rejects.toThrow('已应用筛选');
+      const original = await page(), plan = await preview(original);
+      expect(original.rows.map(row => row.c0)).toEqual(['2']);
+      expect(plan).toMatchObject({ counts: { insert: 0, update: 0, delete: 4 }, filteredDelete: { parameters: ['待删除'] } });
+      expect(plan.statements).toEqual([`DELETE FROM ONLY ${table} WHERE ctid = ANY($1::tid[])`]);
+      await expect(apply(original, plan, 3)).rejects.toThrow('确认行数');
+      expect(await keys(table)).toEqual(['1', '2', '3', '4', '5', '6']);
+      expect(await apply(original, plan)).toMatchObject({ outcome: 'rolledBack', affected: 0 });
+      expect(await keys(table)).toEqual(['1', '2', '3', '4', '5', '6']);
+      expect(await keys(child)).toEqual(['1', '5']);
+
+      await sql(`DELETE FROM ${restrict} WHERE id = 3`);
+      const stalePage = await page(), stale = await preview(stalePage);
+      await sql(`INSERT INTO ${table} VALUES (7, '待删除')`);
+      expect(await apply(stalePage, stale)).toMatchObject({ outcome: 'notSent', affected: 0, message: expect.stringContaining('匹配集合') });
+      expect(await keys(table)).toEqual(['1', '2', '3', '4', '5', '6', '7']);
+      const ready = await page(), readyPlan = await preview(ready);
+      expect(readyPlan.counts.delete).toBe(5);
+      expect(await apply(ready, readyPlan)).toMatchObject({ outcome: 'committed', affected: 5 });
+      expect(await keys(table)).toEqual(['5', '6']);
+      expect(await keys(child)).toEqual(['5']);
+      await expect(apply(ready, readyPlan)).rejects.toThrow();
+    } finally { await engine.closeAll(); await reader.close(); }
+  }, 60000);
+
   it('从统一引擎使用隔离角色和库，保留类型精度、错误终态及原事务', async () => {
     if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(database) ||
         user !== database || !password || !Number.isInteger(port) || port <= 1024 || port > 65535) {
