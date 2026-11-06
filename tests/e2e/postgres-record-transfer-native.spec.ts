@@ -288,8 +288,8 @@ test('PostgreSQL 从只读视图跨库映射并追加两条记录', async ({}, i
         precise, typeof(precise) AS precise_type, hex(raw) AS raw, typeof(raw) AS raw_type, missing FROM transfer_target ORDER BY id`).all(); }
       finally { db.close(); }
     };
-    await (await navigationMenuItem(sqliteTab, { name: sqliteTransferText.entry, exact: true }, check)).click();
-    const sqliteMapping = page.getByRole('dialog', { name: sqliteTransferText.title, exact: true });
+    await (await navigationMenuItem(sqliteTab, { name: sqliteTransferText.entry('PostgreSQL'), exact: true }, check)).click();
+    const sqliteMapping = page.getByRole('dialog', { name: sqliteTransferText.title('PostgreSQL'), exact: true });
     await expect(sqliteMapping).toContainText('跨引擎 SQLite 写入目标');
     await sqliteMapping.getByLabel(sqliteTransferText.sourceColumn, { exact: true }).selectOption('2');
     await expect(sqliteMapping.getByLabel(sqliteTransferText.targetColumn, { exact: true })).toHaveValue('precise');

@@ -6,14 +6,28 @@ import type { PostgresRecordTransfer } from './postgresRecordTransfer';
 import { prepareSqlitePaste, sqliteClipboardLimits, type SqliteClipboardCell, type SqlitePasteMapping } from './sqliteTableClipboard';
 import { sqliteRecordTransferZh as text } from './locales/sqliteRecordTransfer.zh-CN';
 
-export function isPostgresQueryTransfer(snapshot: PostgresRecordTransfer | undefined): snapshot is PostgresRecordTransfer {
-  return !!snapshot && 'title' in snapshot.source && !snapshot.source.dialect;
+export type SqliteTransferEngine = 'PostgreSQL' | 'MySQL' | 'MariaDB';
+
+export function sqliteTransferEngine(snapshot: PostgresRecordTransfer | undefined): SqliteTransferEngine | undefined {
+  const source = snapshot?.source;
+  if (!source || !('title' in source) || source.dialect === 'sqlite') return undefined;
+  if (source.dialect === 'mysql') return 'MySQL';
+  if (source.dialect === 'mariadb') return 'MariaDB';
+  return 'PostgreSQL';
 }
 
-/** 只对真实 PostgreSQL 整型保留 INTEGER，任意精度小数不经过 Number。 */
-export function postgresToSqliteValues(snapshot: PostgresRecordTransfer): SqliteClipboardCell[][] {
-  if (!isPostgresQueryTransfer(snapshot)) throw Error(text.unavailable);
-  return snapshot.rows.map(row => snapshot.columns.map(column => {
+/** 整批使用同一整数存储类型；网络整数只要一条超出 int64，就把该列原文统一保留为 TEXT。 */
+export function queryToSqliteValues(snapshot: PostgresRecordTransfer): SqliteClipboardCell[][] {
+  const engine = sqliteTransferEngine(snapshot);
+  if (!engine) throw Error(text.unavailable);
+  const postgres = engine === 'PostgreSQL';
+  const integerTypes = postgres ? /^(?:smallint|integer|bigint)$/ : /^(?:TINY|SHORT|INT24|LONG|LONGLONG)$/;
+  const integerCandidates = snapshot.columns.map(column => integerTypes.test(column.type));
+  const integers = snapshot.columns.map((column, index) => integerCandidates[index] && (postgres || snapshot.rows.every(row => {
+    const value = row.get(column.key);
+    return value === null || sqliteEditValueSchema.safeParse({ kind: 'integer', value: String(value) }).success;
+  })));
+  return snapshot.rows.map(row => snapshot.columns.map((column, index) => {
     const value = row.get(column.key);
     if (value === undefined) throw Error(text.unavailable);
     if (value === null) return { kind: 'null' };
@@ -21,8 +35,9 @@ export function postgresToSqliteValues(snapshot: PostgresRecordTransfer): Sqlite
       if (value.base64.length > 4 * Math.ceil(sqliteClipboardLimits.valueUnits / 6)) throw Error(text.incompatible(column.name));
       return sqliteEditValueSchema.parse({ kind: 'blob', value: cellText(value).slice(2) });
     }
+    if (integerCandidates[index] && typeof value === 'number' && !Number.isSafeInteger(value)) throw Error(text.unsafeInteger(column.name));
     return sqliteEditValueSchema.parse({
-      kind: /^(?:smallint|integer|bigint)$/.test(column.type) ? 'integer' : 'text',
+      kind: integers[index] ? 'integer' : 'text',
       value: String(value),
     });
   }));
@@ -35,7 +50,7 @@ function accepts(column: SqliteEditColumn, strict: boolean, value: SqliteClipboa
   if (strict && column.declaredType.toUpperCase() === 'ANY') return true;
   const affinity = sqliteTableImportAffinity(column.declaredType, strict);
   if (value.kind === 'text') return affinity === 'text' || !strict && affinity === 'blob';
-  if (value.kind === 'integer') return affinity === 'integer' || !strict && (affinity === 'numeric' || affinity === 'blob');
+  if (value.kind === 'integer') return affinity === 'integer' || affinity === 'text' || !strict && (affinity === 'numeric' || affinity === 'blob');
   return value.kind === 'blob' && (affinity === 'blob' || !strict && !column.primary);
 }
 
@@ -64,10 +79,15 @@ export function prepareSqliteRecordTransfer(page: SqliteTablePage, values: Sqlit
   const edit = page.edit;
   if (edit?.kind !== 'editable') throw Error(text.unavailable);
   const targets = new Map(edit.columns.map(column => [column.name, column]));
+  const textTargets = new Set<number>();
   for (const [index, field] of mapping.entries()) {
     if (field.column === null) continue;
     const target = targets.get(field.column);
     if (!target || field.kind !== 'preserve' || !values.every(row => accepts(target, !!edit.strict, row[index]))) throw Error(text.incompatible(field.column));
+    if (sqliteTableImportAffinity(target.declaredType, !!edit.strict) === 'text') textTargets.add(index);
   }
-  return prepareSqlitePaste(page, values, mapping);
+  // 映射到 TEXT 时直接写入整数原文，后续较小的批次也能写入同一文本列。
+  const input = values.map(row => row.map((value, index) => value?.kind === 'integer' && textTargets.has(index)
+    ? { kind: 'text' as const, value: value.value } : value));
+  return prepareSqlitePaste(page, input, mapping);
 }

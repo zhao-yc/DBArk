@@ -1536,7 +1536,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     try{const snapshot=resultSelection.allSnapshot(selectionBinding);invalidateResultSelection();setExportSelected(false);setExportResult(snapshot);}catch(reason){setError(errorMessage(reason));}
   }
   /** 使用本次勾选的协议值和同一视图的类型证据，不重新执行源查询。 */
-  function capturePostgresTransfer() {
+  function captureQueryTransfer() {
     if (!connection || connection.dialect === 'postgresql' || pin || !selectionBinding || !resultSelectionAllowed(selectionBinding)) return;
     try {
       const source = { connectionId: tab.connectionId, label: connection.name, title: tab.title, result: resultIndex + 1 };
@@ -1544,7 +1544,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         ? captureSqliteQueryTransfer({ ...source, database: 'main' }, resultSelection.sqliteSnapshot(selectionBinding))
         : captureMysqlQueryTransfer(source, connection.dialect, resultSelection.snapshot(selectionBinding), selectionBinding.visibleColumns);
       usePostgresRecordTransfer.setState({ snapshot });
-      useWorkspace.getState().notify(transferText.queryCaptured(snapshot.rows.length));
+      useWorkspace.getState().notify(connection.dialect === 'sqlite' ? transferText.queryCaptured(snapshot.rows.length) : transferText.queryCapturedToEither(snapshot.rows.length));
     } catch (reason) { setError(errorMessage(reason)); }
   }
 
@@ -2032,7 +2032,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 {connection && connection.dialect !== 'postgresql' && !pin && <button disabled={busy || !selectionBinding ||
   sqlite && !selectionBinding.result.sqliteStorage || !selectedExportCount ||
   selectedExportCount > postgresTableLimits.changes || selectionBinding.visibleColumns.length > postgresTableLimits.fields}
-  title={transferText.limits} onClick={capturePostgresTransfer}>{transferText.captureToPostgres}</button>}
+  title={transferText.limits} onClick={captureQueryTransfer}>{sqlite ? transferText.captureToPostgres : transferText.queryCapture}</button>}
 {!sqlite && <button aria-label={resultInsertZh.open} disabled={!selectionBinding || !exportable?.rows.length || busy || !!resultInsertSource || !!activeColumnLease || !!activeFilterLease || !!activeSortLease} onClick={() => openResultInsert(false)}>{resultInsertZh.open}</button>}
 {!sqlite && <button aria-label={resultInsertZh.selected} disabled={!selectedExportCount || busy || !!resultInsertSource} onClick={() => openResultInsert(true)}>{resultInsertZh.selected}</button>}</ActionMenuSection>
           <ActionMenuSection label={menuText.snapshots}>{snapshotActions}</ActionMenuSection>
