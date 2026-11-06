@@ -564,6 +564,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'backupArchive.exportSql': z.object({ operationId: id, token: id }).strict(),
   'backupArchive.inspectSql': z.object({ operationId: id, token: id }).strict(),
   'backupArchive.auditTarget': z.object({ operationId: id, token: id, connectionId: id }).strict(),
+  'backupArchive.restore': z.object({ operationId: id, token: id, connectionId: id, acknowledgeScript: z.literal(true) }).strict(),
   'backupArchive.cancel': z.object({ operationId: id }).strict(),
   'postgres.archive.choose': postgresArchiveChooseSchema,
   'postgres.archive.list': postgresArchiveListSchema,

@@ -43,7 +43,7 @@ async function visibility(context: Context, family: Manifest['family'], version:
     return unknown;
   const modes = facts.sqlMode.toUpperCase().split(',');
   const proof = databaseBackupGlobalGrants(rows, facts.account, family, { dialect: family,
-    mode: { ansiQuotes: modes.includes('ANSI_QUOTES'), noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES') } }, true);
+    mode: { ansiQuotes: modes.includes('ANSI_QUOTES'), noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES') } }, true, true);
   const schemas = proof.known && ['SELECT', 'SHOW DATABASES'].every(grant => proof.privileges.has(grant));
   const objects = schemas && ['SHOW VIEW', 'TRIGGER', 'EVENT', ...(family === 'mariadb' ? ['SHOW CREATE ROUTINE'] : [])]
     .every(grant => proof.privileges.has(grant));

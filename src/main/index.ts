@@ -2274,6 +2274,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'backupArchive.open': return queryFileOperation(() => backupArchiveFiles.open(columns!, input.operationId));
     case 'backupArchive.exportSql': return queryFileOperation(() => backupArchiveFiles.export(columns!, input.operationId, input.token));
     case 'backupArchive.inspectSql': return queryFileOperation(() => backupArchiveFiles.inspectSql(columns!, input.operationId, input.token));
+    case 'backupArchive.restore':
     case 'backupArchive.auditTarget': {
       const { connectionId, operationId, token } = input;
       const revision = store.connectionRevision();
@@ -2282,15 +2283,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         if (shuttingDown || revision !== store.connectionRevision()) throw Error('恢复目标的窗口或连接配置已变化，请重新检查');
         connectionConfig.assertAvailable(connectionId);
       };
+      const targetKey = JSON.stringify([connectionId, revision]);
+      const start = (registerStop: (stop: () => Promise<void>) => void) => {
+        assertConnection();
+        const profile = store.resolveConnection(connectionId);
+        if (profile.dialect !== 'mysql' && profile.dialect !== 'mariadb') throw Error('恢复目标需要已保存的 MySQL 或 MariaDB 连接');
+        const taskId = randomUUID();
+        registerStop(() => broker.request('query.cancel', { taskId }));
+        return { connectionId, profile, taskId };
+      };
+      if (command === 'backupArchive.restore') return queryFileOperation(() => backupArchiveFiles.restore(columns!, operationId, token, targetKey,
+        async (source, registerStop) => broker.request(command, { ...start(registerStop), source, acknowledgeScript: input.acknowledgeScript })));
       const result = await queryFileOperation(() => backupArchiveFiles.auditTarget(columns!, operationId, token,
-        async ({ family, serverVersion, database }, registerStop) => {
-          assertConnection();
-          const profile = store.resolveConnection(connectionId);
-          if (profile.dialect !== 'mysql' && profile.dialect !== 'mariadb') throw Error('恢复目标需要已保存的 MySQL 或 MariaDB 连接');
-          const taskId = randomUUID();
-          registerStop(() => broker.request('query.cancel', { taskId }));
-          return broker.request(command, { connectionId, profile, taskId, manifest: { family, serverVersion, database } });
-        }));
+        async ({ family, serverVersion, database }, registerStop) =>
+          broker.request(command, { ...start(registerStop), manifest: { family, serverVersion, database } }), targetKey));
       assertConnection();
       return result;
     }

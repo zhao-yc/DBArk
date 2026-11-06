@@ -447,6 +447,7 @@ export interface CommandMap {
   'backupArchive.exportSql': { input: { operationId: string; token: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupSqlExport | null };
   'backupArchive.inspectSql': { input: { operationId: string; token: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupSqlInventory };
   'backupArchive.auditTarget': { input: { operationId: string; token: string; connectionId: string }; output: import('./databaseBackupArchiveFiles').DatabaseBackupRestoreTargetAudit };
+  'backupArchive.restore': { input: { operationId: string; token: string; connectionId: string; acknowledgeScript: true }; output: import('./sqlFileImport').FileImportResult };
   'backupArchive.cancel': { input: { operationId: string }; output: void };
   'postgres.archive.choose': { input: { kind: 'tool' | 'source' }; output: FileChoice | null };
   'postgres.archive.list': { input: import('./postgresArchive').PostgresArchiveListInput; output: import('./postgresArchive').PostgresArchiveListing };

@@ -1,18 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { constants, linkSync, lstatSync, unlinkSync, type BigIntStats } from 'node:fs';
-import { lstat, open } from 'node:fs/promises';
+import { linkSync, lstatSync, unlinkSync, type BigIntStats } from 'node:fs';
+import { lstat } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
 import { AtomicFile, privateAtomicFileIO } from '../engine/atomicFile';
 import { databaseBackupArchiveLimits, inspectDatabaseBackupArchive, type DatabaseBackupArchiveSink } from '../engine/databaseBackupArchive';
+import { namedBackupArchiveRevision, withBackupArchiveFile } from '../engine/databaseBackupArchiveFile';
 import { DatabaseBackupSqlInventoryReader } from '../engine/databaseBackupSqlInventory';
-import { databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit, type DatabaseBackupSqlExport, type DatabaseBackupSqlInventory } from '../shared/databaseBackupArchiveFiles';
+import type { MysqlBackupArchiveSource } from '../engine/mysqlBackupArchiveRestore';
+import { canRestoreBackupArchive, databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit, type DatabaseBackupSqlExport, type DatabaseBackupSqlInventory } from '../shared/databaseBackupArchiveFiles';
+import type { FileImportResult } from '../shared/sqlFileImport';
 
 const leaseMs = 10 * 60_000;
 const invalidPath = () => Error('请选择有效的普通归档文件或新的 SQL 文件名');
 const changed = () => Error(text.stale);
 const sameObject = (left: BigIntStats, right: BigIntStats) => left.dev === right.dev && left.ino === right.ino && right.isFile();
-const sameRevision = (left: BigIntStats, right: BigIntStats) => sameObject(left, right) &&
-  left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 
 interface ArchivePorts<Owner> {
   assert(owner: Owner): void;
@@ -25,9 +26,10 @@ interface ArchivePorts<Owner> {
 interface Inspection<Owner> {
   owner: Owner;
   path: string;
-  stamp: BigIntStats;
+  stamp: string;
   view: DatabaseBackupArchiveView;
   expires: number;
+  auditedTarget?: string;
 }
 
 type RegisterStop = (stop: () => Promise<void>) => void;
@@ -41,31 +43,12 @@ interface ArchiveJob<Owner> {
 }
 
 /** 两次校验均用同一轮打开的只读句柄。选中路径、文件代次、CRC 和 SHA 同时约束导出。 */
-async function readArchive(path: string, check: () => void, stamp?: BigIntStats, sink?: DatabaseBackupArchiveSink) {
-  check();
-  if (!isAbsolute(path) || path.includes('\0')) throw invalidPath();
-  const initial = await lstat(path, { bigint: true });
-  check();
-  if (!initial.isFile() || initial.size > databaseBackupArchiveLimits.archiveBytes || stamp && !sameRevision(stamp, initial))
-    throw changed();
-  // POSIX 防止检查与打开之间换成链接或阻塞设备。Windows 在打开前后核验同一普通文件。
-  const flags = process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
-  const handle = await open(path, flags);
-  try {
-    check();
-    if (!sameRevision(initial, await handle.stat({ bigint: true }))) throw changed();
-    const checked = await inspectDatabaseBackupArchive({
-      size: initial.size,
-      async read(offset, length) {
-        const buffer = Buffer.alloc(length);
-        const { bytesRead } = await handle.read(buffer, 0, length, Number(offset));
-        return buffer.subarray(0, bytesRead);
-      }
-    }, check, sink);
-    if (!sameRevision(initial, await handle.stat({ bigint: true })) || !sameRevision(initial, await lstat(path, { bigint: true }))) throw changed();
-    check();
-    return { stamp: initial, checked };
-  } finally { await handle.close(); }
+async function readArchive(path: string, check: () => void, stamp?: string, sink?: DatabaseBackupArchiveSink) {
+  return withBackupArchiveFile(path, check, stamp, async (reader, assertCurrent, revision) => {
+    const checked = await inspectDatabaseBackupArchive(reader, check, sink);
+    await assertCurrent();
+    return { stamp: revision, checked };
+  });
 }
 
 async function assertNewTarget(path: string): Promise<void> {
@@ -93,8 +76,9 @@ export class DatabaseBackupArchiveFiles<Owner> {
     try {
       return await work(check, () => { check(); job.publishing = true; }, stop => { check(); job.stop = stop; });
     } finally {
-      try { await job.stopping; }
-      finally { this.active = undefined; }
+      // 取消调用方单独取得错误，不能覆盖原操作已经取得的写入回执。
+      await job.stopping?.catch(() => undefined);
+      this.active = undefined;
     }
   }
 
@@ -115,19 +99,33 @@ export class DatabaseBackupArchiveFiles<Owner> {
 
   /** 只转发已校验清单；原窗口或文件代次变化后，不发布另一目标的查询回执。 */
   auditTarget(owner: Owner, id: string, token: string, read: (manifest: DatabaseBackupArchiveView['manifest'],
-    registerStop: RegisterStop) => Promise<DatabaseBackupRestoreTargetAudit>): Promise<DatabaseBackupRestoreTargetAudit> {
+    registerStop: RegisterStop) => Promise<DatabaseBackupRestoreTargetAudit>, targetKey?: string): Promise<DatabaseBackupRestoreTargetAudit> {
     return this.run(owner, id, async (check, _publishing, registerStop) => {
       const inspection = this.assertInspection(owner, token);
+      inspection.auditedTarget = undefined;
       const assertCurrent = async () => {
-        const stamp = await lstat(inspection.path, { bigint: true }).catch(() => { throw changed(); });
+        const stamp = await namedBackupArchiveRevision(inspection.path);
         check();
-        if (!sameRevision(inspection.stamp, stamp)) throw changed();
+        if (inspection.stamp !== stamp) throw changed();
         this.assertInspection(owner, token);
       };
       await assertCurrent();
       const result = await read(inspection.view.manifest, registerStop);
       await assertCurrent();
+      if (canRestoreBackupArchive(result)) inspection.auditedTarget = targetKey;
       return result;
+    });
+  }
+
+  /** 单次确认绑定当前归档和已检查的连接配置。执行进程负责重读归档与原连接上的目标目录。 */
+  restore(owner: Owner, id: string, token: string, targetKey: string,
+    execute: (source: MysqlBackupArchiveSource, registerStop: RegisterStop) => Promise<FileImportResult>): Promise<FileImportResult> {
+    return this.run(owner, id, async (_check, _publishing, registerStop) => {
+      const inspection = this.assertInspection(owner, token);
+      if (inspection.auditedTarget !== targetKey) throw Error(text.restoreNeedsAudit);
+      inspection.auditedTarget = undefined;
+      return execute({ path: inspection.path, revision: inspection.stamp, sha256: inspection.view.archive.sha256,
+        dumpBytes: inspection.view.manifest.dump.bytes }, registerStop);
     });
   }
 

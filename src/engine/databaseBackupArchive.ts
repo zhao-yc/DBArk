@@ -12,6 +12,9 @@ export interface DatabaseBackupArchiveReader {
   /** 返回1至length字节，允许短读；offset保持bigint。 */
   read(offset: bigint, length: number): Promise<Uint8Array>;
 }
+export interface DatabaseBackupArchiveDumpSink {
+  writeBytes(bytes: Uint8Array, offset: bigint): Promise<void>;
+}
 interface Entry {
   name: string;
   offset: number;
@@ -158,7 +161,7 @@ export class DatabaseBackupArchiveWriter {
 }
 
 /** 有界短读，BigInt先核边界再转长度；reader不能用空片段或超额片段掩盖截断。 */
-async function readExact(reader: DatabaseBackupArchiveReader, size: bigint, offset: bigint, length: number, check: () => void): Promise<Buffer> {
+export async function readBackupArchiveBlock(reader: DatabaseBackupArchiveReader, size: bigint, offset: bigint, length: number, check: () => void): Promise<Buffer> {
 
   if (!Number.isSafeInteger(length) || length < 0 || length > limits.blockBytes || offset < 0n || offset + BigInt(length) > size) throw Error('备份归档读取边界无效');
   const out = Buffer.alloc(length);
@@ -217,12 +220,12 @@ async function directoryEntries(size: bigint, read: (offset: bigint, length: num
 }
 
 /** 校验时可把原始 SQL 片段写入调用方的私有暂存。只有完整结果返回后才能发布文件。 */
-export async function inspectDatabaseBackupArchive(reader: DatabaseBackupArchiveReader, checkCancelled: () => void = () => { }, stagedDump?: DatabaseBackupArchiveSink): Promise<{ manifest: DatabaseBackupArchiveManifest; dump: DatabaseBackupArchiveDump; archive: { bytes: string; sha256: string }; integrity: 'valid'; restoreVerified: false }> {
+export async function inspectDatabaseBackupArchive(reader: DatabaseBackupArchiveReader, checkCancelled: () => void = () => { }, stagedDump?: DatabaseBackupArchiveDumpSink): Promise<{ manifest: DatabaseBackupArchiveManifest; dump: DatabaseBackupArchiveDump; archive: { bytes: string; sha256: string }; integrity: 'valid'; restoreVerified: false }> {
 
   checkCancelled();
   const size = reader.size;
   if (typeof size !== 'bigint' || size < 0n || size > limits.archiveBytes) throw Error('备份归档总大小超预算');
-  const read = (offset: bigint, length: number) => readExact(reader, size, offset, length, checkCancelled);
+  const read = (offset: bigint, length: number) => readBackupArchiveBlock(reader, size, offset, length, checkCancelled);
   const { entries } = await directoryEntries(size, read);
 
   const hashes: string[] = [], manifestParts: Buffer[] = [], archiveHash = createHash('sha256');
@@ -240,7 +243,7 @@ export async function inspectDatabaseBackupArchive(reader: DatabaseBackupArchive
       hash.update(chunk);
       archiveHash.update(chunk);
       if (entry.name === names[1]) manifestParts.push(chunk);
-      else if (stagedDump) { await stagedDump.writeBytes(chunk); checkCancelled(); }
+      else if (stagedDump) { await stagedDump.writeBytes(chunk, at); checkCancelled(); }
       remaining -= BigInt(length);
       at += BigInt(length);
     }

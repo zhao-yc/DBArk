@@ -34,26 +34,35 @@ export async function* readMysqlSqlFile(source: MysqlSqlFileSource, encoding: My
       check();
     };
     await assertCurrent();
-    // MariaDB 导出首行是命令行客户端指令。仅屏蔽这一固定标记，并保留原字符位置。
-    const sandbox = '/*M!999999\\- enable the sandbox mode */';
-    let prefix = '', first = family === 'mariadb';
-    const decoder = new TextDecoder({ utf8: 'utf-8', utf16le: 'utf-16le', gb18030: 'gb18030' }[encoding], { fatal: true });
     const stream = handle.createReadStream({ autoClose: false, end: source.bytes - 1 });
-    try {
+    async function* checkedBytes(): AsyncGenerator<Uint8Array> {
       for await (const bytes of stream) {
         await assertCurrent();
-        const chunk = decoder.decode(bytes as Buffer, { stream: true });
-        if (!first) { yield chunk; continue; }
-        prefix += chunk;
-        if (sandbox.startsWith(prefix) || prefix === sandbox + '\r') continue;
-        first = false;
-        yield prefix.startsWith(sandbox) && /^\r?\n/.test(prefix.slice(sandbox.length))
-          ? ' '.repeat(sandbox.length) + prefix.slice(sandbox.length) : prefix;
-        prefix = '';
+        yield bytes as Buffer;
       }
       await assertCurrent();
-      const tail = decoder.decode();
-      if (prefix || tail) yield prefix === sandbox ? ' '.repeat(sandbox.length) + tail : prefix + tail;
-    } finally { stream.destroy(); }
+    }
+    try { yield* decodeMysqlSql(checkedBytes(), encoding, family); }
+    finally { stream.destroy(); }
   } finally { await handle.close(); }
+}
+
+/** MariaDB 转储首行是命令行客户端指令。只屏蔽固定标记，并保留原字符位置。 */
+export async function* decodeMysqlSql(bytes: AsyncIterable<Uint8Array>, encoding: MysqlSqlFileChooseInput['encoding'],
+  family: 'mysql' | 'mariadb'): AsyncGenerator<string> {
+  const sandbox = '/*M!999999\\- enable the sandbox mode */';
+  let prefix = '', first = family === 'mariadb';
+  const decoder = new TextDecoder({ utf8: 'utf-8', utf16le: 'utf-16le', gb18030: 'gb18030' }[encoding], { fatal: true });
+  for await (const block of bytes) {
+    const chunk = decoder.decode(block, { stream: true });
+    if (!first) { yield chunk; continue; }
+    prefix += chunk;
+    if (sandbox.startsWith(prefix) || prefix === sandbox + '\r') continue;
+    first = false;
+    yield prefix.startsWith(sandbox) && /^\r?\n/.test(prefix.slice(sandbox.length))
+      ? ' '.repeat(sandbox.length) + prefix.slice(sandbox.length) : prefix;
+    prefix = '';
+  }
+  const tail = decoder.decode();
+  if (prefix || tail) yield prefix === sandbox ? ' '.repeat(sandbox.length) + tail : prefix + tail;
 }

@@ -1183,7 +1183,8 @@ function WorkspaceApp() {
     {mysqlSqlFile && <MysqlSqlFileDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)}
       onRefresh={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}
       onClose={() => setMysqlSqlFile(false)}/>}
-    {backupArchive && <DatabaseBackupArchiveDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)} onClose={() => setBackupArchive(false)}/>}
+    {backupArchive && <DatabaseBackupArchiveDialog connections={networkConnections.filter(profile => !profile.pendingFiles?.length)} onClose={() => setBackupArchive(false)}
+      onRefresh={id => setConnectionRefreshVersions(current => ({ ...current, [id]: (current[id] ?? 0) + 1 }))}/>}
     {postgresBackup && <PostgresTableBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresBackup(false)}/>}
     {postgresDatabaseBackup && <PostgresDatabaseBackupDialog connections={connections.filter(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)} onClose={() => setPostgresDatabaseBackup(false)}/>}
     {postgresArchive && <PostgresArchiveDialog onClose={() => setPostgresArchive(false)} paused={!!postgresArchiveRestore}

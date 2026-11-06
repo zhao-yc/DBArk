@@ -1,5 +1,7 @@
 import { createMysqlDatabaseBackup } from './mysqlDatabaseBackup';
 import { readMysqlSqlFile, type MysqlSqlFileSource } from './mysqlSqlFile';
+import { withVerifiedMysqlArchiveDump } from './mysqlBackupArchiveRestore';
+import { canRestoreBackupArchive, databaseBackupArchiveZh } from '../shared/databaseBackupArchiveFiles';
 import { PostgresEngine } from './postgres/engine';
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { verifyTableDraft } from './tableDraftVerify';
@@ -356,6 +358,40 @@ export class Engine {
           if (!received) throw reason;
           return finishSqlFileImportEvidence(evidence, evidence.result.sql?.termination === 'cancelled',
             'SQL 文件执行回执已保留，连接或任务收尾未确认；请核对服务器状态');
+        }
+      }
+      case 'backupArchive.restore': {
+        const profile = input.profile;
+        if ((profile?.dialect !== 'mysql' && profile?.dialect !== 'mariadb') || profile.id !== input.connectionId ||
+          input.acknowledgeScript !== true || !input.source) throw Error('缺少可信的归档来源、恢复目标或执行确认');
+        const execution = { ...input, database: null, encoding: 'utf8' };
+        const evidence = createSqlFileImportEvidence(input.taskId, 'utf8');
+        let received = false;
+        try {
+          return await this.withFileTask(execution, '直接恢复数据库备份归档', task => {
+            const checkCancelled = () => this.checkCancelled(task);
+            return withVerifiedMysqlArchiveDump(input.source, checkCancelled, async (manifest, sql) => {
+              // 核对的连接就是执行脚本的连接。取消控制使用同一任务编号与查询代次。
+              const audit = await auditDatabaseBackupTarget({
+                managed: task.managed, checkCancelled,
+                commandStarted() {
+                  checkCancelled();
+                  task.inFlight = true; task.generation++;
+                  return () => { task.inFlight = false; };
+                }
+              }, manifest);
+              if (!canRestoreBackupArchive(audit))
+                throw Error([databaseBackupArchiveZh.restoreRejected + '。', ...audit.blockers.map(blocker => blocker.message)].join(' '));
+              checkCancelled();
+              received = true;
+              task.sqlFileImport = evidence;
+              return this.importSql(task, execution, sql);
+            });
+          }, profile);
+        } catch (reason) {
+          if (!received) throw reason;
+          return finishSqlFileImportEvidence(evidence, evidence.result.sql?.termination === 'cancelled',
+            '归档恢复回执已保留，文件或连接收尾未确认；请核对服务器状态');
         }
       }
       case 'backupArchive.auditTarget': {

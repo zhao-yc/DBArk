@@ -49,6 +49,10 @@ export interface DatabaseBackupRestoreTargetAudit {
   blockers: DatabaseBackupBlocker[];
 }
 
+export function canRestoreBackupArchive(audit: DatabaseBackupRestoreTargetAudit): boolean {
+  return audit.blockers.length === 0 && (audit.state === 'absent' || audit.state === 'empty');
+}
+
 export const databaseBackupArchiveZh = {
   title: '打开数据库备份归档',
   select: '选择备份归档',
@@ -93,6 +97,12 @@ export const databaseBackupArchiveZh = {
   targetPlaceholder: '选择已保存的 MySQL 或 MariaDB 连接',
   noTargets: '保存 MySQL 或 MariaDB 连接后，可以检查恢复目标。',
   audit: '检查目标',
+  restore: '直接恢复归档',
+  restoring: '正在复核归档、检查目标并执行 SQL',
+  restoreNeedsAudit: '恢复前请重新检查当前连接和同名库',
+  restoreRejected: '目标复查未通过，未执行归档 SQL',
+  restoreAcknowledgement: '我信任这份归档，确认用所选账号执行其中的 SQL。',
+  restoreScope: '恢复时会复查同名库是否为空或不存在。SQL 可以使用所选账号的权限，检查无法隔离其他会话的并发修改。停止或失败后，已提交的语句和部分 DDL 可能保留。',
   auditing: '正在只读检查恢复目标',
   auditResult: '目标检查结果',
   targetServer: '实际服务器',

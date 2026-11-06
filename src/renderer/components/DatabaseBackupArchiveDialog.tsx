@@ -1,34 +1,42 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { NetworkConnectionProfile } from '../../shared/contracts';
 import { databaseBackupKinds } from '../../shared/databaseBackup';
-import { databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit, type DatabaseBackupSqlInventory } from '../../shared/databaseBackupArchiveFiles';
+import { canRestoreBackupArchive, databaseBackupArchiveZh as text, type DatabaseBackupArchiveView, type DatabaseBackupRestoreTargetAudit, type DatabaseBackupSqlInventory } from '../../shared/databaseBackupArchiveFiles';
+import { sqlFileImportReceiptSchema, type SqlFileImportReceipt } from '../../shared/sqlFileImport';
 import { databaseBackupZh } from '../locales/databaseBackup.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
 import { ErrorBox, Modal } from './ui';
+import { SqlFileImportReport } from './SqlFileImportReport';
 import '../databaseBackup.css';
 
 /** 操作结束之前保留对话框；取消请求只作用于当前操作，原操作负责给出最终结果。 */
-export function DatabaseBackupArchiveDialog({ connections, onClose }: {
+export function DatabaseBackupArchiveDialog({ connections, onClose, onRefresh }: {
   connections: readonly Pick<NetworkConnectionProfile, 'id' | 'name' | 'dialect'>[];
   onClose(): void;
+  onRefresh(connectionId: string): void;
 }) {
   const [archive, setArchive] = useState<DatabaseBackupArchiveView | null>(null);
   const [connectionId, setConnectionId] = useState('');
   const [audit, setAudit] = useState<DatabaseBackupRestoreTargetAudit | null>(null);
+  const [trusted, setTrusted] = useState(false);
+  const [receipt, setReceipt] = useState<SqlFileImportReceipt | null>();
+  const receiptPanel = useRef<HTMLDivElement>(null);
   const [inventory, setInventory] = useState<DatabaseBackupSqlInventory | null>(null);
   const [busy, setBusy] = useState(''), [status, setStatus] = useState(''), [error, setError] = useState('');
   const running = useRef<string | undefined>(undefined);
   const target = connections.find(connection => connection.id === connectionId);
   const familyName = (family: NetworkConnectionProfile['dialect']) => family === 'mysql' ? 'MySQL' : 'MariaDB';
-  async function run(action: 'open' | 'export' | 'audit' | 'inspectSql') {
+  const ready = !!audit && canRestoreBackupArchive(audit);
+  useEffect(() => { if (receipt !== undefined) receiptPanel.current?.scrollIntoView({ block: 'nearest' }); }, [receipt]);
+  async function run(action: 'open' | 'export' | 'audit' | 'inspectSql' | 'restore') {
     if (running.current) return;
     const operationId = uid();
     running.current = operationId;
-    const busyMessage = { open: text.checking, export: text.exporting, audit: text.auditing, inspectSql: text.inspectingSql };
+    const busyMessage = { open: text.checking, export: text.exporting, audit: text.auditing, inspectSql: text.inspectingSql, restore: text.restoring };
     setError(''); setStatus(''); setBusy(busyMessage[action]);
     try {
       if (action === 'open') {
-        setArchive(null); setAudit(null); setInventory(null);
+        setArchive(null); setAudit(null); setInventory(null); setTrusted(false); setReceipt(undefined);
         const result = await invoke('backupArchive.open', { operationId });
         if (result) { setArchive(result); setStatus(text.checked); }
       } else if (action === 'export' && archive) {
@@ -38,8 +46,15 @@ export function DatabaseBackupArchiveDialog({ connections, onClose }: {
         setInventory(null);
         setInventory(await invoke('backupArchive.inspectSql', { operationId, token: archive.token }));
       } else if (action === 'audit' && archive && target) {
-        setAudit(null);
+        setAudit(null); setTrusted(false);
         setAudit(await invoke('backupArchive.auditTarget', { operationId, token: archive.token, connectionId: target.id }));
+      } else if (action === 'restore' && archive && target && ready && trusted) {
+        setAudit(null); setTrusted(false); setReceipt(undefined);
+        try {
+          const result = await invoke('backupArchive.restore', { operationId, token: archive.token, connectionId: target.id, acknowledgeScript: true });
+          const checked = sqlFileImportReceiptSchema.safeParse(result.sql);
+          setReceipt(checked.success && checked.data.encoding === 'utf8' ? checked.data : null);
+        } finally { onRefresh(target.id); }
       }
     } catch (reason) { setError(errorMessage(reason)); }
     finally { running.current = undefined; setBusy(''); }
@@ -90,7 +105,7 @@ export function DatabaseBackupArchiveDialog({ connections, onClose }: {
         <h3>{text.target}</h3>
         {connections.length ? <div className="database-backup-target">
           <select aria-label={text.target} disabled={!!busy} value={target?.id ?? ''}
-            onChange={event => { setConnectionId(event.target.value); setAudit(null); setError(''); }}>
+            onChange={event => { setConnectionId(event.target.value); setAudit(null); setTrusted(false); setReceipt(undefined); setError(''); }}>
             <option value="">{text.targetPlaceholder}</option>
             {connections.map(connection => <option key={connection.id} value={connection.id}>{connection.name} · {familyName(connection.dialect)}</option>)}
           </select>
@@ -103,8 +118,14 @@ export function DatabaseBackupArchiveDialog({ connections, onClose }: {
           {audit.visible && <p>{Object.entries(audit.visible).map(([kind, amount]) => `${text.visible[kind as keyof typeof text.visible]} ${amount}`).join(' · ')}</p>}
           {audit.blockers.length > 0 && <ul>{audit.blockers.map(item => <li key={item.code}>{item.message}</li>)}</ul>}
           <p>{text.auditScope}</p>
+          {ready && <div className="database-backup-restore-controls">
+            <p className="warning-text">{text.restoreScope}</p>
+            <label><input type="checkbox" disabled={!!busy} checked={trusted} onChange={event => setTrusted(event.target.checked)}/> {text.restoreAcknowledgement}</label>
+            <button className="danger" disabled={!!busy || !trusted} onClick={() => void run('restore')}>{text.restore}</button>
+          </div>}
         </div>}
       </section>}
+      {receipt !== undefined && <div ref={receiptPanel}><SqlFileImportReport receipt={receipt}/></div>}
     </div>
     <footer className="modal-footer">
       <button disabled={!!busy} onClick={() => void run('open')}>{text.select}</button>

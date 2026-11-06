@@ -4,6 +4,10 @@
 .database-backup-content section,.database-backup-content p,.database-backup-content li{overflow-wrap:anywhere}
 .database-backup-content details ul{max-height:240px;overflow:auto}.database-backup-plan{padding:12px;border:1px solid var(--border);border-left:3px solid #4e86c5}
 .database-backup-target{display:flex;flex-wrap:wrap;gap:8px}.database-backup-target select{min-width:0;max-width:100%}
+.database-backup-restore-controls{display:grid;justify-items:start;gap:10px}
+.database-backup-restore-controls p{margin:0}
+.database-backup-restore-controls label{display:flex;align-items:baseline;gap:8px}
+.database-backup-restore-controls input{flex:none}
 .database-backup-content .database-backup-table-picker{display:grid}
 .database-backup-table-picker button{margin-right:8px}
 .database-backup-table-list{max-height:260px;overflow:auto}
