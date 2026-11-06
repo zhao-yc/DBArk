@@ -104,12 +104,15 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       await expect(references({ lookup })).rejects.toThrow('快照');
 
       const partitioned = { table: '"浏览"."分区外键"', tabId: randomUUID() };
-      await client.query(`CREATE TABLE "浏览"."复合父键" (num bigint, raw bytea, label text, secret text, PRIMARY KEY (num,raw));
+      await client.query(`CREATE TABLE "浏览"."复合父键" (num bigint, raw bytea, label text, secret text, PRIMARY KEY (num,raw)) PARTITION BY LIST (num);
+        CREATE TABLE "浏览"."复合父甲" PARTITION OF "浏览"."复合父键" FOR VALUES IN (1);
+        CREATE TABLE "浏览"."复合父乙" PARTITION OF "浏览"."复合父键" FOR VALUES IN (2);
         INSERT INTO "浏览"."复合父键" VALUES (1,decode('00ff','hex'),'父甲','私有甲'),(2,decode('00ff','hex'),'父乙','私有乙');
         CREATE TABLE ${partitioned.table} (id int, n smallint, generated smallint GENERATED ALWAYS AS (n) STORED, raw bytea,
           FOREIGN KEY (generated,raw) REFERENCES "浏览"."复合父键" (num,raw)) PARTITION BY LIST (id);
         CREATE TABLE "浏览"."分区甲" PARTITION OF ${partitioned.table} FOR VALUES IN (1);
         CREATE TABLE "浏览"."分区乙" PARTITION OF ${partitioned.table} FOR VALUES IN (2,3);
+        CREATE TABLE "浏览"."分区默认" PARTITION OF ${partitioned.table} DEFAULT;
         INSERT INTO ${partitioned.table} (id,n,raw) VALUES (1,1,decode('00ff','hex')),(2,2,decode('00ff','hex')),(3,NULL,decode('00ff','hex'));
         GRANT SELECT ON ${partitioned.table} TO "${limitedUser}";
         GRANT SELECT(num,raw,label) ON "浏览"."复合父键" TO "${limitedUser}";
@@ -145,6 +148,50 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
       expect(visibleParent?.columns.map(column => column.name)).toEqual(['num','raw','label']);
       expect(visibleParent?.rows[0]?.c2).toBe('父甲');
       expect((await parentBrowse(1, readOnlySource)(byParent)).page?.rows).toEqual([]);
+      await client.query(`INSERT INTO ${partitioned.table} (id,n,raw)
+        SELECT id, 1, decode('00ff','hex') FROM generate_series(4,45) id;
+        CREATE TABLE "浏览"."另一引用" (num bigint, raw bytea, note text, FOREIGN KEY (num,raw) REFERENCES "浏览"."复合父键" (num,raw));
+        INSERT INTO "浏览"."另一引用" VALUES (1,decode('00ff','hex'),'字面_%');`);
+      const inboundRoot = { table: '"浏览"."复合父键"', tabId: randomUUID() };
+      const inboundLeaf = { table: '"浏览"."复合父甲"', tabId: randomUUID() };
+      const inboundRootPage = await read(inboundRoot), inboundLeafPage = await read(inboundLeaf);
+      const children = (table: Record<string, unknown>, page: PostgresTablePage, extra = {}): Promise<PostgresTableReferenceResult> =>
+        engine.handle('postgres.table.references', { ...target, profile, ...table, pageToken: page.exportToken, childrenRow: 0, ...extra });
+      const inboundChoices = (await children(inboundRoot, inboundRootPage)).choices;
+      expect(inboundChoices.map(item => item.table).sort()).toEqual(['分区外键', '另一引用']);
+      expect((await children(inboundLeaf, inboundLeafPage)).choices).toEqual(inboundChoices);
+      const inboundKey = inboundChoices.find(item => item.table === '分区外键')!;
+      const inboundLookup = { id: inboundKey.id, stamp: inboundKey.stamp, search: '', offset: 0 };
+      expect(inboundKey.pairs.map(pair => [pair.localName, pair.remote])).toEqual([['num','generated'], ['raw','raw']]);
+      const related = (await children(inboundLeaf, inboundLeafPage, { lookup: inboundLookup })).page!;
+      expect(related).toMatchObject({ hasNext: true });
+      expect(related.rows).toHaveLength(40);
+      expect(related.rows[0]).toMatchObject({ c0: '1', c1: { type: 'binary', base64: 'AP8=' }, c2: '1' });
+      const rest = (await children(inboundLeaf, inboundLeafPage, { lookup: { ...inboundLookup, offset: 40 } })).page!;
+      expect(rest).toMatchObject({ hasNext: false });
+      expect([...related.rows, ...rest.rows]).toHaveLength(43);
+      expect(new Set([...related.rows, ...rest.rows].map(row => row.c2)).size).toBe(43);
+      const otherKey = inboundChoices.find(item => item.table === '另一引用')!;
+      const otherLookup = { id: otherKey.id, stamp: otherKey.stamp, search: '_%', offset: 0 };
+      expect((await children(inboundRoot, inboundRootPage, { lookup: otherLookup })).page?.rows[0]?.c2).toBe('字面_%');
+      expect((await children(inboundRoot, inboundRootPage, { childrenRow: 1, lookup: otherLookup })).page?.rows).toEqual([]);
+      await client.query(`GRANT SELECT ON "浏览"."复合父甲" TO "${limitedUser}";
+        REVOKE SELECT ON ${partitioned.table} FROM "${limitedUser}";
+        GRANT SELECT(id,generated,raw) ON ${partitioned.table} TO "${limitedUser}";
+        ALTER TABLE ${partitioned.table} ENABLE ROW LEVEL SECURITY;
+        CREATE POLICY "限制子记录" ON ${partitioned.table} FOR SELECT TO "${limitedUser}" USING (id <= 2);`);
+      const inboundLimited = { ...inboundLeaf, profile: limitedProfile, connectionId: limitedProfile.id, tabId: randomUUID() };
+      const inboundLimitedPage = await read(inboundLimited);
+      expect(inboundLimitedPage.pageToken).toBeUndefined();
+      const [limitedInboundKey] = (await children(inboundLimited, inboundLimitedPage)).choices;
+      const limitedInbound = { ...inboundLookup, stamp: limitedInboundKey.stamp };
+      const limitedRows = (await children(inboundLimited, inboundLimitedPage, { lookup: limitedInbound })).page!;
+      expect(limitedRows.columns.map(column => column.name)).toEqual(['generated', 'raw', 'id']);
+      expect(limitedRows.rows.map(row => row.c2)).toEqual(['1']);
+      await client.query(`REVOKE SELECT(raw) ON ${partitioned.table} FROM "${limitedUser}"`);
+      await expect(children(inboundLimited, inboundLimitedPage, { lookup: limitedInbound })).rejects.toThrow('读取权限');
+      await client.query('UPDATE "浏览"."复合父键" SET label = \'外部变动\' WHERE num = 1');
+      await expect(children(inboundLeaf, inboundLeafPage, { lookup: inboundLookup })).rejects.toThrow('原记录已变化');
       await client.query(`UPDATE ${partitioned.table} SET n=2 WHERE id=1`);
       await expect(parentBrowse(0)(byParent)).rejects.toThrow('原记录已变化');
 

@@ -14,7 +14,7 @@ test.skip(!enabled, '仅使用本轮隔离 PostgreSQL 实库');
 test.use({ trace: 'off', video: 'off', screenshot: 'off', ...(enabled ? { preserveOnUnconfirmedExit: true } : {}) });
 test.describe.configure({ timeout: 120000, retries: 0 });
 
-test('PostgreSQL 从当前记录只读查看准确的复合外键父记录', async ({}, info) => {
+test('PostgreSQL 从当前记录双向查看复合外键关联', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Runtime;
   const { page, application } = runtime.ownedDesktopResources(info);
   const directory = runtime.dataDir, pid = application.process().pid;
@@ -44,7 +44,13 @@ test('PostgreSQL 从当前记录只读查看准确的复合外键父记录', asy
         (9007199254740994,'乙','候选父乙',decode('0102','hex'));
       CREATE TABLE "回归"."引用父档案" (id int PRIMARY KEY, parent_code bigint, parent_label text,
         FOREIGN KEY (parent_code,parent_label) REFERENCES "回归"."父档案" (code,label));
-      INSERT INTO "回归"."引用父档案" VALUES (1,9007199254740993,'甲'),(2,NULL,NULL);`);
+      INSERT INTO "回归"."引用父档案" VALUES (1,9007199254740993,'甲'),(2,NULL,NULL);
+      CREATE TABLE "回归"."订单明细" (id int PRIMARY KEY, parent_code bigint, parent_label text, memo text, payload bytea,
+        CONSTRAINT "订单归属" FOREIGN KEY (parent_code,parent_label) REFERENCES "回归"."父档案" (code,label));
+      INSERT INTO "回归"."订单明细" SELECT i, 9007199254740993, '甲',
+        CASE WHEN i=43 THEN '字面_%' || repeat('长说明',150) ELSE '明细' || i END, decode('00ff','hex')
+        FROM generate_series(1,43) i;
+      INSERT INTO "回归"."订单明细" VALUES (44,9007199254740994,'乙','不属于甲',NULL);`);
     const readRows = async () => (await reader!.query(`SELECT id, parent_code::text, parent_label FROM "回归"."引用父档案" ORDER BY id`)).rows;
     const originals = await readRows();
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click();
@@ -104,6 +110,48 @@ test('PostgreSQL 从当前记录只读查看准确的复合外键父记录', asy
     await draft.getByRole('button', { name: tableText.discard, exact: true }).click();
     await expect(draft).toHaveCount(0);
     await mark('空外键无可见父记录，独立读回确认浏览与暂存零写入');
+
+    await page.locator('.object-row').getByRole('button', { name: '"回归"."父档案"', exact: true }).click();
+    await expect(button(text.children)).toBeDisabled();
+    await grid.getByRole('gridcell', { name: '9007199254740993', exact: true }).click();
+    await button(tableText.edit).click();
+    await edit.getByLabel('label ' + tableText.valueMode, { exact: true }).selectOption('text');
+    await edit.getByLabel('label ' + tableText.value, { exact: true }).fill('草稿甲');
+    await edit.getByRole('button', { name: tableText.stage, exact: true }).click();
+    await button(text.children).click();
+    const children = page.getByRole('dialog', { name: text.childrenTitle, exact: true });
+    const constraints = children.getByLabel(text.constraint, { exact: true });
+    const selectTable = async (name: string) => {
+      const option = constraints.getByRole('option', { name: new RegExp('回归\\.' + name) });
+      await expect(option).toHaveCount(1);
+      await constraints.selectOption((await option.getAttribute('value'))!);
+    };
+    await selectTable('订单明细');
+    await expect(children.getByText(text.childRange(0, 40))).toBeVisible();
+    await children.getByRole('button', { name: text.childNext, exact: true }).click();
+    await expect(children.getByText(text.childRange(40, 3))).toBeVisible();
+    await expect(children.getByRole('table')).not.toContainText('不属于甲');
+    await mark('按数据库原复合键读取子记录，分两页准确定位 43 条并排除另一父记录');
+
+    await children.getByRole('searchbox', { name: text.childQuery, exact: true }).fill('_%');
+    await children.getByRole('button', { name: text.childSearch, exact: true }).click();
+    await expect(children.getByText(text.childRange(0, 1))).toBeVisible();
+    await page.screenshot({ path: info.outputPath('PostgreSQL查看子记录.png') });
+    await children.getByRole('button', { name: text.inspectChild, exact: true }).click();
+    await expect(children.getByRole('table')).toContainText('0x00ff');
+    await children.getByRole('button', { name: recordText.raw('memo'), exact: true }).click();
+    await expect(children.getByRole('textbox', { name: recordText.raw('memo'), exact: true })).toHaveValue('字面_%' + '长说明'.repeat(150));
+    await children.getByRole('button', { name: text.backToChildren, exact: true }).click();
+    await expect(children.getByText(text.childRange(0, 1))).toBeVisible();
+    await selectTable('引用父档案');
+    await expect(children.getByRole('table')).toContainText('9007199254740993');
+    await children.getByRole('button', { name: zh.dialogs.text001, exact: true }).click();
+    await expect(draft).toContainText('label=草稿甲');
+    expect((await reader.query('SELECT label FROM "回归"."父档案" ORDER BY code')).rows).toEqual([{ label: '甲' }, { label: '乙' }]);
+    expect(await readRows()).toEqual(originals);
+    await draft.getByRole('button', { name: tableText.discard, exact: true }).click();
+    await expect(draft).toHaveCount(0);
+    await mark('字面搜索、完整字段、约束切换及原草稿均已核对，独立读回确认零写入');
 
     check();
     expect(runtime.pageErrors).toEqual([]);

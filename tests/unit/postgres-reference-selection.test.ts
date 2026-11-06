@@ -58,4 +58,15 @@ describe('PostgreSQL 外键选值', () => {
     await readPostgresTableReferences(connection, '1', [], undefined);
     await readPostgresTableReferences(connection, '1', [], undefined);
   });
+
+  it('子记录查询允许有界翻页，拒绝混用两个方向或提供目标', () => {
+    const input = {
+      connectionId: '连接', database: '库', table: '"引用库"."父表"', tabId: '标签', pageToken: 'abcabcab-abca-4abc-8abc-abcabcabcabc',
+      childrenRow: 0, lookup: { id: choice.id, stamp: choice.stamp, search: '_%', offset: 40 },
+    };
+    expect(postgresTableReferenceSchema.safeParse(input).success).toBe(true);
+    expect(postgresTableReferenceSchema.safeParse({ ...input, parentRow: 0 }).success).toBe(false);
+    expect(postgresTableReferenceSchema.safeParse({ ...input, childrenRow: 200 }).success).toBe(false);
+    expect(postgresTableReferenceSchema.safeParse({ ...input, targetTable: '其他表' }).success).toBe(false);
+  });
 });

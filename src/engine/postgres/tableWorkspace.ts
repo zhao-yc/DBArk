@@ -334,9 +334,10 @@ export class PostgresTableWorkspace {
   async references(input: Scoped<PostgresTableReferenceInput>, connect: Connect): Promise<PostgresTableReferenceResult> {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
-    const browsing = input.parentRow !== undefined;
+    const rowIndex = input.parentRow ?? input.childrenRow;
+    const browsing = rowIndex !== undefined;
     const original = this.snapshot(input, !browsing);
-    const source = input.parentRow === undefined ? undefined : original.rows[input.parentRow];
+    const source = rowIndex === undefined ? undefined : original.rows[rowIndex];
     if (browsing && !source) throw Error('原记录不可定位，请刷新表页');
     if (!browsing && !original.relation.capabilities.insert && !original.relation.capabilities.update)
       throw Error('原表页不支持写入外键字段');
@@ -344,20 +345,21 @@ export class PostgresTableWorkspace {
       await begin(connection, 'page');
       const relation = await readRelation(connection, input.table);
       if (relation.fingerprint !== original.relation.fingerprint) throw Error('原表页结构或权限已变化，请刷新');
-      // 在同一快照内核对磁盘原行，之后按数据库自己的外键比较规则查询父记录。
-      const child = source && { sql: only(relation), tid: source.tid, version: source.version, tableOid: source.tableOid,
+      // 在同一快照内核对原行，再按数据库自己的外键规则查询关联记录。
+      const sourceRow = source && { incoming: input.childrenRow !== undefined, sql: only(relation),
+        tid: source.tid, version: source.version, tableOid: source.tableOid,
         oid: relation.oid, name: relation.sql };
-      if (source && child && input.lookup) {
+      if (source && sourceRow && input.lookup) {
         const args: unknown[] = [];
         const predicate = rowPredicate(args, source);
         const projection = relation.columns.map(column => postgresIdentifier(column.name)).join(', ');
-        const row = await connection.query('SELECT ' + projection + ' FROM ' + child.sql + ' WHERE ' + predicate +
+        const row = await connection.query('SELECT ' + projection + ' FROM ' + sourceRow.sql + ' WHERE ' + predicate +
           ' AND tableoid = $3::oid AND pg_catalog.to_regclass($4)::oid = $5::oid',
-        [...args, child.tableOid, child.name, child.oid], { rows: 2, bytes: 8 * 1024 * 1024 });
+        [...args, sourceRow.tableOid, sourceRow.name, sourceRow.oid], { rows: 2, bytes: 8 * 1024 * 1024 });
         if (row.truncated || row.rows.length !== 1 || digest(row.rows[0]) !== source.digest)
           throw Error('原记录已变化，请刷新后查看引用记录');
       }
-      const references = await readPostgresTableReferences(connection, relation.oid, relation.columns, input.lookup, child);
+      const references = await readPostgresTableReferences(connection, relation.oid, relation.columns, input.lookup, sourceRow);
       const reply = await connection.query('COMMIT', undefined, small());
       if (reply.postgresCommand !== 'COMMIT') throw Error('PostgreSQL 外键候选读取未完成');
       return references;

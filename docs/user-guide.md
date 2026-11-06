@@ -240,6 +240,8 @@ PostgreSQL 表页同时显示「整批已回滚」和「草稿已保留」时，
 
 在 PostgreSQL 网格选中一行，或定位到记录表单中的一条记录后，点击「查看引用记录」。窗口按数据库中的原外键值显示当前账号可读的父记录，可切换约束并展开字段原值。关闭后保留源表草稿。[PostgreSQL 查看引用记录](development/postgres-browse-parent-20261106.md)
 
+在 PostgreSQL 表页选中一条父记录后，点击「查看子记录」。按子表和外键约束切换，可搜索当前父记录的关联结果、翻页和查看单条原值。查询使用父记录在数据库中的原值，关闭窗口后草稿仍可继续编辑。[PostgreSQL 查看子记录](development/postgres-browse-children-20261106.md)
+
 在 PostgreSQL 表或视图的记录网格右键单元格，或聚焦后按 `Shift+F10`，可以[按此值筛选或排除此值](development/postgres-table-cell-filter-20261106.md)。检查带入的列、操作符和原值，点击「添加条件」，再点击「应用高级筛选」。
 
 在同一入口可修改已有字段的数据类型、默认值、空值约束和注释，或删除字段。删除在 SQL 预览后需额外确认，本表内引用该字段的索引和约束可能随之移除。详见[已有字段属性与删除](development/postgres-column-alter-20261105.md)。
