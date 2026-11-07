@@ -3,7 +3,7 @@ import { open, realpath, rename, rm, lstat } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import iconv from 'iconv-lite';
-import { encodingName } from './files';
+import { encodingName } from './fileEncoding';
 import { queryInsertZh as stagedText } from '../shared/queryInsertExport.zh-CN';
 
 export interface WritableFile {

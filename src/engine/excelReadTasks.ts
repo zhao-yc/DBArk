@@ -11,7 +11,8 @@ export class ExcelReadTasks {
   has(id: string): boolean { return this.tasks.has(id); }
   /** 读取循环逐块检查取消；RPC 收尾前等待读取器 finally 关闭句柄。 */
   async cancel(id: string): Promise<void> { const task = this.tasks.get(id); if (task) { task.cancelled = true; await task.done; } }
-  async closeAll(): Promise<void> { this.closing = true; await Promise.all([...this.tasks.keys()].map(id => this.cancel(id))); }
+  async cancelAll(): Promise<void> { await Promise.all([...this.tasks.keys()].map(id => this.cancel(id))); }
+  async closeAll(): Promise<void> { this.closing = true; await this.cancelAll(); }
   async run(command: 'excel.sheets' | 'excel.preview', input: ExcelSheetReadOptions & { taskId: string }): Promise<unknown> {
     if (this.closing || !input.taskId || this.has(input.taskId)) throw new Error('Excel 读取任务编号为空、已在执行或客户端正在退出');
     let finish!: () => void; const done = new Promise<void>(resolve => { finish = resolve; });

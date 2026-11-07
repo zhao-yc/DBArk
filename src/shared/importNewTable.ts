@@ -1,3 +1,4 @@
+import { excelImportOptionsSchema, type ExcelImportOptions } from './excelTransfer';
 import { txtImportOptionsSchema, type TxtImportOptions } from './txtImport';
 import { z } from 'zod';
 import type { DataRow, FileChoice } from './contracts';
@@ -6,7 +7,7 @@ import { xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions 
 
 export const importNewTableLimits = Object.freeze({ columns: 1000, sourceName: 256, sampleRows: 20, sampleBytes: 256 * 1024 });
 export interface ImportFileSource { sha256: string; bytes: number; }
-export interface ImportFileReadOptions { format: RecordImportFormat; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; }
+export interface ImportFileReadOptions { format: RecordImportFormat; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; }
 export interface ImportFileInspectInput extends ImportFileReadOptions { fileToken: string; taskId: string; strictEncoding?: true; }
 export interface ImportFileInspectOutput { columns: string[]; rows: DataRow[]; records: number; source: ImportFileSource; sampleOmitted: boolean; }
 export interface ImportNewTableSeed extends ImportFileReadOptions { file: FileChoice; columns: string[]; expectedSource: ImportFileSource; mapping: Record<string, string>; }
@@ -35,6 +36,13 @@ function columns(input: unknown): string[] { const result = array(input, importN
 function source(input: unknown): ImportFileSource { const value = object(input, 2, ['sha256', 'bytes']); if (typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256) || typeof value.bytes !== 'number' || !Number.isSafeInteger(value.bytes) || value.bytes < 0) return invalid(); return { sha256: value.sha256, bytes: value.bytes }; }
 /** 显式undefined也算指定CSV专用配置；JSON不能借可选属性静默忽略它。 */
 function options(value: Record<string, unknown>): ImportFileReadOptions {
+  if (value.format === 'xlsx') {
+    if (value.encoding !== 'utf8' || ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions'].some(key => Object.hasOwn(value, key))) return invalid();
+    const excel = object(value.excelOptions, 3, ['sheetId', 'protocol'], ['headerRow']);
+    const excelOptions = excelImportOptionsSchema.parse({ ...excel, headerRow: excel.headerRow ?? 1 });
+    return { format: 'xlsx', encoding: 'utf8', excelOptions };
+  }
+  if (Object.hasOwn(value, 'excelOptions')) return invalid();
   if (value.format === 'txt') {
     if (!['utf8', 'utf16le', 'gb18030'].includes(value.encoding as string) || ['csvDelimiter', 'csvHasHeader', 'xmlOptions'].some(key => Object.hasOwn(value, key))) return invalid();
     return { format: 'txt', encoding: value.encoding as ImportFileReadOptions['encoding'], txtOptions: txtImportOptionsSchema.parse(object(value.txtOptions, 5)) };
@@ -54,7 +62,7 @@ function options(value: Record<string, unknown>): ImportFileReadOptions {
 function schema<T>(parse: (input: unknown) => T) { return z.unknown().transform((input, context): T => { try { return parse(input); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '文件导入配置无效' }); return z.NEVER; } }); }
 export const importFileSourceSchema = schema(source);
 export const importFileInspectInputSchema = schema((input): ImportFileInspectInput => {
-  const value = object(input, 9, ['fileToken', 'taskId', 'format', 'encoding'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'strictEncoding']);
+  const value = object(input, 9, ['fileToken', 'taskId', 'format', 'encoding'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'excelOptions', 'strictEncoding']);
   if (Object.hasOwn(value, 'strictEncoding') && value.strictEncoding !== true) return invalid();
   return { fileToken: string(value.fileToken, 1, 200), taskId: string(value.taskId, 1, 200), ...options(value),
     ...(value.strictEncoding === true ? { strictEncoding: true } : {}) };
@@ -87,7 +95,7 @@ export const importFileInspectOutputSchema = schema((input): ImportFileInspectOu
 });
 /** 完整源目录与映射逐项一致，保留__proto__等自有源键并拒绝重复非空目标。 */
 export const importNewTableSeedSchema = schema((input): ImportNewTableSeed => {
-  const value = object(input, 10, ['file', 'format', 'encoding', 'columns', 'expectedSource', 'mapping'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions']), file = object(value.file, 2, ['token', 'name']), names = columns(value.columns), raw = object(value.mapping, importNewTableLimits.columns), mapping: Record<string, string> = Object.create(null), targets = new Set<string>();
+  const value = object(input, 10, ['file', 'format', 'encoding', 'columns', 'expectedSource', 'mapping'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'excelOptions']), file = object(value.file, 2, ['token', 'name']), names = columns(value.columns), raw = object(value.mapping, importNewTableLimits.columns), mapping: Record<string, string> = Object.create(null), targets = new Set<string>();
   if (Object.keys(raw).length !== names.length || names.some(name => !Object.hasOwn(raw, name))) return invalid();
   for (const name of names) { const target = string(raw[name], 0, 64); if (target.includes('\0') || target !== '' && targets.has(target)) return invalid(); if (target) targets.add(target); mapping[name] = target; }
   return { file: { token: string(file.token, 1, 200), name: string(file.name, 1, 4096) }, ...options(value), columns: names, expectedSource: source(value.expectedSource), mapping };

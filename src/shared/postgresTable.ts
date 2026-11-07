@@ -1,3 +1,4 @@
+import { excelImportOptionsSchema } from './excelTransfer';
 import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { txtImportOptionsSchema } from './txtImport';
 import { recordImportFormats, xmlImportOptionsSchema } from './xmlImport';
@@ -267,6 +268,12 @@ export const postgresTableImportChooseSchema = z.union([
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('txt'), encoding: recordImportEncoding,
     txtOptions: txtImportOptionsSchema, scannedFile: scannedImportFile.optional(),
+  }).strict(),
+  target.extend({ pageToken: token, format: z.literal('xlsx'), excelOptions: excelImportOptionsSchema,
+    scannedFile: scannedImportFile, workbookToken: z.never().optional(),
+  }).strict(),
+  target.extend({ pageToken: token, format: z.literal('xlsx'), excelOptions: excelImportOptionsSchema,
+    workbookToken: token, scannedFile: z.never().optional(),
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('json'), encoding: recordImportEncoding,
     scannedFile: scannedImportFile.optional(),

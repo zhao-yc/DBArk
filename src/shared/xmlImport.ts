@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const recordImportFormats = ['csv', 'json', 'xml', 'txt'] as const;
+export const recordImportFormats = ['csv', 'json', 'xml', 'txt', 'xlsx'] as const;
 export type RecordImportFormat = typeof recordImportFormats[number];
 
 // XML 1.0 第五版命名范围。导入和记录布局导出均使用无命名空间的字段名。

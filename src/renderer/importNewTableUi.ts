@@ -1,5 +1,6 @@
 import { recordImportFormats, xmlImportOptionsSchema, xmlImportZh, type XmlImportOptions } from '../shared/xmlImport';
 import { txtImportDefaults, txtImportOptionsSchema, txtImportZh } from '../shared/txtImport';
+import { excelImportDefaults, excelImportOptionsSchema, excelImportZh } from '../shared/excelTransfer';
 import type { FileChoice, TaskEvent } from '../shared/contracts';
 import { importFileInspectInputSchema, importFileInspectOutputSchema, importNewTableSeedSchema, type ImportFileInspectInput, type ImportFileReadOptions, type ImportFileInspectOutput, type ImportNewTableSeed } from '../shared/importNewTable';
 import { tableCreateDraftSchema, type TableCreateApplyOutput, type TableCreateDraft } from '../shared/tableCreate';
@@ -12,12 +13,13 @@ export type ImportNewTableOptions = ImportFileReadOptions;
 export const newTableXmlDefaults: XmlImportOptions = { rowTag: 'RECORD', attributes: true, binaryBase64: false };
 
 /** 扫描和建表来源种子采用同一套格式选项，避免将旧 CSV 或 XML 配置带入其它格式。 */
-function sourceOptions({ format, encoding, csvDelimiter, csvHasHeader, xmlOptions, txtOptions }: ImportNewTableOptions): ImportFileReadOptions {
+function sourceOptions({ format, encoding, csvDelimiter, csvHasHeader, xmlOptions, txtOptions, excelOptions }: ImportNewTableOptions): ImportFileReadOptions {
   return {
     format, encoding,
     ...(format === 'csv' ? { csvDelimiter: csvDelimiter ?? ',', csvHasHeader: csvHasHeader ?? true } : {}),
     ...(format === 'xml' ? { xmlOptions: xmlImportOptionsSchema.parse(xmlOptions) } : {}),
     ...(format === 'txt' ? { txtOptions: txtImportOptionsSchema.parse(txtOptions) } : {}),
+    ...(format === 'xlsx' ? { excelOptions: excelImportOptionsSchema.parse(excelOptions) } : {}),
   };
 }
 export interface ImportNewTableServices {
@@ -81,8 +83,10 @@ export class ImportNewTableController {
     const next = { ...this.value.options, ...patch };
     if (next.format === 'xml') { next.encoding = 'utf8'; next.xmlOptions = { ...(next.xmlOptions ?? newTableXmlDefaults) }; }
     if (next.format === 'txt') next.txtOptions = { ...(next.txtOptions ?? txtImportDefaults) };
+    const workbook = next.format === 'xlsx';
+    if (workbook) { next.encoding = 'utf8'; next.excelOptions = { ...(next.excelOptions ?? excelImportDefaults) }; }
     if (!recordImportFormats.includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
-    this.update({ options: next, file: undefined, inspection: undefined, reviewed: false, error: undefined, progress: undefined });
+    this.update({ options: next, file: workbook && expected.options.format === 'xlsx' ? expected.file : undefined, inspection: undefined, reviewed: false, error: undefined, progress: undefined });
   }
   name(expected: ImportNewTableState, tableName: string): void { if (this.editable(expected)) this.update({ tableName, reviewed: false, error: undefined }); }
   review(expected: ImportNewTableState, reviewed: boolean): void { if (this.editable(expected)) this.update({ reviewed }); }
@@ -94,17 +98,22 @@ export class ImportNewTableController {
     if (this.lifetime) this.update({ progress: { progress: 0, message: text.cancelling } });
   }
   /** 文件选择和全文件扫描共享同一锁；关闭先取消，随后等待原选择、扫描及取消全部结算。 */
-  scan(expected: ImportNewTableState): Promise<void> {
-    if (!this.editable(expected)) return Promise.resolve();
+  scan(expected: ImportNewTableState, selectWorkbook = false): Promise<void> {
+    if (!this.editable(expected) || selectWorkbook && expected.options.format !== 'xlsx') return Promise.resolve();
     const lifetime = this.lifetime!;
-    let options: ImportFileReadOptions;
-    try { options = sourceOptions(expected.options); }
-    catch { this.update({ error: expected.options.format === 'txt' ? txtImportZh.invalid : xmlImportZh.invalid }); return Promise.resolve(); }
+    const workbook = expected.options.format === 'xlsx';
+    let options: ImportFileReadOptions | undefined;
+    try { if (!selectWorkbook) options = sourceOptions(expected.options); }
+    catch { this.update({ error: workbook ? excelImportZh.missing : expected.options.format === 'txt' ? txtImportZh.invalid : xmlImportZh.invalid }); return Promise.resolve(); }
     let active: Operation;
     const promise = Promise.resolve().then(async () => {
       if (!this.current() || this.lifetime !== lifetime || active.cancelled) return;
-      const file = await this.services.choose({ purpose: 'import', format: options.format });
+      const file = workbook && !selectWorkbook ? expected.file : await this.services.choose({ purpose: 'import', format: expected.options.format });
       if (!file || !this.current() || this.lifetime !== lifetime || active.cancelled) return;
+      if (!options) {
+        this.update({ file: { ...file }, options: { ...expected.options, excelOptions: { ...excelImportDefaults } } });
+        return;
+      }
       const request = importFileInspectInputSchema.parse({ fileToken: file.token, taskId: active.taskId, ...options,
         ...(this.target.postgres ? { strictEncoding: true } : {}) });
       active.dispatched = true;
@@ -116,7 +125,7 @@ export class ImportNewTableController {
       if (this.active === active) { this.active = undefined; this.update({ busy: false }); }
     });
     active = { lifetime, cancelled: false, taskId: this.services.uid(), dispatched: false, promise }; this.active = active;
-    this.update({ busy: true, file: undefined, inspection: undefined, reviewed: false, progress: undefined, error: undefined }); return promise;
+    this.update({ busy: true, file: workbook ? expected.file : undefined, inspection: undefined, reviewed: false, progress: undefined, error: undefined }); return promise;
   }
   progress(event: TaskEvent): void {
     const active = this.active;

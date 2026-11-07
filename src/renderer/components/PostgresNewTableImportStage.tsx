@@ -35,6 +35,7 @@ export function PostgresNewTableImportStage({ connectionId, database, table, see
         if (!page.exportToken || !page.canImport) throw Error(text.postgresTargetUnavailable);
         const scannedFile = { token: seed.file.token, expectedSource: seed.expectedSource };
         const options = seed.format === 'xml' ? { format: seed.format, xmlOptions: seed.xmlOptions!, scannedFile } :
+          seed.format === 'xlsx' ? { format: seed.format, excelOptions: seed.excelOptions!, scannedFile } :
           seed.format === 'txt' ? { format: seed.format, encoding: seed.encoding, txtOptions: seed.txtOptions!, scannedFile } :
           seed.format === 'csv' ? { format: seed.format, encoding: seed.encoding, csvDelimiter: seed.csvDelimiter ?? ',',
             csvHasHeader: seed.csvHasHeader ?? true, scannedFile } : { format: seed.format, encoding: seed.encoding, scannedFile };

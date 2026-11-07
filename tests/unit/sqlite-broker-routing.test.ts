@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { ConnectionProfile, SqliteConnectionProfile } from '../../src/shared/contracts';
+import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 
 const ports = vi.hoisted(() => ({ fork: vi.fn(), sqlite: vi.fn(), close: vi.fn(), force: vi.fn() }));
 vi.mock('electron', () => ({ utilityProcess: { fork: ports.fork } }));
@@ -28,6 +32,19 @@ beforeEach(() => { vi.clearAllMocks(); ports.sqlite.mockReset().mockResolvedValu
 it('未知对象结构取消不启动任何驱动或物理文件', async () => {
   const { broker } = fixture(); await broker.request('query.cancel', { taskId: 'object-definition:unknown' });
   expect(ports.fork).not.toHaveBeenCalled(); expect(ports.sqlite).not.toHaveBeenCalled();
+});
+it('工作表目录和取消留在原文件任务，SQLite 单独使用时不启动网络引擎', async () => {
+  const { broker } = fixture(), folder = await mkdtemp(join(tmpdir(), 'tabrelio-broker-xlsx-'));
+  const filePath = join(folder, 'source.xlsx');
+  try {
+    await writeXlsxImportFixture(filePath, ['id'], [['1']]);
+    const taskId = 'workbook-cancel';
+    const stopped = expect(broker.request('excel.sheets', {filePath, taskId})).rejects.toThrow('取消');
+    await broker.request('query.cancel', {taskId}); await stopped;
+    expect(await broker.request('excel.sheets', {filePath, taskId: 'workbook-again'})).toHaveLength(2);
+    expect(ports.fork).not.toHaveBeenCalled(); expect(ports.sqlite).not.toHaveBeenCalled();
+    await broker.close();
+  } finally { await rm(folder, {recursive: true, force: true}); }
 });
 it('对象结构完成后仍保留SQLite方言墓碑，改连接或删配置不把旧取消发往网络', async () => {
   const { broker, profiles } = fixture(), taskId = 'object-definition:file';

@@ -285,18 +285,21 @@ export async function listExcelSheets(input: ExcelReadOptions): Promise<ExcelShe
 }
 
 /** 原始标题与数据协议分开，__proto__ 等合法字段通过 null 原型对象保留。 */
-export async function* readExcelRows(input: ExcelSheetReadOptions): AsyncGenerator<DataRow> {
+export async function* readExcelRows(input: ExcelSheetReadOptions & { onColumns?: (columns: string[]) => void; onBytes?: (chunk: Buffer) => void }): AsyncGenerator<DataRow> {
   const maximumCells = cellBudget(input.cellBudget);
   const zip = await ExcelZipArchive.open(input.filePath, input.checkCancelled);
   try {
-    if (input.expectedFingerprint !== undefined && await zip.fingerprint() !== input.expectedFingerprint) throw new Error('工作簿自预览后已发生变化，请重新预览并确认字段映射');
+    if (input.expectedFingerprint !== undefined || input.onBytes) {
+      const fingerprint = await zip.fingerprint(input.onBytes);
+      if (input.expectedFingerprint !== undefined && fingerprint !== input.expectedFingerprint) throw new Error('工作簿自预览后已发生变化，请重新预览并确认字段映射');
+    }
     const sheet = (await inspectWorkbook(zip)).find(item => item.id === input.sheetId);
     if (!sheet) throw new Error('所选工作表不存在，请重新预览');
     const strings = await sharedStrings(zip);
     let headers: string[] | undefined, records = 0;
     // 标题必须按原始文本读取；数据协议在按标题形成记录时应用。
     for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow, maximumCells)) {
-      if (!headers) { headers = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value))); continue; }
+      if (!headers) { headers = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value))); input.onColumns?.([...headers]); continue; }
       if (values.length > headers.length) throw new Error('Excel 数据行超出标题字段范围');
       checkCellCount(++records + 1, headers.length, maximumCells);
       const row: DataRow = Object.create(null);

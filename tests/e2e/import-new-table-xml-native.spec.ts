@@ -1,3 +1,5 @@
+import { excelImportZh } from '../../src/shared/excelTransfer';
+import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 import { test, expect, desktop, page } from './desktop-fixture';
 import { isolatedDatabase } from './live-helpers';
 import { sidebarMenuItem } from './sidebar-menu';
@@ -24,7 +26,7 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
     const [identity] = await observer.query<RowDataPacket[]>('SELECT @@hostname AS hostname');
     expect(identity[0].hostname).toBe(host);
     await mkdir(info.outputDir, {recursive: true});
-    const files = [info.outputPath('新表记录.xml'), info.outputPath('预检后变化.xml'), info.outputPath('位置映射样例.xml'), info.outputPath('固定列宽.txt')];
+    const files = [info.outputPath('新表记录.xml'), info.outputPath('预检后变化.xml'), info.outputPath('位置映射样例.xml'), info.outputPath('固定列宽.txt'), info.outputPath('工作表.xlsx')];
     const source = '<data><entry id="18446744073709551614" raw="AP8="><note/></entry><entry id="18446744073709551615" raw=""><late>尾部字段</late></entry></data>';
     for (const file of files.slice(0, 2)) await writeFile(file, source);
     await writeFile(files[2], positionalXmlFixture(['id', 'raw', 'note', 'late'], [
@@ -36,6 +38,10 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       ['18446744073709551614', 'base64:AP8=', '', '\\N'],
       ['18446744073709551615', 'base64:', '\\N', '尾部字段'],
     ].map(row => row.map((cell, index) => cell.padEnd(widths[index])).join('')).join('\r\n') + '\r\n');
+    await writeXlsxImportFixture(files[4], ['id', 'raw', 'note', 'late'], [
+      ['18446744073709551614', '\\B:AP8=', '', null],
+      ['18446744073709551615', '\\B:', null, '尾部字段'],
+    ]);
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showOpenDialog;
       let count = 0;
@@ -52,13 +58,18 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
     const wizard = page.getByRole('dialog', {name: wizardText.title, exact: true});
     const designer = page.getByRole('dialog', {name: formatText(zh.schema.text009, database), exact: true});
     const confirmation = page.getByRole('dialog', {name: createText.title, exact: true});
-    for (const [index, table] of ['xml_created', 'xml_changed', 'xml_positioned', 'txt_fixed'].entries()) {
+    for (const [index, table] of ['xml_created', 'xml_changed', 'xml_positioned', 'txt_fixed', 'xlsx_sheet'].entries()) {
       const qualified = `\`${database}\`.\`${table}\``;
       const records = async () => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id, HEX(raw) AS raw, note, late FROM ${qualified} ORDER BY ${qualified}.id`))[0].map(row => ({...row}));
       await (await sidebarMenuItem(databaseRow, {name: wizardText.title + ' ' + database, exact: true})).click();
-      const txt = index === 3;
-      await wizard.getByLabel(wizardText.format, {exact: true}).selectOption(txt ? 'txt' : 'xml');
-      if (txt) {
+      const txt = index === 3, workbook = index === 4;
+      await wizard.getByLabel(wizardText.format, {exact: true}).selectOption(workbook ? 'xlsx' : txt ? 'txt' : 'xml');
+      if (workbook) {
+        await wizard.getByRole('button', {name: excelImportZh.workbook, exact: true}).click();
+        await wizard.getByLabel(excelImportZh.sheet, {exact: true}).selectOption({label: '导入🚢'});
+        await wizard.getByLabel(excelImportZh.header, {exact: true}).fill('2');
+        await wizard.getByLabel(excelImportZh.protocol, {exact: true}).selectOption('dbark-v1');
+      } else if (txt) {
         await wizard.getByLabel(txtImportZh.layout, {exact: true}).selectOption('fixed');
         await wizard.getByLabel(txtImportZh.widths, {exact: true}).fill(widths.join(','));
         await wizard.getByRole('checkbox', {name: txtImportZh.hasHeader, exact: true}).check();
@@ -70,13 +81,14 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
         await wizard.getByRole('checkbox', {name: xmlImportZh.binary, exact: true}).check();
       }
       if (!txt) await expect(wizard.getByLabel(wizardText.encoding, {exact: true})).toBeDisabled();
-      await wizard.getByRole('button', {name: wizardText.choose, exact: true}).click();
+      await wizard.getByRole('button', {name: workbook ? excelImportZh.inspect : wizardText.choose, exact: true}).click();
       await expect(wizard.getByText(index === 2 ? xmlImportZh.documentRecords(2) : wizardText.records(2), {exact: true})).toBeVisible();
       await expect(wizard.getByRole('columnheader', {name: 'late', exact: true})).toBeVisible();
       await wizard.getByLabel(wizardText.table, {exact: true}).fill(table);
       await wizard.getByRole('checkbox', {name: wizardText.reviewed, exact: true}).check();
       if (index === 0) await wizard.screenshot({path: info.outputPath('XML 新表来源扫描.png')});
       if (index === 2) await wizard.screenshot({path: info.outputPath('XML 文档新表来源扫描.png')});
+      if (workbook) await wizard.screenshot({path: info.outputPath('XLSX 工作表扫描.png')});
       if (txt) await wizard.screenshot({path: info.outputPath('TXT 固定列宽新表扫描.png')});
       await wizard.getByRole('button', {name: wizardText.design, exact: true}).click();
       for (const [position, name] of ['id', 'raw', 'note', 'late'].entries()) {
@@ -95,7 +107,10 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       await wizard.getByRole('button', {name: wizardText.continue, exact: true}).click();
       const importer = page.getByRole('dialog', {name: zh.transfer.text004 + ' · ' + database + '.' + table, exact: true});
       const start = importer.getByRole('button', {name: zh.transfer.text028, exact: true});
-      if (txt) {
+      if (workbook) {
+        await expect(importer.getByLabel(excelImportZh.sheet, {exact: true})).toHaveValue('2');
+        await expect(importer.getByLabel(excelImportZh.header, {exact: true})).toBeDisabled();
+      } else if (txt) {
         await expect(importer.getByLabel(txtImportZh.widths, {exact: true})).toHaveValue(widths.join(','));
         await expect(importer.getByLabel(txtImportZh.widths, {exact: true})).toBeDisabled();
       } else if (index === 2) {
@@ -127,6 +142,6 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       await importer.getByRole('button', {name: zh.common.done, exact: true}).click();
       await expect(importer).toBeHidden();
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restoreXmlNewTablePicker(): number}).restoreXmlNewTablePicker())).toBe(4);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restoreXmlNewTablePicker(): number}).restoreXmlNewTablePicker())).toBe(5);
   }, info, {captureFailureScreenshot: false});
 });

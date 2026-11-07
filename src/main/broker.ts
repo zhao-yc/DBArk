@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import type { ConnectionProfile, TaskEvent } from '../shared/contracts';
 import { SqliteRuntime } from './sqliteRuntime';
 import { objectDefinitionTaskPrefix } from '../shared/objectDefinition';
+import { ExcelReadTasks } from '../engine/excelReadTasks';
+import type { ExcelSheetReadOptions } from '../engine/excelFiles';
 
 /** 数据库执行与界面生命周期分离；进程故障时拒绝所有等待请求，绝不自动重试。 */
 export class EngineBroker {
@@ -12,11 +14,13 @@ export class EngineBroker {
   private closePending?: Promise<void>;
   private pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
   private readonly sqlite: SqliteRuntime;
+  private readonly workbookReads: ExcelReadTasks;
   /** 仅对象定义使用跨方言编号；保留方言墓碑，迟到取消不能落到另一驱动。 */
   private readonly objectDefinitionRoutes = new Map<string, 'sqlite' | 'network'>();
   /** 接收任务事件和进程故障出口，不向渲染进程暴露底层消息通道。 */
   constructor(private emit: (event: TaskEvent) => void, private failed: () => void, private readonly profile: (id: string) => ConnectionProfile | undefined = () => undefined) {
     this.sqlite = new SqliteRuntime({ emit, resolveProfile: id => { const profile = this.profile(id); return profile?.dialect === 'sqlite' ? profile : undefined; } });
+    this.workbookReads = new ExcelReadTasks(emit);
   }
 
   /** 归属判断只读Main已存概要，不建立连接；网络进程故障不能误清SQLite会话或任务。 */
@@ -62,6 +66,10 @@ export class EngineBroker {
     // 编辑能力由原SQLite账本解析目标；公共输入没有连接ID，释放也必须能越过退出屏障。
     if (command === 'sqlite.tableEdit.release' || command === 'sqlite.tableCreate.release' || command === 'sqlite.tableImport.release' || command === 'sqlite.importSource.release' || command === 'sqlite.indexes.release' || command === 'sqlite.objects.release' || command === 'sqlite.tableMaintenance.release' || command === 'sqlite.tableRename.release' || command === 'sqlite.tableRebuild.release' || command === 'sqlite.columns.release') return this.sqlite.request(command, input);
     if (this.closePending && !['search.release', 'search.dataRelease', 'search.recordsRelease', 'query.cancel', 'sessions.close', 'connections.close', 'query.sessionState', 'query.completionState'].includes(command)) return Promise.reject(Error('数据库执行进程正在收尾，不能开始新操作'));
+    // 工作表目录只读取已授权的本地工作簿，SQLite 独立使用时不加载网络数据库驱动。
+    if (command === 'excel.sheets') return this.workbookReads.run(command, input as ExcelSheetReadOptions & { taskId: string });
+    if (command === 'query.cancel' && typeof definition?.taskId === 'string' && this.workbookReads.has(definition.taskId))
+      return this.workbookReads.cancel(definition.taskId);
     if (command === 'sqliteDraftFiles.restore' || command === 'sqlite.tableDraft.capture' || command === 'sqlite.tableDraft.restore' || command === 'sqlite.completion' || command === 'sqlite.tableEdit.preview' || command === 'sqlite.tableEdit.apply' || command === 'sqlite.tableCreate.preview' || command === 'sqlite.tableCreate.apply' || command === 'sqlite.tableImport.inspect' || command === 'sqlite.tableImport.preview' || command === 'sqlite.tableImport.apply' || command === 'sqlite.importSource.inspect' || command === 'sqlite.indexes.inspect' || command === 'sqlite.indexes.preview' || command === 'sqlite.indexes.apply' || command === 'sqlite.objects.inspect' || command === 'sqlite.objects.preview' || command === 'sqlite.objects.apply' || command === 'sqlite.tableMaintenance.inspect' || command === 'sqlite.tableMaintenance.preview' || command === 'sqlite.tableMaintenance.apply' || command === 'sqlite.tableRename.inspect' || command === 'sqlite.tableRename.preview' || command === 'sqlite.tableRename.apply' || command === 'sqlite.tableRebuild.inspect' || command === 'sqlite.tableRebuild.preview' || command === 'sqlite.tableRebuild.apply' || command === 'sqlite.columns.inspect' || command === 'sqlite.columns.preview' || command === 'sqlite.columns.apply') return this.sqlite.request(command === 'sqliteDraftFiles.restore' ? 'sqlite.tableDraft.restore' : command, input);
     if (command === 'sqlite.compareData' || command === 'sqlite.compareSync.apply') return this.sqlite.request(command, input);
     const value = input as { id?: string; connectionId?: string; sessionId?: string; taskId?: string; dialect?: string; profile?: ConnectionProfile; sourceProfile?: ConnectionProfile; targetProfile?: ConnectionProfile; source?: { connectionId?: string }; target?: { connectionId?: string } } | null;
@@ -109,7 +117,7 @@ export class EngineBroker {
       try {
         // 独立引擎同时开始收尾，保留网络shutdown的原即时投递与3000ms期限。
         const network = child ? Promise.race([this.networkRequest('__shutdown', {}), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(Error('数据库任务收尾尚未确认，已保留执行进程；请核对资源后重试退出')), 3000); })]) : Promise.resolve();
-        const results = await Promise.allSettled([network, this.sqlite.close()]);
+        const results = await Promise.allSettled([network, this.sqlite.close(), this.workbookReads.cancelAll()]);
         const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
         if (failure) throw failure.reason;
         if (child && this.child === child) { this.stopping = true; if (child.kill() === false) throw Error('数据库执行进程未能终止，请重试退出'); }
@@ -123,7 +131,7 @@ export class EngineBroker {
 
   /** 仅产品明确的强制退出选择可调用；不把它当作服务器任务或资源已经终态的证明。 */
   async forceClose(): Promise<void> {
-    const sqlite = this.sqlite.forceClose();
+    const sqlite = Promise.all([this.sqlite.forceClose(), this.workbookReads.cancelAll()]).then(() => undefined);
     void sqlite.catch(() => {}); // 网络强退失败时也继续观察已启动的准确SQLite收尾，避免未处理拒绝。
     if (!this.child) { await sqlite; return; }
     this.stopping = true;

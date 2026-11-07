@@ -1,3 +1,5 @@
+import { excelImportZh } from '../../src/shared/excelTransfer';
+import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 import { test, expect, desktop, page } from './desktop-fixture';
 import { Client } from 'pg';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -49,12 +51,16 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       { name: '空键.json', format: 'json', mode: 'skip-existing', data: '[{"tenant":"华东","code":null,"payload":"空键"}]', result: '整批已回滚' },
       { name: '其它唯一键冲突.json', format: 'json', mode: 'upsert', data: '[{"tenant":"华东","code":7,"payload":"应回滚"},{"tenant":"华东","code":9,"payload":"更新八"}]', result: '整批已回滚' },
       { name: '分隔文本更新.txt', format: 'txt', mode: 'update-existing', data: "tenant||code||payload\n华东||7||'TXT''||内容'\n", result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行' },
+      { name: '工作簿更新.xlsx', format: 'xlsx', mode: 'update-existing', data: '', result: '新增 0 行，匹配更新 1 行，跳过已有 0 行，跳过未匹配 0 行' },
       { name: '等待并发提交.json', format: 'json', mode: 'skip-existing', data: '[{"tenant":"华东","code":9,"payload":"不得覆盖并发写入"}]', result: '新增 0 行，匹配更新 0 行，跳过已有 1 行，跳过未匹配 0 行' },
       { name: '索引变化.json', format: 'json', mode: 'update-existing', data: '[{"tenant":"华东","code":7,"payload":"不写入"}]', result: '原匹配键已变化' },
     ] as const;
     await mkdir(info.outputDir, {recursive: true});
     const paths = cases.map(item => info.outputPath(item.name));
-    for (const [index, path] of paths.entries()) await writeFile(path, cases[index].data);
+    for (const [index, path] of paths.entries()) {
+      if (cases[index].format !== 'xlsx') await writeFile(path, cases[index].data);
+      else await writeXlsxImportFixture(path, ['tenant', 'code', 'payload', 'raw'], [['华东', '7', '工作簿更新', '\\B:AAE=']]);
+    }
     await desktop.evaluate(({dialog, BrowserWindow}, files) => {
       const original = dialog.showOpenDialog;
       let count = 0;
@@ -78,7 +84,13 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         await modal.getByLabel(txtImportZh.quote, {exact: true}).selectOption('single');
         await modal.getByRole('checkbox', {name: txtImportZh.hasHeader, exact: true}).check();
       }
-      const pick = item.format === 'csv' ? text.choose : item.format === 'json' ? text.chooseJson : item.format === 'txt' ? text.chooseTxt : text.chooseXml;
+      if (item.format === 'xlsx') {
+        await modal.getByRole('button', {name: excelImportZh.workbook, exact: true}).click();
+        await modal.getByLabel(excelImportZh.sheet, {exact: true}).selectOption({label: '导入🚢'});
+        await modal.getByLabel(excelImportZh.header, {exact: true}).fill('2');
+        await modal.getByLabel(excelImportZh.protocol, {exact: true}).selectOption('dbark-v1');
+      }
+      const pick = item.format === 'xlsx' ? excelImportZh.inspect : item.format === 'csv' ? text.choose : item.format === 'json' ? text.chooseJson : item.format === 'txt' ? text.chooseTxt : text.chooseXml;
       await modal.getByRole('button', {name: pick, exact: true}).click();
       await expect(modal).toContainText(basename(paths[index]));
       await expect(modal.getByLabel(conflict.mode, {exact: true})).toHaveValue('insert');
@@ -91,6 +103,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       await key.selectOption({label: 'import_match (tenant, code)'});
       if (index === 1) await modal.screenshot({path: info.outputPath('PostgreSQL 匹配键导入.png')});
       if (item.format === 'txt') await modal.screenshot({path: info.outputPath('PostgreSQL TXT 字段映射.png')});
+      if (item.format === 'xlsx') await modal.screenshot({path: info.outputPath('PostgreSQL XLSX 字段映射.png')});
       if (item.name === '索引变化.json') await observer.query('DROP INDEX public.import_match');
       if (item.name === '等待并发提交.json') {
         await observer.query('BEGIN');
@@ -122,6 +135,10 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       if (index < 3) committed = actual;
       else if (item.format === 'txt') {
         expect(actual).toEqual([{...committed[0], payload: "TXT'||内容"}, ...committed.slice(1)]);
+        committed = actual;
+      }
+      else if (item.format === 'xlsx') {
+        expect(actual).toEqual([{...committed[0], payload: '工作簿更新', raw: '0001'}, ...committed.slice(1)]);
         committed = actual;
       }
       else if (item.name === '等待并发提交.json') {

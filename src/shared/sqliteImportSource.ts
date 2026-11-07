@@ -28,9 +28,9 @@ function fields(input: unknown, required: readonly string[], optional: readonly 
 /** 对外仅固定中文错误；原输入、路径或用户字段值不能进入解析诊断。 */
 function schema<T>(parse: (input: unknown) => T) { return z.unknown().transform((input, context): T => { try { return parse(input); } catch { context.addIssue({ code: 'custom', message: 'SQLite导入来源合同无效或超过预算，请重新选择并检查文件' }); return z.NEVER; } }); }
 export const sqliteImportSourceInspectSchema = schema((input): SqliteImportSourceInspectInput => {
-  const raw = fields(input, ['connectionId', 'database', 'fileToken', 'format', 'encoding', 'taskId'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions']);
+  const raw = fields(input, ['connectionId', 'database', 'fileToken', 'format', 'encoding', 'taskId'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'excelOptions']);
   const connectionId = identifier.parse(raw.connectionId); if (raw.database !== 'main') return invalid();
-  const selected = importFileInspectInputSchema.parse({ fileToken: raw.fileToken, format: raw.format, encoding: raw.encoding, taskId: raw.taskId, ...(Object.hasOwn(raw, 'csvDelimiter') ? { csvDelimiter: raw.csvDelimiter } : {}), ...(Object.hasOwn(raw, 'csvHasHeader') ? { csvHasHeader: raw.csvHasHeader } : {}), ...(Object.hasOwn(raw, 'xmlOptions') ? { xmlOptions: raw.xmlOptions } : {}), ...(Object.hasOwn(raw, 'txtOptions') ? { txtOptions: raw.txtOptions } : {}) });
+  const selected = importFileInspectInputSchema.parse({ fileToken: raw.fileToken, format: raw.format, encoding: raw.encoding, taskId: raw.taskId, ...(Object.hasOwn(raw, 'csvDelimiter') ? { csvDelimiter: raw.csvDelimiter } : {}), ...(Object.hasOwn(raw, 'csvHasHeader') ? { csvHasHeader: raw.csvHasHeader } : {}), ...(Object.hasOwn(raw, 'xmlOptions') ? { xmlOptions: raw.xmlOptions } : {}), ...(Object.hasOwn(raw, 'txtOptions') ? { txtOptions: raw.txtOptions } : {}), ...(Object.hasOwn(raw, 'excelOptions') ? { excelOptions: raw.excelOptions } : {}) });
   if (selected.xmlOptions?.binaryBase64) return invalid();
   return { connectionId, database: 'main', ...selected };
 });
@@ -44,17 +44,17 @@ export const sqliteImportSourceInspectionSchema = schema((input): SqliteImportSo
 });
 export const sqliteImportSourceReleaseSchema = schema((input): SqliteImportSourceReleaseInput => { const raw = fields(input, ['sourceId']); return { sourceId: identifier.parse(raw.sourceId) }; });
 /** 两次检查只比较实际文件解释；省略CSV默认值与显式默认等价，false不能被吞掉。 */
-export function sqliteImportSourceOptionsKey(input: Pick<SqliteImportSourceInspectInput, 'fileToken' | 'format' | 'encoding' | 'csvDelimiter' | 'csvHasHeader' | 'xmlOptions' | 'txtOptions'>): string {
+export function sqliteImportSourceOptionsKey(input: Pick<SqliteImportSourceInspectInput, 'fileToken' | 'format' | 'encoding' | 'csvDelimiter' | 'csvHasHeader' | 'xmlOptions' | 'txtOptions' | 'excelOptions'>): string {
   if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) return invalid();
   const raw: Record<string, unknown> = { taskId: '内部来源解释核验' };
-  for (const key of ['fileToken', 'format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions']) {
+  for (const key of ['fileToken', 'format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'excelOptions']) {
     const item = Object.getOwnPropertyDescriptor(input, key);
     if (!item) { if (['fileToken', 'format', 'encoding'].includes(key)) return invalid(); continue; }
     if (!item.enumerable || !('value' in item)) return invalid(); raw[key] = item.value;
   }
   const selected = importFileInspectInputSchema.parse(raw), csv = selected.format === 'csv';
   if (selected.xmlOptions?.binaryBase64) return invalid();
-  return JSON.stringify({ fileToken: selected.fileToken, format: selected.format, encoding: selected.encoding, csvDelimiter: csv ? selected.csvDelimiter ?? ',' : null, csvHasHeader: csv ? selected.csvHasHeader ?? true : null, ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions } : {}), ...(selected.txtOptions ? { txtOptions: selected.txtOptions } : {}) });
+  return JSON.stringify({ fileToken: selected.fileToken, format: selected.format, encoding: selected.encoding, csvDelimiter: csv ? selected.csvDelimiter ?? ',' : null, csvHasHeader: csv ? selected.csvHasHeader ?? true : null, ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions } : {}), ...(selected.txtOptions ? { txtOptions: selected.txtOptions } : {}), ...(selected.excelOptions ? { excelOptions: selected.excelOptions } : {}) });
 }
 export const sqliteImportSourceMessages = {
   stale: 'SQLite原导入来源已失效，请重新检查文件；不会自动创建表或导入。',

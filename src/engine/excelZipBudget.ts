@@ -36,6 +36,8 @@ async function readExact(file: FileHandle, offset: number, length: number): Prom
   return output;
 }
 
+export class ExcelWorkbookChangedError extends Error {}
+
 /** 有界 ZIP 读取器：只接受单磁盘 ZIP32 的 stored/deflate，所有实际展开均执行预算和 CRC 校验。 */
 export class ExcelZipArchive {
   readonly entries = new Map<string, ExcelZipEntry>();
@@ -59,7 +61,7 @@ export class ExcelZipArchive {
     this.checkCancelled();
     const stat = await this.file.stat({ bigint: true });
     const identity = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-    if (this.identity && this.identity !== identity) throw new Error('XLSX 文件在读取期间发生变化，请重新选择');
+    if (this.identity && this.identity !== identity) throw new ExcelWorkbookChangedError('XLSX 文件在读取期间发生变化，请重新选择');
     this.identity = identity;
   }
 
@@ -171,11 +173,13 @@ export class ExcelZipArchive {
   }
 
   /** 预览与正式导入之间使用完整压缩文件的 SHA256 绑定，不依赖可伪造的 CRC 或时间戳。 */
-  async fingerprint(): Promise<string> {
+  async fingerprint(onBytes?: (chunk: Buffer) => void): Promise<string> {
     await this.assertUnchanged();
     const hash = createHash('sha256'), size = Number((await this.file.stat()).size);
     for (let offset = 0; offset < size; offset += 64 * 1024) {
-      this.checkCancelled(); hash.update(await readExact(this.file, offset, Math.min(64 * 1024, size - offset)));
+      this.checkCancelled();
+      const chunk = await readExact(this.file, offset, Math.min(64 * 1024, size - offset));
+      hash.update(chunk); onBytes?.(chunk);
     }
     await this.assertUnchanged(); return hash.digest('hex');
   }

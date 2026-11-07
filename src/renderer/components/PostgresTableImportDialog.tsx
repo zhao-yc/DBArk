@@ -1,3 +1,6 @@
+import { excelImportDefaults, excelImportOptionsSchema, excelImportZh } from '../../shared/excelTransfer';
+import { ExcelImportFields } from './ExcelImportFields';
+import type { FileChoice } from '../../shared/contracts';
 import { useRef, useState } from 'react';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import type { ImportFileReadOptions } from '../../shared/importNewTable';
@@ -27,6 +30,9 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const [hasHeader, setHasHeader] = useState(true);
   const [encoding, setEncoding] = useState<ImportFileReadOptions['encoding']>('utf8');
   const [txtOptions, setTxtOptions] = useState<TxtImportOptions>(txtImportDefaults);
+  const [workbook, setWorkbook] = useState<FileChoice | null>(null);
+  const [excelOptions, setExcelOptions] = useState(excelImportDefaults);
+  const validWorkbook = format !== 'xlsx' || !!workbook && excelImportOptionsSchema.safeParse(excelOptions).success;
   const [file, setFile] = useState<PostgresTableImportChoice | null>(initialSource?.file ?? null);
   const candidates = page.columns.filter(isPostgresSqlExportColumn);
   const [mapping, setMapping] = useState<string[]>(() => initialSource?.file.header.map(name =>
@@ -59,14 +65,27 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     setMapping(next); setMode('insert'); setKeyId('');
   }
 
+  async function chooseWorkbook() {
+    if (initialSource || occupied.current || format !== 'xlsx') return;
+    occupied.current = true; setChoosing(true);
+    try {
+      if (!isCurrent()) throw Error(text.stale);
+      const selected = await invoke('files.choose', { purpose: 'import', format: 'xlsx' });
+      if (!isCurrent()) throw Error(text.stale);
+      if (selected) { setWorkbook(selected); setExcelOptions(excelImportDefaults); resetSource(); }
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { occupied.current = false; setChoosing(false); }
+  }
+
   /** 预填准确同名字段，余下字段留给用户映射。 */
   async function choose() {
-    if (initialSource || occupied.current || !page.exportToken || !validXml || !validTxt) return;
+    if (initialSource || occupied.current || !page.exportToken || !validXml || !validTxt || !validWorkbook) return;
     occupied.current = true;
     setChoosing(true); resetSource();
     try {
       if (!isCurrent()) throw Error(text.stale);
       const selection = format === 'xml' ? { format, xmlOptions } : format === 'txt' ? { format, encoding, txtOptions } : format === 'json' ? { format, encoding } :
+        format === 'xlsx' ? { format, excelOptions, workbookToken: workbook!.token } :
         { csvDelimiter: delimiter, csvHasHeader: hasHeader };
       const selected = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...selection });
       if (!isCurrent()) throw Error(text.stale);
@@ -114,10 +133,10 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     <div className="modal-content pg-table-export">
       <p><strong>{target.table}</strong> · {target.database}</p>
       <p>{mode === 'insert' ? text.note : text.conflictNote}</p>
-      {(format !== 'txt' || initialSource) && <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : format === 'txt' ? txtImportZh.hint : initialSource ? newTableText.postgresCsv : text.nullNote}</p>}
+      {(!['txt', 'xlsx'].includes(format) || initialSource) && <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : format === 'txt' ? txtImportZh.hint : format === 'xlsx' ? excelImportZh.hint : initialSource ? newTableText.postgresCsv : text.nullNote}</p>}
       {!initialSource && <><Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
-        setFormat(event.target.value as typeof format); resetSource();
-      }}><option value="csv">CSV</option><option value="json">JSON</option><option value="txt">{txtImportZh.format}</option><option value="xml">XML</option></select></Field>
+        setFormat(event.target.value as typeof format); setWorkbook(null); setExcelOptions(excelImportDefaults); resetSource();
+      }}><option value="csv">CSV</option><option value="json">JSON</option><option value="txt">{txtImportZh.format}</option><option value="xlsx">{excelImportZh.format}</option><option value="xml">XML</option></select></Field>
       <div className="pg-table-controls">
         {format === 'xml' ? <>
           <XmlDocumentImportFields options={xmlOptions} disabled={locked} onChange={options => { setXmlOptions(options); resetSource(); }}/>
@@ -132,7 +151,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         </> : format === 'json' || format === 'txt' ? <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
           onChange={event => { setEncoding(event.target.value as typeof encoding); resetSource(); }}>
           <option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option>
-        </select></Field> : <>
+        </select></Field> : format === 'xlsx' ? <button disabled={locked} onClick={() => void chooseWorkbook()}>{workbook?.name ?? excelImportZh.workbook}</button> : <>
         <CsvExportDelimiterField value={delimiter} disabled={locked} label={text.delimiter} hint={text.delimiterHint} onChange={value => {
           setDelimiter(value); resetSource();
         }}/>
@@ -142,8 +161,10 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
           }}/> {csvImportHeaderZh.label}
         </label>
         </>}
-        <button disabled={locked || !validXml || !validTxt} onClick={() => void choose()}>{format === 'xml' ? text.chooseXml : format === 'json' ? text.chooseJson : format === 'txt' ? text.chooseTxt : text.choose}</button>
+        {format !== 'xlsx' && <button disabled={locked || !validXml || !validTxt} onClick={() => void choose()}>{format === 'xml' ? text.chooseXml : format === 'json' ? text.chooseJson : format === 'txt' ? text.chooseTxt : text.choose}</button>}
       </div>
+      {format === 'xlsx' && <><div className="form-grid"><ExcelImportFields fileToken={workbook?.token} options={excelOptions} disabled={locked} onChange={options => { setExcelOptions(options); resetSource(); }}/></div>
+        <button disabled={locked || !validWorkbook} onClick={() => void choose()}>{excelImportZh.inspect}</button></>}
       {format === 'txt' && <div className="form-grid"><TxtImportFields options={txtOptions} disabled={locked} onChange={options => { setTxtOptions(options); resetSource(); }}/></div>}
       {!validTxt && <ErrorBox message={txtImportZh.invalid}/>}
       {!validXml && <ErrorBox message={xmlImportZh.invalid}/>}</>}

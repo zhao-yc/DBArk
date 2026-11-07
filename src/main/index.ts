@@ -1344,7 +1344,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const format = records ? target.format : 'csv';
         const scanned = records ? target.scannedFile : undefined;
         const formatName = format.toUpperCase();
-        const path = scanned ? resolveFileToken(files, scanned.token, 'import', format) : await dialog.showOpenDialog(columns!.owner.window,
+        const workbookToken = records && target.format === 'xlsx' ? target.workbookToken : undefined;
+        const fileToken = scanned?.token ?? workbookToken;
+        const path = fileToken ? resolveFileToken(files, fileToken, 'import', format) : await dialog.showOpenDialog(columns!.owner.window,
           { title: `选择 PostgreSQL ${formatName} 文件`, properties: ['openFile'],
             filters: [{ name: formatName, extensions: format === 'csv' ? ['csv', 'tsv'] : [format] }] })
           .then(chosen => chosen.canceled ? undefined : chosen.filePaths[0]);
@@ -1354,6 +1356,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           ? await inspectPostgresRecordImportSource(path, target.format === 'xml' ? { format: 'xml', encoding: 'utf8', xmlOptions: target.xmlOptions } :
             target.format === 'csv' ? { format: 'csv', encoding: target.encoding, csvDelimiter: target.csvDelimiter, csvHasHeader: target.csvHasHeader } :
               target.format === 'txt' ? { format: 'txt', encoding: target.encoding, txtOptions: target.txtOptions } :
+                target.format === 'xlsx' ? { format: 'xlsx', encoding: 'utf8', excelOptions: target.excelOptions } :
                 { format: 'json', encoding: target.encoding }, check)
           : await inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader);
         check();
@@ -2520,7 +2523,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
       // 已返回结果的 Excel 和标记格式只消费本窗口选择的具体格式令牌。
       const checkFormat = command === 'files.preflight' || command === 'files.inspectImport' || input.expectedSource ||
-        (command === 'files.preview' || command === 'files.import') && ['xml', 'txt'].includes(input.format) ||
+        (command === 'files.preview' || command === 'files.import') && ['xml', 'txt', 'xlsx'].includes(input.format) ||
         command === 'files.exportResult' && (input.format === 'xlsx' || !!dataFileText(input.format));
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) }; break;
     }

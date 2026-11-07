@@ -12,6 +12,11 @@ import type { CsvExportDelimiter } from '../shared/csvExport';
 import { validXmlImport, xmlImportZh, type RecordImportFormat, type XmlImportOptions } from '../shared/xmlImport';
 import { readXmlRecords, type XmlImportReadControl } from './xmlImport';
 import { txtFixedWidths, txtImportOptionsSchema, txtImportZh, txtQualifier, txtRecordDelimiters, validTxtImport, type TxtImportOptions } from '../shared/txtImport';
+import { excelImportZh, validExcelImport, type ExcelImportOptions } from '../shared/excelTransfer';
+import { readExcelRows } from './excelFiles';
+import { encodingName } from './fileEncoding';
+
+export { encodingName } from './fileEncoding';
 
 /** 保存 JSON 数字的原始 token，避免经过 JavaScript 浮点数再序列化。 */
 class JsonNumber {
@@ -36,12 +41,6 @@ function preciseJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** 编码只允许界面公开支持的值，避免任意编码名称意外降级。 */
-export function encodingName(encoding: string): string {
-  if (!['utf8', 'utf16le', 'gb18030'].includes(encoding)) throw new Error('编码必须为 UTF-8、UTF-16LE 或 GB18030');
-  return encoding;
-}
-
 /** CSV 中 \\N 表示 NULL，反斜线开头的文本以额外反斜线转义，保持往返无歧义。 */
 export function csvCell(value: CellValue, delimiter: CsvExportDelimiter = ','): string {
   return csvHeader(delimitedCellText(value), delimiter);
@@ -61,13 +60,19 @@ export function csvValue(value: string): CellValue {
 }
 
 /** 在同一条流上解析记录及校验原始字节，JSON 数字保留原始字符串。 */
-export async function* readRecords(filePath: string, format: RecordImportFormat, encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: XmlImportReadControl & { xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions }): AsyncGenerator<DataRow> {
+export async function* readRecords(filePath: string, format: RecordImportFormat, encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: XmlImportReadControl & { xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; checkCancelled?: () => void }): AsyncGenerator<DataRow> {
   const selectedDelimiter = csvImportDelimiter(format, delimiter);
   const selectedHasHeader = csvImportHasHeader(format, hasHeader);
   // 所有配置先校验，错误选项不能触发文件打开或遗留尚未接入 pipeline 的句柄。
   const selectedEncoding = encodingName(encoding);
   if (!validXmlImport({ ...control, format, encoding })) throw Error(xmlImportZh.invalid);
   if (!validTxtImport({ ...control, format })) throw Error(txtImportZh.invalid);
+  if (!validExcelImport({ ...control, format, encoding })) throw Error(excelImportZh.missing);
+  if (format === 'xlsx') {
+    yield* readExcelRows({ ...control!.excelOptions!, filePath, onColumns: control?.onColumns, onBytes: control?.onBytes,
+      checkCancelled: () => { control?.signal?.throwIfAborted(); control?.checkCancelled?.(); } });
+    return;
+  }
   if (format === 'xml') {
     yield* readXmlRecords(filePath, control!.xmlOptions!, control);
     return;
@@ -206,17 +211,18 @@ export async function* readText(filePath: string, encoding: string): AsyncGenera
 }
 
 /** 样本最多 20 条，XML 与 TXT 继续读完以核对来源结构。 */
-export async function previewFile(input: { filePath: string; format: RecordImportFormat; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions }): Promise<{ columns: string[]; rows: DataRow[] }> {
+export async function previewFile(input: { filePath: string; format: RecordImportFormat; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions }): Promise<{ columns: string[]; rows: DataRow[] }> {
   if (Object.hasOwn(input, 'csvHasHeader') && typeof input.csvHasHeader !== 'boolean') throw new Error('首行为标题选项必须为布尔值，且只适用于 CSV 导入');
   const rows: DataRow[] = [], columns = new Set<string>();
   const control = {
     ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}),
     ...(Object.hasOwn(input, 'txtOptions') ? { txtOptions: input.txtOptions } : {}),
-    ...(input.format === 'xml' || input.format === 'txt' ? { onColumns: (names: string[]) => { for (const name of names) columns.add(name); } } : {}),
+    ...(Object.hasOwn(input, 'excelOptions') ? { excelOptions: input.excelOptions } : {}),
+    ...(['xml', 'txt', 'xlsx'].includes(input.format) ? { onColumns: (names: string[]) => { for (const name of names) columns.add(name); } } : {}),
   };
   let sampleBytes = 0;
   for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, control)) {
-    if (input.format === 'xml' || input.format === 'txt') {
+    if (input.format === 'xml' || input.format === 'txt' || input.format === 'xlsx') {
       // 整文件取得列的并集，样本只保留有界数据，避免大字段跨 IPC。
       Object.keys(row).forEach(name => columns.add(name));
       if (rows.length < 20 && sampleBytes < 2 * 1024 * 1024) {

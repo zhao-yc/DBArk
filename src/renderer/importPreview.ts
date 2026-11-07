@@ -1,3 +1,4 @@
+import type { ExcelImportOptions } from '../shared/excelTransfer';
 import type { TxtImportOptions } from '../shared/txtImport';
 import type { RecordImportFormat, XmlImportOptions } from '../shared/xmlImport';
 import type { DataRow, TableInfo } from '../shared/contracts';
@@ -7,7 +8,7 @@ import { importPresetsZh } from './locales/importPresets.zh-CN';
 
 export interface ImportPreviewTarget { connectionId: string; database: string; table: string; }
 export interface ImportPreviewContext extends ImportPreviewTarget {
-  fileToken: string; format: RecordImportFormat; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
+  fileToken: string; format: RecordImportFormat; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
   csvDelimiter?: CsvImportDelimiter;
   csvHasHeader?: boolean;
 }
@@ -34,7 +35,7 @@ function targetKey(target: ImportPreviewTarget): string { return JSON.stringify(
 
 /** 使用结构化键避免名称分隔符碰撞；就绪判断在渲染阶段完成，不等待副作用失效旧状态。 */
 export function importPreviewKey(context: ImportPreviewContext): string {
-  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter), csvImportHasHeader(context.format, context.csvHasHeader), context.xmlOptions, context.txtOptions]);
+  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter), csvImportHasHeader(context.format, context.csvHasHeader), context.xmlOptions, context.txtOptions, context.excelOptions]);
 }
 
 /** 只有完整匹配当前上下文的预览可见且可导入，旧预览和失败状态均不能借用旧映射。 */

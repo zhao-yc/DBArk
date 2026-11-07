@@ -86,7 +86,7 @@ async function prepareSql(columns: number) {
 
 describe('已返回结果Excel的真实导出对话框', () => {
   it('新增XLSX格式选项并说明固定编码、文本数值日期与完整dbark-v1协议', async () => {
-    await mount(); expect(node(zh.resultExport.format).querySelectorAll('option').map(option => option.value)).toEqual(['csv', 'json', 'sql', 'xlsx']);
+    await mount(); expect(node(zh.resultExport.format).querySelectorAll('option').map(option => option.value)).toEqual(['csv', 'json', 'sql', 'xlsx', 'txt', 'html', 'xml', 'xml-elements', 'xml-attributes']);
     await select(zh.resultExport.encoding, 'utf16le'); await xlsx(); expect(node(zh.resultExport.encoding).disabled).toBe(true); expect(node(zh.resultExport.encoding).value).toBe('utf8');
     for (const message of [text.encoding, text.notice, text.numbers, text.nulls, text.binary, text.limits]) expect(document.body.textContent).toContain(message);
     expect(document.querySelector(`[aria-label="${csvExportZh.label}"]`)).toBeNull(); expect(document.querySelector(`pre[aria-label="${sqlText.preview}"]`)).toBeNull();

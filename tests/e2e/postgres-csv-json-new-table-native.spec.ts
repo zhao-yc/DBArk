@@ -1,3 +1,5 @@
+import { excelImportZh } from '../../src/shared/excelTransfer';
+import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 import { test, expect, desktop, page } from './desktop-fixture';
 import { Client } from 'pg';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -37,10 +39,16 @@ test('PostgreSQL 从 CSV、精确 JSON 和分隔 TXT 新建表，文件变化时
       {format: 'csv', table: 'csv_created', content: Buffer.from(csv, 'utf16le')},
       {format: 'json', table: 'json_created', content: json},
       {format: 'txt', table: 'txt_created', content: txt},
+      {format: 'xlsx', table: 'xlsx_created', content: ''},
       {format: 'json', table: 'json_changed', content: json},
     ] as const;
     const paths = scenarios.map(({format, table}) => info.outputPath(`${table}.${format}`));
-    for (const [index, path] of paths.entries()) await writeFile(path, scenarios[index].content);
+    for (const [index, path] of paths.entries()) {
+      if (scenarios[index].format !== 'xlsx') await writeFile(path, scenarios[index].content);
+      else await writeXlsxImportFixture(path, ['id', 'raw', 'note', 'late'], [
+        ['9007199254740993', '\\B:AP8=', '', null], ['9223372036854775807', '\\B:', null, '尾部字段'],
+      ]);
+    }
     await desktop.evaluate(({dialog, BrowserWindow}, files) => {
       const original = dialog.showOpenDialog;
       let count = 0;
@@ -66,8 +74,13 @@ test('PostgreSQL 从 CSV、精确 JSON 和分隔 TXT 新建表，文件变化时
       } else if (format === 'txt') {
         await wizard.getByLabel(txtImportZh.delimiter, {exact: true}).selectOption('|');
         await wizard.getByRole('checkbox', {name: txtImportZh.hasHeader, exact: true}).check();
+      } else if (format === 'xlsx') {
+        await wizard.getByRole('button', {name: excelImportZh.workbook, exact: true}).click();
+        await wizard.getByLabel(excelImportZh.sheet, {exact: true}).selectOption({label: '导入🚢'});
+        await wizard.getByLabel(excelImportZh.header, {exact: true}).fill('2');
+        await wizard.getByLabel(excelImportZh.protocol, {exact: true}).selectOption('dbark-v1');
       }
-      await wizard.getByRole('button', {name: wizardText.choose, exact: true}).click();
+      await wizard.getByRole('button', {name: format === 'xlsx' ? excelImportZh.inspect : wizardText.choose, exact: true}).click();
       await expect(wizard.getByText(wizardText.records(2), {exact: true})).toBeVisible();
       await wizard.getByLabel(wizardText.table, {exact: true}).fill(table);
       await wizard.getByRole('checkbox', {name: wizardText.reviewed, exact: true}).check();

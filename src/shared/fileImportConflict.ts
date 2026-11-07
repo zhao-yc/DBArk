@@ -56,7 +56,7 @@ function ownRecord(value: unknown, keys: string[]): Record<string, unknown> {
 export function fileImportConflict(format: string, input: object): FileImportConflictSelection | undefined {
   const descriptor = Object.getOwnPropertyDescriptor(input, 'conflict');
   if (!descriptor) { if ('conflict' in input) throw Error(fileImportConflictText.invalid); return; }
-  if (!recordImportFormats.includes(format as RecordImportFormat) || !('value' in descriptor) || !descriptor.enumerable) throw Error(fileImportConflictText.invalid);
+  if (format === 'xlsx' || !recordImportFormats.includes(format as RecordImportFormat) || !('value' in descriptor) || !descriptor.enumerable) throw Error(fileImportConflictText.invalid);
   const value = ownRecord(descriptor.value, ['mode', 'schemaHash', 'key']);
   const key = ownRecord(value.key, ['name', 'columns']), raw = key.columns;
   if (!Array.isArray(raw) || Object.getPrototypeOf(raw) !== Array.prototype || raw.length < 1 || raw.length > 64 || Reflect.ownKeys(raw).length !== raw.length + 1) throw Error(fileImportConflictText.invalid);

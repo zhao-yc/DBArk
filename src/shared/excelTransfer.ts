@@ -1,8 +1,28 @@
+import { z } from 'zod';
 import type { CellValue, DataRow, FileChoice } from './contracts';
 
 /** XLSX 使用固定 Unicode 文本，不提供会改变数据含义的编码选项。 */
 export interface ExcelColumn { name: string; type: string; }
 export type ExcelTextProtocol = 'plain' | 'dbark-v1';
+export const excelImportOptionsSchema = z.object({
+  sheetId: z.string().min(1).max(200), headerRow: z.number().int().min(1).max(1000).optional(),
+  protocol: z.enum(['plain', 'dbark-v1']),
+}).strict();
+export type ExcelImportOptions = z.infer<typeof excelImportOptionsSchema>;
+export const excelImportDefaults: ExcelImportOptions = { sheetId: '', headerRow: 1, protocol: 'plain' };
+
+export const excelImportZh = {
+  format: 'Excel（XLSX）', workbook: '选择 Excel 工作簿', inspect: '完整扫描工作表', sheet: '工作表', header: '标题所在行',
+  protocol: 'Excel 文本协议', plain: '普通工作簿', reversible: 'tabrelio 可逆文本', hidden: '（隐藏）',
+  missing: '请选择工作簿及工作表，并核对标题所在行', reading: '正在读取工作表目录',
+  atomic: '工作簿必须使用整文件原子导入',
+  hint: '空白格按 NULL 导入。数字保留文件中的原始值，日期序列请先转成日期文本。公式和合并单元格须先整理为普通值。',
+} as const;
+
+export function validExcelImport(input: { format: string; encoding?: string; excelOptions?: unknown }): boolean {
+  return input.format === 'xlsx' ? (input.encoding === undefined || input.encoding === 'utf8') &&
+    excelImportOptionsSchema.safeParse(input.excelOptions).success : !Object.hasOwn(input, 'excelOptions');
+}
 export interface ExcelSheet { id: string; name: string; hidden: boolean; }
 export interface ExcelSheetPreview { sheet: ExcelSheet; columns: string[]; rows: DataRow[]; warnings: string[]; fingerprint: string; }
 export interface ExcelFieldMapping { source: string; target: string; }
