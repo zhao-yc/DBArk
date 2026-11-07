@@ -2,7 +2,7 @@ import type { ResultExportOptions, TaskEvent } from '../shared/contracts';
 import { resultExportColumns, validateResultExportData } from '../shared/resultExport';
 import { csvCell, csvHeader, encodingName } from './files';
 import { AtomicFile, nativeAtomicFileIO, type AtomicFileIO } from './atomicFile';
-import { assertResultSqlData, resultSqlLimits, resultSqlSelectionSchema, type ResultSqlTarget } from '../shared/resultSql';
+import { assertResultSqlData, assertResultSqlEncoding, resultSqlHeader, resultSqlLimits, resultSqlSelectionSchema, type ResultSqlTarget } from '../shared/resultSql';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { resultSqlRowWriter } from './resultSql';
 import { csvExportDelimiter } from '../shared/csvExport';
@@ -40,6 +40,7 @@ export class ResultFileTasks {
       const parsed = resultSqlSelectionSchema.safeParse(input.sql);
       if (!parsed.success || parsed.data.confirmation !== `${parsed.data.target.database}.${parsed.data.target.table}`) throw Error(resultSqlZh.stale);
       sqlTarget = parsed.data.target; assertResultSqlData(input.result, sqlTarget);
+      assertResultSqlEncoding(sqlTarget, input.encoding);
     } else if (input.sql !== undefined) throw Error(resultSqlZh.invalid);
     if (input.format === 'xlsx') {
       if (input.encoding !== 'utf8') throw Error(resultExcelZh.utf8Only);
@@ -67,7 +68,7 @@ export class ResultFileTasks {
       }
       file = await AtomicFile.create(input.filePath, encoding, checkCancelled, () => { task.committing = true; }, this.io, input.format === 'sql' ? resultSqlLimits.fileBytes : undefined);
       if (encoding === 'utf16le') await write('\uFEFF');
-      await write(input.format === 'sql' ? resultSqlZh.header : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n' : '[\n');
+      await write(sqlTarget ? resultSqlHeader(sqlTarget) : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n' : '[\n');
       for (const row of input.result.rows) {
         // 按列描述顺序取值，不能依赖行对象的枚举顺序；手工构造 JSON 键值对保留原型同名键。
         await write(sqlRow ? sqlRow(row) : input.format === 'csv'

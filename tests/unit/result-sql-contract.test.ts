@@ -10,6 +10,28 @@ import { resolveFileToken, type SelectedFile } from '../../src/main/fileTokens';
 function input(): ResultSqlPreviewInput { return { encoding: 'utf8', target: { database: 'd`b', table: 't', columns: [{ key: '__proto__', name: 'a`b' }] }, result: { columns: [{ key: '__proto__', name: '' }], rows: [Object.fromEntries([['__proto__', '原值']])], truncated: true } }; }
 
 describe('结果INSERT合同和模式无关字面量', () => {
+  it('PostgreSQL 按 schema 和双引号名生成显式字面量，大小写不同的目标字段分别映射', () => {
+    const target = {dialect: 'postgresql' as const, database: '模式😀', table: 't"表',
+      columns: [{key: 'a', name: 'Value'}, {key: 'b', name: 'value'}, {key: 'c', name: 'bytes'}]};
+    const result = {columns: [{key: 'a', name: '重复'}, {key: 'b', name: '重复'}, {key: 'c', name: ''}],
+      rows: [{a: "中'\\\n😀", b: null, c: {type: 'binary' as const, base64: 'AP8='}}], truncated: true};
+    const parsed = validateCommand('files.previewResultSql', {result, target, encoding: 'utf8'});
+    expect(parsed).toMatchObject({target});
+    expect(previewResultSql(result, target).sql).toBe("-- PostgreSQL 已返回结果快照；仅生成INSERT，不执行SQL。\n" +
+      'INSERT INTO "模式😀"."t""表" ("Value", "value", "bytes") VALUES (E\'中\'\'\\\\\n😀\', NULL, E\'\\\\x00ff\');\n');
+  });
+  it('PostgreSQL 在 IPC 和 Main 同时拒绝超长字节名称、NUL 和其它输出编码', () => {
+    const value = input();
+    value.target = {dialect: 'postgresql', database: 'public', table: 't', columns: [{key: '__proto__', name: 'v'}]};
+    for (const name of ['界'.repeat(22), '\0', '\ud800'])
+      expect(() => validateCommand('files.previewResultSql', {...value, target: {...value.target, table: name}})).toThrow();
+    for (const encoding of ['utf16le', 'gb18030'] as const) {
+      expect(() => validateCommand('files.previewResultSql', {...value, encoding})).toThrow('UTF-8');
+      expect(() => new ResultSqlPreviews(new Map()).issue({...value, encoding}, {})).toThrow('UTF-8');
+    }
+    value.result.rows[0].__proto__ = 'NUL\0';
+    expect(() => validateCommand('files.previewResultSql', value)).toThrow('NUL');
+  });
   it('手工独立SQL期望：反引号分段引用，Unicode、引号、反斜线、换行和NUL全用原字节', () => {
     const value = input(); value.result.rows = [Object.fromEntries([['__proto__', "中😊'\\\n\0"]])];
     expect(previewResultSql(value.result, value.target).sql).toBe("-- 已返回结果快照；仅生成INSERT，不执行SQL。\nINSERT INTO `d``b`.`t` (`a``b`) VALUES (_utf8mb4 X'e4b8adf09f988a275c0a00');\n");

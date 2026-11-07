@@ -41,7 +41,7 @@ afterEach(async () => {
 });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 /** 结果投影与勾选均用原快照类，禁止把隐藏字段或原始查询传给文件链。 */
-async function mount(selected = false, strict = false) {
+async function mount(selected = false, strict = false, sqlDialect?: 'postgresql') {
   folder = await mkdtemp(join(tmpdir(), 'dbark-result-sql-ui-')); path = join(folder, 'selected.sql'); await writeFile(path, '原目标');
   source = { columns: [{ key: 'a', name: '重名', type: 'BIGINT' }, { key: 'b', name: '重名', type: 'BLOB' }, { key: 'hidden', name: '隐藏', type: 'TEXT' }], rows: [{ a: '18446744073709551615', b: { type: 'binary', base64: 'AP8=' }, hidden: '秘密' }, { a: '0.12345678901234567890', b: '', hidden: '秘密' }], statement: 'SELECT 原SQL不得传给导出', elapsedMs: 0, truncated: true };
   const owner = new ResultExportSelection(), binding = owner.bind(source, ['已返回'], source.columns.slice(0, 2))!;
@@ -53,7 +53,7 @@ async function mount(selected = false, strict = false) {
     if (command === 'files.exportResult') writes.push(promise); return promise;
   } };
   const container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container as any);
-  const dialog = <Dialog result={snapshot} tabId="q" selected={selected} onClose={closed}/>;
+  const dialog = <Dialog result={snapshot} tabId="q" selected={selected} sqlDialect={sqlDialect} onClose={closed}/>;
   await act(async () => root!.render(strict ? <StrictMode>{dialog}</StrictMode> : dialog));
 }
 function button(name: string) { const node = document.querySelectorAll('button').find(value => value.textContent === name || value.textContent.includes(name)); expect(node, name).toBeDefined(); return node!; }
@@ -66,6 +66,31 @@ async function ready() { await click(text.preview); await click(zh.resultExport.
 function delay(command: string) { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); hold = { command, promise, release }; return hold; }
 
 describe('结果INSERT真实React到文件链路（RAM原生端口）', () => {
+  it('PostgreSQL 从其它格式切入 SQL 时固定 UTF-8，并写出明确 schema 的原预览', async () => {
+    await mount(false, false, 'postgresql');
+    await select(zh.resultExport.encoding, 'utf16le');
+    await select(zh.resultExport.format, 'sql');
+    const encoding = document.querySelector('select[aria-label="' + zh.resultExport.encoding + '"]')!;
+    expect(encoding.value).toBe('utf8');
+    expect(encoding.disabled).toBe(true);
+    await input(text.postgresDatabase, 'public');
+    await input(text.table, 'target');
+    await input(text.column(1), 'Value');
+    await input(text.column(2), 'value');
+    await click(text.preview);
+    const preview = document.querySelector('pre[aria-label="' + text.preview + '"]')!.textContent;
+    expect(preview).toContain('INSERT INTO "public"."target" ("Value", "value")');
+    await act(async () => callback(encoding, 'onChange')({target: {value: 'utf16le'}}));
+    expect(encoding.value).toBe('utf8');
+    await click(zh.resultExport.chooseFile);
+    await input(text.postgresConfirmation, 'public.target');
+    const acknowledged = document.querySelector('input[aria-label="' + text.acknowledge + '"]')!;
+    await act(async () => { acknowledged.checked = true; acknowledged.dispatchEvent(new MemoryEvent('click')); });
+    await click(zh.resultExport.start);
+    await act(async () => { await Promise.all(writes); });
+    expect(await readFile(path, 'utf8')).toBe(preview);
+    expect(requests.filter(call => call.command === 'files.exportResult')[0].input.sql.target.dialect).toBe('postgresql');
+  });
   it.each([false, true])('全结果/勾选=%s：显式目标、实际SQL确认、一次提交及真实文件均只含可见快照', async selected => {
     await mount(selected); await target(); expect(button(zh.resultExport.chooseFile).disabled).toBe(true);
     await ready(); const sql = document.querySelector(`pre[aria-label="${text.preview}"]`)!.textContent; expect(sql).toContain('INSERT INTO `db`.`t` (`n`, `b`)'); expect(document.body.textContent).toContain('此结果已截断');

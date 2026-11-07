@@ -1,5 +1,12 @@
 /** 结果INSERT导出的合同、界面及任务文案集中维护。 */
 export const resultSqlZh = {
+  postgresFormat: 'PostgreSQL INSERT SQL',
+  postgresDatabase: 'INSERT目标 schema', postgresConfirmation: '确认INSERT目标 schema.表名',
+  postgresProtocol: 'PostgreSQL SQL：文本使用显式 E 字符串，字节使用 BYTEA 十六进制输入。目标字段决定文本到类型的转换，日期、时区等仍受执行时会话设置影响。请核对目标类型和约束。',
+  postgresIdentifier: 'PostgreSQL 名称须为有效 Unicode、最多 63 个 UTF-8 字节，不能包含控制符或仅含空白。',
+  postgresNul: 'PostgreSQL 文本不能包含 NUL，请核对来源值。',
+  postgresUtf8: 'PostgreSQL INSERT SQL 文件仅支持 UTF-8。',
+  postgresHeader: '-- PostgreSQL 已返回结果快照；仅生成INSERT，不执行SQL。\n',
   database: 'INSERT目标数据库', table: 'INSERT目标表', column: (position: number) => `第${position}列INSERT目标字段`,
   targetColumn: 'INSERT目标字段', previewRequired: 'SQL结果导出必须先预览并确认目标映射', nonSql: '非SQL格式不能夹带INSERT目标或预览', confirmationMismatch: 'INSERT准确目标确认不匹配', filePurpose: 'INSERT预览只能绑定SQL结果保存用途', shuttingDown: '客户端正在退出，不能准备结果SQL', formats: '结果仅支持CSV、JSON、XLSX或INSERT SQL导出',
   mapping: '请明确填写每个结果列对应的目标字段；不从查询文本推断库、表或字段。',

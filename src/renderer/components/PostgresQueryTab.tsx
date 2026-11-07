@@ -1539,7 +1539,7 @@ export function PostgresQueryTab({
           onClose={() => closeResultSort(sortDraft)} /></div>
       </Modal>}
       {exportView && <ResultExportDialog result={exportView.result} tabId={tab.id} selected={exportView.selected}
-        allowSql={false} onClose={() => {
+        sqlDialect="postgresql" onClose={() => {
           exportOpen.current = false;
           setExportView(undefined);
         }} />}

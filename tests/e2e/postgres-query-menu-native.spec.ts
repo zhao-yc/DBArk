@@ -1,10 +1,14 @@
 import { Client } from 'pg';
+import { readFile } from 'node:fs/promises';
 import { test, expect, page, desktop, pageErrors, quitDesktop } from './desktop-fixture';
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
+import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
+import { postgresIdentifier } from '../../src/shared/postgresSql';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -66,6 +70,96 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 查询结果 INSERT 文件预览、截断范围、勾选和真实回放', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const schema = '结果😀', fields = ['id', 'Value', 'value', 'bytes', 'nullable', 'stamp'];
+  const table = (name: string) => postgresIdentifier(schema) + '.' + postgresIdentifier(name);
+  const values = [
+    ['9007199254740993', '0.12345678901234567890', "中'\\\n😀", Buffer.from([0, 255]), null, '2026-11-07 12:34:56.123456'],
+    ['9007199254740994', '-9.87654321098765432100', '', Buffer.alloc(0), '', '2026-11-08 01:02:03.000004'],
+    ['9007199254740995', '1', '超出已返回范围', Buffer.from([1]), '第三行', '2026-11-09 00:00:00'],
+  ];
+  const allFile = info.outputPath('已返回结果.sql'), selectedFile = info.outputPath('勾选结果.sql');
+  try {
+    await observer.query('CREATE SCHEMA ' + postgresIdentifier(schema));
+    for (const name of ['source', 'all_rows', 'selected_rows'])
+      await observer.query('CREATE TABLE ' + table(name) + ' (id bigint PRIMARY KEY, "Value" numeric(38,20), "value" text, bytes bytea, nullable text, stamp timestamp(6))');
+    for (const row of values) await observer.query('INSERT INTO ' + table('source') + ' VALUES ($1,$2,$3,$4,$5,$6)', row);
+    const sourceSql = 'SELECT id AS duplicate, "Value" AS duplicate, "value", bytes, nullable, stamp FROM ' + table('source') + ' ORDER BY id';
+    await prepare({id: '', name: '本轮隔离 PostgreSQL 结果', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sourceSql);
+    await page.evaluate(async () => {
+      const settings = await window.dbark.invoke('settings.get', {});
+      await window.dbark.invoke('settings.save', {...settings, resultLimit: 2});
+    });
+    await page.reload();
+    await expect(editor().getByRole('textbox')).toBeVisible();
+    await tab().getByRole('button', {name: postgresZh.execute, exact: true}).click();
+    await expect(tab().locator('.postgres-results .rdg')).toContainText('9007199254740994');
+    const history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
+      const original = dialog.showSaveDialog;
+      let count = 0;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        if (BrowserWindow.getAllWindows().length !== 1 || args[0] !== BrowserWindow.getAllWindows()[0] ||
+            !(args.at(-1) as Electron.SaveDialogOptions).filters?.some(filter => filter.extensions.includes('sql')) || !paths[count])
+          throw Error('拒绝本例范围外的文件选择');
+        return {canceled: false, filePath: paths[count++]};
+      }) as typeof dialog.showSaveDialog;
+      Object.assign(globalThis, {restorePostgresResultSqlPicker: () => { dialog.showSaveDialog = original; return count; }});
+    }, [allFile, selectedFile]);
+    for (const [selected, target, path] of [[false, 'all_rows', allFile], [true, 'selected_rows', selectedFile]] as const) {
+      if (selected) await tab().locator('.postgres-results .rdg-row').filter({hasText: '9007199254740994'}).getByRole('checkbox').check();
+      await tab().getByRole('button', {name: selected ? zh.resultExport.selectedTitle : zh.resultExport.title, exact: true}).click();
+      const dialog = page.getByRole('dialog', {name: selected ? zh.resultExport.selectedTitle : zh.resultExport.title, exact: true});
+      await dialog.getByLabel(zh.resultExport.format).selectOption('sql');
+      await expect(dialog.getByLabel(zh.resultExport.encoding)).toHaveValue('utf8');
+      await expect(dialog.getByLabel(zh.resultExport.encoding)).toBeDisabled();
+      if (!selected) await expect(dialog).toContainText(zh.resultExport.truncated);
+      await dialog.getByLabel(resultSqlZh.postgresDatabase).fill(schema);
+      await dialog.getByLabel(resultSqlZh.table).fill(target);
+      for (const [index, name] of fields.entries()) await dialog.getByLabel(resultSqlZh.column(index + 1)).fill(name);
+      await dialog.getByRole('button', {name: resultSqlZh.preview, exact: true}).click();
+      await expect(dialog.locator('.result-sql-preview')).toContainText('INSERT INTO ' + table(target));
+      if (!selected) {
+        await dialog.locator('.result-sql-preview').scrollIntoViewIfNeeded();
+        await page.screenshot({path: info.outputPath('PostgreSQL查询结果SQL预览.png')});
+      }
+      await dialog.getByRole('button').filter({hasText: zh.resultExport.chooseFile}).click();
+      await dialog.getByLabel(resultSqlZh.postgresConfirmation).fill(schema + '.' + target);
+      await dialog.getByRole('checkbox', {name: resultSqlZh.acknowledge, exact: true}).check();
+      await dialog.getByRole('button', {name: zh.resultExport.start, exact: true}).click();
+      await expect(dialog.locator('.success-box')).toContainText('已导出 ' + (selected ? 1 : 2) + ' 行');
+      const generated = await readFile(path, 'utf8');
+      expect(generated).not.toContain('超出已返回范围');
+      for (const mode of ['on', 'off']) {
+        await observer.query('TRUNCATE ' + table(target));
+        await observer.query('SET standard_conforming_strings = ' + mode);
+        await observer.query(generated);
+        const actual = (await observer.query('SELECT id::text, "Value"::text AS numeric, "value" AS note, encode(bytes, \'hex\') AS bytes, nullable, to_char(stamp, \'YYYY-MM-DD HH24:MI:SS.US\') AS stamp FROM ' + table(target) + ' ORDER BY id')).rows;
+        const expected = (selected ? values.slice(1, 2) : values.slice(0, 2)).map(row => ({
+          id: row[0], numeric: row[1], note: row[2], bytes: (row[3] as Buffer).toString('hex'), nullable: row[4], stamp: row[5],
+        }));
+        expect(actual).toEqual(expected);
+      }
+      await dialog.getByRole('button', {name: zh.common.done, exact: true}).click();
+      expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history);
+    }
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePostgresResultSqlPicker(): number}).restorePostgresResultSqlPicker())).toBe(2);
+    expect((await observer.query('SELECT count(*)::int AS n FROM ' + table('source'))).rows[0].n).toBe(3);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await observer.end();
+  }
+  await quitDesktop();
+});
 
 test('PostgreSQL 语句折叠离线保留标题和同行的下一条 SQL', async ({}, info) => {
   const sql = "SELECT 0;\n/* 外层 /* 内层; */ */\nDO $body$\nBEGIN\nPERFORM 42;\nEND;\n$body$; SELECT '相邻语句';";

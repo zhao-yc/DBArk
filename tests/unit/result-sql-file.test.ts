@@ -22,6 +22,26 @@ const disk = (overrides: Partial<ResultFileIO> = {}): ResultFileIO => ({ open: p
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 
 describe('结果INSERT真实文件与主进程链路', () => {
+  it('PostgreSQL 沿 Main 预览和文件令牌写出同一原子文件，方言变更使旧预览失效', async () => {
+    const path = await destination(), value = input(path);
+    value.sql!.target = {dialect: 'postgresql', database: 'public', table: 'target', columns: value.sql!.target.columns};
+    value.sql!.confirmation = 'public.target';
+    value.result.rows[0].b = "中'\\😀";
+    const engine = new Engine(() => {}); engines.push(engine);
+    const main = resultSqlMain(path, (command, input) => engine.handle(command as any, input));
+    const preview = await main.invoke('files.previewResultSql', {result: value.result, target: value.sql!.target, encoding: 'utf8'});
+    const file = await main.invoke('files.choose', {purpose: 'export', format: 'sql', resultSqlPreviewId: preview.previewId});
+    const request = {...value, fileToken: file.token, sql: {...value.sql!, previewId: preview.previewId}};
+    delete (request as Partial<typeof request>).filePath;
+    expect(await main.invoke('files.exportResult', request)).toEqual({rows: 2});
+    expect(await readFile(path, 'utf8')).toBe(preview.sql);
+    const next = await main.invoke('files.previewResultSql', {result: value.result, target: value.sql!.target, encoding: 'utf8'});
+    const otherFile = await main.invoke('files.choose', {purpose: 'export', format: 'sql', resultSqlPreviewId: next.previewId});
+    const changed = {...request, fileToken: otherFile.token, sql: {...request.sql, previewId: next.previewId, target: {...request.sql.target}}};
+    delete changed.sql.target.dialect;
+    await expect(main.invoke('files.exportResult', changed)).rejects.toThrow('失效');
+    expect(await readFile(path, 'utf8')).toBe(preview.sql);
+  });
   it.each(['utf8', 'utf16le', 'gb18030'] as const)('%s实际字节与手工独立期望一致，原数据不改写', async encoding => {
     const path = await destination(), value = input(path); value.encoding = encoding; const saved = structuredClone(value.result);
     await new ResultFileTasks(() => {}).run(value);

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { ResultExportOptions } from '../shared/contracts';
-import { assertResultSqlData, resultSqlLimits, type ResultSqlPreview, type ResultSqlPreviewInput } from '../shared/resultSql';
+import { assertResultSqlData, assertResultSqlEncoding, resultSqlLimits, type ResultSqlPreview, type ResultSqlPreviewInput } from '../shared/resultSql';
 import { resultSqlZh as text } from '../shared/resultSql.zh-CN';
 import { previewResultSql } from '../engine/resultSql';
 import type { SelectedFile } from './fileTokens';
@@ -25,6 +25,7 @@ export class ResultSqlPreviews {
   assert(id: string, owner: object): Preview { this.prune(); const value = this.previews.get(id); if (!value || value.owner !== owner) throw Error(text.stale); return value; }
   /** 新主文档撤销旧文档能力；只保存摘要，样例返回后不在Main缓存正文。 */
   issue(input: ResultSqlPreviewInput, owner: object): ResultSqlPreview {
+    assertResultSqlEncoding(input.target, input.encoding);
     for (const [id, value] of this.previews) if (value.owner !== owner) this.remove(id, value);
     this.prune(); if (this.previews.size >= resultSqlLimits.previews) throw Error(text.capacity);
     const sample = previewResultSql(input.result, input.target), id = randomUUID(), expires = this.now() + resultSqlLimits.ttlMs;
@@ -48,6 +49,7 @@ export class ResultSqlPreviews {
     const authorized = value.files.has(input.fileToken) && file?.purpose === 'result-sql-export' && file.format === 'sql';
     for (const token of value.files) this.files.delete(token);
     assertResultSqlData(input.result, selection.target);
+    assertResultSqlEncoding(selection.target, input.encoding);
     if (!authorized || selection.acknowledged !== true || selection.confirmation !== `${selection.target.database}.${selection.target.table}` || value.digest !== fingerprint({ result: input.result, target: selection.target, encoding: input.encoding })) throw Error(text.stale);
     return file!.path;
   }

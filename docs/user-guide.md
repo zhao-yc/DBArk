@@ -342,6 +342,8 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 在 PostgreSQL 查询页，选定结果集后可「导出已返回结果」，或勾选行后「导出勾选结果行」。支持 CSV、JSON 和 Excel。结果出现截断提示时，导出的范围以当前已经返回的行数为准。详见[PostgreSQL 查询结果导出](development/postgres-query-result-export-20261105.md)。
 
+也可选择「PostgreSQL INSERT SQL」。明确填写目标 schema、表名和全部目标字段，生成预览后输入准确目标名称并确认保存。文件固定 UTF-8，仅包含打开导出窗口时的已返回或勾选快照。生成文件不会执行 INSERT，目标字段的类型转换和约束需在执行前核对。[PostgreSQL 查询结果 SQL 导出](development/postgres-result-sql-export-20261107.md)
+
 在 PostgreSQL 当前查询结果勾选行并点「暂存勾选结果以跨库复制」，可在目标表点击「从查询结果复制记录」。重复别名按列序号手动映射。核对后加入新增草稿，再预览并确认提交。[查询结果跨库复制](development/postgres-query-record-transfer-20261106.md)
 
 SQLite 查询结果也可在结果菜单中点「暂存勾选结果以跨库复制」。可在目标 PostgreSQL 表核对实际存储类型和映射，再加入草稿。详见[SQLite 到 PostgreSQL 的记录复制](development/sqlite-postgres-record-transfer-20261106.md)。
