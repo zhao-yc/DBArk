@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。SQLite 脚本可在当前标签显式启用遇错继续，保留原会话、完整结果、原语句序号和多错定位。Q02、Q06、R02 仍为部分覆盖。[SQLite 脚本遇错继续](development/sqlite-continue-on-error-20261107.md)
+
 2026-11-07 源码增量。SQLite 和 PostgreSQL 完整查询导出新增 XLSX，按原列序和批次落盘，保留精确数值文本、NULL 和字节。Q05、R01、R02 仍为部分覆盖。[完整查询 Excel 导出](development/full-query-xlsx-20261107.md)
 
 2026-11-07 源码增量。SQLite 查询可从单个选区或全文捕获一条 SELECT／WITH，使用独立只读连接流式导出 CSV／JSON，支持 `:name` 原生绑定。Q05、R02 仍为部分覆盖。[SQLite 完整查询导出](development/sqlite-query-export-20261107.md)

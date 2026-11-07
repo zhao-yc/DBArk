@@ -62,7 +62,7 @@ describe('SQLite原查询会话的类型参数脚本', () => {
     const groups: QueryParameter[][] = [[], [{ name: 'b', type: 'text', value: 'x' }], [{ name: 'a', type: 'text', value: 'x' }, { name: 'b', type: 'text', value: 'x' }], [{ name: 'a', type: 'text', value: 'x' }, { name: 'a', type: 'text', value: 'x' }], [{ name: 'a', type: 'integer', value: '9223372036854775808' }]];
     for (const group of groups) await expect(execute(h, sql, group)).rejects.toThrow();
     for (const suffix of ['SELECT ?', 'SELECT @a', 'SELECT $a', "SELECT '未闭合"]) await expect(execute(h, 'INSERT INTO control VALUES(99); ' + suffix)).rejects.toThrow();
-    for (const extra of [{ continueOnError: true }, { collectWarnings: true }]) await expect(execute(h, 'INSERT INTO control VALUES(99)', [], extra)).rejects.toThrow();
+    await expect(execute(h, 'INSERT INTO control VALUES(99)', [], {collectWarnings: true})).rejects.toThrow();
     expect(h.process.sent).toHaveLength(before); expect(h.events).toEqual([]); expect(disk(profile, db => db.prepare('SELECT n FROM control').all())).toEqual([{ n: 7 }]);
   });
   it('原事务/临时表和其它会话隔离，用户明确回滚保原库', async () => {
@@ -90,4 +90,21 @@ describe('SQLite原查询会话的类型参数脚本', () => {
     // 直接核准确原进程退出回执，不用不存在的运行时统计接口推断资源已经释放。
     expect(processes.length).toBeGreaterThan(0); for (const record of processes) expect(await record.exited).toEqual({ code: 0, signal: null });
   });
+});
+
+
+it('参数续执行只绑定各语句所需的原生名称，不把值写入模板或错误', async () => {
+  const profile = fixture(), h = await open(profile);
+  const sql = 'SELECT :id; SELECT missing(:private); SELECT :private, :id;';
+  const value = "私有值'; DELETE FROM control; -- 🚢";
+  const result = await execute(h, sql, [{name: 'id', type: 'integer', value: '9223372036854775807'},
+    {name: 'private', type: 'text', value}], {continueOnError: true});
+  expect(result.results.map(result => result.rows)).toEqual([[{c0: '9223372036854775807'}], [{c0: value, c1: '9223372036854775807'}]]);
+  expect(result.scriptReport).toMatchObject({statementsCompleted: 2, reachedEnd: true, errors: [{statementOrdinal: 2}]});
+  expect(JSON.stringify(result.scriptReport)).not.toContain(value);
+  const sent = h.process.sent.filter(message => message.kind === 'execute');
+  expect(sent.map(message => [message.sql, Object.keys(message.namedParameters ?? {}), message.singleStatement])).toEqual([
+    ['SELECT :id;', [':id'], true], ['SELECT missing(:private);', [':private'], true], ['SELECT :private, :id;', [':private', ':id'], true],
+  ]);
+  expect(disk(profile, db => db.prepare('SELECT n FROM control').get())).toEqual({n: 7});
 });

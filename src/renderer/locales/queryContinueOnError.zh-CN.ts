@@ -1,6 +1,7 @@
 export const queryContinueOnErrorZh = {
   option: '遇错继续', title: '遇错继续执行摘要',
   hint: '遇数据库语句错误将继续执行后续语句（包括写操作）；取消、断线、解析失败将停止。客户端不自动提交或回滚，服务器错误仍可能回滚事务。继续前读取当前模式和默认库，会改变 ROW_COUNT()、FOUND_ROWS() 及警告等诊断信息。此选项只在当前标签保留，关闭后恢复默认，不保存到配置。',
+  sqliteHint: 'SQLite 普通 SQL、约束或类型错误后可继续执行，包括写操作。取消、锁冲突、权限、连接或无法确认的错误会停止。以 SQLite 回报的真实事务状态为准。仅在当前标签生效。',
   counts: (attempted: number, completed: number, failed: number) => `已尝试处理 ${attempted} 条语句，完整成功 ${completed} 条，记录失败 ${failed} 条。`,
   reachedEnd: '已处理到本次脚本末尾。', stopped: '本次脚本已停止，尚未处理到末尾。',
   stopReason: '停止原因', server: '数据库语句错误', terminal: '执行已停止',

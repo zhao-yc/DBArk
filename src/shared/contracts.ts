@@ -97,7 +97,7 @@ export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳�
   /** PostgreSQL 普通执行专用。与完整结果逐项对应，范围相对本次提交的 SQL。 */
   postgresResultSources?: PostgresResultSource[];
   /** 与本次 SQLite 的完整结果逐项对应，不随固定快照写入文件。 */
-  sqliteResultReceipts?: { producedRows: number; changedRows: number; sourceRange: import('./queryFailure').QueryFailureSourceRange }[];
+  sqliteResultReceipts?: { statementOrdinal?: number; producedRows: number; changedRows: number; sourceRange: import('./queryFailure').QueryFailureSourceRange }[];
 }
 export interface PostgresResultSource { statementOrdinal: number; sourceRange: import('./queryFailure').QueryFailureSourceRange; }
 export type FilterMode = 'all' | 'any';

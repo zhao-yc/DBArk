@@ -365,6 +365,7 @@ export class SqliteWorkerCore {
         this.guardedCreate = { owner: active, guard, matched: false };
       }
       if ('captureFailureRange' in request && (request.captureFailureRange !== true || stream || parameters || named || this.guardedCreate)) throw invalid();
+      if ('singleStatement' in request && (request.singleStatement !== true || stream || this.guardedCreate)) throw invalid();
       if ('captureQueryReceipt' in request && (request.captureQueryReceipt !== true || stream || this.guardedCreate)) throw invalid();
       // 原生准备仍跳过注释。另记最近分隔符，避免空语句前的注释串到下一条结果。
       let heading = 0;
@@ -375,7 +376,7 @@ export class SqliteWorkerCore {
         while (sql[offset] === '\uFEFF') offset = skipTrivia(sql, offset + 1);
         if (!/^(?:SELECT|WITH)(?![A-Za-z0-9_$\u0080-\uFFFF])/i.test(sql.slice(offset))) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite 查询导出只接受单条只读 SELECT 或 WITH 查询');
       } else if (stream && (!Array.isArray(request.parameters) || !/^SELECT\b/i.test(sql.slice(offset)))) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite完整流读取只接受单条SELECT');
-      if (parameters && offset === sql.length) throw invalid();
+      if ((parameters || request.singleStatement) && offset === sql.length) throw invalid();
       while (offset < sql.length) {
         this.check(active); if (active.results.length >= limits.statements) throw invalid();
         const statementStart = offset;
@@ -392,6 +393,8 @@ export class SqliteWorkerCore {
             while (sql[offset] === '\uFEFF') offset = skipTrivia(sql, offset + 1);
             if (offset !== sql.length || !statement.hasStatement || !statement.columns().length) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite 查询导出必须恰好产生一组查询结果');
           }
+          if (request.singleStatement && (offset !== sql.length || !statement.hasStatement))
+            throw new DriverFailure('SQLITE_SINGLE_STATEMENT_REQUIRED', 'SQLite 单条语句原生边界校验失败，未执行这条语句');
           if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');
           if (this.guardedCreate && !this.guardedCreate.matched) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite没有观察到本次准确CREATE原生授权，尚未执行任何语句');
           if (this.guardedCreate && statement.columns().length !== 0) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite对象创建不能使用EXPLAIN或带结果列的其它语句');

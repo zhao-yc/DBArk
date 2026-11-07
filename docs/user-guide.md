@@ -584,6 +584,8 @@ PostgreSQL 当前查询结果会显示语句序号、服务器回执、服务端
 
 SQLite 普通脚本遇到首错时，若原语句范围明确，可点「定位未完成SQL」回到原编辑器。修改过正文或无法确认边界时，定位不可用。此前完整返回的结果仍可查看。[SQLite 脚本失败定位](development/sqlite-script-failure-source-20261107.md)
 
+SQLite 查询页可在「会话与执行选项」开启「遇错继续」。全文、选区或参数脚本的普通 SQL、约束及类型错误后可以继续执行，摘要支持逐条定位失败并保留完整成功结果。默认首错停止，当前语句快捷键仍只执行一条。详见 [SQLite 脚本遇错继续](development/sqlite-continue-on-error-20261107.md)。
+
 SQLite 当前语句回执显示单条耗时、行变更计数，并区分产生和保留的结果行数。切换结果可逐条查看，底栏显示本次总耗时。行变更计数可能包含触发器和外键动作，提交结果仍以原事务为准。[SQLite 查询回执](development/sqlite-query-receipts-20261107.md)
 
 SQLite 当前语句回执的「定位结果原语句」会恢复编辑区并选中该结果对应的 SQL。首错后的成功结果可以独立定位，失败摘要仍定位失败语句。编辑原文后定位停用。[SQLite 结果定位](development/sqlite-result-source-20261107.md)

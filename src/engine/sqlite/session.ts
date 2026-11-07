@@ -23,6 +23,8 @@ export interface SqliteExecuteOptions extends Partial<SqliteExecutionOptions> {
   /** 仅普通用户脚本要求保留失败语句在本次载荷内的原始范围。 */
   captureFailureRange?: true;
   captureQueryReceipt?: true;
+  /** 续执行按单条原生确认，含命名绑定时也必须在 step 前验证尾部。 */
+  singleStatement?: true;
   onStatement?(statement: { index: number; sql: string; columns: SqliteColumn[]; title?: string }): void | Promise<void>;
   onBatch?(batch: { index: number; rows: SqliteValue[][] }): void | Promise<void>;
 }
@@ -190,6 +192,8 @@ export class SqliteDriverSession {
     } catch { return Promise.reject(this.error('SQLite对象创建内部能力或绑定模式无效，本次未发送SQL', 'SQLITE_CREATE_GUARD_INVALID')); }
     if (options.captureFailureRange && (stream || namedParameters || options.parameters !== undefined || createGuard))
       return Promise.reject(this.error('SQLite失败定位只允许普通脚本', 'SQLITE_INVALID_REQUEST'));
+    if ('singleStatement' in options && (options.singleStatement !== true || stream || createGuard))
+      return Promise.reject(this.error('SQLite 单条执行能力无效', 'SQLITE_INVALID_REQUEST'));
     if (options.captureQueryReceipt && (stream || createGuard))
       return Promise.reject(this.error('SQLite查询回执不用于流式导出或内部创建操作', 'SQLITE_INVALID_REQUEST'));
     const operation: Operation = { id: randomUUID(), options, result: deferred(), nativeDone: deferred(), results: [], delivery: Promise.resolve(), frame: 0, index: -1, cancelRequested: false,
@@ -204,7 +208,8 @@ export class SqliteDriverSession {
         ...(querySource ? { querySource: true, namedParameters: namedParameters! } : { parameters: options.parameters ?? [] }) }
       : { kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), ...(namedParameters === undefined ? {} : { namedParameters }), ...(createGuard === undefined ? {} : { createGuard }),
         ...(operation.captureFailureRange ? {captureFailureRange: true} : {}),
-        ...(operation.captureQueryReceipt ? {captureQueryReceipt: true} : {}), options: configured }); }
+        ...(operation.captureQueryReceipt ? {captureQueryReceipt: true} : {}),
+        ...(options.singleStatement ? {singleStatement: true} : {}), options: configured }); }
     catch { void this.breakSession('SQLite请求未能投递，未重试', 'SQLITE_SEND_FAILED'); }
     return operation.result.promise;
   }

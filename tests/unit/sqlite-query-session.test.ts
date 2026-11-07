@@ -207,11 +207,10 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     expect(harness.process.sent.some(message => message.kind === 'execute' && message.sql === 'ROLLBACK')).toBe(false);
   });
 
-  it('两个不支持选项及错误session在任何SQL投递前拒绝', async () => {
+  it('不支持的警告采集、续执行词法错误及错误 session 在任何 SQL 投递前拒绝', async () => {
     const path = fixture(), harness = await open(path), baseline = harness.process.sent.length;
-    for (const options of [{ continueOnError: true }, { collectWarnings: true }]) {
-      await expect(execute(harness, "INSERT INTO subject VALUES(1,'不得执行')", options)).rejects.toThrow('尚未接入');
-    }
+    await expect(execute(harness, "INSERT INTO subject VALUES(1,'不得执行')", {collectWarnings: true})).rejects.toThrow('不支持');
+    await expect(execute(harness, "INSERT INTO subject VALUES(1,'不得执行'); SELECT '未闭合", {continueOnError: true})).rejects.toThrow('未闭合');
     await expect(execute(harness, "INSERT INTO subject VALUES(2,'错误会话')", { sessionId: '另一会话' })).rejects.toThrow('关闭或失效');
     await expect(harness.session.transaction({ sessionId: '另一会话', action: 'begin' })).rejects.toThrow('关闭或失效');
     expect(harness.process.sent).toHaveLength(baseline); expect(harness.events).toEqual([]); expect(diskValue(path, 'SELECT count(*) FROM subject')).toBe(0);
@@ -393,5 +392,97 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     const baseline = harness.process.sent.length;
     await expect(execute(harness, 'SELECT 1')).rejects.toThrow('关闭或失效'); expect(harness.process.sent).toHaveLength(baseline);
     expect(harness.session.state()).toEqual({ transactionOpen: false, transactionKnown: false, broken: true });
+  });
+});
+
+
+describe('SQLite 脚本遇错继续', () => {
+  it('保留原事务和完整结果，按全文范围标出语法与约束错误，后续 SQL 只执行一次', async () => {
+    const path = fixture(), h = await open(path);
+    const statements = ["CREATE TEMP TABLE current_only(n);", 'BEGIN;',
+      "INSERT INTO subject VALUES(1,'原事务🚢');", "INSERT INTO subject VALUES(1,'重复');",
+      'BAD SELECT 9;', 'INSERT INTO current_only VALUES(2);', 'SELECT id, note FROM subject;',
+      'SELECT n FROM current_only;'];
+    const sql = statements.join('\r\n');
+    const result = await execute(h, sql, {continueOnError: true, maxRows: 1});
+    expect(result.transactionOpen).toBe(true);
+    expect(result.scriptReport).toMatchObject({statementsAttempted: 8, statementsCompleted: 6, reachedEnd: true,
+      errors: [{kind: 'server', statementOrdinal: 4, statementsCompleted: 3}, {kind: 'server', statementOrdinal: 5, statementsCompleted: 3}]});
+    expect(result.scriptReport?.errors.map(error => sql.slice(error.sourceRange!.start, error.sourceRange!.end))).toEqual(statements.slice(3, 5));
+    expect(result.results.at(-2)?.rows).toEqual([{c0: '1', c1: '原事务🚢'}]);
+    expect(result.results.at(-1)).toMatchObject({rows: [], truncated: true});
+    expect(result.sqliteResultReceipts?.map(receipt => receipt.statementOrdinal)).toEqual([1, 2, 3, 6, 7, 8]);
+    expect(result.sqliteResultReceipts?.map(({sourceRange}) => sql.slice(sourceRange.start, sourceRange.end)))
+      .toEqual(statements.filter((_, index) => index !== 3 && index !== 4));
+    expect(h.process.sent.filter(message => message.kind === 'execute').map(message => message.sql)).toEqual(statements);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+    await h.session.transaction({sessionId: h.session.sessionId, action: 'rollback'});
+    expect(h.session.state().transactionOpen).toBe(false);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+
+  it('SQLite 主动回滚后按实际事务位继续，成功计数不宣称先前写入已提交', async () => {
+    const path = fixture(), h = await open(path);
+    const result = await execute(h, "BEGIN; INSERT INTO subject VALUES(1,'将被回滚'); INSERT OR ROLLBACK INTO subject VALUES(1,'冲突'); SELECT count(*) FROM subject;", {continueOnError: true});
+    expect(result.scriptReport).toMatchObject({statementsCompleted: 3, reachedEnd: true, errors: [{statementOrdinal: 3}]});
+    expect(result.results.at(-1)?.rows).toEqual([{c0: '0'}]);
+    expect(result.transactionOpen).toBe(false);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+
+  it('失败前已产生的部分批次不进入完成结果，后继语句仍可使用原保留行预算', async () => {
+    const h = await open(fixture());
+    const sql = "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<500) " +
+      "SELECT CASE WHEN x=450 THEN abs(CAST('-9223372036854775808' AS INTEGER)) ELSE x END FROM n; SELECT 9;";
+    const result = await execute(h, sql, {continueOnError: true, maxRows: 200});
+    expect(result.scriptReport).toMatchObject({reachedEnd: true, statementsAttempted: 2, statementsCompleted: 1,
+      errors: [{kind: 'server', statementOrdinal: 1}]});
+    expect(result.results.map(result => result.rows)).toEqual([[{c0: '9'}]]);
+    expect(h.process.sent.some(message => message.kind === 'ack')).toBe(true);
+    expect(h.events.every(event => !event.batch)).toBe(true);
+  });
+
+  it('命名绑定的单句原生门在首次 step 前拒绝多条 SQL', async () => {
+    const path = fixture(), h = await open(path);
+    await expect(h.driver.execute('INSERT INTO subject VALUES(:id,NULL); SELECT 2;', {
+      singleStatement: true, namedParameters: {':id': {type: 'integer', value: '1'}},
+    })).rejects.toMatchObject({code: 'SQLITE_SINGLE_STATEMENT_REQUIRED', completedStatements: 0});
+    expect(h.process.statements).toEqual([]);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+
+  it('只读原生授权失败时停止，保留前序成功结果并保持只读连接可用', async () => {
+    const path = fixture(), h = await open(path, undefined, true);
+    const result = await execute(h, "SELECT 1; INSERT INTO subject VALUES(1,'拒绝'); SELECT 2;", {continueOnError: true});
+    expect(result.scriptReport).toMatchObject({reachedEnd: false, statementsAttempted: 2, statementsCompleted: 1,
+      errors: [{kind: 'stopped', statementOrdinal: 2, message: expect.stringContaining('SQLITE_NATIVE_23')}]});
+    expect(result.results.map(result => result.rows)).toEqual([[{c0: '1'}]]);
+    expect(h.process.sent.filter(message => message.kind === 'execute').map(message => message.sql))
+      .toEqual(['SELECT 1;', "INSERT INTO subject VALUES(1,'拒绝');"]);
+    expect(h.session.state()).toMatchObject({broken: false, transactionOpen: false});
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+
+  it('达到 100 项错误后停止，下一条写入尚未发送', async () => {
+    const path = fixture(), h = await open(path);
+    const result = await execute(h, 'SELECT missing_column; '.repeat(100) + "INSERT INTO subject VALUES(1,'未发送');", {continueOnError: true});
+    expect(result.scriptReport).toMatchObject({reachedEnd: false, statementsAttempted: 100, statementsCompleted: 0, stopReason: expect.stringContaining('100')});
+    expect(result.scriptReport?.errors).toHaveLength(100);
+    expect(h.process.sent.filter(message => message.kind === 'execute')).toHaveLength(100);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+
+  it('取消原子进程中的长语句，保留已确认结果且不发送下一条', async () => {
+    const path = fixture(), h = await open(path), taskId = '本例取消';
+    const sql = "SELECT 7; WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n; INSERT INTO subject VALUES(1,'未发送');";
+    const work = execute(h, sql, {taskId, continueOnError: true});
+    await expect.poll(() => h.process.statements.length).toBe(2);
+    await h.session.cancel(taskId);
+    const result = await work;
+    expect(result.scriptReport).toMatchObject({reachedEnd: false, statementsCompleted: 1, stopReason: 'SQLite 脚本已取消'});
+    expect(result.results.map(result => result.rows)).toEqual([[{c0: '7'}]]);
+    expect(h.events.at(-1)?.status).toBe('cancelled');
+    expect(h.process.sent.filter(message => message.kind === 'execute')).toHaveLength(2);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
   });
 });

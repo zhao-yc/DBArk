@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { CellValue, CommandMap, DataRow, QueryOutcome, QueryResult, TaskEvent } from '../shared/contracts';
 import type { CompletionSessionState } from '../shared/sqlCompletion';
-import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
+import { SqliteDriverError, type SqliteDriverSession, type SqliteExecuteOptions } from '../engine/sqlite/session';
 import { sqliteDriverLimits, type SqliteCancellation, type SqliteStatementResult, type SqliteValue } from '../engine/sqlite/protocol';
 import { currentSqliteStatement, sqliteStatementRanges } from '../engine/sqlite/currentStatement';
 import { sqliteExplainSource } from '../engine/sqlite/explainSource';
@@ -9,16 +9,19 @@ import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
 import { sqliteNamedParameterNames, sqliteParameterInfo } from '../engine/sqlite/parameters';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
 import { validQueryResultTitle } from '../shared/queryResultTitle';
+import { queryScriptReportSummary } from '../shared/queryContinueOnError';
+import type { SqlStatementRange } from '../shared/sqlScriptScanner';
+import { continueSqliteScript } from './sqliteContinueOnError';
 
 type ExecuteInput = CommandMap['query.execute']['input'];
 type ExplainInput = CommandMap['query.explain']['input'];
 type ParameterInput = CommandMap['query.executeParameterized']['input'];
-interface RunOptions { single: boolean; sourceRange?: { start: number; end: number }; explainView?: 'tree' | 'table'; namedParameters?: Record<string, SqliteValue>; parameterRanges?: { start: number; end: number }[]; }
+interface RunOptions { single: boolean; sourceRange?: { start: number; end: number }; explainView?: 'tree' | 'table'; namedParameters?: Record<string, SqliteValue>; parameterRanges?: { start: number; end: number }[]; continueRanges?: SqlStatementRange[]; }
 type SessionState = CommandMap['query.sessionState']['output'];
 type TransactionInput = CommandMap['query.transaction']['input'];
 export type SqliteCompletionState = Omit<CompletionSessionState, 'dialect'> & { dialect: 'sqlite' };
-const resultLimit = 200;
-interface Execution { readonly taskId: string; readonly results: QueryResult[]; readonly started: number; rows: number; }
+const resultLimit = 200, queryBytes = 16 * 1024 * 1024;
+interface Execution { readonly taskId: string; readonly results: QueryResult[]; readonly started: number; rows: number; cancelled: boolean; }
 
 /** 旧结果合同用字符串承载SQLite数值原文，不把64位整数、负零或Infinity转成JSON数字。 */
 export function sqliteWorkspaceValue(value: SqliteValue): CellValue {
@@ -62,10 +65,12 @@ export class SqliteQuerySession {
   async execute(input: ExecuteInput): Promise<QueryOutcome> {
     this.available(input.sessionId);
     if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || typeof input.sql !== 'string' || Buffer.byteLength(input.sql) > sqliteDriverLimits.sqlBytes || !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > sqliteDriverLimits.rows) throw Error('SQLite查询请求或结果预算无效');
-    if (input.continueOnError === true || input.collectWarnings === true) throw Error('SQLite遇错继续和MySQL警告采集尚未接入，本次没有发送SQL');
+    if (input.collectWarnings === true) throw Error('SQLite 不支持 MySQL 警告采集，本次未发送 SQL');
     const selected = input.currentStatement === undefined ? undefined : currentSqliteStatement(input.sql, input.currentStatement.offset);
     if (input.currentStatement !== undefined && !selected) throw Error('SQLite光标位置没有可执行的当前语句，本次没有发送SQL');
-    return this.run(input, selected?.sql ?? input.sql, { single: !!selected, ...(selected ? { sourceRange: { start: selected.start, end: selected.end } } : {}) });
+    const continueRanges = !selected && input.continueOnError === true ? sqliteStatementRanges(input.sql) : undefined;
+    return this.run(input, selected?.sql ?? input.sql, { single: !!selected, continueRanges,
+      ...(selected ? { sourceRange: { start: selected.start, end: selected.end } } : {}) });
   }
 
   /** 仅在原物理会话执行EQP包装，不执行原DML；只读会话仍由原authorizer拒绝其写目标授权。 */
@@ -86,28 +91,32 @@ export class SqliteQuerySession {
   async executeParameterized(input: ParameterInput): Promise<QueryOutcome> {
     this.available(input.sessionId);
     if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000) throw Error('SQLite参数查询请求或结果预算无效');
-    if (input.continueOnError === true || input.collectWarnings === true) throw Error('SQLite参数查询不支持遇错继续或MySQL警告采集，本次未发送SQL');
+    if (input.collectWarnings === true) throw Error('SQLite 参数查询不支持 MySQL 警告采集，本次未发送 SQL');
     const names = sqliteNamedParameterNames(input.sql), values = validateSqliteQueryParameters(input.parameters);
     if (values.size !== names.length || names.some(name => !values.has(name))) throw Error('SQLite参数必须准确覆盖模板全部名称，不接受缺少或额外的参数');
     const namedParameters: Record<string, SqliteValue> = Object.create(null);
     for (const name of names) namedParameters[':' + name] = values.get(name)!;
-    const parameterRanges = sqliteStatementRanges(input.sql).map(range => ({ start: range.start, end: range.end }));
-    return this.run(input, input.sql, { single: false, namedParameters, parameterRanges });
+    const ranges = sqliteStatementRanges(input.sql);
+    const parameterRanges = ranges.map(range => ({start: range.start, end: range.end}));
+    return this.run(input, input.sql, {single: false, namedParameters, parameterRanges,
+      ...(input.continueOnError === true ? {continueRanges: ranges} : {})});
   }
 
   /** 查询与计划共用同一active任务、ACK、预算、原生终态和通知失效保护，不能绕开会话忙态或重放。 */
   private async run(input: Pick<ExecuteInput, 'taskId' | 'maxRows'>, sql: string, options: RunOptions): Promise<QueryOutcome> {
     // 任何明确执行均撤销此前目录建议，即使它最终报错或回滚；目录短读本身不推进此修订。
+    const {continueRanges} = options;
+    if (continueRanges && !continueRanges.length) throw Error('SQLite 脚本中没有可执行语句');
     if (this.objectsRevision >= Number.MAX_SAFE_INTEGER) throw Error('SQLite会话目录修订已达上限，请明确重开会话');
     this.objectsRevision++;
-    const operation: Execution = { taskId: input.taskId, results: [], started: performance.now(), rows: 0 };
+    const operation: Execution = { taskId: input.taskId, results: [], started: performance.now(), rows: 0, cancelled: false };
     const titles: (string | null)[] = [];
     /** 只回传已完成的结果名称，失败语句的流式表头不能泄漏到下一条结果。 */
     function displayTitles(completed: number): Pick<QueryOutcome, 'resultTitles'> {
       const resultTitles = titles.slice(0, completed);
       return resultTitles.some(Boolean) ? { resultTitles } : {};
     }
-    let resultLimitReached = false;
+    let resultLimitReached = false, retainedBytes = 0;
     this.active = operation;
     const event = (patch: Omit<Partial<TaskEvent>, 'taskId'>) => {
       if (this.active !== operation) throw Error('SQLite原查询任务已失效，停止发布结果');
@@ -117,7 +126,7 @@ export class SqliteQuerySession {
     const terminalEvent = (patch: Omit<Partial<TaskEvent>, 'taskId'>) => {
       try { event(patch); } catch { this.terminalNotificationFailed = true; }
     };
-    const complete = (facts: readonly Readonly<SqliteStatementResult>[]): Pick<QueryOutcome, 'results' | 'sqliteResultReceipts'> => {
+    const complete = (facts: readonly Readonly<SqliteStatementResult>[], ordinals?: number[]): Pick<QueryOutcome, 'results' | 'sqliteResultReceipts'> => {
       if (facts.length > operation.results.length) throw Error('SQLite完整结果与原语句不匹配');
       const receipts: NonNullable<QueryOutcome['sqliteResultReceipts']> = [];
       // 当前语句投递的是原文片段。选区及普通脚本的偏移相对各自完整载荷。
@@ -129,46 +138,74 @@ export class SqliteQuerySession {
         if (changed > BigInt(Number.MAX_SAFE_INTEGER)) throw Error('SQLite语句已执行，但变更量超过现有结果合同；请核对数据库，不要重复执行');
         if (fact.queryReceipt) {
           const {producedRows, sourceRange} = fact.queryReceipt;
-          receipts.push({producedRows, changedRows: Number(changed), sourceRange: {start: base + sourceRange.start, end: base + sourceRange.end}});
+          receipts.push({...(ordinals ? {statementOrdinal: ordinals[index]} : {}), producedRows, changedRows: Number(changed), sourceRange: {start: base + sourceRange.start, end: base + sourceRange.end}});
         }
         return { ...source, ...(!source.columns.length || changed > 0n ? { affectedRows: Number(changed) } : {}), truncated: source.truncated || fact.truncated,
           elapsedMs: fact.queryReceipt?.elapsedMs ?? performance.now() - operation.started };
       });
       return {results, ...(receipts.length && receipts.length === results.length ? {sqliteResultReceipts: receipts} : {})};
     };
+    const onStatement: NonNullable<SqliteExecuteOptions['onStatement']> = statement => {
+      if (statement.index !== operation.results.length) throw Error('SQLite结果集顺序与原任务不匹配');
+      if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
+      // SQLite列可逐行改变存储类型，不能把声明亲和性伪装成结果中每个单元格的真实类型。
+      const columns = statement.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' }));
+      const result: QueryResult = { columns, rows: [], sqliteStorage: { version: 1, rows: [] }, truncated: false, elapsedMs: 0, statement: statement.sql.slice(0, 32768) };
+      operation.results.push(result);
+      titles.push(columns.length && validQueryResultTitle(statement.title) ? statement.title : null);
+      // 续执行中，失败语句可能发出部分行；在原生确认前留在本次缓冲。
+      if (!continueRanges) event({ resultIndex: statement.index, columns, executionSql: statement.sql });
+    };
+    const onBatch: NonNullable<SqliteExecuteOptions['onBatch']> = batch => {
+      const result = operation.results[batch.index]; if (!result) throw Error('SQLite结果行缺少原始列定义');
+      const accepted: DataRow[] = [];
+      for (const values of batch.rows) {
+        if (values.length !== result.columns.length) throw Error('SQLite结果列数与原批次不匹配');
+        if (operation.rows >= input.maxRows) { result.truncated = true; continue; }
+        accepted.push(Object.fromEntries(values.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)])));
+        // 只标记原driver已确认的存储类；同样的字符串原文也能区分INTEGER、REAL与TEXT。
+        result.sqliteStorage!.rows.push(values.map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'binary' ? 'b' : value.type === 'integer' ? 'i' : 'r').join(''));
+        operation.rows++;
+        if (continueRanges) retainedBytes += Buffer.byteLength(JSON.stringify(values)) + 1;
+      }
+      result.rows.push(...accepted);
+      if (accepted.length && !continueRanges) event({ resultIndex: batch.index, batch: accepted, rows: operation.rows });
+    };
     try {
       event({ executionDatabase: { state: 'known', database: 'main' } });
+      if (continueRanges) {
+        let checkpoint = {results: 0, rows: 0, bytes: 0};
+        const {facts, ordinals, report, cancelled, transaction} = await continueSqliteScript(this.driver, sql, continueRanges, options.namedParameters, resultLimit, {
+          cancelled: () => operation.cancelled,
+          budget: () => {
+            checkpoint = {results: operation.results.length, rows: operation.rows, bytes: retainedBytes};
+            return {rows: input.maxRows - operation.rows, bytes: queryBytes - retainedBytes};
+          },
+          statement: onStatement,
+          batch: onBatch,
+          discard: () => {
+            operation.results.length = checkpoint.results;
+            titles.length = checkpoint.results;
+            operation.rows = checkpoint.rows;
+            retainedBytes = checkpoint.bytes;
+          },
+        });
+        const completed = complete(facts, ordinals);
+        const message = queryScriptReportSummary(report), first = report.errors[0];
+        const failure = first && {statementOrdinal: first.statementOrdinal, statementsCompleted: first.statementsCompleted,
+          sourceRange: first.sourceRange, message};
+        terminalEvent({status: cancelled ? 'cancelled' : failure ? 'failed' : 'completed', progress: 100, rows: operation.rows, message});
+        return {...completed, ...displayTitles(facts.length), elapsedMs: performance.now() - operation.started,
+          transactionOpen: transaction, scriptReport: report, ...(failure ? {failure} : {})};
+      }
       const outcome = await this.driver.execute(sql, {
-        maxRows: input.maxRows, batchRows: 200, maxBytes: 16 * 1024 * 1024,
+        maxRows: input.maxRows, batchRows: 200, maxBytes: queryBytes,
         // 空绑定数组显式启用原worker的原生单完整语句复核；词法定位错误也不能偷偷step第二句。
         ...(options.single ? { parameters: [] } : {}),
         ...(options.namedParameters ? { namedParameters: options.namedParameters } : {}),
         ...(!options.single && !options.namedParameters && !options.explainView ? {captureFailureRange: true as const} : {}),
         ...(!options.explainView ? {captureQueryReceipt: true as const} : {}),
-        onStatement: statement => {
-          if (statement.index !== operation.results.length) throw Error('SQLite结果集顺序与原任务不匹配');
-          if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
-          // SQLite列可逐行改变存储类型，不能把声明亲和性伪装成结果中每个单元格的真实类型。
-          const columns = statement.columns.map((column, index) => ({ key: 'c' + index, name: column.name, type: 'SQLITE' }));
-          const result: QueryResult = { columns, rows: [], sqliteStorage: { version: 1, rows: [] }, truncated: false, elapsedMs: 0, statement: statement.sql.slice(0, 32768) };
-          operation.results.push(result);
-          titles.push(columns.length && validQueryResultTitle(statement.title) ? statement.title : null);
-          event({ resultIndex: statement.index, columns, executionSql: statement.sql });
-        },
-        onBatch: batch => {
-          const result = operation.results[batch.index]; if (!result) throw Error('SQLite结果行缺少原始列定义');
-          const accepted: DataRow[] = [];
-          for (const values of batch.rows) {
-            if (values.length !== result.columns.length) throw Error('SQLite结果列数与原批次不匹配');
-            if (operation.rows >= input.maxRows) { result.truncated = true; continue; }
-            accepted.push(Object.fromEntries(values.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)])));
-            // 只标记原driver已确认的存储类；同样的字符串原文也能区分INTEGER、REAL与TEXT。
-            result.sqliteStorage!.rows.push(values.map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'binary' ? 'b' : value.type === 'integer' ? 'i' : 'r').join(''));
-            operation.rows++;
-          }
-          result.rows.push(...accepted);
-          if (accepted.length) event({ resultIndex: batch.index, batch: accepted, rows: operation.rows });
-        },
+        onStatement, onBatch,
       });
       if (!outcome.statements.length) throw Error('SQLite脚本中没有可执行语句');
       const completed = complete(outcome.statements), {results} = completed;
@@ -208,6 +245,7 @@ export class SqliteQuerySession {
   async cancel(taskId: string): Promise<SqliteCancellation | undefined> {
     const operation = this.active;
     if (!operation || operation.taskId !== taskId) return;
+    operation.cancelled = true;
     return this.driver.cancel();
   }
   /** 关闭仍遵守原消费者终态和正常退出握手；失败保留原driver，调用方可准确重试收尾。 */
