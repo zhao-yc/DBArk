@@ -7,6 +7,7 @@ import { csvImportDelimiters, type CsvImportDelimiter } from '../../shared/csvIm
 import { ImportNewTableController, newTableXmlDefaults, type ImportNewTableServices } from '../importNewTableUi';
 import { cellPreview, invoke, uid } from '../lib';
 import { importNewTableZh as text } from '../locales/importNewTable.zh-CN';
+import { postgresTableImportZh } from '../locales/postgresTableImport.zh-CN';
 import { useWorkspace } from '../store';
 import { SchemaDialog } from './SchemaDialog';
 import { PostgresCreateTableDialog } from './PostgresCreateTableDialog';
@@ -86,7 +87,7 @@ function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreate
       </div>
       {xml && <p>{xmlImportZh.hint}</p>}
       {postgres && state.options.format === 'csv' && <p>{text.postgresCsv}</p>}
-      {postgres && state.options.format === 'json' && <p>{text.postgresJson}</p>}
+      {postgres && state.options.format === 'json' && <p>{postgresTableImportZh.jsonNote}</p>}
       <button disabled={disabled || !validXml} onClick={() => event(() => { void controller.scan(state); })}>{state.busy ? <Spinner/> : null}{text.choose}</button>
       {state.file && <p>{text.source}：{state.file.name}</p>}
       {inspection && <section><p>{text.records(inspection.records)}</p><p>{text.columns}：{inspection.columns.length}</p><p>{text.sample}</p>

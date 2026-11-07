@@ -1339,11 +1339,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       };
       try {
         check();
-        const records = 'format' in target, xml = records && target.format === 'xml';
+        const records = 'format' in target;
+        const format = records ? target.format : 'csv';
         const scanned = records ? target.scannedFile : undefined;
-        const path = records && scanned ? resolveFileToken(files, scanned.token, 'import', target.format) : await dialog.showOpenDialog(columns!.owner.window,
-          { title: xml ? '选择 PostgreSQL XML 文件' : '选择 PostgreSQL CSV 文件', properties: ['openFile'],
-            filters: [xml ? { name: 'XML', extensions: ['xml'] } : { name: 'CSV', extensions: ['csv', 'tsv'] }] })
+        const formatName = format.toUpperCase();
+        const path = scanned ? resolveFileToken(files, scanned.token, 'import', format) : await dialog.showOpenDialog(columns!.owner.window,
+          { title: `选择 PostgreSQL ${formatName} 文件`, properties: ['openFile'],
+            filters: [{ name: formatName, extensions: format === 'csv' ? ['csv', 'tsv'] : [format] }] })
           .then(chosen => chosen.canceled ? undefined : chosen.filePaths[0]);
         check();
         if (!path) return null;
@@ -1355,10 +1357,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         check();
         // 新表向导沿用已选文件，只有原字节指纹匹配才签发原表页导入能力。
         if (scanned && (!('sha256' in source) || source.sha256 !== scanned.expectedSource.sha256 || source.bytes !== scanned.expectedSource.bytes))
-          throw Error(`${records ? target.format.toUpperCase() : 'CSV'} 源文件已变化，请退出向导并核对已创建的表`);
+          throw Error(`${formatName} 源文件已变化，请退出向导并核对已创建的表`);
         const token = randomUUID();
         postgresImportFiles.set(document, { token, target, source, revision, expires: Date.now() + 5 * 60 * 1000 });
-        return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited };
+        return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited,
+          ...('records' in source ? { records: source.records } : {}) };
       } finally { postgresImportChoosing.delete(document); }
     });
   }

@@ -338,7 +338,7 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 要把数据交给 PostgreSQL 的 `COPY FROM`，在表页「导出数据」中选择「COPY CSV（PostgreSQL 原生）」。选择输出列及逗号、分号或 Tab，再指定 `.csv` 保存位置。文件含列名，固定 UTF-8，按 PostgreSQL 的 CSV 规则区分 NULL 和空字符串。导入时使用相同分隔符，并按文件列顺序指定目标列。详见[PostgreSQL 表页原生 COPY 导出](development/postgres-copy-export-20261105.md)。
 
-在有写入权限的 PostgreSQL 普通表或分区表打开「导入数据」，选择 CSV 或 XML。CSV 可设置分隔符和首行模式。XML 可指定记录标签、使用属性字段并按需解码 Base64。选择 UTF-8 文件，核对样本和字段映射后点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。[CSV 导入](development/postgres-copy-preview-20261105.md) · [XML 导入](development/postgres-xml-import-20261107.md)
+在有写入权限的 PostgreSQL 普通表或分区表打开「导入数据」，选择 CSV、JSON 或 XML。CSV 可设置分隔符和首行模式，XML 可指定记录标签、使用属性字段及按需解码 Base64。CSV 和 XML 使用 UTF-8，JSON 另支持 UTF-16 LE 和 GB18030。核对样本和字段映射后点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。[CSV 导入](development/postgres-copy-preview-20261105.md) · [JSON 导入](development/postgres-table-json-import-20261107.md) · [XML 导入](development/postgres-xml-import-20261107.md)
 
 在 PostgreSQL 数据库节点或对象浏览器的表分类打开「从文件导入新表」，可扫描 CSV、JSON 或 XML 并据此建立字段。CSV 可按表头或列位置映射。选择 schema、核对字段类型并确认建表后，点击「继续配置导入」，检查映射并另行确认追加。源文件变化会阻止或回滚数据写入，已建表仍保留。[从 CSV 和 JSON 新建表](development/postgres-csv-json-new-table-20261107.md) · [从 XML 新建表](development/postgres-xml-new-table-20261107.md)
 

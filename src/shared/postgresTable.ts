@@ -262,7 +262,7 @@ export const postgresTableImportChooseSchema = z.union([
     csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), scannedFile: scannedImportFile,
   }).strict(),
   target.extend({ pageToken: token, format: z.literal('json'), encoding: recordImportEncoding,
-    scannedFile: scannedImportFile,
+    scannedFile: scannedImportFile.optional(),
   }).strict(),
 ]);
 const importTarget = target.extend({ pageToken: token, taskId: identity, fileToken: token });
@@ -280,6 +280,7 @@ export interface PostgresTableImportChoice {
   name: string;
   header: string[];
   bytes: number;
+  records?: number;
   sample: (string | null)[][];
   sampleLimited: boolean;
 }

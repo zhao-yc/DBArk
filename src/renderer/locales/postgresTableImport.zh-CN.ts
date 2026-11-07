@@ -1,5 +1,7 @@
 export const postgresTableImportZh = {
-  open: '导入数据', title: '导入数据到 PostgreSQL 表', choose: '选择 CSV 文件', format: '导入格式', chooseXml: '选择 XML 文件',
+  open: '导入数据', title: '导入数据到 PostgreSQL 表', choose: '选择 CSV 文件', format: '导入格式', chooseXml: '选择 XML 文件', chooseJson: '选择 JSON 文件',
+  encoding: '文件编码', reading: '正在选择并读取文件', records: (count: number) => `已扫描 ${count.toLocaleString('zh-CN')} 条记录`,
+  jsonNote: 'JSON 使用对象数组。记录中省略的已映射字段写入 NULL。大整数和小数按源文本交给 PostgreSQL。',
   note: '按文件顺序逐列映射到目标字段，确认后追加数据。',
   delimiter: 'CSV 分隔符', delimiterHint: '选择与源文件一致的分隔符。更改后请重新选择文件。',
   nullNote: '使用 UTF-8。未加引号的空字段写为 NULL，两个双引号表示空字符串。映射标识列时保留文件中的值。',
@@ -8,7 +10,7 @@ export const postgresTableImportZh = {
   position: '按目标列顺序映射',
   sample: '数据预览', sampleLimit: '最多显示前 5 条数据、前 12 列，长值会截短。',
   sampleLimited: '有记录超出预览范围或无法完整解析，数据库将在导入时校验全文件。',
-  xmlSampleLimited: '已读取完整文件和字段目录。此处仅显示有限样本，数据库将在导入时校验目标类型与约束。',
+  recordSampleLimited: '已读取完整文件和字段目录。此处仅显示有限样本，数据库将在导入时校验目标类型与约束。',
   sampleEmpty: '文件只有表头。',
   nullValue: 'NULL', emptyValue: '空字符串',
   confirm: '确认追加并导入', close: '关闭', cancel: '取消导入',
