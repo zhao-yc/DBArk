@@ -1,3 +1,4 @@
+import { isXmlFormat } from '../shared/dataMarkupExport';
 import { sqliteQueryInsertColumnsForResult, type SqliteQueryExportInput } from '../shared/sqliteQueryExport';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
 import { resultExportColumns } from '../shared/resultExport';
@@ -51,7 +52,7 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
             deferredAtomicFile: file.excelFile(), checkCancelled: check, onCommitStart: () => { throw Error('SQLite Excel 不能自行发布文件'); }});
         } else if (insertRow) await file.write('-- SQLite 完整查询结果\n');
         else if (markup) {
-          const headers = input.format === 'xml' ? columns : resultExportColumns(columns.map((name, index) => ({key: String(index), name}))).map(column => column.exportName);
+          const headers = isXmlFormat(input.format) ? columns : resultExportColumns(columns.map((name, index) => ({key: String(index), name}))).map(column => column.exportName);
           await file.write(markup.documentStart() + markup.tableStart(headers));
         }
         else {

@@ -1,3 +1,4 @@
+import { dataMarkupFormats, isXmlRecordLayout } from './dataMarkupExport';
 import type { CellValue, QueryOutcome, QueryFileEncoding } from './contracts';
 import type { CsvExportDelimiter } from './csvExport';
 import { sqlExecutableWords, type QueryParameter, type SqlLexicalMode } from './queryParameters';
@@ -11,7 +12,13 @@ export const queryStreamExportLimits = {
   fileBytes: 10 * 1024 * 1024 * 1024,
   archiveManifestBytes: 8 * 1024 * 1024,
 } as const;
-export type QueryExportFormat = 'csv' | 'json' | 'csv-zip' | 'sql' | 'html' | 'xml';
+export const queryExportFormats = ['csv', 'json', 'csv-zip', 'sql', ...dataMarkupFormats] as const;
+export type QueryExportFormat = typeof queryExportFormats[number];
+export const queryExportSelectionMessage = '单 CSV 和 XML 记录布局须指定行结果集，其余格式导出全部结果';
+
+export function queryExportSelectsRowResult(format: QueryExportFormat): boolean {
+  return format === 'csv' || isXmlRecordLayout(format);
+}
 /** 容器仍是原生保存对话框授权的单个ZIP文件，不能借CSV令牌改写其它类型。 */
 export function queryExportFileFormat(format: QueryExportFormat): Exclude<QueryExportFormat, 'csv-zip'> | 'zip' { return format === 'csv-zip' ? 'zip' : format; }
 /** 所有包内文件名由有界序号生成，SQL、库表及列名都不参与路径。 */

@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { QueryStreamExportDialog } from '../../src/renderer/components/QueryStreamExportDialog';
+import { dataExportExtension, dataMarkupText } from '../../src/shared/dataMarkupExport';
 import { queryExportFileFormat } from '../../src/shared/queryStreamExport';
 import { streamExecutionAllowed, streamResultSelection } from '../../src/renderer/queryStreamExport';
 import { queryStreamZh } from '../../src/renderer/locales/queryStreamExport.zh-CN';
@@ -17,7 +18,7 @@ function fixture() {
   const source = readFileSync(new URL('../../src/renderer/components/QueryStreamExportDialog.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('dialog.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), functions: string[] = [];
   const visit = (node: ts.Node) => { if (ts.isFunctionDeclaration(node) && ['chooseFile', 'execute', 'invalidate'].includes(node.name?.text ?? '')) functions.push(node.getText(tree)); else node.forEachChild(visit); }; tree.forEachChild(visit);
   const invoke = vi.fn(async () => ({ token: 'zip-target', name: 'all.zip' })), onExecute = vi.fn(async () => ({ fileCommitted: true, results: [] }));
-  const context = createContext({ csvExportOptions, csvDelimiter: ',', queryExportFileFormat, streamExecutionAllowed, streamResultSelection, text: queryStreamZh, Error, format: 'csv-zip', encoding: 'utf8', protocol: 'text-strict', ordinal: 'unused', file: { token: 'zip-target' }, acknowledged: false, binaryAcknowledged: false, sessionBusy: false, completed: false, parameters: undefined, task: { current: '' }, busyRef: { current: false }, choosingRef: { current: false }, uid: () => 'single-task', invoke, onExecute, errorMessage: (error: unknown) => String(error) });
+  const context = createContext({ csvExportOptions, csvDelimiter: ',', queryExportFileFormat, dataExportExtension, dataMarkupText, streamExecutionAllowed, streamResultSelection, text: queryStreamZh, Error, format: 'csv-zip', encoding: 'utf8', protocol: 'text-strict', ordinal: 'unused', file: { token: 'zip-target' }, acknowledged: false, binaryAcknowledged: false, sessionBusy: false, completed: false, parameters: undefined, task: { current: '' }, busyRef: { current: false }, choosingRef: { current: false }, uid: () => 'single-task', invoke, onExecute, errorMessage: (error: unknown) => String(error) });
   // 正式表单增加归属与配置代次；本夹具模拟每次状态更新后的当前渲染，保留全部原断言。
   context.live={current:true};context.configuration={current:0};context.completedRef={current:false};context.publishingRef={current:false};
   Object.defineProperty(context,'generation',{get:()=>context.configuration.current});

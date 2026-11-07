@@ -1,9 +1,10 @@
+import { dataMarkupFormats } from './dataMarkupExport';
 import type { ColumnInfo, FilterGroup, FilterMode, FilterRule, SortRule, TableInfo } from './contracts';
 import type { CsvExportDelimiter } from './csvExport';
 import { queryStreamExportLimits } from './queryStreamExport';
 
 export const tableFilteredExportLimits = Object.freeze({ metadataBytes: 2 * 1024 * 1024, sorts: 20, columns: queryStreamExportLimits.columns });
-export const tableFilteredExportFormats = ['csv', 'json', 'sql', 'xlsx', 'html', 'xml'] as const;
+export const tableFilteredExportFormats = ['csv', 'json', 'sql', 'xlsx', ...dataMarkupFormats] as const;
 /** 只接收已应用的完整表页条件；SQL、凭据、路径和连接修订均由可信进程产生。 */
 export interface TableFilteredExportInput {
   connectionId: string; database: string; table: string; taskId: string; fileToken: string;

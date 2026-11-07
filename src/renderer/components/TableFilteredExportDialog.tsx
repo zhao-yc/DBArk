@@ -8,8 +8,7 @@ import { filterRuleSummary } from '../tableFilters';
 import { tableFilterGroupSummary } from '../tableFilterGroups';
 import { errorMessage, invoke, uid } from '../lib';
 import { tableFilteredExportZh as text } from '../locales/tableFilteredExport.zh-CN';
-import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
-import { dataMarkupText, dataXmlZh } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 
@@ -83,7 +82,7 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
     let active: Operation;
     const promise = Promise.resolve().then(async () => {
       if (!current() || operation.current !== active) return;
-      const file = await owner.services.choose({ purpose: 'export', format: chosen.format, suggestedName: `${owner.intent.target.table}-filtered.${chosen.format}` });
+      const file = await owner.services.choose({ purpose: 'export', format: chosen.format, suggestedName: `${owner.intent.target.table}-filtered.${dataExportExtension(chosen.format)}` });
       if (!current() || operation.current !== active || live.current !== chosen) return;
       if (file) {
         if (typeof file.token !== 'string' || !file.token || typeof file.name !== 'string' || !file.name) throw Error(text.invalid);
@@ -144,7 +143,7 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
     <p>{owner.intent.target.database}.{owner.intent.target.table}</p><p>{text.scope}</p><p className="warning-text">{text.committedOnly}</p>
     <section aria-label={text.conditions}><strong>{text.conditions}</strong>{owner.intent.conditions.filters.length ? <ul>{owner.intent.conditions.filters.map((filter, index) => <li key={index}>{filter.enabled === false ? text.disabled : ''}{filterRuleSummary(filter)}</li>)}</ul> : <p>{text.noConditions}</p>}{owner.intent.conditions.filterGroup && <p>{tableFilterGroupSummary(owner.intent.conditions.filterGroup)}</p>}</section>
     <section aria-label={text.sorts}><strong>{text.sorts}</strong>{owner.intent.sort.length ? <ol>{owner.intent.sort.map((rule, index) => <li key={index}>{tableSortRuleSummary(rule)}</li>)}</ol> : <p>{text.noSorts}</p>}</section>
-    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql" disabled={owner.intent.source.objectKind !== 'table'}>INSERT SQL</option><option value="xlsx">Excel（XLSX）</option><option value="html">{queryHtmlZh.format}</option><option value="xml">{dataXmlZh.format}</option></select></Field>
+    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql" disabled={owner.intent.source.objectKind !== 'table'}>INSERT SQL</option><option value="xlsx">Excel（XLSX）</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}</select></Field>
       <Field label={text.encoding}><select aria-label={text.encoding} disabled={disabled || draft.format === 'xlsx' || !!markup} value={draft.encoding} onChange={event => change({ format: draft.format, encoding: event.target.value as Draft['encoding'], csvDelimiter: draft.csvDelimiter })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <CsvExportDelimiterField value={draft.csvDelimiter} disabled={disabled} onChange={csvDelimiter => change({ format: draft.format, encoding: draft.encoding, csvDelimiter })}/>}</div>
     {markup && <p>{markup.hint}</p>}
     {draft.format === 'xlsx' && <UsageHelp><p>{text.xlsxEncoding}</p><p>{text.xlsxLimits}</p></UsageHelp>}{draft.format === 'sql' && <p className="warning-text">{text.sqlScope}</p>}{owner.intent.source.objectKind !== 'table' && <p className="muted small">{text.viewSql}</p>}

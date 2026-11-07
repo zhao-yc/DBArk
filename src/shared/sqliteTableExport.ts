@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { sqliteTablePageSchema, sqliteTableBrowseLimits } from './sqliteTableBrowse';
 import { csvExportDelimiters } from './csvExport';
-import { dataMarkupText } from './dataMarkupExport';
+import { dataMarkupFormats, dataMarkupText } from './dataMarkupExport';
 
 /** 完整导出沿原已应用的typed筛选和排序；路径、任意SQL及凭据均不进入公共合同。 */
 export const sqliteTableExportSchema = z.object({
@@ -9,7 +9,7 @@ export const sqliteTableExportSchema = z.object({
   taskId: sqliteTablePageSchema.shape.taskId, fileToken: z.string().min(1).max(200), schemaKey: z.string().regex(/^[a-f0-9]{64}$/),
   relation: sqliteTablePageSchema.shape.relation, mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters, sort: sqliteTablePageSchema.shape.sort,
   columns: z.array(sqliteTablePageSchema.shape.table).max(sqliteTableBrowseLimits.columns),
-  format: z.enum(['csv', 'json', 'sql', 'xlsx', 'html', 'xml']), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
+  format: z.enum(['csv', 'json', 'sql', 'xlsx', ...dataMarkupFormats]), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
   sqlContent: z.enum(['data', 'structure', 'structure-data']).optional(),
 }).strict().superRefine((input, context) => {
   const page = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, offset: 0, limit: 1, mode: input.mode, filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: input.sort });

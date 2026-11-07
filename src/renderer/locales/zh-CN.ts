@@ -16,6 +16,7 @@ export const zh = {
     atomicFile: '完成后替换目标文件；取消或失败保留原文件。',
     columnMapping: '导出列预览', columnPosition: '列位置', originalColumn: '原列名', outputColumn: 'CSV 标题 / JSON 键', emptyName: '（空列名）',
     columnRule: '按结果列顺序导出。首个非空列名保留；重复名或空名添加“ [列位置]”后缀，冲突时递增，避开所有原始列名。空名以“列”为前缀。',
+    xmlColumnRule: '按结果列顺序使用原列名。',
     csvProtocol: 'CSV：\\N 表示 NULL，空字符串使用双引号；反斜线开头的文本增加一个反斜线，二进制写为 base64: 内容。',
     jsonProtocol: 'JSON：保存对象数组，精确数值保持字符串；NULL 保持 null，二进制保持 type / base64 对象。',
     preview: '数据预览（最多 20 行）', start: '开始导出已返回行', cancel: '取消结果导出', completed: '已导出 {0} 行已返回结果。'

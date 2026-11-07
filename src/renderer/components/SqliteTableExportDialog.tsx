@@ -6,8 +6,7 @@ import { SqliteTableExportIntent, checkSqliteTableExportOutput, selectSqliteExpo
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteTableExportZh as text } from '../locales/sqliteTableExport.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
-import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
-import { dataMarkupText, dataXmlZh } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 
@@ -52,7 +51,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
   /** 配置变化消费当前草稿身份，并撤销原文件；不会自动选择文件或发起导出。 */
   function change(next: Omit<SqliteTableExportOptions, 'columns'> & { columns?: string[] }): void {
     if (!editable()) return;
-    if (!['csv', 'json', 'sql', 'xlsx', 'html', 'xml'].includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
+    if (!['csv', 'json', 'sql', 'xlsx', ...dataMarkupFormats].includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
     const sqlContent = next.format === 'sql' ? next.sqlContent ?? (draft.format === 'sql' ? draft.sqlContent : owner.intent.source.target.kind === 'view' ? 'structure' : undefined) : undefined;
     if (sqlContent !== undefined && !['data', 'structure', 'structure-data'].includes(sqlContent)) return;
     if (next.format === 'sql' && owner.intent.source.target.kind !== 'table' && sqlContent !== 'structure') { replace({ ...draft, problem: text.viewSql }); return; }
@@ -93,7 +92,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
     let active: Operation;
     const promise = Promise.resolve().then(async () => {
       if (!current() || operation.current !== active) return;
-      const file = await owner.services.choose({ purpose: 'export', format: chosen.format, suggestedName: `${owner.intent.source.target.table}-filtered.${chosen.format}` });
+      const file = await owner.services.choose({ purpose: 'export', format: chosen.format, suggestedName: `${owner.intent.source.target.table}-filtered.${dataExportExtension(chosen.format)}` });
       if (!current() || operation.current !== active || live.current !== chosen) return;
       if (file) {
         if (typeof file.token !== 'string' || !file.token || typeof file.name !== 'string' || !file.name) throw Error(text.invalid);
@@ -160,7 +159,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
     <p>{owner.intent.source.target.database}.{owner.intent.source.target.table}</p><p>{structureOnly ? text.structureScope : text.scope}</p>{!structureOnly && <><p className="warning-text">{text.committedOnly}</p><p className="muted small">{text.protocolHint}</p></>}
     {structureOnly ? <p>{text.structureConditions}</p> : <><section aria-label={text.conditions}><strong>{text.conditions}</strong><p>{browseText.enabledFilters(owner.intent.query.filters.filter(filter => filter.enabled !== false).length, owner.intent.query.filters.length)}</p>{!owner.intent.query.filters.some(filter => filter.enabled !== false) && <p>{owner.intent.query.filters.length ? browseText.noEnabledFilters : text.noConditions}</p>}{owner.intent.query.filters.length ? <ul>{owner.intent.query.filters.map((filter, index) => <li key={index}>[{filter.enabled === false ? browseText.filterDisabledState : browseText.filterEnabledState}] {filter.column} {browseText.operators[filter.operator]} {filter.value ? '[' + browseText.kinds[filter.value.kind] + '] ' + filter.value.value : ''}{filter.secondValue ? ' AND [' + browseText.kinds[filter.secondValue.kind] + '] ' + filter.secondValue.value : ''}{filter.values ? ' [' + browseText.kinds[filter.values[0].kind] + '] (' + filter.values.map(value => JSON.stringify(value.value)).join(', ') + ')' : ''}</li>)}</ul> : null}<p>{owner.intent.query.mode === 'and' ? 'AND' : 'OR'}</p></section>
     <section aria-label={text.sorts}><strong>{text.sorts}</strong>{owner.intent.query.sort.length ? <ol>{owner.intent.query.sort.map((rule, index) => <li key={index}>{rule.column} {rule.direction === 'asc' ? browseText.ascending : browseText.descending}</li>)}</ol> : <p>{text.noSorts}</p>}</section></>}
-    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">SQLite SQL</option><option value="xlsx">Excel（XLSX）</option><option value="html">{queryHtmlZh.format}</option><option value="xml">{dataXmlZh.format}</option></select></Field>
+    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">SQLite SQL</option><option value="xlsx">Excel（XLSX）</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}</select></Field>
       {draft.format === 'sql' && <Field label={text.sqlContent}><select aria-label={text.sqlContent} disabled={disabled} value={draft.sqlContent ?? 'data'} onChange={event => change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, sqlContent: event.target.value as SqliteTableExportInput['sqlContent'] })}>{Object.entries(text.sqlContents).map(([value, label]) => <option key={value} value={value} disabled={owner.intent.source.target.kind !== 'table' && value !== 'structure'}>{label}</option>)}</select></Field>}
       <Field label={text.encoding}><select aria-label={text.encoding} disabled={disabled || draft.format === 'xlsx' || !!markup} value={draft.encoding} onChange={event => change({ format: draft.format, encoding: event.target.value as Draft['encoding'], csvDelimiter: draft.csvDelimiter })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <CsvExportDelimiterField value={draft.csvDelimiter} disabled={disabled} onChange={csvDelimiter => change({ format: draft.format, encoding: draft.encoding, csvDelimiter })}/>}</div>
     {markup && <p>{markup.hint}</p>}

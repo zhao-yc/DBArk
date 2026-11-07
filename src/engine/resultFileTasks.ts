@@ -11,7 +11,7 @@ import { assertResultExcelData } from '../shared/resultExcel';
 import { resultExcelZh } from '../shared/resultExcel.zh-CN';
 import { exportResultExcelFile } from './resultExcelFile';
 import { dataMarkupWriter } from './dataMarkupExport';
-import { dataMarkupText } from '../shared/dataMarkupExport';
+import { dataMarkupText, isXmlFormat } from '../shared/dataMarkupExport';
 
 export type ResultFileIO = AtomicFileIO;
 interface FileTask { cancelled: boolean; committing: boolean; done: Promise<void>; finish(): void; }
@@ -36,8 +36,8 @@ export class ResultFileTasks {
     if (this.closing) throw new Error('客户端正在退出，不能启动结果导出');
     if (!input.taskId || this.has(input.taskId)) throw new Error('任务编号为空或任务已在执行');
     if (!input.filePath) throw new Error('主进程未提供已授权文件路径');
-    if (!['csv', 'json', 'sql', 'xlsx', 'html', 'xml'].includes(input.format)) throw new Error(resultSqlZh.formats);
     const markup = dataMarkupWriter(input.format), markupText = dataMarkupText(input.format);
+    if (!markup && !['csv', 'json', 'sql', 'xlsx'].includes(input.format)) throw new Error(resultSqlZh.formats);
     if (markupText && input.encoding !== 'utf8') throw Error(markupText.utf8);
     validateResultExportData(input.result); const encoding = encodingName(input.encoding), delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
     let sqlTarget: ResultSqlTarget | undefined, sqlStorage: SqliteResultStorage | undefined;
@@ -75,7 +75,7 @@ export class ResultFileTasks {
       file = await AtomicFile.create(input.filePath, encoding, checkCancelled, () => { task.committing = true; }, this.io, input.format === 'sql' ? resultSqlLimits.fileBytes : undefined);
       if (encoding === 'utf16le') await write('\uFEFF');
       if (markup) await write(markup.documentStart({ scope: 'returned', truncated: input.result.truncated }) +
-        markup.tableStart(columns.map(column => input.format === 'xml' ? column.name : column.exportName)));
+        markup.tableStart(columns.map(column => isXmlFormat(input.format) ? column.name : column.exportName)));
       else await write(sqlTarget ? resultSqlHeader(sqlTarget) : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n' : '[\n');
       for (const row of input.result.rows) {
         // 按列描述顺序取值，不能依赖行对象的枚举顺序；手工构造 JSON 键值对保留原型同名键。

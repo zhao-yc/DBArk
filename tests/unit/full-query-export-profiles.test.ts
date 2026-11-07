@@ -29,10 +29,13 @@ describe('完整查询导出方案', () => {
     const sqliteList = store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: csv });
     const postgresList = store.mutateFullQueryExportProfiles({ ...postgres, kind: 'add', profile: insert });
     expect(sqliteList).toMatchObject([csv]); expect(postgresList).toMatchObject([insert]);
+    const recordProfile = { name: 'XML 记录', options: { format: 'xml-attributes' } };
+    const sqliteWithXml = store.mutateFullQueryExportProfiles({ ...sqlite, kind: 'add', profile: recordProfile });
+    expect(sqliteWithXml).toMatchObject([csv, recordProfile]);
     store.saveSettings({ ...store.settings(), theme: 'light' });
     store.close();
     store = await LocalStore.open(file, wasm, protector);
-    expect(store.fullQueryExportProfiles(sqlite)).toEqual(sqliteList);
+    expect(store.fullQueryExportProfiles(sqlite)).toEqual(sqliteWithXml);
     expect(store.fullQueryExportProfiles(postgres)).toEqual(postgresList);
     expect(store.settings().theme).toBe('light');
     expect(store.history()).toEqual([]); expect(store.tasks()).toEqual([]);

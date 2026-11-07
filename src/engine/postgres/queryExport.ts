@@ -5,7 +5,7 @@ import { resultExportColumns } from '../../shared/resultExport';
 import { EXCEL_LIMITS } from '../../shared/excelTransfer';
 import { AtomicFile, nativeAtomicFileIO } from '../atomicFile';
 import { startExcelExportRows } from '../excelExportRows';
-import { queryStreamExportLimits } from '../../shared/queryStreamExport';
+import { queryExportSelectsRowResult, queryStreamExportLimits } from '../../shared/queryStreamExport';
 import { postgresQueryExportSchema, postgresQueryInsertColumnsForResult, type PostgresQueryExportInput, type PostgresQueryExportOutput } from '../../shared/postgresQueryExport';
 import { createQueryStreamFile, type QueryStreamFile } from '../queryStreamFile';
 import type { PostgresConnection } from './connection';
@@ -87,7 +87,7 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
         await write('COMMIT;\n');
       } else {
         const output = file = format === 'xlsx' ? undefined : await createQueryStreamFile({filePath, format, encoding, csvDelimiter,
-          resultSelection: format === 'csv' ? {kind: 'row-result', ordinal: 1} : {kind: 'all'},
+          resultSelection: queryExportSelectsRowResult(format) ? {kind: 'row-result', ordinal: 1} : {kind: 'all'},
           checkCancelled: check, onCommitStart: publish});
         let started = false;
         for await (const batch of batches) {

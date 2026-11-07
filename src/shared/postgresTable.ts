@@ -6,7 +6,7 @@ import { strictTableLayoutPreferences } from './tablePreferences';
 import { postgresRelatedTabPrefix } from './postgresRelatedTab';
 import { postgresHistogramBins } from './postgresTableHistogram';
 import { postgresIdentifier, postgresRelationName } from './postgresSql';
-import { dataMarkupText } from './dataMarkupExport';
+import { dataMarkupFormats, dataMarkupText, dataExportExtension } from './dataMarkupExport';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -206,7 +206,7 @@ export interface PostgresRelatedTablePage {
   search: string;
   editToken?: string;
 }
-const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', 'html', 'xml']);
+const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', ...dataMarkupFormats]);
 export const postgresBackupTableLimit = 64;
 export const postgresBackupSetTitle = 'PostgreSQL 多表备份';
 const backupSource = z.object({ connectionId: identity, database: identity }).strict();
@@ -225,7 +225,7 @@ export type PostgresBackupCatalogueInput = z.infer<typeof postgresBackupCatalogu
 
 /** 原生 COPY 使用 CSV 扩展名，文件能力仍按具体导出格式绑定。 */
 export function postgresTableExportExtension(format: PostgresTableExportChooseInput['format']) {
-  return format === 'copy' ? 'csv' : format === 'sql-backup' || format === 'sql-backup-set' ? 'sql' : format;
+  return format === 'copy' ? 'csv' : format === 'sql-backup' || format === 'sql-backup-set' ? 'sql' : dataExportExtension(format);
 }
 /** 文件能力只由主进程签发，筛选和排序只从原服务端表页读取。 */
 export const postgresTableExportChooseSchema = z.object({

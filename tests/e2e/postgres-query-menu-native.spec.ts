@@ -818,7 +818,8 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     const owner = (await sessions()).rows;
     expect(owner).toHaveLength(1);
     expect(owner[0].state).toBe('idle in transaction');
-    const output = [csv, csv, json, xlsx, html, xml, insertFile, unchanged, cancelledExcel, cancelledSql, cancelledHtml];
+    const recordXml = info.outputPath('完整查询记录属性.xml');
+    const output = [csv, csv, json, xlsx, html, xml, insertFile, unchanged, cancelledExcel, cancelledSql, cancelledHtml, recordXml];
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
@@ -985,7 +986,20 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
       expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
       await close();
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(11);
+    await replaceDraft(sql.replace('numeric(30,20) AS id', 'numeric(30,20) AS amount'));
+    await open();
+    await dialog.getByLabel(zh.resultExport.format).selectOption('xml-attributes');
+    await start();
+    await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
+    const recordResult = await page.evaluate(markup => {
+      const root = new DOMParser().parseFromString(markup, 'application/xml').documentElement;
+      const record = root.lastElementChild!;
+      return {root: root.localName, count: root.childElementCount, last: [...record.attributes].map(field => [field.name, field.value])};
+    }, await readFile(recordXml, 'utf8'));
+    expect(recordResult).toEqual({root: 'RECORDS', count: 4099,
+      last: [['id', '9007199254745092'], ['amount', '0.12345678901234567890'], ['note', '行4099'], ['bytes', 'AP8=']]});
+    await close();
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(12);
     await expect.poll(async () => (await sessions()).rows).toEqual(owner);
     expect(await history()).toEqual(baseline);
     expect(await grid.innerText()).toBe(original);

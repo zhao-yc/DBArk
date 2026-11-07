@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import type { FullQueryExportOptions } from '../../shared/fullQueryExportProfiles';
-import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
-import { dataMarkupText, dataXmlZh } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
 import { postgresExportParameterNames, postgresQueryInsertTargetSchema, type PostgresQueryExportInput } from '../../shared/postgresQueryExport';
 import { sqliteQueryInsertTargetSchema, type SqliteQueryExportInput } from '../../shared/sqliteQueryExport';
 import type { QueryParameter } from '../../shared/queryParameters';
@@ -44,7 +43,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   let profileOptions: FullQueryExportOptions | undefined;
   if (format === 'csv') profileOptions = { format, encoding, delimiter };
   else if (format === 'json') profileOptions = { format, encoding };
-  else if (format === 'xlsx' || format === 'html' || format === 'xml') profileOptions = { format };
+  else if (format !== 'sql') profileOptions = { format };
   else if (target?.success) profileOptions = { format, target: target.data };
   const [file, setFile] = useState<FileChoice | null>(null);
   const [pending, setPending] = useState<'pick' | 'write' | null>(null);
@@ -86,7 +85,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
     picking.current = true;
     setPending('pick'); setFile(null); setError(''); setRows(undefined);
     try {
-      const selected = await invoke('files.choose', {purpose: 'export', format, suggestedName: `${text.suggestedName}.${format}`});
+      const selected = await invoke('files.choose', {purpose: 'export', format, suggestedName: `${text.suggestedName}.${dataExportExtension(format)}`});
       if (!current()) throw Error(text.changed);
       setFile(selected);
     } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
@@ -140,8 +139,8 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>
       {parameters && <p>{text.parameterCount(parameters.length)}</p>}
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
-        onChange={event => { const value = event.target.value; if (value === 'csv' || value === 'json' || value === 'xlsx' || value === 'sql' || value === 'html' || value === 'xml') setFormat(value); setFile(null); setRows(undefined); }}>
-        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option><option value="html">{queryHtmlZh.format}</option><option value="xml">{dataXmlZh.format}</option>
+        onChange={event => { const value = event.target.value; if (['csv', 'json', 'xlsx', 'sql', ...dataMarkupFormats].includes(value)) setFormat(value as typeof format); setFile(null); setRows(undefined); }}>
+        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}
       </select></Field>
       {sqlite && format === 'json' && <p>{sqliteQueryExportZh.formatHint}</p>}
       {markup && <p>{markup.hint}</p>}

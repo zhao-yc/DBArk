@@ -6,7 +6,7 @@ import { SaxesParser } from 'saxes';
 import { createQueryStreamFile } from '../../src/engine/queryStreamFile';
 import { dataMarkupWriter } from '../../src/engine/dataMarkupExport';
 import { ResultFileTasks } from '../../src/engine/resultFileTasks';
-import { dataXmlZh } from '../../src/shared/dataMarkupExport';
+import { dataXmlZh, xmlRecordLayouts } from '../../src/shared/dataMarkupExport';
 import { validateCommand } from '../../src/shared/validation';
 
 const options = { fileToken: 'file', taskId: 'test', format: 'xml', encoding: 'utf8' } as const;
@@ -87,7 +87,7 @@ it('字段转义超限和取消不会发布半份 XML，二进制必须是规范
   expect(() => dataMarkupWriter('xml')!.row([{type:'binary', base64:'AB=='}])).toThrow(dataXmlZh.invalid);
 });
 
-it('查询、表和视图七个 IPC 接受 XML 并锁定 UTF-8', () => {
+it.each(['xml', ...xmlRecordLayouts] as const)('查询、表和视图七个 IPC 接受 %s 并锁定 UTF-8', format => {
   const target = { ...options, connectionId: 'connection', database: 'main', table: 'example' };
   const token = '39041f23-9317-48e3-8508-748df1682040';
   for (const [command, input] of [
@@ -98,8 +98,36 @@ it('查询、表和视图七个 IPC 接受 XML 并锁定 UTF-8', () => {
     ['postgres.table.export', {...target, fileToken: token, exportToken: token, tabId: 'tab', columns: ['c0']}],
     ['table.exportFiltered', {...target, metadataKey: 'key', filters: [], sort: [], columns: ['id']}],
   ] as const) {
-    expect(validateCommand(command, input)).toMatchObject({format: 'xml', encoding: 'utf8'});
-    expect(() => validateCommand(command, {...input, encoding: 'gb18030'})).toThrow(dataXmlZh.utf8);
-    expect(() => validateCommand(command, {...input, csvDelimiter: ';'})).toThrow();
+    const payload = {...input, format, ...(command === 'query.exportStream' && format !== 'xml' ? {resultSelection: {kind: 'row-result', ordinal: 2}} : {})};
+    expect(validateCommand(command, payload)).toMatchObject({format, encoding: 'utf8'});
+    expect(() => validateCommand(command, {...payload, encoding: 'gb18030'})).toThrow(dataXmlZh.utf8);
+    expect(() => validateCommand(command, {...payload, csvDelimiter: ';'})).toThrow();
+    if (command === 'query.exportStream' && format !== 'xml') {
+      expect(() => validateCommand(command, {...payload, resultSelection: {kind: 'all'}})).toThrow('须指定行结果集');
+    }
   }
+});
+
+it.each(xmlRecordLayouts)('%s 按原列名输出，解析后保留文本、空字符串、精确数字和字节', async format => {
+  const fields = ['备注', 'missing', 'empty', 'raw', 'exact-id', '𐐀'];
+  const values = [payload, null, '', {type: 'binary' as const, base64: 'AP8='}, '9223372036854775807', true];
+  const result = { truncated: false, columns: fields.map((name, index) => ({name, key: 'c' + index})),
+    rows: [Object.fromEntries(values.map((value, index) => ['c' + index, value]))] };
+  expect(await new ResultFileTasks(() => {}).run({...options, format, result, filePath})).toEqual({rows: 1});
+  const parsed = parse(await readFile(filePath, 'utf8'));
+  expect(parsed.slice(0, 2).map(item => item.name)).toEqual(['RECORDS', 'RECORD']);
+  const entries = Object.entries({'备注': payload, empty: '', raw: 'AP8=', 'exact-id': '9223372036854775807', '𐐀': 'true'});
+  expect(format === 'xml-elements' ? parsed.slice(2).map(item => [item.name, item.text]) : Object.entries(parsed[1].attributes)).toEqual(entries);
+});
+
+it.each(xmlRecordLayouts)('%s 拒绝无效或重复列名，且写入失败不覆盖已有文件', async format => {
+  const writer = dataMarkupWriter(format)!;
+  for (const name of ['', '1id', 'a:b', 'a b', 'a\n', '\u037e']) expect(() => writer.tableStart([name])).toThrow('第 1 列');
+  expect(() => writer.tableStart(['id', 'id'])).toThrow('第 2 列的列名重复');
+  if (format === 'xml-attributes') expect(() => writer.tableStart(['xmlns'])).toThrow('第 1 列');
+  await writeFile(filePath, '原文件');
+  const result = { truncated: false, columns: [{name: '备注', key: 'note'}], rows: [{note: '有效首行'}, {note: '\0'}] };
+  await expect(new ResultFileTasks(() => {}).run({...options, format, result, filePath})).rejects.toThrow('第 1 列的值含 XML 1.0 禁用字符');
+  expect(await readFile(filePath, 'utf8')).toBe('原文件');
+  expect(await readdir(folder)).toEqual(['out.xml']);
 });

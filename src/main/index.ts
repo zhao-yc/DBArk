@@ -113,6 +113,7 @@ import { readQueryFileSnapshot } from './queryFileSourceFiles';
 import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
 import { taskCancelSnapshot } from './taskCancelState';
+import { dataExportExtension, dataMarkupText } from '../shared/dataMarkupExport';
 import type { QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
@@ -662,7 +663,8 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
 /** 文件只能来自用户打开/保存对话框；数据库进程收到的是主进程解析后的实际路径。 */
 async function chooseFile(input: any): Promise<{ token: string; name: string } | null> {
   if (input.purpose === 'sqlite-database') throw Error('SQLite文件选择必须绑定准确原文档');
-  const filters = input.format ? [{ name: `${String(input.format).toUpperCase()} 文件`, extensions: [input.format] }, { name: '所有文件', extensions: ['*'] }] : [{ name: '所有文件', extensions: ['*'] }];
+  const extension = input.format && dataExportExtension(input.format);
+  const filters = extension ? [{ name: `${extension.toUpperCase()} 文件`, extensions: [extension] }, { name: '所有文件', extensions: ['*'] }] : [{ name: '所有文件', extensions: ['*'] }];
   let filePath: string | undefined;
   if (input.purpose === 'export' || input.purpose === 'connection-export') {
     const result = await dialog.showSaveDialog(window!, { title: '导出文件', defaultPath: input.suggestedName, filters });
@@ -2491,9 +2493,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         input = { ...input, filePath: resultSqlPreviews.consume(input, columns!.owner.document) }; break;
       }
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
-      // 已返回XLSX只消费本窗口明确选择的Excel文件能力，不借其它导出格式令牌。
+      // 已返回结果的 Excel 和标记格式只消费本窗口选择的具体格式令牌。
       const checkFormat = command === 'files.preflight' || command === 'files.inspectImport' || input.expectedSource ||
-        command === 'files.exportResult' && (input.format === 'xlsx' || input.format === 'html' || input.format === 'xml');
+        command === 'files.exportResult' && (input.format === 'xlsx' || !!dataMarkupText(input.format));
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) }; break;
     }
   }

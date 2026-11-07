@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Download, Square } from 'lucide-react';
 import type { FileChoice } from '../../shared/contracts';
 import type { QueryParameter, QueryParameterNames } from '../../shared/queryParameters';
-import { queryExportFileFormat, queryCsvResultFile, type QueryExportProgress, type QueryStreamExportInput, type QueryStreamExportOutput } from '../../shared/queryStreamExport';
+import { queryExportFileFormat, queryExportSelectsRowResult, queryCsvResultFile, type QueryExportProgress, type QueryStreamExportInput, type QueryStreamExportOutput } from '../../shared/queryStreamExport';
 import { errorMessage, invoke, uid } from '../lib';
 import { zh, formatText } from '../locales/zh-CN';
 import { queryStreamZh as text } from '../locales/queryStreamExport.zh-CN';
@@ -14,8 +14,7 @@ import { queryInsertTargetSchema, type QueryInsertPending } from '../../shared/q
 import { queryInsertZh as insertText } from '../../shared/queryInsertExport.zh-CN';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
-import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
-import { dataMarkupText, dataXmlZh } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
 
 export type StreamExportOptions = Omit<QueryStreamExportInput, 'sql' | 'sessionId'>;
 
@@ -47,7 +46,7 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   async function chooseFile() {
     if (!live.current || generation!==configuration.current || busyRef.current || choosingRef.current || completedRef.current) return;
     choosingRef.current = true; setChoosing(true);
-    try { const extension = queryExportFileFormat(format); const next = await invoke('files.choose', { purpose: 'export', format: extension, suggestedName: `${text.defaultName}.${extension}`,...(format==='sql'?{queryInsertExport:true as const}:{}) }); if (next && live.current && generation===configuration.current) { setFile(next); setError(''); invalidate(); } }
+    try { const fileFormat = queryExportFileFormat(format); const next = await invoke('files.choose', { purpose: 'export', format: fileFormat, suggestedName: `${text.defaultName}.${dataExportExtension(fileFormat)}`,...(format==='sql'?{queryInsertExport:true as const}:{}) }); if (next && live.current && generation===configuration.current) { setFile(next); setError(''); invalidate(); } }
     catch (reason) { setError(errorMessage(reason)); }
     finally { choosingRef.current = false; setChoosing(false); }
   }
@@ -59,7 +58,7 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
     try { resultSelection = streamResultSelection(format, ordinal);if(format==='sql')insertTarget=queryInsertTargetSchema.parse({database,table,columns:columns.split('\n')}); } catch (reason) { setError(errorMessage(reason)); return; }
     busyRef.current = true; setBusy(true); setError(''); setProgress(null); setCancelling(false);publishingRef.current=false;setPublishing(false); task.current = uid();
     try {
-      const result = await onExecute({ taskId: task.current, fileToken: file!.token, format, encoding: format === 'html' || format === 'xml' ? 'utf8' : encoding, protocol, resultSelection, parameters, ...csvExportOptions(format === 'csv-zip' ? 'csv' : format, csvDelimiter), ...(insertTarget?{insertTarget}:{}) });
+      const result = await onExecute({ taskId: task.current, fileToken: file!.token, format, encoding: dataMarkupText(format) ? 'utf8' : encoding, protocol, resultSelection, parameters, ...csvExportOptions(format === 'csv-zip' ? 'csv' : format, csvDelimiter), ...(insertTarget?{insertTarget}:{}) });
       setOutput(result);
       completedRef.current=true;setCompleted(true);
     } catch (reason) { setError(errorMessage(reason)); setFailed(true); setAcknowledged(false); setBinaryAcknowledged(false); }
@@ -84,12 +83,12 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   function changeDelimiter(value: CsvExportDelimiter) { if (!canConfigure() || generation !== configuration.current || value === csvDelimiter) return; setCsvDelimiter(value); setFile(null); invalidate(); }
   return <>{!parameterDialog && <Modal title={text.title} wide onClose={close}><div className="modal-content">
     <div className="info-strip">{text.warning}</div><h3>{text.source}</h3>{source.length > 65536 && <p className="muted small">{text.sourceLimit}</p>}<pre className="query-stream-source" aria-label={text.source}>{source.slice(0, 65536)}</pre>
-    <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} aria-label={text.format} onChange={event => { if(!canConfigure())return;setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option><option value="csv-zip">{text.csvZip}</option><option value="sql">{insertText.format}</option><option value="html">{queryHtmlZh.format}</option><option value="xml">{dataXmlZh.format}</option></select></Field><Field label={text.encoding}><select disabled={busy || completed || !!markup} value={markup ? 'utf8' : encoding} onChange={event => { if(!canConfigure())return;setEncoding(event.target.value as typeof encoding); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
+    <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} aria-label={text.format} onChange={event => { if(!canConfigure())return;setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option><option value="csv-zip">{text.csvZip}</option><option value="sql">{insertText.format}</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}</select></Field><Field label={text.encoding}><select disabled={busy || completed || !!markup} value={markup ? 'utf8' : encoding} onChange={event => { if(!canConfigure())return;setEncoding(event.target.value as typeof encoding); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
     {format==='sql'&&<><p className="warning-text">{insertText.scope}</p><p>{insertText.mapping}</p><div className="form-grid"><Field label={insertText.database}><input disabled={busy||choosing||completed} value={database} aria-label={insertText.database} onChange={event=>{if(!canConfigure())return;setDatabase(event.target.value);invalidate();}}/></Field><Field label={insertText.table}><input disabled={busy||choosing||completed} value={table} aria-label={insertText.table} onChange={event=>{if(!canConfigure())return;setTable(event.target.value);invalidate();}}/></Field></div><Field label={insertText.columns}><textarea disabled={busy||choosing||completed} value={columns} aria-label={insertText.columns} onChange={event=>{if(!canConfigure())return;setColumns(event.target.value);invalidate();}}/></Field></>}
     {(format === 'csv' || format === 'csv-zip') && <CsvExportDelimiterField value={csvDelimiter} disabled={busy || choosing || completed} onChange={changeDelimiter}/>}
     {markup && <p>{markup.hint} {markup.streamHint}</p>}
     {format === 'csv-zip' && <UsageHelp><p>{text.csvZipHint}</p></UsageHelp>}
-    {format === 'csv' && <><Field label={text.ordinal}><input disabled={busy || completed} value={ordinal} inputMode="numeric" onChange={event => { if(!canConfigure())return;setOrdinal(event.target.value); invalidate(); }}/></Field><UsageHelp><p>{text.ordinalHint}</p></UsageHelp></>}
+    {queryExportSelectsRowResult(format) && <><Field label={text.ordinal}><input disabled={busy || completed} value={ordinal} inputMode="numeric" onChange={event => { if(!canConfigure())return;setOrdinal(event.target.value); invalidate(); }}/></Field><UsageHelp><p>{text.ordinalHint}</p></UsageHelp></>}
     <Field label={text.protocol}><select disabled={busy || completed} value={protocol} onChange={event => { if(!canConfigure())return;setProtocol(event.target.value as typeof protocol); invalidate(); }}><option value="text-strict">{text.text}</option><option value="binary-explicit">{text.binary}</option></select></Field><p className="warning-text">{protocol === 'text-strict' ? text.textHint : text.binaryHint}</p>
     <div className="parameter-actions"><button disabled={busy || choosing || completed || sessionBusy} onClick={() => {if(canConfigure())setParameterDialog(true);}}>{text.parameters}</button><span>{parameters ? formatText(text.parameterCount, parameters.length) : text.noParameters}</span>{parameters && <button disabled={busy || completed} onClick={() => { if(!canConfigure())return;setParameters(undefined); invalidate(); }}>{text.clearParameters}</button>}</div>
     <button className="file-picker" disabled={busy || choosing || completed} onClick={() => void chooseFile()}><Download size={20}/><span><strong>{file?.name ?? text.choose}</strong><small>{text.fileHint}</small></span></button>

@@ -8,7 +8,7 @@
 
 `cell` 的 `kind` 表示客户端接收的值类型。精确整数和小数在驱动以字符串返回时仍按原文本保存。空文本使用空的 `kind="text"` 元素，NULL 使用 `kind="null"`，二进制使用 `kind="binary" encoding="base64"`。含 NUL 或孤立代理项等 XML 1.0 禁用码元的列名及文本，使用 `encoding="utf16le-base64"` 保存完整原字符串。XML 特殊字符和回车使用实体引用保留。[XML 1.0 规范](https://www.w3.org/TR/xml/#charsets)
 
-单字段按编码后的 8 MiB 限额处理，单行及列头分别以 16 MiB 为限。文件沿用原任务的流式写入、取消和原子发布。当前采用 tabrelio 的位置映射文档。Navicat 的列名标签及记录属性两种布局列入后续覆盖。[Navicat 导出向导](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/export_wizard.html#additional-options)
+单字段按编码后的 8 MiB 限额处理，单行及列头分别以 16 MiB 为限。文件沿用原任务的流式写入、取消和原子发布。列名标签及记录属性两种布局的文件约定另见 [XML 记录布局](xml-record-layouts-20261107.md)。
 
 ## 验收
 

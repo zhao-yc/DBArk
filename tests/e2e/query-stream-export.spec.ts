@@ -11,6 +11,7 @@ import { enabled, isolatedDatabase, openDatabaseQuery, executeSql, modifier } fr
 import { readQueryCsvZip } from '../helpers/queryCsvZip';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { queryHtmlZh } from '../../src/shared/queryHtml.zh-CN';
+import { isXmlRecordLayout, xmlRecordLayouts, type XmlRecordLayout } from '../../src/shared/dataMarkupExport';
 
 // 凭据只进入临时连接表单；关闭追踪，截图和文件仅使用合成测试数据。
 test.use({ trace: 'off' });
@@ -37,10 +38,14 @@ async function writeSql(source: string) {
   })).toBe(source.replaceAll('\r\n', '\n'));
 }
 /** 只替换系统文件选择结果，不替换授权、IPC、数据库执行或实际文件写入。 */
-async function choosePath(path?: string) {
-  await desktop.evaluate(({ dialog: native }, filePath) => {
-    native.showSaveDialog = (async () => ({ canceled: filePath === undefined, filePath })) as typeof native.showSaveDialog;
-  }, path);
+async function choosePath(path?: string, extension?: string) {
+  await desktop.evaluate(({ dialog: native }, {filePath, extension}) => {
+    native.showSaveDialog = (async (...args: unknown[]) => {
+      const options = args[1] as Electron.SaveDialogOptions;
+      if (extension && (options.filters?.[0]?.extensions[0] !== extension || !options.defaultPath?.endsWith('.' + extension))) throw Error('保存对话框扩展名不匹配');
+      return { canceled: filePath === undefined, filePath };
+    }) as typeof native.showSaveDialog;
+  }, {filePath: path, extension});
 }
 /** 流事件只观察，不修改任务；任务记录不持久化结果行，因此进度另从真实事件取证。 */
 async function observeEvents() {
@@ -59,13 +64,13 @@ async function count(observer: Connection, database: string, condition = '1=1') 
   return Number(rows[0].total);
 }
 /** 选择格式和目标后仍需明确新执行确认，双协议确认相互独立。 */
-async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'html' | 'xml' = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
-  await observeEvents(); await choosePath(path);
+async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'html' | 'xml' | XmlRecordLayout = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
+  await observeEvents(); await choosePath(path, isXmlRecordLayout(format) ? 'xml' : undefined);
   await (await navigationMenuItem(query(), { name: '新执行并完整导出', exact: true })).click();
   const modal = dialog(); await expect(modal).toBeVisible();
   await modal.getByRole('combobox', { name: '完整文件格式', exact: true }).selectOption(format);
   await modal.getByRole('combobox', { name: '执行协议', exact: true }).selectOption(protocol);
-  if (format === 'csv') await modal.getByRole('textbox', { name: '行结果集序号', exact: true }).fill(String(ordinal));
+  if (format === 'csv' || isXmlRecordLayout(format)) await modal.getByRole('textbox', { name: '行结果集序号', exact: true }).fill(String(ordinal));
   await expect((await navigationMenuItem(modal, { name: '确认新执行并导出', exact: true }))).toBeDisabled();
   await modal.locator('.file-picker').click();
   if (path) await expect(modal.locator('.file-picker')).toContainText(basename(path));
@@ -158,6 +163,40 @@ test.describe('实库完整 SQL 流式导出', () => {
         headers: ['1:列', '1:列', 'empty_value', 'bytes', 'empty_result'],
         values: [['<标记>&中文', 'text'], ['', 'null'], ['', 'text'], ['AP8=', 'binary']], counts: ['1', '0'],
       });
+      await closeExport();
+    }, info);
+  });
+
+  test('XML 记录布局只写指定行结果集，缺少该结果时保留原文件', async ({}, info) => {
+    await isolatedDatabase(async ({observer, database}) => {
+      await observer.query(`CREATE TABLE \`${database}\`.stream_guard(id INT PRIMARY KEY)`);
+      await openDatabaseQuery(database);
+      await mkdir(info.outputDir, {recursive: true});
+      for (const [index, format] of xmlRecordLayouts.entries()) {
+        const target = info.outputPath(format + '.xml');
+        await writeSql(`SELECT '跳过' AS \`无效 列名\`; INSERT INTO stream_guard VALUES(${index + 1}); SELECT CONVERT(CONCAT('<&>', CHAR(34, 9, 10, 13)) USING utf8mb4) AS note, NULL AS missing, '' AS empty_value, UNHEX('00FF') AS bytes;`);
+        const modal = await openExport(target, format, 2);
+        await expect(modal.locator('select:has(option[value="utf8"])')).toBeDisabled();
+        const event = await finish(await start(modal));
+        expect(event?.queryExport).toMatchObject({statementsCompleted: 3, rowsWritten: 1, fileCommitted: true});
+        const document = await page.evaluate(({markup, attributes}) => {
+          const root = new DOMParser().parseFromString(markup, 'application/xml').documentElement;
+          const rows = [...root.children].map(row => [row.localName, attributes
+            ? [...row.attributes].map(field => [field.name, field.value])
+            : [...row.children].map(field => [field.localName, field.textContent])]);
+          return {root: root.localName, rows};
+        }, {markup: await readFile(target, 'utf8'), attributes: format === 'xml-attributes'});
+        expect(document).toEqual({root: 'RECORDS', rows: [['RECORD', [['note', '<&>"\t\n\r'], ['empty_value', ''], ['bytes', 'AP8=']]]]});
+        await closeExport();
+      }
+      expect(await count(observer, database)).toBe(2);
+      const sentinel = info.outputPath('保留原文件.xml');
+      await writeFile(sentinel, '原文件');
+      await writeSql('SELECT 1 AS id;');
+      const modal = await openExport(sentinel, 'xml-attributes', 2);
+      await finish(await start(modal), 'failed');
+      await expect(modal.locator('.error-box')).toContainText('不存在指定的行结果集');
+      expect(await readFile(sentinel, 'utf8')).toBe('原文件');
       await closeExport();
     }, info);
   });

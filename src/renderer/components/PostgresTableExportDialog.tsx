@@ -7,11 +7,11 @@ import { postgresRelationName } from '../../shared/postgresSql';
 import { errorMessage, invoke } from '../lib';
 import { postgresTableExportZh as text } from '../locales/postgresTableExport.zh-CN';
 import { acquireWorkspaceBusy } from '../store';
-import { dataMarkupText } from '../../shared/dataMarkupExport';
+import { dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
 
-const formats = ['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', 'html', 'xml'] as const;
+const formats = ['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', ...dataMarkupFormats] as const;
 const encodings = [['utf8', 'UTF-8'], ['utf16le', 'UTF-16 LE'], ['gb18030', 'GB18030']] as const;
 
 /** 文件选择、列和任务只对应打开时的原服务端表页。 */

@@ -122,7 +122,7 @@ export interface ImportOptions { /** 新表导入的原文件指纹，仅允许�
 export interface ExportOptions { csvSelection?: CsvExportSelection; csvDelimiter?: CsvExportDelimiter; connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
 /** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
 export interface ResultExportData { columns: Pick<ResultColumn, 'key' | 'name'>[]; rows: DataRow[]; truncated: boolean; }
-export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json' | 'sql' | 'xlsx' | 'html' | 'xml'; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvExportDelimiter; taskId: string; result: ResultExportData; sql?: import('./resultSql').ResultSqlSelection; }
+export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json' | 'sql' | 'xlsx' | import('./dataMarkupExport').DataMarkupFormat; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvExportDelimiter; taskId: string; result: ResultExportData; sql?: import('./resultSql').ResultSqlSelection; }
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {

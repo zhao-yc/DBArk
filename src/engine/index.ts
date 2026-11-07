@@ -112,7 +112,7 @@ import type { QueryDatabaseSwitchInput } from '../shared/queryDatabaseSwitch';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { prepareTableFilteredExport, type PreparedTableFilteredExport } from './tableFilteredExport';
 import { tableFilteredExportText } from '../shared/tableFilteredExport';
-import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
+import { queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner, typedCellPlaceholder } from './sql';
 import { currentSqlStatement } from './currentStatement';
 import { QueryWarningCollector } from './queryWarnings';
@@ -1931,7 +1931,7 @@ export class Engine {
       }
     };
     try {
-      if ((input.format !== 'csv') !== (input.resultSelection.kind === 'all') || !['csv', 'json', 'csv-zip', 'sql', 'html', 'xml'].includes(input.format)) throw new Error('单 CSV 必须指定行结果集，其余格式导出全部结果');
+      if (!queryExportFormats.includes(input.format) || queryExportSelectsRowResult(input.format) !== (input.resultSelection.kind === 'row-result')) throw new Error(queryExportSelectionMessage);
       if(input.format==='sql')queryInsertTargetSchema.parse(input.insertTarget);else if(input.insertTarget!==undefined)throw Error(queryInsertZh.nonSql);
       if (input.resultSelection.kind === 'row-result' && (!Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > queryStreamExportLimits.results)) throw new Error('行结果序号必须在 1～200 之间');
       if (!['text-strict', 'binary-explicit'].includes(input.protocol)) throw new Error('完整导出的执行协议无效');
