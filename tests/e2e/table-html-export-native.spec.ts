@@ -27,7 +27,7 @@ test('表页和视图 HTML 导出应用筛选、隐藏排序列和有序字段�
     await observer.query(`INSERT INTO ${table} VALUES ?`, [data]);
     await observer.query(`CREATE VIEW \`${database}\`.html_view AS SELECT id, bucket, note, payload FROM ${table}`);
     await mkdir(info.outputDir, {recursive: true});
-    const paths = ['html_subject', 'html_view'].map(name => info.outputPath(name + '.html'));
+    const paths = ['html_subject.html', 'html_subject.xml', 'html_view.html', 'html_view.xml'].map(name => info.outputPath(name));
     for (const path of paths) await writeFile(path, '原文件');
     await desktop.evaluate(({dialog, BrowserWindow}, targets) => {
       const original = dialog.showSaveDialog;
@@ -35,7 +35,7 @@ test('表页和视图 HTML 导出应用筛选、隐藏排序列和有序字段�
       dialog.showSaveDialog = (async (...args: unknown[]) => {
         const window = BrowserWindow.getAllWindows()[0];
         const options = args[1] as Electron.SaveDialogOptions;
-        if (args[0] !== window || options.filters?.[0]?.extensions[0] !== 'html' || !targets[index]) throw Error('本例文件选择越界');
+        if (args[0] !== window || !targets[index] || options.filters?.[0]?.extensions[0] !== targets[index].split('.').at(-1)) throw Error('本例文件选择越界');
         return {canceled: false, filePath: targets[index++]};
       }) as typeof original;
       Object.assign(globalThis, { restoreTableHtmlPicker: () => { dialog.showSaveDialog = original; return index; } });
@@ -82,14 +82,31 @@ test('表页和视图 HTML 导出应用筛选、隐藏排序列和有序字段�
         return { title: doc.title, headers: [...doc.querySelectorAll('th')].map(cell => cell.textContent),
           rows: [...doc.querySelectorAll('tbody tr')].map(row => [...row.querySelectorAll('td')].map(cell => cell.textContent)),
           active: doc.querySelectorAll('script,img,iframe,[onerror]').length };
-      }, await readFile(paths[index], 'utf8'));
+      }, await readFile(paths[index * 2], 'utf8'));
       expect(actual).toEqual({ title: '表数据', headers: ['payload', 'note'],
         rows: data.filter(row => row[1] === '匹配').reverse().map(row => ['base64:' + row[3].toString('base64'), row[2] === null ? 'NULL' : row[2] || '空字符串']), active: 0 });
       if (index === 1) await modal.screenshot({path: info.outputPath('视图HTML导出.png')});
       await modal.getByRole('button', {name: text.done, exact: true}).click();
       await expect(modal).toBeHidden();
+      await (await navigationMenuItem(tab, {name: text.entry, exact: true})).click();
+      await modal.getByLabel(text.format, {exact: true}).selectOption('xml');
+      await expect(modal.getByLabel(text.encoding, {exact: true})).toBeDisabled();
+      for (const field of ['id', 'bucket']) await modal.getByRole('checkbox', {name: text.fieldLabel(field), exact: true}).uncheck();
+      await modal.getByRole('button', {name: text.fieldUp('payload'), exact: true}).click();
+      await modal.getByRole('button', {name: text.choose, exact: true}).click();
+      await modal.getByRole('button', {name: text.start, exact: true}).click();
+      await expect(modal.getByText(text.completed(40), {exact: true})).toBeVisible();
+      const xml = await page.evaluate(markup => {
+        const doc = new DOMParser().parseFromString(markup, 'application/xml');
+        return {scope: doc.documentElement.getAttribute('scope'), headers: [...doc.querySelectorAll('column')].map(column => column.textContent),
+          rows: [...doc.querySelectorAll('record')].map(row => [...row.children].map(cell => [cell.textContent, cell.getAttribute('kind')]))};
+      }, await readFile(paths[index * 2 + 1], 'utf8'));
+      expect(xml).toEqual({scope: 'table', headers: ['payload', 'note'], rows: data.filter(row => row[1] === '匹配').reverse().map(row =>
+        [[row[3].toString('base64'), 'binary'], [row[2] ?? '', row[2] === null ? 'null' : 'text']])});
+      await modal.getByRole('button', {name: text.done, exact: true}).click();
+      await expect(modal).toBeHidden();
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restoreTableHtmlPicker(): number}).restoreTableHtmlPicker())).toBe(2);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restoreTableHtmlPicker(): number}).restoreTableHtmlPicker())).toBe(4);
     expect(await history()).toEqual(baseline);
     expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
     const [rows] = await observer.query<import('mysql2').RowDataPacket[]>(`SELECT COUNT(*) AS count FROM ${table}`);

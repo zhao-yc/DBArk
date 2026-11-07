@@ -14,8 +14,8 @@ import { buildTableFilterSql, identifier, inlineParameters, qualified } from './
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { tableStatisticsSourceIdentity } from './tableStatistics';
 import { buildTableReadOrder } from '../shared/tableReadSql';
-import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd } from './queryHtml';
-import { queryHtmlZh } from '../shared/queryHtml.zh-CN';
+import { dataMarkupWriter } from './dataMarkupExport';
+import { dataMarkupText } from '../shared/dataMarkupExport';
 
 export interface TableFilteredExportPlan { sql: string; columns: ColumnInfo[]; }
 export interface PreparedTableFilteredExport {
@@ -29,7 +29,8 @@ const exportTypes = new Set(['TINY', 'SHORT', 'LONG', 'INT24', 'YEAR', 'DECIMAL'
 export function planTableFilteredExport(source: TableInfo, input: TableFilteredExportInput): TableFilteredExportPlan {
   if (typeof input.metadataKey !== 'string' || Buffer.byteLength(input.metadataKey) > tableFilteredExportLimits.metadataBytes || tableCopyMetadataKey(source) !== input.metadataKey) throw Error(text.stale);
   if (!tableFilteredExportFormats.includes(input.format) || !['utf8', 'utf16le', 'gb18030'].includes(input.encoding) || input.format === 'xlsx' && input.encoding !== 'utf8') throw Error(text.invalid);
-  if (input.format === 'html' && input.encoding !== 'utf8') throw Error(queryHtmlZh.utf8);
+  const markupText = dataMarkupText(input.format);
+  if (markupText && input.encoding !== 'utf8') throw Error(markupText.utf8);
   csvExportDelimiter(input.format, input.csvDelimiter);
   // 视图目录不能证明投影及生成表达式可写；不把只读结果伪装成可向原视图复放的INSERT。
   if (input.format === 'sql' && source.objectKind !== 'table') throw Error('无法确认视图INSERT可写性；视图请用CSV/JSON/XLSX/HTML导出。');
@@ -91,6 +92,7 @@ export async function prepareTableFilteredExport(context: StructureTaskContext, 
   let file: AtomicFile;
   try { file = await AtomicFile.create(input.filePath, input.format === 'xlsx' ? 'utf8' : input.encoding, check, control.onCommitStart, control.io, input.format === 'xlsx' ? EXCEL_LIMITS.maxCompressedBytes : limits.fileBytes, reservation, true); }
   catch (error) { if (!(error instanceof AggregateError)) reservation.release(); throw error; }
+  const markup = dataMarkupWriter(input.format);
   let rows = 0, starts = 0, ends = 0, warningCount: number | undefined, columnsStarted = false;
   const channel = input.format === 'xlsx' ? new ExportRowChannel() : undefined;
   let excel: Promise<{ rows: number; bytes: number }> | undefined;
@@ -101,7 +103,7 @@ export async function prepareTableFilteredExport(context: StructureTaskContext, 
     if (input.format !== 'xlsx' && input.encoding === 'utf16le') await file.write('\uFEFF');
     if (input.format === 'csv') await file.write(plan.columns.map(column => csvHeader(column.name, delimiter)).join(delimiter) + '\r\n');
     if (input.format === 'json') await file.write('[\n');
-    if (input.format === 'html') await file.write(queryHtmlDocumentStart({ scope: 'table' }) + queryHtmlTableStart(plan.columns.map(column => column.name)));
+    if (markup) await file.write(markup.documentStart({ scope: 'table' }) + markup.tableStart(plan.columns.map(column => column.name)));
     if (input.format === 'sql') await file.write('-- DBArk：当前服务器筛选全部匹配行，仅数据INSERT，不含表结构。\n-- 执行前请核对会话设置：若包含自增列零值，sql_mode必须包含NO_AUTO_VALUE_ON_ZERO，避免零值被重新分配。\n-- TIMESTAMP再次执行时，目标会话时区必须与源导出会话一致；请先核对源、目标@@SESSION.time_zone及实际时区规则。\n-- 本文件不自动切换或恢复sql_mode、时区等会话设置；未承诺通用恢复或跨时区无损恢复。\n');
     if (channel) {
       excel = exportExcelFile({ filePath: input.filePath, columns: plan.columns.map(column => ({ name: column.name, type: column.type })), rows: channel, deferredAtomicFile: file, checkCancelled: check, onCommitStart: control.onCommitStart });
@@ -118,7 +120,7 @@ export async function prepareTableFilteredExport(context: StructureTaskContext, 
         } else if (frame.kind === 'row') {
           if (!columnsStarted || ends || frame.resultOrdinal !== 1 || frame.values.length !== plan.columns.length || !Number.isSafeInteger(rows + 1)) throw Error(text.invalid);
           if (channel) await channel.write(frame.values);
-          else if (input.format === 'html') await file.write(queryHtmlRow(frame.values));
+          else if (markup) await file.write(markup.row(frame.values));
           else if (!insert) {
             const cells = frame.values.map(value => encodedCell(value, input.format as 'csv' | 'json', delimiter));
             const line = input.format === 'json' ? (rows ? ',\n' : '') + '{' + plan.columns.map((column, index) => JSON.stringify(column.name) + ':' + cells[index]).join(',') + '}' : cells.join(delimiter) + '\r\n';
@@ -135,7 +137,7 @@ export async function prepareTableFilteredExport(context: StructureTaskContext, 
     if (!Array.isArray(warnings) || warnings.length || warningCount !== 0 || starts !== 1 || ends !== 1) throw Error('服务器完整导出存在警告或无法确认原终包，原文件保持');
     channel?.end(); if (excel) { const complete = await excel; if (complete.rows !== rows) throw Error(text.invalid); }
     if (input.format === 'json') await file.write('\n]\n');
-    if (input.format === 'html') await file.write(queryHtmlTableEnd(rows) + queryHtmlDocumentEnd);
+    if (markup) await file.write(markup.tableEnd(rows) + markup.documentEnd);
     if (insert && insert.rowsWritten !== rows) throw Error(text.invalid);
     const after = await readIncomingReferenceTable(context, input, true), afterIdentity = tableStatisticsSourceIdentity(after, context);
     if (tableCopyMetadataKey(after) !== input.metadataKey || identity.digest !== afterIdentity.digest || identity.conservative !== afterIdentity.conservative) throw Error(text.stale);

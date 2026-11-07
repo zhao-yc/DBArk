@@ -16,7 +16,7 @@ if (active) {
 }
 
 type Desktop = typeof import('./desktop-fixture');
-type Format = 'csv' | 'json' | 'sql' | 'xlsx' | 'html';
+type Format = 'csv' | 'json' | 'sql' | 'xlsx' | 'html' | 'xml';
 type Fact = { request: Record<string, unknown>; reply?: unknown; failure?: string };
 type Event = { taskId: string; status: string; progress: number; rows?: number; message: string };
 interface Audit { pending: number; denied: string[]; forks: string[]; pickerCalls: number; saveCalls: { format: string; canceled: boolean; path?: string }[]; connectionId?: string; commands: string[]; pages: Fact[]; exports: Fact[]; events: Event[]; }
@@ -30,7 +30,7 @@ let completed: { directory: string; database: string; platform: string; firstPid
 /** 任何失败都保留原owner、profile、源库和实际导出文件，不自动补跑或清理。 */
 test.afterEach(({}, info) => { if (active && info.status !== 'skipped' && !completed) { (require('./desktop-fixture') as Desktop).retainOwnedDesktopResources(info); throw Error('SQLite全量导出未完成两次正常退出，原现场已保留'); } });
 
-test('SQLite原表页第二页完整导出五格式、字段重排、独立读回和SQL类型回放，取消不提交文件', async ({ trace, screenshot, video }, info) => {
+test('SQLite原表页第二页完整导出六格式、字段重排、独立读回和SQL类型回放，取消不提交文件', async ({ trace, screenshot, video }, info) => {
   const runtime = require('./desktop-fixture') as Desktop;
   const { join, resolve, dirname, basename } = require('node:path') as typeof import('node:path');
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
@@ -93,7 +93,7 @@ test('SQLite原表页第二页完整导出五格式、字段重排、独立读�
     };
     state.check = check; state.restore = () => { check(); if (state.pending || state.choice) throw Error('导出请求/chooser仍在途'); handlers.set('dbark:request', original); dialog.showOpenDialog = originalPicker; dialog.showSaveDialog = originalSave; utilityProcess.fork = originalFork; window.webContents.send = originalSend; delete root.__sqliteTableExportNative; };
     root.__sqliteTableExportNative = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = picker; dialog.showSaveDialog = save; utilityProcess.fork = fork; window.webContents.send = send; check();
-  }, { database, profileId, tableName, targets: ['csv', 'json', 'sql', 'xlsx', 'html'].map(format => join(exportDirectory, '全量筛选.' + format)) }));
+  }, { database, profileId, tableName, targets: ['csv', 'json', 'sql', 'xlsx', 'html', 'xml'].map(format => join(exportDirectory, '全量筛选.' + format)) }));
   const choose = (format: Format, canceled: boolean) => { const target = join(exportDirectory, '全量筛选.' + format); ownExportFile(target); return step(() => application.evaluate((_electron, input) => { const state = (globalThis as typeof globalThis & { __sqliteTableExportNative?: Audit & { check(): void; choice?: { format: Format; path: string; canceled: boolean } } }).__sqliteTableExportNative; if (!state) throw Error('原观察器不存在'); state.check(); if (state.choice) throw Error('原chooser尚未消费'); state.choice = input; }, { format, canceled, path: target })); };
   /** 读取真实id列可见单元格，避开网格勾选列，不能用IPC数据替代已展示的第二页。 */
   const ids = () => step(async () => { const grid = table().getByRole('grid'); await grid.evaluate(element => { element.scrollLeft = 0; }); check(); const header = grid.getByRole('columnheader').filter({ hasText: /^id/ }); await expect(header).toHaveCount(1); check(); const column = await header.getAttribute('aria-colindex'); check(); if (!column || !/^[1-9][0-9]*$/.test(column)) throw Error('原id列位置未知'); return grid.locator(`[role="row"][aria-rowindex]:not([aria-rowindex="1"]) [role="gridcell"][aria-colindex="${column}"]`).allTextContents(); });
@@ -114,6 +114,17 @@ test('SQLite原表页第二页完整导出五格式、字段重排、独立读�
       expect(document.rows).toEqual(projection.map(row => Object.values(row).map(value =>
         value === null ? ['NULL', 'null'] : value === '' ? ['空字符串', 'empty'] :
           typeof value === 'object' ? ['base64:' + value.base64, 'binary'] : [value, 'text'])));
+    }
+    if (format === 'xml') {
+      const document = await step(() => page.evaluate(markup => {
+        const doc = new DOMParser().parseFromString(markup, 'application/xml');
+        return { scope: doc.documentElement.getAttribute('scope'), headers: [...doc.querySelectorAll('column')].map(cell => cell.textContent),
+          rows: [...doc.querySelectorAll('record')].map(row => [...row.children].map(cell => [cell.textContent, cell.getAttribute('kind')])) };
+      }, bytes.toString('utf8')));
+      expect(document.scope).toBe('table');
+      expect(document.headers).toEqual(selected);
+      expect(document.rows).toEqual(projection.map(row => Object.values(row).map(value =>
+        value === null ? ['', 'null'] : typeof value === 'object' ? [value.base64, 'binary'] : [value, 'text'])));
     }
     if (format === 'csv') {
       const { parse } = require('csv-parse/sync') as typeof import('csv-parse/sync'); const records = parse(bytes, { bom: true }) as string[][];
@@ -145,7 +156,7 @@ test('SQLite原表页第二页完整导出五格式、字段重排、独立读�
       ownExportFile(replayDatabase); const replay = new DatabaseSync(replayDatabase); try { replay.exec(schema); replay.exec(sql); } finally { replay.close(); }
       const expected = [...filtered].sort((a, b) => a.id - b.id).map(row => ({ id: String(row.id), bucket: null, rank_num: null, note: row.note, mixed_type: row.mixedType, mixed_text: row.mixed, nullable: row.nullable, payload: row.payload, exact_int: row.exact, exact_type: 'integer', real_num: String(row.real), real_type: 'real' })); expect(disk(replayDatabase)).toEqual(expected);
     }
-    fileFacts.push({ format, rows: filtered.length, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), headers: selected }); await info.attach('SQLite全量导出原始成品.' + format, { body: bytes, contentType: format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : format === 'json' ? 'application/json' : format === 'html' ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8' }); check(); noPartial();
+    fileFacts.push({ format, rows: filtered.length, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), headers: selected }); await info.attach('SQLite全量导出原始成品.' + format, { body: bytes, contentType: format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : format === 'json' ? 'application/json' : format === 'html' ? 'text/html; charset=utf-8' : format === 'xml' ? 'application/xml' : 'text/plain; charset=utf-8' }); check(); noPartial();
   };
   try {
     check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); expect(basename(directory)).toMatch(/^dbark-e2e-/); expect(filtered.length).toBeGreaterThan(1025);
@@ -170,9 +181,9 @@ test('SQLite原表页第二页完整导出五格式、字段重排、独立读�
     const canceledTarget = join(exportDirectory, '全量筛选.csv'), originalBytes = Buffer.from('本例已存在目标：取消必须完整保留\n'); ownExportFile(canceledTarget); writeFileSync(canceledTarget, originalBytes); const beforeCancelFiles = readdirSync(exportDirectory).sort();
     stage = '真实chooser取消零文件提交'; await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '导出全部筛选行', exact: true }, check)).click()); await step(() => expect(dialog()).toBeVisible()); await step(() => dialog().getByLabel('SQLite 全量导出格式', { exact: true }).selectOption('csv')); await choose('csv', true); await step(() => dialog().getByRole('button', { name: '选择 SQLite 全量导出文件', exact: true }).click());
     await step(() => expect.poll(async () => (await audit()).saveCalls.length).toBe(1)); await step(() => expect(dialog().locator('[data-sqlite-table-export-dialog]')).toHaveAttribute('aria-busy', 'false')); await step(() => expect(dialog().getByRole('button', { name: '开始 SQLite 全量导出', exact: true })).toBeDisabled()); expect((await step(audit)).exports).toEqual([]); expect(readFileSync(canceledTarget)).toEqual(originalBytes); expect(readdirSync(exportDirectory).sort()).toEqual(beforeCancelFiles); noPartial(); await step(() => dialog().getByRole('button', { name: '关闭 SQLite 全量导出', exact: true }).click());
-    for (const format of ['csv', 'json', 'sql', 'xlsx', 'html'] as const) {
+    for (const format of ['csv', 'json', 'sql', 'xlsx', 'html', 'xml'] as const) {
       stage = '真实全部筛选行导出及独立读回：' + format; const previous = (await step(audit)).exports.length;
-      await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '导出全部筛选行', exact: true }, check)).click()); await step(() => expect(dialog()).toBeVisible()); await step(() => dialog().getByLabel('SQLite 全量导出格式', { exact: true }).selectOption(format)); if (format === 'xlsx' || format === 'html') { await step(() => expect(dialog().getByLabel('SQLite 全量导出编码', { exact: true })).toBeDisabled()); await step(() => expect(dialog().getByLabel('SQLite 全量导出编码', { exact: true })).toHaveValue('utf8')); } else await step(() => dialog().getByLabel('SQLite 全量导出编码', { exact: true }).selectOption('utf8'));
+      await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '导出全部筛选行', exact: true }, check)).click()); await step(() => expect(dialog()).toBeVisible()); await step(() => dialog().getByLabel('SQLite 全量导出格式', { exact: true }).selectOption(format)); if (format === 'xlsx' || format === 'html' || format === 'xml') { await step(() => expect(dialog().getByLabel('SQLite 全量导出编码', { exact: true })).toBeDisabled()); await step(() => expect(dialog().getByLabel('SQLite 全量导出编码', { exact: true })).toHaveValue('utf8')); } else await step(() => dialog().getByLabel('SQLite 全量导出编码', { exact: true }).selectOption('utf8'));
       for (const column of ['bucket', 'rank_num']) await step(() => dialog().getByRole('checkbox', { name: '导出 SQLite 字段 ' + column, exact: true }).uncheck());
       // 通过真实上移入口按名字重排；不读取或写入React/Zustand内部状态。
       const order = ['id', 'note', 'mixed', 'nullable', 'payload', 'exact_int', 'real_num'];
@@ -181,10 +192,10 @@ test('SQLite原表页第二页完整导出五格式、字段重排、独立读�
       await step(() => expect.poll(async () => { const state = await audit(); return state.exports.length === previous + 1 && state.exports.at(-1)?.reply !== undefined; }).toBe(true)); const facts = await step(audit), exported = facts.exports.at(-1); expect(exported?.failure).toBeUndefined(); expect(exported?.reply).toEqual({ ok: true, result: { rows: filtered.length, fileCommitted: true } }); expect(exported?.request).toMatchObject({ connectionId: profile.id, database: 'main', table: tableName, mode: 'and', filters: secondPage?.request.filters, sort: secondPage?.request.sort, format, encoding: 'utf8', columns: selected }); expect(exported?.request.schemaKey).toMatch(/^[0-9a-f]{64}$/); expect(exported?.request).not.toHaveProperty('offset'); expect(exported?.request).not.toHaveProperty('limit');
       const events = facts.events.filter(event => event.taskId === exported?.request.taskId); expect(events.some(event => event.status === 'running' && (event.rows ?? 0) >= 100 && (event.rows ?? 0) < filtered.length)).toBe(true); expect(events.at(-1)).toMatchObject({ status: 'completed', progress: 100, rows: filtered.length }); await readExport(format); expect(disk()).toEqual(baseline);
       await step(() => expect(dialog().getByText('SQLite 全量导出已保存 ' + filtered.length + ' 行。', { exact: true })).toBeVisible());
-      if (format === 'html') await step(() => dialog().screenshot({ path: info.outputPath('SQLite表页HTML导出.png') }));
+      if (format === 'html' || format === 'xml') await step(() => dialog().screenshot({ path: info.outputPath('SQLite表页' + format.toUpperCase() + '导出.png') }));
       await step(() => expect(dialog().getByRole('button', { name: '关闭 SQLite 全量导出', exact: true })).toBeEnabled()); await step(() => dialog().getByRole('button', { name: '关闭 SQLite 全量导出', exact: true }).click()); await expectIds(filtered.slice(5, 10).map(row => row.id)); expect((await step(audit)).pages.at(-1)?.request.offset).toBe(5);
     }
-    stage = '完整请求/任务边界及源库不变'; await step(() => expect.poll(async () => (await tasks()).every(task => ['sqlite.tablePage', 'sqlite.tableExport'].includes(task.kind) && task.status === 'completed')).toBe(true)); const firstFacts = await step(audit), firstTasks = await tasks(); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerCalls).toBe(1); expect(firstFacts.saveCalls).toHaveLength(6); expect(firstFacts.exports).toHaveLength(5); expect(firstFacts.pages).toHaveLength(3); expect(firstFacts.commands.some(command => command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('table.') || command.startsWith('schema.') || /clipboard/i.test(command))).toBe(false); expect(await history()).toEqual([]); expect(runtime.pageErrors).toEqual([]); noPartial(); expect(disk()).toEqual(baseline);
+    stage = '完整请求/任务边界及源库不变'; await step(() => expect.poll(async () => (await tasks()).every(task => ['sqlite.tablePage', 'sqlite.tableExport'].includes(task.kind) && task.status === 'completed')).toBe(true)); const firstFacts = await step(audit), firstTasks = await tasks(); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerCalls).toBe(1); expect(firstFacts.saveCalls).toHaveLength(7); expect(firstFacts.exports).toHaveLength(6); expect(firstFacts.pages).toHaveLength(3); expect(firstFacts.commands.some(command => command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('table.') || command.startsWith('schema.') || /clipboard/i.test(command))).toBe(false); expect(await history()).toEqual([]); expect(runtime.pageErrors).toEqual([]); noPartial(); expect(disk()).toEqual(baseline);
     const persisted = await settings(); expect(persisted.tabs).toHaveLength(1); expect(persisted.tabs[0]).toMatchObject({ kind: 'table', table: tableName, connectionId: profile.id });
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableExportNative?: { restore(): void } }).__sqliteTableExportNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;
     stage = '第一owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); const firstPid = originalProcess.pid;

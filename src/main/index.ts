@@ -2493,7 +2493,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
       // 已返回XLSX只消费本窗口明确选择的Excel文件能力，不借其它导出格式令牌。
       const checkFormat = command === 'files.preflight' || command === 'files.inspectImport' || input.expectedSource ||
-        command === 'files.exportResult' && (input.format === 'xlsx' || input.format === 'html');
+        command === 'files.exportResult' && (input.format === 'xlsx' || input.format === 'html' || input.format === 'xml');
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) }; break;
     }
   }

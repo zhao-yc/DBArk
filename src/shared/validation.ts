@@ -1,6 +1,6 @@
 import { sqliteStatementTimeoutMaximumMs } from './sqliteStatementTimeout';
 import { postgresQueryExportSchema } from './postgresQueryExport';
-import { queryHtmlZh } from './queryHtml.zh-CN';
+import { dataMarkupText } from './dataMarkupExport';
 import { fullQueryExportProfileMutation, fullQueryExportProfileScope } from './fullQueryExportProfiles';
 import { postgresTransactionReadSchema, postgresTransactionApplySchema } from './postgresTransactionSettings';
 import { postgresSearchPathReadSchema, postgresSearchPathApplySchema } from './postgresSearchPath';
@@ -478,12 +478,13 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.temporaryRead':z.object({sessionId:id,database:completionName,table:completionName,taskId:id}).strict(),
   'query.objectDefinition': objectDefinitionInputSchema,
   'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000), sqliteStatementTimeoutMs: z.number().int().min(1).max(sqliteStatementTimeoutMaximumMs).optional(), currentStatement: z.object({ offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional(), continueOnError: z.boolean().optional(), collectWarnings: z.boolean().optional() }).strict().refine(value => value.currentStatement === undefined || value.currentStatement.offset <= value.sql.length, '当前语句光标超出完整正文范围'),
-  'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json', 'csv-zip', 'sql', 'html']), csvDelimiter: z.enum(csvExportDelimiters).optional(), insertTarget: queryInsertTargetSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {
+  'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json', 'csv-zip', 'sql', 'html', 'xml']), csvDelimiter: z.enum(csvExportDelimiters).optional(), insertTarget: queryInsertTargetSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {
     if (Object.hasOwn(input, 'csvDelimiter') && (input.csvDelimiter === undefined || input.format !== 'csv' && input.format !== 'csv-zip')) context.addIssue({ code: 'custom', path: ['csvDelimiter'], message: '分隔符只适用于CSV或CSV ZIP，且必须为逗号、分号或Tab' });
     if ((input.format === 'sql') !== (input.insertTarget !== undefined)) context.addIssue({ code:'custom',path:['insertTarget'],message:'仅完整INSERT必须携带明确目标映射' });
     if (new TextEncoder().encode(input.sql).byteLength > queryStreamExportLimits.sqlBytes) context.addIssue({ code: 'custom', path: ['sql'], message: 'SQL 模板不能超过 20 MiB' });
     if ((input.format !== 'csv') !== (input.resultSelection.kind === 'all')) context.addIssue({ code: 'custom', path: ['resultSelection'], message: '单 CSV 必须指定行结果集，其余格式导出全部结果' });
-    if (input.format === 'html' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: queryHtmlZh.utf8 });
+    const markup = dataMarkupText(input.format);
+    if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
   }),
   'query.confirmInsertExport': queryInsertConfirmationSchema,
   'query.cancel': z.object({ taskId: id }).strict(),
@@ -513,7 +514,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : tableFilteredExportText.invalid }); }
     if (Object.hasOwn(input, 'csvDelimiter') && (input.format !== 'csv' || input.csvDelimiter === undefined)) context.addIssue({ code: 'custom', message: '分隔符仅适用于CSV导出，且必须为逗号、分号或Tab' });
     if (new Set(input.sort.map(rule => rule.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: '导出排序字段不能重复' });
-    if (input.format === 'html' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: queryHtmlZh.utf8 });
+    const markup = dataMarkupText(input.format);
+    if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
   })),
   'table.statistics': guardedTablePage(z.object({ ...target, taskId: id, columns: z.array(name).max(12).refine(value => new Set(value).size === value.length, '统计字段不能重复'), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), distinct: z.boolean().optional(), histogram: tableHistogramSchema.optional() }).strict().superRefine((input, context) => {
     try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); } catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '统计筛选无效' }); }
@@ -613,11 +615,12 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.exportColumns': z.object({ ...target, taskId: id }).strict(),
   'files.releaseExportColumns': z.object({ catalogId: id }).strict(),
   'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean(), csvDelimiter: z.enum(csvExportDelimiters).optional(), csvSelection: z.object({ catalogId: id, columns: z.array(z.string().min(1).max(64).refine(value => !value.includes('\0'))).min(1).max(csvExportFieldLimits.columns).refine(value => new Set(value).size === value.length, 'CSV字段不能重复') }).strict().optional() }).strict().refine(value => !value.csvSelection || value.format === 'csv' && value.includeData, '字段选择只适用于CSV数据导出').refine(value => !Object.hasOwn(value, 'csvDelimiter') || value.format === 'csv' && value.csvDelimiter !== undefined, '分隔符仅适用于CSV导出，且必须为逗号、分号或Tab'),
-  'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json','sql','xlsx','html']), encoding: z.enum(['utf8','utf16le','gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(), taskId: id, result: resultExportData, sql: resultSqlSelectionSchema.optional() }).strict().superRefine((value, context) => {
+  'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json','sql','xlsx','html','xml']), encoding: z.enum(['utf8','utf16le','gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(), taskId: id, result: resultExportData, sql: resultSqlSelectionSchema.optional() }).strict().superRefine((value, context) => {
     if (Object.hasOwn(value, 'csvDelimiter') && (value.format !== 'csv' || value.csvDelimiter === undefined)) context.addIssue({ code: 'custom', message: '分隔符仅适用于CSV导出，且必须为逗号、分号或Tab' });
     try { if (value.format === 'sql') { if (!value.sql) throw Error(resultSqlZh.previewRequired); assertResultSqlData(value.result, value.sql.target, value.sql.sqliteStorage); assertResultSqlEncoding(value.sql.target, value.encoding); if (value.sql.confirmation !== `${value.sql.target.database}.${value.sql.target.table}`) throw Error(resultSqlZh.confirmationMismatch); } else if (value.sql !== undefined) throw Error(resultSqlZh.nonSql); }
     catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'INSERT结果无效' }); }
-    if (value.format === 'html' && value.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: queryHtmlZh.utf8 });
+    const markup = dataMarkupText(value.format);
+    if (markup && value.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
     if (value.format === 'xlsx') {
       if (value.encoding !== 'utf8') context.addIssue({ code: 'custom', message: resultExcelZh.utf8Only });
       if (Object.hasOwn(value, 'sql')) context.addIssue({ code: 'custom', message: resultExcelZh.invalid });

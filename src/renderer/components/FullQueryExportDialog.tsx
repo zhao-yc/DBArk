@@ -3,6 +3,7 @@ import type { FileChoice } from '../../shared/contracts';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import type { FullQueryExportOptions } from '../../shared/fullQueryExportProfiles';
 import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
+import { dataMarkupText, dataXmlZh } from '../../shared/dataMarkupExport';
 import { postgresExportParameterNames, postgresQueryInsertTargetSchema, type PostgresQueryExportInput } from '../../shared/postgresQueryExport';
 import { sqliteQueryInsertTargetSchema, type SqliteQueryExportInput } from '../../shared/sqliteQueryExport';
 import type { QueryParameter } from '../../shared/queryParameters';
@@ -30,7 +31,8 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   const text = sqlite ? sqliteQueryExportZh : postgresQueryExportZh;
   const [format, setFormat] = useState<SqliteQueryExportInput['format'] | PostgresQueryExportInput['format']>('csv');
   const [insertDatabase, setInsertDatabase] = useState(sqlite ? 'main' : 'public'), [insertTable, setInsertTable] = useState(''), [insertColumns, setInsertColumns] = useState('');
-  const insert = format === 'sql', fixedEncoding = insert || format === 'xlsx' || format === 'html';
+  const markup = dataMarkupText(format);
+  const insert = format === 'sql', fixedEncoding = insert || format === 'xlsx' || !!markup;
   const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [parameters, setParameters] = useState<QueryParameter[]>(), [editingParameters, setEditingParameters] = useState(false);
@@ -42,7 +44,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   let profileOptions: FullQueryExportOptions | undefined;
   if (format === 'csv') profileOptions = { format, encoding, delimiter };
   else if (format === 'json') profileOptions = { format, encoding };
-  else if (format === 'xlsx' || format === 'html') profileOptions = { format };
+  else if (format === 'xlsx' || format === 'html' || format === 'xml') profileOptions = { format };
   else if (target?.success) profileOptions = { format, target: target.data };
   const [file, setFile] = useState<FileChoice | null>(null);
   const [pending, setPending] = useState<'pick' | 'write' | null>(null);
@@ -138,11 +140,11 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>
       {parameters && <p>{text.parameterCount(parameters.length)}</p>}
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
-        onChange={event => { const value = event.target.value; if (value === 'csv' || value === 'json' || value === 'xlsx' || value === 'sql' || value === 'html') setFormat(value); setFile(null); setRows(undefined); }}>
-        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option><option value="html">{queryHtmlZh.format}</option>
+        onChange={event => { const value = event.target.value; if (value === 'csv' || value === 'json' || value === 'xlsx' || value === 'sql' || value === 'html' || value === 'xml') setFormat(value); setFile(null); setRows(undefined); }}>
+        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option><option value="html">{queryHtmlZh.format}</option><option value="xml">{dataXmlZh.format}</option>
       </select></Field>
       {sqlite && format === 'json' && <p>{sqliteQueryExportZh.formatHint}</p>}
-      {format === 'html' && <p>{queryHtmlZh.hint}</p>}
+      {markup && <p>{markup.hint}</p>}
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={fixedEncoding ? 'utf8' : encoding} disabled={!!pending || fixedEncoding}
         onChange={event => { const value = event.target.value; if (value === 'utf8' || value === 'utf16le' || value === 'gb18030') setEncoding(value); }}>
         <option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option>

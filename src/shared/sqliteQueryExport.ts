@@ -5,7 +5,7 @@ import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { sqliteTableExportSchema } from './sqliteTableExport';
 import { sqliteInsertIdentifier, sqliteInsertIdentifierKey } from './resultSql';
 import { locateSqliteStatement, sqliteLeadingKeyword } from './sqliteStatementScanner';
-import { queryHtmlZh } from './queryHtml.zh-CN';
+import { dataMarkupText } from './dataMarkupExport';
 
 /** 只截取光标所在的原文。真正执行仍由独立只读进程验证语句边界及权限。 */
 export function sqliteCurrentQueryExportSource(source: string, offset: number): string {
@@ -42,11 +42,14 @@ export function sqliteQueryInsertColumnsForResult(target: z.infer<typeof sqliteQ
 export const sqliteQueryExportSchema = z.object({
   connectionId: sqliteTableExportSchema.shape.connectionId, taskId: sqliteTableExportSchema.shape.taskId,
   fileToken: sqliteTableExportSchema.shape.fileToken, encoding: sqliteTableExportSchema.shape.encoding,
-  sql, format: z.enum(['csv', 'json', 'xlsx', 'sql', 'html']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
+  sql, format: z.enum(['csv', 'json', 'xlsx', 'sql', 'html', 'xml']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
   parameters: parameters.optional(), insertTarget: sqliteQueryInsertTargetSchema.optional(),
 }).strict()
   .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
   .refine(input => input.format === 'sql' ? !!input.insertTarget : input.insertTarget === undefined, '仅 SQLite INSERT SQL 导出需要明确目标')
-  .refine(input => input.format !== 'html' || input.encoding === 'utf8', queryHtmlZh.utf8)
+  .superRefine((input, context) => {
+    const markup = dataMarkupText(input.format);
+    if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
+  })
   .refine(input => input.format !== 'xlsx' && input.format !== 'sql' || input.encoding === 'utf8', 'SQLite INSERT SQL 和 Excel 导出使用 UTF-8');
 export type SqliteQueryExportInput = z.infer<typeof sqliteQueryExportSchema>;

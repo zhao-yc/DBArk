@@ -7,11 +7,11 @@ import { postgresRelationName } from '../../shared/postgresSql';
 import { errorMessage, invoke } from '../lib';
 import { postgresTableExportZh as text } from '../locales/postgresTableExport.zh-CN';
 import { acquireWorkspaceBusy } from '../store';
-import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
+import { dataMarkupText } from '../../shared/dataMarkupExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
 
-const formats = ['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', 'html'] as const;
+const formats = ['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', 'html', 'xml'] as const;
 const encodings = [['utf8', 'UTF-8'], ['utf16le', 'UTF-16 LE'], ['gb18030', 'GB18030']] as const;
 
 /** 文件选择、列和任务只对应打开时的原服务端表页。 */
@@ -32,6 +32,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
   const output = backup ? available : available.filter(column => selected.has(column.key));
   const textEncoding = format === 'csv' || format === 'json';
   const extension = postgresTableExportExtension(format);
+  const markup = dataMarkupText(format);
 
   /** 原生选择器只返回当前窗口一次性文件能力。 */
   async function choose() {
@@ -95,7 +96,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
           onChange={event => { setFormat(event.target.value as typeof format); setFile(null); setMessage(''); }}>
           {formats.map(value => <option key={value} value={value} disabled={value === 'sql-backup' ? page.relationKind !== 'r' :
             value === 'sql' && !isPostgresSqlExportRelation(page.relationKind)}>
-            {value === 'copy' ? text.copyFormat : value === 'sql-backup' ? text.backupFormat : value === 'html' ? queryHtmlZh.format : value.toUpperCase()}
+            {value === 'copy' ? text.copyFormat : value === 'sql-backup' ? text.backupFormat : dataMarkupText(value)?.format ?? value.toUpperCase()}
           </option>)}
         </select></Field>
         {textEncoding && <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
@@ -106,7 +107,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
       </div>
       {format === 'sql' && <p>{text.sqlHint}</p>}
       {format === 'copy' && <p>{text.copyHint}</p>}
-      {format === 'html' && <p>{queryHtmlZh.hint}</p>}
+      {markup && <p>{markup.hint}</p>}
       <fieldset disabled={locked || backup}>
         <legend>{text.columns}</legend>
         <button onClick={() => setSelected(new Set(available.map(column => column.key)))}>{text.allColumns}</button>

@@ -3,6 +3,7 @@ import { selectTableFilteredExportColumns, tableFilteredExportFormats, tableFilt
 import { copyFilterRules, validateFilterGroup } from '../shared/filtering';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import { validateTableSort } from './tableSort';
+import { dataMarkupText } from '../shared/dataMarkupExport';
 import { tableFilteredExportZh as text } from './locales/tableFilteredExport.zh-CN';
 
 export interface TableFilteredExportConditions { filters: readonly FilterRule[]; filterMode: FilterMode; filterGroup?: FilterGroup; }
@@ -38,14 +39,14 @@ export class TableFilteredExportIntent {
   /** 微任务通知避免父渲染期间更新子组件；活动任务由对话框发送一次取消并等原终态。 */
   invalidate(): void { if (this.dead) return; this.dead = true; queueMicrotask(() => { for (const listener of this.listeners) listener(); }); }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-  /** 构造参数时再核原来源，CSV私有配置不夹带到其它格式，XLSX与HTML明确固定UTF-8。 */
+  /** 构造参数时再核原来源，CSV私有配置不夹带到其它格式，XLSX和标记文档固定UTF-8。 */
   input(options: TableFilteredExportOptions, fileToken: string, taskId: string): TableFilteredExportInput {
     if (!this.current() || !fileToken || !taskId || !tableFilteredExportFormats.includes(options.format) || !['utf8', 'utf16le', 'gb18030'].includes(options.encoding) || options.format !== 'csv' && options.csvDelimiter !== undefined || options.csvDelimiter !== undefined && ![',', ';', '\t'].includes(options.csvDelimiter)) throw Error(text.invalid);
     if (options.format === 'sql' && this.source.objectKind !== 'table') throw Error(text.viewSql);
     if (options.format === 'sql' && !this.source.columns.some(column => !column.generated)) throw Error(text.noSqlFields);
     const columns = selectTableFilteredExportColumns(this.source, options);
     // 原请求可省略字段保持兼容；明确选择独立复制，迟到调用方修改不能改写已确认的文件范围。
-    return { ...this.target, metadataKey: this.metadataKey, filters: structuredClone(this.conditions.filters) as FilterRule[], filterMode: this.conditions.filterMode, ...(this.conditions.filterGroup ? { filterGroup: structuredClone(this.conditions.filterGroup) } : {}), sort: structuredClone(this.sort) as SortRule[], format: options.format, encoding: options.format === 'xlsx' || options.format === 'html' ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), ...(options.columns !== undefined ? { columns: columns.map(column => column.name) } : {}), fileToken, taskId };
+    return { ...this.target, metadataKey: this.metadataKey, filters: structuredClone(this.conditions.filters) as FilterRule[], filterMode: this.conditions.filterMode, ...(this.conditions.filterGroup ? { filterGroup: structuredClone(this.conditions.filterGroup) } : {}), sort: structuredClone(this.sort) as SortRule[], format: options.format, encoding: options.format === 'xlsx' || dataMarkupText(options.format) ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), ...(options.columns !== undefined ? { columns: columns.map(column => column.name) } : {}), fileToken, taskId };
   }
 }
 /** 完整落盘事实只来自原IPC回执；运行进度和完成事件不能代替此回执。 */

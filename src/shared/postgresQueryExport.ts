@@ -3,7 +3,7 @@ import { csvExportDelimiters } from './csvExport';
 import { queryParameterTypes, validateQueryParameters, type QueryParameterNames } from './queryParameters';
 import { postgresNewIdentifier } from './postgresCreateTable';
 import { currentPostgresStatement, splitPostgresSql } from './postgresSql';
-import { queryHtmlZh } from './queryHtml.zh-CN';
+import { dataMarkupText } from './dataMarkupExport';
 
 const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParameterTypes), value: z.string().optional()}).strict())
   .max(200).superRefine((values, context) => {
@@ -28,13 +28,16 @@ export function postgresQueryInsertColumnsForResult(target: z.infer<typeof postg
 export const postgresQueryExportSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.string().min(1).max(256),
   taskId: z.string().min(1).max(200), fileToken: z.string().min(1).max(200),
-  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json', 'xlsx', 'sql', 'html']),
+  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json', 'xlsx', 'sql', 'html', 'xml']),
   encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
   parameters: parameters.optional(), insertTarget: postgresQueryInsertTargetSchema.optional(),
 }).strict()
   .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
   .refine(input => input.format === 'sql' ? !!input.insertTarget : input.insertTarget === undefined, '仅 PostgreSQL INSERT SQL 导出需要明确目标')
-  .refine(input => input.format !== 'html' || input.encoding === 'utf8', queryHtmlZh.utf8)
+  .superRefine((input, context) => {
+    const markup = dataMarkupText(input.format);
+    if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
+  })
   .refine(input => input.format !== 'xlsx' && input.format !== 'sql' || input.encoding === 'utf8', 'PostgreSQL INSERT SQL 和 Excel 导出使用 UTF-8');
 
 export type PostgresQueryExportInput = z.infer<typeof postgresQueryExportSchema>;

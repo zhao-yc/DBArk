@@ -5,8 +5,8 @@ import { csvCell, csvHeader } from './files';
 import { prepareQueryCsvZip, QueryCsvArchive } from './queryCsvZip';
 import { createQueryInsertFile } from './queryInsertFile';
 import { csvExportDelimiter, type CsvExportDelimiter } from '../shared/csvExport';
-import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd, queryHtmlReceipt } from './queryHtml';
-import { queryHtmlZh as htmlText } from '../shared/queryHtml.zh-CN';
+import { dataMarkupWriter } from './dataMarkupExport';
+import { dataMarkupText } from '../shared/dataMarkupExport';
 
 export interface QueryStreamFileOptions {
   filePath: string; format: QueryExportFormat; encoding: QueryFileEncoding; resultSelection: QueryExportSelection;
@@ -40,9 +40,9 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
   // 文件创建、SQL暂存或执行前先拒绝非法配置；完整INSERT仍沿原独立合同。
   const delimiter = csvExportDelimiter(input.format === 'csv-zip' ? 'csv' : input.format, input.csvDelimiter);
   if(input.format==='sql')return createQueryInsertFile(input,io);
-  if (!['json', 'csv', 'csv-zip', 'html'].includes(input.format) || (input.format !== 'csv' && input.resultSelection.kind !== 'all') || (input.format === 'csv' && (input.resultSelection.kind !== 'row-result' || !Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > limits.results))) throw new Error('单 CSV 必须指定行结果集，其余格式导出全部结果');
-  const html = input.format === 'html';
-  if (html && input.encoding !== 'utf8') throw Error(htmlText.utf8);
+  if (!['json', 'csv', 'csv-zip', 'html', 'xml'].includes(input.format) || (input.format !== 'csv' && input.resultSelection.kind !== 'all') || (input.format === 'csv' && (input.resultSelection.kind !== 'row-result' || !Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > limits.results))) throw new Error('单 CSV 必须指定行结果集，其余格式导出全部结果');
+  const markup = dataMarkupWriter(input.format), markupText = dataMarkupText(input.format);
+  if (markupText && input.encoding !== 'utf8') throw Error(markupText.utf8);
   if (input.format === 'csv-zip') await prepareQueryCsvZip(input.filePath, input.checkCancelled);
   const file = await AtomicFile.create(input.filePath, input.encoding, input.checkCancelled, input.onCommitStart, io, limits.fileBytes);
   const archive = input.format === 'csv-zip' ? new QueryCsvArchive(file, input.encoding, input.checkCancelled, delimiter) : undefined;
@@ -72,14 +72,14 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
         else if (input.format === 'json') {
           const metadata = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: 'rows', rowResultOrdinal: frame.rowResultOrdinal, columns: columns.map(({ key: _key, ...column }) => column) };
           await file.write((resultCount > 1 ? ',\n' : '\n') + JSON.stringify(metadata).slice(0, -1) + ',"rows":[\n');
-        } else if (html) await file.write(queryHtmlTableStart(columns.map(column => column.exportName), htmlText.result(frame.resultOrdinal, frame.statementOrdinal)));
+        } else if (markup) await file.write(markup.tableStart(columns.map(column => input.format === 'xml' ? column.name : column.exportName), frame));
         else if (selected) await file.write(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n');
         break;
       }
       case 'row': {
         if (!active || active.ordinal !== frame.resultOrdinal || !Array.isArray(frame.values) || frame.values.length !== active.columns.length) throw new Error('完整导出行与所属结果列不匹配');
-        if (html) {
-          await file.write(queryHtmlRow(frame.values));
+        if (markup) {
+          await file.write(markup.row(frame.values));
           written++; active.rows++;
           break;
         }
@@ -103,21 +103,21 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
         if (frame.warningCount !== undefined && (!Number.isInteger(frame.warningCount) || frame.warningCount < 0 || frame.warningCount > 65535)) throw new Error('完整导出警告数量无效');
         if (archive) await archive.end(active.rows, frame.warningCount);
         else if (input.format === 'json') await file.write('\n],"rowsWritten":' + active.rows + (frame.warningCount === undefined ? '' : ',"warningCount":' + frame.warningCount) + '}');
-        else if (html) await file.write(queryHtmlTableEnd(active.rows, frame.warningCount));
+        else if (markup) await file.write(markup.tableEnd(active.rows, frame.warningCount));
         active = undefined; break;
       case 'status':
         nextResult(frame.resultOrdinal, frame.statementOrdinal);
         if (!Number.isSafeInteger(frame.affectedRows) || frame.affectedRows < 0 || !Number.isInteger(frame.warningCount) || frame.warningCount < 0 || typeof frame.insertId !== 'string' || !/^\d+$/.test(frame.insertId)) throw new Error('完整导出状态结果无效');
         if (archive) archive.status(frame);
         if (input.format === 'json') await file.write((resultCount > 1 ? ',\n' : '\n') + JSON.stringify({ ...frame, rowsWritten: 0 }));
-        else if (html) await file.write(queryHtmlReceipt(frame.resultOrdinal, frame.statementOrdinal, frame.affectedRows, frame.insertId, frame.warningCount));
+        else if (markup) await file.write(markup.receipt(frame));
         break;
     }
   }
   try {
     if (!archive && input.encoding === 'utf16le') await file.write('\uFEFF');
     if (input.format === 'json') await file.write('{"format":"DBArk-query-results","version":1,"results":[');
-    if (html) await file.write(queryHtmlDocumentStart());
+    if (markup) await file.write(markup.documentStart());
   } catch (error) { await file.dispose(); throw error; }
   return {
     write,
@@ -128,7 +128,7 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
       if (input.format === 'csv' && !selectedFound) throw new Error('本次执行不存在指定的行结果集；SQL 可能已执行，原目标文件保持不变');
       if (archive) await archive.complete();
       if (input.format === 'json') await file.write('\n]}\n');
-      if (html) await file.write(queryHtmlDocumentEnd);
+      if (markup) await file.write(markup.documentEnd);
       await file.commit(); completed = true;
     },
     /** 无论失败、取消或完成，均关闭自有句柄并释放目标文件锁。 */

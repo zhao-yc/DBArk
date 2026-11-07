@@ -22,13 +22,13 @@ test('PostgreSQL 表和视图从第二页导出全部筛选 HTML', async ({}, in
         FROM generate_series(1,18) g;
       CREATE VIEW public.html_view AS SELECT id,bucket,note,raw FROM public.html_table`);
     await mkdir(info.outputDir, {recursive: true});
-    const targets = ['表数据.html', '视图数据.html'].map(name => info.outputPath(name));
+    const targets = ['表数据.html', '表数据.xml', '视图数据.html', '视图数据.xml'].map(name => info.outputPath(name));
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
       dialog.showSaveDialog = (async (...args: unknown[]) => {
         const options = args[1] as Electron.SaveDialogOptions;
-        if (args[0] !== BrowserWindow.getAllWindows()[0] || options.filters?.[0]?.extensions[0] !== 'html' || !paths[count])
+        if (args[0] !== BrowserWindow.getAllWindows()[0] || !paths[count] || options.filters?.[0]?.extensions[0] !== paths[count].split('.').at(-1))
           throw Error('本例 PostgreSQL 文件选择越界');
         return {canceled: false, filePath: paths[count++]};
       }) as typeof original;
@@ -67,15 +67,26 @@ test('PostgreSQL 表和视图从第二页导出全部筛选 HTML', async ({}, in
         return {title: doc.title, headers: [...doc.querySelectorAll('th')].map(cell => cell.textContent),
           rows: [...doc.querySelectorAll('tbody tr')].map(row => [...row.querySelectorAll('td')].map(cell => [cell.textContent, cell.dataset.kind ?? 'text'])),
           unsafe: doc.querySelectorAll('img,script,iframe').length};
-      }, await readFile(targets[index], 'utf8'));
+      }, await readFile(targets[index * 2], 'utf8'));
       const notes = ['<img src=x> & 中文', 'NULL', '空字符串', '行7', '行9', '行11', '行13', '行15', '行17'];
       expect(document).toEqual({title: '表数据', headers: ['note', 'raw'], unsafe: 0, rows: notes.map((note, i) =>
         [[note, i === 1 ? 'null' : i === 2 ? 'empty' : 'text'], ['base64:AP8=', 'binary']])});
       if (index === 1) await modal.screenshot({path: info.outputPath('PostgreSQL视图HTML导出.png')});
+      await modal.getByLabel(text.format, {exact: true}).selectOption('xml');
+      await modal.getByRole('button', {name: text.choose, exact: true}).click();
+      await modal.getByRole('button', {name: text.start, exact: true}).click();
+      await expect(modal.getByRole('status')).toHaveText(text.saved(9));
+      const xml = await page.evaluate(markup => {
+        const doc = new DOMParser().parseFromString(markup, 'application/xml');
+        return {scope: doc.documentElement.getAttribute('scope'), headers: [...doc.querySelectorAll('column')].map(column => column.textContent),
+          rows: [...doc.querySelectorAll('record')].map(row => [...row.children].map(cell => [cell.textContent, cell.getAttribute('kind')]))};
+      }, await readFile(targets[index * 2 + 1], 'utf8'));
+      expect(xml).toEqual({scope: 'table', headers: ['note', 'raw'], rows: notes.map((note, i) =>
+        [[i === 1 || i === 2 ? '' : note, i === 1 ? 'null' : 'text'], ['AP8=', 'binary']])});
       await modal.locator('.modal-footer').getByRole('button', {name: text.close, exact: true}).click();
       await expect(tab.locator('.tab-status')).toContainText(tableText.currentPage(2));
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgTableHtmlPicker(): number}).restorePgTableHtmlPicker())).toBe(2);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgTableHtmlPicker(): number}).restorePgTableHtmlPicker())).toBe(4);
     expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
     expect((await observer.query('SELECT count(*)::int AS count FROM public.html_table')).rows).toEqual([{count: 18}]);
   } finally { await observer.end(); }

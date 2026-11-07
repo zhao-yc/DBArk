@@ -12,7 +12,7 @@ import { csvCell, csvHeader } from '../engine/files';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import { buildSqliteTableSelect, quoteSqliteIdentifier, readSqliteTableCatalogue, verifySqliteTableScope, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 import { readSqliteSchemaExport } from './sqliteSchemaExport';
-import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd } from '../engine/queryHtml';
+import { dataMarkupWriter } from '../engine/dataMarkupExport';
 
 export const sqliteTableExportLimits = { fileBytes: 10 * 1024 ** 3 } as const;
 /** 只有Main同进程可注入原窗口、目标复核及跨入口预留，公共IPC没有这些能力。 */
@@ -138,7 +138,8 @@ export class SqliteTableExportFile {
 export async function prepareSqliteTableExport(driver: SqliteDriverSession, input: SqliteTableExportRequest, file: SqliteTableExportFile, control: SqliteTableBrowseControl & { progress(rows: number): void }): Promise<number> {
   if (!driver.readOnly) throw Error('SQLite完整导出必须使用独立物理只读连接');
   const { filePath: _path, assertCurrent: _owner, validateDestination: _destination, retainDestinationUntil: _retain, ...publicInput } = input;
-  const parsed = sqliteTableExportSchema.parse(publicInput); let count = 0, failed = false, failure: unknown;
+  const parsed = sqliteTableExportSchema.parse(publicInput);
+  const markup = dataMarkupWriter(parsed.format); let count = 0, failed = false, failure: unknown;
   let excel: ReturnType<typeof startExcelExportRows> | undefined;
   try {
     control.check(); await driver.execute('BEGIN'); control.check();
@@ -160,7 +161,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     if (parsed.format !== 'xlsx' && parsed.encoding === 'utf16le') await file.write('\uFEFF');
     if (parsed.format === 'csv') await file.write(selected.map(column => csvHeader(column.name, delimiter)).join(delimiter) + '\r\n');
     if (parsed.format === 'json') await file.write('[\n');
-    if (parsed.format === 'html') await file.write(queryHtmlDocumentStart({ scope: 'table' }) + queryHtmlTableStart(selected.map(column => column.name)));
+    if (markup) await file.write(markup.documentStart({ scope: 'table' }) + markup.tableStart(selected.map(column => column.name)));
     if (schema) await file.write(schema.beforeData);
     if (parsed.format === 'xlsx') {
       excel = startExcelExportRows({ filePath: input.filePath, columns: selected.map(column => ({ name: column.name, type: 'SQLITE' })), deferredAtomicFile: file.excelFile(), checkCancelled: control.check, onCommitStart: () => { throw Error('SQLite Excel不能自行发布文件'); } });
@@ -176,7 +177,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
           else if (parsed.format === 'sql') await file.write('INSERT INTO "main".' + quoteSqliteIdentifier(parsed.table) + ' (' + selected.map(column => quoteSqliteIdentifier(column.name)).join(', ') + ') VALUES (' + row.map(sqliteInsertLiteral).join(', ') + ');\n');
           else {
             const values = row.map(sqliteWorkspaceValue);
-            if (parsed.format === 'html') await file.write(queryHtmlRow(values));
+            if (markup) await file.write(markup.row(values));
             else await file.write(parsed.format === 'csv' ? values.map(value => csvCell(value, delimiter)).join(delimiter) + '\r\n' : (count ? ',\n' : '') + '{' + selected.map((column, index) => JSON.stringify(column.name) + ':' + JSON.stringify(values[index])).join(',') + '}');
           }
           count++; if (count % 100 === 0) control.progress(count);
@@ -186,7 +187,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     if (result && (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== count)) throw Error('SQLite完整导出没有取得完整原生终态，文件未发布');
     if (excel && (await excel.complete()).rows !== count) throw Error('SQLite Excel导出行数与原结果不一致');
     if (parsed.format === 'json') await file.write('\n]\n');
-    if (parsed.format === 'html') await file.write(queryHtmlTableEnd(count) + queryHtmlDocumentEnd);
+    if (markup) await file.write(markup.tableEnd(count) + markup.documentEnd);
     if (schema) await file.write(schema.afterData);
   } catch (reason) { failed = true; failure = reason; await excel?.abort(reason); }
   control.beginCleanup();

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。查询快照、完整查询和表／视图全量数据支持 XML 文档，按位置保存原列名和行值，并记录多结果回执。Q05、F01、R01、R02 仍为部分覆盖。[XML 数据导出](development/data-xml-export-20261107.md)
+
 2026-11-07 源码增量。SQLite、PostgreSQL、MySQL 和 MariaDB 的表页全量导出支持 HTML，沿用当前筛选、排序和所选字段，普通视图也可直接导出。F01、R01、R02 仍为部分覆盖。[表和视图 HTML 导出](development/table-html-export-20261107.md)
 
 2026-11-07 源码增量。已返回和勾选结果、SQLite 与 PostgreSQL 完整查询、MySQL／MariaDB 同会话完整导出可生成 HTML 网页。Q05、R01、R02 仍为部分覆盖。[查询结果 HTML 导出](development/query-html-export-20261107.md)

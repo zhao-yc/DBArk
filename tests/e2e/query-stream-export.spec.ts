@@ -59,7 +59,7 @@ async function count(observer: Connection, database: string, condition = '1=1') 
   return Number(rows[0].total);
 }
 /** 选择格式和目标后仍需明确新执行确认，双协议确认相互独立。 */
-async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'html' = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
+async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'html' | 'xml' = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
   await observeEvents(); await choosePath(path);
   await (await navigationMenuItem(query(), { name: '新执行并完整导出', exact: true })).click();
   const modal = dialog(); await expect(modal).toBeVisible();
@@ -133,6 +133,34 @@ async function restorePathGate() { await desktop.evaluate(() => { const state = 
 test.describe('实库完整 SQL 流式导出', () => {
   test.skip(!enabled, '需要显式启用 DBARK_INTEGRATION_ENABLED 并配置已核对的远程测试实例');
   test.describe.configure({ timeout: 180000 });
+
+  test('XML 完整导出保留协议顺序、重名列、空结果和类型', async ({}, info) => {
+    await isolatedDatabase(async ({observer, database}) => {
+      await observer.query(`CREATE TABLE \`${database}\`.stream_guard(id INT PRIMARY KEY)`);
+      await openDatabaseQuery(database);
+      const target = info.outputPath('查询结果.xml');
+      await mkdir(info.outputDir, {recursive: true});
+      await writeSql("INSERT INTO stream_guard VALUES(1); SELECT '<标记>&中文' AS `1:列`, NULL AS `1:列`, '' AS empty_value, UNHEX('00FF') AS bytes; SELECT 1 AS empty_result WHERE 0;");
+      const modal = await openExport(target, 'xml');
+      await expect(modal.locator('select:has(option[value="utf8"])')).toBeDisabled();
+      const event = await finish(await start(modal, true));
+      expect(event?.queryExport).toMatchObject({statementsCompleted: 3, rowsWritten: 1, fileCommitted: true});
+      expect(await count(observer, database)).toBe(1);
+      const document = await page.evaluate(markup => {
+        const doc = new DOMParser().parseFromString(markup, 'application/xml');
+        return { order: [...doc.documentElement.children].map(child => [child.localName, child.getAttribute('ordinal')]),
+          headers: [...doc.querySelectorAll('column')].map(column => column.textContent),
+          values: [...doc.querySelectorAll('cell')].map(cell => [cell.textContent, cell.getAttribute('kind')]),
+          counts: [...doc.querySelectorAll('summary')].map(summary => summary.getAttribute('rows')) };
+      }, await readFile(target, 'utf8'));
+      expect(document).toEqual({
+        order: [['receipt', '1'], ['result', '2'], ['result', '3']],
+        headers: ['1:列', '1:列', 'empty_value', 'bytes', 'empty_result'],
+        values: [['<标记>&中文', 'text'], ['', 'null'], ['', 'text'], ['AP8=', 'binary']], counts: ['1', '0'],
+      });
+      await closeExport();
+    }, info);
+  });
 
   test('HTML 完整导出保留多组结果和回执，数据库文本不会生成网页元素', async ({}, testInfo) => {
     await isolatedDatabase(async ({ observer, database }) => {

@@ -10,7 +10,7 @@ import type { SqliteValue } from '../engine/sqlite/protocol';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteExportDestination, SqliteTableExportFile } from './sqliteTableExport';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
-import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd } from '../engine/queryHtml';
+import { dataMarkupWriter } from '../engine/dataMarkupExport';
 
 export type SqliteQueryExportRequest = SqliteQueryExportInput & SqliteExportDestination;
 
@@ -25,6 +25,7 @@ export function sqliteQueryExportBindings(input: SqliteQueryExportInput): Record
 /** 只在收到原生列定义后打开暂存，按批次落盘。真正发布由任务在确认只读进程退出后处理。 */
 export async function prepareSqliteQueryExport(driver: SqliteDriverSession, input: SqliteQueryExportRequest,
   namedParameters: Record<string, SqliteValue>, file: SqliteTableExportFile, check: () => void, progress: (rows: number) => void): Promise<number> {
+  const markup = dataMarkupWriter(input.format);
   const delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
   let columns: string[] | undefined;
   let excel: ReturnType<typeof startExcelExportRows> | undefined;
@@ -49,9 +50,9 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
           excel = startExcelExportRows({filePath: input.filePath, columns: headers.map(({exportName}) => ({name: exportName, type: 'SQLITE'})),
             deferredAtomicFile: file.excelFile(), checkCancelled: check, onCommitStart: () => { throw Error('SQLite Excel 不能自行发布文件'); }});
         } else if (insertRow) await file.write('-- SQLite 完整查询结果\n');
-        else if (input.format === 'html') {
-          const headers = resultExportColumns(columns.map((name, index) => ({key: String(index), name})));
-          await file.write(queryHtmlDocumentStart() + queryHtmlTableStart(headers.map(column => column.exportName)));
+        else if (markup) {
+          const headers = input.format === 'xml' ? columns : resultExportColumns(columns.map((name, index) => ({key: String(index), name}))).map(column => column.exportName);
+          await file.write(markup.documentStart() + markup.tableStart(headers));
         }
         else {
           if (input.encoding === 'utf16le') await file.write('\uFEFF');
@@ -68,7 +69,7 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
           else {
             const values = row.map(sqliteWorkspaceValue);
             if (excel) await excel.write(values);
-            else if (input.format === 'html') await file.write(queryHtmlRow(values));
+            else if (markup) await file.write(markup.row(values));
             else await file.write(input.format === 'csv' ? values.map(value => csvCell(value, delimiter)).join(delimiter) + '\r\n'
               : (count ? ',\n' : '') + '{' + columns.map((name, index) => JSON.stringify(name) + ':' + JSON.stringify(values[index])).join(',') + '}');
           }
@@ -83,7 +84,7 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
     }
     if (excel && (await excel.complete()).rows !== count) throw Error('SQLite Excel 导出行数与原结果不一致');
     if (input.format === 'json') await file.write('\n]\n');
-    if (input.format === 'html') await file.write(queryHtmlTableEnd(count) + queryHtmlDocumentEnd);
+    if (markup) await file.write(markup.tableEnd(count) + markup.documentEnd);
     return count;
   } catch (reason) {
     await excel?.abort(reason);

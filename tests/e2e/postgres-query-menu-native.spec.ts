@@ -797,6 +797,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     const csv = info.outputPath('完整结果.csv'), json = info.outputPath('完整结果.json'), xlsx = info.outputPath('完整结果.xlsx');
     const insertFile = info.outputPath('完整结果.sql'), cancelledSql = info.outputPath('原文件.sql');
     const html = info.outputPath('完整结果.html'), cancelledHtml = info.outputPath('原文件.html');
+    const xml = info.outputPath('完整结果.xml');
     const unchanged = info.outputPath('原文件.csv'), cancelledExcel = info.outputPath('原文件.xlsx');
     await mkdir(info.outputDir, {recursive: true});
     await writeFile(unchanged, '原文件哨兵');
@@ -817,7 +818,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     const owner = (await sessions()).rows;
     expect(owner).toHaveLength(1);
     expect(owner[0].state).toBe('idle in transaction');
-    const output = [csv, csv, json, xlsx, html, insertFile, unchanged, cancelledExcel, cancelledSql, cancelledHtml];
+    const output = [csv, csv, json, xlsx, html, xml, insertFile, unchanged, cancelledExcel, cancelledSql, cancelledHtml];
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
@@ -908,6 +909,19 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     expect(webpage).toEqual({headers: ['id', 'id [2]', 'note', 'bytes'], count: 4099,
       last: ['9007199254745092', '0.12345678901234567890', '行4099', 'base64:AP8=']});
     await page.screenshot({path: info.outputPath('PostgreSQL完整查询HTML.png')});
+    await dialog.getByLabel(zh.resultExport.format).selectOption('xml');
+    await expect(dialog.getByLabel(zh.resultExport.encoding)).toBeDisabled();
+    await start();
+    await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
+    const xmlResult = await page.evaluate(markup => {
+      const doc = new DOMParser().parseFromString(markup, 'application/xml');
+      const records = doc.querySelectorAll('record');
+      return {root: doc.documentElement.localName, headers: [...doc.querySelectorAll('column')].map(column => column.textContent),
+        count: records.length, last: [...records[records.length - 1].children].map(cell => cell.textContent)};
+    }, await readFile(xml, 'utf8'));
+    expect(xmlResult).toEqual({root: 'tabrelio-data', headers: ['id', 'id', 'note', 'bytes'], count: 4099,
+      last: ['9007199254745092', '0.12345678901234567890', '行4099', 'AP8=']});
+    await page.screenshot({path: info.outputPath('PostgreSQL完整查询XML.png')});
     await dialog.getByLabel(zh.resultExport.format).selectOption('sql');
     await expect(dialog.getByLabel(zh.resultExport.encoding)).toBeDisabled();
     await expect(dialog.getByRole('button', {name: zh.resultExport.chooseFile, exact: true})).toBeDisabled();
@@ -971,7 +985,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
       expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
       await close();
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(10);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(11);
     await expect.poll(async () => (await sessions()).rows).toEqual(owner);
     expect(await history()).toEqual(baseline);
     expect(await grid.innerText()).toBe(original);
