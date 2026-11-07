@@ -32,9 +32,17 @@ export const postgresZh = {
   retainedSave: '查询已保存到本地查询目录，但原页已变化，请重新核对；原输入没有被覆盖。',
   closeFailed: 'PostgreSQL原会话关闭未确认，请保留现场并显式断开原连接：',
   empty: '执行SQL后在此显示结果',
-  result: (index: number, command: string, rows: number, name?: string) =>
-    `${index + 1} · ${name ? `${name} · ` : ''}${command} · ${rows} 行`,
+  result: (ordinal: number, command: string, rows: number, name?: string) =>
+    `${ordinal} · ${name ? `${name} · ` : ''}${command} · ${rows} 行`,
   complete: (command: string, rows?: number) =>
     `服务器回执：${command}${rows === undefined ? '' : ` · 影响 ${rows} 行`}`,
+  receipt: '当前语句回执',
+  receiptStatement: (ordinal: number) => `第 ${ordinal} 条语句`,
+  receiptCommand: (command: string) => `服务器回执 ${command}`,
+  receiptRows: (rows: number) => `服务端计数 ${rows} 行`,
+  receiptCached: (rows: number) => `已接收 ${rows} 行`,
+  receiptVisible: (rows: number) => `筛选后 ${rows} 行`,
+  receiptElapsed: (elapsedMs: number) => `本条耗时 ${Math.round(elapsedMs)} ms`,
+  executionElapsed: (elapsedMs: number) => `本次总耗时 ${Math.round(elapsedMs)} ms`,
   truncated: '显示结果达到行数或16MiB预算，未显示部分已截断；SQL仍按原意执行。',
 } as const;

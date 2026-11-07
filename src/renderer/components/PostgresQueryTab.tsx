@@ -940,6 +940,8 @@ export function PostgresQueryTab({
     controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!transactionSettings || !!closeRequest || !!exportView || !!pinSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
+  const resultOrdinals = outcome?.postgresResultOrdinals;
+  const receiptOrdinal = pin ? undefined : resultOrdinals?.[selected];
   // 名称属于服务器已返回的语句，编辑草稿时仍显示原结果的名称。
   const resultNames = useMemo(() => outcome?.results.map(result => result.columns.length
     ? queryResultTitle(result.statement, 'postgresql') : undefined) ?? [], [outcome]);
@@ -1834,7 +1836,7 @@ export function PostgresQueryTab({
                   resetResultView();
                   setSelected(Number(event.target.value));
                 }}>
-                {results.map((r, i) => <option key={i} value={i}>{text.result(i, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
+                {results.map((r, i) => <option key={i} value={i}>{text.result(resultOrdinals?.[i] ?? i + 1, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
               {dataResult && <>
                 {!pin && results.length === 1 && resultNames[selected] && <strong className="postgres-result-name">{resultNames[selected]}</strong>}
@@ -1871,6 +1873,16 @@ export function PostgresQueryTab({
               </>}
             </div>
           )}
+          {result && receiptOrdinal !== undefined && <div className="info-strip" role="group" aria-label={text.receipt}>
+            {[
+              text.receiptStatement(receiptOrdinal),
+              result.postgresCommand && text.receiptCommand(result.postgresCommand),
+              result.affectedRows !== undefined && text.receiptRows(result.affectedRows),
+              !!result.columns.length && text.receiptCached(result.rows.length),
+              displayResult && displayResult.rows.length !== result.rows.length && text.receiptVisible(displayResult.rows.length),
+              text.receiptElapsed(result.elapsedMs),
+            ].filter(Boolean).join(' · ')}
+          </div>}
           <div className="result-body">
             {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
               !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
@@ -1893,7 +1905,7 @@ export function PostgresQueryTab({
                     isCurrent={() => rowDetailCurrent(currentRowDetail.binding)} onMove={moveRowDetail} onClose={closeRowDetail} />}
                 </div>
               ) : (
-                <div className="info-strip">
+                receiptOrdinal === undefined && <div className="info-strip">
                   {text.complete(result.postgresCommand ?? '', result.affectedRows)}
                 </div>
               )
@@ -1950,6 +1962,7 @@ export function PostgresQueryTab({
         }} />}
       {fullExport && !closeRequest && <PostgresQueryExportDialog source={fullExport} onClose={() => setFullExport(undefined)} />}
       <div className="tab-status">
+        {!pin && outcome && resultOrdinals && <span>{text.executionElapsed(outcome.elapsedMs)}</span>}
         <span>
           {!state.transactionKnown
             ? text.unknown

@@ -911,6 +911,7 @@ export class PostgresEngine {
     const started = performance.now(),
       results: QueryResult[] = [],
       budget = { rows: input.maxRows, bytes: 16 * 1024 * 1024 };
+    const resultOrdinals = !estimate && !analysisSql ? [] as number[] : undefined;
     const report: QueryScriptReport | undefined = input.continueOnError === true
       ? {mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: []} : undefined;
     const notices = new PostgresNoticeCollector(input.parameters !== undefined);
@@ -994,6 +995,8 @@ export class PostgresEngine {
             }),
             undefined, (notice, redact) => notices.record(ordinal, noticeRange, notice, redact));
           results.push(result);
+          // 回执只与完整结果配对。遇错继续时不能用结果数组索引代替原语句编号。
+          resultOrdinals?.push(ordinal);
           if (report) report.statementsCompleted++;
           if (report && (session.managed.broken || !session.managed.state().transactionKnown)) {
             activeOrdinal = undefined; sourceRange = undefined;
@@ -1061,6 +1064,7 @@ export class PostgresEngine {
       ...(failure ? { failure } : {}),
       ...(report ? {scriptReport: report} : {}),
       ...(postgresNotices ? {postgresNotices} : {}),
+      ...(resultOrdinals ? {postgresResultOrdinals: resultOrdinals} : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */

@@ -28,16 +28,16 @@ const tab = () => page.locator('.postgres-query:visible');
 const editor = () => tab().locator('.postgres-editor .monaco-editor');
 const script = "SELECT '选区原值' AS result;\nSELECT '第二句原值' AS result;";
 
-async function prepare(connection: Extract<ConnectionProfile, {dialect: 'postgresql'}>, sql: string) {
+async function prepare(connection: Extract<ConnectionProfile, {dialect: 'postgresql'}>, sql: string, resultLimit?: number) {
   await page.addInitScript(() => { self.MonacoEnvironment = {...self.MonacoEnvironment, globalAPI: true}; });
-  await page.evaluate(async ({connection, sql}) => {
+  await page.evaluate(async ({connection, sql, resultLimit}) => {
     const profile = await window.dbark.invoke('connections.save', connection);
     const settings = await window.dbark.invoke('settings.get', {});
-    await window.dbark.invoke('settings.save', {...settings, activeTabId: 'pg-original', tabs: [
+    await window.dbark.invoke('settings.save', {...settings, resultLimit: resultLimit ?? settings.resultLimit, activeTabId: 'pg-original', tabs: [
       {id: 'pg-original', kind: 'query', title: '原 PostgreSQL 查询', connectionId: profile.id, database: connection.database, sql},
       {id: 'pg-other', kind: 'query', title: '另一 PostgreSQL 查询', connectionId: profile.id, database: connection.database, sql: '-- 保留另一草稿'},
     ]});
-  }, {connection, sql});
+  }, {connection, sql, resultLimit});
   await page.reload();
   await expect(editor().getByRole('textbox')).toBeVisible();
 }
@@ -149,6 +149,68 @@ test('PostgreSQL 会话事务默认设置保持原结果并按实际事务隔离
     await page.locator('.tab-strip').getByText('原 PostgreSQL 查询', {exact: true}).click(); await open();
     await expect(dialog().getByLabel(transactionText.isolation, {exact: true})).toHaveValue('REPEATABLE READ'); await close();
     expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
+test('PostgreSQL 查询回执区分原编号、事务回执和实际接收行数', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const receipt = () => tab().getByRole('group', {name: postgresZh.receipt, exact: true});
+  const picker = () => tab().getByRole('combobox', {name: 'PostgreSQL结果集', exact: true});
+  const status = () => tab().locator('.tab-status');
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const records = async () => (await observer.query('SELECT id FROM public.receipt_rows ORDER BY id')).rows.map(row => row.id);
+  try {
+    await observer.query('CREATE TABLE public.receipt_rows (id int PRIMARY KEY)');
+    await prepare({id: '', name: '隔离 PostgreSQL 查询回执', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, [
+      'INSERT INTO public.receipt_rows VALUES (1) RETURNING id;',
+      'SELECT missing_column;',
+      'BEGIN;',
+      'INSERT INTO public.receipt_rows VALUES (9);',
+      'SELECT another_missing;',
+      'COMMIT;',
+      'UPDATE public.receipt_rows SET id = 2 WHERE id = 1 RETURNING id;',
+      'DELETE FROM public.receipt_rows WHERE false;',
+      '/*NAME: 实库四行 */ SELECT generate_series(1, 4) AS number;',
+    ].join('\n'), 3);
+    const choice = tab().getByRole('checkbox', {name: continueText.option, exact: true});
+    await choice.check(); await command('execute-all');
+    await expect(picker().getByRole('option')).toHaveText([
+      '1 · INSERT · 1 行', '3 · BEGIN · 0 行', '4 · INSERT · 0 行', '6 · ROLLBACK · 0 行',
+      '7 · UPDATE · 1 行', '8 · DELETE · 0 行', '9 · 实库四行 · SELECT · 1 行',
+    ]);
+    await expect(receipt()).toContainText('第 1 条语句 · 服务器回执 INSERT · 服务端计数 1 行 · 已接收 1 行');
+    await expect(status()).toContainText(/本次总耗时 \d+ ms/);
+    await expect(status()).toContainText(postgresZh.idle);
+    await expect(tab().getByRole('status', {name: continueText.title, exact: true})).toContainText(continueText.counts(9, 7, 2));
+    const before = await history();
+    await picker().selectOption('2');
+    await expect(receipt()).toContainText('第 4 条语句 · 服务器回执 INSERT · 服务端计数 1 行');
+    await expect(receipt()).not.toContainText('已接收');
+    await picker().selectOption('3');
+    await expect(receipt()).toContainText('第 6 条语句 · 服务器回执 ROLLBACK');
+    await expect(receipt()).not.toContainText('服务端计数');
+    await picker().selectOption('5');
+    await expect(receipt()).toContainText('第 8 条语句 · 服务器回执 DELETE · 服务端计数 0 行');
+    await picker().selectOption('6');
+    await expect(receipt()).toContainText(/第 9 条语句 · 服务器回执 SELECT · 服务端计数 4 行 · 已接收 1 行 · 本条耗时 \d+ ms/);
+    await expect(tab()).toContainText(postgresZh.truncated);
+    await status().scrollIntoViewIfNeeded();
+    await receipt().scrollIntoViewIfNeeded();
+    await page.screenshot({path: info.outputPath('PostgreSQL查询回执.png')});
+    await picker().selectOption('4');
+    await tab().getByRole('button', {name: zh.query.pinResult, exact: true}).click();
+    await expect(receipt()).toHaveCount(0);
+    await expect(status()).not.toContainText('本次总耗时');
+    await tab().getByRole('button', {name: zh.query.currentResults, exact: true}).click();
+    await expect(receipt()).toContainText('第 7 条语句 · 服务器回执 UPDATE · 服务端计数 1 行 · 已接收 1 行');
+    expect(await history()).toEqual(before); expect(await records()).toEqual([2]); expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
   await quitDesktop();
 });
