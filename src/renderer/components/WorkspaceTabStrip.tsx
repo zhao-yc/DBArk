@@ -1,3 +1,4 @@
+import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type Ref } from 'react';
 import { Database, FileCode2, Plus, Table2, X } from 'lucide-react';
 import { useWorkspace } from '../store';
@@ -35,15 +36,15 @@ export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSi
   /** 外层只接收原条带节点，保持App既有的活动标签滚动定位。 */
   function attach(node: HTMLDivElement | null) { element.current = node; if (typeof stripRef === 'function') stripRef(node); else if (stripRef) stripRef.current = node; }
   function available() {
-    if (!alive.current || latest.current.blocked || !element.current || !document.documentElement.contains(element.current) || document.querySelector('[role="dialog"], [role="alertdialog"]')) return false;
+    if (!alive.current || latest.current.blocked || !element.current || !document.documentElement.contains(element.current) || document.querySelector(appModalSelector)) return false;
     for (let node: HTMLElement | null = element.current; node; node = node.parentElement) if (node.hidden || node.style.display === 'none' || node.style.visibility === 'hidden') return false;
     return true;
   }
   /** 菜单租约捕获顺序和原对象；订阅使重排、来源/连接ABA即时且永久撤销旧动作。 */
   function menuHasModal(records: MutationRecord[]): boolean {
     return records.some(record => {
-      if (record.type === 'attributes') return record.attributeName === 'role' && (['dialog', 'alertdialog'].includes(record.oldValue ?? '') || record.target.nodeType === 1 && ['dialog', 'alertdialog'].includes((record.target as Element).getAttribute('role') ?? ''));
-      return Array.from(record.addedNodes).some(node => node.nodeType === 1 && (['dialog', 'alertdialog'].includes((node as Element).getAttribute('role') ?? '') || (node as Element).querySelector('[role="dialog"], [role="alertdialog"]')));
+      if (record.type === 'attributes') return record.attributeName === 'role' && (['dialog', 'alertdialog'].includes(record.oldValue ?? '') || isAppModalNode(record.target));
+      return Array.from(record.addedNodes).some(node => node.nodeType === 1 && (isAppModalNode(node) || (node as Element).querySelector(appModalSelector)));
     });
   }
   function menuCurrent(owner: QueryMenuOwner): boolean {
@@ -109,7 +110,7 @@ export function WorkspaceTabStrip({ stripRef, onClose, onNew, blocked, onCloseSi
   /** 模态出现又移除也保留墓碑，drop前同步取出尚未投递的MutationObserver记录。 */
   function inspect(owner: DragOwner, records: MutationRecord[]) {
     if (records.some(record => Array.from(record.addedNodes).some(node => node.nodeType === 1 && (
-      ['dialog', 'alertdialog'].includes((node as Element).getAttribute('role') ?? '') || (node as Element).querySelector('[role="dialog"], [role="alertdialog"]')
+      isAppModalNode(node) || (node as Element).querySelector(appModalSelector)
     )))) retire(owner, true);
   }
   function currentDrag() {

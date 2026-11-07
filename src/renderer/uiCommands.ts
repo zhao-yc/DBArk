@@ -4,6 +4,7 @@ import { UiCommandRegistry, updateCommandPageContext, type UiCommandPageContext,
 import { errorMessage, invoke } from './lib';
 import { useWorkspace } from './store';
 import { openFocusedGridRowJump } from './components/GridRowJump';
+import { appModalSelector, isAppModalNode } from './modalSelectors';
 
 export type { UiCommandHandler } from './uiCommandRegistry';
 export const uiCommands = new UiCommandRegistry();
@@ -43,7 +44,7 @@ export function useUiCommands() {
 export function useUiCommandRuntime(): void {
   useEffect(() => {
     let alive = true, queued = false;
-    const modal = () => !!document.querySelector('[role="dialog"], [role="alertdialog"]');
+    const modal = () => !!document.querySelector(appModalSelector);
     uiCommands.setBlocked(modal());
     const sync = () => {
       if (queued || !alive) return; queued = true;
@@ -56,7 +57,7 @@ export function useUiCommandRuntime(): void {
     };
     const off = uiCommands.subscribe(sync); sync();
     const observer = new MutationObserver(records => {
-      const ownsModal = (node: Node) => node.nodeType === 1 && ((node as Element).matches('[role="dialog"], [role="alertdialog"]') || !!(node as Element).querySelector('[role="dialog"], [role="alertdialog"]'));
+      const ownsModal = (node: Node) => node.nodeType === 1 && (isAppModalNode(node) || !!(node as Element).querySelector(appModalSelector));
       const changed = records.some(record => record.type === 'attributes'
         ? ['dialog', 'alertdialog'].includes(record.oldValue ?? '') || ownsModal(record.target)
         : [...record.addedNodes, ...record.removedNodes].some(ownsModal));

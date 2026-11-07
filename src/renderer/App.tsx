@@ -1,3 +1,4 @@
+import { appDialogSelector, appModalSelector } from './modalSelectors';
 import { MysqlDatabaseBackupDialog } from './components/MysqlDatabaseBackupDialog';
 import { MysqlSqlFileDialog } from './components/MysqlSqlFileDialog';
 import { ServerDataCompareDialog } from './components/ServerDataCompareDialog';
@@ -333,7 +334,7 @@ function WorkspaceApp() {
   useEffect(() => {
     /** 仅在无活动对话框时处理工作区快捷键，避免覆盖表单内的正常操作。 */
     const listener = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (!(event.ctrlKey || event.metaKey) || document.querySelector(appModalSelector)) return;
       if (event.isComposing || event.keyCode === 229) return;
       if (event.shiftKey && event.key.toLowerCase() === 'a') {
         if (event.altKey || event.defaultPrevented || event.repeat) return;
@@ -348,14 +349,14 @@ function WorkspaceApp() {
         if (!event.shiftKey) openNewQueryDialog();
         else { const snapshot = uiCommands.getSnapshot(); void uiCommands.execute({ id: 'reopen-query', revision: snapshot.revision }).catch(reason => useWorkspace.getState().notify(errorMessage(reason), true)); }
       }
-      if(event.shiftKey&&event.key.toLowerCase()==='f'){event.preventDefault();if(document.querySelector('[role="dialog"], [role="alertdialog"]'))return;const snapshot=uiCommands.getSnapshot();void uiCommands.execute({id:'structure-search',revision:snapshot.revision}).catch(reason=>useWorkspace.getState().notify(errorMessage(reason),true));}
+      if(event.shiftKey&&event.key.toLowerCase()==='f'){event.preventDefault();if(document.querySelector(appModalSelector))return;const snapshot=uiCommands.getSnapshot();void uiCommands.execute({id:'structure-search',revision:snapshot.revision}).catch(reason=>useWorkspace.getState().notify(errorMessage(reason),true));}
       if (event.key.toLowerCase() === 'w' && useWorkspace.getState().settings.activeTabId) { event.preventDefault(); closeTab(useWorkspace.getState().settings.activeTabId!); }
     };
     window.addEventListener('keydown', listener); return () => window.removeEventListener('keydown', listener);
   }, []);
   /** 全局入口从全部来源开始，查询内入口冻结原标签的连接，模态内不重新选目标。 */
   function showHistoryPanel(section: 'history' | 'queries', fromQuery?: Pick<WorkspaceTab, 'id' | 'connectionId'>) {
-    if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (document.querySelector(appModalSelector)) return;
     const workspace = useWorkspace.getState(), tab = workspace.settings.tabs.find(item => item.id === workspace.settings.activeTabId);
     if (fromQuery && (tab?.kind !== 'query' || tab.id !== fromQuery.id || tab.connectionId !== fromQuery.connectionId)) return;
     workbenchNavigation.invalidate(); historyInsertionRef.current?.dispose();
@@ -387,7 +388,7 @@ function WorkspaceApp() {
   /** 无连接时沿用先建连的行为；标签加号的两条路径都必须在任何异步读取前撤销旧导航。 */
   function openQueryTabEntry() { workbenchNavigation.invalidate(); if (connections.length) setNewQuery(true); else setConnectionDialog('new'); }
   /** 连接外观整理沿用模态导航屏障，不切换当前会话或清除结果。 */
-  function openConnectionOrganization() { if (document.querySelector('[role="dialog"]')) return; workbenchNavigation.invalidate(); setConnectionOrganization(true); }
+  function openConnectionOrganization() { if (document.querySelector(appDialogSelector)) return; workbenchNavigation.invalidate(); setConnectionOrganization(true); }
   function closeConnectionOrganization() { workbenchNavigation.invalidate(); setConnectionOrganization(false); }
   /** 导入模态独占显式导航意图，旧收藏/链接的迟到结果不得创建标签或自动连接。 */
   function openConnectionsTransfer() { workbenchNavigation.invalidate(); setConnectionsTransfer(true); }
@@ -399,20 +400,20 @@ function WorkspaceApp() {
   function openObjectLink() { workbenchNavigation.invalidate(); setObjectLinkDialog(true); }
   function closeObjectLink() { workbenchNavigation.invalidate(); setObjectLinkDialog(false); }
   /** 命令栏偏好入口先撤销旧导航，模态期间不叠加第二份编辑草稿。 */
-  function openEditorFontPreferences() { if (document.querySelector('[role="dialog"]')) return; workbenchNavigation.invalidate(); setEditorFontPreferences(true); }
+  function openEditorFontPreferences() { if (document.querySelector(appDialogSelector)) return; workbenchNavigation.invalidate(); setEditorFontPreferences(true); }
   /** 关闭仅结束本次设置弹窗，不回写任何工作区快照。 */
   function closeEditorFontPreferences() { workbenchNavigation.invalidate(); setEditorFontPreferences(false); }
   /** 离线计划入口无需连接，仍遵守当前模态和导航归属。 */
-  function openExplainSnapshot() { if (document.querySelector('[role="dialog"]')) return; workbenchNavigation.invalidate(); setExplainSnapshot(true); }
+  function openExplainSnapshot() { if (document.querySelector(appDialogSelector)) return; workbenchNavigation.invalidate(); setExplainSnapshot(true); }
   /** 结束离线查看也撤销旧的工作区导航回执。 */
   function closeExplainSnapshot() { workbenchNavigation.invalidate(); setExplainSnapshot(false); }
   /** 全局结果文件仅离线查看，不为缺少连接的工作区伪造查询标签。 */
-  function openResultSnapshot() { if (document.querySelector('[role="dialog"]')) return; workbenchNavigation.invalidate(); setResultSnapshot(true); }
+  function openResultSnapshot() { if (document.querySelector(appDialogSelector)) return; workbenchNavigation.invalidate(); setResultSnapshot(true); }
   /** 文件操作结束后由查看器释放模态，旧的异步工作区导航仍保持失效。 */
   function closeResultSnapshot() { workbenchNavigation.invalidate(); setResultSnapshot(false); }
   /** 空工作区也可查看空态；同步owner防止同轮连点创建两个查找窗口。 */
   function openTabSearch() {
-    if (tabSearchRef.current || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (tabSearchRef.current || document.querySelector(appModalSelector)) return;
     const owner = { id: uid(), registry: new OpenTabSearchRegistry() };
     try { owner.registry.observe(useWorkspace.getState().settings.tabs); } catch { owner.registry.dispose(); }
     workbenchNavigation.invalidate(); tabSearchRef.current = owner; setTabSearch(owner);
@@ -433,7 +434,7 @@ function WorkspaceApp() {
   }
   /** 例程入口属于侧栏的明确对象；不复用或改写当前查询会话。 */
   function openRoutineInvocation(target: RoutineInvocationTarget) {
-    if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (document.querySelector(appModalSelector)) return;
     if (!useWorkspace.getState().connections.some(profile => profile.id === target.connectionId)) { useWorkspace.getState().notify(routineInvocationZh.stale, true); return; }
     workbenchNavigation.invalidate(); setRoutineInvocationTarget(target);
   }
@@ -457,7 +458,7 @@ function WorkspaceApp() {
     if (current.activeJobs[id]) { current.notify(zh.app.text001, true); return false; }
     if (current.dirtyTabs[id] && !window.confirm(zh.app.text002)) return false;
     if (tab?.kind === 'query' && (!!tab.fileSourceBinding || !!tab.sql?.trim()) && !current.dirtyTabs[id]) {
-      if (document.querySelector('[role="dialog"]')) return false;
+      if (document.querySelector(appDialogSelector)) return false;
       const request = closeRequests.begin(id, queue?.hooks(tab)); if (request) setQueryCloseRequest(request); return request ?? false;
     }
     if (queue) return queue.remove(tab, () => current.closeTab(id));
@@ -465,7 +466,7 @@ function WorkspaceApp() {
   }
   /** 侧关使用菜单原锚点而非活动标签；捕获触发时查询对象，沿原关闭入口逐一等待。 */
   function closeOtherQueries(anchor?: TabOrderRef, side?: 'left' | 'right') {
-    if (otherQueryClose.current?.running || otherQueryClose.current?.pending || closeRequests.pending || document.querySelector('[role="dialog"]')) return;
+    if (otherQueryClose.current?.running || otherQueryClose.current?.pending || closeRequests.pending || document.querySelector(appDialogSelector)) return;
     const current = useWorkspace.getState(), keep = anchor ? current.resolveTabOrder(anchor) : current.settings.tabs.find(tab => tab.id === current.settings.activeTabId);
     if (keep?.kind !== 'query') return;
     const queue = new QueryCloseQueue({ read: () => useWorkspace.getState(), subscribe: changed => useWorkspace.subscribe(changed), close: (tab, owner) => closeTab(tab.id, owner), changed: setClosingOtherQueries });
@@ -496,7 +497,7 @@ function WorkspaceApp() {
   /** 用新标签身份打开独立草稿，只在确认打开后消费内存记录。 */
   function reopenRetainedQuery(): void {
     const current = useWorkspace.getState(), entry = retainedQueries.peek(current);
-    if (!entry || current.settings.tabs.length >= 100 || closeRequests.pending || otherQueryClose.current?.running || otherQueryClose.current?.pending || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (!entry || current.settings.tabs.length >= 100 || closeRequests.pending || otherQueryClose.current?.running || otherQueryClose.current?.pending || document.querySelector(appModalSelector)) return;
     const id = uid();
     workbenchNavigation.invalidate(); current.openTab({ ...entry.draft, id });
     if (useWorkspace.getState().settings.tabs.some(tab => tab.id === id)) retainedQueries.consume(entry);
@@ -505,14 +506,14 @@ function WorkspaceApp() {
   function commitQueryClose(commit: { queue: QueryCloseQueue; request: QueryCloseRequest }, pending?: QueryCloseRequest) {
     if (pending || otherQueryClose.current !== commit.queue || commit.queue.awaitingCommit !== commit.request) return;
     setQueryCloseCommit(undefined);
-    commit.queue.committed(commit.request, !document.querySelector('[role="dialog"]'));
+    commit.queue.committed(commit.request, !document.querySelector(appDialogSelector));
   }
   useLayoutEffect(() => { if (queryCloseCommit) commitQueryClose(queryCloseCommit, queryCloseRequest); }, [queryCloseCommit, queryCloseRequest, settings.tabs]);
   useEffect(() => { if (queryCloseRequest && !settings.tabs.some(tab => tab.id === queryCloseRequest.tabId)) finishQueryClose(queryCloseRequest, false); }, [settings.tabs, queryCloseRequest]);
   /** 新字段入口先保护同目标所有表页，绝不自动放弃已有数据草稿。 */
   /** 重建入口保护同main全部表页，旧菜单不能覆盖当前模态或复活旧连接目标。 */
   function openSqliteTableRebuild(target: SqliteTableRebuildTarget) {
-    if (document.querySelector('[role="dialog"], [role="alertdialog"]') || sqliteRebuildOwnerRef.current || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
+    if (document.querySelector(appModalSelector) || sqliteRebuildOwnerRef.current || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
     try {
       const workspace = useWorkspace.getState(); assertSqliteTableRebuildTargetAvailable(target, workspace);
       const owner = { target: { ...target }, version: workspace.connectionVersions[target.connectionId] ?? 0 }; sqliteRebuildOwnerRef.current = owner;
@@ -520,7 +521,7 @@ function WorkspaceApp() {
     } catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   function openColumnPatches(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"], [role="alertdialog"]') || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
+    if (document.querySelector(appModalSelector) || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
     try {
       const workspace = useWorkspace.getState();
       if (workspace.connections.find(profile => profile.id === target.connectionId)?.dialect === 'sqlite') {
@@ -538,7 +539,7 @@ function WorkspaceApp() {
   }
   /** 索引入口保护精确目标的全部表页，已有结构模态或数据草稿不会被覆盖。 */
   function openIndexPatches(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"], [role="alertdialog"]') || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
+    if (document.querySelector(appModalSelector) || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
     try {
       const workspace = useWorkspace.getState();
       if (workspace.connections.find(profile => profile.id === target.connectionId)?.dialect === 'sqlite') {
@@ -553,24 +554,24 @@ function WorkspaceApp() {
   }
   /** 外键入口保护当前子表；执行前由弹窗提交全部已加载父目标再核对数据草稿。 */
   function openForeignKeyPatches(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try { assertForeignKeyTargetsAvailable([target], useWorkspace.getState()); useWorkspace.setState({ notice: undefined }); setForeignKeyEdits(false); setForeignKeyTarget(structuredClone(target)); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   /** 专用入口在任何读取之前保护全部同目标表页并撤销旧导航意图。 */
   function openTableCopyData(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try { const workspace = useWorkspace.getState(); assertTableCopyDataTargetAvailable(target, workspace); workbenchNavigation.invalidate(); setCopyDataVersion(workspace.connectionVersions[target.connectionId] ?? 0); setCopyDataEdits(false); setCopyDataTarget(structuredClone(target)); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   function openTableCopyStructure(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try { const workspace = useWorkspace.getState(); assertTableCopyStructureTargetAvailable(target, workspace); workbenchNavigation.invalidate(); setCopyStructureVersion(workspace.connectionVersions[target.connectionId] ?? 0); setCopyStructureEdits(false); setCopyStructureTarget(structuredClone(target)); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   /** 原表重命名入口保留独立任务。 */
   function openTableRename(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"], [role="alertdialog"]') || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
+    if (document.querySelector(appModalSelector) || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
     try {
       const workspace = useWorkspace.getState();
       if (workspace.connections.find(profile => profile.id === target.connectionId)?.dialect === 'sqlite') {
@@ -613,7 +614,7 @@ function WorkspaceApp() {
   }
   /** 计数编辑独立于列级AUTO_INCREMENT，入口同步保护同目标全部隐藏草稿和活动任务。 */
   function openTableAutoIncrement(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try {
       assertTableAutoIncrementTargetAvailable(target, useWorkspace.getState()); workbenchNavigation.invalidate();
       setCounterVersion(useWorkspace.getState().connectionVersions[target.connectionId] ?? 0); setCounterEdits(false); setCounterTarget(structuredClone(target));
@@ -621,7 +622,7 @@ function WorkspaceApp() {
   }
   /** 对象用途与窗口同步占位；创建尚无名称时仍保护同库全部表页，不发送数据库请求。 */
   function openSqliteObjects(scope: SqliteObjectsScope, action: SqliteObjectsAction) {
-    if (document.querySelector('[role="dialog"], [role="alertdialog"]') || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
+    if (document.querySelector(appModalSelector) || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return;
     const workspace = useWorkspace.getState();
     try {
       const selected = { ...scope }; assertSqliteObjectsScopeAvailable(selected, workspace);
@@ -634,7 +635,7 @@ function WorkspaceApp() {
   /** 清空／删除保护同库所有表页；触发器和外键影响不能以目标表名局限。 */
   function openSqliteTableMaintenance(target: TableColumnPatchTarget, action: SqliteTableMaintenanceAction): boolean {
     const workspace = useWorkspace.getState(); if (workspace.connections.find(profile => profile.id === target.connectionId)?.dialect !== 'sqlite') return false;
-    if (document.querySelector('[role="dialog"], [role="alertdialog"]') || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return true;
+    if (document.querySelector(appModalSelector) || sqliteObjectsOwnerRef.current || sqliteMaintenanceOwnerRef.current || sqliteRenameOwnerRef.current || sqliteRebuildOwnerRef.current || sqliteColumnOwnerRef.current || sqliteIndexOwnerRef.current) return true;
     try {
       if (target.database !== 'main') throw Error(sqliteTableMaintenanceZh.invalid);
       const selected = { ...target, database: 'main' as const }; assertSqliteTableMaintenanceTargetAvailable(selected, workspace);
@@ -646,7 +647,7 @@ function WorkspaceApp() {
   /** 删除入口固定连接修订；同目标隐藏草稿或活动操作不允许进入。 */
   function openTableDrop(target: TableColumnPatchTarget) {
     if (openSqliteTableMaintenance(target, 'drop')) return;
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try { assertTableDropTargetAvailable(target, useWorkspace.getState()); workbenchNavigation.invalidate(); setDropVersion(useWorkspace.getState().connectionVersions[target.connectionId] ?? 0); setDropEdits(false); setDropTarget(structuredClone(target)); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
@@ -664,13 +665,13 @@ function WorkspaceApp() {
   /** 清空须先通过全部同表页保护；版本固定于打开时，执行前再次检查草稿。 */
   function openTableTruncate(target: TableColumnPatchTarget) {
     if (openSqliteTableMaintenance(target, 'clear')) return;
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try { assertTableTruncateTargetAvailable(target, useWorkspace.getState()); workbenchNavigation.invalidate(); setTruncateVersion(useWorkspace.getState().connectionVersions[target.connectionId] ?? 0); setTruncateEdits(false); setTruncateTarget(structuredClone(target)); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   /** CHECK入口保护所有同目标表页；同轮连点不能叠加第二个结构窗口。 */
   function openTableChecks(target: TableCheckTarget) {
-    if (tableChecksRef.current || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (tableChecksRef.current || document.querySelector(appModalSelector)) return;
     try {
       const workspace = useWorkspace.getState(); assertTableChecksTargetAvailable(target, workspace);
       const owner = { id: uid(), target: structuredClone(target), version: workspace.connectionVersions[target.connectionId] ?? 0 };
@@ -690,19 +691,19 @@ function WorkspaceApp() {
   }
   /** 注释入口保护全部同目标表页；不覆盖已有模态或未提交数据。 */
   function openTableComment(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try { assertTableCommentTargetAvailable(target, useWorkspace.getState()); useWorkspace.setState({ notice: undefined }); setCommentEdits(false); setCommentTarget(structuredClone(target)); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   /** 默认编码入口保护精确目标所有表页，不覆盖数据草稿或其他模态。 */
   function openTableDefaultEncoding(target: TableColumnPatchTarget) {
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try { assertTableDefaultEncodingTargetAvailable(target, useWorkspace.getState()); useWorkspace.setState({ notice: undefined }); setEncodingEdits(false); setEncodingTarget(structuredClone(target)); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
   /** 删除库必须保护全库草稿及同连接查询任务，入口和发送前分别复核。 */
   function openDatabaseDrop(target: DatabaseDropTarget) {
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try {
       const workspace = useWorkspace.getState(); assertDatabaseDropTargetAvailable(target, workspace);
       workbenchNavigation.invalidate(); setDatabaseDropVersion(workspace.connectionVersions[target.connectionId] ?? 0);
@@ -726,7 +727,7 @@ function WorkspaceApp() {
   }
   /** 数据库默认值与现有表页草稿独立；固定原连接修订并撤销旧导航回执。 */
   function openDatabaseDefaultEncoding(target: DatabaseDefaultEncodingTarget) {
-    if (document.querySelector('[role="dialog"]')) return;
+    if (document.querySelector(appDialogSelector)) return;
     try { const workspace = useWorkspace.getState(); assertDatabaseDefaultEncodingTargetAvailable(target, workspace); workbenchNavigation.invalidate(); useWorkspace.setState({ notice: undefined }); setDatabaseEncodingVersion(workspace.connectionVersions[target.connectionId] ?? 0); setDatabaseEncodingEdits(false); setDatabaseEncodingTarget(structuredClone(target)); }
     catch (reason) { useWorkspace.getState().notify(errorMessage(reason), true); }
   }
@@ -921,7 +922,7 @@ function WorkspaceApp() {
   const monitorConnections = connections.filter(profile => profile.dialect !== 'sqlite' && !profile.pendingFiles?.length);
   /** 类别入口只使用树中的明确库；没有库时由用户选择，不借当前查询补库。 */
   function openObjectBrowser(category: ObjectCategory, chosen?: { connectionId: string; database: string }) {
-    if (!chosen && document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (!chosen && document.querySelector(appModalSelector)) return;
     const current = useWorkspace.getState(), target = chosen ?? current.selection;
     workbenchNavigation.invalidate();
     if (!target?.database || !current.connections.some(item => item.id === target.connectionId)) { setObjectPicker(category); return; }
@@ -993,43 +994,43 @@ function WorkspaceApp() {
     'schema-compare': handler(() => setSchemaCompare(true), !!networkConnections.length), 'structure-search': handler(() => setStructureSearch(true)),
     'server-monitor': handler(() => setServerMonitor(true), !sqliteObjects && !!monitorConnections.length),
     'mysql-data-compare': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setServerDataCompare('mysql');
     }, networkConnections.some(profile => !profile.pendingFiles?.length)),
     'postgres-data-compare': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setServerDataCompare('postgres');
     }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
     'sqlite-data-compare': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setSqliteDataCompare(true);
     }, connections.some(profile => profile.dialect === 'sqlite' && !!profile.sqlite.filePath && !profile.pendingFiles?.length)),
     'backup-archive': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setBackupArchive(true);
     }),
     'postgres-table-backup': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setPostgresBackup(true);
     }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
     'mysql-database-backup': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setMysqlDatabaseBackup(true);
     }, networkConnections.some(profile => !profile.pendingFiles?.length)),
     'mysql-sql-file': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setMysqlSqlFile(true);
     }, networkConnections.some(profile => !profile.pendingFiles?.length)),
     'postgres-sql-file': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setPostgresSqlFile(true);
     }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
     'postgres-database-backup': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setPostgresDatabaseBackup(true);
     }, connections.some(profile => profile.dialect === 'postgresql' && !profile.pendingFiles?.length)),
     'postgres-custom-archive': handler(() => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      if (document.querySelector(appModalSelector)) return;
       workbenchNavigation.invalidate(); setPostgresArchive(true);
     }),
     'explain-snapshot': handler(openExplainSnapshot), 'result-snapshot': handler(openResultSnapshot),
@@ -1046,10 +1047,10 @@ function WorkspaceApp() {
   if (!ready) return <div className="boot-screen"><Brand/><Spinner text={zh.app.text004}/></div>;
   return <div className={`app platform-${platform} ${workbench.snapshot.document.focusMode ? 'focus-mode' : ''}`}><header className="app-titlebar"><Brand/><span className="title-divider"/><span className="window-title">{zh.app.text005}</span><span className="grow"/><span className="version-label">v{version}</span><button className="icon-button" title={settings.theme === 'dark' ? zh.app.text006 : zh.app.text007} aria-label={zh.app.text008} onClick={() => state.updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })}>{settings.theme === 'dark' ? <Sun size={15}/> : <Moon size={15}/>}</button><button className="icon-button" title={zh.app.text009} aria-label={zh.app.text009} onClick={() => setPreferences(true)}><Settings2 size={15}/></button></header><NavigationToolbar sqliteObjects={sqliteObjects} postgresObjects={connections.find(profile => profile.id === state.selection?.connectionId)?.dialect === 'postgresql'} onBrowse={category => openObjectBrowser(category)} onQueries={() => showHistoryPanel('queries')} onHistory={openHistoryPanel} connectionsAvailable={!!connections.length} runningCount={runningCount} objectTarget={state.selection ? `${connections.find(item => item.id === state.selection!.connectionId)?.name ?? ''}${state.selection.database ? ` / ${state.selection.database}` : ''}` : navigationZh.selectDatabase}/>
 <div className="app-body"><div className="sidebar-container" style={{ width: settings.sidebarWidth }}><Sidebar onSqliteTableRebuild={openSqliteTableRebuild} onSqliteObjects={(connectionId, database, kind, action, name) => openSqliteObjects({ connectionId, database: database as 'main', kind, name }, action)} onTableMaintenance={(connectionId, database, table, action) => { openSqliteTableMaintenance({ connectionId, database, table }, action); }} onImportNewTable={(connectionId, database) => { if (!document.querySelector('[role=dialog], [role=alertdialog]')) setImportNewTable({ connectionId, database }); }} onTableChecks={(connectionId, database, table) => openTableChecks({ connectionId, database, table })} onRoutineInvocation={openRoutineInvocation} connectionRefreshVersions={connectionRefreshVersions} onDatabaseDrop={(connectionId, database) => openDatabaseDrop({ connectionId, database })} onDatabaseDefaultEncoding={(connectionId, database) => openDatabaseDefaultEncoding({ connectionId, database })} onTableAutoIncrement={(connectionId, database, table) => openTableAutoIncrement({ connectionId, database, table })} objectRefreshVersions={objectRefreshVersions} onTableCopyData={(connectionId, database, table) => openTableCopyData({ connectionId, database, table })} onTableCopyStructure={(connectionId, database, table) => openTableCopyStructure({ connectionId, database, table })} onTableRename={(connectionId, database, table) => openTableRename({ connectionId, database, table })} onTableDefaultEncoding={(connectionId, database, table) => openTableDefaultEncoding({ connectionId, database, table })} onTableComment={(connectionId, database, table) => openTableComment({ connectionId, database, table })} onOpenWorkbench={openWorkbenchTarget} onNewConnection={() => setConnectionDialog('new')} onEditConnection={setConnectionDialog} onForeignKeyPatches={(connectionId, database, table) => openForeignKeyPatches({ connectionId, database, table })} onIndexPatches={(connectionId, database, table) => openIndexPatches({ connectionId, database, table })} onColumnPatches={(connectionId, database, table) => openColumnPatches({ connectionId, database, table })} onCopyConnection={profile => { setConnectionCopy(copyConnectionOverview(profile)); setConnectionDialog('new'); }} onDesign={(connectionId, database, table, createView) => setSchema({ connectionId, database, table, createView })} onDdl={(connectionId, database, object) => setDdl({ connectionId, database, object })} refreshVersion={refreshVersion}/></div><div className="vertical-resize" role="separator" aria-label={zh.app.text011} aria-orientation="vertical" onPointerDown={resizeSidebar}/><main className="main-workspace"><WorkspaceTabStrip onCloseSide={(anchor, side) => closeOtherQueries(anchor, side)} stripRef={tabStripRef} onClose={id => { void closeTab(id); }} onNew={openQueryTabEntry} blocked={closingOtherQueries || !!queryCloseRequest}/>{settings.tabs.length ? <div className="tab-content">{settings.tabs.map(tab => <section key={tab.id} className="tab-pane" hidden={tab.id !== activeTab?.id}>{tab.kind === 'query' ? connections.find(profile=>profile.id===tab.connectionId)?.dialect==='postgresql' ? <PostgresQueryTab historyInsertionRegistry={historyInsertionRegistry} searchNavigation={Object.hasOwn(querySearchPositions,tab.id)?querySearchPositions[tab.id]:undefined} tab={tab} closeRequest={queryCloseRequest?.tabId===tab.id?queryCloseRequest:undefined} onCloseRequestFinished={finishQueryClose} onHistory={()=>showHistoryPanel('history',tab)}/> : <QueryTab historyInsertionRegistry={historyInsertionRegistry} tab={tab} closeRequest={queryCloseRequest?.tabId === tab.id ? queryCloseRequest : undefined} onCloseRequestFinished={finishQueryClose} searchNavigation={Object.hasOwn(querySearchPositions,tab.id)?querySearchPositions[tab.id]:undefined} onHistory={() => showHistoryPanel('history', tab)}/> : tab.kind === 'objects' ? <ObjectBrowser onNewRoutine={() => setSchema({ connectionId: tab.connectionId, database: tab.database!, createView: 'routine' })} onNewSequence={() => setSchema({ connectionId: tab.connectionId, database: tab.database!, createView: 'sequence' })} onSqliteCreate={kind => openSqliteObjects({ connectionId: tab.connectionId, database: tab.database as 'main', kind }, 'create')} tab={tab} active={tab.id === activeTab.id} refreshVersion={refreshVersion + (objectRefreshVersions[JSON.stringify([tab.connectionId, tab.database])] ?? 0) + (connectionRefreshVersions[tab.connectionId] ?? 0)} onOpen={object => openBrowserObject(tab, object)} onNewTable={() => setSchema({ connectionId: tab.connectionId, database: tab.database! })} onImportNewTable={() => { if (!document.querySelector('[role=dialog], [role=alertdialog]')) setImportNewTable({ connectionId: tab.connectionId, database: tab.database! }); }} actions={(object, refresh) => browserActions(tab, object, refresh)}/> : isPostgresRelatedTabId(tab.id) ? <PostgresRelatedTableTab tab={tab} active={tab.id === activeTab.id}/> : isPostgresPresetTabId(tab.id) || connections.find(profile => profile.id === tab.connectionId)?.dialect === 'postgresql' ? <PostgresTableTab key={structureRefresh[columnTargetKey({ connectionId: tab.connectionId, database: tab.database ?? 'postgres', table: tab.table! })]?.version ?? 0} tab={tab} active={tab.id === activeTab.id} onInspect={() => setDdl({ connectionId: tab.connectionId, database: tab.database ?? 'postgres', object: { name: tab.table!, kind: 'table' } })} onCopyTable={() => {
-  if (!document.querySelector('[role="dialog"], [role="alertdialog"]') && useWorkspace.getState().settings.activeTabId === tab.id && tab.table)
+  if (!document.querySelector(appModalSelector) && useWorkspace.getState().settings.activeTabId === tab.id && tab.table)
     setSchema({ connectionId: tab.connectionId, database: tab.database ?? 'postgres', copyPostgresTable: tab.table });
 }}/> : isSqliteRelatedTabId(tab.id) || connections.find(profile => profile.id === tab.connectionId)?.dialect === 'sqlite' ? <SqliteTableTab onCopyTable={() => {
-  if (!document.querySelector('[role="dialog"], [role="alertdialog"]') && useWorkspace.getState().settings.activeTabId === tab.id && tab.database === 'main' && tab.table)
+  if (!document.querySelector(appModalSelector) && useWorkspace.getState().settings.activeTabId === tab.id && tab.database === 'main' && tab.table)
     setSchema({ connectionId: tab.connectionId, database: 'main', copySqliteTable: tab.table });
 }} onSqliteTableRebuild={openSqliteTableRebuild} onObject={action => openSqliteObjects({ connectionId: tab.connectionId, database: tab.database as 'main', kind: 'view', name: tab.table! }, action)} onMaintenance={action => { openSqliteTableMaintenance({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! }, action); }} onRename={() => openTableRename({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onColumns={() => openColumnPatches({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} tab={tab} active={tab.id === activeTab?.id} refreshVersion={structureRefresh[columnTargetKey({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })]?.version ?? 0} refreshAutomatically={structureRefresh[columnTargetKey({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })]?.automatic ?? true} onIndexes={() => openIndexPatches({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })}/> : <TableTab incomingQuery={incomingQuery} readIncomingQuery={readIncomingQuery} consumeIncomingQuery={consumeIncomingQuery} onTableChecks={() => openTableChecks({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onQueryTemplateNavigation={() => workbenchNavigation.invalidate()} onOpenGeneratedQuery={candidate => { workbenchNavigation.invalidate(); state.openTab(candidate); }} onTableDrop={() => openTableDrop({ connectionId: tab.connectionId!, database: tab.database!, table: tab.table! })} onTableTruncate={() => openTableTruncate({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onTableAutoIncrement={() => openTableAutoIncrement({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onTableCopyData={() => openTableCopyData({ connectionId: tab.connectionId!, database: tab.database!, table: tab.table! })} onTableCopyStructure={() => openTableCopyStructure({ connectionId: tab.connectionId!, database: tab.database!, table: tab.table! })} onTableRename={() => openTableRename({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onTableDefaultEncoding={() => openTableDefaultEncoding({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onTableComment={() => openTableComment({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} tab={tab} refreshVersion={structureRefresh[columnTargetKey({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })]?.version ?? 0} refreshAutomatically={structureRefresh[columnTargetKey({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })]?.automatic ?? true} onForeignKeyPatches={() => openForeignKeyPatches({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onIndexPatches={() => openIndexPatches({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onColumnPatches={() => openColumnPatches({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! })} onDesign={isView => isView ? setDdl({ connectionId: tab.connectionId, database: tab.database!, object: { name: tab.table!, kind: 'view' } }) : setSchema({ connectionId: tab.connectionId, database: tab.database!, table: tab.table })} onTransfer={mode => setTransfer({ mode, connectionId: tab.connectionId, database: tab.database!, table: tab.table! })}/>}</section>)}</div> : <Welcome onConnect={() => setConnectionDialog('new')} onQuery={() => openNewQueryDialog()} onHistory={openHistoryPanel}/>}</main></div><footer className="app-statusbar"><span className="status-dot"/>{zh.app.text015}<span className="status-divider"/><span>{activeTab ? connections.find(profile => profile.id === activeTab.connectionId)?.name || zh.common.connectionDeleted : 'MySQL · MariaDB · PostgreSQL · SQLite'}</span><span className="grow"/><button onClick={() => setTasks(true)}>{runningCount ? formatText(zh.app.text016, runningCount) : zh.app.text017}</button><span className="status-divider"/><span>UTF-8</span></footer>{notice && <div className={`toast ${notice.error ? 'error' : ''}`} role={notice.error ? 'alert' : 'status'}>{!notice.error && <CheckCircle2 size={17}/>}<span>{notice.text}</span><button aria-label={zh.app.text018} onClick={() => useWorkspace.setState({ notice: undefined })}><X size={15}/></button></div>}
     {workbenchDialog && <WorkbenchDialog onOpen={openWorkbenchTarget} onClose={closeWorkbenchManager}/>}

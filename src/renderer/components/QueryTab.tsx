@@ -1,3 +1,4 @@
+import { appDialogSelector, appModalSelector } from '../modalSelectors';
 import { StatementNavigationController, type StatementNavigationView } from '../statementNavigationController';
 import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { StatementNavigationWorkerClient } from '../statementNavigationWorkerClient';
@@ -149,23 +150,7 @@ import { ActionMenu, ActionMenuSection } from './ActionMenu';
 import { AdaptiveToolbar } from './AdaptiveToolbar';
 import { useUiCommandScope } from '../uiCommands';
 import { actionMenuZh as menuText } from '../locales/actionMenu.zh-CN';
-
-/** 复用 Monaco 的整行、多选区及撤销行为。 */
-const sqlTextActions = {
-  'sql-uppercase': 'editor.action.transformToUppercase',
-  'sql-lowercase': 'editor.action.transformToLowercase',
-  'sql-duplicate-lines': 'editor.action.copyLinesDownAction',
-  'sql-move-lines-up': 'editor.action.moveLinesUpAction',
-  'sql-move-lines-down': 'editor.action.moveLinesDownAction',
-  'sql-delete-lines': 'editor.action.deleteLines',
-} as const;
-/** 行列及括号导航使用 Monaco 已注册的动作与当前模型。 */
-const sqlPositionActions = {
-  'sql-goto-line': 'editor.action.gotoLine',
-  'sql-goto-bracket': 'editor.action.jumpToBracket',
-  'sql-select-bracket': 'editor.action.selectToBracket',
-} as const;
-const bracketCommands = ['sql-goto-bracket', 'sql-select-bracket'] as const;
+import { bracketCommands, sqlPositionActions, sqlTextActions } from '../sqlEditorActions';
 const completionStatusInfo={sessionUnknown:{text:completionZh.sessionUnknown,hint:completionZh.sessionUnknownHint},partial:{text:completionZh.partial,hint:completionZh.partialHint},unavailable:{text:completionZh.unavailable,hint:completionZh.unavailableHint},limited:{text:completionZh.limited,hint:completionZh.limitedHint},databaseUnknown:{text:completionZh.databaseUnknown,hint:completionZh.databaseUnknownHint},startupTimeout:{text:completionZh.startupTimeout,hint:completionZh.startupTimeoutHint},analysisTimeout:{text:completionZh.analysisTimeout,hint:completionZh.analysisTimeoutHint}};
 
 interface SqliteParameterForm { id: string; source: string; connectionId: string; connection: unknown; version: number; fileBinding: unknown; savedBinding: unknown; session: string; recognized: boolean; submitted: boolean; valid: boolean; }
@@ -316,9 +301,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     const unsubscribe=useWorkspace.subscribe(state=>{const source=resultOwner.current,current=state.settings.tabs.find(item=>item.id===source.tabId);const sourceChanged=current?.kind!=='query'||current.connectionId!==source.connectionId||(state.connectionVersions[source.connectionId]??0)!==source.version;const changed=state.settings.activeTabId!==source.tabId||sourceChanged;if(sourceChanged)resultMemoryRef.current=undefined;if(changed)resultHistory.invalidate();if(changed||state.activeJobs[source.tabId]&&!resultInsertActivity.current)revoke();else resultInsertRef.current?.current();});
     let blocked=false;
     const inspect=(records:MutationRecord[]=[])=>{
-      const lease=columnLeaseRef.current, preset=presetLeaseRef.current, statistics=statisticsLeaseRef.current, comparison=comparisonLeaseRef.current, insert=resultInsertRef.current, owned=lease?document.querySelector(`[data-query-columns-owner="${lease.owner}"]`)?.querySelector('[role="dialog"]'):preset?document.querySelector(`[data-query-result-presets-owner="${preset.owner}"]`)?.querySelector('[role="dialog"]'):statistics?document.querySelector(`[data-query-result-statistics-owner="${statistics.owner}"]`)?.querySelector('[role="dialog"]'):comparison?document.querySelector(`[data-query-result-comparison-owner="${comparison.owner}"]`)?.querySelector('[role="dialog"]'):insert?Array.from(document.querySelectorAll('[role="dialog"]')).find(node=>node.querySelector(`[data-result-insert-owner="${insert.owner}"]`)):undefined;
-      const foreign=Array.from(document.querySelectorAll('[role="dialog"]')).some(node=>node!==owned);
-      const added=records.some(record=>Array.from(record.addedNodes).some(node=>node instanceof Element&&(node.getAttribute('role')==='dialog'&&node!==owned||Array.from(node.querySelectorAll('[role="dialog"]')).some(dialog=>dialog!==owned))));
+      const lease=columnLeaseRef.current, preset=presetLeaseRef.current, statistics=statisticsLeaseRef.current, comparison=comparisonLeaseRef.current, insert=resultInsertRef.current, owned=lease?document.querySelector(`[data-query-columns-owner="${lease.owner}"]`)?.querySelector(appDialogSelector):preset?document.querySelector(`[data-query-result-presets-owner="${preset.owner}"]`)?.querySelector(appDialogSelector):statistics?document.querySelector(`[data-query-result-statistics-owner="${statistics.owner}"]`)?.querySelector(appDialogSelector):comparison?document.querySelector(`[data-query-result-comparison-owner="${comparison.owner}"]`)?.querySelector(appDialogSelector):insert?Array.from(document.querySelectorAll(appDialogSelector)).find(node=>node.querySelector(`[data-result-insert-owner="${insert.owner}"]`)):undefined;
+      const foreign=Array.from(document.querySelectorAll(appDialogSelector)).some(node=>node!==owned);
+      const added=records.some(record=>Array.from(record.addedNodes).some(node=>node instanceof Element&&(node.getAttribute('role')==='dialog'&&node!==owned||Array.from(node.querySelectorAll(appDialogSelector)).some(dialog=>dialog!==owned))));
       if(foreign&&!blocked||added)revoke();else if(blocked&&!foreign)revoke();blocked=foreign;
     };
     const observer=typeof MutationObserver==='undefined'?undefined:new MutationObserver(inspect);observer?.observe(document.body,{childList:true,subtree:true});
@@ -479,7 +464,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 定位独立于会话与当前语句投递意图；正文、标签和连接修订均读取同步工作区。 */
   function failureSourceScope(): QueryFailureSourceScope {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), connectionId = current?.connectionId ?? tab.connectionId;
-    return { tabId: tab.id, connectionId, connectionVersion: workspace.connectionVersions[connectionId] ?? 0, draft: current?.sql, present: alive.current && current?.kind === 'query' && workspace.connections.some(item => item.id === connectionId), active: workspace.settings.activeTabId === tab.id, busy: busyRef.current || !!workspace.activeJobs[tab.id], modal: !!document.querySelector('[role="dialog"]'), closing: !!closeRequestRef.current };
+    return { tabId: tab.id, connectionId, connectionVersion: workspace.connectionVersions[connectionId] ?? 0, draft: current?.sql, present: alive.current && current?.kind === 'query' && workspace.connections.some(item => item.id === connectionId), active: workspace.settings.activeTabId === tab.id, busy: busyRef.current || !!workspace.activeJobs[tab.id], modal: !!document.querySelector(appDialogSelector), closing: !!closeRequestRef.current };
   }
   /** 捕获失败仅使定位不可用，不改变原执行范围、参数模板或发送行为。 */
   function captureFailureSource(source: string, all = false): QueryFailureSourceLease | undefined {
@@ -490,7 +475,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function clearFailureSource(): void { failureSource.current?.dispose(); failureSource.current = undefined; }
   /** 格式化是当前草稿的普通编辑，不建连、投递SQL或改写会话/来源绑定。 */
   function formatQuery() {
-    if (busyRef.current || document.querySelector('[role="dialog"]')) return;
+    if (busyRef.current || document.querySelector(appDialogSelector)) return;
     try {
       const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), instance = editor.current;
       const model = instance?.getModel(), eol = model?.getEOL();
@@ -502,13 +487,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       const owner = current, profile = workspace.connections.find(item => item.id === owner.connectionId), version = workspace.connectionVersions[owner.connectionId] ?? 0, session = sessionRef.current;
       let operation: DeferredUpperSqlFormatting | undefined, observer: MutationObserver | undefined, modalSeen = false;
       // 模态窗口即使打开又关闭也留下墓碑；提交前同步取出尚未投递的记录。
-      const inspectModals = (records: MutationRecord[]) => { if (records.some(record => Array.from(record.addedNodes).some(node => node.nodeType === 1 && ((node as Element).getAttribute('role') === 'dialog' || (node as Element).querySelector('[role="dialog"]'))))) modalSeen = true; };
+      const inspectModals = (records: MutationRecord[]) => { if (records.some(record => Array.from(record.addedNodes).some(node => node.nodeType === 1 && ((node as Element).getAttribute('role') === 'dialog' || (node as Element).querySelector(appDialogSelector))))) modalSeen = true; };
       operation = new DeferredUpperSqlFormatting({
         editor: () => editor.current,
         assertCurrent() {
           if (observer) inspectModals(observer.takeRecords());
           const latest = useWorkspace.getState(), target = latest.settings.tabs.find(item => item.id === tab.id);
-          if (!alive.current || operation && formatting.current !== operation || target !== owner || latest.connections.find(item => item.id === owner.connectionId) !== profile || (latest.connectionVersions[owner.connectionId] ?? 0) !== version || sessionRef.current !== session || latest.settings.activeTabId !== tab.id || latest.activeJobs[tab.id] || busyRef.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy() || modalSeen || document.querySelector('[role="dialog"]') || latest.settings.sqlKeywordCase !== preferences.keywordCase || latest.settings.editorTabSize !== preferences.tabSize || latest.settings.editorInsertSpaces !== preferences.insertSpaces) throw Error(sqlFormattingZh.unavailable);
+          if (!alive.current || operation && formatting.current !== operation || target !== owner || latest.connections.find(item => item.id === owner.connectionId) !== profile || (latest.connectionVersions[owner.connectionId] ?? 0) !== version || sessionRef.current !== session || latest.settings.activeTabId !== tab.id || latest.activeJobs[tab.id] || busyRef.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy() || modalSeen || document.querySelector(appDialogSelector) || latest.settings.sqlKeywordCase !== preferences.keywordCase || latest.settings.editorTabSize !== preferences.tabSize || latest.settings.editorInsertSpaces !== preferences.insertSpaces) throw Error(sqlFormattingZh.unavailable);
         },
         subscribe(changed) {
           const unsubscribe = useWorkspace.subscribe(changed);
@@ -529,13 +514,13 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), profile = workspace.connections.find(item => item.id === current?.connectionId), origin = duplicateOrigin.current;
         return { tab: current, connection: profile, connectionVersion: workspace.connectionVersions[current?.connectionId ?? ''] ?? 0, sessionId: sessionRef.current,
           present: alive.current && current?.kind === 'query' && !!profile && current.connectionId === tab.connectionId && current.connectionId === origin.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === origin.version,
-          active: workspace.settings.activeTabId === tab.id, blocked: busyRef.current || !!workspace.activeJobs[tab.id] || !!pendingSession.current || !!closeRequestRef.current || !!document.querySelector('[role="dialog"]') };
+          active: workspace.settings.activeTabId === tab.id, blocked: busyRef.current || !!workspace.activeJobs[tab.id] || !!pendingSession.current || !!closeRequestRef.current || !!document.querySelector(appDialogSelector) };
       };
       intent = new QueryDuplicateIntent({ editor: () => editor.current, scope, flush: flushEditorContent,
         subscribe: changed => {
           const unsubscribe = useWorkspace.subscribe(changed);
           const observer = typeof MutationObserver === 'undefined' ? undefined : new MutationObserver(records => {
-            if (records.some(record => Array.from(record.addedNodes).some(node => node instanceof Element && (node.getAttribute('role') === 'dialog' || node.querySelector('[role="dialog"]'))))) intent?.dispose();
+            if (records.some(record => Array.from(record.addedNodes).some(node => node instanceof Element && (node.getAttribute('role') === 'dialog' || node.querySelector(appDialogSelector))))) intent?.dispose();
           });
           observer?.observe(document.body, { childList: true, subtree: true }); return () => { unsubscribe(); observer?.disconnect(); };
         },
@@ -548,7 +533,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   /** 选区优先执行；执行计划走专用命令，由引擎拒绝多语句输入。 */
   async function execute(mode: 'selected' | 'selection-only' | 'all' | 'explain' = 'selected') {
-    if (busyRef.current || document.querySelector('[role="dialog"]')) return;
+    if (busyRef.current || document.querySelector(appDialogSelector)) return;
     if (mode === 'selection-only' || sqlite && mode === 'explain') {
       if (mode === 'selection-only' && resultsOnly) return;
       if (!alive.current || useWorkspace.getState().activeJobs[tab.id] || closeRequestRef.current || fileSource.isBusy() || formatting.current || useWorkspace.getState().queryFileOpenings?.[tab.id] || document.querySelector('[role="alertdialog"]')) return;
@@ -577,7 +562,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function openTransactionSettings() {
     if (sqlite) return;
     const workspace = useWorkspace.getState();
-    if (busyRef.current || workspace.activeJobs[tab.id] || pendingSession.current || closeRequestRef.current || formatting.current || fileSource.isBusy() || transactionSettingsIntent.current || document.querySelector('[role="dialog"]')) return;
+    if (busyRef.current || workspace.activeJobs[tab.id] || pendingSession.current || closeRequestRef.current || formatting.current || fileSource.isBusy() || transactionSettingsIntent.current || document.querySelector(appDialogSelector)) return;
     const current = workspace.settings.tabs.find(item => item.id === tab.id), profile = workspace.connections.find(item => item.id === current?.connectionId);
     if (current?.kind !== 'query' || !profile) return;
     // 尚未建立会话且默认库来源未知时，沿用既有确认入口，避免猜库或叠加模态。
@@ -663,7 +648,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 仅当前已连接空闲页打开目录；绝不建连、修改正文或借普通runQuery发送USE。 */
   function openDatabaseSwitch() {
     if (sqlite) return;
-    if(databaseSwitchIntent.current||busyRef.current||!sessionRef.current||!editor.current||closeRequestRef.current||document.querySelector('[role="dialog"]'))return;
+    if(databaseSwitchIntent.current||busyRef.current||!sessionRef.current||!editor.current||closeRequestRef.current||document.querySelector(appDialogSelector))return;
     try {
       const intent=new QueryDatabaseSwitchIntent(editor.current,databaseSwitchScope,changed=>useWorkspace.subscribe(changed),queryDatabaseSwitchZh.changed);
       databaseSwitchIntent.current=intent;setDatabaseSwitchDialog(intent);
@@ -756,7 +741,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 先在原会话受限读取真实默认库；完整确认之前不发送用户SQL，也不清除已有结果。 */
   async function openAnalyze() {
     if (sqlite) return;
-    if (busyRef.current || analyzeIntent.current || document.querySelector('[role="dialog"]') || !editor.current || closeRequestRef.current) return;
+    if (busyRef.current || analyzeIntent.current || document.querySelector(appDialogSelector) || !editor.current || closeRequestRef.current) return;
     let intent: QueryAnalyzeIntent | undefined, opened = false;
     try {
       intent = new QueryAnalyzeIntent(editor.current, analyzeScope, changed => useWorkspace.subscribe(changed), () => { if (alive.current) setAnalyzeInvalid(queryAnalyzeZh.changed); }, queryAnalyzeZh.changed);
@@ -798,11 +783,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 直接读workspace和session同步引用，不等待React重新渲染才能拒绝旧连接或旧草稿。 */
   function currentStatementScope(): CurrentStatementScope {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), connectionId = current?.connectionId ?? tab.connectionId;
-    return { tabId: tab.id, connectionId, connectionVersion: workspace.connectionVersions[connectionId] ?? 0, sessionId: sessionRef.current, draft: current?.sql, present: alive.current && !closeRequestRef.current && !fileSource.isBusy() && !workspace.queryFileOpenings?.[tab.id] && current?.kind === 'query' && workspace.connections.some(item => item.id === connectionId), active: workspace.settings.activeTabId === tab.id, modal: !!document.querySelector('[role="dialog"], [role="alertdialog"]') };
+    return { tabId: tab.id, connectionId, connectionVersion: workspace.connectionVersions[connectionId] ?? 0, sessionId: sessionRef.current, draft: current?.sql, present: alive.current && !closeRequestRef.current && !fileSource.isBusy() && !workspace.queryFileOpenings?.[tab.id] && current?.kind === 'query' && workspace.connections.some(item => item.id === connectionId), active: workspace.settings.activeTabId === tab.id, modal: !!document.querySelector(appModalSelector) };
   }
   /** 独立入口只捕获当前模型，不读取选区或tab.sql代替正文，也不改原执行快捷键。 */
   async function executeCurrentStatement() {
-    if (!alive.current || busyRef.current || useWorkspace.getState().activeJobs[tab.id] || closeRequestRef.current || fileSource.isBusy() || formatting.current || useWorkspace.getState().queryFileOpenings?.[tab.id] || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (!alive.current || busyRef.current || useWorkspace.getState().activeJobs[tab.id] || closeRequestRef.current || fileSource.isBusy() || formatting.current || useWorkspace.getState().queryFileOpenings?.[tab.id] || document.querySelector(appModalSelector)) return;
     let intent: CurrentStatementIntent | undefined;
     try {
       if (!editor.current) throw new Error(currentStatementZh.unavailable);
@@ -815,7 +800,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 参数识别只打开固定会话，不建立任务、不执行用户模板，也不清除已有结果。 */
   function openParameters() {
     if (sqlite && (!alive.current || useWorkspace.getState().settings.activeTabId !== tab.id || useWorkspace.getState().activeJobs[tab.id] || closeRequestRef.current || fileSource.isBusy() || formatting.current || useWorkspace.getState().queryFileOpenings?.[tab.id] || document.querySelector('[role="alertdialog"]'))) return;
-    if (busyRef.current || document.querySelector('[role="dialog"]')) return;
+    if (busyRef.current || document.querySelector(appDialogSelector)) return;
     const source = querySource(); if (!source.trim()) { setError(zh.query.text001); return; }
     clearFailureSource(); parameterFailureSource.current?.dispose(); parameterFailureSource.current = captureFailureSource(source); parameterContinueOnError.current = !sqlite && continueOnError; parameterCollectWarnings.current = !sqlite && collectWarnings;
     if (sqlite) {
@@ -834,7 +819,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 捕获不可变选区或全文；打开和选择文件均不执行 SQL。 */
   function openStreamExport() {
     if (sqlite) return;
-    if (busyRef.current || document.querySelector('[role="dialog"]')) return;
+    if (busyRef.current || document.querySelector(appDialogSelector)) return;
     const source = querySource(); if (!source.trim()) { setError(zh.query.text001); return; }
     invalidateResultSelection(); streamParameterSession.current = ''; setStreamExportSource(source);
   }
@@ -997,7 +982,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
 
   /** 打开只使用已返回的离线报告，固定结果不能借用当前会话重新读警告。 */
   function openWarningsReport() {
-    if (busyRef.current || warningsIntent.current || document.querySelector('[role="dialog"]') || !warningsReportAvailable()) return;
+    if (busyRef.current || warningsIntent.current || document.querySelector(appDialogSelector) || !warningsReportAvailable()) return;
     let intent: QueryWarningsViewIntent | undefined;
     try {
       intent = new QueryWarningsViewIntent(warningsViewScope, listener => useWorkspace.subscribe(listener), () => {
@@ -1158,7 +1143,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 文件能力只绑定本轮查询页与已返回来源，不要求连接存在，不触发建连或读取数据库。 */
   function beginResultSnapshot(mode: 'open' | 'save'): QueryResultSnapshotOperation {
     const state = useWorkspace.getState(), originalTab = state.settings.tabs.find(item => item.id === tab.id), profile = state.connections.find(item => item.id === tab.connectionId), view = snapshotView.current, values = [...snapshotValues.current];
-    if (!alive.current || snapshotOperation.current || busyRef.current || pendingSession.current || closeRequestRef.current || formatting.current || fileSource.isBusy() || state.activeJobs[tab.id] || originalTab?.kind !== 'query' || originalTab !== tab || state.settings.activeTabId !== tab.id || document.querySelector('[role="dialog"]')) throw Error(queryResultSnapshotUiZh.unavailable);
+    if (!alive.current || snapshotOperation.current || busyRef.current || pendingSession.current || closeRequestRef.current || formatting.current || fileSource.isBusy() || state.activeJobs[tab.id] || originalTab?.kind !== 'query' || originalTab !== tab || state.settings.activeTabId !== tab.id || document.querySelector(appDialogSelector)) throw Error(queryResultSnapshotUiZh.unavailable);
     if (mode === 'save' && !view.result?.columns.length) throw Error(zh.query.pinRequiresRows);
     if (mode === 'open' && view.pins.length >= pinLimits.count) throw Error(zh.query.pinCountLimit);
     const version = state.connectionVersions[tab.connectionId] ?? 0;
@@ -1245,7 +1230,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 直接读原工作区防止标签/连接/忙态ABA；内联region不放宽已有modal保护。 */
   function rowDetailAllowed(binding: QueryRowDetailsBinding | undefined): boolean {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
-    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !filterLeaseRef.current && !sortLeaseRef.current && !document.querySelector('[role="dialog"]') && resultViewCurrent(binding?.result) && rowDetails.current(binding);
+    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !filterLeaseRef.current && !sortLeaseRef.current && !document.querySelector(appDialogSelector) && resultViewCurrent(binding?.result) && rowDetails.current(binding);
   }
   /** 活动位置独立于勾选；RDG的视图rowIdx只用于同一视图binding，不索引原source.rows。 */
   function selectActiveDetailRow(index: number | null): void {
@@ -1272,7 +1257,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function filterContextCurrent(lease: FilterLease): boolean {
     if(sortLeaseRef.current||resultFilterRef.current.view(lease.binding)!==lease.view||resultSorterRef.current.view(lease.sortBinding)!==lease.sortView)return false;
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
-    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!columnLeaseRef.current&&!document.querySelector('[role="dialog"]');
+    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!columnLeaseRef.current&&!document.querySelector(appDialogSelector);
   }
   /** 打开只撤销旧选择；取消不修改过滤、排序和原SQL。 */
   function openFilterPanel():void{showFilterPanel();}
@@ -1329,7 +1314,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function sortPanelCurrent(lease: SortLease): boolean {
     if (sortLeaseRef.current !== lease || resultSorterRef.current.view(lease.binding) !== lease.view || resultFilterRef.current.view(lease.filterBinding) !== lease.filterView) return false;
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
-    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !filterLeaseRef.current && !columnLeaseRef.current && !document.querySelector('[role="dialog"]');
+    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !filterLeaseRef.current && !columnLeaseRef.current && !document.querySelector(appDialogSelector);
   }
   /** 打开只清旧选择；当前筛选、排序和历史均保持，草稿不触发比较或SQL。 */
   function openSortPanel(): void {
@@ -1399,7 +1384,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 旧结果或旧暂存的丢弃回调不能清除下一份配置。 */
   function rememberedOrganizationCanDiscard(): boolean {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
-    return !!resultMemory && resultMemoryRef.current === resultMemory && alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && task.current === resultContext[3] && !columnLeaseRef.current && !filterLeaseRef.current && !sortLeaseRef.current && !document.querySelector('[role="dialog"]') && (selectionBinding ? resultSelectionAllowed(selectionBinding) : !sourceResult?.columns.length);
+    return !!resultMemory && resultMemoryRef.current === resultMemory && alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && task.current === resultContext[3] && !columnLeaseRef.current && !filterLeaseRef.current && !sortLeaseRef.current && !document.querySelector(appDialogSelector) && (selectionBinding ? resultSelectionAllowed(selectionBinding) : !sourceResult?.columns.length);
   }
   /** 即使后续SQL失败或没有行结果，仍可主动清除包含条件值的内存暂存。 */
   function discardRememberedOrganization(): void {
@@ -1410,8 +1395,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function presetManagerCurrent(lease: PresetLease): boolean {
     if(presetLeaseRef.current!==lease||resultFilterRef.current.view(lease.filterBinding)!==lease.filterView||resultSorterRef.current.view(lease.binding)!==lease.view)return false;
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
-    const owned=document.querySelector(`[data-query-result-presets-owner="${lease.owner}"]`)?.querySelector('[role="dialog"]');
-    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!columnLeaseRef.current&&!filterLeaseRef.current&&!sortLeaseRef.current&&!Array.from(document.querySelectorAll('[role="dialog"]')).some(node=>node!==owned);
+    const owned=document.querySelector(`[data-query-result-presets-owner="${lease.owner}"]`)?.querySelector(appDialogSelector);
+    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!columnLeaseRef.current&&!filterLeaseRef.current&&!sortLeaseRef.current&&!Array.from(document.querySelectorAll(appDialogSelector)).some(node=>node!==owned);
   }
   /** 打开时只捕获完整配置和字段，不复制行或SQL；暂存槽保持独立。 */
   function openResultPresets(): void {
@@ -1425,15 +1410,15 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 对比独立于当前结果的选择；仅持有明确的本标签固定快照，不执行SQL或猜测行键。 */
   function openResultComparison():void {
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
-    if(!alive.current||busyRef.current||workspace.activeJobs[tab.id]||workspace.settings.activeTabId!==tab.id||current?.kind!=='query'||current.connectionId!==tab.connectionId||(workspace.connectionVersions[current.connectionId]??0)!==connectionVersion||comparisonPinsRef.current!==pins||pins.length<2||comparisonLeaseRef.current||statisticsLeaseRef.current||columnLeaseRef.current||filterLeaseRef.current||sortLeaseRef.current||presetLeaseRef.current||document.querySelector('[role="dialog"]'))return;
+    if(!alive.current||busyRef.current||workspace.activeJobs[tab.id]||workspace.settings.activeTabId!==tab.id||current?.kind!=='query'||current.connectionId!==tab.connectionId||(workspace.connectionVersions[current.connectionId]??0)!==connectionVersion||comparisonPinsRef.current!==pins||pins.length<2||comparisonLeaseRef.current||statisticsLeaseRef.current||columnLeaseRef.current||filterLeaseRef.current||sortLeaseRef.current||presetLeaseRef.current||document.querySelector(appDialogSelector))return;
     invalidateResultSelection();const lease={owner:uid(),pins};comparisonLeaseRef.current=lease;setComparisonLease(lease);setError('');
   }
   /** 每批只核父级轻门；对比器最终完整核固定来源，旧窗口不能在标签或连接ABA后复活。 */
   function comparisonCurrent(lease:ComparisonLease):boolean {
     if(comparisonLeaseRef.current!==lease||comparisonPinsRef.current!==lease.pins)return false;
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
-    const owned=document.querySelector(`[data-query-result-comparison-owner="${lease.owner}"]`)?.querySelector('[role="dialog"]');
-    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!statisticsLeaseRef.current&&!columnLeaseRef.current&&!filterLeaseRef.current&&!sortLeaseRef.current&&!presetLeaseRef.current&&!Array.from(document.querySelectorAll('[role="dialog"]')).some(node=>node!==owned);
+    const owned=document.querySelector(`[data-query-result-comparison-owner="${lease.owner}"]`)?.querySelector(appDialogSelector);
+    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!statisticsLeaseRef.current&&!columnLeaseRef.current&&!filterLeaseRef.current&&!sortLeaseRef.current&&!presetLeaseRef.current&&!Array.from(document.querySelectorAll(appDialogSelector)).some(node=>node!==owned);
   }
   /** 迟到关闭只能撤销原owner，不能影响重新打开的对比窗口。 */
   function closeResultComparison(lease:ComparisonLease):void {
@@ -1446,8 +1431,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function statisticsCurrent(lease:StatisticsLease):boolean {
     if(statisticsLeaseRef.current!==lease||resultFilterRef.current!==lease.filter||resultSorterRef.current!==lease.sorter)return false;
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
-    const owned=document.querySelector(`[data-query-result-statistics-owner="${lease.owner}"]`)?.querySelector('[role="dialog"]');
-    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!columnLeaseRef.current&&!filterLeaseRef.current&&!sortLeaseRef.current&&!presetLeaseRef.current&&!Array.from(document.querySelectorAll('[role="dialog"]')).some(node=>node!==owned);
+    const owned=document.querySelector(`[data-query-result-statistics-owner="${lease.owner}"]`)?.querySelector(appDialogSelector);
+    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!columnLeaseRef.current&&!filterLeaseRef.current&&!sortLeaseRef.current&&!presetLeaseRef.current&&!Array.from(document.querySelectorAll(appDialogSelector)).some(node=>node!==owned);
   }
   /** 列只认准确可见对象；非空勾选必须匹配父级已接纳回执，不能由调用方伪造范围。 */
   function openResultStatistics(column:ResultColumn,indices:ReadonlySet<number>):void {
@@ -1515,7 +1500,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 同步读取真实工作区和操作引用；关闭、连接修订或迟到按钮均不能借旧绑定导出。 */
   function resultSelectionAllowed(binding: ResultSelectionBinding | undefined): boolean {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
-    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !resultInsertRef.current && !comparisonLeaseRef.current && !statisticsLeaseRef.current && !filterLeaseRef.current && !sortLeaseRef.current && !document.querySelector('[role="dialog"]') && resultViewCurrent(binding?.result) && resultSelection.current(binding);
+    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !resultInsertRef.current && !comparisonLeaseRef.current && !statisticsLeaseRef.current && !filterLeaseRef.current && !sortLeaseRef.current && !document.querySelector(appDialogSelector) && resultViewCurrent(binding?.result) && resultSelection.current(binding);
   }
   /** 网格只交付当前准确数组的选择，验证失败清空选择，不能回退成全结果导出。 */
   function selectResultRows(selection: ResultGridSelection): boolean {
@@ -1590,8 +1575,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 只忽略本owner唯一模态；其它窗口、任务、连接修订和失效绑定均终止本次管理。 */
   function columnManagerCurrent(lease:ColumnLease):boolean {
     if(columnLeaseRef.current!==lease||!resultSelection.current(lease.binding)||!resultViewCurrent(lease.binding.result))return false;
-    const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id),owned=document.querySelector(`[data-query-columns-owner="${lease.owner}"]`)?.querySelector('[role="dialog"]');
-    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!closeRequest&&Array.from(document.querySelectorAll('[role="dialog"]')).every(node=>node===owned);
+    const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id),owned=document.querySelector(`[data-query-columns-owner="${lease.owner}"]`)?.querySelector(appDialogSelector);
+    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!closeRequest&&Array.from(document.querySelectorAll(appDialogSelector)).every(node=>node===owned);
   }
   /** 关闭也撤销本代次；旧关闭／应用回调不能作用于下一次管理器或新结果。 */
   function closeColumnManager(lease:ColumnLease){if(columnLeaseRef.current!==lease)return;columnLeaseRef.current=null;invalidateResultSelection();setColumnLease(null);refreshResultSelection(value=>value+1);}
@@ -1662,7 +1647,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       && JSON.stringify(current.sourceBinding) === JSON.stringify(tab.sourceBinding)
       && workspace.connections.find(profile => profile.id === tab.connectionId) === connection
       && (workspace.connectionVersions[tab.connectionId] ?? 0) === connectionVersion
-      && !closeRequestRef.current && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+      && !closeRequestRef.current && !document.querySelector(appModalSelector);
   }
   /** 目录、选中和相邻跳转共用原分段规则，均不创建连接、会话或查询任务。 */
   function openStatementNavigation(instance = editor.current, action: 'panel' | 'select' | 'previous' | 'next' = 'panel'): void {
@@ -1692,7 +1677,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         && JSON.stringify([now.connectionId, now.database, now.databaseContext, now.sourceBinding, now.fileSourceBinding]) === context
         && state.connections.find(value => value.id === profile.id) === profile && (state.connectionVersions[profile.id] ?? 0) === connectionVersion
         && sessionRef.current === originalSession && !closeRequestRef.current && !busyRef.current && !state.activeJobs[tab.id] && !fileSource.isBusy()
-        && !document.querySelector('[role="dialog"], [role="alertdialog"]') && editor.current === instance && instance.getModel() === model && !model.isDisposed() && model.getVersionId() === version;
+        && !document.querySelector(appModalSelector) && editor.current === instance && instance.getModel() === model && !model.isDisposed() && model.getVersionId() === version;
       const nowSelections = okay && originalSelection ? instance.getSelections() : undefined;
       if (!okay || originalSelection && (layoutRoot.current?.dataset.resultLayout === 'results' || nowSelections?.length !== 1 || !originalSelection.equalsSelection(nowSelections[0]))) valid = false;
       return valid;
@@ -1757,7 +1742,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         && JSON.stringify([now.connectionId, now.database, now.databaseContext, now.sourceBinding, now.fileSourceBinding]) === context
         && state.connections.find(value => value.id === profile.id) === profile && (state.connectionVersions[profile.id] ?? 0) === connectionVersion
         && sessionRef.current === originalSession && !closeRequestRef.current && !busyRef.current && !state.activeJobs[tab.id] && !fileSource.isBusy()
-        && !document.querySelector('[role="dialog"], [role="alertdialog"]') && editor.current === instance && instance.getModel() === model && !model.isDisposed() && model.getVersionId() === version;
+        && !document.querySelector(appModalSelector) && editor.current === instance && instance.getModel() === model && !model.isDisposed() && model.getVersionId() === version;
       if (!okay) valid = false; return okay;
     };
     binding.controller = new SqlSyntaxCheckController({ source: model.getValue(), sessionId: originalSession || undefined, current,
@@ -1799,7 +1784,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       current: () => {
         if (!valid) return false;
         const workspace = useWorkspace.getState(), now = workspace.settings.tabs.find(value => value.id === tab.id);
-        const dialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')];
+        const dialogs = [...document.querySelectorAll(appModalSelector)];
         const okay = alive.current && objectDefinitionRef.current === intent && workspace.settings.activeTabId === tab.id && now?.kind === 'query'
           && JSON.stringify([now.connectionId, now.database, now.databaseContext, now.sourceBinding, now.fileSourceBinding]) === key
           && workspace.connections.find(value => value.id === profile.id) === profile && (workspace.connectionVersions[profile.id] ?? 0) === connectionVersion

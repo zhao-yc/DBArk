@@ -1,3 +1,4 @@
+import { appModalSelector } from '../modalSelectors';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { DataGridHandle } from 'react-data-grid';
 import { gridRowJumpZh as text } from '../locales/gridRowJump.zh-CN';
@@ -8,7 +9,7 @@ const focusedJump = new WeakMap<Element, () => void>();
 /** 命令只分发给当前焦点所在的网格；编辑中的输入格不会被换焦点。 */
 export function openFocusedGridRowJump(): boolean {
   const focus = document.activeElement;
-  if (!focus || document.querySelector('[role="dialog"], [role="alertdialog"]')) return false;
+  if (!focus || document.querySelector(appModalSelector)) return false;
   for (let node: Element | null = focus; node; node = node.parentElement) {
     const open = focusedJump.get(node);
     if (open) { open(); return true; }

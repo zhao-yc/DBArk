@@ -1,3 +1,4 @@
+import { appModalSelector } from '../modalSelectors';
 import { createPostgresCompletionProvider, type PostgresCompletionScope } from '../postgresCompletionProvider';
 import type { ConnectionProfile } from '../../shared/contracts';
 import { editorWordWrapOptions, readEditorWordWrap } from '../../shared/editorWordWrap';
@@ -151,7 +152,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   /** 局部F2重命名独占分析线程；输入框焦点属于本widget，不能借树选择改变目标。 */
   useEffect(() => {
     if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
-    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!(editorRef.current?.hasTextFocus() || editorRef.current?.hasWidgetFocus()) && !document.querySelector('[role="dialog"], [role="alertdialog"]') && (!completion || sameCompletionScope(completionRef.current, completion));
+    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!(editorRef.current?.hasTextFocus() || editorRef.current?.hasWidgetFocus()) && !document.querySelector(appModalSelector) && (!completion || sameCompletionScope(completionRef.current, completion));
     const worker = createLocalRenameAnalysis({ dialect: dialect === 'sqlite' ? 'sqlite' : 'mysql', scope: completion, current,
       facts: () => completion ? completionServerFacts.get(completion.connectionId, completion.connectionVersion) : undefined,
       state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => dialect === 'sqlite' ? new SqliteLocalReferencesWorker() : new CompletionWorker(), dialect === 'sqlite' ? 'sqlite' : 'mysql'),
@@ -166,7 +167,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   /** 内置函数参数提示只分析当前模型；模式缓存之外没有数据库入口，与补全／声明线程独立。 */
   useEffect(() => {
     if (readOnly || !contentReady || !dialect || dialect !== 'sqlite' && !completion) return;
-    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]') && (!completion || sameCompletionScope(completionRef.current, completion));
+    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector(appModalSelector) && (!completion || sameCompletionScope(completionRef.current, completion));
     const signatures = createSqlSignatureProvider({ model: () => editorRef.current?.getModel() ?? null, current, dialect, scope: completion, state: sessionId => invoke('query.completionState', { sessionId }) });
     const registration = monaco.languages.registerSignatureHelpProvider('sql', signatures.provider);
     return () => { registration.dispose(); signatures.dispose(); };
@@ -174,7 +175,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   /** 本文引用按方言复用声明语义，独占线程；SQLite不读取会话缓存或回退到MySQL解析器。 */
   useEffect(() => {
     if (readOnly || !contentReady || dialect !== 'sqlite' && !completion) return;
-    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]') && (!completion || sameCompletionScope(completionRef.current, completion));
+    const current = () => aliveRef.current && dialectRef.current === dialect && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector(appModalSelector) && (!completion || sameCompletionScope(completionRef.current, completion));
     const worker = dialect === 'sqlite' ? createSqliteLocalReferencesAnalysis({ current, create: () => new LocalReferencesWorkerClient(() => new SqliteLocalReferencesWorker(), 'sqlite') }) : createLocalReferencesAnalysis({ scope: completion!, current,
       facts: () => completionServerFacts.get(completion!.connectionId, completion!.connectionVersion),
       state: sessionId => invoke('query.completionState', { sessionId }), create: () => new LocalReferencesWorkerClient(() => new CompletionWorker()),
@@ -190,7 +191,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   /** 声明导航独立于元数据补全；MySQL只读既有会话模式缓存，不为F12建立连接或执行SQL。 */
   useEffect(() => {
     if (readOnly || !contentReady || dialect !== 'sqlite' && !completion) return;
-    const current = () => aliveRef.current && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector('[role="dialog"], [role="alertdialog"]') && (dialect === 'sqlite' || sameCompletionScope(completionRef.current, completion));
+    const current = () => aliveRef.current && !propsRef.current.readOnly && contentRef.current?.ready === true && !!editorRef.current?.hasTextFocus() && !document.querySelector(appModalSelector) && (dialect === 'sqlite' || sameCompletionScope(completionRef.current, completion));
     const worker = dialect === 'sqlite' ? new SqliteCompletionWorkerClient(() => new SqliteCompletionWorker()) : createMysqlDefinitionAnalysis({
       scope: completion!, current, facts: () => completionServerFacts.get(completion!.connectionId, completion!.connectionVersion),
       state: sessionId => invoke('query.completionState', { sessionId }), create: () => new CompletionWorkerClient(() => new CompletionWorker()),
@@ -211,7 +212,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         const current = () => active && aliveRef.current && contentRef.current?.ready === true
           && dialectRef.current === dialect && !propsRef.current.readOnly && !token.isCancellationRequested
           && !!instance?.hasTextFocus() && instance.getModel() === model && !model.isDisposed()
-          && !suggestionsBlocked() && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+          && !suggestionsBlocked() && !document.querySelector(appModalSelector);
         if (!current() || instance?.getSelections()?.length !== 1 || !instance.getSelection()?.isEmpty()) return;
         if (model.getValueLength() > 65_536) return;
         const prefix = snippetPrefix(model.getLineContent(position.lineNumber).slice(0, position.column - 1));
@@ -250,7 +251,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         const tab = workspace.settings.tabs.find(item => item.id === original.tabId);
         const profile = workspace.connections.find(item => item.id === original.connectionId);
         return aliveRef.current && !propsRef.current.readOnly && !suggestionsBlocked() && contentRef.current?.ready === true &&
-          !document.querySelector('[role="dialog"], [role="alertdialog"]') &&
+          !document.querySelector(appModalSelector) &&
           editor?.getSelections()?.length === 1 && editor.getSelection()?.isEmpty() === true &&
           workspace.settings.activeTabId === original.tabId && !workspace.activeJobs[original.tabId] && tab?.connectionId === original.connectionId &&
           profile?.dialect === 'postgresql' && (tab.database || profile.database || 'postgres') === original.database &&
@@ -281,7 +282,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       const worker = new SqliteCompletionWorkerClient(() => new SqliteCompletionWorker());
       const provider = createSqliteCompletionProvider({ connectionId: completion.connectionId, sessionId: completion.sessionId,
         model: () => editorRef.current?.getModel() ?? null,
-        current: () => aliveRef.current && !propsRef.current.readOnly && !suggestionsBlocked() && sameCompletionScope(completionRef.current, completion) && contentRef.current?.ready === true && !document.querySelector('[role="dialog"], [role="alertdialog"]'),
+        current: () => aliveRef.current && !propsRef.current.readOnly && !suggestionsBlocked() && sameCompletionScope(completionRef.current, completion) && contentRef.current?.ready === true && !document.querySelector(appModalSelector),
         worker, request: input => invoke('sqlite.completion', input), cancel: taskId => invoke('query.cancel', { taskId }),
         state: sessionId => invoke('query.completionState', { sessionId }), id: () => sqliteCompletionTaskPrefix + uid(), status: status => statusRef.current?.(status),
       });

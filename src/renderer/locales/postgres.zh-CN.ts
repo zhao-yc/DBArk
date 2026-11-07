@@ -10,6 +10,7 @@ export const postgresZh = {
   parameters: '执行位置参数',
   stop: '停止 PostgreSQL 查询',
   format: '格式化 PostgreSQL SQL',
+  formatTooLarge: '格式化 SQL 不能超过 64 KiB',
   save: '保存查询',
   history: '执行历史',
   reconnect: '关闭原会话并重新连接',

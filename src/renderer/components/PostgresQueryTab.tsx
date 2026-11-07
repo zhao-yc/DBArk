@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { appModalSelector } from '../modalSelectors';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
 import { format } from 'sql-formatter';
@@ -6,6 +7,8 @@ import type { QueryOutcome, QueryResult, ResultColumn } from '../../shared/contr
 import { postgresTableLimits } from '../../shared/postgresTable';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
+import type { UiCommandId } from '../../shared/uiCommands';
+import { sqlLineCommandIds } from '../../shared/uiCommandIds';
 import { queryResultPresetValueSchema, type QueryResultPresetValue } from '../../shared/queryResultPresets';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
 import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } from '../store';
@@ -59,6 +62,10 @@ import { captureQueryFileSnapshot } from '../queryFileSnapshot';
 import { flushEditorContent } from '../editorContentBridge';
 import { captureHistoryInsertion, type HistoryInsertionRegistry, type HistoryInsertionTarget } from '../historyInsertion';
 import { SavedQueryMatchNavigation } from './SavedQueryMatchNavigation';
+import { useUiCommandScope, type UiCommandHandler } from '../uiCommands';
+import { bracketCommands, sqlPositionActions, sqlTextActions } from '../sqlEditorActions';
+import { hasExplicitCaseSelection } from '../sqlSelectionCase';
+import { openFocusedGridRowJump } from './GridRowJump';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
 import './PostgresQueryTab.css';
 import '../queryPins.css';
@@ -129,6 +136,10 @@ export function PostgresQueryTab({
     closeRef = useRef(closeRequest);
   closeRef.current = closeRequest;
   const [editorInstance, setEditorInstance] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const [editorSelection, setEditorSelection] = useState({ explicit: false, single: false });
+  const updateEditorSelection = useCallback((explicit: boolean, single: boolean) => {
+    setEditorSelection(previous => previous.explicit === explicit && previous.single === single ? previous : { explicit, single });
+  }, []);
   const historyInsertion = useRef<HistoryInsertionTarget | null>(null);
   const [busy, setBusy] = useState(false),
     [fileBusy, setFileBusy] = useState(false),
@@ -219,7 +230,7 @@ export function PostgresQueryTab({
       !snapshotOperation.current &&
       !fileBusy &&
       !closeRef.current &&
-      !document.querySelector('[role="dialog"], [role="alertdialog"]')
+      !document.querySelector(appModalSelector)
     );
   }
   /** 撤销确认来源，后续事件不能使用已经关闭或换代的弹窗。 */
@@ -306,7 +317,7 @@ export function PostgresQueryTab({
   }
   /** 查询和计划都捕获原模型版本，实际分析只接受已经确认的原令牌。 */
   function run(
-    mode: 'normal' | 'current' | 'explain' | 'analyzePreview' = 'normal',
+    mode: 'normal' | 'selection' | 'current' | 'all' | 'explain' | 'analyzePreview' = 'normal',
     values?: QueryParameter[],
     parameter?: ParameterOwner,
     sqlOverride?: string,
@@ -333,7 +344,7 @@ export function PostgresQueryTab({
         !parameter.session
       )
         throw Error(text.changed);
-    } else if (!available()) return;
+    } else if (!commandEditor()) return;
     if (session.current && !state.transactionKnown) {
       setError(text.unknown);
       return;
@@ -341,9 +352,12 @@ export function PostgresQueryTab({
     const model = editor.current?.getModel(),
       selection = editor.current?.getSelection(),
       original = model?.getValue() ?? source();
+    // 「执行选区」在实际派发时重新读取原选区，空选区或多选区不得降级为整份执行。
+    if (mode === 'selection' && (!model || !selection || selection.isEmpty() || editor.current?.getSelections()?.length !== 1)) return;
+    if (mode === 'current' && !selection) return;
     let sql = confirmed?.source ?? sqlOverride ?? original,
       offset: number | undefined;
-    if (!confirmed && !sqlOverride && !values && selection) {
+    if (!confirmed && !sqlOverride && !values && selection && mode !== 'all') {
       if (mode === 'current' || (mode === 'explain' || mode === 'analyzePreview') && selection.isEmpty()) offset = model!.getOffsetAt(selection.getPosition());
       else if (!selection.isEmpty()) sql = model!.getValueInRange(selection);
     }
@@ -798,7 +812,7 @@ export function PostgresQueryTab({
     const intent: QueryResultSnapshotIntent = new QueryResultSnapshotIntent(snapshotIdentity, () =>
       snapshotOperation.current === intent && same(scope) && currentTab() === tab &&
       useWorkspace.getState().settings.activeTabId === tab.id && !closeRef.current && job.owns() &&
-      pinStateRef.current === pinState && !document.querySelector('[role="dialog"], [role="alertdialog"]'));
+      pinStateRef.current === pinState && !document.querySelector(appModalSelector));
     snapshotOperation.current = intent;
     setSnapshotBusy(true);
     let finished = false;
@@ -888,7 +902,7 @@ export function PostgresQueryTab({
   function comparisonCurrent(draft: ComparisonDraft) {
     if (!resultScopeCurrent() || comparisonDraftRef.current !== draft || pinStateRef.current.items !== draft.pins) return false;
     const owned = document.querySelector(`[data-query-result-comparison-owner="${draft.owner}"] [role="dialog"]`);
-    return Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).every(node => node === owned);
+    return Array.from(document.querySelectorAll(appModalSelector)).every(node => node === owned);
   }
 
   /** 只撤销准确的对比窗口，取消当前扫描由共享组件负责。 */
@@ -900,7 +914,7 @@ export function PostgresQueryTab({
 
   /** 行详情沿用当前网格的来源校验，另排除遮挡网格的模态窗口。 */
   function rowDetailCurrent(source: QueryRowDetailsBinding | undefined) {
-    return resultCurrent() && rowDetails.current(source) && !document.querySelector('[role="dialog"], [role="alertdialog"]');
+    return resultCurrent() && rowDetails.current(source) && !document.querySelector(appModalSelector);
   }
 
   /** 同坐标重新点击也采集当前单元格，旧投影的行索引不能重用。 */
@@ -950,7 +964,7 @@ export function PostgresQueryTab({
   /** 普通入口和快捷入口都打开同一草稿，追加条件与当前生效表达式分开保存。 */
   function openResultFilter(node?: QueryResultFilterRule | QueryResultFilterGroup) {
     if (!filterBinding || !filterView || !sortView || !filterCurrent() ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+        document.querySelector(appModalSelector)) return;
     const seed = node && appendQueryResultFilterNode(filterView.expression, node);
     beginResultFilter({ binding: filterBinding, view: filterView, sortView, seed });
   }
@@ -981,7 +995,7 @@ export function PostgresQueryTab({
   /** 统计以父网格接纳的行索引为准，锁定已显示行和准确可见列。 */
   function openResultStatistics(column: ResultColumn, indices: ReadonlySet<number>) {
     if (!binding || !resultCurrent() || !binding.visibleColumns.includes(column) ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+        document.querySelector(appModalSelector)) return;
     const selected = Array.from(Set.prototype.values.call(indices) as IterableIterator<number>).sort((a, b) => a - b);
     if (selected.length ? !resultSelection.matchesIndices(binding, selected) : resultSelection.count(binding) !== 0) return;
     const draft = { binding, column, indices: new Set(selected), owner: uid() };
@@ -993,7 +1007,7 @@ export function PostgresQueryTab({
   function statisticsCurrent(draft: StatisticsDraft) {
     if (!resultScopeCurrent() || statisticsDraftRef.current !== draft || binding !== draft.binding) return false;
     const owned = document.querySelector(`[data-query-result-statistics-owner="${draft.owner}"] [role="dialog"]`);
-    return Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).every(node => node === owned);
+    return Array.from(document.querySelectorAll(appModalSelector)).every(node => node === owned);
   }
 
   /** 只关闭对应统计窗口。 */
@@ -1052,7 +1066,7 @@ export function PostgresQueryTab({
 
   /** 验证历史目标能完整恢复后才移动游标，避免失败丢失重做。 */
   function travelResultHistory(direction: -1 | 1) {
-    if (!resultSource || !visibleColumns || !resultCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (!resultSource || !visibleColumns || !resultCurrent() || document.querySelector(appModalSelector)) return;
     const ticket = resultHistory.target(historyBinding, direction);
     if (!ticket) return;
     try {
@@ -1065,7 +1079,7 @@ export function PostgresQueryTab({
   /** 打开时捕获当前条件、排序、字段身份和冻结边界，沿用原本机方案存储。 */
   function openResultPresets() {
     if (!binding || !resultSource || !visibleColumns || !filterView || !sortView || !historyBinding ||
-        !resultCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+        !resultCurrent() || document.querySelector(appModalSelector)) return;
     try {
       const value = queryResultPresetValueSchema.parse(captureQueryResultMemory(resultSource, visibleColumns,
         { expression: filterView.expression, sort: sortView.rules }, layout?.frozenThrough, 'postgresql'));
@@ -1079,7 +1093,7 @@ export function PostgresQueryTab({
   function presetCurrent(draft: PresetDraft) {
     if (!resultScopeCurrent() || presetDraftRef.current !== draft || !resultSelection.current(draft.binding)) return false;
     const owned = document.querySelector(`[data-query-result-presets-owner="${draft.owner}"] [role="dialog"]`);
-    return Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).every(node => node === owned);
+    return Array.from(document.querySelectorAll(appModalSelector)).every(node => node === owned);
   }
 
   /** 只关闭本代窗口，迟到的关闭不能撤销后来打开的方案。 */
@@ -1131,7 +1145,7 @@ export function PostgresQueryTab({
 
   /** 列管理从当前已返回的显示行取样，以原列键维护所有列的草稿。 */
   function openResultColumns() {
-    if (!binding || !resultCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (!binding || !resultCurrent() || document.querySelector(appModalSelector)) return;
     try {
       const keys = queryResultColumnKeys(binding.columns);
       const draft = { binding, owner: uid(), initial: layout ?? { order: keys, visible: keys } };
@@ -1144,7 +1158,7 @@ export function PostgresQueryTab({
   function columnCurrent(draft: ColumnDraft) {
     if (!resultScopeCurrent() || columnDraftRef.current !== draft || !resultSelection.current(draft.binding)) return false;
     const owned = document.querySelector(`[data-query-columns-owner="${draft.owner}"] [role="dialog"]`);
-    return Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).every(node => node === owned);
+    return Array.from(document.querySelectorAll(appModalSelector)).every(node => node === owned);
   }
 
   /** 关闭时撤销旧网格回执，迟到的草稿事件不能修改后续结果。 */
@@ -1210,7 +1224,7 @@ export function PostgresQueryTab({
 
   /** 打开时冻结导出内容，不通过会话、SQL 或数据库连接再次读取。 */
   function openResultExport(selectedOnly: boolean) {
-    if (!resultCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (!resultCurrent() || document.querySelector(appModalSelector)) return;
     try {
       const snapshot = selectedOnly ? resultSelection.snapshot(binding) : resultSelection.allSnapshot(binding);
       exportOpen.current = true;
@@ -1220,7 +1234,7 @@ export function PostgresQueryTab({
 
   /** 仅消费当前结果代次已接纳的勾选，不读取连接或再次执行原 SQL。 */
   function captureResultTransfer() {
-    if (pin || !binding || !resultCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    if (pin || !binding || !resultCurrent() || document.querySelector(appModalSelector)) return;
     try {
       const snapshot = capturePostgresQueryTransfer({
         connectionId: tab.connectionId, label: profile?.name ?? tab.connectionId, database: scope.database,
@@ -1230,6 +1244,68 @@ export function PostgresQueryTab({
       workspace.notify(transferText.queryCapturedToNetwork(snapshot.rows.length));
     } catch (reason) { setError(errorMessage(reason)); }
   }
+  /** 菜单、快捷键和工具栏只操作活动标签中已同步且可编辑的原模型。 */
+  function commandEditor() {
+    const instance = editor.current;
+    const model = instance?.getModel();
+    if (!instance || !model || model.isDisposed() || !available() || files.isBusy() || instance.getRawOptions().readOnly) return;
+    const draft = currentTab()?.sql ?? '';
+    if (model.getValue() === draft.replace(/\r\n|\r|\n/g, model.getEOL())) return { instance, model };
+  }
+  async function editorAction(actionId: string, explicitSelection = false) {
+    const target = commandEditor();
+    if (!target || explicitSelection && !hasExplicitCaseSelection(target.instance)) return;
+    const action = target.instance.getAction(actionId);
+    if (!action?.isSupported()) return;
+    target.instance.focus();
+    await action.run();
+  }
+  function formatQuery() {
+    const target = commandEditor();
+    if (!target) return;
+    const { instance, model } = target;
+    try {
+      const sql = model.getValue();
+      if (sql.length > 65536) throw Error(text.formatTooLarge);
+      const formatted = format(sql, { language: 'postgresql' });
+      if (formatted === sql) return;
+      instance.pushUndoStop();
+      instance.executeEdits('postgres-format', [{ range: model.getFullModelRange(), text: formatted }]);
+      instance.pushUndoStop();
+      instance.focus();
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  function openSaveQuery() {
+    if (commandEditor()) setSave(true);
+  }
+  const editable = !!profile && !!editorInstance && !locked;
+  const canRun = editable && state.transactionKnown;
+  const canPlan = canRun && !state.transactionFailed;
+  const canStop = busy && !!phase.current && !phase.current.cancelled;
+  const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {
+    execute: { enabled: canRun, run: () => run() },
+    'execute-selection': { enabled: canRun && editorSelection.single, run: () => run('selection') },
+    'execute-current': { enabled: canRun, run: () => run('current') },
+    'execute-all': { enabled: canRun, run: () => run('all') },
+    stop: { enabled: canStop, run: stop },
+    explain: { enabled: canPlan, run: () => run('explain') },
+    analyze: { enabled: canPlan, run: () => run('analyzePreview') },
+    parameters: { enabled: canRun, run: openParameters },
+    format: { enabled: editable, run: formatQuery },
+    'save-query': { enabled: editable, run: openSaveQuery },
+    find: { enabled: editable, run: () => editorAction('actions.find') },
+    replace: { enabled: editable, run: () => editorAction('editor.action.startFindReplaceAction') },
+    'sql-goto-line': { enabled: editable, run: () => { if (!openFocusedGridRowJump()) return editorAction(sqlPositionActions['sql-goto-line']); } },
+    'sql-toggle-comment': { enabled: editable, run: () => editorAction('editor.action.commentLine') },
+    'sql-uppercase': { enabled: editable && editorSelection.explicit, run: () => editorAction(sqlTextActions['sql-uppercase'], true) },
+    'sql-lowercase': { enabled: editable && editorSelection.explicit, run: () => editorAction(sqlTextActions['sql-lowercase'], true) },
+  };
+  for (const id of bracketCommands) commands[id] = { enabled: editable, run: () => editorAction(sqlPositionActions[id]) };
+  for (const id of sqlLineCommandIds) commands[id] = { enabled: editable, run: () => editorAction(sqlTextActions[id]) };
+  useUiCommandScope(`tab:${tab.id}`, commands, {
+    active: workspace.settings.activeTabId === tab.id && !closeRequest,
+    contextKey: JSON.stringify([scope.database, session.current?.id, phase.current?.taskId, state.transactionKnown, state.transactionFailed]),
+  });
   return (
     <div className="workspace-tab query-tab postgres-query">
       <div className="context-bar">
@@ -1245,44 +1321,28 @@ export function PostgresQueryTab({
         renderActions={(actions) => (
           <div className="query-toolbar postgres-toolbar">
             {actions}
-            <button disabled={locked || !state.transactionKnown} onClick={() => run()}>
+            <button disabled={!canRun} onClick={() => run()}>
               {text.execute}
             </button>
-            <button disabled={locked || !state.transactionKnown} onClick={() => run('current')}>
+            <button disabled={!canRun} onClick={() => run('current')}>
               {text.current}
             </button>
-            <button disabled={locked || !state.transactionKnown || state.transactionFailed} onClick={() => run('explain')}>
+            <button disabled={!canPlan} onClick={() => run('explain')}>
               {text.explain}
             </button>
-            <button disabled={locked || !state.transactionKnown || state.transactionFailed} onClick={() => run('analyzePreview')}>
+            <button disabled={!canPlan} onClick={() => run('analyzePreview')}>
               {queryAnalyzeZh.open}
             </button>
-            <button disabled={locked || !state.transactionKnown} onClick={openParameters}>
+            <button disabled={!canRun} onClick={openParameters}>
               {text.parameters}
             </button>
-            <button disabled={!busy || phase.current?.cancelled} onClick={stop}>
+            <button disabled={!canStop} onClick={stop}>
               {text.stop}
             </button>
-            <button
-              disabled={locked}
-              onClick={() => {
-                try {
-                  const sql = source();
-                  if (sql.length > 65536) throw Error('格式化SQL不能超过64KiB');
-                  editor.current?.executeEdits('postgres-format', [
-                    {
-                      range: editor.current.getModel()!.getFullModelRange(),
-                      text: format(sql, { language: 'postgresql' }),
-                    },
-                  ]);
-                } catch (reason) {
-                  setError(errorMessage(reason));
-                }
-              }}
-            >
+            <button disabled={!editable} onClick={formatQuery}>
               {text.format}
             </button>
-            <button disabled={locked} onClick={() => setSave(true)}>
+            <button disabled={!editable} onClick={openSaveQuery}>
               {text.save}
             </button>
             <button disabled={locked} onClick={onHistory}>
@@ -1315,6 +1375,9 @@ export function PostgresQueryTab({
           }}
           onExecute={() => run()}
           onExecuteCurrent={() => run('current')}
+          onFormat={formatQuery}
+          onToggleComment={() => editorAction('editor.action.commentLine')}
+          onSelectionState={updateEditorSelection}
         />
       </div>
       <ErrorBox message={error} />
@@ -1359,7 +1422,7 @@ export function PostgresQueryTab({
               </>}
               <button disabled={locked || !sortView || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
                 onClick={() => {
-                  if (!sortBinding || !sortView || !sortCurrent() || document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+                  if (!sortBinding || !sortView || !sortCurrent() || document.querySelector(appModalSelector)) return;
                   const draft = { binding: sortBinding, view: sortView };
                   sortDraftRef.current = draft;
                   setSortDraft(draft);
