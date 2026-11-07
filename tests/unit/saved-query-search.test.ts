@@ -40,6 +40,20 @@ beforeEach(async()=>{directory=mkdtempSync(join(tmpdir(),'dbark-test-savedquery-
 afterEach(async()=>{await service?.close();for(const worker of workers)expect(worker.threadId).toBe(-1);store?.close();removeDirectory(directory);});
 
 describe('真实SQLite及匹配线程生命周期',()=>{
+ it('SQLite 结构线程区分零宽命中和可高亮位置，跨过完整 Unicode 码点', async () => {
+  const matcher = new SavedQueryMatcher(workerPath);
+  try {
+   const pattern = { mode: 'regexp' as const, text: '^|X', caseSensitive: false };
+   expect(await matcher.matchSqliteStructure('😀xX', pattern)).toEqual({ matched: true });
+   expect(await matcher.matchSqliteStructure('😀xX', pattern, true)).toEqual({
+    matched: true, positions: { ranges: [{ offset: 2, length: 1 }, { offset: 3, length: 1 }], limitReached: false },
+   });
+   expect(await matcher.matchSqliteStructure('😀', { ...pattern, text: '(?=.)' }, true)).toEqual({
+    matched: true, positions: { ranges: [], limitReached: false },
+   });
+  } finally { await matcher.close(); }
+  expect(matcher.threadId).toBe(-1);
+ });
  it('密集命中仍按128KiB分页，每条最多200处且上限明确，续页无丢失或重复',async()=>{for(let index=0;index<30;index++)store.saveQuery(query({id:'dense'+String(index).padStart(3,'0'),sql:'命中 '.repeat(250)}));let page=await service.start(request()),hits=[...page.hits];expect(page.hits.length).toBeLessThan(25);for(;;){expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(128*1024);for(const hit of page.hits){expect(hit.sqlOccurrences?.ranges).toHaveLength(200);expect(hit.sqlOccurrences?.limitReached).toBe(true);}for(const worker of workers)expect(worker.threadId).toBe(-1);if(!page.cursor)break;page=await service.next({taskId:randomUUID(),cursor:page.cursor});hits.push(...page.hits);}expect(hits).toHaveLength(30);expect(new Set(hits.map(hit=>hit.query.id)).size).toBe(30);expect(page.scanned).toBe(30);});
  it('58条原文分三页，只传命中摘要，每页结束真实线程均为-1',async()=>{for(let i=0;i<58;i++)store.saveQuery(query({id:'q'+String(i).padStart(3,'0')}));let page=await service.start(request());expect(page.hits).toHaveLength(25);expect(page.scanned).toBe(25);expect(page.cursor).toBeTruthy();for(const worker of workers)expect(worker.threadId).toBe(-1);const hits=[...page.hits];while(page.cursor){page=await service.next({taskId:randomUUID(),cursor:page.cursor});expect(page.hits.length).toBeLessThanOrEqual(25);hits.push(...page.hits);}expect(hits).toHaveLength(58);expect(new Set(hits.map(hit=>hit.query.id)).size).toBe(58);expect(page.scanned).toBe(58);expect(page.totalHits).toBe(58);expect(store.history()).toEqual([]);});
  it('最长Unicode摘要触发字节续页时不丢当前查询，含句柄的每页仍不超过128KiB',async()=>{for(let i=0;i<40;i++)store.saveQuery(query({id:String(i).padStart(4,'0')+'文'.repeat(196),name:'命中'+'文'.repeat(254),connectionId:'文'.repeat(200),database:'文'.repeat(256),databaseContext:{state:'known',database:'文'.repeat(256)},updatedAt:'文'.repeat(256),sql:'命中'+'文'.repeat(1000)}));let page=await service.start(request());expect(page.hits.length).toBeLessThan(25);const hits=[];for(;;){expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(128*1024);hits.push(...page.hits);if(!page.cursor)break;page=await service.next({taskId:randomUUID(),cursor:page.cursor});}expect(hits).toHaveLength(40);expect(new Set(hits.map(hit=>hit.query.id)).size).toBe(40);expect(page.scanned).toBe(40);});

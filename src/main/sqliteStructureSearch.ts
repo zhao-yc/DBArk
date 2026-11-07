@@ -4,7 +4,7 @@ import type { StructureSearchState } from '../engine/structureSearchPages';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteValue } from '../engine/sqlite/protocol';
 import { sqliteSearchName, structureSearchLimits as limits, type StructureSearchHit, type StructureSearchPage } from '../shared/databaseSearch';
-import { SavedQueryMatcher } from './savedQueryMatcher';
+import { SavedQueryMatcher, SavedQueryMatchTimeout, type SqliteStructureMatch } from './savedQueryMatcher';
 import { readSqliteCatalogDefinition } from './sqliteObjectDefinition';
 import { sqliteExactTextProjection } from './sqliteTableBrowse';
 
@@ -38,18 +38,28 @@ export async function readSqliteStructureSearchPage(driver: SqliteDriverSession,
     scopeCount: input.kinds.length, limitReached: false, stoppedOnError: false };
   let matcher: SavedQueryMatcher | undefined;
   const interrupt = () => { void matcher?.close().catch(() => {}); };
-  const matches = async (source: string) => {
+  const matches = async (source: string, locate = false): Promise<SqliteStructureMatch> => {
     if (pattern.mode === 'regexp') {
       if (!matcher || matcher.closed) {
         await matcher?.close();
         check();
         matcher = new SavedQueryMatcher(join(__dirname, 'savedQuerySearchWorker.cjs'), 500);
       }
-      return matcher.matchSqliteStructure(source, pattern);
+      const hit = await matcher.matchSqliteStructure(source, pattern);
+      if (!locate || !hit.matched) return hit;
+      check();
+      try { return await matcher.matchSqliteStructure(source, pattern, true); }
+      catch (reason) {
+        check();
+        if (!(reason instanceof SavedQueryMatchTimeout)) throw reason;
+        await matcher.close();
+        check();
+        return hit;
+      }
     }
     const value = pattern.caseSensitive ? source : fold(source);
     const needle = pattern.caseSensitive ? pattern.text : fold(pattern.text);
-    return pattern.mode === 'whole' ? value === needle : pattern.mode === 'prefix' ? value.startsWith(needle) : value.includes(needle);
+    return { matched: pattern.mode === 'whole' ? value === needle : pattern.mode === 'prefix' ? value.startsWith(needle) : value.includes(needle) };
   };
   const definition = input.searchIn === 'definition';
   const bounded = () => page.hits.length >= limits.pageHits || state.total >= input.maxResults ||
@@ -119,7 +129,7 @@ export async function readSqliteStructureSearchPage(driver: SqliteDriverSession,
         try {
           sqliteSearchName.parse(item.name); sqliteSearchName.parse(item.object);
           const source = definition ? await readSqliteCatalogDefinition(driver, item.name, kind === 'index' ? 'index' : item.parent, { check }) : item.name;
-          const matched = await matches(source);
+          const { matched, positions } = await matches(source, definition);
           check();
           if (matched) {
             const hit: StructureSearchHit = { database: 'main', dialect: 'sqlite', kind,
@@ -129,7 +139,7 @@ export async function readSqliteStructureSearchPage(driver: SqliteDriverSession,
               let characters = 0; for (const _character of source) characters++;
               hit.definitionCharacters = characters;
               hit.definitionNavigation = definitionNavigationResult(source, pattern,
-                { navigationText: fold(source), navigationNeedle: fold(pattern.text) });
+                { navigationText: fold(source), navigationNeedle: fold(pattern.text), regexpRanges: positions });
             }
             page.hits.push(hit); state.total++;
           }

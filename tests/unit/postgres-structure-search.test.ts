@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { postgresStructureSearchQuery, readPostgresStructureSearchPage } from '../../src/engine/postgres/structureSearch';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
+import { matchPostgresDefinition } from '../../src/engine/postgres/definitionSearch';
 import { StructureSearches, type StructureSearchState } from '../../src/engine/structureSearch';
 import { structureSearchInputSchema, type StructureSearchInput } from '../../src/shared/databaseSearch';
 import { definitionSearchOpenSchema } from '../../src/shared/definitionNavigation';
@@ -103,5 +104,20 @@ describe('PostgreSQL 结构名称搜索', () => {
     expect(validateCommand('postgres.structure.definition', target)).toEqual(target);
     expect(() => validateCommand('postgres.structure.definition', { ...target, sql: body })).toThrow();
     expect(definitionSearchOpenSchema.safeParse({ ...target, dialect: 'postgresql', connectionVersion: 1, invalidated: false }).success).toBe(true);
+  });
+
+  it('PostgreSQL 位置查询超时保留已确认命中，传输失败继续向上传播', async () => {
+    const pattern = { mode: 'regexp' as const, text: 'x+', caseSensitive: false };
+    const timeout = Object.assign(Error('statement timeout'), { postgresSqlState: '57014' });
+    const query = vi.fn().mockResolvedValueOnce({ rows: [{ c0: '2' }] }).mockRejectedValueOnce(timeout);
+    const connection = { query, broken: false } as unknown as PostgresConnection;
+    const check = vi.fn();
+    await expect(matchPostgresDefinition(connection, 'xX', pattern, check)).resolves.toMatchObject({
+      definitionCharacters: 2, definitionNavigation: { status: 'unavailable' },
+    });
+    expect(check).toHaveBeenCalledOnce();
+    expect(query.mock.calls[1][1]).toEqual(['xX', 'x+', '\x01\\&\x02', 'gi']);
+    query.mockResolvedValueOnce({ rows: [{ c0: '2' }] }).mockRejectedValueOnce(Error('连接断开'));
+    await expect(matchPostgresDefinition(connection, 'xX', pattern, check)).rejects.toThrow('连接断开');
   });
 });

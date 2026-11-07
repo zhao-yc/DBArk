@@ -96,7 +96,7 @@ async function readDefinitionPage(connection: PostgresConnection, state: Structu
       try {
         const body = await readPostgresDefinitionText(connection, { database, kind, name: object });
         check();
-        const match = await matchPostgresDefinition(connection, body, input.pattern);
+        const match = await matchPostgresDefinition(connection, body, input.pattern, check);
         check();
         if (match) {
           const hit: StructureSearchHit = { database, kind, object, name, parentKind: kind,

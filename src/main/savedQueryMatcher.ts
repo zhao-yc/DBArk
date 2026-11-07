@@ -1,20 +1,23 @@
 import{Worker}from'node:worker_threads';
-import{savedQuerySearchLimits as limits,type SavedQueryScope,type SavedQuerySearchHit,type SavedQuerySearchInput}from'../shared/savedQuerySearch';
+import{savedQuerySearchLimits as limits,type SavedQueryScope,type SavedQuerySearchHit,type SavedQuerySearchInput,type SavedQuerySqlOccurrences}from'../shared/savedQuerySearch';
 import type{SavedQueryPageEntry}from'../shared/savedQueryPages';
 import type{HistoryPageInput,HistoryPagePosition,HistoryPageEntry}from'../shared/historyPages';
+
+export interface SqliteStructureMatch { matched: boolean; positions?: SavedQuerySqlOccurrences; }
+export class SavedQueryMatchTimeout extends Error {}
 
 /** 每页使用独立且有堆预算的真实线程；定时器超时后等待terminate实际完成再回复。 */
 export class SavedQueryMatcher{
  private worker:Worker;private pending?:{resolve(value:any):void;reject(error:Error):void;timer:ReturnType<typeof setTimeout>};private closing?:Promise<void>;private ended=false;
- constructor(path:string,private readonly matchMs:number=limits.matchMs){this.worker=new Worker(path,{env:{},execArgv:[],resourceLimits:{maxOldGenerationSizeMb:256,maxYoungGenerationSizeMb:32}});this.worker.on('message',(value:{ok:boolean;hit?:SavedQuerySearchHit;summary?:SavedQueryPageEntry;matched?:boolean;error?:string})=>{const pending=this.pending;if(!pending)return;clearTimeout(pending.timer);this.pending=undefined;value.ok?pending.resolve(value.matched??value.summary??value.hit):pending.reject(Error(value.error??'本地匹配失败'));});this.worker.on('error',()=>this.fail(Error('本地匹配线程异常结束，当前查询未确认搜索')));this.worker.on('exit',()=>{this.ended=true;this.fail(Error('本地匹配线程已结束'));});}
+ constructor(path:string,private readonly matchMs:number=limits.matchMs){this.worker=new Worker(path,{env:{},execArgv:[],resourceLimits:{maxOldGenerationSizeMb:256,maxYoungGenerationSizeMb:32}});this.worker.on('message',(value:{ok:boolean;hit?:SavedQuerySearchHit;summary?:SavedQueryPageEntry;sqliteStructure?:SqliteStructureMatch;error?:string})=>{const pending=this.pending;if(!pending)return;clearTimeout(pending.timer);this.pending=undefined;value.ok?pending.resolve(value.sqliteStructure??value.summary??value.hit):pending.reject(Error(value.error??'本地匹配失败'));});this.worker.on('error',()=>this.fail(Error('本地匹配线程异常结束，当前查询未确认搜索')));this.worker.on('exit',()=>{this.ended=true;this.fail(Error('本地匹配线程已结束'));});}
  /** 每次至多一条请求，错误不携带原始SQL到任务历史。 */
- private request<T>(message:unknown,timeout:number):Promise<T>{if(this.ended||this.closing)throw Error('本地匹配线程已关闭');if(this.pending)throw Error('本地匹配线程仍在处理上一条记录');return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{void this.close(Error('单条本地查询检索超时，已停止匹配线程，不能认定为无命中'));},timeout);this.pending={resolve,reject,timer};this.worker.postMessage(message);});}
+ private request<T>(message:unknown,timeout:number):Promise<T>{if(this.ended||this.closing)throw Error('本地匹配线程已关闭');if(this.pending)throw Error('本地匹配线程仍在处理上一条记录');return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{void this.close(new SavedQueryMatchTimeout('单条本地查询检索超时，已停止匹配线程，不能认定为无命中'));},timeout);this.pending={resolve,reject,timer};this.worker.postMessage(message);});}
  /** 在线程内编译，空查询库也能明确拒绝非法正则。 */
  async initialize(input:SavedQuerySearchInput){await this.request({kind:'initialize',input},limits.initializationMs);}
  /** 正则时间预算逐条生效；调用方可在失败后继续其它记录，不能重放此条。 */
  match(id:string,raw:string){return this.request<SavedQuerySearchHit|undefined>({kind:'record',id,raw},this.matchMs);}
  /** SQLite结构正则只处理目录文字，按原线程的逐条预算终止。 */
- matchSqliteStructure(source:string,pattern:import('../shared/databaseSearchPattern').DatabaseSearchPattern){return this.request<boolean>({kind:'sqliteStructureMatch',source,pattern},this.matchMs);}
+ matchSqliteStructure(source:string,pattern:import('../shared/databaseSearchPattern').DatabaseSearchPattern,locate = false){return this.request<SqliteStructureMatch>({kind:'sqliteStructureMatch',source,pattern,locate},this.matchMs);}
  /** 列表概要不运行正则，不返回完整SQL，仍受线程时间和堆预算约束。 */
  summarize(id:string,raw:string,search:string,scope?:SavedQueryScope){return this.request<SavedQueryPageEntry|undefined>({kind:'summary',id,raw,search,scope},this.matchMs);}
  /** 历史全文和索引一致性在线程内处理，字段/来源筛选不会隐藏损坏记录。 */

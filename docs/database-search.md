@@ -27,6 +27,8 @@ MySQL 和 MariaDB 可按表、视图、字段、索引、主外键、过程、�
 
 PostgreSQL 连接也提供「定义正文」模式，覆盖表、视图及物化视图、函数和存储过程的可见目录文本。打开命中会重新读取正文，内容一致后显示可核对的位置。[PostgreSQL 定义正文搜索](development/postgres-definition-search-20261107.md) SQLite 可搜索表、视图、显式索引及触发器的目录 SQL，打开后按摘要核对正文并定位命中。[SQLite 定义正文搜索](development/sqlite-structure-search-20261107.md)
 
+PostgreSQL 的「服务器正则」和 SQLite 的「本地 Unicode 正则」都支持在定义中高亮非空匹配并按行列跳转。最多显示前 200 处。仅有零宽匹配、位置计算超时或定义已变化时，仍可打开当前定义。[PostgreSQL 和 SQLite 定义正则定位](development/postgres-sqlite-definition-navigation-20261107.md)
+
 选择 MySQL 或 MariaDB 连接后，把“搜索内容”切换为“定义正文”，明确选择数据库和表、视图、存储过程、函数、触发器或事件。所属表的定义包含字段、索引及约束。开始搜索后，独立会话逐个读取当前账号可见对象的完整 SHOW CREATE 定义，包括名称、字段、注释及例程正文。
 
 包含、前缀和服务器正则作用于整个定义原文，“整个定义相等”要求匹配完整SHOW CREATE文本。普通文字中的百分号和下划线仍按原文处理，大小写及正则遵循当前服务器规则。每对象最多2MiB，不可读、NULL、读取失败或超限定义明确记入对象失败明细，不能把截断内容当作无命中。继续策略只跳过失败对象，继续检查后面的同类对象；停止策略保留已收到结果并标明未完成范围。

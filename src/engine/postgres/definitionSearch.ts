@@ -4,7 +4,7 @@ import { definitionTextWithinBudget } from '../../shared/definitionNavigation';
 import { postgresDdlLiteral } from '../../shared/postgresCreateTable';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import type { PostgresStructureResult } from '../../shared/postgresStructure';
-import { definitionNavigationResult } from '../definitionNavigation';
+import { definitionNavigationResult, definitionRegexpMarkers } from '../definitionNavigation';
 import type { PostgresConnection } from './connection';
 import { readPostgresStructureFacts } from './relationStructure';
 import { postgresRoutineSignatureSql, postgresRoutineVisibleSql } from './routine';
@@ -85,7 +85,7 @@ export function postgresSearchPredicate(column: string, pattern: DatabaseSearchP
     : `pg_catalog.strpos(${name}, ${value}) > 0`;
 }
 
-export async function matchPostgresDefinition(connection: PostgresConnection, source: string, pattern: DatabaseSearchPattern) {
+export async function matchPostgresDefinition(connection: PostgresConnection, source: string, pattern: DatabaseSearchPattern, check: () => void) {
   const folded = !pattern.caseSensitive && pattern.mode !== 'regexp';
   const result = await connection.query(`SELECT pg_catalog.char_length(definition_text)::text
     ${folded ? ', pg_catalog.lower(definition_text), pg_catalog.lower($1::text)' : ''}
@@ -97,6 +97,20 @@ export async function matchPostgresDefinition(connection: PostgresConnection, so
   const characters = Number(match.c0);
   if (!Number.isSafeInteger(characters) || characters < 1 || characters > structureSearchLimits.definitionBytes)
     throw Error('PostgreSQL 定义匹配长度无效');
+  const markers = pattern.mode === 'regexp' ? definitionRegexpMarkers(source) : undefined;
+  let marked;
+  if (markers) {
+    check();
+    // 整组引用保留原文和捕获编号。仅位置查询失败时保留先前确认的对象命中。
+    try {
+      const located = await connection.query('SELECT pg_catalog.regexp_replace($1::text, $2::text, $3::text, $4::text)',
+        [source, pattern.text, markers.start + '\\&' + markers.end, pattern.caseSensitive ? 'g' : 'gi'],
+        { rows: 1, bytes: 3 * structureSearchLimits.definitionBytes + 1024 });
+      if (!located.truncated && located.rows.length === 1) marked = located.rows[0].c0;
+    } catch (reason) {
+      if (connection.broken || !['57014', '42501'].includes((reason as { postgresSqlState?: string }).postgresSqlState ?? '')) throw reason;
+    }
+  }
   return { definitionCharacters: characters, definitionNavigation: definitionNavigationResult(source, pattern,
-    { navigationText: match.c1, navigationNeedle: match.c2 }) };
+    markers ? { regexp: { ...markers, marked } } : { navigationText: match.c1, navigationNeedle: match.c2 }) };
 }

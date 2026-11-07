@@ -1,8 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSearchPattern } from '../shared/databaseSearchPattern';
+import type { SavedQuerySqlOccurrences } from '../shared/savedQuerySearch';
 import { definitionNavigationLimits as limits, validateDefinitionNavigationResult, type DefinitionNavigationResult } from '../shared/definitionNavigation';
 
 interface RegexpEvidence { marked: unknown; start: string; end: string; }
+
+/** 选择原文不含的单字节边界，服务器替换结果因此有固定空间上限。 */
+export function definitionRegexpMarkers(source: string) {
+  const [start, end] = ['\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x1e', '\x1f'].filter(marker => !source.includes(marker));
+  if (start && end) return { start, end };
+}
 
 /** 去掉服务端边界后必须逐段等于原文，验证偏移量的同时避免把替换文本误当定义。 */
 function regexpPositions(source: string, { marked, start, end }: RegexpEvidence) {
@@ -40,13 +47,13 @@ function exactCaseMap(original: string, folded: unknown): folded is string {
 }
 /** 服务器已经判定命中，客户端只从可核对的原文和服务端证据推导位置。 */
 export function definitionNavigationResult(sql: string, pattern: DatabaseSearchPattern,
-  facts: { navigationText?: unknown; navigationNeedle?: unknown; regexp?: RegexpEvidence } = {}): DefinitionNavigationResult {
+  facts: { navigationText?: unknown; navigationNeedle?: unknown; regexp?: RegexpEvidence; regexpRanges?: SavedQuerySqlOccurrences } = {}): DefinitionNavigationResult {
   const digest = createHash('sha256').update(sql).digest('hex');
   const unavailable = (reason: 'server-regexp' | 'case-mapping' | 'positions-unavailable'): DefinitionNavigationResult => ({ digest, status: 'unavailable', reason });
   if (Buffer.byteLength(sql) > limits.sourceBytes) return unavailable('positions-unavailable');
   if (pattern.mode === 'regexp') {
-    const positions = facts.regexp && regexpPositions(sql, facts.regexp);
-    if (!positions) return unavailable('server-regexp');
+    const positions = facts.regexpRanges ?? (facts.regexp && regexpPositions(sql, facts.regexp));
+    if (!positions?.ranges.length) return unavailable('server-regexp');
     const result = { digest, status: 'ready', ...positions };
     try { return validateDefinitionNavigationResult(result, sql); }
     catch { return unavailable('positions-unavailable'); }

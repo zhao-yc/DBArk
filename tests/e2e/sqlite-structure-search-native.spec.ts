@@ -30,6 +30,7 @@ test('SQLite 全库搜索分页、目录和正文高亮，拒绝继续旧目录'
       INSERT INTO "对象😀" VALUES ('原数据');
       CREATE INDEX "关键_%索引" ON "对象😀"("关键_%列");
       CREATE VIEW "关键_%视图" AS SELECT '定义😀针' AS value, '定义😀针' AS second;
+      CREATE VIEW "批量正则" AS SELECT '${'Q9 '.repeat(201)}' AS value;
       CREATE TRIGGER "关键_%触发器" AFTER INSERT ON "对象😀" BEGIN SELECT '触发器正文'; END;
       ${Array.from({ length: 56 }, (_, i) => 'CREATE TABLE "batch_' + String(i).padStart(2, '0') + '" (id INTEGER);').join('')}`);
     const original = await bytes();
@@ -98,10 +99,11 @@ test('SQLite 全库搜索分页、目录和正文高亮，拒绝继续旧目录'
     await indexViewer.getByRole('button', { name: zh.common.cancel, exact: true }).click();
     await open();
 
-    const findDefinition = async () => {
+    const findDefinition = async (searchMode = 'contains', needle = '定义😀针') => {
       await page.getByLabel(t.searchIn, { exact: true }).selectOption('definition');
       await chooseKinds(t.kinds.view);
-      await keyword.fill('定义😀针');
+      await mode.selectOption(searchMode);
+      await keyword.fill(needle);
       await button(t.start).click();
       await expect(page.getByRole('dialog', { name: t.definitionsTitle, exact: true }).getByRole('status')).toContainText('命中 1');
     };
@@ -117,7 +119,39 @@ test('SQLite 全库搜索分页、目录和正文高亮，拒绝继续旧目录'
     expect(await bytes()).toBe(original);
 
     await open();
-    await findDefinition();
+    await findDefinition('regexp', '(?=定义)|(?<=定义)😀针');
+    await page.getByRole('gridcell', { name: '关键_%视图', exact: true }).dblclick();
+    const source = (() => {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try { return String(db.prepare('SELECT sql FROM sqlite_schema WHERE name = ?').get('关键_%视图')?.sql); }
+      finally { db.close(); }
+    })();
+    const firstOffset = source.indexOf('😀针'), lastOffset = source.lastIndexOf('😀针');
+    expect(firstOffset).toBeGreaterThan(-1);
+    expect(lastOffset).toBeGreaterThan(firstOffset);
+    await expect(navigator.getByRole('status')).toHaveText(navigation.count(0, 2) + navigation.position(1, firstOffset + 1));
+    await navigator.getByRole('button', { name: navigation.previous, exact: true }).click();
+    await expect(navigator.getByRole('status')).toHaveText(navigation.count(1, 2) + navigation.position(1, lastOffset + 1));
+    await page.screenshot({ path: info.outputPath('SQLite定义正则定位.png') });
+    await viewer.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+
+    await open();
+    await findDefinition('regexp', 'q[0-9]');
+    await page.getByRole('gridcell', { name: '批量正则', exact: true }).dblclick();
+    const many = page.getByRole('dialog', { name: t.definitionTitle(t.kinds.view, '批量正则'), exact: true });
+    await expect(many.getByRole('region', { name: navigation.title })).toContainText(navigation.capped(200));
+    await many.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+
+    await open();
+    await findDefinition('regexp', '(?=定义)');
+    await page.getByRole('gridcell', { name: '关键_%视图', exact: true }).dblclick();
+    await expect(viewer.getByRole('status')).toHaveText(navigation.unavailable);
+    await expect(navigator).toHaveCount(0);
+    await viewer.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+    expect(await bytes()).toBe(original);
+
+    await open();
+    await findDefinition('regexp', '定义.针');
     write(`DROP VIEW "关键_%视图"; CREATE VIEW "关键_%视图" AS SELECT '修改后的定义' AS value;`);
     await page.getByRole('gridcell', { name: '关键_%视图', exact: true }).dblclick();
     await expect(viewer.getByRole('status')).toContainText(navigation.invalid);

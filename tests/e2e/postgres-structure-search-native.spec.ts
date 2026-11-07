@@ -180,10 +180,53 @@ test('PostgreSQL 全库结构搜索跨库续页，遵循对象权限并定位原
     await page.screenshot({ path: info.outputPath('定义正文高亮.png') });
     await viewer.getByRole('button', { name: zh.common.cancel, exact: true }).click();
 
+    await second.query("CREATE VIEW pgdef_regex AS SELECT '😀XAA1 XBB2'::text AS body");
+    await second.query("CREATE VIEW pgdef_regex_many AS SELECT '" + 'Q9 '.repeat(201) + "'::text AS body");
+    const body = (await second.query<{ definition: string }>("SELECT pg_catalog.pg_get_viewdef('public.pgdef_regex'::regclass, false) AS definition")).rows[0].definition;
+    const expectedPosition = (fragment: string) => {
+      const offset = body.indexOf(fragment);
+      expect(offset).toBeGreaterThan(-1);
+      const lines = body.slice(0, offset).split('\n');
+      return matches.position(lines.length + 1, lines.at(-1)!.length + 1);
+    };
+    const findViews = async (pattern: string, caseSensitive = false) => {
+      const window = await openDefinitionSearch();
+      await window.getByRole('textbox', { name: text.databases, exact: true }).fill(dbOther);
+      for (const kind of ['table', 'procedure', 'function'] as const)
+        await window.getByRole('checkbox', { name: text.kinds[kind], exact: true }).uncheck();
+      await window.getByRole('checkbox', { name: text.caseSensitive, exact: true }).setChecked(caseSensitive);
+      await window.getByRole('combobox', { name: text.mode, exact: true }).selectOption('regexp');
+      await window.getByRole('textbox', { name: text.pattern, exact: true }).fill(pattern);
+      await window.getByRole('button', { name: text.start, exact: true }).click();
+      return window;
+    };
+    const regexView = page.getByRole('dialog', { name: /查看视图/ });
+    const regexNavigation = regexView.getByRole('region', { name: matches.title });
+    const searchRegex = await findViews('^|(?<=x)([a-z])\\1[0-9]');
+    await searchRegex.getByRole('gridcell', { name: '"public"."pgdef_regex"', exact: true }).dblclick();
+    await expect(regexNavigation.getByRole('status')).toHaveText(matches.count(0, 2) + expectedPosition('AA1'));
+    await regexNavigation.getByRole('button', { name: matches.next, exact: true }).click();
+    await expect(regexNavigation.getByRole('status')).toHaveText(matches.count(1, 2) + expectedPosition('BB2'));
+    await expect(regexView.locator('.definition-match-active').first()).toBeVisible();
+    await page.screenshot({ path: info.outputPath('PostgreSQL定义正则定位.png') });
+    await regexView.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+
+    const many = await findViews('Q[0-9]', true);
+    await many.getByRole('gridcell', { name: '"public"."pgdef_regex_many"', exact: true }).dblclick();
+    await expect(regexNavigation).toContainText(matches.capped(200));
+    await regexView.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+
+    const zero = await findViews('^', true);
+    await zero.getByRole('gridcell', { name: '"public"."pgdef_regex"', exact: true }).dblclick();
+    await expect(regexView.getByRole('status')).toHaveText(matches.unavailable);
+    await expect(regexNavigation).toHaveCount(0);
+    await regexView.getByRole('button', { name: zh.common.cancel, exact: true }).click();
+
     const stale = await openDefinitionSearch();
     await stale.getByRole('textbox', { name: text.databases, exact: true }).fill(dbOther);
     for (const kind of ['view', 'procedure', 'function'] as const)
       await stale.getByRole('checkbox', { name: text.kinds[kind], exact: true }).uncheck();
+    await stale.getByRole('combobox', { name: text.mode, exact: true }).selectOption('regexp');
     await stale.getByRole('button', { name: text.start, exact: true }).click();
     await expect(stale.locator('.database-search-status')).toContainText(text.summary(1, 1, 1));
     await second.query('COMMENT ON TABLE public."page%_last" IS \'新定义\'');

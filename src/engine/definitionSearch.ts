@@ -6,7 +6,7 @@ import {completionQuery} from './completionQuery';
 import {databaseSearchMatch,databaseSearchRegexpCollation} from './databaseSearchMatch';
 import {qualified} from './sql';
 import {definitionOmittingSqlModes} from '../shared/tableColumnPatches';
-import {definitionNavigationResult} from './definitionNavigation';
+import {definitionNavigationResult,definitionRegexpMarkers} from './definitionNavigation';
 
 export interface DefinitionSearchState{input:StructureSearchInput;scope:number;total:number;after?:{object:string;name:string};scannedDefinitions?:number}
 type Control=Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>;
@@ -43,9 +43,9 @@ export function definitionMatchQuery(source:string,pattern:StructureSearchInput[
 
 /** 使用同一排序规则和原始正则，不插入捕获组，保留反向引用、断言和锚点。 */
 function regexpNavigationQuery(source: string, pattern: StructureSearchInput['pattern'], maria: boolean) {
- const markers = ['\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x1e', '\x1f'].filter(marker => !source.includes(marker));
- if (markers.length < 2) return;
- const [start, end] = markers, collation = databaseSearchRegexpCollation(pattern.caseSensitive);
+ const markers = definitionRegexpMarkers(source);
+ if (!markers) return;
+ const { start, end } = markers, collation = databaseSearchRegexpCollation(pattern.caseSensitive);
  const text = 'CONVERT(? USING utf8mb4) COLLATE ' + collation;
  // MariaDB 的替换在第一个空匹配处停止。位置查询用 PCRE2 非空选项，命中判定仍使用用户原式。
  const expression = maria ? '(*NOTEMPTY)' + pattern.text : pattern.text;
