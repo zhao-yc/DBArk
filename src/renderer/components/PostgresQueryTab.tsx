@@ -64,6 +64,10 @@ import { QueryBindingDialog } from './QueryBindingDialog';
 import { QueryDuplicateIntent } from '../queryDuplicateIntent';
 import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
+import { QueryTransactionSettingsIntent } from '../queryTransactionSettingsIntent';
+import { PostgresTransactionSettingsDialog } from './PostgresTransactionSettingsDialog';
+import { postgresTransactionSettingsZh as transactionText } from '../locales/postgresTransactionSettings.zh-CN';
+import type { PostgresTransactionDefaults, PostgresTransactionSnapshot } from '../../shared/postgresTransactionSettings';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
 import { QueryContinueOnErrorNotice, confirmedQueryContinueRange } from './QueryContinueOnErrorNotice';
@@ -217,7 +221,13 @@ export function PostgresQueryTab({
   const failureSource = useRef<QueryFailureSourceLease | undefined>(undefined);
   const [, refreshFailureSource] = useState(0);
   const [continueOnError, setContinueOnError] = useState(false);
+  const [transactionSettings, setTransactionSettings] = useState<{intent: QueryTransactionSettingsIntent; scope: Scope}>();
+  const transactionSettingsRef = useRef(transactionSettings); transactionSettingsRef.current = transactionSettings;
   const scriptFailureRanges = useRef(new Set<QueryFailure>());
+  useLayoutEffect(() => {
+    const current = transactionSettingsRef.current; current?.intent.current();
+    if (current && closeRef.current && !phase.current) closeTransactionSettings(current);
+  });
   const [completionStatus, setCompletionStatus] = useState<SqlCompletionStatus>('idle');
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
@@ -331,6 +341,7 @@ export function PostgresQueryTab({
       !phase.current &&
       !analyzeRef.current &&
       !exportOpen.current &&
+      !transactionSettingsRef.current &&
       !sortDraftRef.current &&
       !filterDraftRef.current &&
       !columnDraftRef.current &&
@@ -644,6 +655,56 @@ export function PostgresQueryTab({
     setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true, reuse,
       failureSource: captureFailureSource(sql), continueOnError });
   }
+  /** 事务默认值绑定原标签、数据库及会话，不绑定 SQL 正文；正文编辑不改变设置目标。 */
+  function openTransactionSettings() {
+    if (!available()) return;
+    try {
+      const original = scope;
+      const intent = new QueryTransactionSettingsIntent(() => {
+        const now = useWorkspace.getState(), current = currentTab();
+        return {tabId: tab.id, connectionId: current?.connectionId ?? tab.connectionId,
+          connectionVersion: now.connectionVersions[tab.connectionId] ?? 0,
+          connection: now.connections.find(item => item.id === current?.connectionId), sessionId: session.current?.id ?? '',
+          present: same(original), active: now.settings.activeTabId === tab.id, closing: !!closeRef.current};
+      }, changed => useWorkspace.subscribe(changed), transactionText.changed);
+      const owner = {intent, scope: original}; transactionSettingsRef.current = owner; setTransactionSettings(owner);
+    } catch (reason) { setError(errorMessage(reason)); }
+  }
+  /** 元数据请求保留原结果和历史，所有等待边界核对原弹窗及物理会话。 */
+  async function requestTransactionSettings(owner: NonNullable<typeof transactionSettings>, expected?: PostgresTransactionSnapshot,
+    defaults?: PostgresTransactionDefaults): Promise<PostgresTransactionSnapshot> {
+    const assertCurrent = () => {
+      owner.intent.assertCurrent();
+      if (transactionSettingsRef.current !== owner || !same(owner.scope)) throw Error(transactionText.changed);
+    };
+    assertCurrent();
+    if (phase.current || useWorkspace.getState().activeJobs[tab.id]) throw Error('原标签已有活动作业');
+    const job = acquireWorkspaceBusy(tab.id);
+    const operation: Phase = {life: life.current, scope: owner.scope, valid: true, cancelled: false, taskId: uid(), sent: false};
+    phase.current = operation; setBusy(true);
+    const work = (async () => {
+      try {
+        assertCurrent(); const id = await ensure(operation); owner.intent.bindSession(id); assertCurrent();
+        operation.sent = true;
+        const result = expected && defaults
+          ? await invoke('postgres.transactionSettings.apply', {sessionId: id, taskId: operation.taskId, expected, defaults})
+          : await invoke('postgres.transactionSettings.read', {sessionId: id, taskId: operation.taskId});
+        assertCurrent(); return result;
+      } finally {
+        if (operation.cancel) await operation.cancel;
+        const id = session.current?.id; if (id) await readState(id, operation);
+        if (phase.current === operation) phase.current = undefined;
+        job.release(); if (alive.current && life.current === operation.life) setBusy(false);
+      }
+    })();
+    operation.work = work.then(() => {}, () => {});
+    return work;
+  }
+  /** 迟到关闭不能清除后继弹窗；原请求收尾前保持占用。 */
+  function closeTransactionSettings(owner: NonNullable<typeof transactionSettings>): void {
+    if (transactionSettingsRef.current !== owner || phase.current) return;
+    owner.intent.dispose(); transactionSettingsRef.current = undefined; setTransactionSettings(undefined);
+  }
   /** 显式重连先正常关闭旧会话；旧事务或未知写入不会被自动恢复和重放。 */
   async function reconnect() {
     const original = session.current;
@@ -793,6 +854,7 @@ export function PostgresQueryTab({
       alive.current = false;
       clearFailureSource(); parameters.current?.failureSource?.dispose();
       parameterReuse.current?.dispose(); parameterReuse.current = null;
+      transactionSettingsRef.current?.intent.dispose();
       duplicateIntent.current?.dispose();
       snippetTarget.current?.dispose();
       snapshotOperation.current?.invalidate();
@@ -864,7 +926,7 @@ export function PostgresQueryTab({
   const pin = pinState.items.find(item => item.id === pinState.selected);
   const results = outcome?.results ?? [],
     result = pin?.result ?? results[selected],
-    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView || !!pinSql,
+    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!transactionSettings || !!closeRequest || !!exportView || !!pinSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
   // 名称属于服务器已返回的语句，编辑草稿时仍显示原结果的名称。
@@ -1675,6 +1737,7 @@ export function PostgresQueryTab({
             <button disabled={locked || !session.current} onClick={() => void reconnect()}>
               {text.reconnect}
             </button>
+            <button disabled={!editable} onClick={openTransactionSettings}>{transactionText.open}</button>
             {snapshotActions}
           </div>
         )}
@@ -1918,7 +1981,7 @@ export function PostgresQueryTab({
           }}
         />
       )}
-      {closeRequest && !save && !snippets && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !pinSql && !comparisonDraft && (
+      {closeRequest && !transactionSettings && !save && !snippets && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !pinSql && !comparisonDraft && (
         <QueryCloseDialog
           title={tab.title}
           onCancel={() => finishClose(false)}
@@ -1942,6 +2005,10 @@ export function PostgresQueryTab({
           }}
         />
       )}
+      {transactionSettings && <PostgresTransactionSettingsDialog intent={transactionSettings.intent} connectionName={profile?.name ?? ''}
+        onRead={() => requestTransactionSettings(transactionSettings)}
+        onApply={(expected, defaults) => requestTransactionSettings(transactionSettings, expected, defaults)}
+        onClose={() => closeTransactionSettings(transactionSettings)} />}
       {snippets && <SnippetsDialog dialect="postgresql" initialSql={snippets.initialSql} startWithDraft={snippets.create}
         onInsert={insertSnippet} onClose={closeSnippets} />}
     </div>

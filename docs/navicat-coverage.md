@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 查询可读取并设置原会话后续事务的默认隔离级别、只读及 DEFERRABLE，保留原结果和历史，活动事务只读查看，修改前复核原值和物理身份。Q02、R01 仍为部分覆盖。[本会话事务默认设置](development/postgres-transaction-settings-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 查询可显式启用遇错继续，按实际协议状态记录多错和完整结果，并逐项定位。失败事务由用户脚本显式处理，取消及硬错误停止。Q02、R01 仍为部分覆盖。[PostgreSQL 遇错继续](development/postgres-continue-on-error-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 首错停止后可定位原脚本、选区、当前语句及位置参数模板中的未完成语句，保留此前完整结果及实际事务状态。Q02、R01 仍为部分覆盖。[未完成语句定位](development/postgres-failure-source-20261107.md)

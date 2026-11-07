@@ -1,4 +1,5 @@
 import { postgresQueryExportSchema } from './postgresQueryExport';
+import { postgresTransactionReadSchema, postgresTransactionApplySchema } from './postgresTransactionSettings';
 import { mysqlDatabaseBackupChooseSchema, mysqlDatabaseBackupExecuteSchema } from './mysqlDatabaseBackup';
 import { mysqlSqlFileChooseSchema, mysqlSqlFileExecuteSchema } from './mysqlSqlFile';
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
@@ -449,6 +450,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   }).strict().refine(value => value.currentStatement === undefined || value.currentStatement.offset <= value.sql.length, '当前语句光标超出完整正文范围'),
   'postgres.analyze': z.object({ sessionId: id, token: id, taskId: id, acknowledged: z.literal(true) }).strict(),
   'postgres.analyzeDiscard': z.object({ sessionId: id, token: id }).strict(),
+  'postgres.transactionSettings.read': postgresTransactionReadSchema,
+  'postgres.transactionSettings.apply': postgresTransactionApplySchema,
   'query.analyze': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), acknowledged: z.literal(true), expectedDatabase: z.string().min(1).max(64).nullable() }).strict(),
   'query.analyzeContext': z.object({ sessionId: id, taskId: id }).strict(),
   'query.parameterNames': z.object({ sessionId: id, sql: text.min(1) }).strict(),

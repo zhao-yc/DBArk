@@ -19,6 +19,7 @@ import { queryParameterReuseZh as reuseText } from '../../src/renderer/locales/q
 import { queryFailureSourceZh as failureText } from '../../src/renderer/locales/queryFailureSource.zh-CN';
 import { queryPartialOutcomeZh as partialText } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
+import { postgresTransactionSettingsZh as transactionText } from '../../src/renderer/locales/postgresTransactionSettings.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -81,6 +82,74 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 会话事务默认设置保持原结果并按实际事务隔离、只读及延期生效', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const dialog = () => page.getByRole('dialog', {name: transactionText.title, exact: true});
+  const open = async () => {
+    await tab().getByRole('button', {name: transactionText.open, exact: true}).click();
+    await expect(dialog().getByText(transactionText.ready, {exact: true})).toBeVisible();
+  };
+  const close = () => dialog().getByRole('button', {name: transactionText.close, exact: true}).click();
+  const apply = async (isolation: string, readOnly: boolean, deferrable: boolean) => {
+    await dialog().getByLabel(transactionText.isolation, {exact: true}).selectOption(isolation);
+    await dialog().getByRole('checkbox', {name: transactionText.readOnly, exact: true}).setChecked(readOnly);
+    await dialog().getByRole('checkbox', {name: transactionText.deferrable, exact: true}).setChecked(deferrable);
+    await dialog().getByRole('button', {name: transactionText.apply, exact: true}).click();
+    await expect(dialog().getByText(transactionText.applied, {exact: true})).toBeVisible();
+  };
+  const sessions = async () => (await observer.query("SELECT pid,state,xact_start::text FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+  const records = async () => (await observer.query('SELECT id FROM public.transaction_settings_sentinel ORDER BY id')).rows;
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  try {
+    await observer.query('CREATE TABLE public.transaction_settings_sentinel (id int PRIMARY KEY)');
+    await prepare({id: '', name: '隔离 PostgreSQL 事务设置', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, "SELECT '原结果保持' AS original;");
+    await command('execute-all'); const grid = tab().locator('.postgres-results .rdg'); await expect(grid).toContainText('原结果保持');
+    const originalResult = await grid.innerText(), before = await history(), original = await sessions(); expect(original).toHaveLength(1);
+    await open(); await expect(dialog().getByLabel(transactionText.isolation, {exact: true})).toHaveValue('READ COMMITTED');
+    await expect(dialog().getByRole('button', {name: transactionText.apply, exact: true})).toBeDisabled();
+    await apply('SERIALIZABLE', true, true); expect(await sessions()).toEqual(original); expect(await history()).toEqual(before);
+    expect(await grid.innerText()).toBe(originalResult);
+    await page.screenshot({path: info.outputPath('PostgreSQL会话事务默认设置.png')}); await close();
+    await replaceDraft("SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS readonly, current_setting('transaction_deferrable') AS deferred;");
+    await command('execute-all'); await expect(grid).toContainText('serializable'); await expect(grid.getByRole('gridcell').filter({hasText: /^on$/})).toHaveCount(2);
+    await replaceDraft('INSERT INTO public.transaction_settings_sentinel VALUES (1);'); await command('execute-all');
+    await expect(tab()).toContainText('read-only transaction'); expect(await records()).toEqual([]);
+    await open(); await apply('REPEATABLE READ', false, false); await close();
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click(); await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    const active = await sessions(), beforeRead = await history();
+    await open(); await expect(dialog()).toContainText(transactionText.active);
+    await expect(dialog().getByLabel(transactionText.isolation, {exact: true})).toBeDisabled();
+    await expect(dialog().getByRole('button', {name: transactionText.apply, exact: true})).toBeDisabled();
+    await close(); expect(await sessions()).toEqual(active); expect(await history()).toEqual(beforeRead);
+    // SHOW未提前固定事务快照；用户仍能在第一条SELECT前明确改变当前事务隔离级别。
+    const transactional = 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; INSERT INTO public.transaction_settings_sentinel VALUES (2) RETURNING id;';
+    await replaceDraft(transactional);
+    await command('execute-all'); await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    await expect.poll(async () => (await history()).find(entry => entry.sql === transactional)?.success).toBe(true); expect(await records()).toEqual([]);
+    await replaceDraft('SELECT missing_column;'); await command('execute-all');
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.failedTransaction);
+    const failed = await observer.query("SELECT pid,state,query FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user]);
+    await tab().getByRole('button', {name: transactionText.open, exact: true}).click();
+    await expect(dialog()).toContainText('原会话状态未知或事务已失败'); await close();
+    expect((await observer.query("SELECT pid,state,query FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows).toEqual(failed.rows);
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click(); await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+    expect(await records()).toEqual([]); expect((await sessions())[0].pid).toBe(original[0].pid);
+    await page.locator('.tab-strip').getByText('另一 PostgreSQL 查询', {exact: true}).click(); await open();
+    await expect(dialog().getByLabel(transactionText.isolation, {exact: true})).toHaveValue('READ COMMITTED');
+    await expect(dialog().getByRole('checkbox', {name: transactionText.readOnly, exact: true})).not.toBeChecked(); await close();
+    await page.locator('.tab-strip').getByText('原 PostgreSQL 查询', {exact: true}).click(); await open();
+    await expect(dialog().getByLabel(transactionText.isolation, {exact: true})).toHaveValue('REPEATABLE READ'); await close();
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参数隐私', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');

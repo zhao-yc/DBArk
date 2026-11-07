@@ -12,6 +12,8 @@ import { connectionTransportChanged } from '../../shared/connectionProfile';
 import { queryFailureMessage } from '../../shared/queryFailure';
 import type { QueryParameter } from '../../shared/queryParameters';
 import { postgresParameterValues } from './parameters';
+import { readPostgresTransactionSettings, applyPostgresTransactionSettings } from './transactionSettings';
+import type { PostgresTransactionSnapshot } from '../../shared/postgresTransactionSettings';
 import { canContinuePostgresQueryError, postgresQueryErrorMessage } from './queryContinue';
 import { queryContinueOnErrorLimits, queryScriptReportSummary, truncateQueryScriptMessage, type QueryScriptReport } from '../../shared/queryContinueOnError';
 import {
@@ -867,6 +869,36 @@ export class PostgresEngine {
     return result.rows.map(row => row.c0).join('\n');
   }
 
+  /** 元数据独占原会话并沿同一任务取消；SHOW/SET 不进入用户结果或执行历史。 */
+  private async transactionSettings(session: Session, input: Input): Promise<PostgresTransactionSnapshot> {
+    if (!input.taskId || this.ownsTask(input.taskId) || this.tasks.size >= 8192) throw Error('PostgreSQL任务编号已使用或登记已满');
+    const task: Task = {id: input.taskId, session, cancelled: false, sent: false, terminal: false};
+    this.tasks.set(task.id, task);
+    const check = () => {
+      if (task.cancelled || this.stopping || session.closing || this.closing.has(session.connectionId) || session.managed.broken)
+        throw Error('原事务设置任务已取消、会话关闭或失效，未自动重试');
+    };
+    try {
+      this.emit({taskId: task.id, status: 'running', progress: 0, message: '正在读取或设置PostgreSQL事务默认值'});
+      if (session.completion) await session.completion.catch(() => {});
+      check(); task.sent = true;
+      const result = input.expected
+        ? await applyPostgresTransactionSettings(session.managed, input.expected, input.defaults, check)
+        : await readPostgresTransactionSettings(session.managed, check);
+      this.emit({taskId: task.id, status: 'completed', progress: 100, message: 'PostgreSQL事务默认值已读取确认'});
+      return result;
+    } catch (reason) {
+      const error = session.managed.error(reason);
+      this.emit({taskId: task.id, status: task.cancelled ? 'cancelled' : 'failed', progress: 100, message: error.message});
+      throw error;
+    } finally {
+      task.terminal = true;
+      try { if (task.cancel) await task.cancel; }
+      catch { /* 取消请求的失败单独回报，不能抹去原设置命令的真实回执。 */ }
+      finally { this.tasks.delete(task.id); this.rememberCompleted(task.id); }
+    }
+  }
+
   /** 计划和脚本共用原会话排队、取消及终态，用户脚本仍按原文逐句执行。 */
   private async execute(session: Session, input: Input, estimate = false, analysisSql?: string): Promise<QueryOutcome> {
     if (!input.taskId || this.ownsTask(input.taskId) || this.tasks.size >= 8192)
@@ -1423,6 +1455,9 @@ export class PostgresEngine {
             { rows: 0, bytes: 65536 },
           );
         });
+      case 'postgres.transactionSettings.read':
+      case 'postgres.transactionSettings.apply':
+        return this.session(input.sessionId, session => this.transactionSettings(session, input), true);
       case 'metadata.databases':
         return this.use(this.profile(input.connectionId), undefined, async (m) =>
           (

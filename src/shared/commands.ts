@@ -17,6 +17,7 @@ export const publicCommands: Record<Command, true> = {
   'mysql.compareData': true, 'mysql.compareData.catalogue': true, 'mysql.compareData.cancel': true,
   'postgres.compareData': true, 'postgres.compareData.catalogue': true, 'postgres.compareData.cancel': true,
   'postgres.explain': true,
+  'postgres.transactionSettings.read': true, 'postgres.transactionSettings.apply': true,
   'postgres.analyzePreview': true, 'postgres.analyze': true, 'postgres.analyzeDiscard': true,
   'postgres.createTable.schemas': true, 'postgres.createTable.preview': true, 'postgres.createTable.apply': true,
   'postgres.createTable.copy.preview': true, 'postgres.createTable.copy.apply': true,
