@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 查询页支持按语句折叠多行 SQL。折叠沿用原语句分段和可用的会话字符串模式缓存，并保留带有相邻语句的末行。Q01、R01 仍为部分覆盖。[PostgreSQL 语句折叠](development/postgres-statement-folding-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 查询支持按正文筛选语句目录、跳转、选中当前和相邻导航。连接后沿用原会话的字符串模式，离线拒绝有歧义的边界。Q01、Q02、R01 仍为部分覆盖。[PostgreSQL 语句导航](development/postgres-statement-navigation-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 查询页接入原生菜单的本地编辑、保存及查询执行命令，区分选区、当前语句和全部。Q01、Q02、Q03、R01 继续按部分覆盖记录。[PostgreSQL 查询菜单](development/postgres-query-menu-commands-20261107.md)

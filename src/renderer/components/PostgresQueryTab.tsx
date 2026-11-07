@@ -149,7 +149,13 @@ export function PostgresQueryTab({
     [error, setError] = useState(''),
     [outcome, setOutcome] = useState<QueryOutcome>(),
     [selected, setSelected] = useState(0),
-    [state, setState] = useState({
+    [state, setState] = useState<{
+      transactionOpen: boolean;
+      transactionKnown: boolean;
+      transactionFailed: boolean;
+      broken: boolean;
+      standardConformingStrings?: boolean;
+    }>({
       transactionOpen: false,
       transactionKnown: true,
       transactionFailed: false,
@@ -1378,6 +1384,7 @@ export function PostgresQueryTab({
         <SqlEditor
           value={tab.sql ?? ''}
           dialect="postgresql"
+          postgresFoldingStandardStrings={session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined}
           postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
             connectionVersion: scope.version, sessionId: session.current?.id }}
           onCompletionStatus={setCompletionStatus}

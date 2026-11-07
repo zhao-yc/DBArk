@@ -57,7 +57,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresFoldingStandardStrings, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresFoldingStandardStrings?:boolean;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
   const theme = useWorkspace(state => state.settings.theme);
@@ -72,6 +72,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object; indentation?: ReturnType<typeof bindEditorIndentation> } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat });
+  const foldingScope = useRef({ dialect: requestedDialect, standardStrings: postgresFoldingStandardStrings });
+  useLayoutEffect(() => { foldingScope.current = { dialect: requestedDialect, standardStrings: postgresFoldingStandardStrings }; });
   const completionRef = useRef(completion);
   const dialectRef = useRef(dialect);
   useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
@@ -79,13 +81,15 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const queryEditor = !!onExecute;
   useEffect(() => {
     const instance = editorRef.current;
-    if (!contentReady || !instance || !queryEditor || !sqlFolding || !dialect) return;
+    if (!contentReady || !instance || !queryEditor || !sqlFolding || !requestedDialect) return;
     let active = true;
     const client = new StatementNavigationWorkerClient(() => new StatementNavigationWorker({ name: 'dbark-sql-folding' }));
-    const registration = monaco.languages.registerFoldingRangeProvider('sql', sqlStatementFoldingProvider(instance, dialect, client,
-      () => active && aliveRef.current && editorRef.current === instance && dialectRef.current === dialect && useWorkspace.getState().settings.editorSqlFolding === true));
+    const registration = monaco.languages.registerFoldingRangeProvider('sql', sqlStatementFoldingProvider(instance, requestedDialect, client,
+      () => active && aliveRef.current && editorRef.current === instance && foldingScope.current.dialect === requestedDialect &&
+        foldingScope.current.standardStrings === postgresFoldingStandardStrings && useWorkspace.getState().settings.editorSqlFolding === true,
+      postgresFoldingStandardStrings === undefined ? {} : { noBackslashEscapes: postgresFoldingStandardStrings }));
     return () => { active = false; registration.dispose(); client.dispose(); };
-  }, [contentReady, queryEditor, sqlFolding, dialect]);
+  }, [contentReady, queryEditor, sqlFolding, requestedDialect, postgresFoldingStandardStrings]);
   /** 原生菜单只收到可用状态，选区内容留在当前模型内。 */
   useEffect(() => {
     if (!onSelectionState) return;

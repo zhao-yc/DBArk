@@ -59,12 +59,101 @@ async function inspectModel() {
 
 const navigationPanel = () => tab().getByRole('region', {name: navigationText.title, exact: true});
 const ambiguousScript = String.raw`SELECT 'a\'; SELECT 2; -- '`;
+const ambiguousFoldingScript = ["SELECT 'a\\';", 'SELECT', '2;', "-- close '", ';', 'SELECT 3;'].join('\n');
 async function replaceDraft(sql: string) {
   await editor().getByRole('textbox').focus();
   await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 语句折叠离线保留标题和同行的下一条 SQL', async ({}, info) => {
+  const sql = "SELECT 0;\n/* 外层 /* 内层; */ */\nDO $body$\nBEGIN\nPERFORM 42;\nEND;\n$body$; SELECT '相邻语句';";
+  await prepare({id: '', name: '离线 PostgreSQL 折叠', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  const expanded = editor().locator('.codicon-folding-expanded');
+  const collapsed = editor().locator('.codicon-folding-collapsed');
+  const lines = editor().locator('.view-lines');
+  await expect(expanded).toHaveCount(0);
+  await command('editor-sql-folding');
+  await expect(expanded).toHaveCount(1);
+  await expanded.click();
+  await expect(lines).not.toContainText('PERFORM 42');
+  await expect(lines).toContainText('DO $body$');
+  await expect(lines).toContainText('外层');
+  await expect(lines).toContainText('相邻语句');
+  await page.screenshot({path: info.outputPath('PostgreSQL语句折叠.png')});
+  await collapsed.click();
+  await expect(lines).toContainText('PERFORM 42');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+  await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).editorSqlFolding).toBe(true);
+  await replaceDraft(ambiguousFoldingScript);
+  await expect(expanded).toHaveCount(0);
+  await command('editor-sql-folding');
+  await expect(expanded).toHaveCount(0);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 语句折叠使用真实会话缓存更新范围', async () => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const set = 'SET standard_conforming_strings = ';
+  await page.addInitScript(source => {
+    const original = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message: unknown, options?: Transferable[] | StructuredSerializeOptions) {
+      const request = message as {source?: string; dialect?: string; mode?: {noBackslashEscapes?: boolean}};
+      if (request?.source === source && request.dialect === 'postgresql')
+        (window as Window & {foldingMode?: boolean}).foldingMode = request.mode?.noBackslashEscapes;
+      Reflect.apply(original, this, options === undefined ? [message] : [message, options]);
+    };
+  }, ambiguousFoldingScript);
+  await prepare({id: '', name: '本轮隔离 PostgreSQL', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, set + 'off');
+  const lines = editor().locator('.view-lines');
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  await command('editor-sql-folding');
+  for (const mode of ['off', 'on'] as const) {
+    if (mode === 'on') await replaceDraft(set + mode);
+    await tab().getByRole('button', {name: postgresZh.execute, exact: true}).click();
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === set + mode)).toBe(true);
+    await expect.poll(() => enabled('execute-all')).toBe(true);
+    const baseline = await history();
+    await replaceDraft(ambiguousFoldingScript);
+    const foldStart = mode === 'off' ? 1 : 2;
+    await modelSelection(foldStart, 1);
+    await expect.poll(() => page.evaluate(() => (window as Window & {foldingMode?: boolean}).foldingMode)).toBe(mode === 'on');
+    const locate = () => editor().evaluate((element, line) => {
+      const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      const position = instance?.getScrolledVisiblePosition({lineNumber: line, column: 1});
+      const root = instance?.getDomNode();
+      if (!position || !root) return undefined;
+      const y = root.getBoundingClientRect().top + position.top + position.height / 2;
+      const rect = Array.from(root.querySelectorAll('.codicon-folding-expanded'), icon => icon.getBoundingClientRect())
+        .find(bounds => bounds.top <= y && y < bounds.bottom);
+      return rect && {x: rect.left + rect.width / 2, y};
+    }, foldStart);
+    await expect.poll(async () => !!await locate(), {message: '等待实际折叠首行 · ' + mode}).toBe(true);
+    const clickPoint = await locate();
+    if (!clickPoint) throw Error('折叠按钮在点击前失效');
+    await page.mouse.click(clickPoint.x, clickPoint.y);
+    await expect(editor().locator('.codicon-folding-collapsed')).toHaveCount(1);
+    await expect(lines).not.toContainText('2;');
+    if (mode === 'off') await expect(lines).not.toContainText('-- close');
+    else await expect(lines).toContainText('-- close');
+    await expect(lines).toContainText('SELECT 3;');
+    expect((await inspectModel()).sql).toBe(ambiguousFoldingScript);
+    expect(await history()).toEqual(baseline);
+    await editor().locator('.codicon-folding-collapsed').click();
+  }
+  expect(pageErrors).toEqual([]);
+  await quitDesktop();
+});
 
 test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑失效', async ({}, info) => {
   const body = 'DO $body$BEGIN PERFORM 1; END;$body$';
