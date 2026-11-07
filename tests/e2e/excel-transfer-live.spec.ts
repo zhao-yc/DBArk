@@ -1,11 +1,13 @@
 import { clickSidebarAction } from './sidebar-menu';
 import ExcelJS from 'exceljs';
 import { join } from 'node:path';
+import { copyFile } from 'node:fs/promises';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, desktop, page, dataDir } from './desktop-fixture';
 import { enabled, isolatedDatabase, type LiveContext } from './live-helpers';
 import { excelImportZh } from '../../src/shared/excelTransfer';
 import { importMappingZh } from '../../src/renderer/locales/importMapping.zh-CN';
+import { importPresetsZh } from '../../src/renderer/locales/importPresets.zh-CN';
 
 test.use({ trace: 'off' });
 
@@ -20,16 +22,22 @@ async function openTable(context: LiveContext, table: string) {
   await expect(page.locator('.table-tab:visible .loading-overlay')).toHaveCount(0);
 }
 
-/** 只选择原生文件位置；范围、协议、映射和提交全部通过实际界面操作。 */
-async function excelDialog(mode: 'import' | 'export', path: string) {
+/** 只替换原生对话框返回的文件路径。 */
+async function answerExcelFile(mode: 'import' | 'export', path: string) {
   await desktop.evaluate(({ dialog }, input) => {
     if (input.mode === 'export') dialog.showSaveDialog = (async () => ({ canceled: false, filePath: input.path })) as typeof dialog.showSaveDialog;
     else dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [input.path] })) as typeof dialog.showOpenDialog;
   }, { mode, path });
+}
+
+/** 范围、协议、映射和提交全部通过实际界面操作。 */
+async function excelDialog(mode: 'import' | 'export', path: string, chooseImmediately = true) {
+  await answerExcelFile(mode, path);
   await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.table-tab:visible'), { name: mode === 'import' ? '导入' : '导出', exact: true })).click();
   await page.getByRole('dialog').getByRole('combobox').first().selectOption('xlsx');
   const modal = page.getByRole('dialog'); await expect(modal).toContainText(mode === 'import' ? '导入 Excel' : '导出 Excel');
-  await modal.locator('.file-picker').click(); return modal;
+  if (chooseImmediately) await modal.locator('.file-picker').click();
+  return modal;
 }
 
 test('XLSX 无标题时按列位置映射，并仅提交首末行之间的数据', async ({}, info) => {
@@ -42,11 +50,19 @@ test('XLSX 无标题时按列位置映射，并仅提交首末行之间的数据
     await context.observer.query('USE ??', [context.database]);
     await context.observer.query('CREATE TABLE excel_range (id INT PRIMARY KEY, note TEXT) ENGINE=InnoDB');
     const path = join(dataDir, '无标题行范围.xlsx');
-    const book = new ExcelJS.Workbook(), sheet = book.addWorksheet('数据');
+    const book = new ExcelJS.Workbook();
+    book.addWorksheet('目录').addRow(['说明']);
+    const sheet = book.addWorksheet('数据');
     sheet.addRows([['说明'], ['2', '首条'], ['3', '末条'], [{ formula: '1+1', result: 2 }]]);
     await book.xlsx.writeFile(path);
+    const incompatiblePath = join(dataDir, '增加一列.xlsx');
+    sheet.getCell('C2').value = '字段增加';
+    await book.xlsx.writeFile(incompatiblePath);
     await openTable(context, 'excel_range');
     const modal = await excelDialog('import', path);
+    const workbookSheet = modal.getByRole('combobox', { name: '工作表', exact: true });
+    await workbookSheet.selectOption({label: '数据'});
+    await modal.getByRole('combobox', { name: '文本解释方式', exact: true }).selectOption('dbark-v1');
     await modal.getByRole('spinbutton', { name: excelImportZh.lastDataRow, exact: true }).fill('3');
     await modal.getByRole('spinbutton', { name: '表头所在行', exact: true }).fill('0');
     await modal.getByRole('spinbutton', { name: excelImportZh.firstDataRow, exact: true }).fill('4');
@@ -67,6 +83,50 @@ test('XLSX 无标题时按列位置映射，并仅提交首末行之间的数据
     await expect(modal.locator('.excel-preview')).toContainText('首条');
     await expect(modal.locator('.excel-preview')).toContainText('末条');
     await modal.screenshot({ path: info.outputPath('无标题 XLSX 字段映射.png') });
+
+    const name = '本例无标题 XLSX 配置', section = modal.getByRole('region', {name: importPresetsZh.title, exact: true});
+    const showPresets = () => modal.locator('summary').filter({hasText: importPresetsZh.title}).click();
+    const button = (label: string) => section.getByRole('button', {name: label, exact: true});
+    const configurations = section.getByLabel(importPresetsZh.choose, {exact: true});
+    await showPresets();
+    await button(importPresetsZh.read).click();
+    await section.getByLabel(importPresetsZh.name, {exact: true}).fill(name);
+    await button(importPresetsZh.create).click();
+    await expect(configurations.getByRole('option', {name, exact: true})).toHaveCount(1);
+    const stored = await page.evaluate(async () => (await window.dbark.invoke('files.importPresets.list', {})).entries);
+    expect(stored.map(entry => entry.configuration)).toEqual([{
+      format: 'xlsx', encoding: 'utf8', excelOptions: {headerRow: 0, firstDataRow: 2, lastDataRow: 3, protocol: 'dbark-v1'},
+      columns: ['第1列', '第2列'], mapping: {第1列: 'id', 第2列: 'note'},
+    }]);
+    await modal.getByRole('button', {name: '关闭', exact: true}).click();
+    await expect(modal).toBeHidden();
+    await excelDialog('import', incompatiblePath, false);
+    await showPresets();
+    await button(importPresetsZh.read).click();
+    await configurations.selectOption({label: name});
+    await button(importPresetsZh.apply).click();
+    await expect(apply).toBeDisabled();
+    await modal.locator('.file-picker').click();
+    await expect(workbookSheet).toHaveValue('');
+    await workbookSheet.selectOption({label: '数据'});
+    await expect(modal.locator('.error-box')).toContainText(importPresetsZh.incompatible);
+    await expect(apply).toBeDisabled();
+    await answerExcelFile('import', path);
+    await modal.locator('.file-picker').click();
+    await expect(workbookSheet).toHaveValue('');
+    await workbookSheet.selectOption({label: '数据'});
+    await expect(modal.getByRole('spinbutton', {name: '表头所在行', exact: true})).toHaveValue('0');
+    await expect(modal.getByRole('spinbutton', {name: excelImportZh.firstDataRow, exact: true})).toHaveValue('2');
+    await expect(modal.getByRole('spinbutton', {name: excelImportZh.lastDataRow, exact: true})).toHaveValue('3');
+    await expect(modal.getByRole('combobox', {name: '文本解释方式', exact: true})).toHaveValue('dbark-v1');
+    await expect(firstTarget).toHaveValue('id');
+    await expect(modal.getByRole('combobox', {name: '字段“第2列”的目标列', exact: true})).toHaveValue('note');
+    const [before] = await context.observer.query<RowDataPacket[]>('SELECT id, note FROM excel_range');
+    expect(before).toEqual([]);
+    await showPresets();
+    await firstTarget.scrollIntoViewIfNeeded();
+    await modal.screenshot({path: info.outputPath('无标题 XLSX 配置恢复.png')});
+    await copyFile(path, info.outputPath('无标题 XLSX 配置合成样例.xlsx'));
     await apply.click();
     await expect(modal.locator('.success-box')).toContainText('2 行', { timeout: 30_000 });
     const [rows] = await context.observer.query<RowDataPacket[]>('SELECT id, note FROM excel_range ORDER BY id');

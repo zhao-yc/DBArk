@@ -1,7 +1,7 @@
 /** Excel 文件传输的可见文案集中维护。 */
 export const excelTransferZh = {
   importTitle: '导入 Excel', exportTitle: '导出 Excel', chooseImport: '选择 XLSX 工作簿', chooseExport: '选择 XLSX 保存位置',
-  fileHint: '仅支持 .xlsx，不支持旧版 .xls；文件通过系统选择对话框授权。', sheet: '工作表', hidden: '（隐藏）', protocol: '文本解释方式',
+  fileHint: '仅支持 .xlsx，不支持旧版 .xls；文件通过系统选择对话框授权。', sheet: '工作表', chooseSheet: '请选择工作表', hidden: '（隐藏）', protocol: '文本解释方式',
   format: 'Excel 工作簿（XLSX）', back: '其他文件格式', headerRow: '表头所在行', scope: '导出范围', sample: '前 1000 行样本', all: '整张表（流式）',
   importPolicy: '仅追加到有可靠键的 InnoDB 表，不更新已有记录。每 500 行提交一批；失败或取消保留此前已提交批次，当前批回滚。导入后请刷新表格。',
   plain: '普通 Excel 文本', dbark: 'DBArk 无损导出协议',

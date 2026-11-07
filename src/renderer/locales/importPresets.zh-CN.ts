@@ -9,6 +9,7 @@ export const importPresetsZh = {
   applying: '正在重新核验导入配置…', needFile: '格式已恢复，请重新选择文件后再次应用配置；尚未套用映射。',
   applied: '配置已通过当前文件与目标结构核验；请再次检查映射后明确开始导入。',
   postgresApplyHint: '应用后重新选择文件。XLSX 还需选择工作表并扫描。源列和目标列兼容后会填入映射，再由你确认导入。',
+  workbookApplyHint: '应用后选择本次工作簿和工作表。源列和目标列兼容后会填入映射，再由你确认导入。',
   chooseNewFile: '已恢复读取设置，等待选择文件并核验映射。',
   chooseNewSheet: '已恢复行范围和文本协议，等待选择工作簿、工作表并核验映射。',
   sqliteApplyHint: '应用后重新选择文件并检查。XLSX 还需选择工作表。映射和转换类型恢复后，仍须通过整文件预检并确认写入。',
