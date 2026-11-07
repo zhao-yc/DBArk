@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { Engine } from '../../src/engine';
 import type { PostgresConnectionProfile } from '../../src/shared/contracts';
 import { postgresRelatedTabPrefix } from '../../src/shared/postgresRelatedTab';
-import type { PostgresRelatedTablePage, PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult, PostgresTableValues } from '../../src/shared/postgresTable';
+import type { PostgresImportKey, PostgresRelatedTablePage, PostgresTableChange, PostgresTableExportInput, PostgresTablePage, PostgresTablePreview, PostgresTableReferenceResult, PostgresTableValues } from '../../src/shared/postgresTable';
 import { decodePostgresDraft, encodePostgresDraft, type PostgresDraftDocument, type PostgresDraftRestored } from '../../src/shared/postgresTableDraft';
 import { appendPostgresValueFilter } from '../../src/renderer/postgresTableValues';
 import type { PostgresTableHistogram } from '../../src/shared/postgresTableHistogram';
@@ -1063,6 +1063,18 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
         expect((await client.query(`SELECT p.id, c.relname FROM ${partitionTable} p
           JOIN pg_catalog.pg_class c ON c.oid=p.tableoid WHERE p.id IN (2, 12) ORDER BY p.id`)).rows)
           .toEqual([{ id: 2, relname: 'sql_leaf_a' }, { id: 12, relname: 'sql_leaf_b' }]);
+        const partitionUpsert = await prepareImport('id;note\n2;更新甲\n13;新增乙\n', ['c0', 'c1'], partitionSource);
+        const partitionKeys: PostgresImportKey[] = await engine.handle('postgres.table.importKeys', {
+          ...partitionSource, profile, pageToken: partitionUpsert.pageToken,
+        });
+        expect(partitionKeys.map(key => key.columns)).toEqual([['c0']]);
+        expect(await engine.handle('postgres.table.import', { ...partitionUpsert,
+          conflict: { mode: 'upsert', keyId: partitionKeys[0].id } })).toMatchObject({ outcome: 'committed', affected: 2,
+          conflictCounts: { inserted: 1, matchedUpdates: 1, skippedExisting: 0, skippedMissing: 0 } });
+        expect((await client.query(`SELECT p.id, p.note, c.relname FROM ${partitionTable} p
+          JOIN pg_catalog.pg_class c ON c.oid = p.tableoid WHERE p.id IN (2, 13) ORDER BY p.id`)).rows).toEqual([
+          { id: 2, note: '更新甲', relname: 'sql_leaf_a' }, { id: 13, note: '新增乙', relname: 'sql_leaf_b' },
+        ]);
       } finally { await rm(directory, { recursive: true, force: true }); }
     } finally {
       await engine.closeAll();

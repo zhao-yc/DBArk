@@ -22,6 +22,8 @@ import type { PostgresSyncEvidence, PostgresSyncRow } from './dataCompare';
 import { readPostgresSqlExportSettings, type PostgresSqlExportSettings, type PostgresTableBackupSql } from './sqlExport';
 import { readPostgresTableBackup } from './tableBackup';
 import { readPostgresCopySource, type PostgresCopySource } from './copyImportFile';
+import { createPostgresImportStage, indexPostgresImportStage, readPostgresImportKeys, writePostgresImportConflict } from './importConflict';
+import { isPostgresImportUpdateColumn } from '../../shared/postgresTable';
 import { postgresTableCondition, postgresTableReadOrder } from '../../shared/postgresTableReadSql';
 import { readPostgresTableReferences, type PostgresReferenceSourceRow, type PostgresReferenceRowVersion } from './tableReferences';
 import { readPostgresColumnStatistics } from './tableStatistics';
@@ -442,12 +444,28 @@ export class PostgresTableWorkspace {
     return groups;
   }
 
+  /** 仅文件选择时读取冲突键，不在常规表页翻页时额外查询系统目录。 */
+  async importKeys(input: Scoped<PostgresTableReleaseInput>, connect: Connect) {
+    const snapshot = this.snapshot(input);
+    if (!snapshot.relation.canImport) return [];
+    const keys = await connect(async connection => {
+      await begin(connection, 'page');
+      const current = await readRelation(connection, input.table);
+      if (current.fingerprint !== snapshot.relation.fingerprint || !current.canImport) throw Error('目标表已变化，请刷新表页');
+      const keys = await readPostgresImportKeys(connection, current);
+      if ((await connection.query('COMMIT', undefined, small())).postgresCommand !== 'COMMIT') throw Error('匹配键目录读取未确认');
+      return keys;
+    });
+    this.snapshot(input);
+    return keys;
+  }
+
   /** 消费原页及确认过的列映射；只有数据库确认 COMMIT 后才报告导入行数。 */
   async importData(input: PostgresTableImportRequest, connect: Connect, check: () => void, commitStart: () => void): Promise<PostgresTableOutcome> {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
     const snapshot = this.snapshot(input);
-    const { source } = input;
+    const { source, conflict } = input;
     const records = 'options' in source;
     const mappings = input.columns.flatMap((key, index) => key === null ? [] : [{ key, name: source.header[index] }]);
     const selected = mappings.map(item => snapshot.relation.columns.find(column => column.key === item.key));
@@ -466,16 +484,29 @@ export class PostgresTableWorkspace {
         let commitAttempted = false;
         try {
           check();
-          await begin(connection);
-          const locked = await connection.query('LOCK TABLE ' + only(snapshot.relation) + ' IN ROW EXCLUSIVE MODE', undefined, small());
-          if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 未确认目标表锁');
-          const relation = await readRelation(connection, input.table);
-          if (relation.fingerprint !== snapshot.relation.fingerprint || !relation.canImport)
-            throw Error('目标表结构或写入权限已变化，请刷新表页');
+          await begin(connection, conflict ? 'filteredWrite' : 'write');
+          const target = only(snapshot.relation);
+          const lock = async (mode: string) => {
+            const locked = await connection.query(`LOCK TABLE ${target} IN ${mode} MODE`, undefined, small());
+            if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 未确认目标表锁');
+            const relation = await readRelation(connection, input.table);
+            if (relation.fingerprint !== snapshot.relation.fingerprint || !relation.canImport)
+              throw Error('目标表结构或写入权限已变化，请刷新表页');
+            return relation;
+          };
+          const relation = await lock(conflict ? 'ACCESS SHARE' : 'ROW EXCLUSIVE');
+          const chosen = conflict ? (await readPostgresImportKeys(connection, relation)).find(key => key.id === conflict.keyId) : undefined;
+          if (conflict && !chosen) throw Error('原匹配键已变化或不可用，请刷新表页并重新选择');
+          const keys = chosen?.columns.map(key => columns.find(column => column.key === key)?.name);
+          if (keys?.some(name => name === undefined)) throw Error('匹配键的所有列都需要映射');
+          if (chosen && conflict?.mode !== 'skip-existing' && !columns.some(column => isPostgresImportUpdateColumn(column, chosen)))
+            throw Error('没有可更新的已映射非匹配键列');
+          check();
+          const stage = chosen ? await createPostgresImportStage(connection, target, columns) : undefined;
           await connection.query("SET LOCAL statement_timeout = '0'", undefined, small());
           const sourceOptions = records ? "ENCODING 'UTF8', NULL " + postgresDdlLiteral(postgresRecordCopyNull) :
             'HEADER ' + (source.hasHeader ? 'true' : 'false') + ", ENCODING 'UTF8', DELIMITER " + postgresDdlLiteral(source.delimiter);
-          const command = 'COPY ' + relation.sql + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, ' + sourceOptions + ')';
+          const command = 'COPY ' + (stage ?? relation.sql) + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, ' + sourceOptions + ')';
           const consume = (stream: Readable) => {
             check(); sent = true;
             return connection.copyIn(command, stream);
@@ -483,13 +514,27 @@ export class PostgresTableWorkspace {
           const rows = records ? await readPostgresRecordImportSource(source,
             mappings.map((item, index) => ({ name: item.name, binary: columns[index].binary })), check, consume)
             : await readPostgresCopySource(source, consume);
+          let counts: PostgresTableOutcome['conflictCounts'];
+          if (stage && chosen && conflict && keys) {
+            check();
+            const names = keys as string[];
+            await indexPostgresImportStage(connection, stage, names);
+            // 文件及重复键核验完成后才阻止其它事务写入，尽量缩短目标表写锁时间。
+            const current = await lock('SHARE ROW EXCLUSIVE');
+            if (!(await readPostgresImportKeys(connection, current)).some(key => key.id === chosen.id))
+              throw Error('锁定后的匹配键或写入条件已变化，请重新选择');
+            counts = await writePostgresImportConflict(connection, { target, insertTarget: relation.sql, stage, columns,
+              key: chosen, keys: names, mode: conflict.mode, rows, check });
+          }
           check();
           commitStart();
           commitAttempted = true;
           const completed = await connection.query('COMMIT', undefined, small());
           if (completed.postgresCommand !== 'COMMIT' || !connection.state().transactionKnown || connection.state().transactionOpen)
             throw Error('PostgreSQL 未确认导入提交');
-          receipt = { outcome: 'committed', affected: rows, message: 'PostgreSQL 已提交导入，共 ' + rows + ' 行' };
+          receipt = counts ? { outcome: 'committed', affected: counts.inserted + counts.matchedUpdates, conflictCounts: counts,
+            message: `PostgreSQL 已提交导入，新增 ${counts.inserted} 行，匹配更新 ${counts.matchedUpdates} 行，跳过已有 ${counts.skippedExisting} 行，跳过未匹配 ${counts.skippedMissing} 行` } :
+            { outcome: 'committed', affected: rows, message: 'PostgreSQL 已提交导入，共 ' + rows + ' 行' };
         } catch (reason) {
           receipt = await this.rollbackWrite(connection, sent, commitAttempted, reason);
         }

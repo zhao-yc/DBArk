@@ -63,6 +63,11 @@ it('XML 和原 CSV 文件选择与映射保持独立合同', () => {
   expect(postgresTableImportChooseSchema.safeParse({ ...target, format: 'csv', encoding: 'utf8', csvDelimiter: ',', csvHasHeader: true }).success).toBe(false);
   const apply = { ...target, taskId: 'task', fileToken: token };
   expect(postgresTableImportSchema.safeParse({ ...apply, format: 'xml', columns: ['c1', null, 'c2'] }).success).toBe(true);
+  const conflict = { mode: 'upsert', keyId: 'a'.repeat(64) };
+  expect(postgresTableImportSchema.safeParse({ ...apply, columns: ['c1', 'c2'], conflict }).success).toBe(true);
+  expect(postgresTableImportSchema.safeParse({ ...apply, format: 'json', columns: ['c1', null, 'c2'], conflict }).success).toBe(true);
+  expect(postgresTableImportSchema.safeParse({ ...apply, columns: ['c1'], conflict: { ...conflict, keyId: '任意索引名' } }).success).toBe(false);
+  expect(postgresTableImportSchema.safeParse({ ...apply, columns: ['c1'], conflict: { ...conflict, mode: 'replace' } }).success).toBe(false);
   expect(postgresTableImportSchema.safeParse({ ...apply, format: 'xml', columns: [null] }).success).toBe(false);
   expect(postgresTableImportSchema.safeParse({ ...apply, columns: ['c1', null] }).success).toBe(false);
 });

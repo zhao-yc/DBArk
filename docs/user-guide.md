@@ -340,6 +340,8 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 在有写入权限的 PostgreSQL 普通表或分区表打开「导入数据」，选择 CSV、JSON 或 XML。CSV 可设置分隔符和首行模式，XML 可指定记录标签、使用属性字段及按需解码 Base64。CSV 和 XML 使用 UTF-8，JSON 另支持 UTF-16 LE 和 GB18030。核对样本和字段映射后点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。[CSV 导入](development/postgres-copy-preview-20261105.md) · [JSON 导入](development/postgres-table-json-import-20261107.md) · [XML 导入](development/postgres-xml-import-20261107.md)
 
+导入现有 PostgreSQL 表时，如源文件已映射完整非空主键或唯一键，可选择跳过已有、新增或更新，或仅更新已有。向导默认只新增。确认按键导入后，回执分别显示新增、匹配更新和跳过行数。[PostgreSQL 文件按键导入](development/postgres-import-conflict-20261107.md)
+
 在 PostgreSQL 数据库节点或对象浏览器的表分类打开「从文件导入新表」，可扫描 CSV、JSON 或 XML 并据此建立字段。CSV 可按表头或列位置映射。选择 schema、核对字段类型并确认建表后，点击「继续配置导入」，检查映射并另行确认追加。源文件变化会阻止或回滚数据写入，已建表仍保留。[从 CSV 和 JSON 新建表](development/postgres-csv-json-new-table-20261107.md) · [从 XML 新建表](development/postgres-xml-new-table-20261107.md)
 
 导入 tabrelio 导出的「XML 文档」时，将 XML 布局设为「XML 文档（按列位置）」。选择行结果序号后核对字段映射。语句回执不计入序号。[按列位置导入 XML 文档](development/positional-xml-import-20261107.md)

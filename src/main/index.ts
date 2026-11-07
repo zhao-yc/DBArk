@@ -10,7 +10,7 @@ import { buildSqliteSyncClaim, type SqliteSyncEvidence } from './sqliteDataSync'
 import type { SqliteEditClaim } from './sqliteTableEdit';
 import { sqliteDataCompareLimits, sqliteDataCompareZh, sqliteDataSyncLimits, sqliteDataSyncZh, type SqliteDataCompareInput, type SqliteDataSyncPreviewInput } from '../shared/sqliteDataCompare';
 import { sameConnectionFamily } from '../shared/connectionDialect';
-import { postgresTableExportExtension, type PostgresTableImportChooseInput } from '../shared/postgresTable';
+import { postgresTableExportExtension, type PostgresImportKey, type PostgresTableImportChooseInput } from '../shared/postgresTable';
 import { inspectPostgresCopySource, type PostgresCopySource } from '../engine/postgres/copyImportFile';
 import { inspectPostgresSqlFile, type PostgresSqlFileSource } from '../engine/postgres/sqlFile';
 import { postgresSqlFileTitle } from '../shared/postgresSqlFile';
@@ -907,7 +907,7 @@ const postgresDatabaseBackupFiles = new WeakMap<object, PostgresDatabaseBackupCh
 const databaseBackupChoosing = new WeakSet<object>();
 const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
-const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource | PostgresRecordImportSource; revision: number; expires: number }>();
+const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource | PostgresRecordImportSource; conflictKeys: PostgresImportKey[]; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 const sqlFileTaskOwners = new Map<string, ColumnsInvocation>();
 
@@ -1324,7 +1324,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     columnsMain.assertCapturedOwner(columns);
     const document = columns!.owner.document, revision = store.connectionRevision();
     const target: PostgresTableImportChooseInput = input;
-    if (shuttingDown || !postgresTableOwners.has(document) || postgresImportChoosing.has(document))
+    const owner = postgresTableOwners.get(document);
+    if (shuttingDown || !owner || postgresImportChoosing.has(document))
       throw Error('PostgreSQL 原表页或文件选择当前不可用');
     postgresImportChoosing.add(document);
     postgresImportFiles.delete(document);
@@ -1358,9 +1359,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         // 新表向导沿用已选文件，只有原字节指纹匹配才签发原表页导入能力。
         if (scanned && (!('sha256' in source) || source.sha256 !== scanned.expectedSource.sha256 || source.bytes !== scanned.expectedSource.bytes))
           throw Error(`${formatName} 源文件已变化，请退出向导并核对已创建的表`);
+        const conflictKeys = scanned ? [] : await broker.request('postgres.table.importKeys', {
+          connectionId: target.connectionId, database: target.database, table: target.table, tabId: target.tabId, pageToken: target.pageToken,
+          owner, connectionRevision: revision, profile: store.resolveConnection(target.connectionId),
+        }) as PostgresImportKey[];
+        check();
         const token = randomUUID();
-        postgresImportFiles.set(document, { token, target, source, revision, expires: Date.now() + 5 * 60 * 1000 });
-        return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited,
+        postgresImportFiles.set(document, { token, target, source, conflictKeys, revision, expires: Date.now() + 5 * 60 * 1000 });
+        return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited, conflictKeys,
           ...('records' in source ? { records: source.records } : {}) };
       } finally { postgresImportChoosing.delete(document); }
     });
@@ -2397,6 +2403,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
           ('format' in file.target ? file.target.format : undefined) !== input.format ||
           (['connectionId', 'database', 'table', 'tabId', 'pageToken'] as const).some(key => file.target[key] !== input[key]))
         throw Error('PostgreSQL 导入的原表页或源文件选择已失效');
+      if (input.conflict && !file.conflictKeys.some(key => key.id === input.conflict.keyId))
+        throw Error('PostgreSQL 未为原文件签发此匹配键，请重新选择文件');
       const profile = store.resolveConnection(input.connectionId);
       if (profile.dialect !== 'postgresql') throw Error('导入需要已保存的 PostgreSQL 连接');
       postgresImportFiles.delete(document);

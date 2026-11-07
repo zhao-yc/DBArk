@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import type { ImportFileReadOptions } from '../../shared/importNewTable';
-import { isPostgresSqlExportColumn, type PostgresTableImportChoice, type PostgresTablePage, type PostgresTableTarget } from '../../shared/postgresTable';
+import { isPostgresImportUpdateColumn, isPostgresSqlExportColumn, type PostgresImportConflict, type PostgresTableImportChoice, type PostgresTablePage, type PostgresTableTarget } from '../../shared/postgresTable';
 import { errorMessage, invoke } from '../lib';
 import { postgresTableImportZh as text } from '../locales/postgresTableImport.zh-CN';
+import { fileImportConflictZh as conflictText } from '../locales/fileImportConflict.zh-CN';
 import { csvImportHeaderZh } from '../locales/csvImportHeader.zh-CN';
 import { xmlImportOptionsSchema, xmlImportZh, type RecordImportFormat, type XmlImportOptions } from '../../shared/xmlImport';
 import { importNewTableZh as newTableText } from '../locales/importNewTable.zh-CN';
@@ -27,6 +28,8 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const candidates = page.columns.filter(isPostgresSqlExportColumn);
   const [mapping, setMapping] = useState<string[]>(() => initialSource?.file.header.map(name =>
     candidates.find(column => column.name === initialSource.mapping[name])?.key ?? '') ?? []);
+  const [mode, setMode] = useState<'insert' | PostgresImportConflict['mode']>('insert');
+  const [keyId, setKeyId] = useState('');
   const [choosing, setChoosing] = useState(false), [taskId, setTaskId] = useState<string>();
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState('');
   const occupied = useRef(false), cancelRequested = useRef(false);
@@ -35,12 +38,21 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const selectedKeys = mapping.filter(Boolean);
   const mapped = !!file && mapping.length === file.header.length && selectedKeys.length > 0 &&
     new Set(selectedKeys).size === selectedKeys.length && (records || selectedKeys.length === mapping.length);
+  const key = file?.conflictKeys?.find(value => value.id === keyId);
+  const conflictError = mode === 'insert' ? '' : !key ? conflictText.noKey :
+    key.columns.some(column => !selectedKeys.includes(column)) ? conflictText.unmapped :
+      mode !== 'skip-existing' && !candidates.some(column => selectedKeys.includes(column.key) && isPostgresImportUpdateColumn(column, key)) ? conflictText.noUpdate : '';
   const validXml = format !== 'xml' || xmlImportOptionsSchema.safeParse(xmlOptions).success;
   const previewHeaders = file?.header.slice(0, file.sample[0]?.length ?? 0) ?? [];
 
   /** 文件解释变化后，旧样本、令牌和映射须一起撤下。 */
   function resetSource() {
-    setFile(null); setMapping([]); setError('');
+    setFile(null); changeMapping([]); setError('');
+  }
+
+  /** 更换映射后撤下原策略，按键写入需要用户基于新映射重新选择。 */
+  function changeMapping(next: string[]) {
+    setMapping(next); setMode('insert'); setKeyId('');
   }
 
   /** 预填准确同名字段，余下字段留给用户映射。 */
@@ -68,7 +80,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
 
   /** 提交期间保护标签，结束后由表页接管回执和刷新。 */
   async function start() {
-    if (occupied.current || !file || !page.exportToken || !mapped) return;
+    if (occupied.current || !file || !page.exportToken || !mapped || conflictError) return;
     if (!isCurrent()) { setError(text.stale); return; }
     const id = crypto.randomUUID(), lease = acquireWorkspaceBusy(target.tabId);
     occupied.current = true; cancelRequested.current = false;
@@ -76,7 +88,9 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     let message: string, committed = false;
     try {
       const selection = records ? { format, columns: mapping.map(key => key || null) } : { columns: mapping };
-      const outcome = await invoke('postgres.table.import', { ...target, pageToken: page.exportToken, fileToken: file.token, taskId: id, ...selection });
+      const conflict = mode === 'insert' || !key ? undefined : { mode, keyId: key.id };
+      const outcome = await invoke('postgres.table.import', { ...target, pageToken: page.exportToken, fileToken: file.token, taskId: id, ...selection,
+        ...(conflict ? { conflict } : {}) });
       committed = outcome.outcome === 'committed';
       message = outcome.message;
     } catch (reason) { message = text.unknown + ' ' + errorMessage(reason); }
@@ -95,7 +109,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   return <Modal title={text.title} onClose={() => { if (!occupied.current) onClose(); }}>
     <div className="modal-content pg-table-export">
       <p><strong>{target.table}</strong> · {target.database}</p>
-      <p>{text.note}</p>
+      <p>{mode === 'insert' ? text.note : text.conflictNote}</p>
       <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : initialSource ? newTableText.postgresCsv : text.nullNote}</p>
       {!initialSource && <><Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
         setFormat(event.target.value as typeof format); resetSource();
@@ -133,12 +147,12 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         <fieldset disabled={locked}>
           <legend>{text.columns}</legend>
           {!records && !hasHeader && file.header.length <= candidates.length && <button onClick={() => {
-            setMapping(candidates.slice(0, file.header.length).map(column => column.key));
+            changeMapping(candidates.slice(0, file.header.length).map(column => column.key));
           }}>{text.position}</button>}
           <div className="pg-table-export-columns">
             {file.header.map((name, index) => <label key={index}>{index + 1}. {name || text.unnamed}
               <select aria-label={text.target(index)} value={mapping[index]} onChange={event => {
-                setMapping(mapping.map((key, i) => i === index ? event.target.value : key));
+                changeMapping(mapping.map((key, i) => i === index ? event.target.value : key));
               }}>
                 <option value="">{records ? text.skip : text.select}</option>
                 {candidates.map(column => <option key={column.key} value={column.key}
@@ -147,6 +161,17 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
             </label>)}
           </div>
         </fieldset>
+        {!initialSource && !!file.conflictKeys?.length && <div className="pg-table-controls">
+          <Field label={conflictText.mode}><select aria-label={conflictText.mode} value={mode} disabled={locked} onChange={event => {
+            setMode(event.target.value as typeof mode); setKeyId('');
+          }}><option value="insert">{conflictText.insert}</option><option value="skip-existing">{conflictText.skipExisting}</option>
+            <option value="upsert">{conflictText.upsert}</option><option value="update-existing">{conflictText.updateExisting}</option></select></Field>
+          {mode !== 'insert' && <Field label={conflictText.key}><select aria-label={conflictText.key} value={keyId} disabled={locked}
+            onChange={event => setKeyId(event.target.value)}><option value="">{conflictText.chooseKey}</option>
+            {file.conflictKeys.map(value => <option key={value.id} value={value.id}>{value.name} ({value.columns.map(key => candidates.find(column => column.key === key)?.name ?? key).join(', ')})</option>)}
+          </select></Field>}
+        </div>}
+        {mode !== 'insert' && conflictError && <p className="warning-text">{conflictError}</p>}
         <section aria-label={text.sample}>
           <p>{file.sampleLimited ? records ? text.recordSampleLimited : text.sampleLimited : file.sample.length ? text.sampleLimit : text.sampleEmpty}</p>
           {file.sample.length > 0 && <div className="pg-copy-import-sample">
@@ -167,7 +192,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     <footer className="modal-footer">
       <button disabled={locked} onClick={onClose}>{text.close}</button>
       {taskId ? <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button> :
-        <button className="primary" disabled={locked || !mapped} onClick={() => void start()}>{text.confirm}</button>}
+        <button className="primary" disabled={locked || !mapped || !!conflictError} onClick={() => void start()}>{mode === 'insert' ? text.confirm : text.confirmConflict}</button>}
     </footer>
   </Modal>;
 }

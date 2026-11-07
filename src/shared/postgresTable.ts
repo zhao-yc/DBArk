@@ -1,5 +1,6 @@
 import { xmlImportOptionsSchema } from './xmlImport';
 import { importFileSourceSchema } from './importNewTable';
+import { fileImportConflictModes, type FileImportConflictCounts } from './fileImportConflict';
 import { z } from 'zod';
 import type { DataRow, ResultColumn, SortRule } from './contracts';
 import { csvExportDelimiters } from './csvExport';
@@ -265,7 +266,10 @@ export const postgresTableImportChooseSchema = z.union([
     scannedFile: scannedImportFile.optional(),
   }).strict(),
 ]);
-const importTarget = target.extend({ pageToken: token, taskId: identity, fileToken: token });
+const postgresImportConflict = z.object({ mode: z.enum(fileImportConflictModes), keyId: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export type PostgresImportConflict = z.infer<typeof postgresImportConflict>;
+export interface PostgresImportKey { id: string; name: string; columns: string[]; }
+const importTarget = target.extend({ pageToken: token, taskId: identity, fileToken: token, conflict: postgresImportConflict.optional() });
 export const postgresTableImportSchema = z.union([
   importTarget.extend({ columns: z.array(column).min(1).max(1022).refine(value => new Set(value).size === value.length, '导入目标列不能重复') }).strict(),
   importTarget.extend({ format: z.enum(['csv', 'json', 'xml']), columns: z.array(column.nullable()).min(1).max(1022).refine(value => {
@@ -283,6 +287,7 @@ export interface PostgresTableImportChoice {
   records?: number;
   sample: (string | null)[][];
   sampleLimited: boolean;
+  conflictKeys?: PostgresImportKey[];
 }
 export type PostgresTableTarget = z.infer<typeof target>;
 export type PostgresTablePageInput = z.infer<typeof postgresTablePageSchema>;
@@ -332,11 +337,16 @@ export interface PostgresTablePreview {
 export function isPostgresFilteredUpdateColumn(column: PostgresTableColumn): boolean {
   return !column.primary && !column.generated;
 }
+/** 冲突处理也保留主键和所选匹配键，标识列可供新增但不能作为更新列。 */
+export function isPostgresImportUpdateColumn(column: PostgresTableColumn, key: PostgresImportKey): boolean {
+  return isPostgresFilteredUpdateColumn(column) && !column.sequenceDefault && !key.columns.includes(column.key);
+}
 export interface PostgresTableOutcome {
   outcome: 'committed' | 'rolledBack' | 'notSent' | 'unknown';
   affected: number;
   message: string;
   draftsRetained?: true;
+  conflictCounts?: FileImportConflictCounts;
 }
 
 /** 标识列可以显式保留原值，计算生成列由恢复目标重新计算。 */

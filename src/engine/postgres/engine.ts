@@ -1267,6 +1267,7 @@ export class PostgresEngine {
       case 'postgres.table.apply':
       case 'postgres.table.filteredUpdate':
       case 'postgres.table.filteredDelete':
+      case 'postgres.table.importKeys':
       case 'postgres.table.import':
       case 'postgres.table.export': {
         if (command === 'postgres.table.related' && input.operation === 'close')
@@ -1284,6 +1285,7 @@ export class PostgresEngine {
           : this.tables.relatedPage(input as Parameters<PostgresTableWorkspace['relatedPage']>[0], connect);
         if (command === 'postgres.table.export') return this.exportTable(input as PostgresTableExportRequest | PostgresBackupSetRequest, profile);
         if (command === 'postgres.table.import') return this.importTable(input as PostgresTableImportRequest, profile);
+        if (command === 'postgres.table.importKeys') return this.tables.importKeys(input as Parameters<PostgresTableWorkspace['importKeys']>[0], connect);
         if (command === 'postgres.table.references') return this.tables.references(input as Parameters<PostgresTableWorkspace['references']>[0], connect);
         if (command === 'postgres.table.values') return this.tables.values(input as Parameters<PostgresTableWorkspace['values']>[0], connect);
         if (command === 'postgres.table.statistics') return this.tables.statistics(input as Parameters<PostgresTableWorkspace['statistics']>[0], connect);

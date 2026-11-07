@@ -85,7 +85,7 @@ export type ConnectionProfile = NetworkConnectionProfile | PostgresConnectionPro
 export interface NetworkConnectionStatus { version: string; dialect: 'mysql' | 'mariadb'; connectionId?: number; }
 export type ConnectionStatus = NetworkConnectionStatus | { version: string; dialect: 'postgresql'; connectionId?: number } | { version: string; dialect: 'sqlite' };
 /** 内部配置检查仅由主进程调用，不加入渲染进程可访问的 CommandMap/参数白名单。 */
-export type EngineCommand = Command | '__connections.prepareSave' | 'postgres.table.draft.capture' | 'postgres.table.draft.restoreVerified';
+export type EngineCommand = Command | '__connections.prepareSave' | 'postgres.table.draft.capture' | 'postgres.table.draft.restoreVerified' | 'postgres.table.importKeys';
 export interface DatabaseObject { name: string; kind: ObjectKind; }
 export interface ColumnInfo { name: string; type: string; nullable: boolean; defaultValue: string | null; extra: string; comment: string; generated: boolean; /** 来自该列目录，文本容量不能套用整表默认字符集。 */ characterSet?: string | null; }
 export interface IndexInfo { name: string; unique: boolean; columns: string[]; }
