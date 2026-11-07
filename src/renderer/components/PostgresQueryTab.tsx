@@ -67,7 +67,8 @@ import { QueryParametersDialog } from './QueryParametersDialog';
 import { QueryTransactionSettingsIntent } from '../queryTransactionSettingsIntent';
 import { PostgresTransactionSettingsDialog } from './PostgresTransactionSettingsDialog';
 import { postgresTransactionSettingsZh as transactionText } from '../locales/postgresTransactionSettings.zh-CN';
-import type { PostgresTransactionDefaults, PostgresTransactionSnapshot } from '../../shared/postgresTransactionSettings';
+import { PostgresSearchPathDialog } from './PostgresSearchPathDialog';
+import { postgresSearchPathZh as searchPathText } from '../locales/postgresSearchPath.zh-CN';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
 import { PostgresNoticesPanel } from './PostgresNoticesPanel';
@@ -223,14 +224,14 @@ export function PostgresQueryTab({
   const failureSource = useRef<QueryFailureSourceLease | undefined>(undefined);
   const [, refreshFailureSource] = useState(0);
   const [continueOnError, setContinueOnError] = useState(false);
-  const [transactionSettings, setTransactionSettings] = useState<{intent: QueryTransactionSettingsIntent; scope: Scope}>();
-  const transactionSettingsRef = useRef(transactionSettings); transactionSettingsRef.current = transactionSettings;
+  const [sessionSetting, setSessionSetting] = useState<{intent: QueryTransactionSettingsIntent; scope: Scope; mode: 'transaction' | 'search-path'}>();
+  const sessionSettingRef = useRef(sessionSetting); sessionSettingRef.current = sessionSetting;
   const scriptFailureRanges = useRef(new Set<QueryFailure>());
   const noticeRanges = useRef(new Set<PostgresNoticeEntry>());
   const resultRanges = useRef(new Set<PostgresResultSource>());
   useLayoutEffect(() => {
-    const current = transactionSettingsRef.current; current?.intent.current();
-    if (current && closeRef.current && !phase.current) closeTransactionSettings(current);
+    const current = sessionSettingRef.current; current?.intent.current();
+    if (current && closeRef.current && !phase.current) closeSessionSetting(current);
   });
   const [completionStatus, setCompletionStatus] = useState<SqlCompletionStatus>('idle');
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
@@ -357,7 +358,7 @@ export function PostgresQueryTab({
       !phase.current &&
       !analyzeRef.current &&
       !exportOpen.current &&
-      !transactionSettingsRef.current &&
+      !sessionSettingRef.current &&
       !sortDraftRef.current &&
       !filterDraftRef.current &&
       !columnDraftRef.current &&
@@ -675,8 +676,8 @@ export function PostgresQueryTab({
     setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true, reuse,
       failureSource: captureFailureSource(sql), continueOnError });
   }
-  /** 事务默认值绑定原标签、数据库及会话，不绑定 SQL 正文；正文编辑不改变设置目标。 */
-  function openTransactionSettings() {
+  /** 会话设置绑定原标签、数据库及会话。草稿编辑不改变设置目标。 */
+  function openSessionSetting(mode: NonNullable<typeof sessionSetting>['mode']) {
     if (!available()) return;
     try {
       const original = scope;
@@ -686,16 +687,17 @@ export function PostgresQueryTab({
           connectionVersion: now.connectionVersions[tab.connectionId] ?? 0,
           connection: now.connections.find(item => item.id === current?.connectionId), sessionId: session.current?.id ?? '',
           present: same(original), active: now.settings.activeTabId === tab.id, closing: !!closeRef.current};
-      }, changed => useWorkspace.subscribe(changed), transactionText.changed);
-      const owner = {intent, scope: original}; transactionSettingsRef.current = owner; setTransactionSettings(owner);
+      }, changed => useWorkspace.subscribe(changed), mode === 'transaction' ? transactionText.changed : searchPathText.changed);
+      const owner = {intent, scope: original, mode}; sessionSettingRef.current = owner; setSessionSetting(owner);
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 元数据请求保留原结果和历史，所有等待边界核对原弹窗及物理会话。 */
-  async function requestTransactionSettings(owner: NonNullable<typeof transactionSettings>, expected?: PostgresTransactionSnapshot,
-    defaults?: PostgresTransactionDefaults): Promise<PostgresTransactionSnapshot> {
+  async function requestSessionSetting<T>(owner: NonNullable<typeof sessionSetting>,
+    send: (request: {sessionId: string; taskId: string}) => Promise<T>): Promise<T> {
     const assertCurrent = () => {
       owner.intent.assertCurrent();
-      if (transactionSettingsRef.current !== owner || !same(owner.scope)) throw Error(transactionText.changed);
+      if (sessionSettingRef.current !== owner || !same(owner.scope))
+        throw Error(owner.mode === 'transaction' ? transactionText.changed : searchPathText.changed);
     };
     assertCurrent();
     if (phase.current || useWorkspace.getState().activeJobs[tab.id]) throw Error('原标签已有活动作业');
@@ -706,9 +708,7 @@ export function PostgresQueryTab({
       try {
         assertCurrent(); const id = await ensure(operation); owner.intent.bindSession(id); assertCurrent();
         operation.sent = true;
-        const result = expected && defaults
-          ? await invoke('postgres.transactionSettings.apply', {sessionId: id, taskId: operation.taskId, expected, defaults})
-          : await invoke('postgres.transactionSettings.read', {sessionId: id, taskId: operation.taskId});
+        const result = await send({sessionId: id, taskId: operation.taskId});
         assertCurrent(); return result;
       } finally {
         if (operation.cancel) await operation.cancel;
@@ -721,9 +721,9 @@ export function PostgresQueryTab({
     return work;
   }
   /** 迟到关闭不能清除后继弹窗；原请求收尾前保持占用。 */
-  function closeTransactionSettings(owner: NonNullable<typeof transactionSettings>): void {
-    if (transactionSettingsRef.current !== owner || phase.current) return;
-    owner.intent.dispose(); transactionSettingsRef.current = undefined; setTransactionSettings(undefined);
+  function closeSessionSetting(owner: NonNullable<typeof sessionSetting>): void {
+    if (sessionSettingRef.current !== owner || phase.current) return;
+    owner.intent.dispose(); sessionSettingRef.current = undefined; setSessionSetting(undefined);
   }
   /** 显式重连先正常关闭旧会话；旧事务或未知写入不会被自动恢复和重放。 */
   async function reconnect() {
@@ -874,7 +874,7 @@ export function PostgresQueryTab({
       alive.current = false;
       clearFailureSource(); parameters.current?.failureSource?.dispose();
       parameterReuse.current?.dispose(); parameterReuse.current = null;
-      transactionSettingsRef.current?.intent.dispose();
+      sessionSettingRef.current?.intent.dispose();
       duplicateIntent.current?.dispose();
       snippetTarget.current?.dispose();
       snapshotOperation.current?.invalidate();
@@ -946,7 +946,7 @@ export function PostgresQueryTab({
   const pin = pinState.items.find(item => item.id === pinState.selected);
   const results = outcome?.results ?? [],
     result = pin?.result ?? results[selected],
-    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!transactionSettings || !!closeRequest || !!exportView || !!resultSql,
+    controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!sessionSetting || !!closeRequest || !!exportView || !!resultSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets || !!fullExport;
   const resultSources = outcome?.postgresResultSources;
@@ -1772,7 +1772,8 @@ export function PostgresQueryTab({
             <button disabled={locked || !session.current} onClick={() => void reconnect()}>
               {text.reconnect}
             </button>
-            <button disabled={!editable} onClick={openTransactionSettings}>{transactionText.open}</button>
+            <button disabled={!editable} onClick={() => openSessionSetting('transaction')}>{transactionText.open}</button>
+            <button disabled={!editable} onClick={() => openSessionSetting('search-path')}>{searchPathText.open}</button>
             {snapshotActions}
           </div>
         )}
@@ -2033,7 +2034,7 @@ export function PostgresQueryTab({
           }}
         />
       )}
-      {closeRequest && !transactionSettings && !save && !snippets && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !resultSql && !comparisonDraft && (
+      {closeRequest && !sessionSetting && !save && !snippets && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !resultSql && !comparisonDraft && (
         <QueryCloseDialog
           title={tab.title}
           onCancel={() => finishClose(false)}
@@ -2057,10 +2058,14 @@ export function PostgresQueryTab({
           }}
         />
       )}
-      {transactionSettings && <PostgresTransactionSettingsDialog intent={transactionSettings.intent} connectionName={profile?.name ?? ''}
-        onRead={() => requestTransactionSettings(transactionSettings)}
-        onApply={(expected, defaults) => requestTransactionSettings(transactionSettings, expected, defaults)}
-        onClose={() => closeTransactionSettings(transactionSettings)} />}
+      {sessionSetting?.mode === 'transaction' && <PostgresTransactionSettingsDialog intent={sessionSetting.intent} connectionName={profile?.name ?? ''}
+        onRead={() => requestSessionSetting(sessionSetting, request => invoke('postgres.transactionSettings.read', request))}
+        onApply={(expected, defaults) => requestSessionSetting(sessionSetting, request => invoke('postgres.transactionSettings.apply', {...request, expected, defaults}))}
+        onClose={() => closeSessionSetting(sessionSetting)} />}
+      {sessionSetting?.mode === 'search-path' && <PostgresSearchPathDialog intent={sessionSetting.intent}
+        onRead={() => requestSessionSetting(sessionSetting, request => invoke('postgres.searchPath.read', request))}
+        onApply={(expected, change) => requestSessionSetting(sessionSetting, request => invoke('postgres.searchPath.apply', {...request, expected, change}))}
+        onClose={() => closeSessionSetting(sessionSetting)} />}
       {snippets && <SnippetsDialog dialect="postgresql" initialSql={snippets.initialSql} startWithDraft={snippets.create}
         onInsert={insertSnippet} onClose={closeSnippets} />}
     </div>

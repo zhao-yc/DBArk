@@ -20,6 +20,7 @@ import { queryFailureSourceZh as failureText } from '../../src/renderer/locales/
 import { queryPartialOutcomeZh as partialText } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { postgresTransactionSettingsZh as transactionText } from '../../src/renderer/locales/postgresTransactionSettings.zh-CN';
+import { postgresSearchPathZh as searchPathText } from '../../src/renderer/locales/postgresSearchPath.zh-CN';
 import { postgresNoticesZh as noticesText } from '../../src/renderer/locales/postgresNotices.zh-CN';
 import { postgresNoticeHiddenMessage } from '../../src/shared/postgresNotices';
 
@@ -84,6 +85,78 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 会话搜索路径显示实际优先级并隔离查询标签', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const schema = '报告, "近况"', quoted = postgresIdentifier(schema);
+  const sql = 'SELECT marker FROM search_path_items;';
+  const dialog = () => page.getByRole('dialog', {name: searchPathText.title, exact: true});
+  const path = () => dialog().getByLabel(searchPathText.configured, {exact: true});
+  const effective = () => dialog().getByRole('list', {name: searchPathText.effective, exact: true}).getByRole('listitem');
+  const button = (name: string) => dialog().getByRole('button', {name, exact: true});
+  const open = () => tab().getByRole('button', {name: searchPathText.open, exact: true}).click();
+  const close = () => button(searchPathText.close).click();
+  const grid = () => tab().locator('.postgres-results .rdg');
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const sessions = async () => (await observer.query("SELECT pid, state, query, xact_start::text FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+  try {
+    await observer.query('CREATE SCHEMA ' + quoted);
+    for (const [owner, marker] of [['public', '默认表'], [quoted, '路径前置表']]) {
+      await observer.query('CREATE TABLE ' + owner + '.search_path_items (marker text)');
+      await observer.query('INSERT INTO ' + owner + '.search_path_items VALUES ($1)', [marker]);
+    }
+    await prepare({id: '', name: '隔离 PostgreSQL 搜索路径', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+    await command('execute-all'); await expect(grid()).toContainText('默认表');
+    const baseline = await history(), initial = await sessions(); expect(initial).toHaveLength(1);
+    await open(); await expect(dialog()).toContainText(searchPathText.ready);
+    await expect(dialog()).toContainText(searchPathText.identity(user, user, initial[0].pid));
+    const defaultPath = await path().inputValue();
+    await expect(effective()).toHaveText(['pg_catalog', 'public']);
+    await dialog().getByLabel(searchPathText.candidates, {exact: true}).selectOption(schema);
+    await button(searchPathText.append).click(); await expect(path()).toHaveValue(defaultPath + ', ' + quoted);
+    const next = '"缺少的 schema", ' + quoted + ', public';
+    await path().fill(next); await button(searchPathText.apply).click();
+    await expect(dialog()).toContainText(searchPathText.applied);
+    await expect(path()).toHaveValue(next);
+    await expect(effective()).toHaveText(['pg_catalog', schema, 'public']);
+    await page.screenshot({path: info.outputPath('PostgreSQL会话搜索路径.png')});
+    await path().fill('"未闭合'); await button(searchPathText.apply).click();
+    await expect(dialog()).toContainText('未取得完整的设置回执');
+    await expect(button(searchPathText.apply)).toBeDisabled();
+    await button(searchPathText.refresh).click(); await expect(path()).toHaveValue(next);
+    await close();
+    expect(await history()).toEqual(baseline);
+    await expect(grid()).toContainText('默认表');
+    await command('execute-all'); await expect(grid()).toContainText('路径前置表');
+    expect((await sessions()).map(item => item.pid)).toEqual([initial[0].pid]);
+
+    await page.locator('.tab-strip').getByText('另一 PostgreSQL 查询', {exact: true}).click();
+    await open(); await expect(dialog()).toContainText(searchPathText.ready);
+    await expect(path()).toHaveValue(defaultPath); await close();
+    await page.locator('.tab-strip').getByText('原 PostgreSQL 查询', {exact: true}).click();
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    const transaction = await sessions();
+    await open(); await expect(dialog()).toContainText('请先明确提交或回滚原事务，再读取搜索路径');
+    await expect(button(searchPathText.reset)).toBeDisabled(); await close();
+    expect(await sessions()).toEqual(transaction);
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+    await replaceDraft(sql);
+    await open(); await expect(path()).toHaveValue(next);
+    await button(searchPathText.reset).click(); await expect(dialog()).toContainText(searchPathText.applied);
+    await expect(path()).toHaveValue(defaultPath); await close();
+    await command('execute-all'); await expect(grid()).toContainText('默认表');
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 会话事务默认设置保持原结果并按实际事务隔离、只读及延期生效', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');

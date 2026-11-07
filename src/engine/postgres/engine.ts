@@ -14,7 +14,7 @@ import type { QueryParameter } from '../../shared/queryParameters';
 import { postgresParameterValues } from './parameters';
 import { PostgresNoticeCollector } from './notices';
 import { readPostgresTransactionSettings, applyPostgresTransactionSettings } from './transactionSettings';
-import type { PostgresTransactionSnapshot } from '../../shared/postgresTransactionSettings';
+import { readPostgresSearchPath, applyPostgresSearchPath } from './searchPath';
 import { canContinuePostgresQueryError, postgresQueryErrorMessage } from './queryContinue';
 import { queryContinueOnErrorLimits, queryScriptReportSummary, truncateQueryScriptMessage, type QueryScriptReport } from '../../shared/queryContinueOnError';
 import {
@@ -870,23 +870,21 @@ export class PostgresEngine {
     return result.rows.map(row => row.c0).join('\n');
   }
 
-  /** 元数据独占原会话并沿同一任务取消；SHOW/SET 不进入用户结果或执行历史。 */
-  private async transactionSettings(session: Session, input: Input): Promise<PostgresTransactionSnapshot> {
+  /** 会话设置独占原会话并沿同一任务取消，内部命令不进入用户结果或执行历史。 */
+  private async sessionSetting<T>(session: Session, input: Input, label: string, operate: (check: () => void) => Promise<T>): Promise<T> {
     if (!input.taskId || this.ownsTask(input.taskId) || this.tasks.size >= 8192) throw Error('PostgreSQL任务编号已使用或登记已满');
     const task: Task = {id: input.taskId, session, cancelled: false, sent: false, terminal: false};
     this.tasks.set(task.id, task);
     const check = () => {
       if (task.cancelled || this.stopping || session.closing || this.closing.has(session.connectionId) || session.managed.broken)
-        throw Error('原事务设置任务已取消、会话关闭或失效，未自动重试');
+        throw Error('原会话设置任务已取消、会话关闭或失效，未自动重试');
     };
     try {
-      this.emit({taskId: task.id, status: 'running', progress: 0, message: '正在读取或设置PostgreSQL事务默认值'});
+      this.emit({taskId: task.id, status: 'running', progress: 0, message: '正在读取或设置 PostgreSQL ' + label});
       if (session.completion) await session.completion.catch(() => {});
       check(); task.sent = true;
-      const result = input.expected
-        ? await applyPostgresTransactionSettings(session.managed, input.expected, input.defaults, check)
-        : await readPostgresTransactionSettings(session.managed, check);
-      this.emit({taskId: task.id, status: 'completed', progress: 100, message: 'PostgreSQL事务默认值已读取确认'});
+      const result = await operate(check);
+      this.emit({taskId: task.id, status: 'completed', progress: 100, message: 'PostgreSQL ' + label + '已读取确认'});
       return result;
     } catch (reason) {
       const error = session.managed.error(reason);
@@ -1466,7 +1464,16 @@ export class PostgresEngine {
         });
       case 'postgres.transactionSettings.read':
       case 'postgres.transactionSettings.apply':
-        return this.session(input.sessionId, session => this.transactionSettings(session, input), true);
+        return this.session(input.sessionId, session => this.sessionSetting(session, input, '事务默认值', check =>
+          command === 'postgres.transactionSettings.apply'
+            ? applyPostgresTransactionSettings(session.managed, input.expected, input.defaults, check)
+            : readPostgresTransactionSettings(session.managed, check)), true);
+      case 'postgres.searchPath.read':
+      case 'postgres.searchPath.apply':
+        return this.session(input.sessionId, session => this.sessionSetting(session, input, '搜索路径', check =>
+          command === 'postgres.searchPath.apply'
+            ? applyPostgresSearchPath(session.managed, input.expected, input.change, check)
+            : readPostgresSearchPath(session.managed, check)), true);
       case 'metadata.databases':
         return this.use(this.profile(input.connectionId), undefined, async (m) =>
           (
