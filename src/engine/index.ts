@@ -1,3 +1,4 @@
+import { recordImportFormats, validXmlImport, xmlImportZh } from '../shared/xmlImport';
 import { createMysqlDatabaseBackup } from './mysqlDatabaseBackup';
 import { readMysqlSqlFile, type MysqlSqlFileSource } from './mysqlSqlFile';
 import { withVerifiedMysqlArchiveDump } from './mysqlBackupArchiveRestore';
@@ -36,7 +37,7 @@ import { finished } from 'node:stream/promises';
 import { exportExcelFile, previewExcelSheet, readExcelRows } from './excelFiles';
 import { ExcelReadTasks } from './excelReadTasks';
 import { validateExcelMapping } from '../shared/excelTransfer';
-import { validateLosslessImport } from './losslessImport';
+import { mappedImportValue, validateLosslessImport } from './losslessImport';
 import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
 import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, NetworkConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
@@ -879,6 +880,7 @@ export class Engine {
       case 'files.importKeys': return this.readImportKeys(input);
       case 'files.import': {
         this.assertFile(input); const mode = fileImportTransactionMode(input.format, input);
+        if (!validXmlImport({ ...input, format: input.format, encoding: input.encoding })) throw Error(xmlImportZh.invalid);
         const conflict = fileImportConflict(input.format, input);
         // 指纹绑定必须在建连前拒绝批提交、冲突模式及其它格式，内部调用不能绕过IPC。
         this.assertExpectedImportSource(input, mode);
@@ -891,7 +893,9 @@ export class Engine {
           if (this.closing || !input.taskId || this.taskIdInUse(input.taskId)) throw Error('任务编号为空或任务已在执行');
           const evidence = createFileImportConflictEvidence(input.taskId, conflict.mode);
           return this.withConflictImport(input, evidence, task => {
-            return importFileWithConflict({ connectionId: input.connectionId, database: input.database, table: input.table }, input.format, input.mapping, conflict, mode, readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader), evidence, this.conflictImportControl(task));
+            const xml = input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: Object.keys(input.mapping), signal: task.managed.signal } : undefined;
+            const records = readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, xml);
+            return importFileWithConflict({ connectionId: input.connectionId, database: input.database, table: input.table }, input.format, input.mapping, conflict, mode, records, evidence, this.conflictImportControl(task), xml?.xmlOptions.binaryBase64);
           });
         }
         if (input.format === 'sql') {
@@ -2221,11 +2225,11 @@ export class Engine {
       csvImportHasHeader(input.format, input.csvHasHeader);
     }
     if (input.format === 'sql') return this.importSql(task, input);
-    if (!['csv', 'json'].includes(input.format) && !(input.format === 'xlsx' && records)) throw new Error('不支持的导入格式');
+    if (!recordImportFormats.includes(input.format) && !(input.format === 'xlsx' && records)) throw new Error('不支持的导入格式');
     const evidence = task.fileImport ??= { committing: false, finalCommit: false, commitAcknowledged: false, committedRows: 0 };
     /** 映射只信当前同会话真实目录，禁止生成列与重复目标，数值仍交原无损校验。 */
     const plan = (info: Awaited<ReturnType<typeof metadata.tableInfo>>) => {
-      if (info.engine.toUpperCase() !== 'INNODB') throw new Error('CSV/JSON 导入仅支持 InnoDB 表，以保证失败可回滚');
+      if (info.engine.toUpperCase() !== 'INNODB') throw new Error('数据文件导入仅支持 InnoDB 表，以保证失败可回滚');
       if (atomic && info.objectKind !== 'table') throw new Error('整文件原子提交仅支持可确认的 InnoDB 基本表');
       const columns = new Map(info.columns.map(column => [column.name, column])), mapping = Object.entries(input.mapping as Record<string, string>);
       if (!mapping.length) throw new Error('请至少映射一个源字段');
@@ -2261,13 +2265,11 @@ export class Engine {
       }
       const { info, columns, mapping, insertPrefix } = selected!;
       // 原读取链完整核完SHA才结束迭代；任何变化在下方唯一COMMIT之前抛出并走原回滚。
-      const sourceRecords = expectedSource ? readVerifiedImportRecords({ ...input, expectedSource } as Parameters<typeof readVerifiedImportRecords>[0], () => this.checkCancelled(task), task.managed.signal) : readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader);
+      const sourceRecords = expectedSource ? readVerifiedImportRecords({ ...input, expectedSource } as Parameters<typeof readVerifiedImportRecords>[0], () => this.checkCancelled(task), task.managed.signal) : readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source), signal: task.managed.signal } : undefined);
       for await (const row of records ?? sourceRecords) {
         this.checkCancelled(task); checkTransaction(); sourceLine++;
         const values = mapping.map(([source, target]) => {
-          if (!Object.hasOwn(row, source)) throw new Error(`源记录缺少字段：${source}`);
-          let value = row[source];
-          if (input.format === 'csv' && typeof value === 'string' && value.startsWith('base64:') && /^(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)/i.test(columns.get(target)!.type)) value = { type: 'binary', base64: value.slice(7) };
+          const value = mappedImportValue(row, source, columns.get(target)!, input.format, input.xmlOptions?.binaryBase64);
           validateLosslessImport(columns.get(target)!, value, task.managed.status.dialect);
           return value;
         });

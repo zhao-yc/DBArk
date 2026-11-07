@@ -1,3 +1,4 @@
+import type { RecordImportFormat } from '../shared/xmlImport';
 import type { ResultSetHeader } from 'mysql2';
 import type { CellValue, DataRow } from '../shared/contracts';
 import type { FileImportResult } from '../shared/sqlFileImport';
@@ -5,7 +6,7 @@ import { fileImportConflictMessage, fileImportConflictText as text, type FileImp
 import type { FileImportTransactionMode } from '../shared/fileImportTransaction';
 import type { ManagedConnection } from './connection';
 import { deserializeCell, identifier, qualified, typedCellPlaceholder } from './sql';
-import { validateLosslessImport } from './losslessImport';
+import { mappedImportValue, validateLosslessImport } from './losslessImport';
 import { readFileImportKeyCatalog, type FileImportCatalogQuery, type FileImportTarget } from './fileImportConflictCatalog';
 
 type DriverValue = string | number | boolean | null | Buffer;
@@ -69,7 +70,7 @@ function mappingOf(input: object, info: Awaited<ReturnType<typeof readFileImport
 }
 
 /** 非默认导入独占原连接；每500条已处理源记录提交，跳过也计批边界，所有错误均停止而不重放。 */
-export async function importFileWithConflict(target: FileImportTarget, format: 'csv' | 'json', mapping: object, selection: FileImportConflictSelection, mode: FileImportTransactionMode, records: AsyncIterable<DataRow>, evidence: FileImportConflictEvidence, control: FileImportConflictControl): Promise<FileImportResult> {
+export async function importFileWithConflict(target: FileImportTarget, format: RecordImportFormat, mapping: object, selection: FileImportConflictSelection, mode: FileImportTransactionMode, records: AsyncIterable<DataRow>, evidence: FileImportConflictEvidence, control: FileImportConflictControl, xmlBase64 = false): Promise<FileImportResult> {
   const report = evidence.result.conflicts!;
   let stage: NonNullable<FileImportConflictReport['failure']>['stage'] = 'prepare-batch', currentRecord: number | undefined;
   let started = false, committing = false, prepared: Awaited<ReturnType<typeof readFileImportKeyCatalog>> | undefined, mapped: [string, string][] | undefined, processed = 0;
@@ -108,9 +109,7 @@ export async function importFileWithConflict(target: FileImportTarget, format: '
       const valueOf = (target: string): CellValue => {
         if (checked.has(target)) return checked.get(target)!;
         const [source] = mapped!.find(([, column]) => column === target)!;
-        if (!Object.hasOwn(row, source)) throw Error(`源记录缺少字段：${source}`);
-        let value = row[source];
-        if (format === 'csv' && typeof value === 'string' && value.startsWith('base64:') && /^(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)/i.test(columns.get(target)!.type)) value = { type: 'binary', base64: value.slice(7) };
+        const value = mappedImportValue(row, source, columns.get(target)!, format, xmlBase64);
         validateLosslessImport(columns.get(target)!, value, control.managed.status.dialect); checked.set(target, value); return value;
       };
       const keyValues = selection.key.columns.map(valueOf);

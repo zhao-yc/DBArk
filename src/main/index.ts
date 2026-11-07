@@ -2495,6 +2495,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
       // 已返回结果的 Excel 和标记格式只消费本窗口选择的具体格式令牌。
       const checkFormat = command === 'files.preflight' || command === 'files.inspectImport' || input.expectedSource ||
+        (command === 'files.preview' || command === 'files.import') && input.format === 'xml' ||
         command === 'files.exportResult' && (input.format === 'xlsx' || !!dataMarkupText(input.format));
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) }; break;
     }

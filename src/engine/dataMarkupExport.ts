@@ -2,6 +2,7 @@ import type { CellValue } from '../shared/contracts';
 import { dataXmlZh as text, isXmlRecordLayout } from '../shared/dataMarkupExport';
 import { queryStreamExportLimits as limits } from '../shared/queryStreamExport';
 import { queryHtmlZh } from '../shared/queryHtml.zh-CN';
+import { xmlRecordName } from '../shared/xmlImport';
 import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd, queryHtmlReceipt } from './queryHtml';
 
 interface ResultOrdinal { resultOrdinal: number; statementOrdinal: number; }
@@ -90,10 +91,6 @@ const xml: MarkupWriter = {
   receipt: result => `<receipt${ordinalAttributes(result)} affected-rows="${result.affectedRows}" insert-id="${result.insertId}" warnings="${result.warningCount}"/>\n`,
 };
 
-// XML 1.0 第五版 NameStartChar 和 NameChar，去掉命名空间专用的冒号。
-const xmlNameStart = String.raw`A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\u{10000}-\u{EFFFF}`;
-const xmlName = new RegExp(String.raw`^[${xmlNameStart}][${xmlNameStart}0-9.\u00B7\u0300-\u036F\u203F-\u2040-]*$`, 'u');
-
 /** 记录布局直接使用原列名和原值，每个写入任务单独持有列头。 */
 function recordXml(attributes: boolean): MarkupWriter {
   let headers: readonly string[] = [];
@@ -103,7 +100,7 @@ function recordXml(attributes: boolean): MarkupWriter {
     tableStart(names) {
       const seen = new Set<string>();
       for (const [index, name] of names.entries()) {
-        if (!xmlName.test(name) || attributes && name === 'xmlns') throw Error(`第 ${index + 1} 列的列名不能用于此 XML 布局`);
+        if (!xmlRecordName.test(name) || attributes && name === 'xmlns') throw Error(`第 ${index + 1} 列的列名不能用于此 XML 布局`);
         if (seen.has(name)) throw Error(`第 ${index + 1} 列的列名重复，无法导出此 XML 布局`);
         seen.add(name);
       }

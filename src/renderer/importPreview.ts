@@ -1,3 +1,4 @@
+import type { RecordImportFormat, XmlImportOptions } from '../shared/xmlImport';
 import type { DataRow, TableInfo } from '../shared/contracts';
 import { csvImportDelimiter, csvImportHasHeader, type CsvImportDelimiter } from '../shared/csvImport';
 import { importPresetConfigurationSchema, type ImportPresetConfiguration } from '../shared/importPresets';
@@ -5,7 +6,7 @@ import { importPresetsZh } from './locales/importPresets.zh-CN';
 
 export interface ImportPreviewTarget { connectionId: string; database: string; table: string; }
 export interface ImportPreviewContext extends ImportPreviewTarget {
-  fileToken: string; format: 'csv' | 'json'; encoding: 'utf8' | 'utf16le' | 'gb18030';
+  fileToken: string; format: RecordImportFormat; xmlOptions?: XmlImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
   csvDelimiter?: CsvImportDelimiter;
   csvHasHeader?: boolean;
 }
@@ -32,7 +33,7 @@ function targetKey(target: ImportPreviewTarget): string { return JSON.stringify(
 
 /** 使用结构化键避免名称分隔符碰撞；就绪判断在渲染阶段完成，不等待副作用失效旧状态。 */
 export function importPreviewKey(context: ImportPreviewContext): string {
-  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter), csvImportHasHeader(context.format, context.csvHasHeader)]);
+  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter), csvImportHasHeader(context.format, context.csvHasHeader), context.xmlOptions]);
 }
 
 /** 只有完整匹配当前上下文的预览可见且可导入，旧预览和失败状态均不能借用旧映射。 */
@@ -62,7 +63,7 @@ export class ImportPreviewController {
       const sourceColumns = options.sourceColumns === undefined ? undefined : [...options.sourceColumns];
       if (sourceColumns && (!sourceColumns.length || new Set(sourceColumns).size !== sourceColumns.length || sourceColumns.some(name => typeof name !== 'string'))) throw Error(importPresetsZh.incompatible);
       if (configuration && (initialMapping || sourceColumns)) throw Error(importPresetsZh.incompatible);
-      if (configuration && (configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader))) throw Error(importPresetsZh.incompatible);
+      if (configuration && (configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader) || JSON.stringify(configuration.xmlOptions) !== JSON.stringify(context.xmlOptions))) throw Error(importPresetsZh.incompatible);
       const info = await this.metadataFor(context, !!options.freshMetadata);
       if (generation !== this.generation) return;
       if ((configuration || initialMapping || sourceColumns) && (info.database !== context.database || info.name !== context.table)) throw Error(importPresetsZh.incompatible);
@@ -94,7 +95,7 @@ export class ImportPreviewController {
   /** 原就绪对象与完整配置同时核验，失败撤销整份ready，绝不保留自动映射继续导入。 */
   applyMapping(context: ImportPreviewContext, expected: ReadyImportPreview, configuration: ImportPresetConfiguration): boolean {
     if (this.ready(context) !== expected) return false;
-    try { if (configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader)) throw Error(importPresetsZh.incompatible); const mapping = completeMapping(expected.info, expected.sample, configuration); this.update({ ...expected, mapping }); return true; }
+    try { if (configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader) || JSON.stringify(configuration.xmlOptions) !== JSON.stringify(context.xmlOptions)) throw Error(importPresetsZh.incompatible); const mapping = completeMapping(expected.info, expected.sample, configuration); this.update({ ...expected, mapping }); return true; }
     catch (reason) { this.update({ key: expected.key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason) }); return false; }
   }
 

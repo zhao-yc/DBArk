@@ -1,3 +1,4 @@
+import { recordImportFormats, type RecordImportFormat } from './xmlImport';
 import { z } from 'zod';
 import { truncateQueryScriptMessage } from './queryContinueOnError';
 
@@ -35,7 +36,7 @@ export const fileImportConflictReportSchema = z.object({
 });
 export type FileImportConflictReport = z.infer<typeof fileImportConflictReportSchema>;
 export const fileImportConflictText = {
-  invalid: '冲突处理仅适用于CSV／JSON，必须明确选择有效策略及完整匹配键',
+  invalid: '冲突处理仅适用于 CSV、JSON 或 XML，必须明确选择有效策略及完整匹配键',
   stale: '目标结构或匹配键已变化，未继续当前批；此前提交保留，请重新核对',
   noKey: '未选择可确认的完整非空主键或唯一键',
   nullable: '匹配键列不能缺失或为NULL',
@@ -55,7 +56,7 @@ function ownRecord(value: unknown, keys: string[]): Record<string, unknown> {
 export function fileImportConflict(format: string, input: object): FileImportConflictSelection | undefined {
   const descriptor = Object.getOwnPropertyDescriptor(input, 'conflict');
   if (!descriptor) { if ('conflict' in input) throw Error(fileImportConflictText.invalid); return; }
-  if (!['csv', 'json'].includes(format) || !('value' in descriptor) || !descriptor.enumerable) throw Error(fileImportConflictText.invalid);
+  if (!recordImportFormats.includes(format as RecordImportFormat) || !('value' in descriptor) || !descriptor.enumerable) throw Error(fileImportConflictText.invalid);
   const value = ownRecord(descriptor.value, ['mode', 'schemaHash', 'key']);
   const key = ownRecord(value.key, ['name', 'columns']), raw = key.columns;
   if (!Array.isArray(raw) || Object.getPrototypeOf(raw) !== Array.prototype || raw.length < 1 || raw.length > 64 || Reflect.ownKeys(raw).length !== raw.length + 1) throw Error(fileImportConflictText.invalid);

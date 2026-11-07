@@ -5,7 +5,7 @@ import { setImmediate } from 'node:timers/promises';
 import type { TableInfo } from '../shared/contracts';
 import { fileImportPreflightIssueLimit, type FileImportPreflightInput, type FileImportPreflightIssue, type FileImportPreflightProgress, type FileImportPreflightReport } from '../shared/fileImportPreflight';
 import { readRecords } from './files';
-import { validateLosslessImport } from './losslessImport';
+import { mappedImportValue, validateLosslessImport } from './losslessImport';
 import { tableInfo, type MetadataQuery } from './metadata';
 import { inlineParameters, typedCellPlaceholder } from './sql';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
@@ -49,16 +49,17 @@ export async function preflightImportFile(context: StructureTaskContext, input: 
   const hash = createHash('sha256');
   let finished = false;
   try {
-    for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, { signal: context.managed.signal, onBytes: chunk => { hash.update(chunk); report.sourceBytes += chunk.length; } })) {
+    for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, { signal: context.managed.signal, ...(input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source) } : {}), onBytes: chunk => { hash.update(chunk); report.sourceBytes += chunk.length; } })) {
       checkCancelled(); report.checkedRecords++;
       let invalid = false;
       for (const [source, target] of mapping) {
-        if (!Object.hasOwn(row, source)) { invalid = true; issue({ record: report.checkedRecords, source, target, code: 'missing-source', message: '源记录缺少已映射字段' }); continue; }
+        if (input.format !== 'xml' && !Object.hasOwn(row, source)) { invalid = true; issue({ record: report.checkedRecords, source, target, code: 'missing-source', message: '源记录缺少已映射字段' }); continue; }
         const column = columns.get(target)!;
-        let value = row[source];
-        // 与正式CSV导入的二进制协议一致；文本列不会误解释base64前缀。
-        if (input.format === 'csv' && typeof value === 'string' && value.startsWith('base64:') && /^(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)/i.test(column.type)) value = { type: 'binary', base64: value.slice(7) };
-        try { validateLosslessImport(column, value, context.managed.status.dialect); typedCellPlaceholder(column, value); }
+        try {
+          const value = mappedImportValue(row, source, column, input.format, input.xmlOptions?.binaryBase64);
+          validateLosslessImport(column, value, context.managed.status.dialect);
+          typedCellPlaceholder(column, value);
+        }
         catch { invalid = true; issue({ record: report.checkedRecords, source, target, code: 'invalid-value', message: '字段值不能确认满足目标类型、空值或无损表示要求' }); }
       }
       if (invalid) report.invalidRecords++; else report.validRecords++;

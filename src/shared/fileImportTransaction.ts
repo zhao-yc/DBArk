@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { xmlImportZh } from './xmlImport';
 
 export const fileImportTransactionModeSchema = z.enum(['batch', 'atomic']);
 export type FileImportTransactionMode = z.infer<typeof fileImportTransactionModeSchema>;
@@ -15,7 +16,11 @@ export const fileImportTransactionText = {
 /** 自有字段先核类型和适用格式；省略保持历史分批模式，显式undefined不算省略。 */
 export function fileImportTransactionMode(format: string, input: object): FileImportTransactionMode {
   const descriptor = Object.getOwnPropertyDescriptor(input, 'transactionMode');
-  if (!descriptor) { if ('transactionMode' in input) throw Error(fileImportTransactionText.invalid); return 'batch'; }
+  if (!descriptor) { if ('transactionMode' in input) throw Error(fileImportTransactionText.invalid); return format === 'xml' ? 'atomic' : 'batch'; }
+  if (format === 'xml') {
+    if (!('value' in descriptor) || !descriptor.enumerable || descriptor.value !== 'atomic') throw Error(xmlImportZh.atomic);
+    return 'atomic';
+  }
   if (!('value' in descriptor) || !descriptor.enumerable || !['csv', 'json'].includes(format) || !fileImportTransactionModeSchema.safeParse(descriptor.value).success) throw Error(fileImportTransactionText.invalid);
   return descriptor.value as FileImportTransactionMode;
 }

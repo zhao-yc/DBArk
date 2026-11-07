@@ -1,6 +1,22 @@
-import type { CellValue, ColumnInfo } from '../shared/contracts';
+import type { CellValue, ColumnInfo, DataRow } from '../shared/contracts';
 import { typedCellPlaceholder } from './sql';
 import iconv from 'iconv-lite';
+
+/** XML 省略已映射字段时表示 NULL。二进制解释只作用于实际的二进制目标列。 */
+export function mappedImportValue(row: DataRow, source: string, column: ColumnInfo, format: string, xmlBase64 = false): CellValue {
+  if (!Object.hasOwn(row, source)) {
+    if (format === 'xml') return null;
+    throw Error(`源记录缺少字段：${source}`);
+  }
+  const value = row[source];
+  if (typeof value !== 'string' || !/^(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)/i.test(column.type)) return value;
+  if (format === 'csv' && value.startsWith('base64:')) return { type: 'binary', base64: value.slice(7) };
+  if (format === 'xml' && xmlBase64) {
+    if (Buffer.from(value, 'base64').toString('base64') !== value) throw Error('XML 二进制字段须使用规范 Base64');
+    return { type: 'binary', base64: value };
+  }
+  return value;
+}
 
 /** 依列字符集核对可表示性与存储字节；例如 latin1 的 é 不能按 UTF-8 两字节误判容量。 */
 function textStorageBytes(value: string, charset = 'utf8mb4'): number {
