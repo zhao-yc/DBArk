@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 完整查询可通过独立只读游标流式导出 INSERT SQL，支持显式 schema、表和列映射。Q05、R01 仍为部分覆盖。[PostgreSQL 完整查询 INSERT SQL](development/postgres-full-query-sql-20261107.md)
+
 2026-11-07 源码增量。SQLite 完整查询可按光标或选区流式导出 INSERT SQL，按原列序采用结果列名或显式映射目标字段。Q05、R02 仍为部分覆盖。[SQLite 完整查询 INSERT SQL](development/sqlite-full-query-sql-20261107.md)
 
 2026-11-07 源码增量。SQLite 已返回结果与勾选行可按显式目标映射导出 INSERT SQL，按逐格原生存储类型生成字面量。Q05、R02 仍为部分覆盖。[SQLite 查询结果 INSERT SQL](development/sqlite-result-sql-20261107.md)

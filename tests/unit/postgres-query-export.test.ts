@@ -5,7 +5,7 @@ import { validateCommand } from '../../src/shared/validation';
 import { exportPostgresQuery } from '../../src/engine/postgres/queryExport';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import { postgresParameterValues } from '../../src/engine/postgres/parameters';
-import { postgresCurrentQueryExportSource, postgresExportParameterNames } from '../../src/shared/postgresQueryExport';
+import { postgresCurrentQueryExportSource, postgresExportParameterNames, postgresQueryInsertColumnsForResult } from '../../src/shared/postgresQueryExport';
 
 const base = {connectionId: 'pg', database: 'postgres', fileToken: 'choice', taskId: 'task', format: 'csv', encoding: 'utf8'} as const;
 
@@ -52,6 +52,19 @@ it('完整导出只接纳文件令牌及支持的格式，拒绝渲染进程指�
   expect(validateCommand('postgres.query.export', input)).toEqual(input);
   expect(validateCommand('postgres.query.export', {...base, sql: input.sql, format: 'xlsx'})).toMatchObject({format: 'xlsx'});
   for (const patch of [{filePath: '/tmp/other.csv'}, {sessionId: 'workbench'}, {format: 'sql'}, {format: 'json'}, {format: 'xlsx'}, {format: 'xlsx', csvDelimiter: undefined, encoding: 'utf16le'}]) {
+    expect(() => validateCommand('postgres.query.export', {...input, ...patch})).toThrow();
+  }
+});
+
+it('完整 PostgreSQL INSERT 只接收准确目标和 UTF-8，按引号名称及列位置映射', () => {
+  const target = {schema: '模式"🚢', table: '结果', columns: ['Value', 'value']};
+  const input = {...base, sql: 'SELECT 1 AS duplicate, 2 AS duplicate', format: 'sql', insertTarget: target};
+  expect(validateCommand('postgres.query.export', input)).toEqual(input);
+  expect(postgresQueryInsertColumnsForResult(target, ['duplicate', 'duplicate'])).toEqual(['Value', 'value']);
+  expect(() => postgresQueryInsertColumnsForResult({schema: 'public', table: 't'}, ['same', 'same'])).toThrow('重复');
+  expect(() => postgresQueryInsertColumnsForResult(target, ['only'])).toThrow('列数');
+  for (const patch of [{insertTarget: undefined}, {encoding: 'utf16le'}, {csvDelimiter: ','}, {format: 'json'},
+    {insertTarget: {...target, columns: ['same', 'same']}}, {insertTarget: {...target, table: '长'.repeat(22)}}]) {
     expect(() => validateCommand('postgres.query.export', {...input, ...patch})).toThrow();
   }
 });

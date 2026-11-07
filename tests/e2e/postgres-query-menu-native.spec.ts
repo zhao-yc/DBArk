@@ -1,6 +1,7 @@
 import { Client } from 'pg';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { test, expect, page, desktop, pageErrors, quitDesktop } from './desktop-fixture';
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
@@ -793,10 +794,12 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
   try {
     await observer.query('CREATE SEQUENCE export_guard');
     const csv = info.outputPath('完整结果.csv'), json = info.outputPath('完整结果.json'), xlsx = info.outputPath('完整结果.xlsx');
+    const insertFile = info.outputPath('完整结果.sql'), cancelledSql = info.outputPath('原文件.sql');
     const unchanged = info.outputPath('原文件.csv'), cancelledExcel = info.outputPath('原文件.xlsx');
     await mkdir(info.outputDir, {recursive: true});
     await writeFile(unchanged, '原文件哨兵');
     await writeFile(cancelledExcel, 'Excel 原文件哨兵');
+    await writeFile(cancelledSql, 'SQL 原文件哨兵');
     await prepare({id: '', name: '隔离 PostgreSQL 查询导出', dialect: 'postgresql', group: '', color: '#123456',
       host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, "SELECT '保留原结果' AS marker;");
     const execute = tab().getByRole('button', {name: postgresZh.execute, exact: true});
@@ -811,7 +814,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     const owner = (await sessions()).rows;
     expect(owner).toHaveLength(1);
     expect(owner[0].state).toBe('idle in transaction');
-    const output = [csv, json, xlsx, unchanged, cancelledExcel];
+    const output = [csv, json, xlsx, insertFile, unchanged, cancelledExcel, cancelledSql];
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
@@ -877,6 +880,26 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     expect(rowIndex).toBe(4099);
     expect((await observer.query('SELECT is_called FROM export_guard')).rows).toEqual([{is_called: false}]);
     await page.screenshot({path: info.outputPath('PostgreSQL完整查询导出Excel.png')});
+    await dialog.getByLabel(zh.resultExport.format).selectOption('sql');
+    await expect(dialog.getByLabel(zh.resultExport.encoding)).toBeDisabled();
+    await expect(dialog.getByRole('button', {name: zh.resultExport.chooseFile, exact: true})).toBeDisabled();
+    await dialog.getByLabel(fullExportText.insertDatabase, {exact: true}).fill('回放"模式');
+    await dialog.getByLabel(fullExportText.insertTable, {exact: true}).fill('导出结果');
+    await dialog.getByLabel(fullExportText.insertColumns, {exact: true}).fill('exact_id\nexact_amount\nnote\nbytes');
+    await start();
+    await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
+    const generated = await readFile(insertFile, 'utf8');
+    expect(generated).toContain('INSERT INTO "回放""模式"."导出结果" ("exact_id", "exact_amount", "note", "bytes")');
+    expect(generated).toContain("pg_catalog.set_config(E'DateStyle'");
+    expect(generated).not.toContain("nextval('export_guard')");
+    await observer.query('CREATE SCHEMA "回放""模式"; CREATE TABLE "回放""模式"."导出结果"(exact_id bigint, exact_amount numeric(30,20), note text, bytes bytea)');
+    const beforeSettings = (await observer.query('SHOW DateStyle')).rows;
+    await observer.query(generated);
+    expect((await observer.query('SHOW DateStyle')).rows).toEqual(beforeSettings);
+    const restored = await observer.query(`SELECT exact_id AS id, exact_amount AS "id [2]", note, encode(bytes, 'hex') AS bytes FROM "回放""模式"."导出结果" ORDER BY exact_id`);
+    expect(restored.rows).toEqual(parsed.results[0].rows.map((row: {bytes: unknown}) => ({...row, bytes: '00ff'})));
+    expect((await observer.query('SELECT is_called FROM export_guard')).rows).toEqual([{is_called: false}]);
+    await page.screenshot({path: info.outputPath('PostgreSQL完整查询INSERT.png')});
     await close();
 
     await replaceDraft("SELECT nextval('export_guard');");
@@ -887,18 +910,24 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     await close();
 
     await replaceDraft("SELECT g, CASE WHEN g > 64 THEN pg_sleep(30)::text ELSE '' END AS delay FROM generate_series(1,65) AS g;");
-    await open();
-    await dialog.getByLabel(zh.resultExport.format).selectOption('xlsx');
-    await start();
-    // 暂存已存在，且真实后端进入下一批 FETCH 时取消，避免只测试尚未打开文件的准备阶段。
-    await expect.poll(async () => (await readdir(info.outputDir)).some(name => name.startsWith('原文件.xlsx.dbark-') && name.endsWith('.partial'))).toBe(true);
-    await expect.poll(async () => (await observer.query("SELECT count(*)::int AS count FROM pg_stat_activity WHERE usename=$1 AND state='active' AND query LIKE 'FETCH FORWARD 64 FROM dbark_query_export%'", [user])).rows[0].count).toBe(1);
-    await dialog.getByRole('button', {name: zh.common.cancel, exact: true}).click();
-    await expect(dialog.locator('.error-box')).toContainText(/取消|cancel/i);
-    expect(await readFile(cancelledExcel, 'utf8')).toBe('Excel 原文件哨兵');
-    expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
-    await close();
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(5);
+    for (const [format, filename, previous] of [
+      ['xlsx', cancelledExcel, 'Excel 原文件哨兵'],
+      ['sql', cancelledSql, 'SQL 原文件哨兵'],
+    ]) {
+      await open();
+      await dialog.getByLabel(zh.resultExport.format).selectOption(format);
+      if (format === 'sql') await dialog.getByLabel(fullExportText.insertTable, {exact: true}).fill('cancelled_export');
+      await start();
+      // 暂存已存在，且真实后端进入下一批 FETCH 时取消。
+      await expect.poll(async () => (await readdir(info.outputDir)).some(name => name.startsWith(basename(filename) + '.dbark-') && name.endsWith('.partial'))).toBe(true);
+      await expect.poll(async () => (await observer.query("SELECT count(*)::int AS count FROM pg_stat_activity WHERE usename=$1 AND state='active' AND query LIKE 'FETCH FORWARD 64 FROM dbark_query_export%'", [user])).rows[0].count).toBe(1);
+      await dialog.getByRole('button', {name: zh.common.cancel, exact: true}).click();
+      await expect(dialog.locator('.error-box')).toContainText(/取消|cancel/i);
+      expect(await readFile(filename, 'utf8')).toBe(previous);
+      expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
+      await close();
+    }
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(7);
     await expect.poll(async () => (await sessions()).rows).toEqual(owner);
     expect(await history()).toEqual(baseline);
     expect(await grid.innerText()).toBe(original);

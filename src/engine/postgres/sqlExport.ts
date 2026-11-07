@@ -50,7 +50,7 @@ export async function writePostgresSqlStatements(statements: Iterable<string>, w
 }
 
 /** 按行数和字节封顶多行 INSERT，多表回放共享同一个外层事务。 */
-export async function writePostgresSqlRows(table: string, columns: PostgresTableColumn[],
+export async function writePostgresSqlRows(table: string, columns: readonly Pick<PostgresTableColumn, 'name' | 'identityAlways'>[],
   source: AsyncIterable<CellValue[]>, write: Write, progress: (rows: number) => void) {
   const prefix = 'INSERT INTO ' + table + ' (' + columns.map(column => postgresIdentifier(column.name)).join(', ') + ')' +
     (columns.some(column => column.identityAlways) ? ' OVERRIDING SYSTEM VALUE' : '') + ' VALUES\n';

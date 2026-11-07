@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
-import { postgresExportParameterNames, type PostgresQueryExportInput } from '../../shared/postgresQueryExport';
+import { postgresExportParameterNames, postgresQueryInsertTargetSchema, type PostgresQueryExportInput } from '../../shared/postgresQueryExport';
 import { sqliteQueryInsertTargetSchema, type SqliteQueryExportInput } from '../../shared/sqliteQueryExport';
 import type { QueryParameter } from '../../shared/queryParameters';
 import { acquireWorkspaceBusy, useWorkspace } from '../store';
@@ -25,14 +25,16 @@ export interface FullQueryExportSource {
 export function FullQueryExportDialog({source, onClose}: {source: FullQueryExportSource; onClose(): void}) {
   const sqlite = source.dialect === 'sqlite';
   const text = sqlite ? sqliteQueryExportZh : postgresQueryExportZh;
-  const [format, setFormat] = useState<SqliteQueryExportInput['format']>('csv');
-  const [insertDatabase, setInsertDatabase] = useState('main'), [insertTable, setInsertTable] = useState(''), [insertColumns, setInsertColumns] = useState('');
-  const insert = sqlite && format === 'sql', fixedEncoding = insert || format === 'xlsx';
+  const [format, setFormat] = useState<SqliteQueryExportInput['format'] | PostgresQueryExportInput['format']>('csv');
+  const [insertDatabase, setInsertDatabase] = useState(sqlite ? 'main' : 'public'), [insertTable, setInsertTable] = useState(''), [insertColumns, setInsertColumns] = useState('');
+  const insert = format === 'sql', fixedEncoding = insert || format === 'xlsx';
   const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [parameters, setParameters] = useState<QueryParameter[]>(), [editingParameters, setEditingParameters] = useState(false);
-  const target = insert ? sqliteQueryInsertTargetSchema.safeParse({database: insertDatabase, table: insertTable,
-    ...(insertColumns ? {columns: insertColumns.replace(/\r?\n$/, '').split(/\r?\n/)} : {})}) : undefined;
+  const mapping = {table: insertTable, ...(insert && insertColumns ? {columns: insertColumns.replace(/\r?\n$/, '').split(/\r?\n/)} : {})};
+  const sqliteTarget = insert && sqlite ? sqliteQueryInsertTargetSchema.safeParse({database: insertDatabase, ...mapping}) : undefined;
+  const postgresTarget = insert && !sqlite ? postgresQueryInsertTargetSchema.safeParse({schema: insertDatabase, ...mapping}) : undefined;
+  const target = sqliteTarget ?? postgresTarget;
   const invalidTarget = target?.success === false;
   const [file, setFile] = useState<FileChoice | null>(null);
   const [pending, setPending] = useState<'pick' | 'write' | null>(null);
@@ -76,9 +78,10 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       if (!current()) throw Error(text.changed);
       const input = {connectionId: source.connectionId, sql: source.sql, taskId, fileToken: file.token,
         encoding: fixedEncoding ? 'utf8' as const : encoding, ...csvExportOptions(format, delimiter), ...(parameters ? {parameters} : {})};
-      const result = sqlite ? await invoke('sqlite.queryExport', {...input, format, ...(target?.success ? {insertTarget: target.data} : {})})
-        : format !== 'sql' ? await invoke('postgres.query.export', {...input, format, database: source.database}) : undefined;
-      if (!result) throw Error(text.changed);
+      const result = sqlite
+        ? await invoke('sqlite.queryExport', {...input, format, ...(sqliteTarget?.success ? {insertTarget: sqliteTarget.data} : {})})
+        : await invoke('postgres.query.export', {...input, format, database: source.database,
+          ...(postgresTarget?.success ? {insertTarget: postgresTarget.data} : {})});
       if (alive.current) setRows(result.rows);
     } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
     finally {
@@ -111,8 +114,8 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>
       {parameters && <p>{text.parameterCount(parameters.length)}</p>}
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
-        onChange={event => { const value = event.target.value; if (value === 'csv' || value === 'json' || value === 'xlsx' || sqlite && value === 'sql') setFormat(value); setFile(null); setRows(undefined); }}>
-        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option>{sqlite && <option value="sql">{sqliteQueryExportZh.insertFormat}</option>}
+        onChange={event => { const value = event.target.value; if (value === 'csv' || value === 'json' || value === 'xlsx' || value === 'sql') setFormat(value); setFile(null); setRows(undefined); }}>
+        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>
       </select></Field>
       {sqlite && format === 'json' && <p>{sqliteQueryExportZh.formatHint}</p>}
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={fixedEncoding ? 'utf8' : encoding} disabled={!!pending || fixedEncoding}
@@ -120,12 +123,12 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
         <option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option>
       </select></Field>
       {insert && <>
-        <p>{sqliteQueryExportZh.insertHint}</p>
-        <Field label={sqliteQueryExportZh.insertDatabase}><input disabled={!!pending} value={insertDatabase} maxLength={256}
+        <p>{text.insertHint}</p>
+        <Field label={text.insertDatabase}><input disabled={!!pending} value={insertDatabase} maxLength={256}
           onChange={event => { setInsertDatabase(event.target.value); setFile(null); setRows(undefined); }}/></Field>
-        <Field label={sqliteQueryExportZh.insertTable}><input disabled={!!pending} value={insertTable} maxLength={256}
+        <Field label={text.insertTable}><input disabled={!!pending} value={insertTable} maxLength={256}
           onChange={event => { setInsertTable(event.target.value); setFile(null); setRows(undefined); }}/></Field>
-        <Field label={sqliteQueryExportZh.insertColumns}><textarea disabled={!!pending} value={insertColumns} rows={3} maxLength={263168}
+        <Field label={text.insertColumns}><textarea disabled={!!pending} value={insertColumns} rows={3} maxLength={263168}
           onChange={event => { setInsertColumns(event.target.value); setFile(null); setRows(undefined); }}/></Field>
       </>}
       {format === 'csv' && <CsvExportDelimiterField value={delimiter} disabled={!!pending} onChange={setDelimiter}/>}

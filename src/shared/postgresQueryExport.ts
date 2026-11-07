@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { csvExportDelimiters } from './csvExport';
 import { queryParameterTypes, validateQueryParameters, type QueryParameterNames } from './queryParameters';
+import { postgresNewIdentifier } from './postgresCreateTable';
 import { currentPostgresStatement, splitPostgresSql } from './postgresSql';
 
 const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParameterTypes), value: z.string().optional()}).strict())
@@ -9,15 +10,30 @@ const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParamet
     catch { context.addIssue({code: 'custom', message: 'PostgreSQL 导出参数类型或预算无效'}); }
   });
 
+const postgresQueryInsertColumns = z.array(postgresNewIdentifier).min(1).max(1024)
+  .refine(names => new Set(names).size === names.length, 'PostgreSQL INSERT 目标字段不能重名');
+export const postgresQueryInsertTargetSchema = z.object({
+  schema: postgresNewIdentifier, table: postgresNewIdentifier, columns: postgresQueryInsertColumns.optional(),
+}).strict();
+
+/** 使用带双引号的标识符，大小写不同的名称各自保留。 */
+export function postgresQueryInsertColumnsForResult(target: z.infer<typeof postgresQueryInsertTargetSchema>, source: string[]): string[] {
+  const columns = target.columns ?? source;
+  if (columns.length !== source.length) throw Error('PostgreSQL INSERT 目标字段数必须与查询结果列数一致');
+  if (!postgresQueryInsertColumns.safeParse(columns).success) throw Error('PostgreSQL INSERT 字段名无效或重复，请填写唯一的目标字段或修改查询别名');
+  return columns;
+}
+
 export const postgresQueryExportSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.string().min(1).max(256),
   taskId: z.string().min(1).max(200), fileToken: z.string().min(1).max(200),
-  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json', 'xlsx']),
+  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json', 'xlsx', 'sql']),
   encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
-  parameters: parameters.optional(),
+  parameters: parameters.optional(), insertTarget: postgresQueryInsertTargetSchema.optional(),
 }).strict()
   .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
-  .refine(input => input.format !== 'xlsx' || input.encoding === 'utf8', 'Excel 导出仅使用 UTF-8 内部编码');
+  .refine(input => input.format === 'sql' ? !!input.insertTarget : input.insertTarget === undefined, '仅 PostgreSQL INSERT SQL 导出需要明确目标')
+  .refine(input => input.format !== 'xlsx' && input.format !== 'sql' || input.encoding === 'utf8', 'PostgreSQL INSERT SQL 和 Excel 导出使用 UTF-8');
 
 export type PostgresQueryExportInput = z.infer<typeof postgresQueryExportSchema>;
 export interface PostgresQueryExportOutput { rows: number; fileCommitted: true; }
