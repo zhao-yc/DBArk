@@ -4,9 +4,8 @@ import { resultSqlZh as text } from '../shared/resultSql.zh-CN';
 import { exportLiteral, identifier, qualified } from './sql';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { postgresDdlLiteral } from '../shared/postgresCreateTable';
-import { quoteSqliteIdentifier } from '../shared/sqliteReadSql';
 import type { SqliteResultStorage } from '../shared/sqliteResultStorage';
-import { sqliteInsertLiteral } from './sqlite/insertLiteral';
+import { sqliteInsertRowWriter } from './sqlite/insertLiteral';
 
 /** 返回文本保持为未知类型字面量，由明确映射的目标列解释，不猜测结果别名或来源类型。 */
 function postgresResultLiteral(value: DataRow[string]): string {
@@ -20,15 +19,14 @@ function postgresResultLiteral(value: DataRow[string]): string {
 /** 数据预校验后复用同一逐行生成器：预览与实际文件具有相同列序和模式无关字面量。 */
 export function resultSqlRowWriter(target: ResultSqlTarget, storage?: SqliteResultStorage): (row: DataRow, index: number) => string {
   if (target.dialect === 'sqlite') {
-    const prefix = 'INSERT INTO ' + quoteSqliteIdentifier(target.database) + '.' + quoteSqliteIdentifier(target.table) +
-      ' (' + target.columns.map(column => quoteSqliteIdentifier(column.name)).join(', ') + ') VALUES (';
-    return (row, index) => prefix + target.columns.map((column, position) => {
+    const render = sqliteInsertRowWriter(target.database, target.table, target.columns.map(column => column.name));
+    return (row, index) => render(target.columns.map((column, position) => {
       const cell = row[column.key], code = storage!.rows[index][position];
       // 生成器接收已逐格校验的类型标记，数字字符串不能按外观推断。
-      return sqliteInsertLiteral(code === 'i' || code === 'r'
+      return code === 'i' || code === 'r'
         ? {type: code === 'i' ? 'integer' : 'real', value: cell as string}
-        : cell as string | null | {type: 'binary'; base64: string});
-    }).join(', ') + ');\n';
+        : cell as string | null | {type: 'binary'; base64: string};
+    }));
   }
   if (target.dialect === 'postgresql') {
     const prefix = 'INSERT INTO ' + postgresIdentifier(target.database) + '.' + postgresIdentifier(target.table) +

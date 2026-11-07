@@ -8,14 +8,17 @@ import { copySqliteResultStorage, sqliteResultStorageLimits, type SqliteResultSt
 export const resultSqlLimits = { previews: 8, ttlMs: 120000, previewRows: 20, previewBytes: 4 * 1024 ** 2, fileBytes: 512 * 1024 ** 2 } as const;
 /** 无会话模式时保守限制名称，反引号由SQL生成器双写，不允许反斜线改变词法。 */
 const identifier = z.string().min(1, text.identifier).max(64, text.identifier).refine(value => !/[\u0000-\u001f\u007f-\u009f\ud800-\udfff\\]/.test(value) && !/\s$/u.test(value), text.identifier);
-const sqliteIdentifier = z.string().min(1).max(256).refine(value => !!value.trim() &&
+export const sqliteInsertIdentifier = z.string().min(1).max(256).refine(value => !!value.trim() &&
   !/[\u0000-\u001f\u007f-\u009f]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value), text.sqliteIdentifier);
+export function sqliteInsertIdentifierKey(name: string): string {
+  return name.replace(/[A-Z]/g, character => character.toLowerCase());
+}
 export const resultSqlTargetSchema = z.object({
   dialect: z.enum(['postgresql', 'sqlite']).optional(),
   database: z.string().max(256), table: z.string().max(256),
   columns: z.array(z.object({ key: z.string().min(1).max(256), name: z.string().max(256) }).strict()).min(1).max(1024),
 }).strict().superRefine((value, context) => {
-  const schema = value.dialect === 'sqlite' ? sqliteIdentifier : value.dialect === 'postgresql' ? postgresNewIdentifier : identifier;
+  const schema = value.dialect === 'sqlite' ? sqliteInsertIdentifier : value.dialect === 'postgresql' ? postgresNewIdentifier : identifier;
   const message = value.dialect === 'sqlite' ? text.sqliteIdentifier : value.dialect === 'postgresql' ? text.postgresIdentifier : text.identifier;
   for (const [path, name] of [['database', value.database], ['table', value.table]] as const)
     if (!schema.safeParse(name).success) context.addIssue({code: 'custom', path: [path], message});
@@ -41,7 +44,7 @@ export function assertResultSqlTarget(result: ResultExportData, target: ResultSq
   const names = new Set<string>();
   if (target.columns.length !== result.columns.length) throw Error(text.invalid);
   for (const [index, column] of target.columns.entries()) {
-    const name = target.dialect === 'sqlite' ? column.name.replace(/[A-Z]/g, character => character.toLowerCase())
+    const name = target.dialect === 'sqlite' ? sqliteInsertIdentifierKey(column.name)
       : target.dialect === 'postgresql' ? column.name : column.name.normalize('NFC').toLowerCase();
     if (column.key !== result.columns[index].key || names.has(name)) throw Error(text.invalid);
     names.add(name);

@@ -379,6 +379,43 @@ describe('SQLite 完整查询导出', () => {
     expect(await hash(profile.sqlite.filePath!)).toBe(before);
   });
 
+  it('完整查询 INSERT 使用逐格原生类型流式写入，按位置映射重名字段', async () => {
+    const profile = fixture(), {app} = runtime(profile), before = await hash(profile.sqlite.filePath!);
+    const sql = 'WITH RECURSIVE series(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM series WHERE n<1205) ' +
+      "SELECT n AS same, CASE n%2 WHEN 1 THEN 9223372036854775807 ELSE '9223372036854775807' END AS same, " +
+      "CAST(-0.0 AS REAL) AS signed, :note AS note, X'00ff' AS bytes FROM series ORDER BY n";
+    const input = queryRequest(profile, {sql, format: 'sql', insertTarget: {database: 'main', table: '目标"表', columns: ['pos', 'mixed', 'signed', 'note', 'bytes']},
+      parameters: [{name: 'note', type: 'text', value: '原字🚢\0尾'}]});
+    await expect(app.request('sqlite.queryExport', input)).resolves.toEqual({rows: 1205, fileCommitted: true});
+    const replay = new DatabaseSync(':memory:');
+    try {
+      replay.exec('CREATE TABLE "目标""表"(pos, mixed, signed, note, bytes)');
+      const generated = readFileSync(input.filePath, 'utf8');
+      expect(generated).not.toContain('WITH RECURSIVE');
+      replay.exec(generated);
+      const table = '"目标""表"';
+      expect(replay.prepare('SELECT count(*) AS n FROM ' + table).get()).toEqual({n: 1205});
+      const rows = replay.prepare('SELECT pos, typeof(mixed) AS kind, CAST(mixed AS TEXT) AS mixed, signed, hex(note) AS note, hex(bytes) AS bytes FROM ' + table + ' WHERE pos IN (1,2,1205) ORDER BY pos').all();
+      expect(rows).toEqual([1, 2, 1205].map(pos => ({pos, kind: pos === 2 ? 'text' : 'integer', mixed: '9223372036854775807', signed: -0,
+        note: Buffer.from('原字🚢\0尾').toString('hex').toUpperCase(), bytes: '00FF'})));
+    } finally { replay.close(); }
+    const original = processes.at(-1)!;
+    expect(await original.exited).toEqual({code: 0, signal: null});
+    expect(original.sent.filter(message => message.kind === 'streamRead')).toEqual([expect.objectContaining({querySource: true, sql})]);
+    expect(await hash(profile.sqlite.filePath!)).toBe(before);
+  });
+
+  it('完整查询 INSERT 拒绝列数不匹配及默认字段重名，保留原目标文件', async () => {
+    const profile = fixture(), {app} = runtime(profile);
+    const input = queryRequest(profile, {sql: 'SELECT 1 AS repeated, 2 AS REPEATED', format: 'sql',
+      insertTarget: {database: 'main', table: 'target'}});
+    writeFileSync(input.filePath, '旧目标文件');
+    await expect(app.request('sqlite.queryExport', input)).rejects.toThrow('重复');
+    await expect(app.request('sqlite.queryExport', {...input, taskId: '错误列数', insertTarget: {...input.insertTarget!, columns: ['one']}})).rejects.toThrow('列数');
+    expect(readFileSync(input.filePath, 'utf8')).toBe('旧目标文件');
+    expect(readdirSync(dirname(input.filePath)).filter(path => path.endsWith('.partial'))).toEqual([]);
+  });
+
   it('CSV 保留重名及列顺序，空结果仍写表头；JSON 重名拒绝原子替换', async () => {
     const profile = fixture(), {app} = runtime(profile);
     const sql = "SELECT 9223372036854775807 AS same,'分;号' AS same";
@@ -434,13 +471,14 @@ describe('SQLite 完整查询导出', () => {
     expect(readdirSync(dirname(filePath)).filter(path => path.endsWith('.partial'))).toEqual([]);
   });
 
-  it.each(['json', 'xlsx'] as const)('%s 流读取期间取消只撤销本次暂存并保留旧目标', async format => {
+  it.each(['json', 'xlsx', 'sql'] as const)('%s 流读取期间取消只撤销本次暂存并保留旧目标', async format => {
     const profile = fixture(), reached = deferred<void>();
     let paused = false;
     const {app, events} = runtime(profile, {create: () => transport((message, forward) => {
       if (!paused && message.kind === 'batch') { paused = true; reached.resolve(); } else forward();
     })});
-    const input = queryRequest(profile, {format, filePath: join(dirname(profile.sqlite.filePath!), 'result.' + format)});
+    const input = queryRequest(profile, {format, filePath: join(dirname(profile.sqlite.filePath!), 'result.' + format),
+      ...(format === 'sql' ? {insertTarget: {database: 'main', table: 'target'}} : {})});
     writeFileSync(input.filePath, '旧文件');
     const work = app.request('sqlite.queryExport', input).catch(reason => reason);
     await reached.promise;

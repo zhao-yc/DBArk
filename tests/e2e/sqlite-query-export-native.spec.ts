@@ -33,6 +33,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
   const originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'query-export.sqlite'), target = join(directory, 'query-export.json');
   const xlsx = join(directory, 'query-export.xlsx');
+  const fullInsertFile = join(directory, 'full-query.sql');
   const insertFile = join(directory, 'query-result.sql');
   const resultSql = "SELECT 9223372036854775807 AS mixed, -0.0 AS signed, X'00ff' AS bytes, '中🚢'||char(0)||'尾' AS note " +
     "UNION ALL SELECT '9223372036854775807', 1.0, NULL, ''";
@@ -75,8 +76,8 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
         return {canceled: false, filePaths: [input.database]};
       }) as typeof dialog.showOpenDialog;
       dialog.showSaveDialog = (async () => {
-        if (chooser !== 'export' || ++facts.saveCalls > 3) throw Error('本例不允许其它保存对话框');
-        return {canceled: false, filePath: [input.target, input.xlsx, input.insertFile][facts.saveCalls - 1]};
+        if (chooser !== 'export' || ++facts.saveCalls > 4) throw Error('本例不允许其它保存对话框');
+        return {canceled: false, filePath: [input.target, input.xlsx, input.fullInsertFile, input.insertFile][facts.saveCalls - 1]};
       }) as typeof dialog.showSaveDialog;
       const wrapped: Handler = async (event, payload) => {
         if (event.senderFrame !== owner.webContents.mainFrame) throw Error('本例 IPC 窗口归属已改变');
@@ -104,7 +105,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       Object.assign(globalThis, {sqliteQueryExportProof: {facts, restore() {
         handlers.set('dbark:request', original); dialog.showOpenDialog = open; dialog.showSaveDialog = save;
       }}});
-    }, {database, target, xlsx, sql, insertFile, resultSql});
+    }, {database, target, xlsx, sql, fullInsertFile, insertFile, resultSql});
 
     stage = '保存连接及从树打开查询';
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), {name: zh.common.newConnection, exact: true}, check)).click();
@@ -185,17 +186,37 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       expect(row).toEqual(rows[excelRows++]);
     }
     expect(excelRows).toBe(1205);
+    stage = '按光标流式保存完整 SQLite INSERT 并独立回放';
+    await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption('sql');
+    await expect(modal.getByLabel(zh.resultExport.encoding, {exact: true})).toBeDisabled();
+    await expect(modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true})).toBeDisabled();
+    await modal.getByLabel(text.insertTable, {exact: true}).fill('exported');
+    await modal.getByLabel(text.insertColumns, {exact: true}).fill('pos\nexact_value\nmarker_value\nbytes');
+    await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
+    await modal.getByRole('button', {name: text.start, exact: true}).click();
+    await expect(modal.getByRole('status')).toHaveText(text.done(1205));
+    const fullSql = readFileSync(fullInsertFile, 'utf8');
+    const independent = new DatabaseSync(':memory:');
+    try {
+      independent.exec('CREATE TABLE exported(pos, exact_value, marker_value, bytes);');
+      independent.exec(fullSql);
+      expect(independent.prepare('SELECT count(*) AS n FROM exported').get()).toEqual({n: 1205});
+      expect(independent.prepare("SELECT pos, CAST(exact_value AS TEXT) AS exact_value, marker_value, hex(bytes) AS bytes FROM exported WHERE pos=1205").get())
+        .toEqual({pos: 1205, exact_value: '9223372036854775807', marker_value: "中文';🚢", bytes: '00FF'});
+    } finally { independent.close(); }
+    await info.attach('SQLite完整INSERT导出窗口', {body: await modal.screenshot({animations: 'disabled'}), contentType: 'image/png'});
     expect(digest()).toBe(before);
     expect(readdirSync(directory).filter(name => name.endsWith('.partial'))).toEqual([]);
     const facts = await application.evaluate(() =>
       (globalThis as typeof globalThis & {sqliteQueryExportProof: {facts: unknown}}).sqliteQueryExportProof.facts);
     expect(facts).toMatchObject({
-      denied: [], openCalls: 1, saveCalls: 2, requests: [
+      denied: [], openCalls: 1, saveCalls: 3, requests: [
         {command: 'sqlite.queryExportParameterNames', value: {sql}},
         {command: 'sqlite.queryExport', value: {sql, format: 'json', encoding: 'utf16le', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
         {command: 'sqlite.queryExportParameterNames', value: {sql}},
         {command: 'sqlite.queryExport', value: {sql, format: 'xlsx', encoding: 'utf8', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
-      ], replies: Array.from({length: 2}, () => ({ok: true, result: {rows: 1205, fileCommitted: true}})),
+        {command: 'sqlite.queryExport', value: {sql, format: 'sql', encoding: 'utf8', insertTarget: {database: 'main', table: 'exported', columns: ['pos', 'exact_value', 'marker_value', 'bytes']}, parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
+      ], replies: Array.from({length: 3}, () => ({ok: true, result: {rows: 1205, fileCommitted: true}})),
     });
     const observed = await page.evaluate(async () => ({
       history: await window.dbark.invoke('history.list', {}),
@@ -268,7 +289,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       const state = (globalThis as typeof globalThis & {sqliteQueryExportProof: {facts: unknown; restore(): void}}).sqliteQueryExportProof;
       state.restore(); return state.facts;
     });
-    expect(resultProof).toMatchObject({executions: 1, denied: [], saveCalls: 3, resultExports: [
+    expect(resultProof).toMatchObject({executions: 1, denied: [], saveCalls: 4, resultExports: [
       {command: 'files.previewResultSql', value: {sqliteStorage: {version: 1, rows: ['irbt', 'trnt']}}},
       {command: 'files.exportResult', value: {sql: {sqliteStorage: {version: 1, rows: ['irbt', 'trnt']}}}},
     ]});
