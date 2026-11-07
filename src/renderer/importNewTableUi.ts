@@ -1,4 +1,4 @@
-import { recordImportFormats, xmlImportOptionsSchema, xmlImportZh } from '../shared/xmlImport';
+import { recordImportFormats, xmlImportOptionsSchema, xmlImportZh, type XmlImportOptions } from '../shared/xmlImport';
 import type { FileChoice, TaskEvent } from '../shared/contracts';
 import { importFileInspectInputSchema, importFileInspectOutputSchema, importNewTableSeedSchema, type ImportFileInspectInput, type ImportFileReadOptions, type ImportFileInspectOutput, type ImportNewTableSeed } from '../shared/importNewTable';
 import { tableCreateDraftSchema, type TableCreateApplyOutput, type TableCreateDraft } from '../shared/tableCreate';
@@ -8,7 +8,7 @@ import { importNewTableZh as text } from './locales/importNewTable.zh-CN';
 export interface ImportNewTableTarget { connectionId: string; database: string; version: number; postgres?: boolean; }
 export interface PostgresImportDesign { table: string; columns: PostgresCreateColumn[]; }
 export type ImportNewTableOptions = ImportFileReadOptions;
-export const newTableXmlDefaults = { rowTag: 'RECORD', attributes: true, binaryBase64: false } as const;
+export const newTableXmlDefaults: XmlImportOptions = { rowTag: 'RECORD', attributes: true, binaryBase64: false };
 
 /** 扫描和建表来源种子采用同一套格式选项，避免将旧 CSV 或 XML 配置带入其它格式。 */
 function sourceOptions({ format, encoding, csvDelimiter, csvHasHeader, xmlOptions }: ImportNewTableOptions): ImportFileReadOptions {

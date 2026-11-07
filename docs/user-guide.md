@@ -342,6 +342,8 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 在 PostgreSQL 数据库节点或对象浏览器的表分类打开「从文件导入新表」，可扫描 CSV、JSON 或 XML 并据此建立字段。CSV 可按表头或列位置映射。选择 schema、核对字段类型并确认建表后，点击「继续配置导入」，检查映射并另行确认追加。源文件变化会阻止或回滚数据写入，已建表仍保留。[从 CSV 和 JSON 新建表](development/postgres-csv-json-new-table-20261107.md) · [从 XML 新建表](development/postgres-xml-new-table-20261107.md)
 
+导入 tabrelio 导出的「XML 文档」时，将 XML 布局设为「XML 文档（按列位置）」。选择行结果序号后核对字段映射。语句回执不计入序号。[按列位置导入 XML 文档](development/positional-xml-import-20261107.md)
+
 在 PostgreSQL 查询页，选定结果集后可「导出已返回结果」，或勾选行后「导出勾选结果行」。支持 CSV、JSON 和 Excel。结果出现截断提示时，导出的范围以当前已经返回的行数为准。详见[PostgreSQL 查询结果导出](development/postgres-query-result-export-20261105.md)。
 
 也可选择「PostgreSQL INSERT SQL」。明确填写目标 schema、表名和全部目标字段，生成预览后输入准确目标名称并确认保存。文件固定 UTF-8，仅包含打开导出窗口时的已返回或勾选快照。生成文件不会执行 INSERT，目标字段的类型转换和约束需在执行前核对。[PostgreSQL 查询结果 SQL 导出](development/postgres-result-sql-export-20261107.md)

@@ -8,7 +8,7 @@
 
 确认建表与确认导入分开。文件在配置导入前变化会阻止签发导入能力，在映射完成后变化则使写入回滚。退出或导入失败时保留已创建的表。
 
-当前使用扁平 XML 1.0 格式，文件上限 64 MiB，新表设计器接受 1 到 128 个源字段。位置映射「XML 文档」回读和按键更新仍待补齐。[向已有 PostgreSQL 表导入](postgres-xml-import-20261107.md) · [从 CSV 和 JSON 新建表](postgres-csv-json-new-table-20261107.md)
+当前使用扁平 XML 1.0 格式，文件上限 64 MiB，新表设计器接受 1 到 128 个源字段。按键更新仍待补齐。[按列位置导入](positional-xml-import-20261107.md) · [向已有 PostgreSQL 表导入](postgres-xml-import-20261107.md) · [从 CSV 和 JSON 新建表](postgres-csv-json-new-table-20261107.md)
 
 ## 验收
 

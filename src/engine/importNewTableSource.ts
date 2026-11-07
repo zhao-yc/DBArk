@@ -5,6 +5,7 @@ import type { BigIntStats } from 'node:fs';
 import type { DataRow } from '../shared/contracts';
 import { importFileInspectInputSchema, importFileSampleRowBytes, importFileSourceSchema, importNewTableLimits as limits, importSourceColumn, type ImportFileInspectInput, type ImportFileReadOptions, type ImportFileInspectOutput, type ImportFileSource } from '../shared/importNewTable';
 import { readRecords } from './files';
+import { XmlDocumentReadError } from './xmlDocumentImport';
 
 export interface ImportFileInspectProgress { records: number; bytes: number; }
 /** 调用方可要求严格字节编码，默认保持旧来源扫描的解码行为。 */
@@ -46,7 +47,7 @@ async function* sourceRecords(input: ReadInput, checkCancelled: () => void, sign
     if (expected && (source.sha256 !== expected.sha256 || source.bytes !== expected.bytes)) throw changed(); completed?.(source);
   } catch (error) {
     // 先恢复原任务取消原因；其余第三方错误不能携带源行值、SQL或本机路径进入持久任务。
-    check(); if (error instanceof SourceReadError) throw error;
+    check(); if (error instanceof SourceReadError || error instanceof XmlDocumentReadError) throw error;
     throw new SourceReadError(selected.format === 'xml' ? 'XML 文件未完整读取或解析，请核对 UTF-8、记录标签和字段结构' : '导入文件未完整读取或解析，请检查文件格式、编码和CSV配置');
   }
 }

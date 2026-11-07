@@ -180,7 +180,8 @@ export async function* readText(filePath: string, encoding: string): AsyncGenera
 export async function previewFile(input: { filePath: string; format: RecordImportFormat; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions }): Promise<{ columns: string[]; rows: DataRow[] }> {
   if (Object.hasOwn(input, 'csvHasHeader') && typeof input.csvHasHeader !== 'boolean') throw new Error('首行为标题选项必须为布尔值，且只适用于 CSV 导入');
   const rows: DataRow[] = [], columns = new Set<string>();
-  const control = Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : undefined;
+  const control = Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions,
+    onColumns: (names: string[]) => { for (const name of names) columns.add(name); } } : undefined;
   let sampleBytes = 0;
   for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, control)) {
     if (input.format === 'xml') {

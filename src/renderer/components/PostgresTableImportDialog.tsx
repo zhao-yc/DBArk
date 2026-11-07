@@ -9,16 +9,17 @@ import { xmlImportOptionsSchema, xmlImportZh, type RecordImportFormat, type XmlI
 import { importNewTableZh as newTableText } from '../locales/importNewTable.zh-CN';
 import { acquireWorkspaceBusy } from '../store';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
+import { XmlDocumentImportFields } from './XmlDocumentImportFields';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 /** 显示原文件的样本和列映射，只在用户确认后申请一次性导入。 */
 export function PostgresTableImportDialog({ target, page, initialSource, isCurrent, onClose, onOutcome }: {
   target: PostgresTableTarget; page: PostgresTablePage; isCurrent(): boolean; onClose(): void;
-  initialSource?: { file: PostgresTableImportChoice; mapping: Record<string, string>; format: RecordImportFormat };
+  initialSource?: { file: PostgresTableImportChoice; mapping: Record<string, string>; format: RecordImportFormat; xmlOptions?: XmlImportOptions };
   onOutcome(message: string, committed: boolean): void;
 }) {
   const [format, setFormat] = useState<RecordImportFormat>(initialSource?.format ?? 'csv');
-  const [xmlOptions, setXmlOptions] = useState<XmlImportOptions>({ rowTag: 'RECORD', attributes: true, binaryBase64: false });
+  const [xmlOptions, setXmlOptions] = useState<XmlImportOptions>(initialSource?.xmlOptions ?? { rowTag: 'RECORD', attributes: true, binaryBase64: false });
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [hasHeader, setHasHeader] = useState(true);
   const [encoding, setEncoding] = useState<ImportFileReadOptions['encoding']>('utf8');
@@ -95,18 +96,21 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     <div className="modal-content pg-table-export">
       <p><strong>{target.table}</strong> · {target.database}</p>
       <p>{text.note}</p>
-      <p>{format === 'xml' ? xmlImportZh.hint : format === 'json' ? text.jsonNote : initialSource ? newTableText.postgresCsv : text.nullNote}</p>
+      <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : initialSource ? newTableText.postgresCsv : text.nullNote}</p>
       {!initialSource && <><Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
         setFormat(event.target.value as typeof format); resetSource();
       }}><option value="csv">CSV</option><option value="json">JSON</option><option value="xml">XML</option></select></Field>
       <div className="pg-table-controls">
         {format === 'xml' ? <>
+          <XmlDocumentImportFields options={xmlOptions} disabled={locked} onChange={options => { setXmlOptions(options); resetSource(); }}/>
+          {xmlOptions.documentResult === undefined && <>
           <Field label={xmlImportZh.rowTag}><input aria-label={xmlImportZh.rowTag} value={xmlOptions.rowTag} maxLength={256} disabled={locked}
             onChange={event => { setXmlOptions({ ...xmlOptions, rowTag: event.target.value }); resetSource(); }}/></Field>
           <label className="check"><input type="checkbox" checked={xmlOptions.attributes} disabled={locked}
             onChange={event => { setXmlOptions({ ...xmlOptions, attributes: event.target.checked }); resetSource(); }}/> {xmlImportZh.attributes}</label>
           <label className="check"><input type="checkbox" checked={xmlOptions.binaryBase64} disabled={locked}
             onChange={event => { setXmlOptions({ ...xmlOptions, binaryBase64: event.target.checked }); resetSource(); }}/> {xmlImportZh.binary}</label>
+          </>}
         </> : format === 'json' ? <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
           onChange={event => { setEncoding(event.target.value as typeof encoding); resetSource(); }}>
           <option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option>
@@ -125,7 +129,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
       {!validXml && <ErrorBox message={xmlImportZh.invalid}/>}</>}
       {choosing && <Spinner text={text.reading}/>}
       {file && <>
-        <p>{text.file} · {file.name} · {file.bytes.toLocaleString('zh-CN')} {text.bytes}{file.records !== undefined && <> · {text.records(file.records)}</>}</p>
+        <p>{text.file} · {file.name} · {file.bytes.toLocaleString('zh-CN')} {text.bytes}{file.records !== undefined && <> · {format === 'xml' && xmlOptions.documentResult !== undefined ? xmlImportZh.documentRecords(file.records) : text.records(file.records)}</>}</p>
         <fieldset disabled={locked}>
           <legend>{text.columns}</legend>
           {!records && !hasHeader && file.header.length <= candidates.length && <button onClick={() => {

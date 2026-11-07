@@ -12,6 +12,7 @@ import { useWorkspace } from '../store';
 import { SchemaDialog } from './SchemaDialog';
 import { PostgresCreateTableDialog } from './PostgresCreateTableDialog';
 import { PostgresNewTableImportStage } from './PostgresNewTableImportStage';
+import { XmlDocumentImportFields } from './XmlDocumentImportFields';
 import { TransferDialog } from './TransferDialog';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 
@@ -80,17 +81,20 @@ function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreate
         <Field label={text.encoding}><select aria-label={text.encoding} value={state.options.encoding} disabled={disabled || xml} onChange={value => event(() => controller.change(state, { encoding: value.target.value as 'utf8' | 'utf16le' | 'gb18030' }))}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option></select></Field>
         {state.options.format === 'csv' && <><Field label={text.delimiter}><select aria-label={text.delimiter} value={state.options.csvDelimiter ?? ','} disabled={disabled} onChange={value => event(() => controller.change(state, { csvDelimiter: value.target.value as CsvImportDelimiter }))}>{csvImportDelimiters.map(delimiter => <option key={delimiter} value={delimiter}>{text.separators[delimiter]}</option>)}</select></Field><label><input type="checkbox" aria-label={text.header} checked={state.options.csvHasHeader ?? true} disabled={disabled} onChange={value => event(() => controller.change(state, { csvHasHeader: value.target.checked }))}/>{text.header}</label></>}
         {xml && <>
+          <XmlDocumentImportFields options={xmlOptions} disabled={disabled} onChange={options => event(() => controller.change(state, { xmlOptions: options }))}/>
+          {xmlOptions.documentResult === undefined && <>
           <Field label={xmlImportZh.rowTag}><input aria-label={xmlImportZh.rowTag} value={xmlOptions.rowTag} maxLength={256} disabled={disabled} onChange={change => event(() => controller.change(state, { xmlOptions: { ...xmlOptions, rowTag: change.target.value } }))}/></Field>
           <label className="check"><input type="checkbox" checked={xmlOptions.attributes} disabled={disabled} onChange={change => event(() => controller.change(state, { xmlOptions: { ...xmlOptions, attributes: change.target.checked } }))}/>{xmlImportZh.attributes}</label>
           <label className="check"><input type="checkbox" checked={xmlOptions.binaryBase64} disabled={disabled} onChange={change => event(() => controller.change(state, { xmlOptions: { ...xmlOptions, binaryBase64: change.target.checked } }))}/>{xmlImportZh.binary}</label>
+          </>}
         </>}
       </div>
-      {xml && <p>{xmlImportZh.hint}</p>}
+      {xml && <p>{xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint}</p>}
       {postgres && state.options.format === 'csv' && <p>{text.postgresCsv}</p>}
       {postgres && state.options.format === 'json' && <p>{postgresTableImportZh.jsonNote}</p>}
       <button disabled={disabled || !validXml} onClick={() => event(() => { void controller.scan(state); })}>{state.busy ? <Spinner/> : null}{text.choose}</button>
       {state.file && <p>{text.source}：{state.file.name}</p>}
-      {inspection && <section><p>{text.records(inspection.records)}</p><p>{text.columns}：{inspection.columns.length}</p><p>{text.sample}</p>
+      {inspection && <section><p>{xml && xmlOptions.documentResult !== undefined ? xmlImportZh.documentRecords(inspection.records) : text.records(inspection.records)}</p><p>{xml && xmlOptions.documentResult !== undefined ? xmlImportZh.documentColumns : text.columns}：{inspection.columns.length}</p><p>{text.sample}</p>
         <div style={{ overflow: 'auto', maxHeight: 280 }}><table><thead><tr>{inspection.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{inspection.rows.map((row, index) => <tr key={index}>{inspection.columns.map(column => <td key={column}>{cellPreview(Object.hasOwn(row, column) ? row[column] : xml || postgres ? null : undefined, 120)}</td>)}</tr>)}</tbody></table></div>
         {inspection.sampleOmitted && <p>{text.omitted}</p>}
         <Field label={text.table}><input aria-label={text.table} value={state.tableName} disabled={disabled} maxLength={64} onChange={value => event(() => controller.name(state, value.target.value))}/></Field><label><input type="checkbox" aria-label={text.reviewed} checked={state.reviewed} disabled={disabled || !state.tableName} onChange={value => event(() => controller.review(state, value.target.checked))}/>{text.reviewed}</label>

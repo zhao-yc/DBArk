@@ -36,7 +36,7 @@ function source(input: unknown): ImportFileSource { const value = object(input, 
 function options(value: Record<string, unknown>): ImportFileReadOptions {
   if (value.format === 'xml') {
     if (value.encoding !== 'utf8' || Object.hasOwn(value, 'csvDelimiter') || Object.hasOwn(value, 'csvHasHeader')) return invalid();
-    const xmlOptions = xmlImportOptionsSchema.parse(object(value.xmlOptions, 3, ['rowTag', 'attributes', 'binaryBase64']));
+    const xmlOptions = xmlImportOptionsSchema.parse(object(value.xmlOptions, 4, ['rowTag', 'attributes', 'binaryBase64'], ['documentResult']));
     return { format: 'xml', encoding: 'utf8', xmlOptions };
   }
   if (Object.hasOwn(value, 'xmlOptions')) return invalid();

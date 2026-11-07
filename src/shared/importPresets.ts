@@ -94,7 +94,7 @@ function configuration(input: unknown): ImportPresetConfiguration {
     output.csvHasHeader = source.csvHasHeader;
   }
   if (Object.hasOwn(source, 'xmlOptions')) {
-    const fields = record(source.xmlOptions, ['rowTag', 'attributes', 'binaryBase64']);
+    const fields = record(source.xmlOptions, ['rowTag', 'attributes', 'binaryBase64', 'documentResult'], ['rowTag', 'attributes', 'binaryBase64']);
     output.xmlOptions = xmlImportOptionsSchema.parse(fields);
   }
   if (!validXmlImport(output)) return invalid();

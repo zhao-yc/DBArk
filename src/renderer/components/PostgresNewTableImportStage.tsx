@@ -50,7 +50,7 @@ export function PostgresNewTableImportStage({ connectionId, database, table, see
   }, [target, seed, isCurrent]);
 
   if (ready) return <PostgresTableImportDialog target={target} page={ready.page} isCurrent={isCurrent}
-    initialSource={{ file: ready.file, mapping: seed.mapping, format: seed.format }} onClose={onClose} onOutcome={(message, committed) => {
+    initialSource={{ file: ready.file, mapping: seed.mapping, format: seed.format, xmlOptions: seed.xmlOptions }} onClose={onClose} onOutcome={(message, committed) => {
       useWorkspace.getState().notify(message, !committed);
       onClose();
     }}/>;

@@ -5,6 +5,7 @@ import { basename } from 'node:path';
 import { postgresTableImportZh as text } from '../../src/renderer/locales/postgresTableImport.zh-CN';
 import { xmlImportZh } from '../../src/shared/xmlImport';
 import { navigationMenuItem } from './navigation-menu';
+import { positionalXmlFixture } from './positional-xml-fixture';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_POSTGRES_WORKSPACE_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
@@ -33,7 +34,11 @@ test('PostgreSQL 表导入 XML 支持字段映射、精确数据及源文件变�
     await expect(tab.getByRole('grid')).toBeVisible();
     await mkdir(info.outputDir, {recursive: true});
     const path = info.outputPath('混合记录.xml'), changed = info.outputPath('变化记录.xml');
-    await writeFile(path, '<data><entry id="1" raw="AP8="><amount>9007199254740993.123456789012</amount><note/></entry><entry id="9223372036854775807" raw=""><amount>2.500000000000</amount><ignore>跳过</ignore></entry><entry id="3"><note>中文&#9;&#10;&#13; &quot;\\.</note></entry></data>');
+    await writeFile(path, positionalXmlFixture(['id', 'raw', 'amount', 'note', 'note'], [
+      ['1', {type: 'binary', base64: 'AP8='}, '9007199254740993.123456789012', '', '跳过'],
+      ['9223372036854775807', {type: 'binary', base64: ''}, '2.500000000000', null, '跳过'],
+      ['3', null, null, '中文\t\n\r "\\.', '跳过'],
+    ]));
     const before = '<data><entry id="4"><note>原样</note></entry></data>';
     await writeFile(changed, before);
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
@@ -48,16 +53,25 @@ test('PostgreSQL 表导入 XML 支持字段映射、精确数据及源文件变�
       Object.assign(globalThis, {restorePgXmlPicker: () => { dialog.showOpenDialog = original; return count; }});
     }, [path, changed]);
     const modal = page.getByRole('dialog', {name: text.title, exact: true});
-    const choose = async (file: string) => {
+    const choose = async (file: string, document = false) => {
       await (await navigationMenuItem(tab, {name: text.open, exact: true})).click();
       await modal.getByLabel(text.format, {exact: true}).selectOption('xml');
-      await modal.getByLabel(xmlImportZh.rowTag, {exact: true}).fill('entry');
-      await modal.getByRole('checkbox', {name: xmlImportZh.binary, exact: true}).check();
+      if (document) {
+        await modal.getByLabel(xmlImportZh.layout, {exact: true}).selectOption('document');
+        await modal.getByLabel(xmlImportZh.result, {exact: true}).fill('2');
+      } else {
+        await modal.getByLabel(xmlImportZh.rowTag, {exact: true}).fill('entry');
+        await modal.getByRole('checkbox', {name: xmlImportZh.binary, exact: true}).check();
+      }
       await modal.getByRole('button', {name: text.chooseXml, exact: true}).click();
       await expect(modal).toContainText(basename(file));
     };
     const apply = () => modal.getByRole('button', {name: text.confirm, exact: true}).click();
-    await choose(path);
+    await choose(path, true);
+    await expect(modal).toContainText(xmlImportZh.documentRecords(3));
+    await expect(modal.getByRole('columnheader', {name: 'note [第4列]', exact: true})).toBeVisible();
+    await expect(modal.getByRole('columnheader', {name: 'note [第5列]', exact: true})).toBeVisible();
+    await modal.getByLabel(text.target(3), {exact: true}).selectOption({label: 'note'});
     await expect(modal.getByLabel(text.target(4), {exact: true})).toHaveValue('');
     await expect(modal.getByRole('table', {name: text.sample, exact: true})).toContainText('9223372036854775807');
     expect(await snapshot()).toEqual([]);
