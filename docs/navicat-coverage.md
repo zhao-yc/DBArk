@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 查询页支持结果在下方、右侧和仅显示结果，分隔条支持拖动及键盘，位置与尺寸按标签保存；窄窗临时回退，原草稿与结果保持。W02、R01 仍为部分覆盖。[PostgreSQL 查询布局](development/postgres-query-layout-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 查询编辑器可按名称前缀插入用户片段及方言内置模板，采用执行扫描器和原会话字符串模式缓存，保留普通文本及单次撤销。Q06、R01 仍为部分覆盖。[PostgreSQL 片段名称补全](development/postgres-snippet-completion-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 查询页可使用本地 SQL 片段库，并从原生菜单或右键将选区保存为片段。内置模板按 PostgreSQL 引号规则显示，插入保留原选区及单次撤销。Q06、R01 仍为部分覆盖。[PostgreSQL 片段库](development/postgres-snippets-20261107.md)

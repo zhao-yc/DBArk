@@ -11,6 +11,7 @@ import { formatText, zh } from '../../src/renderer/locales/zh-CN';
 import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { postgresIdentifier } from '../../src/shared/postgresSql';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
+import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -59,7 +60,8 @@ async function inspectModel() {
     const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
     if (!instance?.getModel()) throw Error('缺少当前 PostgreSQL 编辑器');
     const model = instance.getModel()!, selection = instance.getSelection();
-    return {sql: model.getValue(), position: instance.getPosition(), selected: selection ? model.getValueInRange(selection) : ''};
+    return {sql: model.getValue(), position: instance.getPosition(), selected: selection ? model.getValueInRange(selection) : '',
+      identity: [instance.getId(), model.id]};
   });
 }
 
@@ -72,6 +74,142 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+async function resizeQueryWindow(width: number, height: number) {
+  await desktop.evaluate(({BrowserWindow}, size) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    window.setMinimumSize(720, 320);
+    window.setContentSize(size.width, size.height);
+  }, {width, height});
+}
+
+test('PostgreSQL 查询布局支持原生拖动、键盘和窄窗回退并保留草稿', async ({}, info) => {
+  const original = "SELECT 1;\nSELECT '原草稿😀';";
+  await prepare({id: '', name: '离线 PostgreSQL 布局', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, original);
+  await resizeQueryWindow(1280, 820);
+  const placement = tab().getByRole('combobox', {name: queryLayoutZh.placement, exact: true});
+  const heightBar = tab().getByRole('separator', {name: queryLayoutZh.separator, exact: true});
+  const widthBar = tab().getByRole('separator', {name: queryLayoutZh.widthSeparator, exact: true});
+  const height = () => tab().locator('.postgres-editor').evaluate(node => Math.round(node.getBoundingClientRect().height));
+  const width = () => tab().locator('.query-layout-editor').evaluate(node => Math.round(node.getBoundingClientRect().width));
+  const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  const saved = async () => (await settings()).tabs.find(item => item.id === 'pg-original');
+  await expect(placement).toHaveValue('below');
+  await expect.poll(height).toBe(300);
+  const maximum = Number(await heightBar.getAttribute('aria-valuemax'));
+  expect(maximum).toBeGreaterThanOrEqual(320);
+  const draggedHeight = Math.min(360, maximum - 10), savedHeight = draggedHeight + 10;
+  const identity = (await inspectModel()).identity;
+  await modelSelection(2, original.split('\n')[1].length + 1);
+  await page.keyboard.press('Space');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(original + ' ');
+  const dragHeight = async (delta: number) => {
+    const box = await heightBar.boundingBox(); if (!box) throw Error('缺少真实高度分隔条');
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x, y + delta, {steps: 4});
+  };
+  await dragHeight(50);
+  await expect.poll(height).toBe(Math.min(350, maximum));
+  expect((await saved())?.queryEditorHeight).toBeUndefined();
+  await page.keyboard.press('Escape'); await page.mouse.up();
+  await expect.poll(height).toBe(300);
+  expect((await saved())?.queryEditorHeight).toBeUndefined();
+  await dragHeight(draggedHeight - 300); await page.mouse.up();
+  await expect.poll(async () => (await saved())?.queryEditorHeight).toBe(draggedHeight);
+  await heightBar.focus(); await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => (await saved())?.queryEditorHeight).toBe(savedHeight);
+  await placement.selectOption('beside');
+  await expect(tab()).toHaveAttribute('data-result-layout', 'beside');
+  await expect.poll(width).toBe(420);
+  await widthBar.focus(); await page.keyboard.press('Shift+ArrowRight');
+  await expect.poll(async () => (await saved())?.queryEditorWidth).toBe(470);
+  await expect.poll(width).toBe(470);
+  await page.screenshot({path: info.outputPath('PostgreSQL查询左右布局.png')});
+
+  await resizeQueryWindow(790, 500);
+  await expect(tab()).toHaveAttribute('data-result-layout', 'below');
+  await expect(tab().getByText(queryLayoutZh.besideNarrow, {exact: true})).toBeVisible();
+  await expect.poll(height).toBeLessThan(savedHeight);
+  expect(await saved()).toMatchObject({queryResultPlacement: 'beside', queryEditorWidth: 470, queryEditorHeight: savedHeight});
+  await resizeQueryWindow(1280, 820);
+  await expect(tab()).toHaveAttribute('data-result-layout', 'beside');
+  await expect.poll(width).toBe(470);
+  await placement.selectOption('results');
+  await expect(editor()).toBeHidden();
+  await command('find');
+  await expect(editor().locator('.find-widget')).toBeVisible();
+  await expect(placement).toHaveValue('beside');
+  await page.keyboard.press('Escape');
+  await widthBar.focus(); await page.keyboard.press('ArrowLeft');
+  await expect.poll(async () => (await saved())?.queryEditorWidth).toBe(460);
+  expect((await inspectModel()).identity).toEqual(identity);
+  expect((await inspectModel()).sql).toBe(original + ' ');
+  await editor().getByRole('textbox').focus(); await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(original);
+  await expect.poll(async () => (await saved())?.sql).toBe(original);
+  await placement.selectOption('results');
+  await page.reload();
+  await expect(placement).toHaveValue('beside');
+  await expect.poll(width).toBe(460);
+  await expect.poll(async () => (await inspectModel()).sql).toBe(original);
+  expect((await settings()).tabs.find(item => item.id === 'pg-other')).toMatchObject({sql: '-- 保留另一草稿'});
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 查询布局切换保留原结果勾选与活动事务', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query("CREATE TABLE layout_source(id bigint PRIMARY KEY,note text); INSERT INTO layout_source VALUES(9007199254740993,'服务器原值')");
+    const sql = "UPDATE layout_source SET note='布局前未提交' RETURNING id,note,pg_backend_pid() AS session_id;";
+    await prepare({id: '', name: '隔离 PostgreSQL 查询布局', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+    await resizeQueryWindow(1280, 820);
+    const identity = (await inspectModel()).identity;
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await expect(tab().getByRole('button', {name: postgresZh.rollback, exact: true})).toBeEnabled();
+    await tab().getByRole('button', {name: postgresZh.execute, exact: true}).click();
+    const grid = tab().locator('.postgres-results .rdg'), row = grid.locator('.rdg-row').filter({hasText: '9007199254740993'});
+    await expect.poll(() => grid.innerText()).toContain('布局前未提交');
+    await row.getByRole('checkbox').check();
+    const result = await grid.innerText(), history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+    const originalSessions = await sessions();
+    expect(originalSessions).toHaveLength(1); expect(originalSessions[0].state).toBe('idle in transaction');
+    const placement = tab().getByRole('combobox', {name: queryLayoutZh.placement, exact: true});
+    for (const layout of ['beside', 'results', 'below'] as const) {
+      await placement.selectOption(layout);
+      await expect(tab()).toHaveAttribute('data-result-layout', layout);
+      await expect.poll(() => grid.innerText()).toBe(result);
+      await expect(row.getByRole('checkbox')).toBeChecked();
+      if (layout === 'beside') await page.screenshot({path: info.outputPath('PostgreSQL查询事务左右布局.png')});
+    }
+    expect((await inspectModel()).identity).toEqual(identity);
+    expect((await inspectModel()).sql).toBe(sql);
+    expect(await sessions()).toEqual(originalSessions);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history);
+    expect((await observer.query('SELECT note FROM layout_source')).rows).toEqual([{note: '服务器原值'}]);
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click();
+    await expect.poll(sessions).toEqual([{...originalSessions[0], state: 'idle'}]);
+    expect((await observer.query('SELECT note FROM layout_source')).rows).toEqual([{note: '服务器原值'}]);
+    await replaceDraft('SELECT 9007199254740993 AS id;');
+    await tab().getByRole('button', {name: postgresZh.explain, exact: true}).click();
+    const plan = tab().locator('.postgres-results .explain-view');
+    await expect(plan).toContainText('Result');
+    await placement.selectOption('results');
+    await expect(plan).toBeVisible();
+    await expect(plan).toContainText('Result');
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 async function triggerSuggestions() {
   await editor().evaluate(element => {

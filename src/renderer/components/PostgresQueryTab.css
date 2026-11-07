@@ -2,7 +2,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .postgres-toolbar {
   display: flex;
@@ -16,24 +17,9 @@
   min-height: 120px;
   flex-shrink: 0;
 }
-/* 展示计划时保留编辑器上下文，让树和指标同时有足够的可视空间。 */
-.postgres-query:has(> .postgres-results > :is(.explain-view, .query-analyze-view)) > .postgres-editor {
-  height: clamp(120px, 19vh, 210px);
-}
-/* 结果操作栏和网格复用同一滚动区，小窗口也为表头和数据行保留空间。 */
-.postgres-query:has(> .postgres-results > .query-result-with-details .query-result-copy-region) > .postgres-editor {
-  height: clamp(120px, 26vh, 240px);
-}
-/* 展开详情时给网格和记录正文留出更多高度。 */
-.postgres-query:has(> .postgres-results > .query-result-with-details > .query-row-details) > .postgres-editor {
-  height: clamp(120px, 14vh, 148px);
-}
+/* 下方布局共享可测量的包装层，结果工具条和内部复制栏各自计费，窄窗口仅压缩显示。 */
 .postgres-results {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  display: contents;
 }
 .postgres-result-actions {
   display: flex;
@@ -46,11 +32,14 @@
 .postgres-result-actions > select {
   max-width: 100%;
 }
+.postgres-layout-actions > select {
+  width: auto;
+}
 /* 独立筛选窗口可展开更多条件，便于同时审阅候选列表和 NULL 子条件。 */
 .postgres-query .modal-content .query-result-filter-conditions {
   max-height: min(48vh, 420px);
 }
-.postgres-results > .query-result-with-details {
+.postgres-results > .result-body > .query-result-with-details {
   flex: 1;
   height: auto;
   min-height: 0;

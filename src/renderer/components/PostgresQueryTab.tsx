@@ -1,5 +1,6 @@
 import { appModalSelector, isAppModalNode } from '../modalSelectors';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
 import { format } from 'sql-formatter';
@@ -75,6 +76,13 @@ import { StatementNavigationPanel } from './StatementNavigationPanel';
 import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
 import { statementNavigationZh as navigationText } from '../locales/statementNavigation.zh-CN';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
+import { QueryLayoutSplitter, queryEditorVisualHeight } from './QueryLayoutSplitter';
+import { beginWorkspaceQueryLayout, queryLayoutActiveTab, queryLayoutTarget } from '../queryLayoutWorkspace';
+import { useQueryLayoutMaximum } from '../useQueryLayoutMaximum';
+import { queryLayoutLimits, queryLayoutWidthLimits, queryResultBesideMinimum, queryEditorWidthMaximum,
+  readQueryEditorHeight, readQueryEditorWidth, readQueryResultPlacement } from '../../shared/queryLayout';
+import { queryLayoutZh } from '../locales/queryLayout.zh-CN';
+import '../queryLayout.css';
 import './PostgresQueryTab.css';
 import '../queryPins.css';
 import '../queryResultSort.css';
@@ -144,6 +152,21 @@ export function PostgresQueryTab({
     closeRef = useRef(closeRequest);
   closeRef.current = closeRequest;
   const [editorInstance, setEditorInstance] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const layoutRoot = useRef<HTMLDivElement>(null);
+  const [layoutWidth, setLayoutWidth] = useState(0), [resultsOnly, setResultsOnly] = useState(false);
+  const [editorPreview, setEditorPreview] = useState<number | null>(null), [editorWidthPreview, setEditorWidthPreview] = useState<number | null>(null);
+  const preferredPlacement = readQueryResultPlacement(tab.queryResultPlacement);
+  const besideAvailable = layoutWidth >= queryResultBesideMinimum;
+  const resultLayout = resultsOnly ? 'results' : preferredPlacement === 'beside' && besideAvailable ? 'beside' : 'below';
+  const layoutMaximum = useQueryLayoutMaximum(layoutRoot, queryLayoutLimits.maxEditorHeight, setLayoutWidth);
+  const widthMaximum = queryEditorWidthMaximum(layoutWidth);
+  const preferredEditorHeight = readQueryEditorHeight(tab.queryEditorHeight), preferredEditorWidth = readQueryEditorWidth(tab.queryEditorWidth);
+  const editorHeight = queryEditorVisualHeight(editorPreview ?? preferredEditorHeight, layoutMaximum);
+  const editorWidth = queryEditorVisualHeight(editorWidthPreview ?? preferredEditorWidth, widthMaximum);
+  const layoutActiveTab = queryLayoutActiveTab(workspace.settings);
+  const layoutScope = JSON.stringify([queryLayoutTarget(tab, version), layoutActiveTab, !!closeRequest]);
+  const layoutEditorId = useId();
+  useLayoutEffect(() => { setEditorPreview(null); setEditorWidthPreview(null); }, [resultLayout]);
   const [editorSelection, setEditorSelection] = useState({ explicit: false, single: false });
   const updateEditorSelection = useCallback((explicit: boolean, single: boolean) => {
     setEditorSelection(previous => previous.explicit === explicit && previous.single === single ? previous : { explicit, single });
@@ -1277,7 +1300,22 @@ export function PostgresQueryTab({
     const model = instance?.getModel();
     if (!instance || !model || model.isDisposed() || !available() || files.isBusy() || instance.getRawOptions().readOnly) return;
     const draft = currentTab()?.sql ?? '';
-    if (model.getValue() === draft.replace(/\r\n|\r|\n/g, model.getEOL())) return { instance, model };
+    if (model.getValue() === draft.replace(/\r\n|\r|\n/g, model.getEOL())) {
+      // 显式编辑命令先恢复原编辑区，不卸载模型或让定位动作落在隐藏控件。
+      if (resultsOnly) flushSync(() => setResultsOnly(false));
+      return { instance, model };
+    }
+  }
+  /** 布局只通过既有租约合并当前标签字段，不持有或回写旧SQL快照。 */
+  function beginEditorLayout(cancel: () => void, dimension: 'height' | 'width' = 'height') {
+    return beginWorkspaceQueryLayout(tab, version, () => alive.current && !closeRef.current && !phase.current && !insertionLocked.current, cancel, dimension);
+  }
+  function changeResultLayout(value: string) {
+    if (!available()) return;
+    if (value === 'results') { setResultsOnly(true); return; }
+    if (value !== 'below' && value !== 'beside') return;
+    setResultsOnly(false);
+    if (preferredPlacement !== value) useWorkspace.getState().updateTab(tab.id, {queryResultPlacement: value});
   }
   async function editorAction(actionId: string, explicitSelection = false) {
     const target = commandEditor();
@@ -1449,7 +1487,7 @@ export function PostgresQueryTab({
     return () => { active = false; action.dispose(); };
   }, [editorInstance, editable, workspace.settings.activeTabId, tab.id, tab.sql, profile, version]);
   return (
-    <div className="workspace-tab query-tab postgres-query">
+    <div ref={layoutRoot} className="workspace-tab query-tab postgres-query" data-result-layout={resultLayout}>
       <div className="context-bar">
         <strong>{profile?.name}</strong>
         <span>PostgreSQL / {scope.database}</span>
@@ -1504,126 +1542,146 @@ export function PostgresQueryTab({
           </div>
         )}
       />} />
-      <SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={editorInstance} />
-      <div className="postgres-editor query-editor-region">
-        <SqlEditor
-          value={tab.sql ?? ''}
-          dialect="postgresql"
-          snippetCompletion
-          postgresStandardStrings={session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined}
-          postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
-            connectionVersion: scope.version, sessionId: session.current?.id }}
-          onCompletionStatus={setCompletionStatus}
-          readOnly={busy || fileBusy || snapshotBusy || !!analyze || !!exportView || !!filterDraft || !!columnDraft || !!statisticsDraft ||
-            !!presetDraft || !!pinSql || !!comparisonDraft}
-          onReady={(instance) => {
-            editor.current = instance;
-            setEditorInstance(instance);
-          }}
-          onChange={(sql) => {
-            if (analyzeRef.current) clearAnalyze();
-            if (!phase.current) useWorkspace.getState().updateTab(tab.id, { sql });
-          }}
-          onExecute={() => run()}
-          onExecuteCurrent={() => run('current')}
-          onSelectCurrent={() => navigation.open('select')}
-          onFormat={formatQuery}
-          onToggleComment={() => editorAction('editor.action.commentLine')}
-          onSelectionState={updateEditorSelection}
-        />
-        {navigation.panel && <StatementNavigationPanel {...navigation.panel} />}
-      </div>
       <ErrorBox message={error} />
       {!busy && completionStatus !== 'idle' && <p className="muted small" role="status">{completionStatus === 'limited'
         ? text.completionLimited : completionStatus === 'partial' ? text.completionPartial
           : completionStatus === 'sessionUnknown' ? text.completionTransaction : text.completionUnavailable}</p>}
       {busy && <Spinner text={phase.current?.sent ? text.running : text.connecting} />}
-      <div className="postgres-results">
-        {!!pinState.items.length && <div className="pinned-results" role="group" aria-label={zh.query.pinSection} title={zh.query.pinSessionOnly}>
-          <span>{zh.query.pinSection}</span>
-          <button className={`current-results ${pin ? '' : 'selected'}`} aria-pressed={!pin} disabled={locked}
-            onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>
-          {pinState.items.map(item => <div key={item.id} className={`pinned-result ${pin === item ? 'selected' : ''}`}>
-            <button aria-pressed={pin === item} disabled={locked} onClick={() => selectPinnedResult(item)}>{item.label}</button>
-            <button aria-label={formatText(zh.query.releasePin, item.label)} title={formatText(zh.query.releasePin, item.label)}
-              disabled={locked} onClick={() => releasePinnedResult(item)}>×</button>
-          </div>)}
-          <button disabled={locked || pinState.items.length < 2} title={pinState.items.length < 2 ? comparisonText.requireTwo : comparisonText.notice}
-            onClick={openResultComparison}>{comparisonText.open}</button>
-        </div>}
-        {(!pin && results.length > 1 || dataResult) && (
-          <div className="postgres-result-actions">
-            {!pin && results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
-              onChange={event => {
-                if (!pinNavigationCurrent()) return;
-                resetResultView();
-                setSelected(Number(event.target.value));
-              }}>
-              {results.map((r, i) => <option key={i} value={i}>{text.result(i, r.postgresCommand ?? '', r.rows.length)}</option>)}
-            </select>}
-            {dataResult && <>
-              {pin ? <button disabled={locked || !pin.result.statement.trim()} onClick={openPinnedSql}>{zh.query.pinnedStatement}</button> :
-                <button disabled={locked || !binding} title={zh.query.pinHint} onClick={pinResult}>{zh.query.pinResult}</button>}
-              <button disabled={locked || !binding} onClick={openResultColumns}>{columnText.open}</button>
-              <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
-                title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
-              <button disabled={locked || !filterBinding || !filterView || !sortView}
-                onClick={() => openResultFilter()}>{filterText.open}</button>
-              {!!filterView?.rules.length && <>
-                <button disabled={locked} onClick={() => applyResultFilter({ mode: 'AND', children: [] })}>{filterText.clear}</button>
-                <span role="status">{filterText.counts(resultSource!.rows.length, dataResult.rows.length)}</span>
-              </>}
-              <button disabled={locked || !sortView || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
-                onClick={() => {
-                  if (!sortBinding || !sortView || !sortCurrent() || document.querySelector(appModalSelector)) return;
-                  const draft = { binding: sortBinding, view: sortView };
-                  sortDraftRef.current = draft;
-                  setSortDraft(draft);
-                }}>{sortText.panelTitle}</button>
-              {!!sortView?.rules.length && <button disabled={locked} onClick={() => applyResultSort([])}>{sortText.clear}</button>}
-              <button disabled={locked || !binding || !resultHistory.target(historyBinding, -1)}
-                title={resultHistory.limited ? historyText.limited : historyText.postgresHint}
-                onClick={() => travelResultHistory(-1)}>{historyText.undo}</button>
-              <button disabled={locked || !binding || !resultHistory.target(historyBinding, 1)} title={historyText.postgresHint}
-                onClick={() => travelResultHistory(1)}>{historyText.redo}</button>
-              <button disabled={locked || !binding || !historyBinding} onClick={openResultPresets}>{presetsText.open}</button>
-              <button disabled={locked || !binding} onClick={() => openResultExport(false)}>{zh.resultExport.title}</button>
-              <button disabled={locked || !selectedCount} onClick={() => openResultExport(true)}>{zh.resultExport.selectedTitle}</button>
-              {!pin && <button disabled={locked || !binding || !selectedCount || selectedCount > postgresTableLimits.changes ||
-                binding.visibleColumns.length > postgresTableLimits.fields} title={transferText.limits} onClick={captureResultTransfer}>
-                {transferText.queryCapture}</button>}
-            </>}
+      <div className="postgres-result-actions postgres-layout-actions">
+        <select aria-label={queryLayoutZh.placement} value={resultsOnly ? 'results' : preferredPlacement}
+          disabled={layoutActiveTab !== tab.id || !profile || locked} onChange={event => changeResultLayout(event.target.value)}>
+          <option value="below">{queryLayoutZh.below}</option><option value="beside">{queryLayoutZh.beside}</option>
+          <option value="results">{queryLayoutZh.results}</option>
+        </select>
+        {!resultsOnly && preferredPlacement === 'beside' && !besideAvailable && <span className="muted small">{queryLayoutZh.besideNarrow}</span>}
+      </div>
+      <div className="query-layout-panes">
+        <div className="query-layout-editor" style={resultLayout === 'beside' ? {width: editorWidth} : undefined}>
+          <SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={editorInstance} />
+          <div id={layoutEditorId} className="postgres-editor sql-editor-wrap query-editor-region" style={resultLayout === 'below' ? {height: editorHeight} : undefined}>
+            <SqlEditor
+              value={tab.sql ?? ''}
+              dialect="postgresql"
+              snippetCompletion
+              postgresStandardStrings={session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined}
+              postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
+                connectionVersion: scope.version, sessionId: session.current?.id }}
+              onCompletionStatus={setCompletionStatus}
+              readOnly={busy || fileBusy || snapshotBusy || !!analyze || !!exportView || !!filterDraft || !!columnDraft || !!statisticsDraft ||
+                !!presetDraft || !!pinSql || !!comparisonDraft}
+              onReady={(instance) => {
+                editor.current = instance;
+                setEditorInstance(instance);
+              }}
+              onChange={(sql) => {
+                if (analyzeRef.current) clearAnalyze();
+                if (!phase.current) useWorkspace.getState().updateTab(tab.id, { sql });
+              }}
+              onExecute={() => run()}
+              onExecuteCurrent={() => run('current')}
+              onSelectCurrent={() => navigation.open('select')}
+              onFormat={formatQuery}
+              onToggleComment={() => editorAction('editor.action.commentLine')}
+              onSelectionState={updateEditorSelection}
+            />
+            {navigation.panel && <StatementNavigationPanel {...navigation.panel} />}
           </div>
-        )}
-        {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
-          !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
-          result.columns.length ? (
-            <div className="query-result-with-details">
-              <div className="query-result-grid">
-                <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
-                  frozenKeys={frozenKeys} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
-                  isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
-                  onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
-                  filterDialect="postgresql"
-                  onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
-                  onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
-                  onStatistics={binding ? openResultStatistics : undefined}
-                  onHistoryTravel={binding && historyBinding ? travelResultHistory : undefined}
-                  sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons}
-                  onSortChange={sortView ? rules => applyResultSort(rules) : undefined} />
-              </div>
-              {currentRowDetail && <QueryRowDetailsPanel controller={rowDetails} view={currentRowDetail}
-                isCurrent={() => rowDetailCurrent(currentRowDetail.binding)} onMove={moveRowDetail} onClose={closeRowDetail} />}
+        </div>
+        {resultLayout === 'below' && <QueryLayoutSplitter value={preferredEditorHeight} min={queryLayoutLimits.minEditorHeight}
+          max={layoutMaximum} defaultValue={queryLayoutLimits.defaultEditorHeight} controls={layoutEditorId} scope={layoutScope}
+          disabled={layoutActiveTab !== tab.id || !profile || locked} begin={beginEditorLayout} onPreview={setEditorPreview} />}
+        {resultLayout === 'beside' && <QueryLayoutSplitter dimension="width" value={preferredEditorWidth} min={queryLayoutWidthLimits.minEditorWidth}
+          max={widthMaximum} defaultValue={queryLayoutWidthLimits.defaultEditorWidth} controls={layoutEditorId} scope={layoutScope}
+          disabled={layoutActiveTab !== tab.id || !profile || locked} begin={cancel => beginEditorLayout(cancel, 'width')} onPreview={setEditorWidthPreview} />}
+        <div className="postgres-results query-layout-results">
+          {!!pinState.items.length && <div className="pinned-results" role="group" aria-label={zh.query.pinSection} title={zh.query.pinSessionOnly}>
+            <span>{zh.query.pinSection}</span>
+            <button className={`current-results ${pin ? '' : 'selected'}`} aria-pressed={!pin} disabled={locked}
+              onClick={() => selectPinnedResult()}>{zh.query.currentResults}</button>
+            {pinState.items.map(item => <div key={item.id} className={`pinned-result ${pin === item ? 'selected' : ''}`}>
+              <button aria-pressed={pin === item} disabled={locked} onClick={() => selectPinnedResult(item)}>{item.label}</button>
+              <button aria-label={formatText(zh.query.releasePin, item.label)} title={formatText(zh.query.releasePin, item.label)}
+                disabled={locked} onClick={() => releasePinnedResult(item)}>×</button>
+            </div>)}
+            <button disabled={locked || pinState.items.length < 2} title={pinState.items.length < 2 ? comparisonText.requireTwo : comparisonText.notice}
+              onClick={openResultComparison}>{comparisonText.open}</button>
+          </div>}
+          {(!pin && results.length > 1 || dataResult) && (
+            <div className="postgres-result-actions">
+              {!pin && results.length > 1 && <select aria-label="PostgreSQL结果集" value={selected} disabled={locked}
+                onChange={event => {
+                  if (!pinNavigationCurrent()) return;
+                  resetResultView();
+                  setSelected(Number(event.target.value));
+                }}>
+                {results.map((r, i) => <option key={i} value={i}>{text.result(i, r.postgresCommand ?? '', r.rows.length)}</option>)}
+              </select>}
+              {dataResult && <>
+                {pin ? <button disabled={locked || !pin.result.statement.trim()} onClick={openPinnedSql}>{zh.query.pinnedStatement}</button> :
+                  <button disabled={locked || !binding} title={zh.query.pinHint} onClick={pinResult}>{zh.query.pinResult}</button>}
+                <button disabled={locked || !binding} onClick={openResultColumns}>{columnText.open}</button>
+                <button disabled={locked || !detailBinding || activeDetailRow?.binding !== detailBinding}
+                  title={detailText.choose} onClick={openRowDetail}>{detailText.open}</button>
+                <button disabled={locked || !filterBinding || !filterView || !sortView}
+                  onClick={() => openResultFilter()}>{filterText.open}</button>
+                {!!filterView?.rules.length && <>
+                  <button disabled={locked} onClick={() => applyResultFilter({ mode: 'AND', children: [] })}>{filterText.clear}</button>
+                  <span role="status">{filterText.counts(resultSource!.rows.length, dataResult.rows.length)}</span>
+                </>}
+                <button disabled={locked || !sortView || !sortBinding?.visible.some(column => !sortBinding.reasons.get(column.key))}
+                  onClick={() => {
+                    if (!sortBinding || !sortView || !sortCurrent() || document.querySelector(appModalSelector)) return;
+                    const draft = { binding: sortBinding, view: sortView };
+                    sortDraftRef.current = draft;
+                    setSortDraft(draft);
+                  }}>{sortText.panelTitle}</button>
+                {!!sortView?.rules.length && <button disabled={locked} onClick={() => applyResultSort([])}>{sortText.clear}</button>}
+                <button disabled={locked || !binding || !resultHistory.target(historyBinding, -1)}
+                  title={resultHistory.limited ? historyText.limited : historyText.postgresHint}
+                  onClick={() => travelResultHistory(-1)}>{historyText.undo}</button>
+                <button disabled={locked || !binding || !resultHistory.target(historyBinding, 1)} title={historyText.postgresHint}
+                  onClick={() => travelResultHistory(1)}>{historyText.redo}</button>
+                <button disabled={locked || !binding || !historyBinding} onClick={openResultPresets}>{presetsText.open}</button>
+                <button disabled={locked || !binding} onClick={() => openResultExport(false)}>{zh.resultExport.title}</button>
+                <button disabled={locked || !selectedCount} onClick={() => openResultExport(true)}>{zh.resultExport.selectedTitle}</button>
+                {!pin && <button disabled={locked || !binding || !selectedCount || selectedCount > postgresTableLimits.changes ||
+                  binding.visibleColumns.length > postgresTableLimits.fields} title={transferText.limits} onClick={captureResultTransfer}>
+                  {transferText.queryCapture}</button>}
+              </>}
             </div>
-          ) : (
-            <div className="info-strip">
-              {text.complete(result.postgresCommand ?? '', result.affectedRows)}
-            </div>
-          )
-        ) : (
-          <Empty title={text.empty} />
-        )}
-        {result?.truncated && <p className="warning-text">{text.truncated}</p>}
+          )}
+          <div className="result-body">
+            {!pin && outcome?.analysis ? <QueryAnalyzeView plan={outcome.analysis} outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> :
+              !pin && outcome?.explain ? <ExplainPlanView outcome={outcome} busy={locked} fileActions onFileBusyChange={setFileBusy} /> : result ? (
+              result.columns.length ? (
+                <div className="query-result-with-details">
+                  <div className="query-result-grid">
+                    <ResultsGrid columns={visibleColumns ?? result.columns} rows={displayResult!.rows} rowJump selectionScope={binding}
+                      frozenKeys={frozenKeys} columnWidths={layout?.widths} rowHeight={layout?.rowHeight} onColumnWidthsChange={resizeResultColumns}
+                      isCurrent={binding ? resultCurrent : undefined} onSelectionChange={binding ? acceptResultSelection : undefined}
+                      onActiveCellChange={cell => selectDetailRow(cell?.column ? cell.index : undefined)}
+                      filterDialect="postgresql"
+                      onFilterCell={filterBinding && sortView && binding ? openCellFilter : undefined}
+                      onFilterSelected={filterBinding && sortView && binding ? openSelectedFilter : undefined}
+                      onStatistics={binding ? openResultStatistics : undefined}
+                      onHistoryTravel={binding && historyBinding ? travelResultHistory : undefined}
+                      sort={sortView ? [...sortView.rules] : undefined} sortReasons={sortBinding?.reasons}
+                      onSortChange={sortView ? rules => applyResultSort(rules) : undefined} />
+                  </div>
+                  {currentRowDetail && <QueryRowDetailsPanel controller={rowDetails} view={currentRowDetail}
+                    isCurrent={() => rowDetailCurrent(currentRowDetail.binding)} onMove={moveRowDetail} onClose={closeRowDetail} />}
+                </div>
+              ) : (
+                <div className="info-strip">
+                  {text.complete(result.postgresCommand ?? '', result.affectedRows)}
+                </div>
+              )
+            ) : (
+              <Empty title={text.empty} />
+            )}
+          </div>
+          {result?.truncated && <p className="warning-text">{text.truncated}</p>}
+        </div>
       </div>
       {pinSql && <Modal title={zh.query.pinSource} wide onClose={() => closePinnedSql(pinSql)}>
         <div className="modal-content"><p>{zh.query.resultSqlHint}</p>

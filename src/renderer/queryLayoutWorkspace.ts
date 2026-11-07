@@ -1,6 +1,7 @@
 import { queryLayoutLimits, queryLayoutWidthLimits, readQueryEditorHeight, readQueryEditorWidth, readQueryResultPlacement } from '../shared/queryLayout';
 import { useWorkspace, type WorkspaceTab } from './store';
 import { beginQueryLayoutLease } from './queryLayoutLease';
+import { appModalSelector } from './modalSelectors';
 
 /** 与App的活动标签回退规则相同；缺旧activeTabId时仍允许实际显示的首个标签。 */
 export function queryLayoutActiveTab(settings: { activeTabId?: string; tabs: { id: string }[] }): string | undefined {
@@ -21,7 +22,7 @@ export function beginWorkspaceQueryLayout(tab: WorkspaceTab, connectionVersion: 
       const state = useWorkspace.getState(), current = state.settings.tabs.find(item => item.id === tab.id);
       const key = current ? queryLayoutTarget(current, state.connectionVersions[current.connectionId] ?? 0) : '';
       const value = horizontal ? readQueryEditorWidth(current?.queryEditorWidth) : readQueryEditorHeight(current?.queryEditorHeight);
-      return { state, key, value, available: alive() && !!current && current.kind === 'query' && key === expected && readQueryResultPlacement(current.queryResultPlacement) === placement && queryLayoutActiveTab(state.settings) === current.id && state.connections.some(profile => profile.id === current.connectionId) && !document.querySelector('[role="dialog"], [role="alertdialog"]') };
+      return { state, key, value, available: alive() && !!current && current.kind === 'query' && key === expected && readQueryResultPlacement(current.queryResultPlacement) === placement && queryLayoutActiveTab(state.settings) === current.id && state.connections.some(profile => profile.id === current.connectionId) && !document.querySelector(appModalSelector) };
     },
     subscribe: changed => useWorkspace.subscribe(changed),
     write(current, value) {
