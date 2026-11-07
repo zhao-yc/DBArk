@@ -18,6 +18,7 @@ import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryParameterReuseZh as reuseText } from '../../src/renderer/locales/queryParameterReuse.zh-CN';
 import { queryFailureSourceZh as failureText } from '../../src/renderer/locales/queryFailureSource.zh-CN';
 import { queryPartialOutcomeZh as partialText } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
+import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -80,6 +81,70 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 显式遇错继续保留多错定位、原事务、取消及参数隐私', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const sql = 'INSERT INTO public.continue_sentinel VALUES (1);\nSELECT missing_column;\nINSERT INTO public.continue_sentinel VALUES (2);\nSELECT 1/0;\nINSERT INTO public.continue_sentinel VALUES (3);';
+  const choice = () => tab().getByRole('checkbox', {name: continueText.option, exact: true});
+  const report = () => tab().getByRole('status', {name: continueText.title, exact: true});
+  const records = async () => (await observer.query('SELECT id FROM public.continue_sentinel ORDER BY id')).rows.map(row => row.id);
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+  try {
+    await observer.query('CREATE TABLE public.continue_sentinel (id int PRIMARY KEY)');
+    await prepare({id: '', name: '隔离 PostgreSQL 遇错继续', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+    await expect(choice()).not.toBeChecked(); await command('execute-all');
+    await expect(tab().getByRole('status', {name: partialText.title, exact: true})).toContainText(partialText.position(2, 1));
+    expect(await records()).toEqual([1]); await expect(report()).toHaveCount(0);
+    const original = await sessions(); expect(original).toHaveLength(1); expect(original[0].state).toBe('idle');
+    await observer.query('TRUNCATE public.continue_sentinel');
+    await choice().check(); await command('execute-all');
+    await expect(report()).toContainText(continueText.counts(5, 3, 2)); await expect(report()).toContainText(continueText.reachedEnd);
+    expect(await records()).toEqual([1, 2, 3]); expect(await sessions()).toEqual(original);
+    const beforeLocate = await history();
+    for (const [ordinal, statement] of [[2, 'SELECT missing_column'], [4, 'SELECT 1/0']] as const) {
+      await report().getByRole('button', {name: continueText.locate(ordinal), exact: true}).click();
+      await expect.poll(async () => (await inspectModel()).selected).toBe(statement);
+    }
+    expect(await history()).toEqual(beforeLocate); expect(await records()).toEqual([1, 2, 3]);
+    expect(beforeLocate[0].success).toBe(false);
+    await page.screenshot({path: info.outputPath('PostgreSQL遇错继续摘要.png')});
+
+    const transactional = 'BEGIN;\nINSERT INTO public.continue_sentinel VALUES (4);\nSELECT missing_column;\nINSERT INTO public.continue_sentinel VALUES (5);\nROLLBACK;\nINSERT INTO public.continue_sentinel VALUES (6);';
+    await replaceDraft(transactional); await command('execute-all');
+    await expect(report()).toContainText(continueText.counts(6, 4, 2)); await expect(report()).toContainText(continueText.reachedEnd);
+    expect(await records()).toEqual([1, 2, 3, 6]); expect(await sessions()).toEqual(original);
+    await expect(report()).toContainText('current transaction is aborted');
+
+    await replaceDraft('SELECT missing_column;\nSELECT pg_sleep(20);\nINSERT INTO public.continue_sentinel VALUES (7);');
+    await command('execute-all');
+    await expect.poll(async () => (await observer.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' AND state='active' AND query LIKE '%pg_sleep(20)%'", [user])).rows[0].n).toBe(1);
+    await tab().getByRole('button', {name: postgresZh.stop, exact: true}).click();
+    await expect(report()).toContainText(continueText.counts(2, 0, 2)); await expect(report()).toContainText(continueText.stopped);
+    expect(await records()).toEqual([1, 2, 3, 6]); await expect.poll(sessions).toEqual(original);
+
+    await replaceDraft('SELECT $1::int AS parameter_error;');
+    await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+    const form = page.getByRole('dialog', {name: parameterZh.title, exact: true}), secret = '续执行参数秘密😀';
+    await form.getByLabel(parameterZh.value + ' p1', {exact: true}).fill(secret);
+    await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+    await expect(report()).toContainText(continueText.counts(1, 0, 1)); await expect(report()).toContainText('SQLSTATE 22P02');
+    expect(JSON.stringify(await history())).not.toContain(secret);
+    expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('tasks.list', {})))).not.toContain(secret);
+    const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
+    expect(JSON.stringify(settings)).not.toContain(secret); expect(settings.tabs.every(item => !Object.hasOwn(item, 'continueOnError'))).toBe(true);
+    await page.locator('.tab-strip').getByText('另一 PostgreSQL 查询', {exact: true}).click(); await expect(choice()).not.toBeChecked();
+    await page.locator('.tab-strip').getByText('原 PostgreSQL 查询', {exact: true}).click(); await expect(choice()).toBeChecked();
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保持提交事实和原事务', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');

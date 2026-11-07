@@ -10,6 +10,7 @@ import type { QueryFailure } from '../../src/shared/queryFailure';
 import { QueryContinueOnErrorNotice, confirmedQueryContinueRange } from '../../src/renderer/components/QueryContinueOnErrorNotice';
 import { queryContinueOnErrorZh as t } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
+import { appDialogSelector } from '../../src/renderer/modalSelectors';
 
 const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const functions = new Map<string, string>(); let option = '';
@@ -26,7 +27,7 @@ if (!option || !functions.has('runQuery') || !functions.has('execute')) throw Er
 function execution(outcome: QueryOutcome = { results: [], elapsedMs: 1 }) {
   const invoke = vi.fn(async () => outcome), ensureSession = vi.fn(async () => '原会话'), errors = vi.fn(async () => {});
   const workspace = { setBusy: vi.fn(), setDirty: vi.fn() }, scriptFailureRanges = { current: new Set<QueryFailure>() }, failureSource = { current: undefined as any };
-  const context: any = createContext({ ...queryDialectVm(),  Error, Set, confirmedQueryContinueRange, invoke, ensureSession, continueOnError: false, collectWarnings: false, scriptFailureRanges, failureSource,
+  const context: any = createContext({ ...queryDialectVm(), appDialogSelector, Error, Set, confirmedQueryContinueRange, invoke, ensureSession, continueOnError: false, collectWarnings: false, scriptFailureRanges, failureSource,
     busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, parameterSession: { current: '原会话' }, settings: { resultLimit: 25 }, tab: { id: '原标签' },
     useWorkspace: { getState: () => workspace }, handleQueryError: errors, clearFailureSource: vi.fn(), invalidateResultSelection: vi.fn(), prepareExecutionContext: vi.fn(async () => {}), uid: () => '本次任务',
     setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),

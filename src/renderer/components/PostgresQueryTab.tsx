@@ -66,6 +66,9 @@ import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
+import { QueryContinueOnErrorNotice, confirmedQueryContinueRange } from './QueryContinueOnErrorNotice';
+import { queryContinueOnErrorZh as continueText } from '../locales/queryContinueOnError.zh-CN';
+import type { QueryFailure } from '../../shared/queryFailure';
 import { QueryParameterReuseOwner, type QueryParameterReuseOwnerInput } from '../queryParameterReuseOwner';
 import type { QueryParameterReusePort } from '../queryParameterReusePort';
 import { SnippetsDialog } from './SnippetsDialog';
@@ -117,6 +120,7 @@ interface ParameterOwner {
   session?: string;
   reuse: QueryParameterReusePort | null;
   failureSource?: QueryFailureSourceLease;
+  continueOnError: boolean;
 }
 interface AnalyzeOwner {
   token: string;
@@ -212,6 +216,8 @@ export function PostgresQueryTab({
   const parameterState = useRef<{ sessionId: string; known: boolean }>({ sessionId: '', known: false });
   const failureSource = useRef<QueryFailureSourceLease | undefined>(undefined);
   const [, refreshFailureSource] = useState(0);
+  const [continueOnError, setContinueOnError] = useState(false);
+  const scriptFailureRanges = useRef(new Set<QueryFailure>());
   const [completionStatus, setCompletionStatus] = useState<SqlCompletionStatus>('idle');
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
@@ -266,7 +272,15 @@ export function PostgresQueryTab({
       subscribe: changed => useWorkspace.subscribe(changed),
       onInvalidated: () => { if (alive.current) refreshFailureSource(value => value + 1); } });
   }
-  function clearFailureSource(): void { failureSource.current?.dispose(); failureSource.current = undefined; }
+  function clearFailureSource(): void { failureSource.current?.dispose(); failureSource.current = undefined; scriptFailureRanges.current.clear(); }
+  /** 多错摘要共用原模型租约；旧错误对象不能重绑后继执行的范围。 */
+  function locateFailure(failure?: QueryFailure): void {
+    const locator = failureSource.current;
+    if (pinStateRef.current.selected || !locator?.available() || failure &&
+        (!scriptFailureRanges.current.has(failure) || !locator.bindRange(failure.sourceRange))) return;
+    flushSync(() => setResultsOnly(false));
+    editor.current?.layout(); locator.locate();
+  }
   /** 暂存只读取本标签原模型及已确认的物理会话；不把参数值写入工作区或来源键。 */
   function parameterReuseInput(): QueryParameterReuseOwnerInput | null {
     const now = useWorkspace.getState(), current = currentTab(), owned = session.current;
@@ -470,6 +484,8 @@ export function PostgresQueryTab({
     const locator = parameter?.failureSource ?? (!sqlOverride && !confirmed && mode !== 'explain' && mode !== 'analyzePreview'
       ? captureFailureSource(sql, mode === 'all' || mode === 'current') : undefined);
     if (parameter) parameter.failureSource = undefined;
+    const continuing = !sqlOverride && !confirmed && mode !== 'explain' && mode !== 'analyzePreview' &&
+      (parameter ? parameter.continueOnError : continueOnError);
     const modelVersion = model?.getVersionId(),
       job = acquireWorkspaceBusy(tab.id),
       owner: Phase = {
@@ -532,6 +548,7 @@ export function PostgresQueryTab({
               taskId: owner.taskId,
               sql,
               parameters: values,
+              ...(continuing ? {continueOnError: true} : {}),
               maxRows: useWorkspace.getState().settings.resultLimit,
             })
           : await invoke(mode === 'explain' ? 'postgres.explain' : 'query.execute', {
@@ -540,10 +557,14 @@ export function PostgresQueryTab({
               sql,
               maxRows: useWorkspace.getState().settings.resultLimit,
               ...(offset === undefined ? {} : { currentStatement: { offset } }),
+              ...(continuing ? {continueOnError: true} : {}),
             });
         succeeded = !result.failure && !result.scriptReport?.errors.length && result.scriptReport?.reachedEnd !== false;
         if (owner.valid && same(owner.scope) && life.current === owner.life) {
-          if (result.failure && locator?.bindRange(result.failure.sourceRange)) {
+          const failures = result.scriptReport?.errors.filter(item => confirmedQueryContinueRange(sql, item));
+          if (failures) scriptFailureRanges.current = new Set(failures);
+          const firstFailure = failures?.[0] ?? result.failure;
+          if (firstFailure && locator?.bindRange(firstFailure.sourceRange)) {
             failureSource.current = locator; retainLocator = true;
           }
           setOutcome(result);
@@ -621,7 +642,7 @@ export function PostgresQueryTab({
     const reuse = (parameterReuse.current ??= new QueryParameterReuseOwner(parameterReuseInput)).begin(sql);
     clearFailureSource();
     setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true, reuse,
-      failureSource: captureFailureSource(sql) });
+      failureSource: captureFailureSource(sql), continueOnError });
   }
   /** 显式重连先正常关闭旧会话；旧事务或未知写入不会被自动恢复和重放。 */
   async function reconnect() {
@@ -1606,6 +1627,8 @@ export function PostgresQueryTab({
         <span>PostgreSQL / {scope.database}</span>
         <QueryFileSourceCaption tab={tab} files={files} compact />
         <span>{session.current ? '原查询会话' : '尚未连接'}</span>
+        <label className="check" title={text.continueHint}><input type="checkbox" checked={continueOnError} disabled={locked}
+          onChange={event => setContinueOnError(event.target.checked)} />{continueText.option}</label>
       </div>
       <QueryResultSnapshotActions result={resultSource} disabled={locked} begin={beginResultSnapshot}
         renderActions={snapshotActions => <QueryFileActions
@@ -1657,14 +1680,12 @@ export function PostgresQueryTab({
         )}
       />} />
       <ErrorBox message={error} />
-      {outcome?.failure && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
-        locateAvailable={!pin && !!failureSource.current?.available()} onLocate={() => {
-          if (!pin && failureSource.current?.available()) {
-            flushSync(() => setResultsOnly(false));
-            // 仅结果模式隐藏过容器，须在可见尺寸下重排后再滚到原语句。
-            editor.current?.layout(); failureSource.current?.locate();
-          }
-        }} />}
+      {continueOnError && <p className="muted small" role="note">{text.continueHint}</p>}
+      {outcome?.scriptReport && <QueryContinueOnErrorNotice report={outcome.scriptReport} completedResults={outcome.results.length}
+        locateAvailable={failure => !pin && scriptFailureRanges.current.has(failure) && !!failureSource.current?.available()}
+        onLocate={locateFailure} />}
+      {outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
+        locateAvailable={!pin && !!failureSource.current?.available()} onLocate={() => locateFailure()} />}
       {!busy && completionStatus !== 'idle' && <p className="muted small" role="status">{completionStatus === 'limited'
         ? text.completionLimited : completionStatus === 'partial' ? text.completionPartial
           : completionStatus === 'sessionUnknown' ? text.completionTransaction : text.completionUnavailable}</p>}

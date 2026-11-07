@@ -12,6 +12,8 @@ import { connectionTransportChanged } from '../../shared/connectionProfile';
 import { queryFailureMessage } from '../../shared/queryFailure';
 import type { QueryParameter } from '../../shared/queryParameters';
 import { postgresParameterValues } from './parameters';
+import { canContinuePostgresQueryError, postgresQueryErrorMessage } from './queryContinue';
+import { queryContinueOnErrorLimits, queryScriptReportSummary, truncateQueryScriptMessage, type QueryScriptReport } from '../../shared/queryContinueOnError';
 import {
   firstPostgresStatement,
   currentPostgresStatement,
@@ -869,15 +871,18 @@ export class PostgresEngine {
   private async execute(session: Session, input: Input, estimate = false, analysisSql?: string): Promise<QueryOutcome> {
     if (!input.taskId || this.ownsTask(input.taskId) || this.tasks.size >= 8192)
       throw Error('PostgreSQL任务编号已使用或登记已满');
-    if (input.continueOnError || input.collectWarnings)
-      throw Error('PostgreSQL尚未实现遇错继续或MySQL诊断采集');
+    if (input.collectWarnings || input.continueOnError && (estimate || analysisSql))
+      throw Error('PostgreSQL计划分析不使用遇错继续，且不支持MySQL诊断采集');
     const task: Task = { id: input.taskId, session, cancelled: false, sent: false, terminal: false };
     this.tasks.set(task.id, task);
     const started = performance.now(),
       results: QueryResult[] = [],
       budget = { rows: input.maxRows, bytes: 16 * 1024 * 1024 };
+    const report: QueryScriptReport | undefined = input.continueOnError === true
+      ? {mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: []} : undefined;
     let offset = 0,
       count = 0,
+      activeOrdinal: number | undefined,
       failure: QueryOutcome['failure'],
       sourceRange: NonNullable<QueryOutcome['failure']>['sourceRange'],
       explain: QueryOutcome['explain'],
@@ -912,6 +917,7 @@ export class PostgresEngine {
       while (!estimate && !analysisSql) {
         // 每次扫描先撤旧范围；尾部词法失败不能误指向上一条已完成语句。
         sourceRange = undefined;
+        activeOrdinal = undefined;
         if (task.cancelled) throw Error('PostgreSQL任务已取消，已执行语句未重放');
         const part =
           selected ?? firstPostgresStatement(source.slice(offset), session.managed.standardStrings);
@@ -920,6 +926,8 @@ export class PostgresEngine {
         // 定位从正文起始，避免前导换行和长注释占住窄编辑区；执行仍保留原文。
         sourceRange = { start: statementOffset + part.start + postgresSqlContentStart(part.sql), end: statementOffset + part.end };
         if (++count > 1000) throw Error('PostgreSQL脚本最多1000条语句');
+        activeOrdinal = count;
+        if (report) report.statementsAttempted = count;
         if (part.keyword === 'COPY')
           throw Error('PostgreSQL COPY数据流需专用导入导出接口，当前SQL执行未发送此语句');
         this.emit({
@@ -937,8 +945,9 @@ export class PostgresEngine {
             throw Error('PostgreSQL参数查询一次只能执行一条语句');
         }
         task.sent = true;
-        const index = results.length,
-          result = await session.managed.query(part.sql, parameters, budget, (batch, columns) =>
+        const index = results.length;
+        try {
+          const result = await session.managed.query(part.sql, parameters, budget, (batch, columns) =>
             this.emit({
               taskId: task.id,
               status: 'running',
@@ -949,21 +958,39 @@ export class PostgresEngine {
               batch,
             }),
           );
-        results.push(result);
+          results.push(result);
+          if (report) report.statementsCompleted++;
+          if (report && (session.managed.broken || !session.managed.state().transactionKnown)) {
+            activeOrdinal = undefined; sourceRange = undefined;
+            throw Error('当前语句已完成，但原会话状态无法确认，已停止后续语句');
+          }
+        } catch (reason) {
+          const detail = session.managed.error(reason);
+          if (!report || !canContinuePostgresQueryError(detail, session.managed.state(), task.cancelled)) throw reason;
+          report.errors.push({kind: 'server', statementOrdinal: count, statementsCompleted: report.statementsCompleted,
+            message: truncateQueryScriptMessage(postgresQueryErrorMessage(detail, !!input.parameters)),
+            ...(sourceRange ? {sourceRange: {...sourceRange}} : {})});
+          if (report.errors.length >= queryContinueOnErrorLimits.errors) {
+            report.stopReason = '错误记录已达到100条上限，已停止后续语句'; break;
+          }
+        }
         if (selected) break;
         offset = statementOffset + part.end + 1;
         if (offset >= source.length) break;
       }
+      if (report && !report.stopReason) report.reachedEnd = true;
     } catch (reason) {
       const detail = session.managed.error(reason);
-      const sqlState = 'postgresSqlState' in detail && typeof detail.postgresSqlState === 'string' && /^[0-9A-Z]{5}$/.test(detail.postgresSqlState)
-        ? detail.postgresSqlState : undefined;
-      failure = {
+      const message = postgresQueryErrorMessage(detail, !!input.parameters);
+      if (report) {
+        const stopReason = truncateQueryScriptMessage(message);
+        report.errors.push({kind: 'stopped', statementOrdinal: activeOrdinal ?? report.statementsAttempted + 1,
+          statementsCompleted: report.statementsCompleted, message: stopReason, ...(sourceRange ? {sourceRange: {...sourceRange}} : {})});
+        report.stopReason = stopReason;
+      } else failure = {
         statementOrdinal: results.length + 1,
         statementsCompleted: results.length,
-        // 服务端参数错误可能包含绑定原值；任务与历史仅保留状态码和原模板范围。
-        message: queryFailureMessage(results.length, input.parameters
-          ? 'PostgreSQL参数查询未完成' + (sqlState ? '（SQLSTATE ' + sqlState + '）' : '') : detail.message),
+        message: queryFailureMessage(results.length, message),
         ...(sourceRange ? { sourceRange } : {}),
       };
     } finally {
@@ -978,6 +1005,11 @@ export class PostgresEngine {
         this.rememberCompleted(task.id);
       }
     }
+    if (report?.errors.length) {
+      const first = report.errors[0];
+      failure = {statementOrdinal: first.statementOrdinal, statementsCompleted: first.statementsCompleted,
+        message: queryScriptReportSummary(report), ...(first.sourceRange ? {sourceRange: {...first.sourceRange}} : {})};
+    }
     this.emit({
       taskId: task.id,
       status: failure ? (task.cancelled ? 'cancelled' : 'failed') : 'completed',
@@ -991,6 +1023,7 @@ export class PostgresEngine {
       ...(explain ? { explain } : {}),
       ...(analysis ? { analysis } : {}),
       ...(failure ? { failure } : {}),
+      ...(report ? {scriptReport: report} : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */

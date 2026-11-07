@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 查询可显式启用遇错继续，按实际协议状态记录多错和完整结果，并逐项定位。失败事务由用户脚本显式处理，取消及硬错误停止。Q02、R01 仍为部分覆盖。[PostgreSQL 遇错继续](development/postgres-continue-on-error-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 首错停止后可定位原脚本、选区、当前语句及位置参数模板中的未完成语句，保留此前完整结果及实际事务状态。Q02、R01 仍为部分覆盖。[未完成语句定位](development/postgres-failure-source-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 参数执行可显式在本标签内存暂存成功的一组类型参数，重新打开后需明确填入及执行，来源变化即时失效。Q06、R01 仍为部分覆盖。[本标签参数暂存](development/postgres-parameter-reuse-20261107.md)

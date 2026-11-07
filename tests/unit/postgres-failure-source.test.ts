@@ -4,6 +4,8 @@ import { PostgresConnection } from '../../src/engine/postgres/connection';
 import { DatabaseError } from 'pg';
 import type { QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import type { QueryParameter } from '../../src/shared/queryParameters';
+import { queryScriptReportSchema } from '../../src/shared/queryContinueOnError';
+import { canContinuePostgresQueryError } from '../../src/engine/postgres/queryContinue';
 
 let engine: PostgresEngine, sent: string[], events: TaskEvent[], next: number;
 let scenario: (sql: string, values?: unknown[]) => Promise<unknown>;
@@ -23,7 +25,7 @@ beforeEach(() => {
   (engine as unknown as {sessions: Map<string, typeof session>}).sessions.set('s', session);
 });
 afterEach(async () => { await engine.closeAll(); });
-function execute(sql: string, options: {parameters?: QueryParameter[]; currentStatement?: {offset: number}} = {}): Promise<QueryOutcome> {
+function execute(sql: string, options: {parameters?: QueryParameter[]; currentStatement?: {offset: number}; continueOnError?: boolean} = {}): Promise<QueryOutcome> {
   return engine.handle(options.parameters ? 'query.executeParameterized' : 'query.execute', {sessionId: 's', taskId: 'range-' + ++next, sql, maxRows: 100, ...options});
 }
 
@@ -98,5 +100,85 @@ describe('PostgreSQL 失败范围沿用实际执行的原文偏移', () => {
   it('完整成功没有失败范围字段，原 SQL 及完整结果保持', async () => {
     scenario = async statement => ok(statement); const output = await execute('SELECT 1;SELECT 2;');
     expect(output).not.toHaveProperty('failure'); expect(output.results.map(result => result.statement)).toEqual(['SELECT 1', 'SELECT 2']);
+  });
+});
+
+const serverError = (code = '42703', message = '预期服务端错误') => Object.assign(Error(message), {postgresSqlState: code});
+describe('PostgreSQL 显式遇错继续仍使用原协议事务', () => {
+  it.each(['00000', '01000', '02000', '08006', '53300', '54000', '57014', '57P01', '58000', 'XX000'])('%s必须停止，不使用其它驱动的错误分类', code => {
+    expect(canContinuePostgresQueryError(serverError(code), {broken: false, transactionKnown: true}, false)).toBe(false);
+  });
+  it('普通服务器错误允许继续，失败事务25P02也保留；取消或未知状态不准入', () => {
+    for (const code of ['42703', '23505', '25P02', '40001', 'P0001']) expect(canContinuePostgresQueryError(serverError(code), {broken: false, transactionKnown: true}, false)).toBe(true);
+    expect(canContinuePostgresQueryError(Error('本地错误'), {broken: false, transactionKnown: true}, false)).toBe(false);
+    expect(canContinuePostgresQueryError(serverError(), {broken: false, transactionKnown: false}, false)).toBe(false);
+    expect(canContinuePostgresQueryError(serverError(), {broken: true, transactionKnown: true}, false)).toBe(false);
+    expect(canContinuePostgresQueryError(serverError(), {broken: false, transactionKnown: true}, true)).toBe(false);
+    const getter = vi.fn(() => '42703'), error = Error('访问器'); Object.defineProperty(error, 'postgresSqlState', {get: getter});
+    expect(canContinuePostgresQueryError(error, {broken: false, transactionKnown: true}, false)).toBe(false); expect(getter).not.toHaveBeenCalled();
+  });
+  it('多处错误有原序号和范围，保留成功结果，终态及报告仍记失败', async () => {
+    const sql = 'SELECT 1; SELECT missing; SELECT 2; SELECT other;';
+    scenario = async statement => { if (/missing|other/.test(statement)) throw serverError(); return ok(statement); };
+    const output = await execute(sql, {continueOnError: true}), report = queryScriptReportSchema.parse(output.scriptReport);
+    expect(report).toMatchObject({statementsAttempted: 4, statementsCompleted: 2, reachedEnd: true});
+    expect(report.errors.map(error => [error.statementOrdinal, error.statementsCompleted, error.kind])).toEqual([[2, 1, 'server'], [4, 2, 'server']]);
+    expect(report.errors.map(error => sql.slice(error.sourceRange!.start, error.sourceRange!.end))).toEqual(['SELECT missing', 'SELECT other']);
+    expect(output.results).toHaveLength(2); expect(sent).toHaveLength(4); expect(events.at(-1)?.status).toBe('failed'); expect(output.failure?.message).toContain('已到脚本末尾');
+  });
+  it('原事务失败后继续记录错误，仅脚本显式ROLLBACK才能恢复，不注入补偿SQL', async () => {
+    const state = {transactionOpen: false, transactionKnown: true, transactionFailed: false, broken: false};
+    managed.state = () => state;
+    scenario = async statement => {
+      if (statement === 'BEGIN') state.transactionOpen = true;
+      else if (statement.trim() === 'ROLLBACK') { state.transactionOpen = false; state.transactionFailed = false; }
+      else if (statement.includes('missing')) { state.transactionFailed = true; throw serverError(); }
+      else if (state.transactionFailed) throw serverError('25P02');
+      return ok(statement);
+    };
+    const sql = 'BEGIN; SELECT missing; SELECT 2; ROLLBACK; SELECT 3;';
+    const output = await execute(sql, {continueOnError: true});
+    expect(queryScriptReportSchema.parse(output.scriptReport)).toMatchObject({statementsAttempted: 5, statementsCompleted: 3, reachedEnd: true});
+    expect(sent).toEqual(['BEGIN', ' SELECT missing', ' SELECT 2', ' ROLLBACK', ' SELECT 3']); expect(state.transactionOpen).toBe(false);
+  });
+  it('参数错误报告只保留SQLSTATE，不发布值或失败填写', async () => {
+    scenario = async () => { throw serverError('22P02', '错误包含秘密参数😀'); };
+    const output = await execute('SELECT $1::int', {continueOnError: true, parameters: [{name: 'p1', type: 'text', value: '秘密参数😀'}]});
+    expect(queryScriptReportSchema.parse(output.scriptReport)).toMatchObject({statementsAttempted: 1, statementsCompleted: 0, reachedEnd: true});
+    expect(output.scriptReport?.errors[0].message).toContain('22P02'); expect(JSON.stringify(output)).not.toContain('秘密参数'); expect(JSON.stringify(events)).not.toContain('秘密参数');
+  });
+  it('词法失败只加停止项，不沿用前一个错误范围', async () => {
+    scenario = async () => { throw serverError(); };
+    const output = await execute("SELECT missing; SELECT '未闭合", {continueOnError: true});
+    const report = queryScriptReportSchema.parse(output.scriptReport);
+    expect(report).toMatchObject({statementsAttempted: 1, statementsCompleted: 0, reachedEnd: false});
+    expect(report.errors.map(error => error.kind)).toEqual(['server', 'stopped']); expect(report.errors[1]).not.toHaveProperty('sourceRange'); expect(sent).toHaveLength(1);
+  });
+  it('100项错误到限即停，不发送第101句', async () => {
+    scenario = async () => { throw serverError(); };
+    const output = await execute('SELECT missing;'.repeat(101), {continueOnError: true});
+    expect(queryScriptReportSchema.parse(output.scriptReport)).toMatchObject({statementsAttempted: 100, statementsCompleted: 0, reachedEnd: false, stopReason: expect.stringContaining('100')});
+    expect(output.scriptReport?.errors).toHaveLength(100); expect(sent).toHaveLength(100);
+  });
+  it('超时和本地断线停在原语句，后继不发送', async () => {
+    for (const error of [serverError('57014'), Error('连接中断')]) {
+      const before = sent.length; scenario = async () => { throw error; };
+      const output = await execute('SELECT waiting; SELECT tail;', {continueOnError: true});
+      expect(queryScriptReportSchema.parse(output.scriptReport)).toMatchObject({statementsAttempted: 1, statementsCompleted: 0, reachedEnd: false});
+      expect(output.scriptReport?.errors[0].kind).toBe('stopped'); expect(sent.length - before).toBe(1);
+    }
+  });
+  it('成功结果后的状态未知保留已完成事实，停止范围不能冒充该句失败', async () => {
+    let known = true; managed.state = () => ({transactionOpen: false, transactionKnown: known, transactionFailed: false, broken: false});
+    scenario = async statement => { known = false; return ok(statement); };
+    const output = await execute('SELECT 1; SELECT tail;', {continueOnError: true});
+    expect(queryScriptReportSchema.parse(output.scriptReport)).toMatchObject({statementsAttempted: 1, statementsCompleted: 1, reachedEnd: false});
+    expect(output.scriptReport?.errors[0]).toMatchObject({statementOrdinal: 2, kind: 'stopped'}); expect(output.scriptReport?.errors[0]).not.toHaveProperty('sourceRange'); expect(output.results).toHaveLength(1);
+  });
+  it('等待补全时取消有终态报告且零用户SQL', async () => {
+    let finish!: () => void; session.completion = new Promise<void>(resolve => { finish = resolve; });
+    const pending = execute('SELECT 1', {continueOnError: true}); await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+    await engine.handle('query.cancel', {taskId: 'range-1'}); finish();
+    expect(queryScriptReportSchema.parse((await pending).scriptReport)).toMatchObject({statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false}); expect(sent).toEqual([]); expect(events.at(-1)?.status).toBe('cancelled');
   });
 });

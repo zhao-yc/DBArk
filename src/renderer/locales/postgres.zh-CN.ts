@@ -5,6 +5,7 @@ export const postgresZh = {
   completionUnavailable: '暂时无法读取 PostgreSQL 补全目录',
   completionTransaction: '事务进行中，目录补全将在事务结束后恢复',
   execute: '执行选区或全部',
+  continueHint: '启用后，普通数据库语句错误会记录并继续后续语句（包括写操作）。失败事务内的命令仍可能报错，需脚本明确提交或回滚；客户端不自动恢复事务。取消、断线、解析失败或100条错误上限会停止。仅本标签本次运行保留此选项。',
   current: '执行当前语句',
   explain: '查看估算计划',
   parameters: '执行位置参数',
