@@ -8,6 +8,8 @@ import { exportExcelFile } from '../excelFiles';
 import { csvCell, csvHeader } from '../files';
 import type { PostgresTableWorkspace } from './tableWorkspace';
 import { writePostgresSqlData } from './sqlExport';
+import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd } from '../queryHtml';
+import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
 
 type Source = Parameters<PostgresTableWorkspace['exportData']>;
 export type PostgresTableExportRequest = Source[0] & { filePath: string };
@@ -28,6 +30,7 @@ export async function exportPostgresTable(workspace: PostgresTableWorkspace, inp
   if (!isAbsolute(input.filePath) || input.filePath.includes('\0')) throw Error('主进程未提供授权的导出路径');
   if ((input.format === 'sql' || input.format === 'sql-backup') && input.encoding !== 'utf8') throw Error('PostgreSQL SQL 脚本使用 UTF-8');
   if (input.format === 'copy' && input.encoding !== 'utf8') throw Error('PostgreSQL COPY CSV 使用 UTF-8');
+  if (input.format === 'html' && input.encoding !== 'utf8') throw Error(queryHtmlZh.utf8);
   const delimiter = csvExportDelimiter(postgresTableExportExtension(input.format), input.csvDelimiter);
   let file: AtomicFile | undefined, rows = 0;
   try {
@@ -61,14 +64,17 @@ export async function exportPostgresTable(workspace: PostgresTableWorkspace, inp
       }
       if (input.encoding === 'utf16le') await staged.write('\uFEFF');
       if (input.format === 'csv') await staged.write(names.map(name => csvHeader(name, delimiter)).join(delimiter) + '\r\n');
+      else if (input.format === 'html') await staged.write(queryHtmlDocumentStart({ scope: 'table' }) + queryHtmlTableStart(names));
       else await staged.write('[\n');
       for await (const row of validatedRows()) {
-        const line = input.format === 'csv' ? row.map(value => csvCell(value, delimiter)).join(delimiter) + '\r\n' :
-          (rows ? ',\n' : '') + JSON.stringify(Object.fromEntries(names.map((name, i) => [name, row[i]])));
+        const line = input.format === 'html' ? queryHtmlRow(row) :
+          input.format === 'csv' ? row.map(value => csvCell(value, delimiter)).join(delimiter) + '\r\n' :
+            (rows ? ',\n' : '') + JSON.stringify(Object.fromEntries(names.map((name, i) => [name, row[i]])));
         await staged.write(line);
         if (++rows % 256 === 0) progress(rows);
       }
       if (input.format === 'json') await staged.write('\n]\n');
+      if (input.format === 'html') await staged.write(queryHtmlTableEnd(rows) + queryHtmlDocumentEnd);
       await staged.prepare(true);
     });
     check();

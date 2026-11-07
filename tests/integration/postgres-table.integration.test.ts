@@ -735,6 +735,17 @@ describe.skipIf(!active)('PostgreSQL实库表页和记录事务', () => {
           ...source, profile, taskId: randomUUID(), fileToken: randomUUID(), filePath: join(directory, name),
           format, encoding: 'utf8', columns: ['c0', 'c1', 'c2', 'c3'], exportToken: exportPage.exportToken, ...extra,
         });
+        const htmlView = { ...target, table: '"浏览"."导出视图"', tabId: randomUUID() };
+        await client.query(`CREATE VIEW ${htmlView.table} AS SELECT id,note,raw,marker FROM ${exportTable}`);
+        const htmlPage = await read({ ...htmlView, offset: 4, filter: { column: 'marker', text: '保留%' }, sort: { column: 'id', direction: 'desc' } });
+        const html = exportRequest('html', '视图.html', { ...htmlView, columns: ['c2', 'c1'], exportToken: htmlPage.exportToken });
+        expect(await engine.handle('postgres.table.export', html)).toEqual({ rows: 130, fileCommitted: true });
+        const markup = await readFile(html.filePath, 'utf8');
+        expect(markup).toContain('<th scope="col">raw</th><th scope="col">note</th>');
+        expect(markup.match(/<tbody>\n([\s\S]*?)<\/tbody>/)?.[1].match(/<tr>/g)).toHaveLength(130);
+        expect(markup).toContain('<td data-kind="null" class="marker">NULL</td>');
+        expect(markup).toContain('<td data-kind="empty" class="marker">空字符串</td>');
+        expect(markup).not.toContain('<th scope="col">marker</th>');
         const wrong = exportRequest('json', '拒绝.json', { owner: '其他文档' });
         await expect(engine.handle('postgres.table.export', wrong)).rejects.toThrow('快照');
         const csv = exportRequest('csv', '实际.csv', { csvDelimiter: ';' });

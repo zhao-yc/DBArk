@@ -1,6 +1,7 @@
 export const queryHtmlZh = {
   format: 'HTML 网页',
   title: '查询结果',
+  table: '表数据',
   returned: '已返回结果',
   truncated: '原结果已截断，文件只包含本次传入的行。',
   hint: '生成可直接打开的 UTF-8 网页，保留列顺序，并区分 NULL、空字符串和二进制。',

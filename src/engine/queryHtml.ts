@@ -18,8 +18,10 @@ function htmlText(value: string): string {
   });
 }
 
-export function queryHtmlDocumentStart(returned = false, truncated = false): string {
-  const title = returned ? text.returned : text.title;
+export function queryHtmlDocumentStart({ scope = 'query', truncated = false }: {
+  scope?: 'query' | 'returned' | 'table'; truncated?: boolean;
+} = {}): string {
+  const title = scope === 'query' ? text.title : text[scope];
   return '<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8">\n' +
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'">\n' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +

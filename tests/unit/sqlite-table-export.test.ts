@@ -95,6 +95,25 @@ async function completed(record: ProcessRecord): Promise<void> {
 }
 
 describe('SQLite完整导出真实只读流、原子文件与精度回放', () => {
+  it('SQLite 视图 HTML 仅输出所选字段，空匹配仍保留表头', async () => {
+    const profile = fixture();
+    disk(profile, db => db.exec("CREATE VIEW html_view AS SELECT 1 AS id, '<img src=x> & 中文' AS note UNION ALL SELECT 2, '其他';"));
+    const { app } = runtime(profile), view = await page(app, profile, '视图元数据', 'html_view');
+    const before = await hash(profile.sqlite.filePath!);
+    const input = request(profile, view, { format: 'html', columns: ['note'], filters: [{ column: 'id', operator: 'eq', value: { kind: 'integer', value: '1' } }] });
+    expect(await app.request('sqlite.tableExport', input)).toEqual({ rows: 1, fileCommitted: true });
+    const content = readFileSync(input.filePath, 'utf8');
+    expect(content).toContain('<th scope="col">note</th>');
+    expect(content).toContain('<td>&lt;img src=x&gt; &amp; 中文</td>');
+    expect(content).not.toContain('其他');
+    await completed(processes.at(-1)!);
+    const empty = { ...input, taskId: '空视图导出', filters: [{ column: 'id', operator: 'eq', value: { kind: 'integer', value: '99' } }] };
+    expect(await app.request('sqlite.tableExport', empty)).toEqual({ rows: 0, fileCommitted: true });
+    expect(readFileSync(input.filePath, 'utf8')).toContain('<th scope="col">note</th></tr>\n</thead><tbody>\n</tbody>');
+    await completed(processes.at(-1)!);
+    expect(await hash(profile.sqlite.filePath!)).toBe(before);
+  });
+
   it('固定关联与整组OR筛选一起进入完整只读流，保父亲和性并拒绝结构漂移', async () => {
     const profile = fixture(); disk(profile, db => db.exec("CREATE TABLE rp(id INTEGER PRIMARY KEY); INSERT INTO rp VALUES(1),(2); CREATE TABLE rc(id INTEGER PRIMARY KEY,p TEXT REFERENCES rp(id),note TEXT); INSERT INTO rc VALUES(1,'001','A'),(2,'1','B'),(3,'2','A'),(4,NULL,'A')"));
     const { app } = runtime(profile), parent = await page(app, profile, '关联父页', 'rp');

@@ -9,7 +9,7 @@ export const tableFilteredExportZh = Object.freeze({
   fieldLabel: (name: string) => `导出字段 ${name}`, fieldUp: (name: string) => `上移导出字段 ${name}`, fieldDown: (name: string) => `下移导出字段 ${name}`,
   moveUp: '上移', moveDown: '下移', emptyFields: '请至少选择一个导出字段。',
   sqlScope: 'SQL 仅导出当前匹配数据的 INSERT 子集，不包含建表结构，不属于备份。生成列不写入 INSERT；导入可能与现有主键冲突。自增列零值再次执行前，sql_mode 需包含 NO_AUTO_VALUE_ON_ZERO；TIMESTAMP 再次执行须与源会话时区一致，此版本未验证跨时区恢复。',
-  viewSql: '视图请用 CSV、JSON 或 XLSX；无法确认 INSERT 可写性，不提供视图 SQL 数据导出。',
+  viewSql: '视图请用 CSV、JSON、XLSX 或 HTML；无法确认 INSERT 可写性，不提供视图 SQL 数据导出。',
   generated: '生成列（SQL 不写入）', format: '文件格式', encoding: '文本编码',
   xlsxEncoding: 'XLSX 使用自身 Unicode 格式，固定为 UTF-8 配置；文本编码选择不改变工作簿编码。',
   xlsxLimits: 'Excel 单元格、行列及完整文本限制仍会严格检查；超限时失败，不截值、不只导出样本。',

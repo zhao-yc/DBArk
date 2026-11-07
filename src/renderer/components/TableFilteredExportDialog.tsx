@@ -1,13 +1,14 @@
 import { tableSortRuleSummary } from '../tableSort';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FileChoice, TaskEvent } from '../../shared/contracts';
-import { selectTableFilteredExportColumns, type TableFilteredExportInput, type TableFilteredExportOutput } from '../../shared/tableFilteredExport';
+import { selectTableFilteredExportColumns, tableFilteredExportFormats, type TableFilteredExportInput, type TableFilteredExportOutput } from '../../shared/tableFilteredExport';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import { TableFilteredExportIntent, checkTableFilteredExportOutput, type TableFilteredExportOptions } from '../tableFilteredExportUi';
 import { filterRuleSummary } from '../tableFilters';
 import { tableFilterGroupSummary } from '../tableFilterGroups';
 import { errorMessage, invoke, uid } from '../lib';
 import { tableFilteredExportZh as text } from '../locales/tableFilteredExport.zh-CN';
+import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 
@@ -52,12 +53,12 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
   /** 配置变化消费当前草稿身份，并撤销原文件；不会自动选择文件或发起导出。 */
   function change(next: TableFilteredExportOptions): void {
     if (!editable()) return;
-    if (!['csv', 'json', 'sql', 'xlsx'].includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
+    if (!tableFilteredExportFormats.includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
     if (next.format === 'sql' && owner.intent.source.objectKind !== 'table') { replace({ ...draft, problem: text.viewSql }); return; }
     consumed.current = false; setProgress(undefined);
     // SQL只呈现可写入INSERT的选择；返回其它格式不偷偷补回此前取消的字段。
     const columns = [...(next.columns ?? draft.columns)].filter(name => next.format !== 'sql' || !owner.intent.source.columns.find(column => column.name === name)?.generated);
-    replace({ format: next.format, encoding: next.format === 'xlsx' ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, columns });
+    replace({ format: next.format, encoding: next.format === 'xlsx' || next.format === 'html' ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, columns });
   }
   /** 字段与顺序同属原草稿租约；旧渲染回调及运行中的选择不能替换已确定的输出范围。 */
   function changeFields(columns: string[]): void { change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, columns }); }
@@ -141,8 +142,9 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
     <p>{owner.intent.target.database}.{owner.intent.target.table}</p><p>{text.scope}</p><p className="warning-text">{text.committedOnly}</p>
     <section aria-label={text.conditions}><strong>{text.conditions}</strong>{owner.intent.conditions.filters.length ? <ul>{owner.intent.conditions.filters.map((filter, index) => <li key={index}>{filter.enabled === false ? text.disabled : ''}{filterRuleSummary(filter)}</li>)}</ul> : <p>{text.noConditions}</p>}{owner.intent.conditions.filterGroup && <p>{tableFilterGroupSummary(owner.intent.conditions.filterGroup)}</p>}</section>
     <section aria-label={text.sorts}><strong>{text.sorts}</strong>{owner.intent.sort.length ? <ol>{owner.intent.sort.map((rule, index) => <li key={index}>{tableSortRuleSummary(rule)}</li>)}</ol> : <p>{text.noSorts}</p>}</section>
-    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql" disabled={owner.intent.source.objectKind !== 'table'}>INSERT SQL</option><option value="xlsx">Excel（XLSX）</option></select></Field>
-      <Field label={text.encoding}><select aria-label={text.encoding} disabled={disabled || draft.format === 'xlsx'} value={draft.encoding} onChange={event => change({ format: draft.format, encoding: event.target.value as Draft['encoding'], csvDelimiter: draft.csvDelimiter })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <CsvExportDelimiterField value={draft.csvDelimiter} disabled={disabled} onChange={csvDelimiter => change({ format: draft.format, encoding: draft.encoding, csvDelimiter })}/>}</div>
+    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql" disabled={owner.intent.source.objectKind !== 'table'}>INSERT SQL</option><option value="xlsx">Excel（XLSX）</option><option value="html">{queryHtmlZh.format}</option></select></Field>
+      <Field label={text.encoding}><select aria-label={text.encoding} disabled={disabled || draft.format === 'xlsx' || draft.format === 'html'} value={draft.encoding} onChange={event => change({ format: draft.format, encoding: event.target.value as Draft['encoding'], csvDelimiter: draft.csvDelimiter })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <CsvExportDelimiterField value={draft.csvDelimiter} disabled={disabled} onChange={csvDelimiter => change({ format: draft.format, encoding: draft.encoding, csvDelimiter })}/>}</div>
+    {draft.format === 'html' && <p>{queryHtmlZh.hint}</p>}
     {draft.format === 'xlsx' && <UsageHelp><p>{text.xlsxEncoding}</p><p>{text.xlsxLimits}</p></UsageHelp>}{draft.format === 'sql' && <p className="warning-text">{text.sqlScope}</p>}{owner.intent.source.objectKind !== 'table' && <p className="muted small">{text.viewSql}</p>}
     <section aria-label={text.fields}><strong>{text.fields}</strong><UsageHelp><p>{text.allFields}</p><p>{text.atomic}</p></UsageHelp>
       <button type="button" disabled={disabled} onClick={() => changeFields(owner.intent.source.columns.filter(column => draft.format !== 'sql' || !column.generated).map(column => column.name))}>{text.selectAllFields}</button><button type="button" disabled={disabled} onClick={() => changeFields([])}>{text.clearFields}</button>

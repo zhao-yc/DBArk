@@ -3,11 +3,12 @@ import type { CsvExportDelimiter } from './csvExport';
 import { queryStreamExportLimits } from './queryStreamExport';
 
 export const tableFilteredExportLimits = Object.freeze({ metadataBytes: 2 * 1024 * 1024, sorts: 20, columns: queryStreamExportLimits.columns });
+export const tableFilteredExportFormats = ['csv', 'json', 'sql', 'xlsx', 'html'] as const;
 /** 只接收已应用的完整表页条件；SQL、凭据、路径和连接修订均由可信进程产生。 */
 export interface TableFilteredExportInput {
   connectionId: string; database: string; table: string; taskId: string; fileToken: string;
   metadataKey: string; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[];
-  format: 'csv' | 'json' | 'sql' | 'xlsx'; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvExportDelimiter;
+  format: typeof tableFilteredExportFormats[number]; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvExportDelimiter;
   /** 省略沿用原全字段规则；显式选择按给定物理列名顺序输出，不默默补列或剔列。 */
   columns?: string[];
 }

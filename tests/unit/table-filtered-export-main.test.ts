@@ -56,7 +56,7 @@ function fixture() {
 }
 
 describe('全部服务器筛选行导出的严格IPC', () => {
-  it.each(['csv', 'json', 'sql', 'xlsx'])('%s接受非空有序字段选择，省略仍保持旧请求', format => {
+  it.each(['csv', 'json', 'sql', 'xlsx', 'html'])('%s接受非空有序字段选择，省略仍保持旧请求', format => {
     const value = { ...input, format, columns: ['字段乙', '字段甲'] };
     expect(validateCommand('table.exportFiltered', value)).toEqual(value);
     expect(validateCommand('table.exportFiltered', { ...input, format })).toEqual({ ...input, format });
@@ -64,7 +64,7 @@ describe('全部服务器筛选行导出的严格IPC', () => {
     const maximum = Array.from({ length: tableFilteredExportLimits.columns }, (_, index) => '列' + index);
     expect(validateCommand('table.exportFiltered', { ...value, columns: maximum })).toMatchObject({ columns: maximum });
   });
-  it.each(['csv', 'json', 'sql', 'xlsx'])('%s仅接受元数据键与完整原筛选排序，不引入任意SQL或路径', format => {
+  it.each(['csv', 'json', 'sql', 'xlsx', 'html'])('%s仅接受元数据键与完整原筛选排序，不引入任意SQL或路径', format => {
     expect(publicCommands['table.exportFiltered']).toBe(true);
     const value = { ...input, format, filters: [{ column: '金额', operator: 'IN', values: ['9007199254740993.000000000001', ''], enabled: false }], filterMode: 'any', filterGroup: { mode: 'any', children: [0] }, sort: [{ column: '金额', direction: 'DESC' }] };
     expect(validateCommand('table.exportFiltered', value)).toEqual(value);
@@ -81,7 +81,7 @@ describe('全部服务器筛选行导出的严格IPC', () => {
   });
   it('CSV接受三种分隔符，其他格式及显式undefined不接受分隔符', () => {
     for (const csvDelimiter of [',', ';', '\t']) expect(validateCommand('table.exportFiltered', { ...input, csvDelimiter })).toMatchObject({ csvDelimiter });
-    for (const value of [{ ...input, csvDelimiter: undefined }, { ...input, csvDelimiter: '|' }, ...['json', 'sql', 'xlsx'].map(format => ({ ...input, format, csvDelimiter: ',' }))]) expect(() => validateCommand('table.exportFiltered', value)).toThrow();
+    for (const value of [{ ...input, csvDelimiter: undefined }, { ...input, csvDelimiter: '|' }, ...['json', 'sql', 'xlsx', 'html'].map(format => ({ ...input, format, csvDelimiter: ',' }))]) expect(() => validateCommand('table.exportFiltered', value)).toThrow();
   });
 });
 

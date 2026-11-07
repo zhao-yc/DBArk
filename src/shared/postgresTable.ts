@@ -6,6 +6,7 @@ import { strictTableLayoutPreferences } from './tablePreferences';
 import { postgresRelatedTabPrefix } from './postgresRelatedTab';
 import { postgresHistogramBins } from './postgresTableHistogram';
 import { postgresIdentifier, postgresRelationName } from './postgresSql';
+import { queryHtmlZh } from './queryHtml.zh-CN';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -205,7 +206,7 @@ export interface PostgresRelatedTablePage {
   search: string;
   editToken?: string;
 }
-const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup']);
+const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', 'html']);
 export const postgresBackupTableLimit = 64;
 export const postgresBackupSetTitle = 'PostgreSQL 多表备份';
 const backupSource = z.object({ connectionId: identity, database: identity }).strict();
@@ -239,6 +240,7 @@ export const postgresTableExportSchema = target.extend({
   if (input.csvDelimiter !== undefined && postgresTableExportExtension(input.format) !== 'csv')
     context.addIssue({ code: 'custom', message: '只有 CSV 可指定分隔符' });
   if (input.format === 'xlsx' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'XLSX 使用固定内部编码' });
+  if (input.format === 'html' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: queryHtmlZh.utf8 });
   if ((input.format === 'sql' || input.format === 'sql-backup') && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL SQL 脚本使用 UTF-8' });
   if (input.format === 'copy' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL COPY CSV 使用 UTF-8' });
 });

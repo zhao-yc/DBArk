@@ -42,7 +42,7 @@ async function input(patch: Partial<TableFilteredExportInput> = {}): Promise<Tab
 }
 
 describe('当前服务器筛选全部行SQL计划', () => {
-  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s显式列顺序只控制SELECT，未选列仍可筛选、排序及补可靠键', async format => {
+  it.each(['csv', 'json', 'sql', 'xlsx', 'html'] as const)('%s显式列顺序只控制SELECT，未选列仍可筛选、排序及补可靠键', async format => {
     const request = await input({ format, columns: ['payload', 'amount'], filters: [{ column: 'label', operator: '=', value: '中文' }], sort: [{ column: 'calculated', direction: 'DESC' }] });
     const plan = planTableFilteredExport(source, request);
     expect(plan.columns.map(column => column.name)).toEqual(['payload', 'amount']); expect(plan.columns[0]).toBe(source.columns[4]);
@@ -70,11 +70,11 @@ describe('当前服务器筛选全部行SQL计划', () => {
   it('SQL数据投影排除生成列，但原筛选及排序仍可引用其原元数据', async () => {
     const plan = planTableFilteredExport(source, await input({ format: 'sql', sort: [{ column: 'calculated', direction: 'DESC' }] })); expect(plan.columns.map(column => column.name)).toEqual(names.filter(name => name !== 'calculated')); expect(plan.sql).toContain('ORDER BY `calculated` DESC, `id` ASC'); expect(plan.sql.slice(0, plan.sql.indexOf(' FROM '))).not.toContain('`calculated`');
   });
-  it('视图SQL不假设INSERT可写性，原文件保持且零全量SELECT；其它三格式仍可生成读取计划', async () => {
+  it('视图SQL不假设INSERT可写性，原文件保持且零全量SELECT；其余数据格式仍可生成读取计划', async () => {
     source.objectKind = 'view'; source.engine = ''; source.ddl = 'CREATE VIEW `subject` AS SELECT `id`,`amount`,`at_value`,`label`,`payload`,1+2 AS `calculated`,`floating` FROM `库``名`.`base`';
     const request = await input({ format: 'sql' }); await expect(prepareTableFilteredExport(context, request, { stop: vi.fn(), onCommitStart() {} })).rejects.toThrow('无法确认视图INSERT可写性');
     expect(await readFile(request.filePath, 'utf8')).toBe('原目标'); expect(await readdir(directories.at(-1)!)).toEqual(['result']); expect(ports.frames).not.toHaveBeenCalled();
-    for (const format of ['csv', 'json', 'xlsx'] as const) expect(planTableFilteredExport(source, { ...request, format }).columns.map(column => column.name)).toEqual(names);
+    for (const format of ['csv', 'json', 'xlsx', 'html'] as const) expect(planTableFilteredExport(source, { ...request, format }).columns.map(column => column.name)).toEqual(names);
   });
   it('旧metadataKey、未知/重复排序、非法方向及其它格式携带CSV参数零执行拒绝', async () => {
     for (const patch of [{ metadataKey: 'stale' }, { sort: [{ column: 'missing', direction: 'ASC' }] }, { sort: [{ column: 'label', direction: 'ASC' }, { column: 'label', direction: 'DESC' }] }, { sort: [{ column: 'label', direction: 'INVALID' }] }, { format: 'json', csvDelimiter: ';' }]) expect(() => planTableFilteredExport(source, { ...{ connectionId: 'c', database: source.database, table: source.name, taskId: 't', fileToken: 'f', metadataKey: tableCopyMetadataKey(source), filters: [], sort: [], format: 'json', encoding: 'utf8' }, ...patch } as TableFilteredExportInput)).toThrow();
@@ -83,7 +83,7 @@ describe('当前服务器筛选全部行SQL计划', () => {
 });
 
 describe('真实文件完整暂存与精度', () => {
-  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s真实文件仅含有序选列并保留精确值及NULL/空字节', async format => {
+  it.each(['csv', 'json', 'sql', 'xlsx', 'html'] as const)('%s真实文件仅含有序选列并保留精确值及NULL/空字节', async format => {
     const selected = ['payload', 'amount', 'id'], positions = selected.map(name => names.indexOf(name));
     columns = selected; rawTypes = positions.map(index => types[index]); rawRows = rawRows.map(row => positions.map(index => row[index]));
     const request = await input({ format, columns: selected }), staged = await prepareTableFilteredExport(context, request, { stop: vi.fn(), onCommitStart() {} });
@@ -100,13 +100,17 @@ describe('真实文件完整暂存与精度', () => {
         expect(values).toEqual([{ payload: { type: 'binary', base64: 'AP8=' }, amount: '9007199254740993.123456789012', id: '18446744073709551615' }, { payload: { type: 'binary', base64: '' }, amount: null, id: '18446744073709551614' }]);
       } else if (format === 'csv') {
         expect(parse(content)).toEqual([selected, ['base64:AP8=', '9007199254740993.123456789012', '18446744073709551615'], ['base64:', '\\N', '18446744073709551614']]);
+      } else if (format === 'html') {
+        expect(content).toContain('<th scope="col">payload</th><th scope="col">amount</th><th scope="col">id</th>');
+        expect(content).toContain('<tr><td data-kind="binary">base64:AP8=</td><td>9007199254740993.123456789012</td><td>18446744073709551615</td></tr>');
+        expect(content).toContain('<tr><td data-kind="binary">base64:</td><td data-kind="null" class="marker">NULL</td><td>18446744073709551614</td></tr>');
       } else {
         expect(content).toContain('INSERT INTO `库``名`.`subject` (`payload`, `amount`, `id`) VALUES ('); expect(content).toContain("X'00ff'"); expect(content).toContain(Buffer.from('9007199254740993.123456789012').toString('hex')); expect(content).toContain(Buffer.from('18446744073709551615').toString('hex')); expect(content).toContain('NULL');
         for (const omitted of ['at_value', 'label', 'calculated', 'floating']) expect(content).not.toContain('`' + omitted + '`');
       }
     }
   });
-  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s非法字段选择在打开暂存或执行数据SELECT之前拒绝，原文件不变', async format => {
+  it.each(['csv', 'json', 'sql', 'xlsx', 'html'] as const)('%s非法字段选择在打开暂存或执行数据SELECT之前拒绝，原文件不变', async format => {
     const invalid: string[][] = [[], ['id', 'id'], ['missing'], Array.from({ length: tableFilteredExportLimits.columns + 1 }, (_, index) => 'c' + index)];
     if (format === 'sql') invalid.push(['id', 'calculated']);
     for (const columns of invalid) {
@@ -140,7 +144,7 @@ describe('真实文件完整暂存与精度', () => {
     rawRows = Array.from({ length: 1201 }, (_, index) => [String(index), '1.000000000000', null, '', null, 3, 0]); const request = await input(), staged = await prepareTableFilteredExport(context, request, { stop: vi.fn(), onCommitStart() {} }); expect(staged.rows).toBe(1201); await staged.commit(); await staged.dispose(); expect(JSON.parse(await readFile(request.filePath, 'utf8'))).toHaveLength(1201);
     rawRows = []; const empty = await input(), emptyStage = await prepareTableFilteredExport(context, empty, { stop: vi.fn(), onCommitStart() {} }); await emptyStage.commit(); await emptyStage.dispose(); expect(JSON.parse(await readFile(empty.filePath, 'utf8'))).toEqual([]);
   });
-  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s警告、旧源或取消拒绝发布，原目标保持且独占暂存清理', async format => {
+  it.each(['csv', 'json', 'sql', 'xlsx', 'html'] as const)('%s警告、旧源或取消拒绝发布，原目标保持且独占暂存清理', async format => {
     const request = await input({ format }); warnings = [{ Level: 'Warning', Code: 1265, Message: '合成转换' }];
     // SQL先消除另有专门拒绝用例的负零，不让无关类型门遮住本次原warning测试。
     if (format === 'sql') { columns.splice(5, 1); rawTypes.splice(5, 1); rawRows = rawRows.map(row => row.filter((_cell, index) => index !== 5).map(value => typeof value === 'number' && Object.is(value, -0) ? 0 : value)); }

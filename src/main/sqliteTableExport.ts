@@ -12,6 +12,7 @@ import { csvCell, csvHeader } from '../engine/files';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import { buildSqliteTableSelect, quoteSqliteIdentifier, readSqliteTableCatalogue, verifySqliteTableScope, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 import { readSqliteSchemaExport } from './sqliteSchemaExport';
+import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd } from '../engine/queryHtml';
 
 export const sqliteTableExportLimits = { fileBytes: 10 * 1024 ** 3 } as const;
 /** 只有Main同进程可注入原窗口、目标复核及跨入口预留，公共IPC没有这些能力。 */
@@ -20,8 +21,6 @@ export interface SqliteExportDestination {
   retainDestinationUntil(recovered: Promise<void>): void;
 }
 export type SqliteTableExportRequest = SqliteTableExportInput & SqliteExportDestination;
-type SqliteExportFileInput = Pick<SqliteTableExportRequest, 'filePath' | 'encoding' | 'validateDestination'> &
-  { format: SqliteTableExportRequest['format'] | 'html' };
 interface FileRecord {
   path: string; handle?: WritableFile; closed: boolean; removed: boolean;
   closeWork?: Promise<void>; removeWork?: Promise<void>; removeOwned?: () => Promise<void>;
@@ -40,7 +39,7 @@ export class SqliteTableExportFile {
   private finishRecovery!: () => void;
   readonly recovered: Promise<void>;
 
-  constructor(private readonly input: SqliteExportFileInput, private readonly check: () => void, private readonly commitStart: () => void, private readonly io: AtomicFileIO = nativeAtomicFileIO, private readonly maxBytes = sqliteTableExportLimits.fileBytes) {
+  constructor(private readonly input: Pick<SqliteTableExportRequest, 'filePath' | 'format' | 'encoding' | 'validateDestination'>, private readonly check: () => void, private readonly commitStart: () => void, private readonly io: AtomicFileIO = nativeAtomicFileIO, private readonly maxBytes = sqliteTableExportLimits.fileBytes) {
     if (!isAbsolute(input.filePath) || input.filePath.includes('\0')) throw Error('Main未提供已授权的SQLite导出目标');
     this.target = resolve(input.filePath); this.recovered = new Promise<void>(resolve => { this.finishRecovery = resolve; });
   }
@@ -148,7 +147,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     await verifySqliteTableScope(driver, parsed, control);
     const structure = parsed.format === 'sql' && (parsed.sqlContent === 'structure' || parsed.sqlContent === 'structure-data'), hasData = !(structure && parsed.sqlContent === 'structure');
     const names = new Map(source.columns.map(column => [column.name, column])), selected: SqliteTableColumn[] = parsed.columns.map(name => { const column = names.get(name); if (!column) throw Error('SQLite导出列已不存在，请刷新表结构'); return column; });
-    if (parsed.format === 'sql' && (hasData && source.kind !== 'table' || selected.some(column => column.generated))) throw Error('SQLite INSERT导出不接受视图或显式生成列，请改用CSV/JSON/XLSX或重新选择普通列');
+    if (parsed.format === 'sql' && (hasData && source.kind !== 'table' || selected.some(column => column.generated))) throw Error('SQLite INSERT导出不接受视图或显式生成列，请改用CSV/JSON/XLSX/HTML或重新选择普通列');
     if (structure && hasData) {
       const writable = source.columns.filter(column => !column.generated);
       if (selected.length !== writable.length || writable.some(column => !parsed.columns.includes(column.name))) throw Error('SQLite结构及数据导出必须恰好选择全部非生成列，允许调整列顺序');
@@ -161,6 +160,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     if (parsed.format !== 'xlsx' && parsed.encoding === 'utf16le') await file.write('\uFEFF');
     if (parsed.format === 'csv') await file.write(selected.map(column => csvHeader(column.name, delimiter)).join(delimiter) + '\r\n');
     if (parsed.format === 'json') await file.write('[\n');
+    if (parsed.format === 'html') await file.write(queryHtmlDocumentStart({ scope: 'table' }) + queryHtmlTableStart(selected.map(column => column.name)));
     if (schema) await file.write(schema.beforeData);
     if (parsed.format === 'xlsx') {
       excel = startExcelExportRows({ filePath: input.filePath, columns: selected.map(column => ({ name: column.name, type: 'SQLITE' })), deferredAtomicFile: file.excelFile(), checkCancelled: control.check, onCommitStart: () => { throw Error('SQLite Excel不能自行发布文件'); } });
@@ -176,7 +176,8 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
           else if (parsed.format === 'sql') await file.write('INSERT INTO "main".' + quoteSqliteIdentifier(parsed.table) + ' (' + selected.map(column => quoteSqliteIdentifier(column.name)).join(', ') + ') VALUES (' + row.map(sqliteInsertLiteral).join(', ') + ');\n');
           else {
             const values = row.map(sqliteWorkspaceValue);
-            await file.write(parsed.format === 'csv' ? values.map(value => csvCell(value, delimiter)).join(delimiter) + '\r\n' : (count ? ',\n' : '') + '{' + selected.map((column, index) => JSON.stringify(column.name) + ':' + JSON.stringify(values[index])).join(',') + '}');
+            if (parsed.format === 'html') await file.write(queryHtmlRow(values));
+            else await file.write(parsed.format === 'csv' ? values.map(value => csvCell(value, delimiter)).join(delimiter) + '\r\n' : (count ? ',\n' : '') + '{' + selected.map((column, index) => JSON.stringify(column.name) + ':' + JSON.stringify(values[index])).join(',') + '}');
           }
           count++; if (count % 100 === 0) control.progress(count);
         }
@@ -185,6 +186,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     if (result && (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== count)) throw Error('SQLite完整导出没有取得完整原生终态，文件未发布');
     if (excel && (await excel.complete()).rows !== count) throw Error('SQLite Excel导出行数与原结果不一致');
     if (parsed.format === 'json') await file.write('\n]\n');
+    if (parsed.format === 'html') await file.write(queryHtmlTableEnd(count) + queryHtmlDocumentEnd);
     if (schema) await file.write(schema.afterData);
   } catch (reason) { failed = true; failure = reason; await excel?.abort(reason); }
   control.beginCleanup();

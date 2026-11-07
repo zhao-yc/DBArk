@@ -74,7 +74,7 @@ export class ResultFileTasks {
       }
       file = await AtomicFile.create(input.filePath, encoding, checkCancelled, () => { task.committing = true; }, this.io, input.format === 'sql' ? resultSqlLimits.fileBytes : undefined);
       if (encoding === 'utf16le') await write('\uFEFF');
-      if (html) await write(queryHtmlDocumentStart(true, input.result.truncated) + queryHtmlTableStart(columns.map(column => column.exportName)));
+      if (html) await write(queryHtmlDocumentStart({ scope: 'returned', truncated: input.result.truncated }) + queryHtmlTableStart(columns.map(column => column.exportName)));
       else await write(sqlTarget ? resultSqlHeader(sqlTarget) : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n' : '[\n');
       for (const row of input.result.rows) {
         // 按列描述顺序取值，不能依赖行对象的枚举顺序；手工构造 JSON 键值对保留原型同名键。
