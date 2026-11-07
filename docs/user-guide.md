@@ -840,6 +840,8 @@ SQL 文件按顺序执行，支持 `DELIMITER`。文件结束时若仍有未提�
 
 在工具栏打开“全库搜索”，明确选择连接、数据库和对象范围，再切换名称、定义正文或数据模式。数据模式须选择字段并确认分批结果；对象失败会列出明细。命中记录重新核验后按只读方式定位，不能把只读命中当成可编辑表。完整范围、身份及权限限制见[搜索说明](database-search.md)。
 
+在 MySQL 或 MariaDB 的「定义正文」中选择「服务器正则」。打开命中后，如果定义内容仍一致，可以通过「上一处定义命中」和「下一处定义命中」查看高亮的非空匹配。[定义正则定位](development/mysql-definition-navigation-20261107.md)
+
 MySQL 和 MariaDB 在具有完整原行证据的命中详情里提供「编辑命中记录」。修改字段后预览 SQL，确认后提交，并可在提交记录里核对事务结果。[MySQL 和 MariaDB 命中编辑](development/mysql-search-record-edit-20261107.md)
 
 选择 PostgreSQL 连接可跨数据库搜索结构名称。双击命中可打开相应的只读结构、序列或例程详情，字段、索引及约束会定位到当前结构中的同名项。[PostgreSQL 结构搜索](development/postgres-structure-search-20261107.md)

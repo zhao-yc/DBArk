@@ -8,5 +8,5 @@ export const definitionNavigationZh = {
   count: (index: number, count: number) => `第 ${index + 1} / ${count} 处`,
   position: (line: number, column: number) => ` · 第 ${line} 行，第 ${column} 列`,
   capped: (limit: number) => `仅显示前 ${limit} 处，已探测到额外命中；导航只在已显示范围内循环。`,
-  complete: '已列出该定义的全部非重叠命中。',
+  complete: '已列出该定义可定位的全部非空命中。',
 };

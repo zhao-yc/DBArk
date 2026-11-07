@@ -109,9 +109,9 @@ for (const change of ['定义变化', '读取失败']) test(`搜索后${change}�
     if (change === '定义变化') await expect(definition(context).locator('.monaco-editor .view-lines')).toContainText('changed'); else await expect(definition(context).locator('.monaco-editor')).toHaveCount(0);
   }, info);
 });
-test('服务器正则只显示真实当前定义和明确降级，不伪称零处或复制JS正则结果', async ({}, info) => {
+test('只有零宽命中的服务器正则显示真实当前定义和明确降级', async ({}, info) => {
   await database(async context => {
-    const { page, desktop } = context; context.assertCurrent(); await context.observer.query(`CREATE TABLE ${target(context, 'subject')}(id INT) COMMENT='NavMark'`); await search(context, context.database, 'NavM.rk', 'regexp'); await open(context, 'subject'); await expect(definition(context).getByRole('status')).toHaveText(t.unavailable); await expect(navigation(context)).toHaveCount(0); await expect(definition(context).locator('.monaco-editor .view-lines')).toContainText('NavMark'); }, info);
+    const { page, desktop } = context; context.assertCurrent(); await context.observer.query(`CREATE TABLE ${target(context, 'subject')}(id INT) COMMENT='NavMark'`); await search(context, context.database, '^', 'regexp'); await open(context, 'subject'); await expect(definition(context).getByRole('status')).toHaveText(t.unavailable); await expect(navigation(context)).toHaveCount(0); await expect(definition(context).locator('.monaco-editor .view-lines')).toContainText('NavMark'); }, info);
 });
 test('延迟真实定义回包后关闭并打开另一对象，旧回包不覆盖新正文、URI或计数', async ({}, info) => {
   await database(async context => {

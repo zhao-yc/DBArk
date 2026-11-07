@@ -6,6 +6,7 @@ const name=z.string().min(1).max(64).refine(value=>!/[\0\ud800-\udfff]/.test(val
 const columnSchema=z.object({column:name,qualifier:name.optional(),representation:z.enum(['text','hex']).default('text')}).strict();
 export interface DatabaseSearchColumn{column:string;qualifier?:string;representation?:'text'|'hex'}
 export interface DatabaseSearchPredicate{sql:string;params:string[]}
+export const databaseSearchRegexpCollation = (caseSensitive: boolean) => caseSensitive ? 'utf8mb4_bin' : 'utf8mb4_unicode_ci';
 
 /** 名称只走逐段引用，值只走预处理参数；HEX表示搜索可见十六进制文本，不冒充字节边界查找。 */
 export function databaseSearchMatch(columnInput:DatabaseSearchColumn,patternInput:unknown):DatabaseSearchPredicate{
@@ -15,7 +16,7 @@ export function databaseSearchMatch(columnInput:DatabaseSearchColumn,patternInpu
   const text='CONVERT('+expression+' USING utf8mb4)',parameter='CONVERT(? USING utf8mb4)';
   if(pattern.mode==='regexp'){
     // MySQL8正则拒绝二进制字符串；使用文本字符集和明确排序规则，保留各服务器自己的正则语义。
-    const collation=pattern.caseSensitive?'utf8mb4_bin':'utf8mb4_unicode_ci';
+    const collation=databaseSearchRegexpCollation(pattern.caseSensitive);
     return{sql:text+' COLLATE '+collation+' REGEXP '+parameter+' COLLATE '+collation,params:[pattern.text]};
   }
   const left=pattern.caseSensitive?text:'LOWER('+text+')',right=pattern.caseSensitive?parameter:'LOWER('+parameter+')';

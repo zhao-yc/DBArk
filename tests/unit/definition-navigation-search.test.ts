@@ -40,6 +40,20 @@ describe('定义正文有界位置与服务器语义边界', () => {
   it.each(['[', '(a+)+$', '(?=😀)|$', '(?<=x)y'])('服务器正则%s不在本地重跑、不伪称零处或完整计数', text => {
     const result = definitionNavigationResult('a'.repeat(20000) + '!', pattern(text, 'regexp')); expect(result).toMatchObject({ status: 'unavailable', reason: 'server-regexp' }); expect(Object.hasOwn(result, 'ranges')).toBe(false); expect(Object.hasOwn(result, 'limitReached')).toBe(false);
   });
+  it('原文往返后从服务器边界恢复 UTF16 范围并跳过空匹配', () => {
+    const start = '\x01', end = '\x02';
+    const result = definitionNavigationResult('😀x\r\ny', pattern('服务器模式', 'regexp'),
+      { regexp: { start, end, marked: start + end + '😀' + start + 'x' + end + '\r\n' + start + 'y' + end } });
+    expect(result).toMatchObject({ status: 'ready', ranges: [{ offset: 2, length: 1 }, { offset: 5, length: 1 }], limitReached: false });
+    for (const marked of ['😀' + start + 'z' + end + '\r\ny', start + '😀x\r\ny', '😀x\r\n', start + end + '😀x\r\ny'])
+      expect(definitionNavigationResult('😀x\r\ny', pattern('x', 'regexp'), { regexp: { start, end, marked } })).toMatchObject({ status: 'unavailable' });
+  });
+  it.each([200, 201])('服务器正则的 %s 个片段保持准确的截断边界', count => {
+    const result = definitionNavigationResult('x'.repeat(count), pattern('x', 'regexp'),
+      { regexp: { start: '\x01', end: '\x02', marked: '\x01x\x02'.repeat(count) } });
+    expect(result).toMatchObject({ status: 'ready', limitReached: count > 200 });
+    expect(result.status === 'ready' && result.ranges.length).toBe(200);
+  });
   it('服务器判命中但普通文字未映射、空needle或超预算时不制造首处位置', () => {
     for (const result of [definitionNavigationResult('x', pattern('y')), definitionNavigationResult('x', pattern('', 'whole')), definitionNavigationResult('中'.repeat(700000), pattern('中'))]) { expect(result.status).toBe('unavailable'); expect(Object.hasOwn(result, 'ranges')).toBe(false); }
   });

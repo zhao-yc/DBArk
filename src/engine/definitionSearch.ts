@@ -3,7 +3,7 @@ import {structureSearchLimits,searchIdentifier,type DefinitionSearchKind,type St
 import type {ManagedConnection} from './connection';
 import type {StructureTaskContext} from './structureDefinition';
 import {completionQuery} from './completionQuery';
-import {databaseSearchMatch} from './databaseSearchMatch';
+import {databaseSearchMatch,databaseSearchRegexpCollation} from './databaseSearchMatch';
 import {qualified} from './sql';
 import {definitionOmittingSqlModes} from '../shared/tableColumnPatches';
 import {definitionNavigationResult} from './definitionNavigation';
@@ -41,6 +41,33 @@ export function definitionMatchQuery(source:string,pattern:StructureSearchInput[
  return{sql:'SELECT CHAR_LENGTH(definition_text) AS characters'+(folded?', LOWER(definition_text) AS navigationText, LOWER(navigation_pattern) AS navigationNeedle':'')+' FROM (SELECT CONVERT(? USING utf8mb4) AS definition_text'+(folded?', CONVERT(? USING utf8mb4) AS navigation_pattern':'')+') AS search_definition WHERE '+match.sql,params:[source,...(folded?[pattern.text]:[]),...match.params]};
 }
 
+/** 使用同一排序规则和原始正则，不插入捕获组，保留反向引用、断言和锚点。 */
+function regexpNavigationQuery(source: string, pattern: StructureSearchInput['pattern'], maria: boolean) {
+ const markers = ['\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x1e', '\x1f'].filter(marker => !source.includes(marker));
+ if (markers.length < 2) return;
+ const [start, end] = markers, collation = databaseSearchRegexpCollation(pattern.caseSensitive);
+ const text = 'CONVERT(? USING utf8mb4) COLLATE ' + collation;
+ // MariaDB 的替换在第一个空匹配处停止。位置查询用 PCRE2 非空选项，命中判定仍使用用户原式。
+ const expression = maria ? '(*NOTEMPTY)' + pattern.text : pattern.text;
+ return { start, end, sql: 'SELECT REGEXP_REPLACE(' + [text, text, text].join(',') + ') AS marked',
+  params: [source, expression, start + (maria ? '\\0' : '$0') + end] };
+}
+
+async function regexpNavigation(source: string, pattern: StructureSearchInput['pattern'], managed: ManagedConnection, control: Control) {
+ if (managed.status.dialect === 'mysql' && /^5\./.test(managed.status.version)) return;
+ const query = regexpNavigationQuery(source, pattern, managed.status.dialect === 'mariadb');
+ if (!query) return;
+ try {
+  const { rows } = await completionQuery<{ marked: unknown }[]>(managed, control, query.sql, query.params);
+  control.checkCancelled();
+  if (rows.length === 1) return { marked: rows[0].marked, start: query.start, end: query.end };
+ } catch (error) {
+  control.checkCancelled();
+  // 补充位置不可用时保留已经由服务器确认的对象命中。连接错误和取消沿用原任务终态。
+  if (managed.broken || ![1139, 1305, 3698, 3699].includes(Number((error as { errno?: number }).errno))) throw error;
+ }
+}
+
 /** 每页最多检查十个定义，页间只保留二进制名称位置，不持有连接或完整定义正文。 */
 export async function readDefinitionSearchPage(state:DefinitionSearchState,managed:ManagedConnection,control:Control):Promise<StructureSearchPage>{
  const input=state.input,page:StructureSearchPage={hits:[],failures:[],totalHits:state.total,completedScopes:state.scope,scopeCount:input.databases.length*input.kinds.length,limitReached:false,stoppedOnError:false,scannedDefinitions:state.scannedDefinitions??0};
@@ -57,7 +84,11 @@ export async function readDefinitionSearchPage(state:DefinitionSearchState,manag
    if(rows.length>2)throw Error('定义目录超过单对象枚举预算');if(rows.length===0){state.scope++;delete state.after;continue;}
    object=searchIdentifier.parse(rows[0].object_name);hasMore=rows.length>1;state.after={object,name:object};objects++;state.scannedDefinitions=(state.scannedDefinitions??0)+1;
    const spec=showTypes[kind],source=definitionText(kind,await read('SHOW CREATE '+spec.type+' '+qualified(database,object))),query=definitionMatchQuery(source,input.pattern),matched=await read(query.sql,query.params);
-   if(matched.length>1)throw Error('定义匹配返回了多条状态');if(matched.length){const characters=Number(matched[0].characters);if(!Number.isSafeInteger(characters)||characters<1||characters>structureSearchLimits.definitionBytes)throw Error('定义长度信息无效');page.hits.push({database,kind,object,name:object,parentKind:kind,matchedIn:'definition',definitionCharacters:characters,definitionNavigation:definitionNavigationResult(source,input.pattern,matched[0])});state.total++;}
+   if(matched.length>1)throw Error('定义匹配返回了多条状态');if(matched.length){
+    const characters=Number(matched[0].characters);if(!Number.isSafeInteger(characters)||characters<1||characters>structureSearchLimits.definitionBytes)throw Error('定义长度信息无效');
+    const facts = input.pattern.mode === 'regexp' ? { regexp: await regexpNavigation(source, input.pattern, managed, control) } : matched[0];
+    page.hits.push({database,kind,object,name:object,parentKind:kind,matchedIn:'definition',definitionCharacters:characters,definitionNavigation:definitionNavigationResult(source,input.pattern,facts)});state.total++;
+   }
    if(!hasMore){state.scope++;delete state.after;}
   }catch(error){
    control.checkCancelled();if(managed.broken)throw error;page.failures.push({database,kind,...(object?{object}:{}),message:(error instanceof Error?error.message:String(error)).slice(0,1024)});
