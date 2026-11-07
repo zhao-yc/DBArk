@@ -1,6 +1,10 @@
 /** 类型参数查询文案集中管理，值只在当前表单保留，不进入持久化工作区。 */
 export const parameterZh = {
   title: '类型参数查询', open: '参数执行', hint: '以 :name 表示一个值参数。选区优先；没有选区时使用全部 SQL。重复名称共用一个值，表名和列名请直接写在 SQL 中。',
+  sqliteCurrentOpen: '参数执行当前语句',
+  sqliteCurrentMissing: '光标位置没有可执行的 SQLite 语句。',
+  sqliteCurrentTooLong: 'SQLite SQL 全文不能超过 20 MiB。',
+  sqliteCurrentHint: '只对光标所在的完整语句填写 :name 并执行。相邻语句不参与参数识别，也不会执行。',
   transactionUnknown: '事务状态需核对', transactionUnknownHint: '服务器错误包不提供当前事务状态。可明确提交或回滚；后续成功查询会按实际协议状态更新提示，不会自动重放写操作。',
   source: '本次 SQL 模板', sourceTruncated: '模板较长，预览仅显示前 65536 个字符，执行使用完整原文。',
   namesLoading: '正在读取当前会话并识别参数…', retry: '重新识别参数', noParameters: '当前可分析语句没有发现值参数。动态脚本可手动添加后续语句需要的参数。',

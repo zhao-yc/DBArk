@@ -1,3 +1,5 @@
+import type { SqlStatementRange } from './sqlScriptScanner';
+
 type Head = 'start' | 'explain' | 'explain-query' | 'explained' | 'create' | 'create-temp' | 'create-unique' | 'create-virtual' | 'ordinary';
 const identifierStart = (character: string) => /[A-Za-z_\u0080-\uFFFF]/.test(character);
 const identifierPart = (character: string) => /[A-Za-z0-9_$\u0080-\uFFFF]/.test(character);
@@ -65,4 +67,19 @@ export function scanSqliteStatementPositions(source: string, accept: SqliteAccep
   if (depth) throw Error('SQLite SQL全文存在未闭合括号');
   if (trigger && !closed) throw Error('SQLite SQL全文存在未闭合CREATE TRIGGER');
   emit(source.length, source.length, null);
+}
+
+/** 当前入口仍支持20MiB完整原文及任意语句数量，只保留命中与必要边界候选，并扫完全文核未闭合。
+ * Monaco光标沿UTF16半开区间；空白/空语句绝不回退全文或跨空白寻找相邻SQL。
+ */
+export function locateSqliteStatement(source: string, offset: number): SqlStatementRange | undefined {
+  if (typeof source !== 'string' || !Number.isSafeInteger(offset) || offset < 0 || offset > source.length) throw Error('SQLite当前语句光标位置无效，请重新选择');
+  if (source[offset - 1] === '\r' && source[offset] === '\n') throw Error('SQLite当前语句光标不能位于CRLF换行内部');
+  if (offset > 0 && offset < source.length && /[\uD800-\uDBFF]/.test(source[offset - 1]) && /[\uDC00-\uDFFF]/.test(source[offset])) throw Error('SQLite当前语句光标不能位于Unicode代理对内部');
+  let containing: SqlStatementRange | undefined, boundary: SqlStatementRange | undefined;
+  scanSqliteStatementPositions(source, (start, end, delimiterStart, delimiterEnd, delimiter) => {
+    if (offset >= start && offset < delimiterEnd) containing = { sql: source.slice(start, end), start, end, delimiterStart, delimiterEnd, delimiter };
+    else if (offset >= start && offset === delimiterEnd && (offset === source.length || source[offset] === '\r' || source[offset] === '\n')) boundary = { sql: source.slice(start, end), start, end, delimiterStart, delimiterEnd, delimiter };
+  });
+  return containing ?? boundary;
 }

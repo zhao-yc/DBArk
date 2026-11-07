@@ -11,7 +11,17 @@ describe('类型参数公共IPC与驱动边界', () => {
     expect(() => validateSqliteQueryParameters(mysql)).toThrow('64'); expect(() => validateQueryParameters(sqlite, 38, true)).toThrow();
   });
   it('不能用自报dialect、绑定map或额外SQL字段改变原受限契约', () => {
-    for (const extra of [{ dialect: 'sqlite' }, { namedParameters: { ':value': '隐私值' } }, { currentStatement: { offset: 0 } }, { executable: 'SQL' }]) expect(() => validateCommand('query.executeParameterized', { ...input([]), ...extra })).toThrow();
+    for (const extra of [{ dialect: 'sqlite' }, { namedParameters: { ':value': '隐私值' } }, { currentStatement: { offset: 0, sql: 'SELECT 2' } }, { executable: 'SQL' }]) expect(() => validateCommand('query.executeParameterized', { ...input([]), ...extra })).toThrow();
+  });
+  it('当前语句识别和执行共用受限 UTF-16 光标字段', () => {
+    const currentStatement = { offset: 7 };
+    const preview = { sessionId: 'sqlite:original', sql: 'SELECT :value' };
+    expect(validateCommand('query.parameterNames', { ...preview, currentStatement })).toEqual({ ...preview, currentStatement });
+    expect(validateCommand('query.executeParameterized', { ...input([]), currentStatement })).toEqual({ ...input([]), currentStatement });
+    for (const offset of [-1, 1.5, 99]) {
+      expect(() => validateCommand('query.parameterNames', { ...preview, currentStatement: { offset } })).toThrow();
+      expect(() => validateCommand('query.executeParameterized', { ...input([]), currentStatement: { offset } })).toThrow();
+    }
   });
   it.each([
     [{ name: 'value', type: 'integer', value: '1; DROP TABLE t' }], [{ name: 'value', type: 'date', value: '0000-01-01' }], [{ name: 'value', type: 'null', value: '不允许' }],

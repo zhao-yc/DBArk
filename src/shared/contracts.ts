@@ -260,14 +260,14 @@ export interface CommandMap {
   'postgres.analyzeDiscard': { input: { sessionId: string; token: string }; output: void };
   'query.analyze': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; acknowledged: true; expectedDatabase: string | null }; output: QueryOutcome };
   'query.analyzeContext': { input: { sessionId: string; taskId: string }; output: CompletionSessionState };
-  'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
+  'query.parameterNames': { input: { sessionId: string; sql: string; currentStatement?: { offset: number } }; output: QueryParameterNames };
   'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; transactionFailed?: boolean; broken: boolean; standardConformingStrings?: boolean } };
   'query.completionState':{input:{sessionId:string};output:CompletionSessionState};
   'query.databaseSwitch': { input: QueryDatabaseSwitchInput; output: QueryDatabaseSwitchOutput };
   'query.temporaryState':{input:{sessionId:string};output:SessionObjectSnapshot};
   'query.temporaryCompletion':{input:{sessionId:string;database:string;prefix:string;kind:'objects'}|{sessionId:string;database:string;table:string;prefix:string;kind:'columns';details?:true};output:SessionObjectCompletion};
   'query.temporaryRead':{input:{sessionId:string;database:string;table:string;taskId:string};output:SessionObjectReadResult};
-  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; continueOnError?: boolean; /** 显式采集时警告消息隐藏参数展开值。 */ collectWarnings?: boolean }; output: QueryOutcome };
+  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; currentStatement?: { offset: number }; continueOnError?: boolean; /** 显式采集时警告消息隐藏参数展开值。 */ collectWarnings?: boolean }; output: QueryOutcome };
   'query.exportStream': { input: QueryStreamExportInput; output: QueryStreamExportOutput };
   'query.confirmInsertExport': { input: import('zod').infer<typeof import('./queryInsertExport').queryInsertConfirmationSchema>; output: void };
   'query.cancel': { input: { taskId: string }; output: void };

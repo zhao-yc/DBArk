@@ -1090,6 +1090,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if ((command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.sqliteStatementTimeoutMs !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('SQLite 语句超时只能用于原 SQLite 查询会话');
+  if ((command === 'query.parameterNames' || command === 'query.executeParameterized') &&
+      input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId))
+    throw Error('当前语句的命名参数只能用于原 SQLite 查询会话');
   if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input.sql);
   if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.') || command.startsWith('postgres.queryTimeouts.')) {
     const session = sessions.get(input.sessionId);
@@ -2502,7 +2505,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const postgresSessionOwner = command === 'sessions.open' ? columns : undefined;
   const postgresSessionRevision = postgresSessionOwner ? store.connectionRevision() : undefined;
   // 实际分析与当前语句均等待Engine报告真正发送的SQL；历史不能把ANALYZE误记成裸DML。
-  const currentStatement = command === 'query.analyze' || command === 'postgres.analyze' || command === 'query.execute' && input.currentStatement !== undefined;
+  const currentStatement = command === 'query.analyze' || command === 'postgres.analyze' || (command === 'query.execute' || command === 'query.executeParameterized') && input.currentStatement !== undefined;
   const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream' || command === 'query.analyze' || command === 'postgres.analyze') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
   const pendingHistory = history ? { entry: history, currentStatement, executionSqlReceived: !currentStatement } : undefined;
   if(pendingHistory&&taskId)pendingQueryHistory.set(taskId,pendingHistory);

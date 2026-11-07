@@ -77,6 +77,30 @@ describe('SQLite原查询会话的类型参数脚本', () => {
     const outcome = await execute(h, sql, parameters); expect(outcome.results).toHaveLength(1); expect(outcome.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1, sourceRange: { start: sql.indexOf('BAD'), end: sql.indexOf('; SELECT 99') } }); expect(outcome.failure?.message).not.toContain('42'); expect(disk(profile, db => db.prepare('SELECT n FROM control ORDER BY n').all())).toEqual([{ n: 7 }, { n: 42 }]);
     expect(h.process.sent.filter(message => message.kind === 'execute')).toHaveLength(1); expect((await execute(h, 'SELECT :x', [{ name: 'x', type: 'text', value: '后继' }])).results[0].rows).toEqual([{ c0: '后继' }]);
   });
+  it('只识别和执行光标内命名参数，前后写入及其它绑定均排除', async () => {
+    const profile = fixture(), h = await open(profile), baseline = h.process.sent.length;
+    const target = 'SELECT :value, :value', sql = "INSERT INTO control VALUES(:before); -- 🚢\r\n" + target + '; INSERT INTO control VALUES(?);';
+    const start = sql.indexOf(target), currentStatement = { offset: start + 10 };
+    const parameters: QueryParameter[] = [{ name: 'value', type: 'integer', value: '9223372036854775807' }];
+    expect(h.session.parameterNames({ sessionId: h.session.sessionId, sql, currentStatement }).names).toEqual(['value']);
+    expect(() => h.session.parameterNames({ sessionId: h.session.sessionId, sql: 'SELECT 1;  SELECT 2', currentStatement: { offset: 10 } })).toThrow('光标位置');
+    await expect(execute(h, sql, [...parameters, { name: 'before', type: 'null' }], {currentStatement})).rejects.toThrow('额外');
+    expect(h.process.sent).toHaveLength(baseline);
+    const outcome = await execute(h, sql, parameters, {currentStatement, continueOnError: true});
+    expect(outcome.results.map(result => result.rows)).toEqual([[{c0: '9223372036854775807', c1: '9223372036854775807'}]]);
+    const [receipt] = outcome.sqliteResultReceipts!;
+    expect(sql.slice(receipt.sourceRange.start, receipt.sourceRange.end)).toBe(receipt.sourceRange.start === start ? target : '-- 🚢\r\n' + target);
+    expect(h.process.sent.slice(baseline).filter(frame => frame.kind === 'execute')).toEqual([expect.objectContaining({
+      sql: '-- 🚢\r\n' + target, singleStatement: true, namedParameters: { ':value': { type: 'integer', value: '9223372036854775807' } },
+    })]);
+    expect(disk(profile, db => db.prepare('SELECT n FROM control').all())).toEqual([{n: 7}]);
+
+    const invalid = sql.replace(target, 'SELEC :value');
+    const failed = await execute(h, invalid, parameters, {currentStatement});
+    expect(failed.failure?.sourceRange).toEqual({ start: invalid.indexOf('--'), end: invalid.indexOf('; INSERT') });
+    expect(failed.results).toEqual([]);
+    expect(disk(profile, db => db.prepare('SELECT n FROM control').all())).toEqual([{n: 7}]);
+  });
   it('只读拒写保原连接可继续SELECT，空BLOB/空TEXT/NULL各自保留', async () => {
     const profile = fixture(true), h = await open(profile); const failed = await execute(h, 'INSERT INTO control VALUES(:v)', [{ name: 'v', type: 'integer', value: '9' }]); expect(failed.failure).toBeDefined(); expect(h.session.state()).toMatchObject({ broken: false, transactionOpen: false });
     const outcome = await execute(h, 'SELECT typeof(:b),length(:b),typeof(:t),length(:t),:n', [{ name: 'b', type: 'binary', value: '' }, { name: 't', type: 'text', value: '' }, { name: 'n', type: 'null' }]); expect(outcome.results[0].rows).toEqual([{ c0: 'blob', c1: '0', c2: 'text', c3: '0', c4: null }]); expect(disk(profile, db => db.prepare('SELECT n FROM control').all())).toEqual([{ n: 7 }]);

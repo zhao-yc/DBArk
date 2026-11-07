@@ -586,6 +586,8 @@ SQLite 普通脚本遇到首错时，若原语句范围明确，可点「定位�
 
 SQLite 查询页可在「会话与执行选项」填写「每条语句超时（毫秒）」。空值或 0 为不限时。超时会停止脚本并保留完整前序结果，原事务状态以 SQLite 回执为准。详见 [SQLite 语句超时](development/sqlite-statement-timeout-20261107.md)。
 
+SQLite 可将光标放在一条含 `:name` 的 SQL 中，从「执行方式」选择「参数执行当前语句」。核对弹窗中的单条模板，填写参数类型和值，再点击「执行参数 SQL」。只执行这一条，参数值不会写入历史。光标或草稿变化后请重新打开表单。详见 [SQLite 参数执行当前语句](development/sqlite-current-parameters-20261107.md)。
+
 SQLite 查询页可通过「更多查询操作」或编辑器右键打开「检查 SQL 语法」。检查在当前 SQLite 会话逐句准备 SQL，标出未通过或未检查的语句，可点击选中原文。检查不会执行脚本，也不会使用前句尚未创建的对象。详见 [SQLite 原生语法检查](development/sqlite-syntax-check-20261107.md)。
 
 SQLite 查询页可在「会话与执行选项」开启「遇错继续」。全文、选区或参数脚本的普通 SQL、约束及类型错误后可以继续执行，摘要支持逐条定位失败并保留完整成功结果。默认首错停止，当前语句快捷键仍只执行一条。详见 [SQLite 脚本遇错继续](development/sqlite-continue-on-error-20261107.md)。
