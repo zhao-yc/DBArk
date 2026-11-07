@@ -5,6 +5,7 @@ import { format } from 'sql-formatter';
 import type { QueryOutcome, QueryResult, ResultColumn } from '../../shared/contracts';
 import { postgresTableLimits } from '../../shared/postgresTable';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
+import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
 import { queryResultPresetValueSchema, type QueryResultPresetValue } from '../../shared/queryResultPresets';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
 import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } from '../store';
@@ -55,6 +56,9 @@ import { QueryBindingDialog } from './QueryBindingDialog';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { useQueryFileSource } from '../useQueryFileSource';
 import { captureQueryFileSnapshot } from '../queryFileSnapshot';
+import { flushEditorContent } from '../editorContentBridge';
+import { captureHistoryInsertion, type HistoryInsertionRegistry, type HistoryInsertionTarget } from '../historyInsertion';
+import { SavedQueryMatchNavigation } from './SavedQueryMatchNavigation';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
 import './PostgresQueryTab.css';
 import '../queryPins.css';
@@ -104,11 +108,15 @@ export function PostgresQueryTab({
   closeRequest,
   onCloseRequestFinished,
   onHistory,
+  searchNavigation,
+  historyInsertionRegistry,
 }: {
   tab: WorkspaceTab;
   closeRequest?: QueryCloseRequest;
   onCloseRequestFinished?(request: QueryCloseRequest, close: boolean, keep?: WorkspaceTab): void;
   onHistory(): void;
+  searchNavigation?: SavedQueryNavigationSource;
+  historyInsertionRegistry?: HistoryInsertionRegistry;
 }) {
   const workspace = useWorkspace((s) => s),
     profile = workspace.connections.find((p) => p.id === tab.connectionId),
@@ -120,6 +128,8 @@ export function PostgresQueryTab({
     phase = useRef<Phase | undefined>(undefined),
     closeRef = useRef(closeRequest);
   closeRef.current = closeRequest;
+  const [editorInstance, setEditorInstance] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const historyInsertion = useRef<HistoryInsertionTarget | null>(null);
   const [busy, setBusy] = useState(false),
     [fileBusy, setFileBusy] = useState(false),
     [error, setError] = useState(''),
@@ -682,6 +692,45 @@ export function PostgresQueryTab({
     result = pin?.result ?? results[selected],
     controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView || !!pinSql,
     locked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft;
+  const insertionLocked = useRef(locked);
+  const fileOperation = useRef(files.isBusy);
+  useLayoutEffect(() => {
+    insertionLocked.current = locked;
+    fileOperation.current = files.isBusy;
+    historyInsertion.current?.current();
+  });
+  /** 进入历史或保存查询搜索时才捕获原选区。后续执行、切源、关闭或模型变化会撤销插入资格。 */
+  useEffect(() => {
+    if (!historyInsertionRegistry) return;
+    const unregister = historyInsertionRegistry.register(tab.id, () => {
+      historyInsertion.current?.dispose();
+      const instance = editor.current;
+      if (!instance) return null;
+      flushEditorContent(instance);
+      historyInsertion.current = captureHistoryInsertion(instance, () => {
+        const current = useWorkspace.getState();
+        const draft = current.settings.tabs.find(item => item.id === tab.id);
+        return {
+          tab: draft,
+          activeTabId: current.settings.activeTabId,
+          connection: current.connections.find(item => item.id === draft?.connectionId),
+          connectionVersion: current.connectionVersions[draft?.connectionId ?? ''] ?? 0,
+          selection: current.selection,
+          session: session.current?.id ?? '',
+          execution: phase.current?.taskId ?? '',
+          alive: alive.current && editor.current === instance,
+          busy: insertionLocked.current || !!phase.current || !!current.activeJobs[tab.id] || fileOperation.current(),
+          closing: !!closeRef.current,
+        };
+      }, listener => useWorkspace.subscribe(listener));
+      return historyInsertion.current;
+    });
+    return () => {
+      unregister();
+      historyInsertion.current?.dispose();
+      historyInsertion.current = null;
+    };
+  }, [historyInsertionRegistry, tab.id]);
   const resultSource = pin?.result ?? (!outcome?.analysis && !outcome?.explain && result?.columns.length ? result : undefined);
   const resultContext = [pin ?? outcome, pin ? undefined : selected, profile, version, scope.database];
   const snapshotIdentity = [tab, pinState, ...resultContext, resultSource];
@@ -1246,6 +1295,7 @@ export function PostgresQueryTab({
           </div>
         )}
       />} />
+      <SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={editorInstance} />
       <div className="postgres-editor">
         <SqlEditor
           value={tab.sql ?? ''}
@@ -1257,6 +1307,7 @@ export function PostgresQueryTab({
             !!presetDraft || !!pinSql || !!comparisonDraft}
           onReady={(instance) => {
             editor.current = instance;
+            setEditorInstance(instance);
           }}
           onChange={(sql) => {
             if (analyzeRef.current) clearAnalyze();

@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 支持跳转本地保存查询的正文命中，并可从全文搜索或保存列表把完整 SQL 插入活动查询的原选区。Q03、R01、W03 继续按部分覆盖记录。[PostgreSQL 保存查询导航与插入](development/postgres-saved-query-navigation-20261107.md)
+
 2026-11-06 源码增量。MariaDB 11.4.13 普通 InnoDB 表可在同一连接内复制结构或结构及数据，支持目标同库或跨库。采用 MariaDB 原生表状态和实例标识核对，沿用准确目标确认及分阶段回执。M01 为部分覆盖，暂不发布。[MariaDB 整表复制](development/mariadb-table-copy-20261106.md)
 
 2026-11-06 源码增量。MySQL 的「复制表结构」和「复制表结构及数据」可选择同一连接下的另一个现有数据库。预览绑定目标库，提交前复核其目录选项和新表占用。M01 为部分覆盖，暂不发布。[MySQL 跨库整表复制](development/mysql-cross-database-table-copy-20261106.md)

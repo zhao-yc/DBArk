@@ -4,6 +4,9 @@ import{test,expect,page,dataDir,pageErrors,answerDialogs,quitDesktop,launchDeskt
 import{enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier}from'./live-helpers';
 import type{SavedQuery}from'../../src/shared/contracts';
 import type{RowDataPacket}from'mysql2/promise';
+import {savedQueryNavigationZh as navigationText} from '../../src/renderer/locales/savedQueryNavigation.zh-CN';
+import {savedQueryInsertionZh as insertionText} from '../../src/renderer/locales/savedQueryInsertion.zh-CN';
+import {zh} from '../../src/renderer/locales/zh-CN';
 
 test.use({trace:'off'});
 const dialog=()=>page.getByRole('dialog',{name:'全库搜索：本地保存查询',exact:true});
@@ -23,6 +26,93 @@ async function save(value:Partial<SavedQuery>&{id:string;name:string;sql:string}
 async function search(value:string,mode='contains'){await dialog().getByLabel('本地搜索文字',{exact:true}).fill(value);await dialog().getByLabel('本地匹配方式',{exact:true}).selectOption(mode);await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'开始本地搜索',exact:true})).click();await expect(dialog().getByRole('button',{name:'开始本地搜索',exact:true})).toBeEnabled({timeout:20000});}
 /** 离线连接仅作为本地来源标记，不尝试连接此不可用端口。 */
 async function connection(name:string){return page.evaluate(name=>window.dbark.invoke('connections.save',{id:'',name,group:'',color:'#123456',dialect:'mysql',host:'127.0.0.1',port:1,user:'offline',database:'配置默认库'}),name);}
+
+test('PostgreSQL 保存查询正文命中可跳转，插入只替换原选区且可以撤销', async ({}, info) => {
+  const profile = await page.evaluate(() => window.dbark.invoke('connections.save', {
+    id: '', name: '离线 PostgreSQL', group: '', color: '#123456', dialect: 'postgresql',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_default',
+  }));
+  const prefix = '-- 原草稿 😀\n', selected = 'REPLACE_ME', suffix = '\n-- 保留后缀';
+  const draft = prefix + selected + suffix;
+  const sql = '-- 😀 pg_anchor_1\nSELECT pg_anchor_2;';
+  const stored = {id: 'pg-search', name: 'PostgreSQL 保存脚本', connectionId: profile.id, sql,
+    databaseContext: {state: 'known', database: 'saved_database'} as const};
+  await save(stored);
+  await page.evaluate(async ({connectionId, sql}) => {
+    const settings = await window.dbark.invoke('settings.get', {});
+    await window.dbark.invoke('settings.save', {...settings, activeTabId: 'pg-original', tabs: [
+      {id: 'pg-original', kind: 'query', title: '原 PostgreSQL 草稿', connectionId, database: 'draft_database', sql},
+    ]});
+  }, {connectionId: profile.id, sql: draft});
+  await page.addInitScript(() => { self.MonacoEnvironment = {...self.MonacoEnvironment, globalAPI: true}; });
+  await page.reload();
+  const query = page.locator('.postgres-query:visible');
+  const editor = query.locator('.postgres-editor .monaco-editor');
+  const current = () => page.evaluate(async () => {
+    const settings = await window.dbark.invoke('settings.get', {});
+    return settings.tabs.find(tab => tab.id === settings.activeTabId);
+  });
+  async function find() {
+    await open();
+    await search('pg_anchor_\\d', 'regexp');
+    await dialog().locator('.rdg-row').filter({hasText: stored.name}).click();
+  }
+  async function selectDraftText() {
+    await editor.evaluate((element, selected) => {
+      const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+      if (!instance || instance.getModel()?.getLineContent(2) !== selected) throw Error('原草稿第二行与预期不符');
+      instance.focus();
+      instance.setSelection({startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: selected.length + 1});
+    }, selected);
+  }
+  async function checkInsertion() {
+    await expect.poll(current).toMatchObject({id: 'pg-original', database: 'draft_database', sql: prefix + sql + suffix});
+    await editor.getByRole('textbox').focus();
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(current).toMatchObject({id: 'pg-original', database: 'draft_database', sql: draft});
+  }
+
+  await expect(editor.locator('.view-lines')).toContainText(selected);
+  await find();
+  await dialog().getByRole('button', {name: '打开查询（不执行）', exact: true}).click();
+  const navigation = query.getByRole('region', {name: navigationText.title});
+  await expect(navigation.getByRole('status')).toHaveText(navigationText.count(0, 2));
+  await expect(query.getByText('PostgreSQL / saved_database', {exact: true})).toBeVisible();
+  await navigation.getByRole('button', {name: navigationText.next}).click();
+  await expect(navigation.getByRole('status')).toHaveText(navigationText.count(1, 2));
+  await navigation.getByRole('button', {name: navigationText.previous}).click();
+  await expect(navigation.getByRole('status')).toHaveText(navigationText.count(0, 2));
+  await expect(editor.locator('.saved-query-match-active')).toBeVisible();
+  await page.screenshot({path: info.outputPath('PostgreSQL保存查询命中.png')});
+  await page.keyboard.insertText('定位');
+  await expect.poll(async () => (await current())?.sql).toBe(sql.replace('pg_anchor_1', '定位pg_anchor_1'));
+  await expect(navigation.getByRole('status')).toHaveText(navigationText.invalid);
+  await expect(editor.locator('.saved-query-match')).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await current())?.sql).toBe(sql);
+  await expect(navigation.getByRole('status')).toHaveText(navigationText.invalid);
+
+  await page.locator('.tab-strip').getByText('原 PostgreSQL 草稿', {exact: true}).click();
+  await selectDraftText();
+  await find();
+  await dialog().getByRole('button', {name: insertionText.insert, exact: true}).click();
+  await expect(dialog()).toHaveCount(0);
+  await checkInsertion();
+
+  await selectDraftText();
+  await query.getByRole('button', {name: '执行历史', exact: true}).click();
+  const history = page.getByRole('dialog', {name: zh.activity.text003, exact: true});
+  await history.getByRole('button', {name: zh.activity.text005, exact: true}).click();
+  const card = history.locator('.history-card').filter({hasText: stored.name});
+  await card.getByRole('button', {name: insertionText.insert, exact: true}).click();
+  await expect(history).toHaveCount(0);
+  await checkInsertion();
+  await expect(query.getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual([expect.objectContaining(stored)]);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
 
 test('较矮原生窗口中的搜索结果可真实点击、选择来源并打开，说明文字不覆盖表格',async({},info)=>{
  test.setTimeout(90000);const size=await desktop.evaluate(({BrowserWindow})=>{const window=BrowserWindow.getAllWindows()[0];window.setSize(1024,680);return window.getContentSize();});expect(size[0]).toBeLessThanOrEqual(1100);expect(size[1]).toBeLessThanOrEqual(700);await expect.poll(()=>page.evaluate(()=>window.innerHeight)).toBe(size[1]);const profile=await connection('矮窗口来源');await page.reload();await expect(page.locator('.app-statusbar')).toBeVisible();await save({id:'compact',name:'矮窗口查询',connectionId:profile.id,databaseContext:{state:'known',database:null},sql:'SELECT 9007199254740993 -- compact_anchor'});await open();await search('compact_anchor');await expect(dialog().getByRole('status')).toContainText('命中查询 1');await page.screenshot({path:info.outputPath('saved-query-compact-before-click.png')});await dialog().locator('.rdg-row').click();await expect(dialog().getByLabel('打开查询的连接',{exact:true})).toHaveValue(profile.id);await expect(dialog().locator('.saved-query-search-preview')).toContainText('compact_anchor');await page.screenshot({path:info.outputPath('saved-query-compact-selected.png')});await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'打开查询（不执行）',exact:true})).click();await expect(dialog()).toHaveCount(0);await expect(page.locator('.query-tab:visible .monaco-editor .view-lines')).toContainText('compact_anchor');expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);expect(pageErrors).toEqual([]);
