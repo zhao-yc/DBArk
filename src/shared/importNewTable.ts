@@ -5,10 +5,10 @@ import { xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions 
 
 export const importNewTableLimits = Object.freeze({ columns: 1000, sourceName: 256, sampleRows: 20, sampleBytes: 256 * 1024 });
 export interface ImportFileSource { sha256: string; bytes: number; }
-export interface ImportFileInspectInput { fileToken: string; taskId: string; format: 'csv' | 'json'; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; }
-export type RecordFileInspectInput = Omit<ImportFileInspectInput, 'format'> & { format: RecordImportFormat; xmlOptions?: XmlImportOptions };
+export interface ImportFileReadOptions { format: RecordImportFormat; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions; }
+export interface ImportFileInspectInput extends ImportFileReadOptions { fileToken: string; taskId: string; }
 export interface ImportFileInspectOutput { columns: string[]; rows: DataRow[]; records: number; source: ImportFileSource; sampleOmitted: boolean; }
-export interface ImportNewTableSeed { file: FileChoice; format: ImportFileInspectInput['format']; encoding: ImportFileInspectInput['encoding']; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; columns: string[]; expectedSource: ImportFileSource; mapping: Record<string, string>; }
+export interface ImportNewTableSeed extends ImportFileReadOptions { file: FileChoice; columns: string[]; expectedSource: ImportFileSource; mapping: Record<string, string>; }
 const invalid = (): never => { throw Error('文件检查或新表导入配置无效，请重新选择文件并检查映射'); };
 
 /** 只读取普通对象的自有数据属性，不执行getter、toJSON或继承字段。 */
@@ -33,7 +33,13 @@ export function importSourceColumn(input: unknown): string { return string(input
 function columns(input: unknown): string[] { const result = array(input, importNewTableLimits.columns).map(importSourceColumn); if (new Set(result).size !== result.length) return invalid(); return result; }
 function source(input: unknown): ImportFileSource { const value = object(input, 2, ['sha256', 'bytes']); if (typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256) || typeof value.bytes !== 'number' || !Number.isSafeInteger(value.bytes) || value.bytes < 0) return invalid(); return { sha256: value.sha256, bytes: value.bytes }; }
 /** 显式undefined也算指定CSV专用配置；JSON不能借可选属性静默忽略它。 */
-function options(value: Record<string, unknown>): Pick<ImportFileInspectInput, 'format' | 'encoding' | 'csvDelimiter' | 'csvHasHeader'> {
+function options(value: Record<string, unknown>): ImportFileReadOptions {
+  if (value.format === 'xml') {
+    if (value.encoding !== 'utf8' || Object.hasOwn(value, 'csvDelimiter') || Object.hasOwn(value, 'csvHasHeader')) return invalid();
+    const xmlOptions = xmlImportOptionsSchema.parse(object(value.xmlOptions, 3, ['rowTag', 'attributes', 'binaryBase64']));
+    return { format: 'xml', encoding: 'utf8', xmlOptions };
+  }
+  if (Object.hasOwn(value, 'xmlOptions')) return invalid();
   if (!['csv', 'json'].includes(value.format as string) || !['utf8', 'utf16le', 'gb18030'].includes(value.encoding as string)) return invalid();
   const result: ReturnType<typeof options> = { format: value.format as ImportFileInspectInput['format'], encoding: value.encoding as ImportFileInspectInput['encoding'] };
   if (Object.hasOwn(value, 'csvDelimiter')) { if (value.format !== 'csv' || !csvImportDelimiters.includes(value.csvDelimiter as CsvImportDelimiter)) return invalid(); result.csvDelimiter = value.csvDelimiter as CsvImportDelimiter; }
@@ -41,14 +47,9 @@ function options(value: Record<string, unknown>): Pick<ImportFileInspectInput, '
 }
 function schema<T>(parse: (input: unknown) => T) { return z.unknown().transform((input, context): T => { try { return parse(input); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '文件导入配置无效' }); return z.NEVER; } }); }
 export const importFileSourceSchema = schema(source);
-export const importFileInspectInputSchema = schema((input): ImportFileInspectInput => { const value = object(input, 7, ['fileToken', 'taskId', 'format', 'encoding'], ['csvDelimiter', 'csvHasHeader']); return { fileToken: string(value.fileToken, 1, 200), taskId: string(value.taskId, 1, 200), ...options(value) }; });
-/** 共用原字节扫描器，旧网络新表入口仍使用原 CSV／JSON 合同。 */
-export const recordFileInspectInputSchema = schema((input): RecordFileInspectInput => {
+export const importFileInspectInputSchema = schema((input): ImportFileInspectInput => {
   const value = object(input, 7, ['fileToken', 'taskId', 'format', 'encoding'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions']);
-  if (value.format !== 'xml') return importFileInspectInputSchema.parse(value);
-  if (value.encoding !== 'utf8' || Object.hasOwn(value, 'csvDelimiter') || Object.hasOwn(value, 'csvHasHeader')) return invalid();
-  const xmlOptions = xmlImportOptionsSchema.parse(object(value.xmlOptions, 3, ['rowTag', 'attributes', 'binaryBase64']));
-  return { fileToken: string(value.fileToken, 1, 200), taskId: string(value.taskId, 1, 200), format: 'xml', encoding: 'utf8', xmlOptions };
+  return { fileToken: string(value.fileToken, 1, 200), taskId: string(value.taskId, 1, 200), ...options(value) };
 });
 
 /** 有界计算完整JSON文字量大小，超预算即停止计量，不先分配巨大转义字符串。 */
@@ -78,7 +79,7 @@ export const importFileInspectOutputSchema = schema((input): ImportFileInspectOu
 });
 /** 完整源目录与映射逐项一致，保留__proto__等自有源键并拒绝重复非空目标。 */
 export const importNewTableSeedSchema = schema((input): ImportNewTableSeed => {
-  const value = object(input, 9, ['file', 'format', 'encoding', 'columns', 'expectedSource', 'mapping'], ['csvDelimiter', 'csvHasHeader']), file = object(value.file, 2, ['token', 'name']), names = columns(value.columns), raw = object(value.mapping, importNewTableLimits.columns), mapping: Record<string, string> = Object.create(null), targets = new Set<string>();
+  const value = object(input, 9, ['file', 'format', 'encoding', 'columns', 'expectedSource', 'mapping'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions']), file = object(value.file, 2, ['token', 'name']), names = columns(value.columns), raw = object(value.mapping, importNewTableLimits.columns), mapping: Record<string, string> = Object.create(null), targets = new Set<string>();
   if (Object.keys(raw).length !== names.length || names.some(name => !Object.hasOwn(raw, name))) return invalid();
   for (const name of names) { const target = string(raw[name], 0, 64); if (target.includes('\0') || target !== '' && targets.has(target)) return invalid(); if (target) targets.add(target); mapping[name] = target; }
   return { file: { token: string(file.token, 1, 200), name: string(file.name, 1, 4096) }, ...options(value), columns: names, expectedSource: source(value.expectedSource), mapping };

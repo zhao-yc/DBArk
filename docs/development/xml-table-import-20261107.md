@@ -8,7 +8,7 @@
 
 XML 导入固定使用整文件事务。文件在执行时重新读取，解析、字段校验或写入失败会停止并尝试回滚。提交或回滚无法确认时，需核对目标库后再决定是否重试。触发器对非事务表或外部系统的副作用仍需独立核查。
 
-当前接受 UTF-8 XML 1.0 的扁平记录。文件上限 64 MiB，单字段 8 MiB，单行 16 MiB，整文件最多 1,024 个不同字段。DTD、命名空间和嵌套子字段会被拒绝。MySQL 和 MariaDB 从 XML 新建表及位置映射「XML 文档」导入仍待补齐。[SQLite 导入 XML](sqlite-xml-import-20261107.md) · [PostgreSQL 导入 XML](postgres-xml-import-20261107.md)
+当前接受 UTF-8 XML 1.0 的扁平记录。文件上限 64 MiB，单字段 8 MiB，单行 16 MiB，整文件最多 1,024 个不同字段。DTD、命名空间和嵌套子字段会被拒绝。位置映射「XML 文档」导入仍待补齐。[MySQL 和 MariaDB 从 XML 新建表](network-xml-new-table-20261107.md) · [SQLite 导入 XML](sqlite-xml-import-20261107.md) · [PostgreSQL 导入 XML](postgres-xml-import-20261107.md)
 
 ## 验收
 

@@ -3,12 +3,12 @@ import { TextDecoder } from 'node:util';
 import { lstat } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import type { DataRow } from '../shared/contracts';
-import { recordFileInspectInputSchema, importFileSampleRowBytes, importFileSourceSchema, importNewTableLimits as limits, importSourceColumn, type RecordFileInspectInput, type ImportFileInspectOutput, type ImportFileSource } from '../shared/importNewTable';
+import { importFileInspectInputSchema, importFileSampleRowBytes, importFileSourceSchema, importNewTableLimits as limits, importSourceColumn, type ImportFileInspectInput, type ImportFileReadOptions, type ImportFileInspectOutput, type ImportFileSource } from '../shared/importNewTable';
 import { readRecords } from './files';
 
 export interface ImportFileInspectProgress { records: number; bytes: number; }
 /** 仅内部调用可要求严格字节编码；公共IPC合同及旧MySQL读取默认行为均不增加该字段。 */
-export type ReadInput = Pick<RecordFileInspectInput, 'format' | 'encoding' | 'csvDelimiter' | 'csvHasHeader' | 'xmlOptions'> & { filePath: string; expectedSource?: ImportFileSource; strictEncoding?: true };
+export type ReadInput = ImportFileReadOptions & { filePath: string; expectedSource?: ImportFileSource; strictEncoding?: true; requiredColumns?: readonly string[] };
 /** 仅本模块构造的中文有界诊断可穿过解析错误边界，避免路径和源字段值进入任务历史。 */
 class SourceReadError extends Error {}
 const changed = () => new SourceReadError('源文件身份、大小、时间或完整内容已变化，请重新选择并检查；未确认本次导入完成');
@@ -35,11 +35,11 @@ function identical(before: BigIntStats, after: BigIntStats): boolean { return be
 /** 全部摘要只来自同一条readRecords原字节链；提前return只收尾，不会产生完整核验证明。 */
 async function* sourceRecords(input: ReadInput, checkCancelled: () => void, signal?: AbortSignal, onColumns?: (columns: string[]) => void, completed?: (source: ImportFileSource) => void, onBytes?: (bytes: number) => void): AsyncGenerator<DataRow> {
   const { filePath, expectedSource: rawExpected } = input;
-  const selected = recordFileInspectInputSchema.parse({ fileToken: '内部来源核验', taskId: '内部来源核验', format: input.format, encoding: input.encoding, ...(Object.hasOwn(input, 'csvDelimiter') ? { csvDelimiter: input.csvDelimiter } : {}), ...(Object.hasOwn(input, 'csvHasHeader') ? { csvHasHeader: input.csvHasHeader } : {}), ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}) }), expected = rawExpected === undefined ? undefined : importFileSourceSchema.parse(rawExpected);
+  const selected = importFileInspectInputSchema.parse({ fileToken: '内部来源核验', taskId: '内部来源核验', format: input.format, encoding: input.encoding, ...(Object.hasOwn(input, 'csvDelimiter') ? { csvDelimiter: input.csvDelimiter } : {}), ...(Object.hasOwn(input, 'csvHasHeader') ? { csvHasHeader: input.csvHasHeader } : {}), ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}) }), expected = rawExpected === undefined ? undefined : importFileSourceSchema.parse(rawExpected);
   const check = () => { checkCancelled(); if (signal?.aborted) throw new SourceReadError('导入文件读取已取消'); };
   check(); const strict = selected.format === 'xml' ? undefined : encodingCheck(input), before = await regularFile(filePath); check(); const hash = createHash('sha256'); let bytes = 0;
   try {
-    for await (const row of readRecords(filePath, selected.format, selected.encoding, selected.csvDelimiter, selected.csvHasHeader, { signal, ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions } : {}), onColumns: columns => { check(); onColumns?.(columns); }, onBytes: chunk => { check(); strict?.chunk(chunk); hash.update(chunk); bytes += chunk.length; if (!Number.isSafeInteger(bytes)) throw new SourceReadError('导入文件字节数超过可安全确认范围'); onBytes?.(bytes); } })) { check(); yield row; }
+    for await (const row of readRecords(filePath, selected.format, selected.encoding, selected.csvDelimiter, selected.csvHasHeader, { signal, ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions, requiredColumns: input.requiredColumns } : {}), onColumns: columns => { check(); onColumns?.(columns); }, onBytes: chunk => { check(); strict?.chunk(chunk); hash.update(chunk); bytes += chunk.length; if (!Number.isSafeInteger(bytes)) throw new SourceReadError('导入文件字节数超过可安全确认范围'); onBytes?.(bytes); } })) { check(); yield row; }
     check(); strict?.finish(); const after = await regularFile(filePath); check();
     if (!identical(before, after) || BigInt(bytes) !== before.size) throw changed();
     const source = { sha256: hash.digest('hex'), bytes };
@@ -52,8 +52,8 @@ async function* sourceRecords(input: ReadInput, checkCancelled: () => void, sign
 }
 
 /** 扫完整文件发现联合源列，仅保留前20条有界完整样本；后续字段不被样本上限遮蔽。 */
-export async function inspectImportFile(input: RecordFileInspectInput & { filePath: string; strictEncoding?: true }, checkCancelled: () => void, onProgress?: (value: ImportFileInspectProgress) => void, signal?: AbortSignal): Promise<ImportFileInspectOutput> {
-  const { filePath, strictEncoding, ...raw } = input, selected = recordFileInspectInputSchema.parse(raw), names = new Set<string>(), rows: DataRow[] = [], completion: { source?: ImportFileSource } = {}; let records = 0, sampleBytes = 2, sampleFull = false;
+export async function inspectImportFile(input: ImportFileInspectInput & { filePath: string; strictEncoding?: true }, checkCancelled: () => void, onProgress?: (value: ImportFileInspectProgress) => void, signal?: AbortSignal): Promise<ImportFileInspectOutput> {
+  const { filePath, strictEncoding, ...raw } = input, selected = importFileInspectInputSchema.parse(raw), names = new Set<string>(), rows: DataRow[] = [], completion: { source?: ImportFileSource } = {}; let records = 0, sampleBytes = 2, sampleFull = false;
   const columns = (values: string[]) => { for (const value of values) { let name: string; try { name = importSourceColumn(value); } catch { throw new SourceReadError('源字段名称超过256字符或编码无效，请先整理源文件'); } names.add(name); if (names.size > limits.columns) throw new SourceReadError('全文件联合源字段超过1000列，未截断字段目录'); } };
   // 字节进度由原raw观察器累计，不能另读文件或把解码字符数当作原字节数。
   let progressBytes = 0;

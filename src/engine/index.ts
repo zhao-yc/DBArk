@@ -2212,7 +2212,7 @@ export class Engine {
   /** 原文件指纹必须整文件原子提交；旧入口省略时保持既有批次语义。 */
   private assertExpectedImportSource(input: Input, mode: string) {
     if (!Object.hasOwn(input, 'expectedSource')) return;
-    if (input.expectedSource === undefined || !['csv', 'json'].includes(input.format) || mode !== 'atomic' || Object.hasOwn(input, 'conflict')) throw Error('原文件指纹仅允许CSV／JSON整文件事务新增，不允许冲突策略');
+    if (input.expectedSource === undefined || !recordImportFormats.includes(input.format) || mode !== 'atomic' || Object.hasOwn(input, 'conflict')) throw Error('原文件指纹仅允许数据文件整文件事务新增，不允许冲突策略');
     return importFileSourceSchema.parse(input.expectedSource);
   }
   private async importFile(task: RunningTask, input: Input, records?: AsyncIterable<DataRow>): Promise<{ rows: number; errors: string[] }> {
@@ -2265,7 +2265,10 @@ export class Engine {
       }
       const { info, columns, mapping, insertPrefix } = selected!;
       // 原读取链完整核完SHA才结束迭代；任何变化在下方唯一COMMIT之前抛出并走原回滚。
-      const sourceRecords = expectedSource ? readVerifiedImportRecords({ ...input, expectedSource } as Parameters<typeof readVerifiedImportRecords>[0], () => this.checkCancelled(task), task.managed.signal) : readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source), signal: task.managed.signal } : undefined);
+      const xml = input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source) } : undefined;
+      const sourceRecords = expectedSource
+        ? readVerifiedImportRecords({ ...input, ...xml, expectedSource } as Parameters<typeof readVerifiedImportRecords>[0], () => this.checkCancelled(task), task.managed.signal)
+        : readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, xml && { ...xml, signal: task.managed.signal });
       for await (const row of records ?? sourceRecords) {
         this.checkCancelled(task); checkTransaction(); sourceLine++;
         const values = mapping.map(([source, target]) => {

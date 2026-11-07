@@ -1,12 +1,23 @@
+import { recordImportFormats, xmlImportOptionsSchema, xmlImportZh } from '../shared/xmlImport';
 import type { FileChoice, TaskEvent } from '../shared/contracts';
-import { importFileInspectInputSchema, importFileInspectOutputSchema, importNewTableSeedSchema, type ImportFileInspectInput, type ImportFileInspectOutput, type ImportNewTableSeed } from '../shared/importNewTable';
+import { importFileInspectInputSchema, importFileInspectOutputSchema, importNewTableSeedSchema, type ImportFileInspectInput, type ImportFileReadOptions, type ImportFileInspectOutput, type ImportNewTableSeed } from '../shared/importNewTable';
 import { tableCreateDraftSchema, type TableCreateApplyOutput, type TableCreateDraft } from '../shared/tableCreate';
 import { importNewTableZh as text } from './locales/importNewTable.zh-CN';
 
 export interface ImportNewTableTarget { connectionId: string; database: string; version: number; }
-export type ImportNewTableOptions = Pick<ImportFileInspectInput, 'format' | 'encoding' | 'csvDelimiter' | 'csvHasHeader'>;
+export type ImportNewTableOptions = ImportFileReadOptions;
+export const newTableXmlDefaults = { rowTag: 'RECORD', attributes: true, binaryBase64: false } as const;
+
+/** 扫描和建表来源种子采用同一套格式选项，避免将旧 CSV 或 XML 配置带入其它格式。 */
+function sourceOptions({ format, encoding, csvDelimiter, csvHasHeader, xmlOptions }: ImportNewTableOptions): ImportFileReadOptions {
+  return {
+    format, encoding,
+    ...(format === 'csv' ? { csvDelimiter: csvDelimiter ?? ',', csvHasHeader: csvHasHeader ?? true } : {}),
+    ...(format === 'xml' ? { xmlOptions: xmlImportOptionsSchema.parse(xmlOptions) } : {}),
+  };
+}
 export interface ImportNewTableServices {
-  choose(input: { purpose: 'import'; format: 'csv' | 'json' }): Promise<FileChoice | null>;
+  choose(input: { purpose: 'import'; format: ImportFileReadOptions['format'] }): Promise<FileChoice | null>;
   inspect(input: ImportFileInspectInput): Promise<ImportFileInspectOutput>;
   cancel(taskId: string): Promise<unknown>; uid(): string;
 }
@@ -59,7 +70,8 @@ export class ImportNewTableController {
   change(expected: ImportNewTableState, patch: Partial<ImportNewTableOptions>): void {
     if (!this.editable(expected)) return;
     const next = { ...this.value.options, ...patch };
-    if (next.format !== 'csv' && next.format !== 'json' || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
+    if (next.format === 'xml') { next.encoding = 'utf8'; next.xmlOptions = { ...(next.xmlOptions ?? newTableXmlDefaults) }; }
+    if (!recordImportFormats.includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
     this.update({ options: next, file: undefined, inspection: undefined, reviewed: false, error: undefined, progress: undefined });
   }
   name(expected: ImportNewTableState, tableName: string): void { if (this.editable(expected)) this.update({ tableName, reviewed: false, error: undefined }); }
@@ -74,12 +86,16 @@ export class ImportNewTableController {
   /** 文件选择和全文件扫描共享同一锁；关闭先取消，随后等待原选择、扫描及取消全部结算。 */
   scan(expected: ImportNewTableState): Promise<void> {
     if (!this.editable(expected)) return Promise.resolve();
-    const lifetime = this.lifetime!, options = { ...expected.options }; let active: Operation;
+    const lifetime = this.lifetime!;
+    let options: ImportFileReadOptions;
+    try { options = sourceOptions(expected.options); }
+    catch { this.update({ error: xmlImportZh.invalid }); return Promise.resolve(); }
+    let active: Operation;
     const promise = Promise.resolve().then(async () => {
       if (!this.current() || this.lifetime !== lifetime || active.cancelled) return;
       const file = await this.services.choose({ purpose: 'import', format: options.format });
       if (!file || !this.current() || this.lifetime !== lifetime || active.cancelled) return;
-      const request = importFileInspectInputSchema.parse({ fileToken: file.token, taskId: active.taskId, format: options.format, encoding: options.encoding, ...(options.format === 'csv' ? { csvDelimiter: options.csvDelimiter ?? ',', csvHasHeader: options.csvHasHeader ?? true } : {}) });
+      const request = importFileInspectInputSchema.parse({ fileToken: file.token, taskId: active.taskId, ...options });
       active.dispatched = true;
       const inspection = importFileInspectOutputSchema.parse(await this.services.inspect(request));
       if (!this.current() || this.lifetime !== lifetime || active.cancelled || this.value.closing) return;
@@ -101,8 +117,8 @@ export class ImportNewTableController {
     if (!this.editable(expected) || !expected.file || !expected.inspection) return;
     try {
       if (!expected.reviewed || !legalName(expected.tableName)) throw Error(text.reviewRequired);
-      const plan = importNewTableDesign(this.target.database, expected.tableName, expected.inspection.columns), options = expected.options;
-      const seed = importNewTableSeedSchema.parse({ file: expected.file, format: options.format, encoding: options.encoding, ...(options.format === 'csv' ? { csvDelimiter: options.csvDelimiter ?? ',', csvHasHeader: options.csvHasHeader ?? true } : {}), expectedSource: expected.inspection.source, columns: expected.inspection.columns, mapping: plan.mapping });
+      const plan = importNewTableDesign(this.target.database, expected.tableName, expected.inspection.columns);
+      const seed = importNewTableSeedSchema.parse({ file: expected.file, ...sourceOptions(expected.options), expectedSource: expected.inspection.source, columns: expected.inspection.columns, mapping: plan.mapping });
       this.child = {}; this.childLifetime = this.lifetime; this.update({ stage: 'design', design: plan.design, seed, childDirty: false, error: undefined }); return this.child;
     } catch (reason) { this.update({ error: reason instanceof Error ? reason.message : String(reason) }); }
   }

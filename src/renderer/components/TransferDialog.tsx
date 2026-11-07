@@ -66,7 +66,7 @@ export function TransferDialog({ mode, connectionId, database, table, initialImp
   const [format, setFormat] = useState<RecordImportFormat | 'sql'>(seed.value?.format??'csv'); const [selectedEncoding, setEncoding] = useState<'utf8' | 'utf16le' | 'gb18030'>(seed.value?.encoding??'utf8'); const [file, setFile] = useState<FileChoice | null>(seed.value?.file??null);
   const [csvDelimiter, setCsvDelimiter] = useState<CsvImportDelimiter>(seed.value?.csvDelimiter??',');
   const [csvHasHeader, setCsvHasHeader] = useState(seed.value?.csvHasHeader??true);
-  const [xmlOptions, setXmlOptions] = useState<XmlImportOptions>({ rowTag: 'RECORD', attributes: true, binaryBase64: false });
+  const [xmlOptions, setXmlOptions] = useState<XmlImportOptions>(() => seed.value?.xmlOptions ?? { rowTag: 'RECORD', attributes: true, binaryBase64: false });
   const xmlActive = mode === 'import' && format === 'xml';
   const encoding = xmlActive ? 'utf8' : selectedEncoding;
   const [selectedTransactionMode, setTransactionMode] = useState<FileImportTransactionMode>(seed.locked?'atomic':'batch');

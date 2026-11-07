@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { recordFileInspectInputSchema, importFileInspectOutputSchema, importNewTableLimits, type RecordFileInspectInput, type ImportFileInspectOutput } from './importNewTable';
+import { importFileInspectInputSchema, importFileInspectOutputSchema, importNewTableLimits, type ImportFileInspectInput, type ImportFileInspectOutput } from './importNewTable';
 
 /** 来源能力仅绑定文件及原SQLite连接，不绑定未创建的表；样本不能代替后续整文件预检。 */
 export const sqliteImportSourceLimits = Object.freeze({
@@ -8,7 +8,7 @@ export const sqliteImportSourceLimits = Object.freeze({
   sourceColumns: importNewTableLimits.columns, sourceName: importNewTableLimits.sourceName,
   sampleRows: importNewTableLimits.sampleRows, sampleBytes: importNewTableLimits.sampleBytes, records: 10000000,
 });
-export type SqliteImportSourceInspectInput = RecordFileInspectInput & { connectionId: string; database: 'main' };
+export type SqliteImportSourceInspectInput = ImportFileInspectInput & { connectionId: string; database: 'main' };
 export interface SqliteImportSourceInspectOutput {
   sourceId: string; connectionId: string; database: 'main'; source: ImportFileInspectOutput['source'];
   sourceColumns: string[]; sample: ImportFileInspectOutput['rows']; records: number; sampleOmitted: boolean; expiresAt: string;
@@ -30,7 +30,7 @@ function schema<T>(parse: (input: unknown) => T) { return z.unknown().transform(
 export const sqliteImportSourceInspectSchema = schema((input): SqliteImportSourceInspectInput => {
   const raw = fields(input, ['connectionId', 'database', 'fileToken', 'format', 'encoding', 'taskId'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions']);
   const connectionId = identifier.parse(raw.connectionId); if (raw.database !== 'main') return invalid();
-  const selected = recordFileInspectInputSchema.parse({ fileToken: raw.fileToken, format: raw.format, encoding: raw.encoding, taskId: raw.taskId, ...(Object.hasOwn(raw, 'csvDelimiter') ? { csvDelimiter: raw.csvDelimiter } : {}), ...(Object.hasOwn(raw, 'csvHasHeader') ? { csvHasHeader: raw.csvHasHeader } : {}), ...(Object.hasOwn(raw, 'xmlOptions') ? { xmlOptions: raw.xmlOptions } : {}) });
+  const selected = importFileInspectInputSchema.parse({ fileToken: raw.fileToken, format: raw.format, encoding: raw.encoding, taskId: raw.taskId, ...(Object.hasOwn(raw, 'csvDelimiter') ? { csvDelimiter: raw.csvDelimiter } : {}), ...(Object.hasOwn(raw, 'csvHasHeader') ? { csvHasHeader: raw.csvHasHeader } : {}), ...(Object.hasOwn(raw, 'xmlOptions') ? { xmlOptions: raw.xmlOptions } : {}) });
   if (selected.xmlOptions?.binaryBase64) return invalid();
   return { connectionId, database: 'main', ...selected };
 });
@@ -52,7 +52,7 @@ export function sqliteImportSourceOptionsKey(input: Pick<SqliteImportSourceInspe
     if (!item) { if (['fileToken', 'format', 'encoding'].includes(key)) return invalid(); continue; }
     if (!item.enumerable || !('value' in item)) return invalid(); raw[key] = item.value;
   }
-  const selected = recordFileInspectInputSchema.parse(raw), csv = selected.format === 'csv';
+  const selected = importFileInspectInputSchema.parse(raw), csv = selected.format === 'csv';
   if (selected.xmlOptions?.binaryBase64) return invalid();
   return JSON.stringify({ fileToken: selected.fileToken, format: selected.format, encoding: selected.encoding, csvDelimiter: csv ? selected.csvDelimiter ?? ',' : null, csvHasHeader: csv ? selected.csvHasHeader ?? true : null, ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions } : {}) });
 }

@@ -3,6 +3,18 @@ import { validateCommand } from '../../src/shared/validation';
 
 const expectedSource = { sha256: 'a'.repeat(64), bytes: 14 };
 const input = { connectionId: '连接', database: '库', table: '新表', fileToken: '原选择', taskId: '原任务', format: 'csv', encoding: 'utf8', mapping: { id: 'id' }, transactionMode: 'atomic', expectedSource };
+const xmlOptions = { rowTag: 'entry', attributes: true, binaryBase64: true };
+
+it('XML 新表检查、预检和提交沿同一原文件指纹，提交不可降级或切换冲突策略', () => {
+  const xml = { ...input, format: 'xml', xmlOptions };
+  const { transactionMode: _mode, ...preflight } = xml;
+  expect(validateCommand('files.inspectImport', { fileToken: input.fileToken, taskId: input.taskId, format: 'xml', encoding: 'utf8', xmlOptions })).toMatchObject({ xmlOptions });
+  expect(validateCommand('files.preflight', preflight)).toMatchObject({ xmlOptions, expectedSource });
+  expect(validateCommand('files.import', xml)).toMatchObject({ xmlOptions, expectedSource, transactionMode: 'atomic' });
+  expect(() => validateCommand('files.import', { ...xml, transactionMode: 'batch' })).toThrow();
+  expect(() => validateCommand('files.import', { ...xml, conflict: undefined })).toThrow();
+  expect(() => validateCommand('files.preflight', { ...preflight, xmlOptions: undefined })).toThrow();
+});
 describe('新表导入的正式IPC来源边界', () => {
   it('原字节指纹只允许CSV或JSON整文件新增；旧无指纹批次仍兼容', () => {
     for (const format of ['csv', 'json']) expect(validateCommand('files.import', { ...input, format })).toMatchObject({ expectedSource, transactionMode: 'atomic' });

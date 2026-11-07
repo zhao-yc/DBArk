@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import type { DataRow, SqliteConnectionProfile } from '../shared/contracts';
-import type { RecordFileInspectInput } from '../shared/importNewTable';
+import type { ImportFileInspectInput } from '../shared/importNewTable';
 import { inspectImportFile, readVerifiedImportRecords } from '../engine/importNewTableSource';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteFileIdentity, SqliteValue } from '../engine/sqlite/protocol';
@@ -16,7 +16,7 @@ export interface SqliteTableImportControl extends SqliteTableBrowseControl { sig
 export interface SqliteTableImportApplyControl extends SqliteTableImportControl { beginCommit(): void; }
 export interface SqliteImportFileIdentity { device: string; inode: string; size: string; modified: string; changed: string; }
 type SourceIdentity = SqliteImportFileIdentity;
-export type SqliteImportFileInput = RecordFileInspectInput & { filePath: string };
+export type SqliteImportFileInput = ImportFileInspectInput & { filePath: string };
 export interface SqliteImportFileScan { source: SqliteTableImportInspectOutput['source']; records: number; sourceColumns: string[]; sample: DataRow[]; sampleOmitted: boolean; }
 export interface SqliteImportTarget {
   target: SqliteTableImportInspectOutput['target']; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
