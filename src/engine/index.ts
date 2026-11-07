@@ -2171,7 +2171,7 @@ export class Engine {
 
   /** Excel 在写入前重验完整工作表、指纹与目标映射，再复用文件导入的分批事务和参数绑定。 */
   private async importExcel(task: RunningTask, input: Input): Promise<{ rows: number; errors: string[] }> {
-    const options = { filePath: input.filePath, sheetId: input.sheetId, headerRow: input.headerRow, protocol: input.protocol, checkCancelled: () => this.checkCancelled(task) };
+    const options = { filePath: input.filePath, sheetId: input.sheetId, headerRow: input.headerRow, firstDataRow: input.firstDataRow, lastDataRow: input.lastDataRow, protocol: input.protocol, checkCancelled: () => this.checkCancelled(task) };
     const sample = await previewExcelSheet(options);
     if (sample.fingerprint !== input.fingerprint) throw new Error('工作簿自预览后已发生变化，请重新预览并确认字段映射');
     const info = await metadata.tableInfo(task.managed, input.database, input.table);

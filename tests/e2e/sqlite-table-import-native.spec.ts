@@ -171,13 +171,15 @@ test('SQLite真实CSV/JSON/XML映射预检、原子导入、末行约束回滚�
     await writeXlsxImportFixture(xlsx, ['id', 'note', 'exact_int', 'payload', 'flag'], [
       ['7', workbookNote, '9223372036854775807', '\\B:AP8=', true],
       ['8', null, '-9223372036854775808', '\\B:', false],
-    ]);
+    ], true);
     await open('xlsx');
     await step(() => dialog().getByLabel(excelImportZh.sheet, {exact: true}).selectOption({label: '导入🚢'}));
     await fill(excelImportZh.header, '2');
+    await fill(excelImportZh.firstDataRow, '4');
+    await fill(excelImportZh.lastDataRow, '5');
     await select(excelImportZh.protocol, 'dbark-v1');
     const xlsxInspection = await inspect();
-    expect(xlsxInspection.fact.request.excelOptions).toEqual({sheetId: '2', headerRow: 2, protocol: 'dbark-v1'});
+    expect(xlsxInspection.fact.request.excelOptions).toEqual({sheetId: '2', headerRow: 2, firstDataRow: 4, lastDataRow: 5, protocol: 'dbark-v1'});
     expect(xlsxInspection.output.source.sha256).toBe(createHash('sha256').update(readFileSync(xlsx)).digest('hex'));
     await mappings('xlsx');
     const xlsxPreview = await preview();

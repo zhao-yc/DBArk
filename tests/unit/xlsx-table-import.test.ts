@@ -61,6 +61,12 @@ it('XLSX 与文本配置隔离，SQLite 新表阶段绑定工作表、标题行�
   expect(() => validateCommand('files.inspectImport', {...options, format: 'txt'})).toThrow();
   expect(sqliteImportSourceOptionsKey(options)).not.toBe(sqliteImportSourceOptionsKey({...options, excelOptions: {...options.excelOptions, sheetId: '1'}}));
   expect(sqliteImportSourceOptionsKey(options)).not.toBe(sqliteImportSourceOptionsKey({...options, excelOptions: {...options.excelOptions, headerRow: 1}}));
+  for (const range of [{firstDataRow: 4}, {lastDataRow: 5}]) {
+    const bounded = {...options, excelOptions: {...options.excelOptions, ...range}};
+    expect(validateCommand('sqlite.tableImport.inspect', {...bounded, ...target})).toMatchObject(bounded);
+    expect(validateCommand('files.inspectImport', bounded)).toMatchObject(bounded);
+    expect(sqliteImportSourceOptionsKey(options)).not.toBe(sqliteImportSourceOptionsKey(bounded));
+  }
   expect(fileImportTransactionMode('xlsx', options)).toBe('atomic');
   expect(fileImportTransactionMode('xlsx', {})).toBe('batch');
 });

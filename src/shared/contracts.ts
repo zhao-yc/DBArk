@@ -24,7 +24,7 @@ import type { TableAutoIncrementGetInput, TableAutoIncrementGetOutput, TableAuto
 import type { TableCommentGetInput, TableCommentGetOutput, TableCommentPreviewInput, TableCommentPreviewOutput, TableCommentApplyInput, TableCommentApplyOutput, TableCommentReleaseInput } from './tableComment';
 import type { TableDropGetInput, TableDropGetOutput, TableDropPreviewInput, TableDropPreviewOutput, TableDropApplyInput, TableDropApplyOutput, TableDropReleaseInput } from './tableDrop';
 import type { TableTruncateGetInput, TableTruncateGetOutput, TableTruncatePreviewInput, TableTruncatePreviewOutput, TableTruncateApplyInput, TableTruncateApplyOutput, TableTruncateReleaseInput } from './tableTruncate';
-import type { ExcelSheet, ExcelSheetPreview, ExcelTextProtocol, ExcelImportRequest, ExcelImportResult, ExcelExportRequest } from './excelTransfer';
+import type { ExcelSheet, ExcelSheetPreview, ExcelImportOptions, ExcelImportRequest, ExcelImportResult, ExcelExportRequest } from './excelTransfer';
 import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
 import type { ConnectionFileRequirement, ConnectionImportApply, ConnectionImportPreview, ConnectionImportResult, ConnectionImportReview, ConnectionImportReviewInput } from './connectionTransfer';
 import type { TablePreferenceTarget, TablePreferences } from './tablePreferences';
@@ -480,7 +480,7 @@ export interface CommandMap {
   'files.createSqlite': { input: { connectionId: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
   'excel.sheets': { input: { fileToken: string; taskId: string }; output: ExcelSheet[] };
-  'excel.preview': { input: { fileToken: string; taskId: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol }; output: ExcelSheetPreview };
+  'excel.preview': { input: ExcelImportOptions & { fileToken: string; taskId: string }; output: ExcelSheetPreview };
   'excel.import': { input: ExcelImportRequest; output: ExcelImportResult };
   'excel.export': { input: ExcelExportRequest; output: { rows: number } };
   'files.readQuery': { input: { fileToken: string; encoding: QueryFileEncoding }; output: { sql: string; encoding: QueryFileEncoding } };

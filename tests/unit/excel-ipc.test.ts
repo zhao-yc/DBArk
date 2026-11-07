@@ -28,12 +28,15 @@ describe('Excel 公开命令与主进程文件授权', () => {
     const input = { fileToken: '输入', taskId: '读取', sheetId: '1', protocol: 'plain' };
     expect(validateCommand('excel.preview', input)).toEqual(input);
     for (const command of ['excel.sheets', 'excel.preview', 'excel.import', 'excel.export'] as const) expect(publicCommands[command]).toBe(true);
-    for (const extra of [{ filePath: '/绕过授权' }, { format: 'xls' }, { headerRow: 0 }, { headerRow: 1001 }, { protocol: '公式缓存' }, { cellBudget: 6 }]) expect(() => validateCommand('excel.preview', { ...input, ...extra })).toThrow('参数无效');
+    const range = { headerRow: 0, firstDataRow: 3, lastDataRow: 8 };
+    expect(validateCommand('excel.preview', { ...input, ...range })).toEqual({ ...input, ...range });
+    for (const extra of [{ filePath: '/绕过授权' }, { format: 'xls' }, { headerRow: -1 }, { headerRow: 1_048_577 }, { headerRow: 2, firstDataRow: 2 }, { firstDataRow: 4, lastDataRow: 3 }, { protocol: '公式缓存' }, { cellBudget: 6 }]) expect(() => validateCommand('excel.preview', { ...input, ...extra })).toThrow('参数无效');
     expect(() => validateCommand('excel.export', { connectionId: 'c', database: 'd', table: 't', fileToken: '输出', taskId: 't', scope: '当前筛选' })).toThrow();
   });
   it('重复映射与非 SHA256 指纹不能进入引擎', () => {
     const input = { connectionId: 'c', database: 'd', table: 't', fileToken: '输入', taskId: 't', sheetId: '1', protocol: 'plain', fingerprint: 'a'.repeat(64), mapping: [{ source: 'a', target: 'b' }] };
     expect(() => validateCommand('excel.import', input)).not.toThrow();
+    expect(() => validateCommand('excel.import', { ...input, firstDataRow: 4, lastDataRow: 3 })).toThrow('参数无效');
     expect(() => validateCommand('excel.import', { ...input, mapping: [...input.mapping, ...input.mapping] })).toThrow();
     expect(() => validateCommand('excel.import', { ...input, fingerprint: '随意值' })).toThrow();
   });

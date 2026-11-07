@@ -4,19 +4,35 @@ import type { CellValue, DataRow, FileChoice } from './contracts';
 /** XLSX 使用固定 Unicode 文本，不提供会改变数据含义的编码选项。 */
 export interface ExcelColumn { name: string; type: string; }
 export type ExcelTextProtocol = 'plain' | 'dbark-v1';
+export const excelMaxRow = 1_048_576;
+export const excelRowRangeShape = {
+  headerRow: z.number().int().min(0).max(excelMaxRow).optional(),
+  firstDataRow: z.number().int().min(1).max(excelMaxRow).optional(),
+  lastDataRow: z.number().int().min(1).max(excelMaxRow).optional(),
+};
+export type ExcelRowRange = { headerRow?: number; firstDataRow?: number; lastDataRow?: number };
+export const excelRowRangeMessage = '请核对表头行号和数据范围：0 表示无标题，首条数据须位于标题之后，末行不能早于首行';
+
+export function validExcelRowRange({ headerRow = 1, firstDataRow = headerRow + 1, lastDataRow = excelMaxRow }: ExcelRowRange): boolean {
+  return firstDataRow > headerRow && firstDataRow <= lastDataRow;
+}
+export const excelRowRangeSchema = z.object(excelRowRangeShape).refine(validExcelRowRange, excelRowRangeMessage);
+
 export const excelImportOptionsSchema = z.object({
-  sheetId: z.string().min(1).max(200), headerRow: z.number().int().min(1).max(1000).optional(),
+  sheetId: z.string().min(1).max(200), ...excelRowRangeShape,
   protocol: z.enum(['plain', 'dbark-v1']),
-}).strict();
+}).strict().refine(validExcelRowRange, excelRowRangeMessage);
 export type ExcelImportOptions = z.infer<typeof excelImportOptionsSchema>;
 export const excelImportDefaults: ExcelImportOptions = { sheetId: '', headerRow: 1, protocol: 'plain' };
 
 export const excelImportZh = {
   format: 'Excel（XLSX）', workbook: '选择 Excel 工作簿', inspect: '完整扫描工作表', sheet: '工作表', header: '标题所在行',
+  firstDataRow: '首条数据所在行', lastDataRow: '最后数据所在行', throughEnd: '默认读到工作表末尾',
+  rangeHint: '标题行填 0 时按列位置映射。首行和末行使用工作表行号，包含边界。',
   protocol: 'Excel 文本协议', plain: '普通工作簿', reversible: 'tabrelio 可逆文本', hidden: '（隐藏）',
   missing: '请选择工作簿及工作表，并核对标题所在行', reading: '正在读取工作表目录',
   atomic: '工作簿必须使用整文件原子导入',
-  hint: '空白格按 NULL 导入。数字保留文件中的原始值，日期序列请先转成日期文本。公式和合并单元格须先整理为普通值。',
+  hint: '空白格按 NULL 导入。数字保留文件中的原始值，日期序列请先转成日期文本。导入范围内的公式和合并单元格须先整理为普通值。',
 } as const;
 
 export function validExcelImport(input: { format: string; encoding?: string; excelOptions?: unknown }): boolean {
@@ -26,7 +42,7 @@ export function validExcelImport(input: { format: string; encoding?: string; exc
 export interface ExcelSheet { id: string; name: string; hidden: boolean; }
 export interface ExcelSheetPreview { sheet: ExcelSheet; columns: string[]; rows: DataRow[]; warnings: string[]; fingerprint: string; }
 export interface ExcelFieldMapping { source: string; target: string; }
-export interface ExcelImportSelection { fileToken: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol; mapping: ExcelFieldMapping[]; fingerprint: string; }
+export interface ExcelImportSelection extends ExcelImportOptions { fileToken: string; mapping: ExcelFieldMapping[]; fingerprint: string; }
 export interface ExcelTransferTarget { connectionId: string; database: string; table: string; }
 export interface ExcelExportRequest extends ExcelTransferTarget { fileToken: string; taskId: string; scope?: 'sample' | 'all'; }
 export interface ExcelImportRequest extends ExcelTransferTarget, ExcelImportSelection { taskId: string; }
@@ -37,7 +53,7 @@ export interface ExcelTransferProgress { message: string; progress: number; }
 export interface ExcelTransferServices {
   chooseFile(mode: 'import' | 'export', suggestedName: string): Promise<FileChoice | null>;
   listSheets(fileToken: string, taskId?: string): Promise<ExcelSheet[]>;
-  preview(input: { fileToken: string; taskId?: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol }): Promise<ExcelSheetPreview>;
+  preview(input: ExcelImportOptions & { fileToken: string; taskId?: string }): Promise<ExcelSheetPreview>;
   targetColumns(target: ExcelTransferTarget, taskId: string): Promise<ExcelColumn[]>;
   exportTable(input: ExcelExportRequest): Promise<{ rows: number }>;
   importTable(input: ExcelImportRequest): Promise<ExcelImportResult>;
@@ -46,7 +62,7 @@ export interface ExcelTransferServices {
 
 /** 产品预算低于格式极限，按实际读取/展开量累计，不能信任 ZIP 或工作表声称的大小。 */
 export const EXCEL_LIMITS = Object.freeze({
-  maxRows: 1_048_576, maxColumns: 16_384, maxCellCharacters: 32_767,
+  maxRows: excelMaxRow, maxColumns: 16_384, maxCellCharacters: 32_767,
   maxSheets: 64, maxEntries: 2_048, maxCompressedBytes: 256 * 1024 ** 2,
   maxEntryBytes: 256 * 1024 ** 2, maxExpandedBytes: 512 * 1024 ** 2,
   maxSharedStrings: 100_000, maxSharedStringBytes: 16 * 1024 ** 2,

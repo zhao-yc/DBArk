@@ -1,4 +1,4 @@
-import { excelImportOptionsSchema, excelImportZh, validExcelImport } from './excelTransfer';
+import { excelImportOptionsSchema, excelImportZh, excelRowRangeMessage, excelRowRangeShape, validExcelImport, validExcelRowRange } from './excelTransfer';
 import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { txtImportOptionsSchema, txtImportZh, validTxtImport } from './txtImport';
 import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, xmlImportZh } from './xmlImport';
@@ -240,7 +240,7 @@ const fileImportPreflightSchema = ownRecord(z.unknown(), '导入预检参数').s
   // 仅新表的完整来源绑定允许JSON空键等原始源身份；普通预检保留既有名称约定。
   if (!input.expectedSource) for (const source of Object.keys(input.mapping)) if (!name.safeParse(source).success) context.addIssue({ code: 'custom', path: ['mapping', source], message: '普通预检源字段名必须为1至256个字符' });
 }));
-const excelSheet = { fileToken: id, sheetId: id, headerRow: z.number().int().min(1).max(1000).optional(), protocol: z.enum(['plain','dbark-v1']) };
+const excelSheet = { fileToken: id, sheetId: id, ...excelRowRangeShape, protocol: z.enum(['plain','dbark-v1']) };
 /** custom 保留已校验结果引用，避免 Zod 深拷贝十万行；主进程仍完整校验每个字段。 */
 const resultExportData = z.custom<ResultExportData>().superRefine((value, context) => {
   try { validateResultExportData(value); }
@@ -608,8 +608,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.createSqlite': z.object({ connectionId: id }).strict(),
   'files.path': z.object({ token: id }).strict(),
   'excel.sheets': z.object({ fileToken: id, taskId: id }).strict(),
-  'excel.preview': z.object({ ...excelSheet, taskId: id }).strict(),
-  'excel.import': z.object({ ...target, ...excelSheet, taskId: id, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), mapping: z.array(z.object({ source: z.string().min(1).max(32767), target: name }).strict()).min(1).max(16384) }).strict().refine(value => new Set(value.mapping.map(item => item.source)).size === value.mapping.length && new Set(value.mapping.map(item => item.target)).size === value.mapping.length, '字段映射不能重复'),
+  'excel.preview': z.object({ ...excelSheet, taskId: id }).strict().refine(validExcelRowRange, excelRowRangeMessage),
+  'excel.import': z.object({ ...target, ...excelSheet, taskId: id, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), mapping: z.array(z.object({ source: z.string().min(1).max(32767), target: name }).strict()).min(1).max(16384) }).strict().refine(validExcelRowRange, excelRowRangeMessage).refine(value => new Set(value.mapping.map(item => item.source)).size === value.mapping.length && new Set(value.mapping.map(item => item.target)).size === value.mapping.length, '字段映射不能重复'),
   'excel.export': z.object({ ...target, fileToken: id, taskId: id, scope: z.enum(['sample','all']).optional() }).strict(),
   'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'files.writeQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']), sql: text }).strict(),

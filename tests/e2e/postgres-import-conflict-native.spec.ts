@@ -59,7 +59,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
     const paths = cases.map(item => info.outputPath(item.name));
     for (const [index, path] of paths.entries()) {
       if (cases[index].format !== 'xlsx') await writeFile(path, cases[index].data);
-      else await writeXlsxImportFixture(path, ['tenant', 'code', 'payload', 'raw'], [['华东', '7', '工作簿更新', '\\B:AAE=']]);
+      else await writeXlsxImportFixture(path, ['tenant', 'code', 'payload', 'raw'], [['华东', '7', '工作簿更新', '\\B:AAE=']], true);
     }
     await desktop.evaluate(({dialog, BrowserWindow}, files) => {
       const original = dialog.showOpenDialog;
@@ -88,6 +88,8 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         await modal.getByRole('button', {name: excelImportZh.workbook, exact: true}).click();
         await modal.getByLabel(excelImportZh.sheet, {exact: true}).selectOption({label: '导入🚢'});
         await modal.getByLabel(excelImportZh.header, {exact: true}).fill('2');
+        await modal.getByLabel(excelImportZh.firstDataRow, {exact: true}).fill('4');
+        await modal.getByLabel(excelImportZh.lastDataRow, {exact: true}).fill('4');
         await modal.getByLabel(excelImportZh.protocol, {exact: true}).selectOption('dbark-v1');
       }
       const pick = item.format === 'xlsx' ? excelImportZh.inspect : item.format === 'csv' ? text.choose : item.format === 'json' ? text.chooseJson : item.format === 'txt' ? text.chooseTxt : text.chooseXml;

@@ -38,7 +38,7 @@ function source(input: unknown): ImportFileSource { const value = object(input, 
 function options(value: Record<string, unknown>): ImportFileReadOptions {
   if (value.format === 'xlsx') {
     if (value.encoding !== 'utf8' || ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions'].some(key => Object.hasOwn(value, key))) return invalid();
-    const excel = object(value.excelOptions, 3, ['sheetId', 'protocol'], ['headerRow']);
+    const excel = object(value.excelOptions, 5, ['sheetId', 'protocol'], ['headerRow', 'firstDataRow', 'lastDataRow']);
     const excelOptions = excelImportOptionsSchema.parse({ ...excel, headerRow: excel.headerRow ?? 1 });
     return { format: 'xlsx', encoding: 'utf8', excelOptions };
   }

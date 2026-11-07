@@ -4,7 +4,8 @@ import { PassThrough, Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { posix } from 'node:path';
 import type { CellValue, DataRow } from '../shared/contracts';
-import { EXCEL_LIMITS, type ExcelColumn, type ExcelSheet, type ExcelSheetPreview, type ExcelTextProtocol } from '../shared/excelTransfer';
+import { EXCEL_LIMITS, excelRowRangeMessage, excelRowRangeSchema, type ExcelColumn, type ExcelImportOptions, type ExcelRowRange, type ExcelSheet, type ExcelSheetPreview, type ExcelTextProtocol } from '../shared/excelTransfer';
+import { csvImportColumnName } from '../shared/csvImport';
 import { AtomicFile, type AtomicFileIO } from './atomicFile';
 import { decodeExcelText, decodeExcelXmlText, encodeExcelCell, encodeExcelXmlText, validateExcelHeaders, validateExcelText } from './excelCellPolicy';
 import { ExcelZipArchive } from './excelZipBudget';
@@ -13,10 +14,10 @@ import { excelXmlEvents } from './excelXmlReader';
 const sheetNs = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const packageNs = 'http://schemas.openxmlformats.org/package/2006/relationships';
-const warnings = ['数字单元格保留文件中的原始数值文本；Excel 保存前已发生的精度丢失无法恢复。', '日期样式的数字单元格保留原始日期序列值，请在源文件中转为明确的日期时间文本后导入。', '空白格按 NULL 导入；显式空文本保留为空字符串；不读取公式、外部链接或合并单元格。'];
+const warnings = ['数字单元格保留文件中的原始数值文本；Excel 保存前已发生的精度丢失无法恢复。', '日期样式的数字单元格保留原始日期序列值，请在源文件中转为明确的日期时间文本后导入。', '空白格按 NULL 导入；显式空文本保留为空字符串。选定范围的公式和合并单元格须先整理，外部链接不读取。'];
 interface InternalSheet extends ExcelSheet { path: string; }
 export interface ExcelReadOptions { filePath: string; checkCancelled?: () => void; /** 仅供内核测试收紧预算，公开 IPC 不接受此参数。 */ cellBudget?: number; }
-export interface ExcelSheetReadOptions extends ExcelReadOptions { sheetId: string; headerRow?: number; protocol: ExcelTextProtocol; expectedFingerprint?: string; }
+export interface ExcelSheetReadOptions extends ExcelReadOptions, ExcelImportOptions { expectedFingerprint?: string; }
 export interface ExcelExportOptions extends ExcelReadOptions {
   columns: ExcelColumn[]; rows: AsyncIterable<CellValue[]>; onCommitStart: () => void;
   onProgress?: (rows: number) => void; io?: AtomicFileIO;
@@ -221,17 +222,24 @@ function readCell(type: string, text: string, strings: string[], hasValue: boole
   throw new Error('XLSX 包含错误单元格或不支持的单元格类型');
 }
 
-/** 逐行解析所选表，空白格为 NULL，显式空文本为字符串；完全空行保持为空数据行。 */
-async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: string[], protocol: ExcelTextProtocol, headerRow = 1, maximumCells: number = EXCEL_LIMITS.maxCells): AsyncGenerator<CellValue[]> {
-  if (!Number.isInteger(headerRow) || headerRow < 1 || headerRow > 1000) throw new Error('表头行号必须在 1～1000 之间');
-  let row: CellValue[] | undefined, rowIndex = 0, lastColumn = 0, cells = 0, rowBytes = 0, headerSeen = false;
+function selectedRows(input: ExcelRowRange) {
+  const result = excelRowRangeSchema.safeParse(input);
+  if (!result.success) throw Error(excelRowRangeMessage);
+  const {headerRow = 1, firstDataRow = headerRow + 1, lastDataRow = EXCEL_LIMITS.maxRows} = result.data;
+  return { headerRow, firstDataRow, lastDataRow };
+}
+
+/** 全表仍受 ZIP/结构预算限制，只有标题和选中行才解释单元格值。 */
+async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: string[], range: ReturnType<typeof selectedRows>, maximumCells: number): AsyncGenerator<{ index: number; values: CellValue[] }> {
+  const {headerRow, firstDataRow, lastDataRow} = range;
+  let row: CellValue[] | undefined, rowIndex = 0, lastColumn = 0, cells = 0, rowBytes = 0, selected = false;
   let cell: { column: number; type: string; text: string; hasValue: boolean } | undefined;
   let inValue = false, inText = false, phonetic = 0, runText = '';
   const stack: string[] = []; let sawSheetData = false;
   for await (const event of excelXmlEvents(zip, sheet.path)) {
     if (event.kind === 'text') {
-      if (cell && inValue) { cell.text += event.text; if (cell.text.length > EXCEL_LIMITS.maxCellCharacters * 7) throw new Error('XLSX 单元格文本超过长度上限'); }
-      if (cell && inText && !phonetic) { runText += event.text; if (runText.length > EXCEL_LIMITS.maxCellCharacters * 7) throw new Error('XLSX 单元格文本超过长度上限'); }
+      if (selected && cell && inValue) { cell.text += event.text; if (cell.text.length > EXCEL_LIMITS.maxCellCharacters * 7) throw new Error('XLSX 单元格文本超过长度上限'); }
+      if (selected && cell && inText && !phonetic) { runText += event.text; if (runText.length > EXCEL_LIMITS.maxCellCharacters * 7) throw new Error('XLSX 单元格文本超过长度上限'); }
       continue;
     }
     const parent = stack.at(-1);
@@ -242,13 +250,20 @@ async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: s
     if (event.uri !== sheetNs) continue;
     if (event.kind === 'open') {
       if (event.name === 'sheetData') { if (parent !== `${sheetNs}:worksheet` || sawSheetData) throw new Error('XLSX 工作表数据区无效'); sawSheetData = true; }
-      if (event.name === 'f') throw new Error('工作表包含公式；请在 Excel 中粘贴为值后再导入');
-      if (event.name === 'mergeCell') throw new Error('工作表包含合并单元格，请取消合并后再导入');
+      if (event.name === 'f' && (!row || selected)) throw new Error('所选范围包含公式；请在 Excel 中粘贴为值后再导入');
+      if (event.name === 'mergeCell') {
+        const [start, end = start, extra] = (event.attributes.ref ?? '').split(':', 3);
+        const from = cellCoordinate(start), to = cellCoordinate(end);
+        if (extra !== undefined || from.row > to.row || from.column > to.column) throw Error('XLSX 合并单元格范围无效');
+        if ((from.row <= headerRow && headerRow <= to.row) || (from.row <= lastDataRow && firstDataRow <= to.row))
+          throw Error('所选范围包含合并单元格，请取消合并后再导入');
+      }
       if (event.name === 'row') {
         if (parent !== `${sheetNs}:sheetData`) throw new Error('XLSX 数据行不在工作表数据区');
         const next = event.attributes.r === undefined ? rowIndex + 1 : Number(event.attributes.r);
         if (row || !Number.isInteger(next) || next <= rowIndex || next > EXCEL_LIMITS.maxRows) throw new Error('XLSX 行序号无效或超限');
         rowIndex = next; row = []; lastColumn = 0; rowBytes = 0;
+        selected = rowIndex === headerRow || rowIndex >= firstDataRow && rowIndex <= lastDataRow;
       }
       if (event.name === 'c') {
         if (parent !== `${sheetNs}:row` || !row || cell) throw new Error('XLSX 单元格结构无效');
@@ -261,17 +276,25 @@ async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: s
       if (event.name === 'rPh') phonetic++;
     } else {
       if (event.name === 'v') inValue = false;
-      if (event.name === 't') { if (cell && !phonetic) { cell.text += decodeExcelXmlText(runText); validateExcelText(cell.text); } inText = false; }
+      if (event.name === 't') { if (selected && cell && !phonetic) { cell.text += decodeExcelXmlText(runText); validateExcelText(cell.text); } inText = false; }
       if (event.name === 'rPh') phonetic--;
       if (event.name === 'c') {
         if (!cell || !row) throw new Error('XLSX 单元格结构无效');
-        while (row.length < cell.column - 1) row.push(null);
-        const value = readCell(cell.type, cell.text, strings, cell.hasValue, protocol);
-        rowBytes += value === null ? 0 : Buffer.byteLength(typeof value === 'object' ? value.base64 : String(value));
-        if (rowBytes > EXCEL_LIMITS.maxRowBytes) throw new Error('Excel 单行文本超过 1 MiB');
-        row.push(value); cell = undefined;
+        if (selected) {
+          while (row.length < cell.column - 1) row.push(null);
+          const value = readCell(cell.type, cell.text, strings, cell.hasValue, 'plain');
+          rowBytes += value === null ? 0 : Buffer.byteLength(typeof value === 'object' ? value.base64 : String(value));
+          if (rowBytes > EXCEL_LIMITS.maxRowBytes) throw new Error('Excel 单行文本超过 1 MiB');
+          row.push(value);
+        }
+        cell = undefined;
       }
-      if (event.name === 'row') { if (!row || cell) throw new Error('XLSX 行结构无效'); cells += row.length; checkCellCount(1, cells, maximumCells); if (rowIndex >= headerRow) { if (rowIndex > headerRow && !headerSeen) throw new Error('指定的表头行为空或不存在'); headerSeen = true; yield row; } row = undefined; }
+      if (event.name === 'row') {
+        if (!row || cell) throw new Error('XLSX 行结构无效');
+        cells += lastColumn; checkCellCount(1, cells, maximumCells);
+        if (selected) yield { index: rowIndex, values: row };
+        row = undefined; selected = false;
+      }
     }
   }
   if (!sawSheetData) throw new Error('XLSX 工作表缺少数据区');
@@ -282,6 +305,36 @@ export async function listExcelSheets(input: ExcelReadOptions): Promise<ExcelShe
   const zip = await ExcelZipArchive.open(input.filePath, input.checkCancelled);
   try { return (await inspectWorkbook(zip)).map(({ id, name, hidden }) => ({ id, name, hidden })); }
   finally { await zip.close(); }
+}
+
+/** 无标题时先流式确定所选范围的最宽列数，避免首行稀疏时遗漏后续字段。 */
+async function* worksheetRecords(zip: ExcelZipArchive, sheet: InternalSheet, input: ExcelSheetReadOptions, maximumCells: number,
+  onColumns: (columns: string[]) => void): AsyncGenerator<DataRow> {
+  const range = selectedRows(input), strings = await sharedStrings(zip);
+  let headers: string[] | undefined, records = 0;
+  if (range.headerRow === 0) {
+    let width = 0;
+    for await (const {values} of sheetRows(zip, sheet, strings, range, maximumCells)) width = Math.max(width, values.length);
+    if (!width) throw Error('所选数据范围没有可映射的字段');
+    headers = Array.from({length: width}, (_value, index) => csvImportColumnName(index));
+    onColumns([...headers]);
+  }
+  for await (const {index, values} of sheetRows(zip, sheet, strings, range, maximumCells)) {
+    if (index === range.headerRow) {
+      headers = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value)));
+      onColumns([...headers]); continue;
+    }
+    if (!headers) throw Error('指定的表头行为空或不存在');
+    if (values.length > headers.length) throw Error('Excel 数据行超出标题字段范围');
+    checkCellCount(++records + (range.headerRow ? 1 : 0), headers.length, maximumCells);
+    const row: DataRow = Object.create(null);
+    headers.forEach((name, column) => {
+      const value = column < values.length ? values[column] : null;
+      row[name] = typeof value === 'string' ? decodeExcelText(value, input.protocol) : value;
+    });
+    yield row;
+  }
+  if (!headers) throw Error('工作表为空或缺少标题行');
 }
 
 /** 原始标题与数据协议分开，__proto__ 等合法字段通过 null 原型对象保留。 */
@@ -295,21 +348,7 @@ export async function* readExcelRows(input: ExcelSheetReadOptions & { onColumns?
     }
     const sheet = (await inspectWorkbook(zip)).find(item => item.id === input.sheetId);
     if (!sheet) throw new Error('所选工作表不存在，请重新预览');
-    const strings = await sharedStrings(zip);
-    let headers: string[] | undefined, records = 0;
-    // 标题必须按原始文本读取；数据协议在按标题形成记录时应用。
-    for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow, maximumCells)) {
-      if (!headers) { headers = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value))); input.onColumns?.([...headers]); continue; }
-      if (values.length > headers.length) throw new Error('Excel 数据行超出标题字段范围');
-      checkCellCount(++records + 1, headers.length, maximumCells);
-      const row: DataRow = Object.create(null);
-      headers.forEach((name, index) => {
-        const value = index < values.length ? values[index] : null;
-        row[name] = typeof value === 'string' ? decodeExcelText(value, input.protocol) : value;
-      });
-      yield row;
-    }
-    if (!headers) throw new Error('工作表为空或缺少标题行');
+    yield* worksheetRecords(zip, sheet, input, maximumCells, names => input.onColumns?.(names));
   } finally { await zip.close(); }
 }
 
@@ -321,17 +360,11 @@ export async function previewExcelSheet(input: ExcelSheetReadOptions): Promise<E
     const fingerprint = await zip.fingerprint();
     const sheet = (await inspectWorkbook(zip)).find(item => item.id === input.sheetId);
     if (!sheet) throw new Error('所选工作表不存在，请重新预览');
-    const strings = await sharedStrings(zip), rows: DataRow[] = [];
-    let columns: string[] | undefined, records = 0;
-    for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow, maximumCells)) {
-      if (!columns) { columns = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value))); continue; }
-      if (values.length > columns.length) throw new Error('Excel 数据行超出标题字段范围');
-      checkCellCount(++records + 1, columns.length, maximumCells);
-      const row: DataRow = Object.create(null);
-      columns.forEach((name, index) => { const value = index < values.length ? values[index] : null; row[name] = typeof value === 'string' ? decodeExcelText(value, input.protocol) : value; });
+    const rows: DataRow[] = [];
+    let columns: string[] = [];
+    for await (const row of worksheetRecords(zip, sheet, input, maximumCells, names => { columns = names; })) {
       if (rows.length < EXCEL_LIMITS.previewRows) rows.push(row);
     }
-    if (!columns) throw new Error('工作表为空或缺少标题行');
     return { sheet: { id: sheet.id, name: sheet.name, hidden: sheet.hidden }, columns, rows, warnings, fingerprint };
   } finally { await zip.close(); }
 }

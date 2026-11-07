@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, desktop, page, dataDir } from './desktop-fixture';
 import { enabled, isolatedDatabase, type LiveContext } from './live-helpers';
+import { excelImportZh } from '../../src/shared/excelTransfer';
 
 test.use({ trace: 'off' });
 
@@ -29,6 +30,41 @@ async function excelDialog(mode: 'import' | 'export', path: string) {
   const modal = page.getByRole('dialog'); await expect(modal).toContainText(mode === 'import' ? '导入 Excel' : '导出 Excel');
   await modal.locator('.file-picker').click(); return modal;
 }
+
+test('XLSX 无标题时按列位置映射，并仅提交首末行之间的数据', async ({}, info) => {
+  test.skip(!enabled || process.env.DBARK_XLSX_ROW_RANGE_NATIVE !== '1', '需要本轮隔离实例');
+  const port = Number(process.env.DBARK_TEST_PORT);
+  if (process.env.DBARK_TEST_HOST !== '127.0.0.1' || !Number.isInteger(port) || port <= 1024 || port > 65535 ||
+    !/^tabrelio-search-[a-f0-9]{12}$/.test(process.env.DBARK_MYSQL_SEARCH_CONTAINER ?? '')) throw Error('需要本轮回环隔离库');
+  test.setTimeout(90_000);
+  await isolatedDatabase(async context => {
+    await context.observer.query('USE ??', [context.database]);
+    await context.observer.query('CREATE TABLE excel_range (id INT PRIMARY KEY, note TEXT) ENGINE=InnoDB');
+    const path = join(dataDir, '无标题行范围.xlsx');
+    const book = new ExcelJS.Workbook(), sheet = book.addWorksheet('数据');
+    sheet.addRows([['说明'], ['2', '首条'], ['3', '末条'], [{ formula: '1+1', result: 2 }]]);
+    await book.xlsx.writeFile(path);
+    await openTable(context, 'excel_range');
+    const modal = await excelDialog('import', path);
+    await modal.getByRole('spinbutton', { name: excelImportZh.lastDataRow, exact: true }).fill('3');
+    await modal.getByRole('spinbutton', { name: '表头所在行', exact: true }).fill('0');
+    await modal.getByRole('spinbutton', { name: excelImportZh.firstDataRow, exact: true }).fill('4');
+    const apply = modal.getByRole('button', { name: '开始导入', exact: true });
+    await expect(apply).toBeDisabled();
+    await expect(modal.locator('.error-box')).toContainText('末行不能早于首行');
+    await modal.getByRole('spinbutton', { name: excelImportZh.firstDataRow, exact: true }).fill('2');
+    await modal.getByRole('combobox', { name: '字段“第1列”的目标列', exact: true }).fill('id');
+    await modal.getByRole('combobox', { name: '字段“第2列”的目标列', exact: true }).fill('note');
+    await expect(modal.locator('.excel-preview tbody tr')).toHaveCount(2);
+    await expect(modal.locator('.excel-preview')).toContainText('首条');
+    await expect(modal.locator('.excel-preview')).toContainText('末条');
+    await modal.screenshot({ path: info.outputPath('无标题 XLSX 字段映射.png') });
+    await apply.click();
+    await expect(modal.locator('.success-box')).toContainText('2 行', { timeout: 30_000 });
+    const [rows] = await context.observer.query<RowDataPacket[]>('SELECT id, note FROM excel_range ORDER BY id');
+    expect(rows).toEqual([{ id: 2, note: '首条' }, { id: 3, note: '末条' }]);
+  }, info);
+});
 
 test('200 隔离库 Excel 样本与完整流式导出、字段映射导入及精度往返', async ({}, testInfo) => {
   test.skip(!enabled, '仅由主对话核对 200 实例和隔离资源后显式启用'); test.setTimeout(120000);

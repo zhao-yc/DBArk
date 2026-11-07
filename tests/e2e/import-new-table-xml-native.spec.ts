@@ -41,7 +41,7 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
     await writeXlsxImportFixture(files[4], ['id', 'raw', 'note', 'late'], [
       ['18446744073709551614', '\\B:AP8=', '', null],
       ['18446744073709551615', '\\B:', null, '尾部字段'],
-    ]);
+    ], true);
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showOpenDialog;
       let count = 0;
@@ -68,6 +68,8 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
         await wizard.getByRole('button', {name: excelImportZh.workbook, exact: true}).click();
         await wizard.getByLabel(excelImportZh.sheet, {exact: true}).selectOption({label: '导入🚢'});
         await wizard.getByLabel(excelImportZh.header, {exact: true}).fill('2');
+        await wizard.getByLabel(excelImportZh.firstDataRow, {exact: true}).fill('4');
+        await wizard.getByLabel(excelImportZh.lastDataRow, {exact: true}).fill('5');
         await wizard.getByLabel(excelImportZh.protocol, {exact: true}).selectOption('dbark-v1');
       } else if (txt) {
         await wizard.getByLabel(txtImportZh.layout, {exact: true}).selectOption('fixed');
@@ -110,6 +112,9 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       if (workbook) {
         await expect(importer.getByLabel(excelImportZh.sheet, {exact: true})).toHaveValue('2');
         await expect(importer.getByLabel(excelImportZh.header, {exact: true})).toBeDisabled();
+        await expect(importer.getByLabel(excelImportZh.firstDataRow, {exact: true})).toHaveValue('4');
+        await expect(importer.getByLabel(excelImportZh.lastDataRow, {exact: true})).toHaveValue('5');
+        await expect(importer.getByLabel(excelImportZh.lastDataRow, {exact: true})).toBeDisabled();
       } else if (txt) {
         await expect(importer.getByLabel(txtImportZh.widths, {exact: true})).toHaveValue(widths.join(','));
         await expect(importer.getByLabel(txtImportZh.widths, {exact: true})).toBeDisabled();

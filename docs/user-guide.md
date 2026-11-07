@@ -880,7 +880,7 @@ SQLite 的普通表也可在「导入 SQLite 表数据」选择 UTF-8 XML，指�
 
 MySQL、MariaDB、PostgreSQL 和 SQLite 可向现有表导入 `.txt`，也可用「从文件导入新表」按文件结构建表。选择「TXT 文本」及文件编码。分隔文本可设置字段分隔符、引号、记录换行和表头。固定宽度文本按顺序填写每列的字符数，例如 `8,12,20`，每条记录的字符数须与列宽总和一致。核对字段映射后确认写入。[TXT 导入说明](development/txt-import-20261107.md)
 
-SQLite 和 PostgreSQL 的现有表可导入「Excel（XLSX）」，四种数据库也可从工作簿新建表。先选择工作表和标题所在行，再完整扫描。由 tabrelio 导出的文件可选可逆文本协议。新表建成后继续核对字段映射，再确认写入。[XLSX 工作簿导入](development/xlsx-table-import-20261107.md)
+MySQL、MariaDB、PostgreSQL 和 SQLite 均可将「Excel（XLSX）」导入现有表或从工作簿新建表。选择工作表并填写标题行，无标题时填 0 并按列位置映射。可填写首末数据行以跳过说明和汇总，范围包含首末两行。由 tabrelio 导出的文件可选可逆文本协议。确认前核对样本和字段映射。[XLSX 工作簿导入](development/xlsx-table-import-20261107.md)
 
 CSV/JSON 导入先检查预览并建立字段映射；同一目标字段不能被多个源字段映射。JSON 顶层必须是对象数组，数字保留原始十进制文本以免丢失精度。CSV 默认第一行为列名，`\N` 表示 NULL，反斜线开头的文本用额外反斜线转义；二进制使用 `base64:` 表示。客户端先做无损类型检查，服务器约束和错误仍会终止当前批次。
 

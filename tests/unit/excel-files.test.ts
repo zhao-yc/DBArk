@@ -31,7 +31,7 @@ describe('Excel 单元格保真策略', () => {
     expect(sample.columns).toEqual(['编号', '名称']); expect(sample.rows).toEqual([{ 编号: '9007199254740993', 名称: '中文' }]);
     const rows = []; for await (const row of readExcelRows({ filePath: path, sheetId: '1', headerRow: 2, protocol: 'plain' })) rows.push(row);
     expect(rows).toEqual(sample.rows);
-    await expect(previewExcelSheet({ filePath: path, sheetId: '1', headerRow: 0, protocol: 'plain' })).rejects.toThrow('表头行号');
+    await expect(previewExcelSheet({ filePath: path, sheetId: '1', headerRow: -1, protocol: 'plain' })).rejects.toThrow('表头行号');
     const gap = workbook.addWorksheet('缺失表头'); gap.getCell('A3').value = '不能代替第二行的表头'; await workbook.xlsx.writeFile(path);
     await expect(previewExcelSheet({ filePath: path, sheetId: '2', headerRow: 2, protocol: 'plain' })).rejects.toThrow('表头行为空或不存在');
   });
@@ -59,6 +59,41 @@ describe('Excel 单元格保真策略', () => {
 });
 
 describe('真实 XLSX 引擎', () => {
+  it('选取物理首末行，跳过范围外的说明、公式和合并，并拒绝跨入边界的合并', async () => {
+    const path = await target(), workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('报表');
+    sheet.mergeCells('A1:B1');
+    sheet.getCell('A2').value = '编号';
+    sheet.getCell('B2').value = '备注';
+    sheet.getCell('A3').value = { formula: '1+1', result: 2 };
+    sheet.getCell('A4').value = '4';
+    sheet.getCell('B6').value = '末行';
+    sheet.getCell('A7').value = { formula: '1+2', result: 3 };
+    await workbook.xlsx.writeFile(path);
+    const options = { filePath: path, sheetId: '1', headerRow: 2, firstDataRow: 4, lastDataRow: 6, protocol: 'plain' } as const;
+    const sample = await previewExcelSheet(options);
+    expect(sample.rows).toEqual([{ 编号: '4', 备注: null }, { 编号: null, 备注: '末行' }]);
+    const rows = [];
+    for await (const row of readExcelRows({ ...options, expectedFingerprint: sample.fingerprint })) rows.push(row);
+    expect(rows).toEqual(sample.rows);
+    await expect(previewExcelSheet({ ...options, lastDataRow: 7 })).rejects.toThrow('公式');
+    sheet.mergeCells('B3:B4');
+    await workbook.xlsx.writeFile(path);
+    await expect(previewExcelSheet(options)).rejects.toThrow('合并');
+  });
+  it('无标题保留首条记录，按所选行的最宽列位置对齐稀疏字段', async () => {
+    const path = await target(), workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('无标题');
+    sheet.getCell('A1').value = '首行';
+    sheet.getCell('C2').value = '末列';
+    sheet.getCell('D3').value = '排除';
+    await workbook.xlsx.writeFile(path);
+    const options = { filePath: path, sheetId: '1', headerRow: 0, lastDataRow: 2, protocol: 'plain' } as const;
+    const sample = await previewExcelSheet(options);
+    expect(sample.columns).toEqual(['第1列', '第2列', '第3列']);
+    expect(sample.rows).toEqual([{ 第1列: '首行', 第2列: null, 第3列: null }, { 第1列: null, 第2列: null, 第3列: '末列' }]);
+    const rows = [];
+    for await (const row of readExcelRows(options)) rows.push(row);
+    expect(rows).toEqual(sample.rows);
+  });
   it('导出可由ExcelJS读取，精度、文本公式与协议完整往返', async () => {
     const path = await target();
     const source: CellValue[][] = [['18446744073709551615', '0.12345678901234567890', '2026-10-15 12:34:56.123456', '=1+1', null, '', { type: 'binary', base64: 'AAH/' }, '\\N']];

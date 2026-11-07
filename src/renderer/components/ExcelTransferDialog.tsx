@@ -1,8 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CellValue, FileChoice } from '../../shared/contracts';
-import { validateExcelMapping, type ExcelColumn, type ExcelFieldMapping, type ExcelSheet, type ExcelSheetPreview, type ExcelTextProtocol, type ExcelTransferProgress, type ExcelTransferServices, type ExcelTransferTarget } from '../../shared/excelTransfer';
+import { excelImportZh, excelRowRangeMessage, excelRowRangeSchema, validateExcelMapping, type ExcelColumn, type ExcelFieldMapping, type ExcelRowRange, type ExcelSheet, type ExcelSheetPreview, type ExcelTextProtocol, type ExcelTransferProgress, type ExcelTransferServices, type ExcelTransferTarget } from '../../shared/excelTransfer';
 import { excelTransferZh as text } from '../locales/excelTransfer.zh-CN';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
+import { ExcelRowRangeFields } from './ExcelImportFields';
 import { ExcelTransferLifecycle, type ExcelTaskSnapshot } from '../excelTransferLifecycle';
 import { ExcelPreviewTasks } from '../excelPreviewTasks';
 import '../excelTransfer.css';
@@ -13,9 +14,10 @@ interface Props extends ExcelTransferTarget {
 }
 interface ReadyPreview { key: string; sample: ExcelSheetPreview; targets: ExcelColumn[]; mapping: ExcelFieldMapping[]; }
 
-/** 预览键包括文件、工作表、协议和目标上下文，迟到响应不能恢复旧映射。 */
-export function excelPreviewKey(target: ExcelTransferTarget, fileToken: string, sheetId: string, protocol: ExcelTextProtocol, headerRow = 1): string {
-  return JSON.stringify([target.connectionId, target.database, target.table, fileToken, sheetId, protocol, headerRow]);
+/** 预览键绑定文件、工作表、行范围、协议和目标，迟到响应不能恢复旧映射。 */
+export function excelPreviewKey(target: ExcelTransferTarget, fileToken: string, sheetId: string, protocol: ExcelTextProtocol,
+  headerRow = 1, firstDataRow?: number, lastDataRow?: number): string {
+  return JSON.stringify([target.connectionId, target.database, target.table, fileToken, sheetId, protocol, headerRow, firstDataRow, lastDataRow]);
 }
 
 /** 预览值只作为 React 文本展示，保留空串/NULL 的可见区别，不插入文件中的 HTML。 */
@@ -30,7 +32,7 @@ export function ExcelTransferDialog(props: Props) {
   const { mode, connectionId, database, table, services, onClose, progress } = props;
   const [file, setFile] = useState<FileChoice | null>(null), [sheets, setSheets] = useState<ExcelSheet[]>([]), [sheetId, setSheetId] = useState('');
   const [protocol, setProtocol] = useState<ExcelTextProtocol>('plain'), [ready, setReady] = useState<ReadyPreview | null>(null);
-  const [headerRow, setHeaderRow] = useState(1), [scope, setScope] = useState<'sample' | 'all'>('sample');
+  const [rowRange, setRowRange] = useState<ExcelRowRange>({ headerRow: 1 }), [scope, setScope] = useState<'sample' | 'all'>('sample');
   const [loading, setLoading] = useState(false), [error, setError] = useState('');
   const [done, setDone] = useState<number>(), [failures, setFailures] = useState<string[]>([]);
   const [lifecycle] = useState(() => new ExcelTransferLifecycle());
@@ -40,7 +42,9 @@ export function ExcelTransferDialog(props: Props) {
   const [mappingPage, setMappingPage] = useState(0); const targetListId = useId();
   const choosing = useRef(false), generation = useRef(0), fileGeneration = useRef(0), mounted = useRef(true);
   const reads = useMemo(() => new ExcelPreviewTasks(id => services.cancel(id)), [services]);
-  const key = file && sheetId ? excelPreviewKey(props, file.token, sheetId, protocol, headerRow) : '';
+  const { headerRow, firstDataRow, lastDataRow } = rowRange;
+  const rangeValid = excelRowRangeSchema.safeParse(rowRange).success;
+  const key = file && sheetId && rangeValid ? excelPreviewKey(props, file.token, sheetId, protocol, headerRow, firstDataRow, lastDataRow) : '';
   const current = ready?.key === key ? ready : null;
 
   /** 组件销毁或上下文改变后，所有旧文件与预览请求都失效。 */
@@ -53,15 +57,16 @@ export function ExcelTransferDialog(props: Props) {
   useEffect(() => {
     const revision = ++generation.current; setReady(null); setDone(undefined); setError(''); setMappingPage(0);
     if (mode !== 'import' || !file || !sheetId) return;
+    if (!rangeValid) { setLoading(false); return; }
     setLoading(true);
-    void reads.pair(taskId => services.preview({ fileToken: file.token, taskId, sheetId, headerRow, protocol }), taskId => services.targetColumns({ connectionId, database, table }, taskId)).then(([sample, targets]) => {
+    void reads.pair(taskId => services.preview({ fileToken: file.token, taskId, sheetId, ...rowRange, protocol }), taskId => services.targetColumns({ connectionId, database, table }, taskId)).then(([sample, targets]) => {
       if (!mounted.current || generation.current !== revision) return;
       const mapping = sample.columns.map(source => ({ source, target: targets.some(column => column.name === source) ? source : '' }));
       setReady({ key, sample, targets, mapping });
     }, reason => { if (mounted.current && generation.current === revision) setError(reason instanceof Error ? reason.message : text.error); })
       .finally(() => { if (mounted.current && generation.current === revision) setLoading(false); });
     return () => { generation.current++; void reads.cancel().catch(() => undefined); };
-  }, [mode, file?.token, sheetId, protocol, connectionId, database, table, services, key, reads]);
+  }, [mode, file?.token, sheetId, protocol, connectionId, database, table, services, key, reads, rowRange, rangeValid]);
 
   /** 文件选择串行化，且校验响应仍属于本轮选择，避免快速点击或关闭导致状态回滚。 */
   async function chooseFile() {
@@ -95,7 +100,7 @@ export function ExcelTransferDialog(props: Props) {
       cancel: task => submittedServices.cancel(task),
       execute: () => mode === 'export'
         ? submittedServices.exportTable({ ...target, scope }).then(result => ({ ...result, errors: [] }))
-        : submittedServices.importTable({ ...target, sheetId, headerRow, protocol, mapping, fingerprint: current!.sample.fingerprint }),
+        : submittedServices.importTable({ ...target, sheetId, ...rowRange, protocol, mapping, fingerprint: current!.sample.fingerprint }),
       success: result => { setDone(result.rows); setFailures(result.errors); },
       failure: reason => setError(reason instanceof Error ? reason.message : text.error),
     });
@@ -119,9 +124,10 @@ export function ExcelTransferDialog(props: Props) {
       <button className="file-picker" title={text.fileHint} disabled={busy || loading} onClick={() => void chooseFile()}><span><strong>{file?.name ?? (mode === 'import' ? text.chooseImport : text.chooseExport)}</strong></span></button>
       {mode === 'import' && sheets.length > 0 && <div className="form-grid">
         <Field label={text.sheet}><select aria-label={text.sheet} value={sheetId} disabled={busy} onChange={event => setSheetId(event.target.value)}>{sheets.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}{sheet.hidden ? text.hidden : ''}</option>)}</select></Field>
-        <Field label={text.headerRow}><input type="number" aria-label={text.headerRow} min="1" max="1000" value={headerRow} disabled={busy} onChange={event => setHeaderRow(Number(event.target.value))}/></Field>
+        <ExcelRowRangeFields range={rowRange} headerLabel={text.headerRow} disabled={busy} onChange={setRowRange}/>
         <Field label={text.protocol}><select aria-label={text.protocol} value={protocol} disabled={busy} onChange={event => setProtocol(event.target.value as ExcelTextProtocol)}><option value="plain">{text.plain}</option><option value="dbark-v1">{text.dbark}</option></select></Field>
       </div>}
+      {mode === 'import' && sheets.length > 0 && <p className="muted small">{excelImportZh.rangeHint}</p>}
       {loading && <Spinner text={text.loading}/>}
       {loading && <button onClick={() => void reads.cancel().catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message : text.error); })}>{text.cancel}</button>}
       {current && <><h3>{text.mapping}</h3><datalist id={targetListId}>{current.targets.map(column => <option key={column.name} value={column.name}/>)}</datalist><div className="mapping-grid">{current.mapping.slice(mappingPage * 50, (mappingPage + 1) * 50).map((item, index) => <div className="mapping-row" key={item.source}><span className="truncate">{item.source}</span><span aria-hidden="true">→</span><input list={targetListId} placeholder={text.skip} aria-label={text.mappingLabel.replace('{name}', item.source)} value={item.target} disabled={busy} onChange={event => {
@@ -136,7 +142,7 @@ export function ExcelTransferDialog(props: Props) {
       {taskState.waitingForPrevious && <Spinner text={text.waitingForPrevious}/>}
       {busy && !taskState.waitingForPrevious && progress && <div className="transfer-progress"><span>{progress.message}</span><progress max="100" value={progress.progress}/></div>}
       {done !== undefined && <div className={failures.length ? 'error-box' : 'success-box'}>{text.completed.replace('{rows}', String(done))}</div>}
-      <ErrorBox message={error || (taskState.cancellationError ? text.cancelFailed + taskState.cancellationError : '')}/>{failures.length > 0 && <details className="error-box"><summary>{text.failureCount}</summary><pre>{failures.join('\n')}</pre></details>}
+      <ErrorBox message={error || (mode === 'import' && !rangeValid ? excelRowRangeMessage : '') || (taskState.cancellationError ? text.cancelFailed + taskState.cancellationError : '')}/>{failures.length > 0 && <details className="error-box"><summary>{text.failureCount}</summary><pre>{failures.join('\n')}</pre></details>}
     </div>
     <footer className="modal-footer"><button disabled={busy && lifecycle.ownsActiveTask} onClick={close}>{done === undefined ? text.close : text.done}</button><span className="grow"/>{busy ? <button disabled={!lifecycle.ownsActiveTask} onClick={() => void lifecycle.cancel()}>{text.cancel}</button> : <button className="primary" disabled={!file || loading || (mode === 'import' && !current) || done !== undefined} onClick={() => void execute()}>{mode === 'import' ? text.startImport : text.startExport}</button>}</footer>
   </Modal>;
