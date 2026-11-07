@@ -1,9 +1,16 @@
-import { createReadStream } from 'node:fs';
+import { constants, type BigIntStats, type ReadStream } from 'node:fs';
+import { lstat, open } from 'node:fs/promises';
 import { SaxesParser } from 'saxes';
 import type { DataRow } from '../shared/contracts';
 import { xmlImportOptionsSchema, xmlImportZh as text, type XmlImportOptions } from '../shared/xmlImport';
 
 const limits = { file: 64 * 1024 * 1024, row: 16 * 1024 * 1024, field: 8 * 1024 * 1024, columns: 1024, name: 256 };
+const changed = 'XML 文件身份或内容已变化，请重新选择';
+function version(stat: BigIntStats): string {
+  if (!stat.isFile()) throw Error('请选择普通 XML 文件');
+  if (stat.size > BigInt(limits.file)) throw Error(text.limit);
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+}
 export interface XmlImportReadControl {
   signal?: AbortSignal;
   onBytes?: (chunk: Buffer) => void;
@@ -66,12 +73,22 @@ export async function* readXmlRecords(filePath: string, input: XmlImportOptions,
     depth--;
   });
   control?.signal?.throwIfAborted();
-  const source = createReadStream(filePath, { signal: control?.signal });
+  const expected = version(await lstat(filePath, { bigint: true }));
+  const handle = await open(filePath, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
+  let source: ReadStream | undefined;
+  // 对比原路径和已打开句柄，防止在检查与读取之间被替换为其它文件或特殊设备。
+  async function assertCurrent() {
+    if (version(await handle.stat({ bigint: true })) !== expected ||
+        version(await lstat(filePath, { bigint: true })) !== expected) throw Error(changed);
+  }
   function decode(chunk?: Buffer): string {
     try { return decoder.decode(chunk, { stream: !!chunk }); }
     catch { return invalid(); }
   }
   try {
+    await assertCurrent();
+    control?.signal?.throwIfAborted();
+    source = handle.createReadStream({ autoClose: false, signal: control?.signal });
     for await (const chunk of source as AsyncIterable<Buffer>) {
       control?.signal?.throwIfAborted();
       bytes += chunk.length;
@@ -83,7 +100,8 @@ export async function* readXmlRecords(filePath: string, input: XmlImportOptions,
     }
     parser.write(decode()).close();
     yield* ready;
+    await assertCurrent();
     if (!records) throw Error(text.noRows);
     if (control?.requiredColumns?.some(name => !columns.has(name))) throw Error(text.unknownColumn);
-  } finally { source.destroy(); }
+  } finally { source?.destroy(); await handle.close(); }
 }

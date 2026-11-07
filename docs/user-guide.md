@@ -338,7 +338,7 @@ PostgreSQL 表页的「导出数据」可将当前筛选的全部匹配记录保
 
 要把数据交给 PostgreSQL 的 `COPY FROM`，在表页「导出数据」中选择「COPY CSV（PostgreSQL 原生）」。选择输出列及逗号、分号或 Tab，再指定 `.csv` 保存位置。文件含列名，固定 UTF-8，按 PostgreSQL 的 CSV 规则区分 NULL 和空字符串。导入时使用相同分隔符，并按文件列顺序指定目标列。详见[PostgreSQL 表页原生 COPY 导出](development/postgres-copy-export-20261105.md)。
 
-在有写入权限的 PostgreSQL 普通表或分区表打开「导入 CSV」。选择与源文件一致的分隔符和首行模式，再选 UTF-8 文件。核对数据样本和目标字段后，点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。详见[PostgreSQL CSV 导入及样本预览](development/postgres-copy-preview-20261105.md)。
+在有写入权限的 PostgreSQL 普通表或分区表打开「导入数据」，选择 CSV 或 XML。CSV 可设置分隔符和首行模式。XML 可指定记录标签、使用属性字段并按需解码 Base64。选择 UTF-8 文件，核对样本和字段映射后点击「确认追加并导入」。数据库校验类型与约束，确认提交后表页自动刷新。[CSV 导入](development/postgres-copy-preview-20261105.md) · [XML 导入](development/postgres-xml-import-20261107.md)
 
 在 PostgreSQL 查询页，选定结果集后可「导出已返回结果」，或勾选行后「导出勾选结果行」。支持 CSV、JSON 和 Excel。结果出现截断提示时，导出的范围以当前已经返回的行数为准。详见[PostgreSQL 查询结果导出](development/postgres-query-result-export-20261105.md)。
 

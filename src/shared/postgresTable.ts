@@ -1,3 +1,4 @@
+import { xmlImportOptionsSchema } from './xmlImport';
 import { z } from 'zod';
 import type { DataRow, ResultColumn, SortRule } from './contracts';
 import { csvExportDelimiters } from './csvExport';
@@ -248,14 +249,19 @@ export const postgresTableExportSchema = target.extend({
 export type PostgresTableExportInput = z.infer<typeof postgresTableExportSchema>;
 export type PostgresTableExportChooseInput = z.infer<typeof postgresTableExportChooseSchema>;
 export interface PostgresTableExportOutput { rows: number; fileCommitted: true }
-/** 预览绑定原表页，提交只认一次性来源和按 CSV 顺序排列的目标列。 */
-export const postgresTableImportChooseSchema = target.extend({
-  pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional(),
-}).strict();
-export const postgresTableImportSchema = target.extend({
-  pageToken: token, taskId: identity, fileToken: token,
-  columns: z.array(column).min(1).max(1022).refine(value => new Set(value).size === value.length, '导入目标列不能重复'),
-}).strict();
+/** 预览绑定原表页及文件解释，保留原 CSV 调用形状。 */
+export const postgresTableImportChooseSchema = z.union([
+  target.extend({ pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional() }).strict(),
+  target.extend({ pageToken: token, format: z.literal('xml'), xmlOptions: xmlImportOptionsSchema }).strict(),
+]);
+const importTarget = target.extend({ pageToken: token, taskId: identity, fileToken: token });
+export const postgresTableImportSchema = z.union([
+  importTarget.extend({ columns: z.array(column).min(1).max(1022).refine(value => new Set(value).size === value.length, '导入目标列不能重复') }).strict(),
+  importTarget.extend({ format: z.literal('xml'), columns: z.array(column.nullable()).min(1).max(1022).refine(value => {
+    const mapped = value.filter(key => key !== null);
+    return mapped.length > 0 && new Set(mapped).size === mapped.length;
+  }, '至少映射一列，导入目标列不能重复') }).strict(),
+]);
 export type PostgresTableImportChooseInput = z.infer<typeof postgresTableImportChooseSchema>;
 export type PostgresTableImportInput = z.infer<typeof postgresTableImportSchema>;
 export interface PostgresTableImportChoice {

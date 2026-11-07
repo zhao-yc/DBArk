@@ -1,3 +1,4 @@
+import { inspectPostgresXmlImportSource, type PostgresXmlImportSource } from '../engine/postgres/xmlImportFile';
 import { mysqlDatabaseBackupTitle, mysqlDatabaseBackupPathMatches, mysqlDumpToolTitle, type MysqlDatabaseBackupChooseInput } from '../shared/mysqlDatabaseBackup';
 import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpTool';
 import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
@@ -906,7 +907,7 @@ const postgresDatabaseBackupFiles = new WeakMap<object, PostgresDatabaseBackupCh
 const databaseBackupChoosing = new WeakSet<object>();
 const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
-const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource; revision: number; expires: number }>();
+const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource | PostgresXmlImportSource; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 const sqlFileTaskOwners = new Map<string, ColumnsInvocation>();
 
@@ -1338,11 +1339,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       };
       try {
         check();
-        const chosen = await dialog.showOpenDialog(columns!.owner.window, { title: '选择 PostgreSQL CSV 文件',
-          properties: ['openFile'], filters: [{ name: 'CSV', extensions: ['csv', 'tsv'] }] });
+        const xml = 'format' in target;
+        const chosen = await dialog.showOpenDialog(columns!.owner.window, { title: xml ? '选择 PostgreSQL XML 文件' : '选择 PostgreSQL CSV 文件',
+          properties: ['openFile'], filters: [xml ? { name: 'XML', extensions: ['xml'] } : { name: 'CSV', extensions: ['csv', 'tsv'] }] });
         check();
         if (chosen.canceled || !chosen.filePaths[0]) return null;
-        const { source, sample, sampleLimited } = await inspectPostgresCopySource(chosen.filePaths[0], target.csvDelimiter, target.csvHasHeader);
+        const { source, sample, sampleLimited } = xml
+          ? await inspectPostgresXmlImportSource(chosen.filePaths[0], target.xmlOptions, check)
+          : await inspectPostgresCopySource(chosen.filePaths[0], target.csvDelimiter, target.csvHasHeader);
         check();
         const token = randomUUID();
         postgresImportFiles.set(document, { token, target, source, revision, expires: Date.now() + 5 * 60 * 1000 });
@@ -2379,8 +2383,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const document = columns!.owner.document, owner = postgresTableOwners.get(document);
       const file = postgresImportFiles.get(document), revision = store.connectionRevision();
       if (shuttingDown || !owner || !file || file.token !== input.fileToken || file.revision !== revision || file.expires <= Date.now() ||
+          ('format' in file.target) !== (input.format === 'xml') ||
           (['connectionId', 'database', 'table', 'tabId', 'pageToken'] as const).some(key => file.target[key] !== input[key]))
-        throw Error('PostgreSQL 导入的原表页或 CSV 文件选择已失效');
+        throw Error('PostgreSQL 导入的原表页或源文件选择已失效');
       const profile = store.resolveConnection(input.connectionId);
       if (profile.dialect !== 'postgresql') throw Error('导入需要已保存的 PostgreSQL 连接');
       postgresImportFiles.delete(document);

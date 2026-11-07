@@ -1,3 +1,5 @@
+import { postgresXmlCopyNull, readPostgresXmlImportSource, type PostgresXmlImportSource } from './xmlImportFile';
+import type { Readable } from 'node:stream';
 import { createHash, randomUUID } from 'node:crypto';
 import type { CellValue, DataRow } from '../../shared/contracts';
 import { postgresIdentifier, postgresRelationName } from '../../shared/postgresSql';
@@ -75,7 +77,7 @@ interface RelatedScope {
   expires: number;
   editSource?: { token: string; relation: Relation; rows: Original[] };
 }
-export type PostgresTableImportRequest = Scoped<PostgresTableImportInput> & { source: PostgresCopySource };
+export type PostgresTableImportRequest = Scoped<PostgresTableImportInput> & { source: PostgresCopySource | PostgresXmlImportSource };
 const noWrites: Capabilities = { insert: false, update: false, delete: false };
 // 按内置类型 OID 开放可原生比较且文本可往返的字段，避免同名自定义类型混入。
 const valueOptionTypes = new Set([
@@ -445,11 +447,16 @@ export class PostgresTableWorkspace {
     const key = this.key(input);
     if (this.active.has(key)) throw Error('当前 PostgreSQL 表页仍有在途操作');
     const snapshot = this.snapshot(input);
-    const selected = input.columns.map(key => snapshot.relation.columns.find(column => column.key === key));
-    if (!snapshot.relation.canImport || selected.length !== input.source.header.length ||
-        new Set(input.columns).size !== selected.length || selected.some(column => !column || !isPostgresSqlExportColumn(column)))
+    const { source } = input;
+    const xml = 'format' in source;
+    const mappings = input.columns.flatMap((key, index) => key === null ? [] : [{ key, name: source.header[index] }]);
+    const selected = mappings.map(item => snapshot.relation.columns.find(column => column.key === item.key));
+    if (!snapshot.relation.canImport || xml !== ('format' in input) || input.columns.length !== source.header.length || !selected.length ||
+        !xml && selected.length !== input.columns.length || new Set(mappings.map(item => item.key)).size !== selected.length ||
+        selected.some(column => !column || !isPostgresSqlExportColumn(column)))
       throw Error('目标表或列映射不可导入，请刷新表页并重新核对');
-    const projection = (selected as PostgresTableColumn[]).map(column => postgresIdentifier(column.name)).join(', ');
+    const columns = selected as PostgresTableColumn[];
+    const projection = columns.map(column => postgresIdentifier(column.name)).join(', ');
     this.snapshots.delete(key);
     this.active.add(key);
     let receipt: PostgresTableOutcome | undefined;
@@ -466,13 +473,16 @@ export class PostgresTableWorkspace {
           if (relation.fingerprint !== snapshot.relation.fingerprint || !relation.canImport)
             throw Error('目标表结构或写入权限已变化，请刷新表页');
           await connection.query("SET LOCAL statement_timeout = '0'", undefined, small());
-          const command = 'COPY ' + relation.sql + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, HEADER ' +
-            (input.source.hasHeader ? 'true' : 'false') + ', ENCODING \'UTF8\', DELIMITER ' +
-            postgresDdlLiteral(input.source.delimiter) + ')';
-          const rows = await readPostgresCopySource(input.source, stream => {
+          const sourceOptions = xml ? "ENCODING 'UTF8', NULL " + postgresDdlLiteral(postgresXmlCopyNull) :
+            'HEADER ' + (source.hasHeader ? 'true' : 'false') + ", ENCODING 'UTF8', DELIMITER " + postgresDdlLiteral(source.delimiter);
+          const command = 'COPY ' + relation.sql + ' (' + projection + ') FROM STDIN WITH (FORMAT CSV, ' + sourceOptions + ')';
+          const consume = (stream: Readable) => {
             check(); sent = true;
             return connection.copyIn(command, stream);
-          });
+          };
+          const rows = xml ? await readPostgresXmlImportSource(source,
+            mappings.map((item, index) => ({ name: item.name, binary: columns[index].binary })), check, consume)
+            : await readPostgresCopySource(source, consume);
           check();
           commitStart();
           commitAttempted = true;
