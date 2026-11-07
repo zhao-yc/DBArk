@@ -13,6 +13,9 @@ export const xmlImportOptionsSchema = z.object({
   binaryBase64: z.boolean(),
 }).strict();
 export type XmlImportOptions = z.infer<typeof xmlImportOptionsSchema>;
+// SQLite 的二进制解释由逐列映射决定。
+export const sqliteXmlImportOptionsSchema = xmlImportOptionsSchema.extend({ binaryBase64: z.literal(false) });
+export type SqliteXmlImportOptions = z.infer<typeof sqliteXmlImportOptionsSchema>;
 
 export const xmlImportZh = {
   invalid: 'XML 导入需要有效的记录标签及属性、二进制设置，编码固定为 UTF-8',

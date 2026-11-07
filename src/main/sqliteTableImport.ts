@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import type { DataRow, SqliteConnectionProfile } from '../shared/contracts';
+import type { RecordFileInspectInput } from '../shared/importNewTable';
 import { inspectImportFile, readVerifiedImportRecords } from '../engine/importNewTableSource';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteFileIdentity, SqliteValue } from '../engine/sqlite/protocol';
@@ -15,7 +16,7 @@ export interface SqliteTableImportControl extends SqliteTableBrowseControl { sig
 export interface SqliteTableImportApplyControl extends SqliteTableImportControl { beginCommit(): void; }
 export interface SqliteImportFileIdentity { device: string; inode: string; size: string; modified: string; changed: string; }
 type SourceIdentity = SqliteImportFileIdentity;
-export type SqliteImportFileInput = Pick<SqliteTableImportInspectRequest, 'fileToken' | 'taskId' | 'format' | 'encoding' | 'csvDelimiter' | 'csvHasHeader' | 'filePath'>;
+export type SqliteImportFileInput = RecordFileInspectInput & { filePath: string };
 export interface SqliteImportFileScan { source: SqliteTableImportInspectOutput['source']; records: number; sourceColumns: string[]; sample: DataRow[]; sampleOmitted: boolean; }
 export interface SqliteImportTarget {
   target: SqliteTableImportInspectOutput['target']; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
@@ -87,7 +88,7 @@ export async function inspectSqliteImportFile(input: SqliteTableImportInspectReq
 /** 共享严格原字节扫描，只读来源能力和最终目标检查沿同一reader及样本预算。 */
 export async function inspectSqliteImportRecords(input: SqliteImportFileInput, profile: SqliteConnectionProfile, expected: SourceIdentity, control: SqliteTableImportControl): Promise<SqliteImportFileScan> {
   await assertSqliteImportSource(input.filePath, profile, control, expected);
-  const inspected = await inspectImportFile({ fileToken: input.fileToken, taskId: input.taskId, format: input.format, encoding: input.encoding, ...(input.csvDelimiter === undefined ? {} : { csvDelimiter: input.csvDelimiter }), ...(input.csvHasHeader === undefined ? {} : { csvHasHeader: input.csvHasHeader }), filePath: input.filePath, strictEncoding: true }, control.check, progress => { control.check(); if (progress.records > limits.records) throw Error('SQLite导入文件超过记录预算'); control.progress(progress.records); }, control.signal);
+  const inspected = await inspectImportFile({ fileToken: input.fileToken, taskId: input.taskId, format: input.format, encoding: input.encoding, ...(input.csvDelimiter === undefined ? {} : { csvDelimiter: input.csvDelimiter }), ...(input.csvHasHeader === undefined ? {} : { csvHasHeader: input.csvHasHeader }), ...(input.xmlOptions ? { xmlOptions: input.xmlOptions } : {}), filePath: input.filePath, strictEncoding: true }, control.check, progress => { control.check(); if (progress.records > limits.records) throw Error('SQLite导入文件超过记录预算'); control.progress(progress.records); }, control.signal);
   control.check(); await assertSqliteImportSource(input.filePath, profile, control, expected);
   if (inspected.records > limits.records || inspected.columns.length > limits.sourceColumns) throw Error('SQLite导入文件记录或源列目录超过预算');
   const sample: DataRow[] = []; let sampleBytes = 2;
@@ -105,7 +106,7 @@ export async function previewSqliteImport(inspection: SqliteImportInspection, in
   const checked = report(); let plan: ImportPlan | undefined;
   try {
     await assertSqliteImportSource(inspection.file.filePath, inspection.profile, control, inspection.fileIdentity); await assertDatabase(inspection, control);
-    if (inspection.records) try { plan = buildSqliteTableImportPlan({ target: inspection.target, columns: inspection.columns, sourceColumns: inspection.sourceColumns, mapping: input.mapping, strict: inspection.strict }); }
+    if (inspection.records) try { plan = buildSqliteTableImportPlan({ target: inspection.target, columns: inspection.columns, sourceColumns: inspection.sourceColumns, mapping: input.mapping, strict: inspection.strict, ...(inspection.file.format === 'xml' ? { missingAsNull: true } : {}) }); }
     catch (reason) { if (reason instanceof SqliteTableImportMappingError) { for (const error of reason.issues) issue(checked, error); checked.issueCount += reason.issueCount - reason.issues.length; checked.truncated = checked.issueCount > checked.issues.length; } else issue(checked, sqliteTableImportIssue('invalid-mapping')); return { report: checked }; }
     for await (const row of readVerifiedImportRecords({ ...inspection.file, expectedSource: inspection.source, strictEncoding: true }, control.check, control.signal)) {
       control.check(); if (checked.checkedRecords >= limits.records) { issue(checked, sqliteTableImportIssue('record-limit')); return { report: checked }; }

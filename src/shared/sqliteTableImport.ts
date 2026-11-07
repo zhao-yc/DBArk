@@ -1,3 +1,4 @@
+import { recordImportFormats, sqliteXmlImportOptionsSchema, validXmlImport, xmlImportZh } from './xmlImport';
 import { z } from 'zod';
 import type { DataRow } from './contracts';
 import type { SqliteValue } from '../engine/sqlite/protocol';
@@ -26,7 +27,9 @@ export type SqliteTableImportColumn = z.infer<typeof sqliteTableImportColumnSche
 /** 沿原reader的精确标量；JSON数字与文字都是原文string，嵌套JSON由reader无损序列化为TEXT。 */
 export type SqliteTableImportRow = DataRow;
 /** 新表流程可引用原来源能力；摘要仍由Main/runtime账本复核，客户端不能提供或覆盖expectedSource。 */
-export const sqliteTableImportInspectSchema = guard(value => { const raw = ownData(value, 10); return !!raw && !(raw.format === 'json' && (Object.hasOwn(raw, 'csvDelimiter') || Object.hasOwn(raw, 'csvHasHeader'))); }).pipe(z.object({ connectionId: id, database: z.literal('main'), table: name, fileToken: id, format: z.enum(['csv', 'json']), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional(), taskId: id, sourceId: id.optional() }).strict());
+export const sqliteTableImportInspectSchema = guard(value => { const raw = ownData(value, 11);
+  return !!raw && (raw.format === 'csv' || !Object.hasOwn(raw, 'csvDelimiter') && !Object.hasOwn(raw, 'csvHasHeader')) &&
+    (!Object.hasOwn(raw, 'xmlOptions') || !!ownData(raw.xmlOptions, 3)); }).pipe(z.object({ connectionId: id, database: z.literal('main'), table: name, fileToken: id, format: z.enum(recordImportFormats), xmlOptions: sqliteXmlImportOptionsSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional(), taskId: id, sourceId: id.optional() }).strict().refine(validXmlImport, xmlImportZh.invalid));
 export const sqliteTableImportPreviewSchema = guard(value => { const raw = ownData(value, 3); return !!raw && arrayBound(raw.mapping, sqliteTableImportLimits.mapping); }).pipe(z.object({ inspectionId: id, mapping: sqliteTableImportMappingSchema, taskId: id }).strict());
 export const sqliteTableImportApplySchema = z.object({ previewId: id, taskId: id, confirmation: z.string().min(1).max(1024) }).strict();
 export const sqliteTableImportReleaseSchema = z.object({ inspectionId: id.optional(), previewId: id.optional() }).strict().refine(value => !!value.inspectionId || !!value.previewId, '缺少要释放的SQLite导入来源');
@@ -100,7 +103,7 @@ export class SqliteTableImportMappingError extends Error {
 }
 export type SqliteTableImportConvertedRow = { ok: true; parameters: SqliteValue[] } | { ok: false; issues: SqliteTableImportIssue[]; issueCount: number };
 export interface SqliteTableImportPlan { readonly sql: string; readonly mapping: readonly Readonly<SqliteTableImportMapping>[]; readonly warnings: readonly string[]; convertRow(row: unknown, record: number): SqliteTableImportConvertedRow; }
-export interface SqliteTableImportPlanInput { target: SqliteTableImportTarget; columns: readonly SqliteTableImportColumn[]; sourceColumns: readonly string[]; mapping: readonly SqliteTableImportMapping[]; strict: boolean; }
+export interface SqliteTableImportPlanInput { target: SqliteTableImportTarget; columns: readonly SqliteTableImportColumn[]; sourceColumns: readonly string[]; mapping: readonly SqliteTableImportMapping[]; strict: boolean; missingAsNull?: true; }
 
 /** 只读普通自有数据字段，拒绝getter；同名__proto__源键必须真实存在，不能借原型链。 */
 function ownData(value: unknown, maximum: number): Record<string, unknown> | undefined {
@@ -153,7 +156,7 @@ function typeSafe(column: SqliteTableImportColumn, kind: SqliteTableImportMappin
 }
 /** 目录与映射编译一次；逐记录只产参数或全部有界问题，JSON缺失绝不借默认值偷偷填充。 */
 export function buildSqliteTableImportPlan(input: SqliteTableImportPlanInput): SqliteTableImportPlan {
-  const raw = ownData(input, 5); if (!raw || !ownData(raw.target, 3) || !arrayBound(raw.columns, sqliteTableImportLimits.columns) || !raw.columns.every(column => !!ownData(column, 7)) || !arrayBound(raw.sourceColumns, sqliteTableImportLimits.sourceColumns) || !arrayBound(raw.mapping, sqliteTableImportLimits.mapping)) throw new SqliteTableImportMappingError([sqliteTableImportIssue('invalid-mapping')]);
+  const raw = ownData(input, 6); if (!raw || Object.hasOwn(raw, 'missingAsNull') && raw.missingAsNull !== true || !ownData(raw.target, 3) || !arrayBound(raw.columns, sqliteTableImportLimits.columns) || !raw.columns.every(column => !!ownData(column, 7)) || !arrayBound(raw.sourceColumns, sqliteTableImportLimits.sourceColumns) || !arrayBound(raw.mapping, sqliteTableImportLimits.mapping)) throw new SqliteTableImportMappingError([sqliteTableImportIssue('invalid-mapping')]);
   const target = targetSchema.parse(raw.target), columns = z.array(sqliteTableImportColumnSchema).min(1).max(sqliteTableImportLimits.columns).parse(raw.columns), mapping = sqliteTableImportMappingSchema.parse(raw.mapping), sources = z.array(sourceName).max(sqliteTableImportLimits.sourceColumns).parse(raw.sourceColumns), strict = z.boolean().parse(raw.strict);
   const available = new Map(columns.map(column => [fold(column.name), Object.freeze({ ...column })])), sourceSet = new Set(sources), selected = new Set(mapping.map(item => fold(item.target))), issues: SqliteTableImportIssue[] = []; let issueCount = 0;
   const add = (issue: SqliteTableImportIssue) => { issueCount++; if (issues.length < sqliteTableImportLimits.issues) issues.push(issue); };
@@ -161,6 +164,7 @@ export function buildSqliteTableImportPlan(input: SqliteTableImportPlanInput): S
   for (const item of mapping) { const column = available.get(fold(item.target)); if (!sourceSet.has(item.source) || !column || column.generated) add(sqliteTableImportIssue('invalid-mapping', { source: item.source, target: item.target })); else if (!typeSafe(column, item.kind, strict)) add(sqliteTableImportIssue('unsafe-affinity', { source: item.source, target: item.target })); }
   for (const column of columns) if (!selected.has(fold(column.name)) && !column.generated && !column.nullable && !column.hasDefault && !column.autoGenerated) add(sqliteTableImportIssue('invalid-mapping', { target: column.name }));
   if (issueCount) throw new SqliteTableImportMappingError(issues, issueCount);
+  const missingAsNull = raw.missingAsNull === true;
   const fixed = Object.freeze(mapping.map(item => Object.freeze({ ...item }))), sql = buildSqliteTableImportInsert(target.table, fixed.map(item => item.target));
   return Object.freeze({ sql, mapping: fixed, warnings: Object.freeze([sqliteTableImportMessages.source, sqliteTableImportMessages.affinity, sqliteTableImportMessages.triggers]), convertRow(row: unknown, record: number): SqliteTableImportConvertedRow {
     const data = ownData(row, sqliteTableImportLimits.sourceColumns), issues: SqliteTableImportIssue[] = [], parameters: SqliteValue[] = [], invalid = new Set<string>(); let issueCount = 0, bytes = 0;
@@ -172,8 +176,9 @@ export function buildSqliteTableImportPlan(input: SqliteTableImportPlanInput): S
       let boundBytes = 0;
       for (const item of fixed) {
         if (invalid.has(item.source) || bytes > sqliteTableImportLimits.rowBytes) continue;
-        if (!Object.hasOwn(data, item.source)) { add('missing-source', item); continue; }
-        const column = available.get(fold(item.target))!; const value = data[item.source];
+        const present = Object.hasOwn(data, item.source);
+        if (!present && !missingAsNull) { add('missing-source', item); continue; }
+        const column = available.get(fold(item.target))!; const value = present ? data[item.source] : null;
         if (value === null && !column.nullable) { add('null-not-allowed', item); continue; }
         const converted = convert(value, item.kind); if (converted === undefined) { add('invalid-value', item); continue; }
         if (converted && typeof converted === 'object' && converted.type === 'integer' && column.affinity === 'real' && BigInt(Number(converted.value)) !== BigInt(converted.value)) { add('unsafe-affinity', item); continue; }

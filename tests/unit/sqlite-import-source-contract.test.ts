@@ -26,6 +26,23 @@ describe('SQLite无表来源能力的严格合同', () => {
     expect(() => sqliteImportSourceOptionsKey({ ...input, csvDelimiter: undefined })).toThrow();
   });
 
+  it('XML 记录标签与属性开关绑定同一来源能力，二进制仍由映射解释', () => {
+    const xml = { ...input, format: 'xml' as const, xmlOptions: { rowTag: '记录', attributes: true, binaryBase64: false as const } };
+    expect(sqliteImportSourceInspectSchema.parse(xml)).toEqual(xml);
+    expect(sqliteTableImportInspectSchema.parse({ ...xml, table: '目标' })).toMatchObject({ xmlOptions: xml.xmlOptions });
+    expect(sqliteImportSourceOptionsKey({ ...xml, xmlOptions: { binaryBase64: false, attributes: true, rowTag: '记录' } })).toBe(sqliteImportSourceOptionsKey(xml));
+    for (const options of [{ ...xml.xmlOptions, rowTag: '其它' }, { ...xml.xmlOptions, attributes: false }])
+      expect(sqliteImportSourceOptionsKey({ ...xml, xmlOptions: options })).not.toBe(sqliteImportSourceOptionsKey(xml));
+    for (const patch of [{ xmlOptions: undefined }, { xmlOptions: { ...xml.xmlOptions, binaryBase64: true } }, { xmlOptions: { ...xml.xmlOptions, rowTag: 'a:b' } }, { encoding: 'gb18030' }, { csvHasHeader: true }]) {
+      expect(sqliteImportSourceInspectSchema.safeParse({ ...xml, ...patch }).success).toBe(false);
+      expect(sqliteTableImportInspectSchema.safeParse({ ...xml, ...patch, table: '目标' }).success).toBe(false);
+    }
+    const getter = vi.fn(() => '记录'), xmlOptions = Object.defineProperty({ ...xml.xmlOptions }, 'rowTag', { enumerable: true, get: getter });
+    expect(sqliteImportSourceInspectSchema.safeParse({ ...xml, xmlOptions }).success).toBe(false);
+    expect(sqliteTableImportInspectSchema.safeParse({ ...xml, xmlOptions, table: '目标' }).success).toBe(false);
+    expect(getter).not.toHaveBeenCalled();
+  });
+
   it('来源回包保持完整目录/精确样本/NULL/空串/missing/原型名，不泄露路径且独立克隆', () => {
     const row: DataRow = Object.fromEntries([['', '18446744073709551615'], ['__proto__', '原型原值'], ['nil', null], ['empty', ''], ['flag', true], ['blob', { type: 'binary', base64: 'AAH/' }]]), value = { ...inspection(), sourceColumns: ['', '__proto__', 'nil', 'empty', 'flag', 'blob', 'missing'], sample: [row] }, parsed = sqliteImportSourceInspectionSchema.parse(value);
     expect(parsed).toEqual(value); expect(Object.hasOwn(parsed.sample[0], 'missing')).toBe(false); expect(Object.hasOwn(parsed.sample[0], '__proto__')).toBe(true);

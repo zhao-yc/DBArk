@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import type { DataRow, FileChoice } from './contracts';
 import { csvImportDelimiters, type CsvImportDelimiter } from './csvImport';
+import { xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions } from './xmlImport';
 
 export const importNewTableLimits = Object.freeze({ columns: 1000, sourceName: 256, sampleRows: 20, sampleBytes: 256 * 1024 });
 export interface ImportFileSource { sha256: string; bytes: number; }
 export interface ImportFileInspectInput { fileToken: string; taskId: string; format: 'csv' | 'json'; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; }
+export type RecordFileInspectInput = Omit<ImportFileInspectInput, 'format'> & { format: RecordImportFormat; xmlOptions?: XmlImportOptions };
 export interface ImportFileInspectOutput { columns: string[]; rows: DataRow[]; records: number; source: ImportFileSource; sampleOmitted: boolean; }
 export interface ImportNewTableSeed { file: FileChoice; format: ImportFileInspectInput['format']; encoding: ImportFileInspectInput['encoding']; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; columns: string[]; expectedSource: ImportFileSource; mapping: Record<string, string>; }
 const invalid = (): never => { throw Error('文件检查或新表导入配置无效，请重新选择文件并检查映射'); };
@@ -40,6 +42,14 @@ function options(value: Record<string, unknown>): Pick<ImportFileInspectInput, '
 function schema<T>(parse: (input: unknown) => T) { return z.unknown().transform((input, context): T => { try { return parse(input); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '文件导入配置无效' }); return z.NEVER; } }); }
 export const importFileSourceSchema = schema(source);
 export const importFileInspectInputSchema = schema((input): ImportFileInspectInput => { const value = object(input, 7, ['fileToken', 'taskId', 'format', 'encoding'], ['csvDelimiter', 'csvHasHeader']); return { fileToken: string(value.fileToken, 1, 200), taskId: string(value.taskId, 1, 200), ...options(value) }; });
+/** 共用原字节扫描器，旧网络新表入口仍使用原 CSV／JSON 合同。 */
+export const recordFileInspectInputSchema = schema((input): RecordFileInspectInput => {
+  const value = object(input, 7, ['fileToken', 'taskId', 'format', 'encoding'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions']);
+  if (value.format !== 'xml') return importFileInspectInputSchema.parse(value);
+  if (value.encoding !== 'utf8' || Object.hasOwn(value, 'csvDelimiter') || Object.hasOwn(value, 'csvHasHeader')) return invalid();
+  const xmlOptions = xmlImportOptionsSchema.parse(object(value.xmlOptions, 3, ['rowTag', 'attributes', 'binaryBase64']));
+  return { fileToken: string(value.fileToken, 1, 200), taskId: string(value.taskId, 1, 200), format: 'xml', encoding: 'utf8', xmlOptions };
+});
 
 /** 有界计算完整JSON文字量大小，超预算即停止计量，不先分配巨大转义字符串。 */
 function quotedBytes(value: string, maximum: number): number {
