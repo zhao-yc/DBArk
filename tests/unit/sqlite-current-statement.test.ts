@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sqliteCurrentQueryExportSource } from '../../src/shared/sqliteQueryExport';
 import { currentSqliteStatement, sqliteStatementRanges } from '../../src/engine/sqlite/currentStatement';
 import { sqliteDriverLimits } from '../../src/engine/sqlite/protocol';
 
@@ -83,4 +84,14 @@ describe('SQLite当前语句纯词法与原文范围', () => {
     expect(sqliteStatementRanges('SELECT 1;'.repeat(sqliteDriverLimits.statements))).toHaveLength(sqliteDriverLimits.statements); expect(() => sqliteStatementRanges(source)).toThrow('目录超过1000');
     expect(() => currentSqliteStatement(source + "SELECT '未闭合", prefix.length + 3)).toThrow('未闭合');
   });
+});
+
+it('SQLite 当前导出保留原 SELECT 范围、注释及分隔符，只接受有查询结果的语句头', () => {
+  const prefix = "INSERT INTO t VALUES('🚢');\r\n";
+  const query = "/* 名称; */ WITH x AS (SELECT :id) SELECT * FROM x;";
+  const source = prefix + query + '\r\nDELETE FROM t;';
+  expect(sqliteCurrentQueryExportSource(source, source.indexOf('SELECT *'))).toBe(query);
+  expect(() => sqliteCurrentQueryExportSource(source, source.indexOf('DELETE'))).toThrow('SELECT');
+  expect(() => sqliteCurrentQueryExportSource(source, prefix.length - 1)).toThrow();
+  expect(() => sqliteCurrentQueryExportSource("SELECT 1;\nSELECT '", 1)).toThrow('未闭合');
 });

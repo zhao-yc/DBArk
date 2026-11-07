@@ -149,7 +149,21 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
     expect(rows).toHaveLength(1205);
     expect(rows[0]).toEqual({position: '1', exact: '9223372036854775807', marker: "中文';🚢", payload: {type: 'binary', base64: 'AP8='}});
     expect(rows.at(-1).position).toBe('1205');
-    stage = '同一原选区逐行导出 XLSX';
+    stage = '按光标捕获当前查询并逐行导出 XLSX';
+    await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await page.evaluate(offset => {
+      const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+      const editor = api?.editor.getEditors().find(instance => instance.getContainerDomNode().closest('.query-tab .sql-editor-wrap'));
+      const model = editor?.getModel();
+      if (!editor || !model) throw Error('缺少当前 SQLite 查询编辑器');
+      editor.setPosition(model.getPositionAt(offset));
+    }, prefix.length + sql.indexOf('SELECT n AS'));
+    await (await navigationMenuItem(query.locator('.query-primary-toolbar'), {name: text.openCurrent, exact: true}, check)).click();
+    await expect(modal.getByText(text.currentSource, {exact: true})).toBeVisible();
+    await expect(modal.getByLabel(text.source)).toHaveText(sql);
+    await modal.getByRole('button', {name: text.parameters, exact: true}).click();
+    await parameters.getByLabel(parameterZh.value + ' marker', {exact: true}).fill("中文';🚢");
+    await parameters.getByRole('button', {name: text.applyParameters, exact: true}).click();
     await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption('xlsx');
     await expect(modal.getByLabel(zh.resultExport.encoding, {exact: true})).toBeDisabled();
     await expect(modal.getByLabel(zh.resultExport.encoding, {exact: true})).toHaveValue('utf8');
@@ -172,6 +186,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       denied: [], openCalls: 1, saveCalls: 2, requests: [
         {command: 'sqlite.queryExportParameterNames', value: {sql}},
         {command: 'sqlite.queryExport', value: {sql, format: 'json', encoding: 'utf16le', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
+        {command: 'sqlite.queryExportParameterNames', value: {sql}},
         {command: 'sqlite.queryExport', value: {sql, format: 'xlsx', encoding: 'utf8', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
       ], replies: Array.from({length: 2}, () => ({ok: true, result: {rows: 1205, fileCommitted: true}})),
     });
@@ -185,6 +200,15 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
     expect(JSON.stringify(observed.tasks)).not.toContain(target);
     expect(runtime.pageErrors).toEqual([]);
     await info.attach('SQLite 查询导出成功窗口', {body: await modal.screenshot({animations: 'disabled'}), contentType: 'image/png'});
+    stage = '改动原草稿后停用旧导出';
+    await page.evaluate(() => {
+      const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+      const model = api?.editor.getEditors().find(editor => editor.getContainerDomNode().closest('.query-tab .sql-editor-wrap'))?.getModel();
+      if (!model) throw Error('缺少原 SQLite 草稿');
+      model.setValue(model.getValue() + '\n-- 修改后旧导出失效');
+    });
+    await expect(modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true})).toBeDisabled();
+    await expect(modal.locator('.error-box')).toContainText(text.changed);
     stage = '确认原 Electron 进程正常退出';
     await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
     await runtime.confirmOwnedDesktopExit(info);

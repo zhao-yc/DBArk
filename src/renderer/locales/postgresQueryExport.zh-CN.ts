@@ -1,5 +1,7 @@
 export const postgresQueryExportZh = {
   open: '执行并导出完整结果',
+  openCurrent: '导出当前语句的完整结果',
+  currentSource: '来源为光标所在语句',
   title: 'PostgreSQL 完整查询导出',
   source: '本次导出的 SQL',
   sourcePrefix: '显示 SQL 前 4000 个 UTF-16 单元',

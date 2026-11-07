@@ -844,6 +844,13 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     expect(lines[0]).toBe('id;id [2];note;bytes');
     expect(lines.slice(1, -1)).toEqual(Array.from({length: 4099}, (_, i) =>
       `${9007199254740994n + BigInt(i)};0.12345678901234567890;${i % 2 === 0 ? `行${i + 1}` : '\\N'};base64:AP8=`));
+    await close();
+    await replaceDraft("SELECT nextval('export_guard'); -- 前置🚢\n" + sql + "\nSELECT nextval('export_guard');");
+    await modelSelection(2, 10);
+    await tab().getByRole('button', {name: fullExportText.openCurrent, exact: true}).click();
+    await expect(dialog.getByText(fullExportText.currentSource, {exact: true})).toBeVisible();
+    await expect(dialog.getByLabel(fullExportText.source)).toContainText(sql);
+    await expect(dialog.getByLabel(fullExportText.source)).not.toContainText("nextval('export_guard')");
     await dialog.getByLabel(zh.resultExport.format).selectOption('json');
     await dialog.getByLabel(zh.resultExport.encoding).selectOption('utf16le');
     await start();
@@ -868,6 +875,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
       rowIndex++;
     }
     expect(rowIndex).toBe(4099);
+    expect((await observer.query('SELECT is_called FROM export_guard')).rows).toEqual([{is_called: false}]);
     await page.screenshot({path: info.outputPath('PostgreSQL完整查询导出Excel.png')});
     await close();
 

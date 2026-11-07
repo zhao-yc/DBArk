@@ -83,3 +83,16 @@ export function locateSqliteStatement(source: string, offset: number): SqlStatem
   });
   return containing ?? boundary;
 }
+
+/** 语句首词只跳过 SQLite 的空白、BOM 和注释，保留原词法中的其他字符。 */
+export function sqliteLeadingKeyword(sql: string): string | undefined {
+  let offset = 0;
+  // 与SQLite原词法一致：仅ASCII空白及token边界BOM；NBSP/VT等不能被静默删除成合法语句头。
+  while (offset < sql.length) {
+    if (/[ \t\n\f\r]/.test(sql[offset]) || sql[offset] === '\uFEFF') { offset++; continue; }
+    if (sql.startsWith('--', offset)) { const end = sql.indexOf('\n', offset + 2); offset = end < 0 ? sql.length : end + 1; continue; }
+    if (sql.startsWith('/*', offset)) { const end = sql.indexOf('*/', offset + 2); if (end < 0) return undefined; offset = end + 2; continue; }
+    break;
+  }
+  return /^[A-Za-z_][A-Za-z0-9_$\u0080-\uFFFF]*/.exec(sql.slice(offset))?.[0].toUpperCase();
+}

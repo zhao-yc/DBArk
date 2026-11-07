@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { csvExportDelimiters } from './csvExport';
 import { queryParameterTypes, validateQueryParameters, type QueryParameterNames } from './queryParameters';
-import { splitPostgresSql } from './postgresSql';
+import { currentPostgresStatement, splitPostgresSql } from './postgresSql';
 
 const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParameterTypes), value: z.string().optional()}).strict())
   .max(200).superRefine((values, context) => {
@@ -21,6 +21,20 @@ export const postgresQueryExportSchema = z.object({
 
 export type PostgresQueryExportInput = z.infer<typeof postgresQueryExportSchema>;
 export interface PostgresQueryExportOutput { rows: number; fileCommitted: true; }
+
+/** 导出使用独立会话，只有两种字符串模式都指向同一原语句和参数时才接受。 */
+export function postgresCurrentQueryExportSource(source: string, offset: number): string {
+  const primary = currentPostgresStatement(source, offset, true);
+  const alternate = currentPostgresStatement(source, offset, false);
+  if (offset > primary.end || primary.start !== alternate.start || primary.end !== alternate.end ||
+      primary.parameters.length !== alternate.parameters.length ||
+      primary.parameters.some((position, index) => position !== alternate.parameters[index]))
+    throw Error('当前位置没有边界明确的 PostgreSQL 导出语句');
+  if (!['SELECT', 'WITH'].includes(primary.keyword))
+    throw Error('请将光标放在要完整导出的 PostgreSQL SELECT 或 WITH 语句中');
+  const end = source[primary.end] === ';' ? primary.end + 1 : primary.end;
+  return source.slice(primary.start, end);
+}
 
 /** 表单识别只读本地模板。两个候选模式须同意范围与编号，实际投递仍由新会话复核。 */
 export function postgresExportParameterNames(sql: string): QueryParameterNames {

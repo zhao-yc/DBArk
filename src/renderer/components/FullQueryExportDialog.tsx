@@ -15,6 +15,7 @@ import { postgresZh } from '../locales/postgres.zh-CN';
 
 export interface FullQueryExportSource {
   dialect?: 'sqlite';
+  fromCurrentStatement?: boolean;
   tabId: string; connectionId: string; database: string; sql: string;
   current(): boolean;
 }
@@ -97,6 +98,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   return <Modal title={text.title} wide onClose={() => { if (!picking.current && !task.current) onClose(); }}>
     <div className="modal-content">
       <p>{source.database} · {text.scope}</p>
+      {source.fromCurrentStatement && <p className="muted small">{text.currentSource}</p>}
       <pre className="result-sql-preview" aria-label={text.source}>{source.sql.slice(0, 4000)}</pre>
       {source.sql.length > 4000 && <p>{text.sourcePrefix}</p>}
       <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>

@@ -5,7 +5,7 @@ import { validateCommand } from '../../src/shared/validation';
 import { exportPostgresQuery } from '../../src/engine/postgres/queryExport';
 import type { PostgresConnection } from '../../src/engine/postgres/connection';
 import { postgresParameterValues } from '../../src/engine/postgres/parameters';
-import { postgresExportParameterNames } from '../../src/shared/postgresQueryExport';
+import { postgresCurrentQueryExportSource, postgresExportParameterNames } from '../../src/shared/postgresQueryExport';
 
 const base = {connectionId: 'pg', database: 'postgres', fileToken: 'choice', taskId: 'task', format: 'csv', encoding: 'utf8'} as const;
 
@@ -13,6 +13,18 @@ it('导出参数名称只按词法识别，忽略 dollar 正文、注释和字�
   expect(postgresExportParameterNames("SELECT $1, $2, $1, '$3', $$ $4 $$ /* $5 */;").names).toEqual(['p1', 'p2']);
   for (const sql of ['SELECT $2', 'SELECT $1, $3', 'SELECT $1; SELECT $2', "SELECT 'a\\'; SELECT $1; -- '"])
     expect(() => postgresExportParameterNames(sql)).toThrow();
+});
+
+it('当前 PostgreSQL 导出只截取两种模式一致的原查询', () => {
+  const head = "UPDATE t SET n=1 /*前置🚢*/;\r\n";
+  const target = "WITH data AS (SELECT $$; $2$$ AS note) SELECT $1, note FROM data;";
+  const full = head + target + ' DELETE FROM t;';
+  expect(postgresCurrentQueryExportSource(full, full.indexOf('note FROM'))).toBe('\r\n' + target);
+  expect(postgresExportParameterNames(postgresCurrentQueryExportSource(full, full.indexOf('note FROM'))).names).toEqual(['p1']);
+  expect(() => postgresCurrentQueryExportSource(full, full.indexOf('DELETE'))).toThrow('SELECT');
+  expect(() => postgresCurrentQueryExportSource('SELECT 1;\n\n', 11)).toThrow();
+  const ambiguous = "SELECT 'a\\'; SELECT 2; -- '";
+  expect(() => postgresCurrentQueryExportSource(ambiguous, ambiguous.indexOf('SELECT 2'))).toThrow();
 });
 
 it('PostgreSQL 绑定保留38位小数原文、精确整数、NULL及字节', () => {

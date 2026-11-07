@@ -3,6 +3,17 @@ import { csvExportDelimiters } from './csvExport';
 import { queryParameterLimits, queryParameterTypes } from './queryParameters';
 import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { sqliteTableExportSchema } from './sqliteTableExport';
+import { locateSqliteStatement, sqliteLeadingKeyword } from './sqliteStatementScanner';
+
+/** 只截取光标所在的原文。真正执行仍由独立只读进程验证语句边界及权限。 */
+export function sqliteCurrentQueryExportSource(source: string, offset: number): string {
+  if (source.length > queryParameterLimits.sqlBytes || new TextEncoder().encode(source).length > queryParameterLimits.sqlBytes)
+    throw Error('SQLite 导出脚本超过 20 MiB');
+  const selected = locateSqliteStatement(source, offset);
+  if (!selected || !['SELECT', 'WITH'].includes(sqliteLeadingKeyword(selected.sql) ?? ''))
+    throw Error('请将光标放在要完整导出的 SQLite SELECT 或 WITH 语句中');
+  return source.slice(selected.start, selected.delimiterEnd);
+}
 
 const sql = z.string().min(1).max(queryParameterLimits.sqlBytes);
 export const sqliteQueryExportSourceSchema = z.object({ sql }).strict();

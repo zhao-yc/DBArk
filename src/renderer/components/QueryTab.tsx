@@ -128,6 +128,7 @@ import '../queryPins.css';
 import { QueryStreamExportDialog, type StreamExportOptions } from './QueryStreamExportDialog';
 import { FullQueryExportDialog, type FullQueryExportSource } from './FullQueryExportDialog';
 import { sqliteQueryExportZh } from '../locales/sqliteQueryExport.zh-CN';
+import { sqliteCurrentQueryExportSource } from '../../shared/sqliteQueryExport';
 import { queryStreamZh } from '../locales/queryStreamExport.zh-CN';
 import {SessionObjectsDialog} from './SessionObjectsDialog';
 import {sessionObjectsZh} from '../locales/sessionObjects.zh-CN';
@@ -869,18 +870,28 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     invalidateResultSelection(); streamParameterSession.current = ''; setStreamExportSource(source);
   }
   /** 锁定原选区、查询标签与连接修订。弹窗内改格式或选文件不会重新读取编辑器。 */
-  function openSqliteFullExport() {
+  function openSqliteFullExport(mode: 'selection-or-all' | 'current' = 'selection-or-all') {
     if (!sqlite || !connection || !queryMenuCurrent() || busyRef.current || fileSource.isBusy() || useWorkspace.getState().activeJobs[tab.id]) return;
     const instance = editor.current, model = instance?.getModel(), selections = instance?.getSelections();
     const selection = selections?.[0];
     if (!instance || !model || model.isDisposed() || selections?.length !== 1 || !selection) { setError(sqliteQueryExportZh.singleSource); return; }
-    const sql = selection.isEmpty() ? model.getValue() : model.getValueInRange(selection);
-    if (!sql.trim()) { setError(sqliteQueryExportZh.singleSource); return; }
-    const version = model.getVersionId();
+    const version = model.getVersionId(), full = model.getValue(), fromCurrentStatement = mode === 'current';
+    const draft = () => useWorkspace.getState().settings.tabs.find(item => item.id === tab.id)?.sql;
+    let sql: string;
+    try {
+      if (fromCurrentStatement) {
+        const caret = instance.getPosition();
+        if (!caret || full !== (draft() ?? '').replace(/\r\n|\r|\n/g, model.getEOL())) throw Error(sqliteQueryExportZh.changed);
+        sql = sqliteCurrentQueryExportSource(full, model.getOffsetAt(caret));
+      } else sql = selection.isEmpty() ? full : model.getValueInRange(selection);
+      if (!sql.trim()) throw Error(sqliteQueryExportZh.singleSource);
+    } catch (reason) { setError(errorMessage(reason)); return; }
+    const capturedDraft = draft();
     invalidateResultSelection();
-    setSqliteFullExport({dialect: 'sqlite', tabId: tab.id, connectionId: tab.connectionId, database: 'main', sql,
+    setSqliteFullExport({dialect: 'sqlite', tabId: tab.id, connectionId: tab.connectionId, database: 'main', sql, fromCurrentStatement,
       current: () => queryOwnerCurrent() && !fileSource.isBusy() && !useWorkspace.getState().queryFileOpenings?.[tab.id] &&
-        editor.current === instance && instance.getModel() === model && !model.isDisposed() && model.getVersionId() === version});
+        (!fromCurrentStatement || draft() === capturedDraft) && editor.current === instance &&
+        instance.getModel() === model && !model.isDisposed() && model.getVersionId() === version});
   }
   /** 参数识别只读取会话协议缓存，保留旧结果和事务，互斥持续至 IPC 结束。 */
   async function loadStreamParameterNames() {
@@ -2109,7 +2120,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       moreLabel={menuText.queryMore}
       more={<>
         <ActionMenuSection label={navigationText.group}><button disabled={busy || !connection || !searchEditor || navigationView?.busy} onClick={() => openStatementNavigation()}>{navigationText.entry}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'previous')}>{uiCommandLabels['previous-statement']}</button><button disabled={!canNavigateFromCursor} onClick={() => openStatementNavigation(editor.current, 'next')}>{uiCommandLabels['next-statement']}</button></ActionMenuSection><ActionMenuSection label={sqlite ? sqliteSyntaxCheckZh.title : syntaxText.title}><button disabled={busy || !connection || !searchEditor || syntaxView?.busy} onClick={() => openSyntaxCheck()}>{syntaxText.entry}</button></ActionMenuSection><ActionMenuSection label={objectDefinitionZh.title}><button disabled={busy || !connection || !searchEditor} onClick={() => openObjectStructure()}>{objectDefinitionZh.entry}</button></ActionMenuSection>
-        <ActionMenuSection label={menuText.execution}>{sqlite && <button disabled={busy || !connection} title={sqliteQueryExportZh.title} onClick={openSqliteFullExport}><Download size={14}/>{sqliteQueryExportZh.open}</button>}{!sqlite && <button disabled={busy || !connection} title={queryStreamZh.title} aria-label={queryStreamZh.open} onClick={openStreamExport}><Download size={14}/>{queryStreamZh.open}</button>}
+        <ActionMenuSection label={menuText.execution}>{sqlite && <>
+          <button disabled={busy || !connection} title={sqliteQueryExportZh.title} onClick={() => openSqliteFullExport()}><Download size={14}/>{sqliteQueryExportZh.open}</button>
+          <button disabled={!canNavigateFromCursor} onClick={() => openSqliteFullExport('current')}><Download size={14}/>{sqliteQueryExportZh.openCurrent}</button>
+        </>}{!sqlite && <button disabled={busy || !connection} title={queryStreamZh.title} aria-label={queryStreamZh.open} onClick={openStreamExport}><Download size={14}/>{queryStreamZh.open}</button>}
 <button aria-label={parameterZh.open} disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => openParameters()}><Braces size={14}/>{parameterZh.open}</button>
 {!sqlite && <button disabled={busy || !connection || !!closeRequest} onClick={openTransactionSettings}>{queryTransactionSettingsZh.open}</button>}
 <button disabled={busy || !connection || !!closeRequest || fileSource.busy} onClick={() => void execute('explain')}><Gauge size={15}/>{zh.query.text014}</button>

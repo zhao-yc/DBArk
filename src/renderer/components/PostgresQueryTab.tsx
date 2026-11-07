@@ -45,6 +45,7 @@ import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
 import { FullQueryExportDialog, type FullQueryExportSource } from './FullQueryExportDialog';
+import { postgresCurrentQueryExportSource } from '../../shared/postgresQueryExport';
 import { postgresQueryExportZh as fullExportText } from '../locales/postgresQueryExport.zh-CN';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
@@ -1564,17 +1565,26 @@ export function PostgresQueryTab({
     if (commandEditor()) setSave(true);
   }
   /** 捕获要重新执行的正文及其目标。选择文件期间不会读取后来编辑的草稿。 */
-  function openFullExport() {
+  function openFullExport(mode: 'selection-or-all' | 'current' = 'selection-or-all') {
     const target = commandEditor(), draft = currentTab();
     if (!target || !draft) return;
     const selections = target.instance.getSelections();
     const selection = selections?.[0];
-    const sql = selection?.isEmpty() ? target.model.getValue() : selection && target.model.getValueInRange(selection);
-    if (selections?.length !== 1 || !sql?.trim()) { setError(fullExportText.singleSource); return; }
-    const version = target.model.getVersionId();
-    setFullExport({tabId: draft.id, connectionId: draft.connectionId, database: scope.database, sql,
+    if (selections?.length !== 1 || !selection) { setError(fullExportText.singleSource); return; }
+    const version = target.model.getVersionId(), fromCurrentStatement = mode === 'current';
+    let sql: string;
+    try {
+      if (fromCurrentStatement) {
+        const caret = target.instance.getPosition();
+        if (!caret) throw Error(fullExportText.singleSource);
+        sql = postgresCurrentQueryExportSource(target.model.getValue(), target.model.getOffsetAt(caret));
+      } else sql = selection.isEmpty() ? target.model.getValue() : target.model.getValueInRange(selection);
+      if (!sql.trim()) throw Error(fullExportText.singleSource);
+    } catch (reason) { setError(errorMessage(reason)); return; }
+    setFullExport({tabId: draft.id, connectionId: draft.connectionId, database: scope.database, sql, fromCurrentStatement,
       current: () => same(scope) && currentTab() === draft && useWorkspace.getState().settings.activeTabId === draft.id &&
-        !closeRef.current && target.instance.getModel() === target.model && !target.model.isDisposed() && target.model.getVersionId() === version});
+        !closeRef.current && editor.current === target.instance && target.instance.getModel() === target.model &&
+        !target.model.isDisposed() && target.model.getVersionId() === version});
   }
   /** 打开片段库时捕获原选区；预览编辑器和本地保存不能接管查询模型。 */
   function openSnippets(create = false, instance = editor.current) {
@@ -1763,7 +1773,8 @@ export function PostgresQueryTab({
             <button disabled={!editable} onClick={openSaveQuery}>
               {text.save}
             </button>
-            <button disabled={!editable} onClick={openFullExport}>{fullExportText.open}</button>
+            <button disabled={!editable} onClick={() => openFullExport()}>{fullExportText.open}</button>
+            <button disabled={!editable} onClick={() => openFullExport('current')}>{fullExportText.openCurrent}</button>
             <button disabled={!editable} onClick={() => openSnippets()}>{zh.snippets.title}</button>
             <button disabled={!editable || duplicating || duplicateOrigin.current.connectionId !== tab.connectionId ||
               duplicateOrigin.current.version !== version} title={queryDuplicateZh.hint}
