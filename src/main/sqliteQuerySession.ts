@@ -134,6 +134,7 @@ export class SqliteQuerySession {
         // 空绑定数组显式启用原worker的原生单完整语句复核；词法定位错误也不能偷偷step第二句。
         ...(options.single ? { parameters: [] } : {}),
         ...(options.namedParameters ? { namedParameters: options.namedParameters } : {}),
+        ...(!options.single && !options.namedParameters && !options.explainView ? {captureFailureRange: true as const} : {}),
         onStatement: statement => {
           if (statement.index !== operation.results.length) throw Error('SQLite结果集顺序与原任务不匹配');
           if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
@@ -174,7 +175,7 @@ export class SqliteQuerySession {
       // 只返回原生确认完成的前序结果；失败语句的部分流式行不能冒充完整结果。
       if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || options.namedParameters && reason.code === 'SQLITE_NAMED_PARAMETERS_INVALID' || options.single && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
         if (reason.completedResults.length !== reason.completedStatements) throw Error('SQLite失败回执缺少前序完整结果，不能发布成功摘要');
-        const sourceRange = options.sourceRange ?? options.parameterRanges?.[reason.completedStatements];
+        const sourceRange = options.sourceRange ?? options.parameterRanges?.[reason.completedStatements] ?? reason.sourceRange;
         return { results: complete(reason.completedResults), ...displayTitles(reason.completedStatements), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) } };
       }
       throw reason;

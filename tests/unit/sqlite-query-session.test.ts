@@ -114,8 +114,13 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     const path = fixture(), harness = await open(path);
     await execute(harness, `WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<250) INSERT INTO subject SELECT x,CASE WHEN x=220 THEN '无效JSON' ELSE '{"n":1}' END FROM n`);
     harness.events.length = 0;
-    const outcome = await execute(harness, "BEGIN; INSERT INTO subject VALUES(1000,'{}'); /*NAME: 已完成 */ SELECT 7 AS prior; /*NAME: 失败后不保留 */ SELECT json_extract(note,'$.n') AS item FROM subject ORDER BY id; INSERT INTO subject VALUES(1001,'不得执行')");
+    const failing = "SELECT json_extract(note,'$.n') AS item FROM subject ORDER BY id;";
+    const script = "BEGIN; INSERT INTO subject VALUES(1000,'{}'); /*NAME: 已完成 */ SELECT 7 AS prior;\r\n/*NAME: 失败后不保留🧭 */ " +
+      failing + " INSERT INTO subject VALUES(1001,'不得执行')";
+    const outcome = await execute(harness, script);
     expect(outcome.failure).toMatchObject({ statementOrdinal: 4, statementsCompleted: 3 });
+    const range = outcome.failure?.sourceRange;
+    expect(range && script.slice(range.start, range.end)).toBe(failing);
     expect(outcome.resultTitles).toEqual([null, null, '已完成']);
     expect(outcome.results).toHaveLength(3); expect(outcome.results[1].affectedRows).toBe(1); expect(outcome.results[2].rows).toEqual([{ c0: '7' }]);
     expect(harness.events.some(event => event.resultIndex === 3 && event.batch?.length === 200)).toBe(true);
@@ -125,6 +130,18 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
     expect((await execute(harness, 'SELECT count(*) FROM subject')).results[0].rows).toEqual([{ c0: '252' }]);
     await harness.session.transaction({ sessionId: harness.session.sessionId, action: 'rollback' });
     expect(diskValue(path, 'SELECT count(*) FROM subject')).toBe(251);
+  });
+
+  it('准备失败只定位已尝试且边界明确的首条语句，不把未闭合尾部或上一条误选为失败', async () => {
+    const harness = await open(fixture());
+    const failing = 'SELECT missing_column FROM subject;';
+    const script = "SELECT '前🧭';\r\n/* 不在选区 */ " + failing + "\r\nSELECT '未闭合";
+    const result = await execute(harness, script), start = script.indexOf(failing);
+    expect(result.failure).toMatchObject({statementOrdinal: 2, statementsCompleted: 1, sourceRange: {start, end: start + failing.length}});
+    expect(result.results).toHaveLength(1);
+    const ambiguous = await execute(harness, "SELECT 1;\r\nSELECT '未闭合");
+    expect(ambiguous.failure).toMatchObject({statementOrdinal: 2, statementsCompleted: 1});
+    expect(ambiguous.failure).not.toHaveProperty('sourceRange');
   });
 
   it('maxRows约束整个脚本而非每个结果集，RETURNING截断后仍完整写入', async () => {

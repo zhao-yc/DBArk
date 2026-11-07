@@ -1,4 +1,5 @@
 import { queryParameterLimits } from '../../shared/queryParameters';
+import type { QueryFailureSourceRange } from '../../shared/queryFailure';
 import type { SqliteRebuildComparisonInput, SqliteRebuildComparisonResult } from './rebuildComparison';
 
 /** SQLite 原生进程的内部契约；不作为渲染 IPC，也不接收可执行代码或扩展路径。 */
@@ -95,8 +96,8 @@ export interface SqliteFileIdentity { path: string; device: string; inode: strin
 export type SqliteWorkerRequest =
   | { kind: 'backupFile'; id: string; source: SqliteFileIdentity; staging: SqliteFileIdentity }
   | { kind: 'open'; id: string; options: SqliteWorkerOpenOptions }
-  | { kind: 'execute'; id: string; sql: string; parameters?: SqliteValue[]; namedParameters?: Record<string, SqliteValue>; createGuard?: SqliteCreateGuard; options: SqliteExecutionOptions }
-  | { kind: 'streamRead'; id: string; sql: string; parameters: SqliteValue[]; namedParameters?: never; createGuard?: never; options: SqliteStreamReadOptions }
+  | { kind: 'execute'; id: string; sql: string; parameters?: SqliteValue[]; namedParameters?: Record<string, SqliteValue>; createGuard?: SqliteCreateGuard; captureFailureRange?: true; options: SqliteExecutionOptions }
+  | { kind: 'streamRead'; id: string; sql: string; parameters: SqliteValue[]; namedParameters?: never; createGuard?: never; captureFailureRange?: never; options: SqliteStreamReadOptions }
   | { kind: 'rebuildCompare'; id: string; input: SqliteRebuildComparisonInput }
   | { kind: 'ack'; id: string; frame: number }
   | { kind: 'cancel'; id: string }
@@ -112,7 +113,7 @@ export type SqliteWorkerResponse =
   | { kind: 'rebuildProgress'; id: string; frame: number; comparedRows: string; columnGroups: number }
   | { kind: 'statementEnd'; id: string; result: SqliteStatementResult }
   | { kind: 'completed'; id: string; result: SqliteExecutionResult }
-  | { kind: 'failed'; id: string; code: string; message: string; transaction: boolean; completedStatements: number }
+  | { kind: 'failed'; id: string; code: string; message: string; transaction: boolean; completedStatements: number; sourceRange?: QueryFailureSourceRange }
   | { kind: 'cancelled'; id: string; transaction: boolean; completedStatements: number }
   | { kind: 'closed'; id: string; rebuildRestored?: true };
 

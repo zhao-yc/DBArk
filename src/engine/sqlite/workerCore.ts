@@ -12,6 +12,8 @@ import { SqliteRawStatement, type SqliteRawInvoke } from './rawStatement';
 import { consumeSqliteRawFrames } from './rawFrames';
 import { installSqliteSearchFunctions } from './dataSearchFunctions';
 import { SqliteRawValueError } from './rawValue';
+import type { QueryFailureSourceRange } from '../../shared/queryFailure';
+import { scanSqliteStatementPositions } from '../../shared/sqliteStatementScanner';
 
 interface Port { send(message: SqliteWorkerResponse): void; exit(code: number): void; }
 interface Execution { id: string; cancelled: boolean; fault?: DriverFailure; waiting?: { frame: number; resolve(): void }; results: SqliteStatementResult[]; bytes: number; }
@@ -44,6 +46,22 @@ function skipTrivia(sql: string, offset = 0, afterDelimiter?: (offset: number) =
     break;
   }
   return offset;
+}
+
+/** prepare 失败没有原生前缀。只从真实尝试起点扫描首条完整语句，边界不明时省略定位。 */
+function failedPrepareRange(sql: string, offset: number): QueryFailureSourceRange | undefined {
+  const firstRange = {};
+  let range: QueryFailureSourceRange | undefined;
+  try {
+    scanSqliteStatementPositions(sql.slice(offset), (start, _end, _delimiterStart, delimiterEnd) => {
+      if (start === 0 && delimiterEnd > start) range = {start: offset, end: offset + delimiterEnd};
+      // 已得到本次失败范围，后面尚未尝试的语句或词法错误不能使这条定位失效。
+      throw firstRange;
+    });
+  } catch (error) {
+    if (error !== firstRange) return;
+  }
+  return range;
 }
 
 /** 输入值不经JSON转换数值；INTEGER限制为SQLite真实有符号64位范围。 */
@@ -147,8 +165,9 @@ export class SqliteWorkerCore {
   private transaction(): boolean { if (!this.db) return false; const value = this.db.isTransaction; if (typeof value !== 'boolean') throw invalid(); return value; }
 
   /** 原生错误正文可能包含SQL、路径或参数；对外仅发送固定的安全中文提示。 */
-  private failure(id: string, failure: DriverFailure, completedStatements = 0): void {
-    try { this.port.send({ kind: 'failed', id, code: failure.code, message: failure.message, transaction: this.transaction(), completedStatements }); }
+  private failure(id: string, failure: DriverFailure, completedStatements = 0, sourceRange?: QueryFailureSourceRange): void {
+    try { this.port.send({ kind: 'failed', id, code: failure.code, message: failure.message, transaction: this.transaction(), completedStatements,
+      ...(sourceRange ? {sourceRange} : {}) }); }
     catch { this.port.exit(1); }
   }
 
@@ -322,6 +341,7 @@ export class SqliteWorkerCore {
 
   /** 在任何用户step前完成参数和单语句约束；脚本每条仅消费原生确认的准确前缀。 */
   private async execute(active: Execution, request: Extract<SqliteWorkerRequest, { kind: 'execute' | 'streamRead' }>): Promise<void> {
+    let attemptedStart: number | undefined, nativeRange: QueryFailureSourceRange | undefined;
     try {
       const { sql, options } = request;
       const stream = request.kind === 'streamRead';
@@ -341,6 +361,7 @@ export class SqliteWorkerCore {
         let guard: SqliteCreateGuard; try { guard = copySqliteCreateGuard(descriptor.value); } catch { throw new DriverFailure('SQLITE_CREATE_GUARD_INVALID', 'SQLite对象创建内部能力格式或预算无效'); }
         this.guardedCreate = { owner: active, guard, matched: false };
       }
+      if ('captureFailureRange' in request && (request.captureFailureRange !== true || stream || parameters || named || this.guardedCreate)) throw invalid();
       // 原生准备仍跳过注释。另记最近分隔符，避免空语句前的注释串到下一条结果。
       let heading = 0;
       const afterDelimiter = (next: number) => { heading = next; };
@@ -349,19 +370,23 @@ export class SqliteWorkerCore {
       if (parameters && offset === sql.length) throw invalid();
       while (offset < sql.length) {
         this.check(active); if (active.results.length >= limits.statements) throw invalid();
+        if (request.captureFailureRange) attemptedStart = offset;
         const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining), prefix = statement.sourceSQL;
         try {
           if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
+          if (attemptedStart !== undefined && statement.hasStatement) nativeRange = {start: attemptedStart, end: attemptedStart + prefix.length};
           const title = stream ? undefined : queryResultTitle(sql.slice(heading, Math.min(offset + prefix.length, heading + queryResultTitlePrefixLimit + 1)), 'sqlite');
           heading = offset + prefix.length;
           offset = skipTrivia(sql, heading, afterDelimiter);
           if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');
           if (this.guardedCreate && !this.guardedCreate.matched) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite没有观察到本次准确CREATE原生授权，尚未执行任何语句');
           if (this.guardedCreate && statement.columns().length !== 0) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite对象创建不能使用EXPLAIN或带结果列的其它语句');
-          if (!statement.hasStatement) continue;
+          if (!statement.hasStatement) { attemptedStart = undefined; nativeRange = undefined; continue; }
           const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream, title);
           active.results.push(result); this.port.send({ kind: 'statementEnd', id: active.id, result });
         } finally { statement.finish(); }
+        attemptedStart = undefined;
+        nativeRange = undefined;
         // 包括零行DDL和控制语句；脚本不能靠连续同步语句饿死父端取消消息。
         await this.yield(active);
       }
@@ -372,7 +397,9 @@ export class SqliteWorkerCore {
       else if (!this.closing) {
         // 原生整数错误码可用于后续诊断；错误正文可能含SQL、路径或参数，仍禁止回传。
         const nativeCode = object(error) && integer(error.errcode, 0, 2147483647) ? 'SQLITE_NATIVE_' + error.errcode : 'SQLITE_EXECUTION_FAILED';
-        this.failure(active.id, error instanceof DriverFailure ? error : error instanceof SqliteRawValueError ? new DriverFailure(error.code === 'SQLITE_RAW_VALUE_INVALID' ? 'SQLITE_VALUE_INVALID' : error.code, error.message) : new DriverFailure(nativeCode, 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length);
+        const range = attemptedStart !== undefined && nativeCode.startsWith('SQLITE_NATIVE_')
+          ? nativeRange ?? failedPrepareRange(request.sql, attemptedStart) : undefined;
+        this.failure(active.id, error instanceof DriverFailure ? error : error instanceof SqliteRawValueError ? new DriverFailure(error.code === 'SQLITE_RAW_VALUE_INVALID' ? 'SQLITE_VALUE_INVALID' : error.code, error.message) : new DriverFailure(nativeCode, 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length, range);
       }
     } finally { if (this.guardedCreate?.owner === active) this.guardedCreate = undefined; active.waiting = undefined; if (this.active === active) this.active = undefined; }
   }
