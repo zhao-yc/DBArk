@@ -951,7 +951,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | R09 | 托管数据库 | 部分 | AWS/Azure/Google/Oracle/Atlas/Redis Cloud/阿里/腾讯/华为适用认证与限制；现仅普通 MySQL 协议 |
 | C05 | HTTP 隧道 | 待做 | 自主协议、权限、TLS、超时及并发 |
 | C06 | PAM/LDAP/Kerberos/Windows AD | 待做 | 分驱动平台验证，不可用组合明示 |
-| F03 | TXT/XML | 部分 | XML 导出支持三种布局及流式写入。MySQL／MariaDB、SQLite、PostgreSQL 现有表支持扁平 XML 记录导入、自定义行标签及属性字段。MySQL／MariaDB 与 SQLite 支持从 XML 新建表，MySQL／MariaDB 支持现有表冲突处理。[MySQL／MariaDB 新表](development/network-xml-new-table-20261107.md) · [SQLite](development/sqlite-xml-import-20261107.md) · [PostgreSQL](development/postgres-xml-import-20261107.md) 独立 TXT 向导、PostgreSQL 从 XML 新建表及按键更新、位置映射文档回读待做。 |
+| F03 | TXT/XML | 部分 | XML 导出支持三种布局及流式写入。MySQL／MariaDB、SQLite、PostgreSQL 现有表支持扁平 XML 记录导入、自定义行标签及属性字段。MySQL／MariaDB、SQLite 与 PostgreSQL 支持从 XML 新建表，MySQL／MariaDB 支持现有表冲突处理。[MySQL／MariaDB 新表](development/network-xml-new-table-20261107.md) · [SQLite](development/sqlite-xml-import-20261107.md) · [PostgreSQL](development/postgres-xml-import-20261107.md) · [PostgreSQL 新表](development/postgres-xml-new-table-20261107.md) 独立 TXT 向导、PostgreSQL 按键更新、位置映射文档回读待做。 |
 | F04 | ODBC/Access/DBF/Parquet | 待做 | 系统适用性、类型映射、文件往返 |
 | B03 | MongoDump/Restore | 待做 | 工具版本、参数、任务、实际恢复及权限 |
 | B04 | Oracle Data Pump | 待做 | 服务端目录/权限/版本、任务及恢复 |

@@ -1340,14 +1340,20 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       try {
         check();
         const xml = 'format' in target;
-        const chosen = await dialog.showOpenDialog(columns!.owner.window, { title: xml ? '选择 PostgreSQL XML 文件' : '选择 PostgreSQL CSV 文件',
-          properties: ['openFile'], filters: [xml ? { name: 'XML', extensions: ['xml'] } : { name: 'CSV', extensions: ['csv', 'tsv'] }] });
+        const scanned = xml ? target.scannedFile : undefined;
+        const path = scanned ? resolveFileToken(files, scanned.token, 'import', 'xml') : await dialog.showOpenDialog(columns!.owner.window,
+          { title: xml ? '选择 PostgreSQL XML 文件' : '选择 PostgreSQL CSV 文件', properties: ['openFile'],
+            filters: [xml ? { name: 'XML', extensions: ['xml'] } : { name: 'CSV', extensions: ['csv', 'tsv'] }] })
+          .then(chosen => chosen.canceled ? undefined : chosen.filePaths[0]);
         check();
-        if (chosen.canceled || !chosen.filePaths[0]) return null;
+        if (!path) return null;
         const { source, sample, sampleLimited } = xml
-          ? await inspectPostgresXmlImportSource(chosen.filePaths[0], target.xmlOptions, check)
-          : await inspectPostgresCopySource(chosen.filePaths[0], target.csvDelimiter, target.csvHasHeader);
+          ? await inspectPostgresXmlImportSource(path, target.xmlOptions, check)
+          : await inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader);
         check();
+        // 新表向导沿用已选文件，只有原字节指纹匹配才签发原表页导入能力。
+        if (scanned && (!('sha256' in source) || source.sha256 !== scanned.expectedSource.sha256 || source.bytes !== scanned.expectedSource.bytes))
+          throw Error('XML 源文件已变化，请退出向导并核对已创建的表');
         const token = randomUUID();
         postgresImportFiles.set(document, { token, target, source, revision, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited };

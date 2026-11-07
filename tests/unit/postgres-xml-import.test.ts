@@ -51,6 +51,10 @@ it('XML 和原 CSV 文件选择与映射保持独立合同', () => {
   expect(postgresTableImportChooseSchema.safeParse({ ...target, format: 'xml', xmlOptions }).success).toBe(true);
   expect(postgresTableImportChooseSchema.safeParse({ ...target, format: 'xml', xmlOptions, csvDelimiter: ',' }).success).toBe(false);
   expect(postgresTableImportChooseSchema.safeParse({ ...target, csvDelimiter: ';', csvHasHeader: false }).success).toBe(true);
+  const scannedFile = { token, expectedSource: { sha256: '0'.repeat(64), bytes: 200 } };
+  expect(postgresTableImportChooseSchema.safeParse({ ...target, format: 'xml', xmlOptions, scannedFile }).success).toBe(true);
+  expect(postgresTableImportChooseSchema.safeParse({ ...target, csvDelimiter: ',', scannedFile }).success).toBe(false);
+  expect(postgresTableImportChooseSchema.safeParse({ ...target, format: 'xml', xmlOptions, scannedFile: { token } }).success).toBe(false);
   const apply = { ...target, taskId: 'task', fileToken: token };
   expect(postgresTableImportSchema.safeParse({ ...apply, format: 'xml', columns: ['c1', null, 'c2'] }).success).toBe(true);
   expect(postgresTableImportSchema.safeParse({ ...apply, format: 'xml', columns: [null] }).success).toBe(false);

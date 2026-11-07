@@ -6,6 +6,7 @@ import {
 import { errorMessage, invoke, uid } from '../lib';
 import { postgresCreateTableZh as text } from '../locales/postgresCreateTable.zh-CN';
 import { useWorkspace } from '../store';
+import type { PostgresImportDesign } from '../importNewTableUi';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import './PostgresCreateTableDialog.css';
 
@@ -18,17 +19,18 @@ function newField(): FieldDraft {
 }
 
 /** 表单草稿、SQL 预览与原连接版本绑定，写入结果未知时禁止重复发送。 */
-export function PostgresCreateTableDialog({ target, onDirtyChange, onCreated, onClose }: {
+export function PostgresCreateTableDialog({ target, initialDesign, isParentCurrent, invalidated = false, onDirtyChange, onCreated, onClose }: {
   target: PostgresCreateTableTarget; onDirtyChange(value: boolean): void; onCreated(table: string, version: number, message: string): void; onClose(): void;
+  initialDesign?: PostgresImportDesign; isParentCurrent?(): boolean; invalidated?: boolean;
 }) {
   const { connectionId, database } = target;
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const dialect = useWorkspace(state => state.connections.find(profile => profile.id === connectionId)?.dialect);
   const [schemas, setSchemas] = useState<string[]>([]);
   const [schema, setSchema] = useState('');
-  const [table, setTable] = useState('');
+  const [table, setTable] = useState(initialDesign?.table ?? '');
   const [comment, setComment] = useState('');
-  const [fields, setFields] = useState(() => [newField()]);
+  const [fields, setFields] = useState(() => initialDesign?.columns.map(field => ({ ...field, id: uid() })) ?? [newField()]);
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -49,9 +51,9 @@ export function PostgresCreateTableDialog({ target, onDirtyChange, onCreated, on
     queueMicrotask(async () => {
       if (lifecycle.current !== owner) return;
       try {
-        if (dialect !== 'postgresql') throw Error(text.changed);
+        if (dialect !== 'postgresql' || isParentCurrent?.() === false) throw Error(text.changed);
         const result = await invoke('postgres.createTable.schemas', { connectionId, database });
-        if (lifecycle.current !== owner) return;
+        if (lifecycle.current !== owner || isParentCurrent?.() === false) return;
         setSchemas(result);
         setSchema(value => result.includes(value) ? value : result[0] ?? '');
       } catch (reason) {
@@ -67,7 +69,7 @@ export function PostgresCreateTableDialog({ target, onDirtyChange, onCreated, on
 
   /** 所有编辑立即取消本地预览，下一次只能使用新建表单。 */
   function edit(update: () => void) {
-    if (operation.current || unknown) return;
+    if (operation.current || unknown || isParentCurrent?.() === false) return;
     setDirty(true);
     setPreview(undefined);
     setError('');
@@ -89,7 +91,7 @@ export function PostgresCreateTableDialog({ target, onDirtyChange, onCreated, on
 
   /** 主进程收到的预览只有结构字段，原文 SQL 由数据库引擎生成。 */
   async function prepare() {
-    if (operation.current || loading || unknown) return;
+    if (operation.current || loading || unknown || isParentCurrent?.() === false) return;
     const input = postgresCreateTablePreviewSchema.safeParse({ ...target, schema, table, comment, columns: fields.map(({ id: _id, ...field }) => field) });
     if (!input.success) { setError(input.error.issues[0]?.message ?? text.changed); return; }
     const owner = lifecycle.current;
@@ -98,7 +100,7 @@ export function PostgresCreateTableDialog({ target, onDirtyChange, onCreated, on
     setError('');
     try {
       const result = await invoke('postgres.createTable.preview', input.data);
-      if (lifecycle.current === owner) setPreview({ ...result, version });
+      if (lifecycle.current === owner && isParentCurrent?.() !== false) setPreview({ ...result, version });
     } catch (reason) {
       if (lifecycle.current === owner) setError(errorMessage(reason));
     } finally {
@@ -109,7 +111,7 @@ export function PostgresCreateTableDialog({ target, onDirtyChange, onCreated, on
 
   /** 提交前先消费本地预览，任何 IPC 中断都要求核对原库。 */
   async function apply() {
-    if (operation.current || !preview || preview.version !== version || dialect !== 'postgresql') return;
+    if (operation.current || !preview || preview.version !== version || dialect !== 'postgresql' || isParentCurrent?.() === false) return;
     operation.current = true;
     setBusy(true);
     setError('');
@@ -145,11 +147,11 @@ export function PostgresCreateTableDialog({ target, onDirtyChange, onCreated, on
     <div className="modal-content pg-create-content">
       <strong>PostgreSQL / {database}</strong>
       {loading && <Spinner text={text.wait}/>}
-      <ErrorBox message={error || (!loading && !schemas.length ? text.empty : '')}/>
+      <ErrorBox message={invalidated ? text.changed : error || (!loading && !schemas.length ? text.empty : '')}/>
       {preview ? <>
         <p>{text.review}</p><p>{database} / {schema}</p>
         <pre className="pg-create-sql">{preview.statements.join(';\n\n') + ';'}</pre>
-      </> : <fieldset disabled={busy || loading || unknown || !schemas.length}>
+      </> : <fieldset disabled={busy || loading || unknown || invalidated || !schemas.length}>
         <div className="pg-create-target">
           <Field label={text.schema}><select aria-label={text.schema} value={schema} onChange={event => edit(() => setSchema(event.target.value))}>
             {schemas.map(item => <option key={item} value={item}>{item}</option>)}</select></Field>
@@ -192,8 +194,8 @@ export function PostgresCreateTableDialog({ target, onDirtyChange, onCreated, on
       <button disabled={busy} onClick={close}>{text.close}</button><span className="grow"/>
       {preview ? <>
         <button disabled={busy} onClick={() => setPreview(undefined)}>{text.back}</button>
-        <button className="primary" disabled={busy || version !== preview.version} onClick={() => void apply()}>{text.apply}</button>
-      </> : <button className="primary" disabled={loading || busy || unknown || !schema} onClick={() => void prepare()}>{text.preview}</button>}
+        <button className="primary" disabled={busy || invalidated || version !== preview.version} onClick={() => void apply()}>{text.apply}</button>
+      </> : <button className="primary" disabled={loading || busy || unknown || invalidated || !schema} onClick={() => void prepare()}>{text.preview}</button>}
     </footer>
   </Modal>;
 }

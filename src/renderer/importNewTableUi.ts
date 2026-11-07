@@ -2,9 +2,11 @@ import { recordImportFormats, xmlImportOptionsSchema, xmlImportZh } from '../sha
 import type { FileChoice, TaskEvent } from '../shared/contracts';
 import { importFileInspectInputSchema, importFileInspectOutputSchema, importNewTableSeedSchema, type ImportFileInspectInput, type ImportFileReadOptions, type ImportFileInspectOutput, type ImportNewTableSeed } from '../shared/importNewTable';
 import { tableCreateDraftSchema, type TableCreateApplyOutput, type TableCreateDraft } from '../shared/tableCreate';
+import { postgresCreateColumnSchema, postgresNewIdentifier, type PostgresCreateColumn } from '../shared/postgresCreateTable';
 import { importNewTableZh as text } from './locales/importNewTable.zh-CN';
 
-export interface ImportNewTableTarget { connectionId: string; database: string; version: number; }
+export interface ImportNewTableTarget { connectionId: string; database: string; version: number; postgres?: boolean; }
+export interface PostgresImportDesign { table: string; columns: PostgresCreateColumn[]; }
 export type ImportNewTableOptions = ImportFileReadOptions;
 export const newTableXmlDefaults = { rowTag: 'RECORD', attributes: true, binaryBase64: false } as const;
 
@@ -25,6 +27,7 @@ export interface ImportNewTableState {
   stage: 'source' | 'design' | 'created' | 'import'; options: ImportNewTableOptions; tableName: string; reviewed: boolean;
   busy: boolean; closing: boolean; invalid: boolean; childDirty: boolean; error?: string;
   file?: FileChoice; inspection?: ImportFileInspectOutput; design?: TableCreateDraft; seed?: ImportNewTableSeed;
+  postgresDesign?: PostgresImportDesign; postgresTable?: string;
   created?: TableCreateApplyOutput; progress?: { progress: number; message: string };
 }
 interface Operation { lifetime: object; cancelled: boolean; taskId: string; dispatched: boolean; promise: Promise<void>; cancellation?: Promise<void>; }
@@ -32,10 +35,10 @@ interface Operation { lifetime: object; cancelled: boolean; taskId: string; disp
 function legalName(value: string): boolean { return value.length > 0 && value.length <= 64 && !/[\u0000-\u001f\u007f\ud800-\udfff]/.test(value) && !/\s$/u.test(value); }
 const prototypeKeys = new Set(['__proto__', 'prototype', 'constructor']);
 /** 全文件列集合决定建议，不从前20行推断类型；预留合法原名防止回退名抢占后续原列。 */
-export function importNewTableDesign(database: string, table: string, columns: readonly string[]): { design: TableCreateDraft; mapping: Record<string, string> } {
-  const safe = (name: string) => legalName(name) && !prototypeKeys.has(name.toLowerCase());
+function suggestNames(columns: readonly string[], legal: (name: string) => boolean): string[] {
+  const safe = (name: string) => legal(name) && !prototypeKeys.has(name.toLowerCase());
   const reserved = new Set(columns.filter(safe).map(name => name.toLowerCase())), used = new Set<string>();
-  const names = columns.map((source, index) => {
+  return columns.map((source, index) => {
     let name = source;
     if (!safe(name) || used.has(name.toLowerCase())) {
       let suffix = index + 1; name = `column_${suffix}`;
@@ -43,6 +46,9 @@ export function importNewTableDesign(database: string, table: string, columns: r
     }
     used.add(name.toLowerCase()); return name;
   });
+}
+export function importNewTableDesign(database: string, table: string, columns: readonly string[]): { design: TableCreateDraft; mapping: Record<string, string> } {
+  const names = suggestNames(columns, legalName);
   const design = tableCreateDraftSchema.parse({ database, name: table, engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: names.map(name => ({ name, type: 'LONGTEXT', nullable: true, autoIncrement: false, comment: '' })), indexes: [], foreignKeys: [] });
   return { design, mapping: Object.fromEntries(columns.map((source, index) => [source, names[index]])) };
 }
@@ -51,9 +57,12 @@ export function importNewTableDesign(database: string, table: string, columns: r
 export class ImportNewTableController {
   private value: ImportNewTableState = { stage: 'source', options: { format: 'csv', encoding: 'utf8', csvDelimiter: ',', csvHasHeader: true }, tableName: '', reviewed: false, busy: false, closing: false, invalid: false, childDirty: false };
   private lifetime: object | undefined; private active?: Operation; private child?: object; private childLifetime?: object;
-  constructor(readonly target: ImportNewTableTarget, private readonly services: ImportNewTableServices, private readonly isCurrent: () => boolean, private readonly publish: (state: ImportNewTableState) => void, private readonly closed: () => void, private readonly created: (result: TableCreateApplyOutput, version: number) => void) {}
+  constructor(readonly target: ImportNewTableTarget, private readonly services: ImportNewTableServices, private readonly isCurrent: () => boolean, private readonly publish: (state: ImportNewTableState) => void, private readonly closed: () => void, private readonly created: (result: TableCreateApplyOutput, version: number) => void) {
+    if (target.postgres) this.value.options = { format: 'xml', encoding: 'utf8', xmlOptions: newTableXmlDefaults };
+  }
   get state(): ImportNewTableState { return this.value; }
-  get dirty(): boolean { const options = this.value.options; return this.value.busy || this.value.closing || this.value.childDirty || this.value.stage !== 'source' || !!this.value.file || !!this.value.tableName || options.format !== 'csv' || options.encoding !== 'utf8' || options.csvDelimiter !== ',' || options.csvHasHeader !== true; }
+  get canContinue(): boolean { return !!this.value.postgresTable || !!this.value.created?.definitionVerified && this.value.created.resourcesReleased; }
+  get dirty(): boolean { const options = this.value.options; return this.value.busy || this.value.closing || this.value.childDirty || this.value.stage !== 'source' || !!this.value.file || !!this.value.tableName || (this.target.postgres ? JSON.stringify(options.xmlOptions) !== JSON.stringify(newTableXmlDefaults) : options.format !== 'csv' || options.encoding !== 'utf8' || options.csvDelimiter !== ',' || options.csvHasHeader !== true); }
   /** StrictMode每次挂载重新签发身份，旧Promise只保留真实终态锁，不能复活旧数据。 */
   mount(): void { this.lifetime = {}; this.update({}); }
   dispose(): void { this.lifetime = undefined; this.cancel(); }
@@ -71,7 +80,7 @@ export class ImportNewTableController {
     if (!this.editable(expected)) return;
     const next = { ...this.value.options, ...patch };
     if (next.format === 'xml') { next.encoding = 'utf8'; next.xmlOptions = { ...(next.xmlOptions ?? newTableXmlDefaults) }; }
-    if (!recordImportFormats.includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
+    if (!recordImportFormats.includes(next.format) || this.target.postgres && next.format !== 'xml' || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
     this.update({ options: next, file: undefined, inspection: undefined, reviewed: false, error: undefined, progress: undefined });
   }
   name(expected: ImportNewTableState, tableName: string): void { if (this.editable(expected)) this.update({ tableName, reviewed: false, error: undefined }); }
@@ -116,10 +125,23 @@ export class ImportNewTableController {
   design(expected: ImportNewTableState): object | undefined {
     if (!this.editable(expected) || !expected.file || !expected.inspection) return;
     try {
-      if (!expected.reviewed || !legalName(expected.tableName)) throw Error(text.reviewRequired);
-      const plan = importNewTableDesign(this.target.database, expected.tableName, expected.inspection.columns);
-      const seed = importNewTableSeedSchema.parse({ file: expected.file, ...sourceOptions(expected.options), expectedSource: expected.inspection.source, columns: expected.inspection.columns, mapping: plan.mapping });
-      this.child = {}; this.childLifetime = this.lifetime; this.update({ stage: 'design', design: plan.design, seed, childDirty: false, error: undefined }); return this.child;
+      const columns = expected.inspection.columns;
+      let design: TableCreateDraft | undefined, postgresDesign: PostgresImportDesign | undefined, mapping: Record<string, string>;
+      if (this.target.postgres) {
+        const table = postgresNewIdentifier.safeParse(expected.tableName);
+        if (!expected.reviewed) throw Error(text.reviewRequired);
+        if (!table.success) throw Error(table.error.issues[0]?.message);
+        if (!columns.length || columns.length > 128) throw Error(text.postgresColumnLimit);
+        const names = suggestNames(columns, name => postgresNewIdentifier.safeParse(name).success);
+        postgresDesign = { table: table.data, columns: names.map(name => postgresCreateColumnSchema.parse({ name,
+          type: 'text', nullable: true, primary: false, unique: false, identity: 'none', default: { mode: 'none' }, comment: '' })) };
+        mapping = Object.fromEntries(columns.map((source, index) => [source, names[index]]));
+      } else {
+        if (!expected.reviewed || !legalName(expected.tableName)) throw Error(text.reviewRequired);
+        ({ design, mapping } = importNewTableDesign(this.target.database, expected.tableName, columns));
+      }
+      const seed = importNewTableSeedSchema.parse({ file: expected.file, ...sourceOptions(expected.options), expectedSource: expected.inspection.source, columns, mapping });
+      this.child = {}; this.childLifetime = this.lifetime; this.update({ stage: 'design', design, postgresDesign, seed, childDirty: false, error: undefined }); return this.child;
     } catch (reason) { this.update({ error: reason instanceof Error ? reason.message : String(reason) }); }
   }
   get childLease(): object | undefined { return this.child; }
@@ -136,17 +158,24 @@ export class ImportNewTableController {
     this.update({ created: receipt, error: !current ? text.createdStale : receipt.definitionVerified && receipt.resourcesReleased ? undefined : text.unverified });
     if (current) this.created(structuredClone(receipt), version);
   }
+  /** PostgreSQL 仅在原建表事务确认提交后提供带 schema 的表名。 */
+  receivePostgresCreated(lease: object, table: string, version: number): boolean {
+    if (!this.target.postgres || !this.ownsExistingChild(lease, 'design') || this.value.postgresTable || version !== this.target.version) return false;
+    const current = this.current();
+    this.update({ postgresTable: table, error: current ? undefined : text.createdStale });
+    return current;
+  }
   /** 只有Schema确认其原资源释放并真正onClose后才切阶段，onCreated本身绝不卸载子组件。 */
   schemaClosed(lease: object): void {
     if (!this.ownsExistingChild(lease, 'design')) return;
     this.child = undefined;
     if (!this.current()) { this.closed(); return; }
-    if (!this.value.created) { this.closed(); return; }
+    if (!this.value.created && !this.value.postgresTable) { this.closed(); return; }
     this.update({ stage: 'created', childDirty: false });
   }
   /** 仅显式继续打开导入；源种子保持原文件/格式/指纹，目标表名取真实创建回应。 */
   continue(expected: ImportNewTableState): void {
-    if (!this.current() || this.value !== expected || this.value.stage !== 'created' || this.value.closing || !expected.created?.definitionVerified || !expected.created.resourcesReleased || !expected.seed) return;
+    if (!this.current() || this.value !== expected || this.value.stage !== 'created' || this.value.closing || !this.canContinue || !expected.seed) return;
     this.child = {}; this.childLifetime = this.lifetime; this.update({ stage: 'import', childDirty: false });
   }
   importClosed(lease: object): void { if (this.ownsExistingChild(lease, 'import')) { this.child = undefined; this.closed(); } }

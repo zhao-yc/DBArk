@@ -1,4 +1,5 @@
 import { xmlImportOptionsSchema } from './xmlImport';
+import { importFileSourceSchema } from './importNewTable';
 import { z } from 'zod';
 import type { DataRow, ResultColumn, SortRule } from './contracts';
 import { csvExportDelimiters } from './csvExport';
@@ -252,7 +253,9 @@ export interface PostgresTableExportOutput { rows: number; fileCommitted: true }
 /** 预览绑定原表页及文件解释，保留原 CSV 调用形状。 */
 export const postgresTableImportChooseSchema = z.union([
   target.extend({ pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional() }).strict(),
-  target.extend({ pageToken: token, format: z.literal('xml'), xmlOptions: xmlImportOptionsSchema }).strict(),
+  target.extend({ pageToken: token, format: z.literal('xml'), xmlOptions: xmlImportOptionsSchema,
+    scannedFile: z.object({ token, expectedSource: importFileSourceSchema }).strict().optional(),
+  }).strict(),
 ]);
 const importTarget = target.extend({ pageToken: token, taskId: identity, fileToken: token });
 export const postgresTableImportSchema = z.union([

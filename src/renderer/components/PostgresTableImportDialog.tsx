@@ -10,20 +10,22 @@ import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
 
 /** 显示原文件的样本和列映射，只在用户确认后申请一次性导入。 */
-export function PostgresTableImportDialog({ target, page, isCurrent, onClose, onOutcome }: {
+export function PostgresTableImportDialog({ target, page, initialSource, isCurrent, onClose, onOutcome }: {
   target: PostgresTableTarget; page: PostgresTablePage; isCurrent(): boolean; onClose(): void;
+  initialSource?: { file: PostgresTableImportChoice; mapping: Record<string, string> };
   onOutcome(message: string, committed: boolean): void;
 }) {
-  const [format, setFormat] = useState<'csv' | 'xml'>('csv');
+  const [format, setFormat] = useState<'csv' | 'xml'>(initialSource ? 'xml' : 'csv');
   const [xmlOptions, setXmlOptions] = useState<XmlImportOptions>({ rowTag: 'RECORD', attributes: true, binaryBase64: false });
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [hasHeader, setHasHeader] = useState(true);
-  const [file, setFile] = useState<PostgresTableImportChoice | null>(null);
-  const [mapping, setMapping] = useState<string[]>([]);
+  const [file, setFile] = useState<PostgresTableImportChoice | null>(initialSource?.file ?? null);
+  const candidates = page.columns.filter(isPostgresSqlExportColumn);
+  const [mapping, setMapping] = useState<string[]>(() => initialSource?.file.header.map(name =>
+    candidates.find(column => column.name === initialSource.mapping[name])?.key ?? '') ?? []);
   const [choosing, setChoosing] = useState(false), [taskId, setTaskId] = useState<string>();
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState('');
   const occupied = useRef(false), cancelRequested = useRef(false);
-  const candidates = page.columns.filter(isPostgresSqlExportColumn);
   const locked = choosing || !!taskId;
   const selectedKeys = mapping.filter(Boolean);
   const mapped = !!file && mapping.length === file.header.length && selectedKeys.length > 0 &&
@@ -89,7 +91,7 @@ export function PostgresTableImportDialog({ target, page, isCurrent, onClose, on
       <p><strong>{target.table}</strong> · {target.database}</p>
       <p>{text.note}</p>
       <p>{format === 'xml' ? xmlImportZh.hint : text.nullNote}</p>
-      <Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
+      {!initialSource && <><Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
         setFormat(event.target.value as typeof format); resetSource();
       }}><option value="csv">CSV</option><option value="xml">XML</option></select></Field>
       <div className="pg-table-controls">
@@ -112,7 +114,7 @@ export function PostgresTableImportDialog({ target, page, isCurrent, onClose, on
         </>}
         <button disabled={locked || !validXml} onClick={() => void choose()}>{format === 'xml' ? text.chooseXml : text.choose}</button>
       </div>
-      {!validXml && <ErrorBox message={xmlImportZh.invalid}/>}
+      {!validXml && <ErrorBox message={xmlImportZh.invalid}/>}</>}
       {file && <>
         <p>{text.file} · {file.name} · {file.bytes.toLocaleString('zh-CN')} {text.bytes}</p>
         <fieldset disabled={locked}>
