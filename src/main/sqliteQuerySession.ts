@@ -81,6 +81,15 @@ export class SqliteQuerySession {
     return this.run({ ...input, maxRows: Math.min(input.maxRows, 1000) }, source.sql, { single: true, sourceRange: source.sourceRange, explainView: input.format === 'text' ? 'table' : 'tree' });
   }
 
+  /** 编译检查占用原会话，但不执行用户 SQL 或推进对象修订。 */
+  async syntaxCheck(input: CommandMap['sqlite.syntaxCheck']['input']): Promise<CommandMap['sqlite.syntaxCheck']['output']> {
+    this.available(input.sessionId);
+    const operation: Execution = {taskId: input.taskId, results: [], started: performance.now(), rows: 0, cancelled: false};
+    this.active = operation;
+    try { return await this.driver.syntaxCheck(input.sql); }
+    finally { if (this.active === operation) this.active = undefined; }
+  }
+
   /** 参数识别只用SQLite完整词法与原会话身份；不prepare用户模板、不建立任务或读取MySQL模式。 */
   parameterNames(input: CommandMap['query.parameterNames']['input']): CommandMap['query.parameterNames']['output'] {
     this.available(input.sessionId);

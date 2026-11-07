@@ -19,3 +19,19 @@ export const sqlSyntaxCheckZh = {
   } as Record<string, string>,
   unavailable: '当前脚本无法由本地解析器可靠检查。',
 } as const;
+
+export const sqliteSyntaxCheckZh = {
+  ...sqlSyntaxCheckZh,
+  title: 'SQLite 原生语法检查',
+  hint: '在原会话逐句准备 SQL，不执行正文。检查使用现有目录和临时表，前一条语句中的建表或设置不会影响后一条。PRAGMA 等受限语句标为未检查。',
+  clean: '全部语句通过 SQLite 原生准备。',
+  issues: '处准备提示',
+  reasons: {...sqlSyntaxCheckZh.reasons,
+    worker: 'SQLite 原生检查未完成，请重新检查。', context: '当前连接或数据库状态无法完成 SQLite 原生检查。',
+  } as Record<string, string>,
+  issueMessages: {...sqlSyntaxCheckZh.issueMessages,
+    'sqlite-prepare': 'SQLite 无法准备此语句，请核对语法和当前会话中的对象。',
+    'sqlite-unchecked': '此语句未检查。当前权限或准备阶段安全约束限制了检查。',
+    'sqlite-incomplete': '此处语句结构不完整，请核对引号、注释、括号或触发器结尾。',
+  } as Record<string, string>,
+} as const;

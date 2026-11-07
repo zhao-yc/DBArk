@@ -3,6 +3,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
 import { queryFailureSourceZh } from '../../src/renderer/locales/queryFailureSource.zh-CN';
+import { sqliteSyntaxCheckZh as syntaxText } from '../../src/renderer/locales/sqlSyntaxCheck.zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 
@@ -81,6 +82,9 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
   const continued: Script = {name: '遇错继续', source: continuedSource, selected: continuedSource, offset: 0, current: false,
     start: 0, end: continuedSource.length, continueOnError: true};
   const scripts = [insert, select, trigger, ordinary, transactionInsert, transactionRead, syntax, ordinaryFailure, continued, readonlyWrite, readonlyRead];
+  const checkedStatements = ["/* 🧭 */ INSERT INTO subject VALUES(77,'不应执行');",
+    'SELECT missing_column FROM subject;', 'EXPLAIN PRAGMA user_version=73;'];
+  const checkedSql = checkedStatements.join('\r\n');
   const restoredSql = "-- 正常重启仅恢复草稿🚢\r\nINSERT INTO guards VALUES(999,'原未执行写哨兵');";
   /** 独立磁盘读回每次使用只读新句柄；原用户事务在另一物理连接中不可见。 */
   const disk = () => { check(); if (dirname(resolve(database)) !== resolve(directory)) throw Error('当前语句磁盘观察越过本例目录'); const db = new DatabaseSync(database, { readOnly: true }); try { return { subject: db.prepare('SELECT CAST(id AS TEXT) AS id,note FROM subject ORDER BY id').all(), guards: db.prepare('SELECT * FROM guards ORDER BY id').all(), audit: db.prepare('SELECT CAST(id AS TEXT) AS id,note FROM audit ORDER BY id,note').all(), triggers: db.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger' ORDER BY name").all(), control: db.prepare('SELECT * FROM control').all() }; } finally { db.close(); check(); } };
@@ -103,7 +107,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     const wrapped: Handler = async (event, payload) => {
       check(); if (event.sender !== window.webContents || event.senderFrame !== frame) return deny('外来文档IPC');
       if (!payload || typeof payload !== 'object' || !('command' in payload) || typeof payload.command !== 'string' || !('input' in payload) || !payload.input || typeof payload.input !== 'object') return deny('非标准IPC'); const command = payload.command, value = payload.input as Record<string, unknown>;
-      if (/clipboard/i.test(command) || command.startsWith('table.') || command.startsWith('schema.') || command.startsWith('sqlite.') || command.startsWith('serverMonitor.') || command.startsWith('files.') && command !== 'files.choose' || command.startsWith('excel.')) return deny(command);
+      if (/clipboard/i.test(command) || command.startsWith('table.') || command.startsWith('schema.') || command.startsWith('sqlite.') && command !== 'sqlite.syntaxCheck' || command.startsWith('serverMonitor.') || command.startsWith('files.') && command !== 'files.choose' || command.startsWith('excel.')) return deny(command);
       if (command.startsWith('query.') && !['query.execute', 'query.sessionState', 'query.completionState', 'query.transaction', 'query.cancel'].includes(command) || command.startsWith('sessions.') && !['sessions.open', 'sessions.close'].includes(command)) return deny('非本例查询命令：' + command);
       if (command.startsWith('metadata.') && !['metadata.databases', 'metadata.objects'].includes(command)) return deny(command);
       if (command === 'files.choose') { if (pickerRequest || value.purpose !== 'sqlite-database' || typeof value.sqliteConnectionId !== 'string' || !value.sqliteConnectionId) return deny('文件用途/连接归属'); pickerRequest = value.sqliteConnectionId; }
@@ -116,14 +120,16 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
       if (command === 'query.cancel' && !state.operations.some(operation => operation.command === 'query.execute' && operation.request.taskId === value.taskId)) return deny('其它查询任务取消');
       if (command === 'query.transaction' && !['begin', 'rollback'].includes(String(value.action))) return deny('非本例明确事务动作');
       if (command === 'query.execute') { const script = input.scripts.find(script => script.source === value.sql), current = value.currentStatement; if (!script || value.continueOnError !== script.continueOnError || value.collectWarnings === true) return deny('非本例全文/执行选项'); if (script.offset === undefined ? current !== undefined : !current || typeof current !== 'object' || Object.keys(current).length !== 1 || !('offset' in current) || current.offset !== script.offset) return deny('非本例准确光标'); }
-      const fact: Fact | undefined = command.startsWith('query.') || command.startsWith('sessions.') ? { command, request: structuredClone(value) } : undefined; if (fact) state.operations.push(fact); state.commands.push(command); state.pending++;
+      if (command === 'sqlite.syntaxCheck' && (value.sql !== input.checkedSql || !Object.hasOwn(state.sessions, String(value.sessionId)) ||
+          state.operations.some(item => item.command === 'sqlite.syntaxCheck'))) return deny('语法检查正文或会话越界');
+      const fact: Fact | undefined = command === 'sqlite.syntaxCheck' || command.startsWith('query.') || command.startsWith('sessions.') ? { command, request: structuredClone(value) } : undefined; if (fact) state.operations.push(fact); state.commands.push(command); state.pending++;
       try { const reply = await original(event, payload); check(); if (fact) fact.reply = structuredClone(reply);
         if (command === 'sessions.open' && reply && typeof reply === 'object' && 'ok' in reply && reply.ok === true && 'result' in reply && reply.result && typeof reply.result === 'object' && 'sessionId' in reply.result && typeof reply.result.sessionId === 'string') { if (!reply.result.sessionId.startsWith('sqlite:')) return deny('会话未由SQLite签发'); state.sessions[reply.result.sessionId] = String(value.connectionId); } return reply;
       } catch (reason) { if (fact) fact.failure = reason instanceof Error ? reason.message : String(reason); throw reason; } finally { state.pending--; if (command === 'files.choose') pickerRequest = undefined; }
     };
     state.check = check; state.restore = () => { check(); if (state.pending) throw Error('SQLite当前语句请求仍在途'); handlers.set('dbark:request', original); dialog.showOpenDialog = originalPicker; dialog.showSaveDialog = originalSave; utilityProcess.fork = originalFork; window.webContents.send = originalSend; delete root.__sqliteCurrentNative; };
     root.__sqliteCurrentNative = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = picker; dialog.showSaveDialog = save; utilityProcess.fork = fork; window.webContents.send = send; check();
-  }, { database, savedProfiles, rwName, roName, scripts: [...scripts.map(script => ({ source: script.source, offset: script.current ? script.offset : undefined, continueOnError: script.continueOnError })), { source: selectionOnly.selected, offset: undefined, continueOnError: undefined }] }));
+  }, { database, savedProfiles, rwName, roName, checkedSql, scripts: [...scripts.map(script => ({ source: script.source, offset: script.current ? script.offset : undefined, continueOnError: script.continueOnError })), { source: selectionOnly.selected, offset: undefined, continueOnError: undefined }] }));
   /** 两个连接都通过真实表单保存；读写连接必须明确取消产品默认只读。 */
   const createConnection = async (name: string, readOnly: boolean) => {
     await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
@@ -189,7 +195,40 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     const canonicalDatabase = realpathSync(database), baseline = { subject: [], guards: [], audit: [], triggers: [], control: [{ id: 1, note: '原控制行保持' }] }; expect(disk()).toEqual(baseline); await arm(); armed = true;
     stage = '真实RW/RO连接表单与原QueryTab'; await createConnection(rwName, false); await createConnection(roName, true); const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(2); const rw = profiles.find(profile => profile.name === rwName), ro = profiles.find(profile => profile.name === roName); if (!rw || rw.dialect !== 'sqlite' || !ro || ro.dialect !== 'sqlite') throw Error('当前语句RW/RO配置未保持SQLite'); expect(rw.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: false }); expect(ro.sqlite).toMatchObject({ filePath: canonicalDatabase, readOnly: true }); for (const profile of [rw, ro]) { expect(profile.sqlite.fileToken).toBeUndefined(); for (const field of ['host', 'port', 'user', 'password', 'rememberPassword', 'hasPassword', 'ssh', 'tls']) expect(profile).not.toHaveProperty(field); }
     await openQuery(rwName); expect((await settings()).tabs).toHaveLength(1); expect(await tasks()).toEqual([]); expect(await history()).toEqual([]);
-    stage = '菜单中句INSERT不运行前后哨兵'; const inserted = await run(insert), actualInsertSql = await insertHeader(inserted.fact); expect(result(inserted.fact?.reply)).toMatchObject({ results: [{ affectedRows: 1, statement: actualInsertSql }] }); const afterInsert = { ...baseline, subject: [{ id: '10', note: "中间;?'中文🚢" }] }; expect(disk()).toEqual(afterInsert); await assertHistory([actualInsertSql]);
+    stage = '首次原生语法检查建立原会话但零执行';
+    await write(checkedSql);
+    await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu'))
+      .navigationMenuItem(query(), {name: syntaxText.entry, exact: true}, check)).click());
+    const syntaxPanel = query().locator('.sql-syntax-check');
+    await step(() => expect(syntaxPanel.getByRole('status')).toHaveText('2 ' + syntaxText.issues + ' · 3 ' + syntaxText.statements));
+    const checkedFacts = await step(audit);
+    expect(operations(checkedFacts, 'query.execute')).toEqual([]);
+    expect(operations(checkedFacts, 'sessions.open')).toHaveLength(1);
+    const checked = operations(checkedFacts, 'sqlite.syntaxCheck');
+    expect(checked).toHaveLength(1);
+    expect(checkedFacts.sessions[String(checked[0].request.sessionId)]).toBe(rw.id);
+    expect(result(checked[0].reply)).toEqual({status: 'ready', statementCount: 3, issues: checkedStatements.slice(1).map((sql, index) => ({
+      start: checkedSql.indexOf(sql), end: checkedSql.indexOf(sql) + sql.length, code: index === 0 ? 'sqlite-prepare' : 'sqlite-unchecked',
+    }))});
+    const diagnostic = syntaxPanel.getByRole('button', {name: /第 2 行/});
+    await step(() => diagnostic.click());
+    const badStart = checkedSql.indexOf(checkedStatements[1]);
+    expect((await model()).selections).toEqual([{start: badStart, end: badStart + checkedStatements[1].length}]);
+    await step(() => page.screenshot({path: info.outputPath('SQLite原生语法检查.png')}));
+    expect((await step(audit)).operations).toEqual(checkedFacts.operations);
+    expect(await history()).toEqual([]);
+    expect(disk()).toEqual(baseline);
+    const verifier = new DatabaseSync(database, {readOnly: true});
+    try { expect(Object.values(verifier.prepare('PRAGMA user_version').get()!)).toEqual([0]); } finally { verifier.close(); }
+    const checkTasks = await tasks();
+    expect(checkTasks.filter(item => item.kind === 'sqlite.syntaxCheck')).toHaveLength(1);
+    expect(JSON.stringify(checkTasks)).not.toContain('missing_column');
+    await write('SELECT 1;');
+    await step(() => expect(syntaxPanel.getByRole('status')).toContainText(syntaxText.reasons.stale));
+    await step(() => expect(diagnostic).toHaveCount(0));
+    await step(() => syntaxPanel.getByRole('button', {name: syntaxText.close, exact: true}).click());
+
+    stage = '菜单中句INSERT不运行前后哨兵'; const inserted = await run(insert), actualInsertSql = await insertHeader(inserted.fact); expect(inserted.fact?.request.sessionId).toBe(checked[0].request.sessionId); expect(result(inserted.fact?.reply)).toMatchObject({ results: [{ affectedRows: 1, statement: actualInsertSql }] }); const afterInsert = { ...baseline, subject: [{ id: '10', note: "中间;?'中文🚢" }] }; expect(disk()).toEqual(afterInsert); await assertHistory([actualInsertSql]);
     stage = 'CtrlMetaShiftEnter中句SELECT精度及中文引号'; const selected = await run(select, true); expect(result(selected.fact?.reply)).toMatchObject({ results: [{ statement: select.selected, rows: [{ c0: '9223372036854775807', c1: "🧭当前;?'中文", c2: '1' }] }] }); await step(() => expect(query().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible()); expect(disk()).toEqual(afterInsert); expect(emittedSql(await step(audit), selected.fact?.request.taskId)).toEqual([select.selected]);
     stage = '当前结果 SQL 预览绑定已执行语句，编辑草稿后也不重新执行';
     const beforePreview = await step(audit);
@@ -324,7 +363,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     stage = '同profile新owner恢复全文不重放SQL'; await runtime.restartOwnedDesktop(info); owner = runtime.ownedDesktopResources(info); application = owner.application; page = owner.page; originalProcess = application.process(); closed = false; check(); expect(originalProcess.pid).not.toBe(firstPid); await arm({ [rw.id]: false, [ro.id]: true }); armed = true; await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible()); expect(await settings()).toEqual(persisted); expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(profiles); expect(await history()).toEqual(firstHistory); expect(await tasks()).toEqual(firstTasks); expect(disk()).toEqual(afterNormal); await step(() => expect(query().locator('.monaco-editor .view-lines')).toContainText('原未执行写哨兵'));
     const secondFacts = await step(audit); expect(secondFacts.denied).toEqual([]); expect(secondFacts.pickerIds).toEqual([]); expect(operations(secondFacts, 'query.execute')).toEqual([]); expect(operations(secondFacts, 'query.transaction')).toEqual([]); expect(runtime.pageErrors).toEqual([]); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteCurrentNative?: { restore(): void } }).__sqliteCurrentNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;
     stage = '第二owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); expect(disk()).toEqual(afterNormal);
-    await info.attach('SQLite当前语句真实原源光标历史及磁盘原件', { body: JSON.stringify({ platform: process.platform, rawDatabase: database, canonicalDatabaseBeforePicker: canonicalDatabase, firstPid, secondPid: originalProcess.pid, scripts, modelFacts, baseline, finalDisk: disk(), firstFacts, beforeQuit, secondFacts, firstHistory, firstTasks, syntaxFailure, located, scriptFailure, continuedRun, readonlyFailure: denied, currentRequests: 8, ordinaryRequests: 3, selectionOnlyRequests: 1, nativeCurrentStatementsWithHeader: 6, prePostSentinelWrites: 0, userTransactionActions: ['begin', 'rollback'], sameSessionRollback: true, prepareFailureHistoryAdded: 0, sourceCRLFAndUtf16Observed: true, inputScope: '仅本例官方Monaco模型API设置全文/EOL/caret；真实菜单和按键执行，不冒称实体键盘文字输入验收', pickerScope: '只替换两次自身Main chooser准确路径，不冒称验证OS原生对话框输入', observationScope: '每个原窗口就绪后安装至正常退出前撤销，不补造恢复前事实', systemClipboardOperations: 0, firstExitCode: 0, secondExitCode: originalProcess.exitCode, automaticRetry: false, automaticTrace: false }), contentType: 'application/json' }); completed = { directory, database, platform: process.platform, firstPid, secondPid: originalProcess.pid };
+    await info.attach('SQLite当前语句真实原源光标历史及磁盘原件', { body: JSON.stringify({ platform: process.platform, rawDatabase: database, canonicalDatabaseBeforePicker: canonicalDatabase, firstPid, secondPid: originalProcess.pid, scripts, modelFacts, baseline, finalDisk: disk(), firstFacts, beforeQuit, secondFacts, firstHistory, firstTasks, syntaxFailure, located, scriptFailure, continuedRun, checked, readonlyFailure: denied, currentRequests: 8, ordinaryRequests: 3, selectionOnlyRequests: 1, nativeCurrentStatementsWithHeader: 6, prePostSentinelWrites: 0, userTransactionActions: ['begin', 'rollback'], sameSessionRollback: true, prepareFailureHistoryAdded: 0, sourceCRLFAndUtf16Observed: true, inputScope: '仅本例官方Monaco模型API设置全文/EOL/caret；真实菜单和按键执行，不冒称实体键盘文字输入验收', pickerScope: '只替换两次自身Main chooser准确路径，不冒称验证OS原生对话框输入', observationScope: '每个原窗口就绪后安装至正常退出前撤销，不补造恢复前事实', systemClipboardOperations: 0, firstExitCode: 0, secondExitCode: originalProcess.exitCode, automaticRetry: false, automaticTrace: false }), contentType: 'application/json' }); completed = { directory, database, platform: process.platform, firstPid, secondPid: originalProcess.pid };
   } catch (reason) {
     runtime.retainOwnedDesktopResources(info); let partial: Audit | undefined;
     if (armed && !closed) try { partial = await application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteCurrentNative?: Audit }).__sqliteCurrentNative; return state ? { pending: state.pending, denied: state.denied, forks: state.forks, pickerIds: state.pickerIds, profiles: state.profiles, sessions: state.sessions, commands: state.commands, operations: state.operations, events: state.events } : undefined; }); } catch { /* 原端口失效不重建、不补造事实。 */ }

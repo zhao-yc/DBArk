@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { fork, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,6 +10,7 @@ import { buildSqliteWorker as build } from '../helpers/buildSqliteWorker';
 import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/session';
 import { sqliteDriverLimits, type SqliteProcessExit, type SqliteProcessTransport, type SqliteWorkerRequest, type SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import { SqliteQuerySession } from '../../src/main/sqliteQuerySession';
+import { validateCommand } from '../../src/shared/validation';
 import type { CommandMap, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 
 type ExecuteInput = CommandMap['query.execute']['input'];
@@ -484,5 +485,66 @@ describe('SQLite 脚本遇错继续', () => {
     expect(h.events.at(-1)?.status).toBe('cancelled');
     expect(h.process.sent.filter(message => message.kind === 'execute')).toHaveLength(2);
     expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+});
+
+
+describe('SQLite 原生语法检查', () => {
+  it('在原 TEMP 和事务里准备多句，不执行写、DDL、PRAGMA 或 ATTACH', async () => {
+    const path = fixture(), h = await open(path);
+    const originalVersion = (await execute(h, 'PRAGMA user_version')).results[0].rows;
+    await execute(h, 'CREATE TEMP TABLE local_only(v); BEGIN; INSERT INTO local_only VALUES(7);');
+    const target = join(dirname(path), '不得创建.sqlite');
+    const statements = ["/* 🌏 */ SELECT v FROM local_only;", "INSERT INTO subject VALUES(7,'不得写入');",
+      'CREATE TABLE never_created(id);', 'SELECT missing FROM local_only;', 'EXPLAIN QUERY PLAN PRAGMA user_version=73;',
+      "ATTACH DATABASE '" + target.replaceAll("'", "''") + "' AS external;", "SELECT '未闭合"];
+    const sql = statements.join('\r\n'), eventCount = h.events.length, requestCount = h.process.sent.length;
+    const revision = h.session.completionState().objectsRevision;
+    const result = await h.session.syntaxCheck({sessionId: h.session.sessionId, taskId: '检查', sql});
+    expect(result).toMatchObject({status: 'ready', statementCount: 7});
+    if (result.status !== 'ready') throw Error('原生检查没有返回诊断');
+    expect(result.issues.map(issue => [issue.code, sql.slice(issue.start, issue.end)])).toEqual([
+      ['sqlite-prepare', statements[3]], ['sqlite-unchecked', statements[4]], ['sqlite-unchecked', statements[5]], ['sqlite-incomplete', statements[6]],
+    ]);
+    expect(h.process.sent.slice(requestCount)).toEqual([expect.objectContaining({kind: 'syntaxCheck', sql})]);
+    expect(h.events).toHaveLength(eventCount);
+    expect(h.session.completionState().objectsRevision).toBe(revision);
+    expect(h.session.state()).toEqual({transactionOpen: true, transactionKnown: true, broken: false});
+    expect((await execute(h, 'PRAGMA user_version')).results[0].rows).toEqual(originalVersion);
+    expect((await execute(h, 'SELECT v FROM local_only')).results[0].rows).toEqual([{c0: '7'}]);
+    expect((await execute(h, "SELECT count(*) FROM sqlite_schema WHERE name='never_created'")).results[0].rows).toEqual([{c0: '0'}]);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+    expect(existsSync(target)).toBe(false);
+    await h.session.transaction({sessionId: h.session.sessionId, action: 'rollback'});
+  });
+
+  it('只读授权限制标为未检查，正常查询仍可准备', async () => {
+    const path = fixture(), h = await open(path, undefined, true);
+    const sql = 'SELECT id FROM subject; DELETE FROM subject;';
+    const result = await h.session.syntaxCheck({sessionId: h.session.sessionId, taskId: '只读', sql});
+    expect(result).toEqual({status: 'ready', statementCount: 2, issues: [{start: sql.indexOf('DELETE'), end: sql.length, code: 'sqlite-unchecked'}]});
+    expect(h.session.state()).toMatchObject({broken: false, transactionOpen: false});
+  });
+
+  it('取消准确准备任务而不终止原进程，之后事务仍可回滚', async () => {
+    const path = fixture(), h = await open(path);
+    await execute(h, 'BEGIN; INSERT INTO subject VALUES(2,NULL);');
+    const input = {sessionId: h.session.sessionId, taskId: '取消准备', sql: 'SELECT id FROM subject; '.repeat(256)};
+    const work = h.session.syntaxCheck(input);
+    const failure = expect(work).rejects.toMatchObject({code: 'SQLITE_CANCELLED'});
+    await expect(h.session.cancel(input.taskId)).resolves.toMatchObject({sessionClosed: false, transaction: true});
+    await failure;
+    expect(h.process.kills).toBe(0);
+    expect(h.session.state()).toMatchObject({broken: false, transactionKnown: true, transactionOpen: true});
+    await h.session.transaction({sessionId: h.session.sessionId, action: 'rollback'});
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+
+  it('公开合同拒绝引擎能力，语句超限和 NUL 无部分诊断', async () => {
+    const h = await open(fixture()), input = {sessionId: h.session.sessionId, taskId: '检查合同', sql: 'SELECT 1'};
+    expect(validateCommand('sqlite.syntaxCheck', input)).toEqual(input);
+    expect(() => validateCommand('sqlite.syntaxCheck', {...input, readOnly: false})).toThrow();
+    expect(await h.session.syntaxCheck({...input, sql: 'SELECT 1;'.repeat(257)})).toEqual({status: 'blocked', reason: 'budget'});
+    expect(await h.session.syntaxCheck({...input, sql: 'SELECT 1\0'})).toEqual({status: 'blocked', reason: 'input'});
   });
 });

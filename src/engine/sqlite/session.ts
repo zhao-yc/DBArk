@@ -1,3 +1,4 @@
+import { sqlSyntaxCheckLimits, validSqlSyntaxCheckResult, type SqlSyntaxCheckResult } from '../../shared/sqlSyntaxCheck';
 import { randomUUID } from 'node:crypto';
 import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteOpenOptions, copySqliteWorkerOpenOptions, sqliteDriverLimits as limits, type SqliteCreateGuard, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteWorkerOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
 import { copySqliteRebuildComparisonInput, copySqliteRebuildComparisonResult, type SqliteRebuildComparisonInput, type SqliteRebuildComparisonResult } from './rebuildComparison';
@@ -39,6 +40,7 @@ interface Operation {
   terminal?: Terminal; finishing?: boolean; consumerError?: Error;
   originalSql?: string;
   latestStatementSql?: string;
+  syntaxSource?: string;
   captureFailureRange?: true;
   captureQueryReceipt?: true;
   comparison?: { columnGroups: number; comparedRows: bigint; onProgress?(progress: { comparedRows: string; columnGroups: number }): void | Promise<void> };
@@ -138,6 +140,18 @@ export class SqliteDriverSession {
   execute(sql: string, options: SqliteExecuteOptions = {}): Promise<SqliteExecutionResult> {
     return this.start(sql, options, false);
   }
+  /** 原会话只准备 SQL，接收原文校验过的固定范围，不接收查询结果。 */
+  syntaxCheck(sql: string): Promise<SqlSyntaxCheckResult> {
+    if (!this.isUsable || this.active || this.isRebuildWriter) return Promise.reject(this.error('SQLite 原会话不能开始语法检查', 'SQLITE_SESSION_UNAVAILABLE'));
+    if (typeof sql !== 'string' || sql.length > sqlSyntaxCheckLimits.sourceUnits) return Promise.resolve({status: 'blocked', reason: 'budget'});
+    const operation: Operation = {id: randomUUID(), options: {}, syntaxSource: sql, result: deferred(), nativeDone: deferred(),
+      results: [], delivery: Promise.resolve(), frame: 0, index: -1, cancelRequested: false};
+    void operation.nativeDone.promise.catch(() => {});
+    this.active = operation;
+    try { this.transport.send({kind: 'syntaxCheck', id: operation.id, sql}); }
+    catch { void this.breakSession('SQLite 语法检查未能投递', 'SQLITE_SEND_FAILED'); }
+    return operation.result.promise.then(result => result.syntax!);
+  }
   /** 完整比较不走公共行/结果字节上限，输入没有SQL，进度帧仍由原消费者确认及取消框架约束。 */
   rebuildCompare(input: SqliteRebuildComparisonInput, options: { onProgress?(progress: { comparedRows: string; columnGroups: number }): void | Promise<void> } = {}): Promise<SqliteRebuildComparisonResult> {
     if (!this.opened || this.exited || this.invalid || this.closing || this.active) return Promise.reject(this.error('SQLite会话未就绪或已有运行任务', 'SQLITE_SESSION_UNAVAILABLE'));
@@ -233,6 +247,8 @@ export class SqliteDriverSession {
     operation.cancelRequested = true;
     try { this.transport.send({ kind: 'cancel', id: operation.id }); }
     catch { void this.breakSession('SQLite取消请求无法投递，原会话不可继续使用', 'SQLITE_SEND_FAILED'); return; }
+    // 检查按语句间协作取消，不因检查等待而杀掉原事务。
+    if (operation.syntaxSource !== undefined) return;
     operation.timer = setTimeout(() => {
       if (this.active === operation && !operation.terminal) void this.terminate().catch(error => this.failUnconfirmed(operation, error));
     }, limits.cancelGraceMs);
@@ -269,7 +285,7 @@ export class SqliteDriverSession {
         const rows = BigInt(message.comparedRows); if (rows < comparison.comparedRows || rows > 9223372036854775807n * BigInt(comparison.columnGroups)) throw Error('SQLite重建比较进度计数倒退或溢出'); comparison.comparedRows = rows; operation.frame = message.frame;
         operation.delivery = operation.delivery.then(async () => { if (!this.invalid && this.active === operation && !operation.cancelRequested && !operation.terminal) await comparison.onProgress?.({ comparedRows: message.comparedRows, columnGroups: message.columnGroups }); }).catch(reason => { operation.consumerError = reason instanceof Error ? reason : Error('SQLite重建进度消费者失败'); this.requestCancel(operation); }).finally(() => { if (!this.invalid && this.active === operation && !operation.terminal && !this.exited) try { this.transport.send({ kind: 'ack', id: operation.id, frame: message.frame }); } catch { void this.breakSession('SQLite重建进度确认无法投递', 'SQLITE_SEND_FAILED'); } });
       } else if (message.kind === 'statement' || message.kind === 'batch') {
-        if (operation.comparison) throw Error('SQLite重建比较不能携带SQL或用户结果值');
+        if (operation.comparison || operation.syntaxSource !== undefined) throw Error('SQLite非查询操作不能携带SQL或用户结果值');
         if (message.frame !== operation.frame + 1 || message.kind === 'statement' && (message.index !== operation.results.length || operation.index !== operation.results.length - 1) || message.kind === 'batch' && (message.index < 0 || message.index !== operation.index || message.index !== operation.results.length)) throw Error('SQLite结果批次顺序无效');
         operation.frame = message.frame;
         if (message.kind === 'statement') {
@@ -284,7 +300,7 @@ export class SqliteDriverSession {
           if (!this.invalid && this.active === operation && !operation.terminal && !this.exited) try { this.transport.send({ kind: 'ack', id: operation.id, frame: message.frame }); } catch { void this.breakSession('SQLite批次确认无法投递', 'SQLITE_SEND_FAILED'); }
         });
       } else if (message.kind === 'statementEnd') {
-        if (operation.comparison) throw Error('SQLite重建比较不能冒充执行DDL');
+        if (operation.comparison || operation.syntaxSource !== undefined) throw Error('SQLite非查询操作不能冒充已执行SQL');
         if (message.result.index !== operation.results.length || message.result.index !== operation.index) throw Error('SQLite语句完成顺序无效');
         const receipt = message.result.queryReceipt;
         if (operation.captureQueryReceipt ? (!receipt || !Number.isFinite(receipt.elapsedMs) || receipt.elapsedMs < 0 ||
@@ -308,6 +324,10 @@ export class SqliteDriverSession {
           message.sourceRange = {start: message.sourceRange.start, end: message.sourceRange.end};
         }
         if (message.kind === 'completed') {
+          if (operation.syntaxSource !== undefined) {
+            if (!validSqlSyntaxCheckResult(message.result.syntax, operation.syntaxSource) || message.result.transaction !== this.transactionValue)
+              throw Error('SQLite 语法检查结果或事务状态不匹配');
+          } else if ('syntax' in message.result) throw Error('SQLite 执行结果不能携带语法检查');
           if (operation.comparison) {
             const result = copySqliteRebuildComparisonResult(message.result.comparison); if (message.result.transaction !== true || message.result.statements.length || result.columnGroups !== operation.comparison.columnGroups || BigInt(result.verifiedRows) * BigInt(result.columnGroups) !== operation.comparison.comparedRows) throw Error('SQLite重建完整计数、分组或事务终态不一致'); message.result.comparison = result;
           } else if ('comparison' in message.result) throw Error('SQLite普通执行不能携带重建比较事实');

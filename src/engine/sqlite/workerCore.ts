@@ -9,6 +9,7 @@ import { queryParameterLimits } from '../../shared/queryParameters';
 import { sqliteNamedParameterNames } from './parameters';
 import { createSqliteNativeInvoke, resolveSqliteNativeResource, sqliteNativeFunction } from './nativeRuntime';
 import { SqliteRawStatement, type SqliteRawInvoke } from './rawStatement';
+import { checkSqliteSyntax } from './syntaxCheck';
 import { consumeSqliteRawFrames } from './rawFrames';
 import { installSqliteSearchFunctions } from './dataSearchFunctions';
 import { SqliteRawValueError } from './rawValue';
@@ -109,6 +110,7 @@ export class SqliteWorkerCore {
   private guardedCreate?: { owner: Execution; guard: SqliteCreateGuard; matched: boolean };
   private nativeInvoke?: SqliteRawInvoke;
   private preparingNativeControl = false;
+  private preparingSyntax = false;
   constructor(private readonly port: Port) {}
 
   /** ACK和取消在消息栈内同步生效，不能排在正在等待ACK的SQL后面。 */
@@ -134,12 +136,14 @@ export class SqliteWorkerCore {
       return;
     }
     if (request.kind === 'open') { this.open(request.id, request.options); return; }
-    if (request.kind === 'execute' || request.kind === 'streamRead' || request.kind === 'rebuildCompare') {
+    if (request.kind === 'execute' || request.kind === 'streamRead' || request.kind === 'syntaxCheck' || request.kind === 'rebuildCompare') {
       if (!this.db) { this.failure(request.id, new DriverFailure('SQLITE_NOT_OPEN', 'SQLite会话尚未打开')); return; }
       // 帧属于本次执行；父端每个新operation从0等待，旧执行ACK仍按id隔离。
       this.frame = 0;
       const active: Execution = { id: request.id, cancelled: false, results: [], bytes: 0 }; this.active = active;
-      void (request.kind === 'rebuildCompare' ? this.rebuildCompare(active, request) : this.execute(active, request)).catch(() => { this.port.exit(1); }); return;
+      const work = request.kind === 'rebuildCompare' ? this.rebuildCompare(active, request)
+        : request.kind === 'syntaxCheck' ? this.syntaxCheck(active, request.sql) : this.execute(active, request);
+      void work.catch(() => { this.port.exit(1); }); return;
     }
     if (request.kind === 'close') {
       if (this.rebuildWriter && this.transaction()) { this.failure(request.id, new DriverFailure('SQLITE_REBUILD_TRANSACTION_ACTIVE', 'SQLite重建事务尚未明确收束，正常关闭被拒绝；请先显式ROLLBACK或COMMIT')); return; }
@@ -253,6 +257,7 @@ export class SqliteWorkerCore {
         // 内部只编译固定的SELECT函数壳；函数内用户SQL的prepare必须重新经过原权限判断。
         if (this.preparingNativeControl) return action === constants.SQLITE_SELECT || action === constants.SQLITE_FUNCTION && nativeControl ? constants.SQLITE_OK : constants.SQLITE_DENY;
         if (action === constants.SQLITE_FUNCTION && nativeControl) return constants.SQLITE_DENY;
+        if (this.preparingSyntax && [constants.SQLITE_PRAGMA, constants.SQLITE_CREATE_VTABLE, constants.SQLITE_DROP_VTABLE].includes(action)) return constants.SQLITE_DENY;
         if (action === constants.SQLITE_ATTACH || action === constants.SQLITE_DETACH) return constants.SQLITE_DENY;
         if (action === constants.SQLITE_PRAGMA) {
           const restoring = this.restoringRebuildFlags && rebuild && source === null && (first === 'foreign_keys' && second === 'ON' || first === 'legacy_alter_table' && second === 'OFF');
@@ -340,6 +345,25 @@ export class SqliteWorkerCore {
   }
 
   /** 在任何用户step前完成参数和单语句约束；脚本每条仅消费原生确认的准确前缀。 */
+  /** 只读编译通道始终释放原材料，终态不携带用户 SQL 或原生错误原文。 */
+  private async syntaxCheck(active: Execution, sql: string): Promise<void> {
+    try {
+      if (this.rebuildWriter) throw invalid();
+      const before = this.transaction();
+      this.preparingSyntax = true;
+      const syntax = await checkSqliteSyntax(sql, source => SqliteRawStatement.prepare(this.nativeInvoke!, source), () => this.yield(active));
+      this.check(active);
+      const transaction = this.transaction();
+      if (transaction !== before) throw new DriverFailure('SQLITE_SYNTAX_TRANSACTION_CHANGED', 'SQLite 检查期间原生事务状态变化');
+      this.port.send({kind: 'completed', id: active.id, result: {statements: [], transaction, syntax}});
+    } catch (reason) {
+      if (!this.closing) {
+        if (active.cancelled) this.port.send({kind: 'cancelled', id: active.id, completedStatements: 0, transaction: this.transaction()});
+        else this.failure(active.id, reason instanceof DriverFailure ? reason : new DriverFailure('SQLITE_SYNTAX_UNAVAILABLE', 'SQLite 原生语法检查未完成'));
+      }
+    } finally { this.preparingSyntax = false; if (this.active === active) this.active = undefined; }
+  }
+
   private async execute(active: Execution, request: Extract<SqliteWorkerRequest, { kind: 'execute' | 'streamRead' }>): Promise<void> {
     let attemptedStart: number | undefined, nativeRange: QueryFailureSourceRange | undefined;
     try {

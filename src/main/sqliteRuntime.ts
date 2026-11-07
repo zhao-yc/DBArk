@@ -1346,6 +1346,7 @@ export class SqliteRuntime {
       case 'query.sessionState': return this.session(input.sessionId, true).query.state();
       case 'query.completionState': { const session = this.session(input.sessionId, true); return session.query.completionState(!!session.pending || !!session.userHandoff || session.closing || session.connection.closing || session.connection.blocked || this.stopping); }
       case 'query.parameterNames': { const session = this.session(input.sessionId); return this.userSessionOperation(session, async () => session.query.parameterNames(input as CommandMap['query.parameterNames']['input'])); }
+      case 'sqlite.syntaxCheck':
       case 'query.execute':
       case 'query.executeParameterized':
       case 'query.explain': {
@@ -1353,7 +1354,7 @@ export class SqliteRuntime {
         if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || input.taskId.startsWith(sqliteCompletionTaskPrefix) || input.taskId.startsWith(objectDefinitionTaskPrefix) || this.tasks.has(input.taskId) || this.completionReads.has(input.taskId) || this.definitionReads.has(input.taskId)) throw Error('SQLite任务编号无效或已经使用');
         const task: QueryTask = { kind: 'query', session, preparing: true, cancelled: false }; this.tasks.set(input.taskId, task);
         const check = () => { if (task.cancelled || this.tasks.get(input.taskId) !== task) throw Error('SQLite用户操作在会话交接期间已取消，尚未发送SQL'); };
-        const work = this.userSessionOperation(session, () => { check(); task.preparing = false; return command === 'query.explain' ? session.query.explain(input as CommandMap['query.explain']['input']) : command === 'query.executeParameterized' ? session.query.executeParameterized(input as CommandMap['query.executeParameterized']['input']) : session.query.execute(input as CommandMap['query.execute']['input']); }, check); task.active = work;
+        const work = this.userSessionOperation<unknown>(session, () => { check(); task.preparing = false; return command === 'sqlite.syntaxCheck' ? session.query.syntaxCheck(input as CommandMap['sqlite.syntaxCheck']['input']) : command === 'query.explain' ? session.query.explain(input as CommandMap['query.explain']['input']) : command === 'query.executeParameterized' ? session.query.executeParameterized(input as CommandMap['query.executeParameterized']['input']) : session.query.execute(input as CommandMap['query.execute']['input']); }, check); task.active = work;
         void work.then(() => { task.active = undefined; }, () => { task.active = undefined; }); return work;
       }
       case 'query.transaction': { const session = this.session(input.sessionId, input.action === 'rollback'); return this.userSessionOperation(session, () => session.query.transaction(input)); }

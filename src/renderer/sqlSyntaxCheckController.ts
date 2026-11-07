@@ -8,11 +8,12 @@ interface SyntaxWorker { syntax(source: string, mode: CompletionLexicalMode, sig
 interface Ports {
   source: string; sessionId?: string; current(): boolean; subscribe(changed: () => void): () => void;
   state(sessionId: string): Promise<CompletionSessionState>; create(): SyntaxWorker;
+  native?(signal: AbortSignal): Promise<SqlSyntaxCheckResult>;
   decorate(result: Extract<SqlSyntaxCheckResult, { status: 'ready' }>): void; clear(): void;
   changed(view: SqlSyntaxCheckView): void;
 }
 
-/** 单次检查仅借用原会话缓存；永久失效围栏阻止旧问题标记落到编辑后的模型。 */
+/** 单次检查绑定原来源。MySQL 路径读取模式缓存，SQLite 路径调用原生准备。来源失效后不发布旧标记。 */
 export class SqlSyntaxCheckController {
   private dead = false; private disposed = false; private started = false;
   private readonly abort = new AbortController();
@@ -60,6 +61,12 @@ export class SqlSyntaxCheckController {
       this.release = this.ports.subscribe(() => this.observe());
       if (!this.current()) return this.observe();
       this.clear(); this.publish({ busy: true });
+      if (this.ports.native) {
+        const result = await this.ports.native(this.abort.signal);
+        if (!this.current()) return this.observe();
+        this.showResult(result);
+        return;
+      }
       const cached = this.ports.sessionId ? { ...await this.ports.state(this.ports.sessionId) } : undefined;
       if (!this.current()) return this.observe();
       if (cached && (cached.busy || cached.broken || !['mysql', 'mariadb'].includes(cached.dialect ?? ''))) { this.publish({ busy: false, result: { status: 'blocked', reason: 'context' } }); return; }
@@ -74,10 +81,7 @@ export class SqlSyntaxCheckController {
         if (!this.current()) return this.observe();
         if (!sameCompletionState(cached!, latest)) { this.dead = true; return this.observe(); }
       }
-      if (!validSqlSyntaxCheckResult(result, this.source)) { this.publish({ busy: false, result: { status: 'blocked', reason: 'worker' } }); return; }
-      if (result.status === 'ready') this.ports.decorate(result);
-      if (!this.current()) return this.observe();
-      this.publish({ busy: false, result });
+      this.showResult(result);
     } catch {
       this.clear();
       if (!this.current()) this.observe();
@@ -85,7 +89,14 @@ export class SqlSyntaxCheckController {
     } finally { this.terminate(); }
   }
 
-  /** 用户取消立即终止所属线程，不影响用户查询、会话或其他检查。 */
+  private showResult(result: SqlSyntaxCheckResult): void {
+    if (!validSqlSyntaxCheckResult(result, this.source)) { this.publish({busy: false, result: {status: 'blocked', reason: 'worker'}}); return; }
+    if (result.status === 'ready') this.ports.decorate(result);
+    if (!this.current()) return this.observe();
+    this.publish({busy: false, result});
+  }
+
+  /** 取消只终止所属本地线程或请求停止原生准备任务。 */
   stop(): void { this.dead = true; this.abort.abort(); this.terminate(); this.release?.(); this.release = undefined; this.clear(); if (!this.disposed) this.publish({ busy: false, result: { status: 'blocked', reason: 'cancelled' } }); }
   /** 释放只撤销本轮标记和监听；旧dispose不能触及下一轮owner。 */
   dispose(): void { if (this.disposed) return; this.disposed = true; this.abort.abort(); this.terminate(); this.release?.(); this.release = undefined; this.clear(); }

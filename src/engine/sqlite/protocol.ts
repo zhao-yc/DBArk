@@ -1,3 +1,4 @@
+import type { SqlSyntaxCheckResult } from '../../shared/sqlSyntaxCheck';
 import { queryParameterLimits } from '../../shared/queryParameters';
 import type { QueryFailureSourceRange } from '../../shared/queryFailure';
 import type { SqliteRebuildComparisonInput, SqliteRebuildComparisonResult } from './rebuildComparison';
@@ -70,7 +71,7 @@ export interface SqliteStatementResult {
   /** 原生语句的完整行数与耗时，仅用户查询明确请求时返回。 */
   queryReceipt?: { producedRows: number; elapsedMs: number; sourceRange: QueryFailureSourceRange };
 }
-export interface SqliteExecutionResult { statements: SqliteStatementResult[]; transaction: boolean; comparison?: SqliteRebuildComparisonResult; }
+export interface SqliteExecutionResult { statements: SqliteStatementResult[]; transaction: boolean; comparison?: SqliteRebuildComparisonResult; syntax?: SqlSyntaxCheckResult; }
 export interface SqliteOpenOptions { path: string; readOnly: boolean; busyTimeoutMs: number; }
 export const sqliteCopySourceSchema = 'dbark_copy_source';
 /** 固定模式由 Main 独立任务注入，普通查询不能附加文件。 */
@@ -104,6 +105,7 @@ export type SqliteWorkerRequest =
   | ({ kind: 'streamRead'; id: string; sql: string; createGuard?: never; captureFailureRange?: never; captureQueryReceipt?: never; singleStatement?: never; options: SqliteStreamReadOptions } & (
     { querySource?: never; parameters: SqliteValue[]; namedParameters?: never } |
     { querySource: true; parameters?: never; namedParameters: Record<string, SqliteValue> }))
+  | { kind: 'syntaxCheck'; id: string; sql: string }
   | { kind: 'rebuildCompare'; id: string; input: SqliteRebuildComparisonInput }
   | { kind: 'ack'; id: string; frame: number }
   | { kind: 'cancel'; id: string }

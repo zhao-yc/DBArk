@@ -1,6 +1,6 @@
 /** 本地解析器只报告自身语法提示，不证明服务器版本、权限或对象有效。 */
 export const sqlSyntaxCheckLimits = { sourceUnits: 262144, tokens: 16384, depth: 64, issues: 100, statements: 256 } as const;
-export const sqlSyntaxIssueCodes = ['syntax', 'incomplete', 'unclosed-string', 'unclosed-identifier', 'unclosed-comment'] as const;
+export const sqlSyntaxIssueCodes = ['syntax', 'incomplete', 'unclosed-string', 'unclosed-identifier', 'unclosed-comment', 'sqlite-prepare', 'sqlite-unchecked', 'sqlite-incomplete'] as const;
 export const sqlSyntaxBlockedReasons = ['input', 'budget', 'mode', 'dynamic-mode', 'executable-comment', 'client-command', 'delimiter', 'unsupported', 'parser', 'position', 'stale', 'context', 'cancelled', 'worker', 'startup-timeout', 'timeout', 'disposed', 'replaced'] as const;
 export type SqlSyntaxIssueCode = typeof sqlSyntaxIssueCodes[number];
 export type SqlSyntaxBlockedReason = typeof sqlSyntaxBlockedReasons[number];

@@ -389,6 +389,7 @@ export interface CommandMap {
   'sqlite.referencePage': { input: import('./sqliteReference').SqliteReferenceInput; output: import('./sqliteReference').SqliteReferenceOutput };
   'sqlite.relationships': { input: import('./sqliteRelationships').SqliteRelationshipsInput; output: import('./sqliteRelationships').SqliteRelationshipsOutput };
   'sqlite.tableExport': { input: import('./sqliteTableExport').SqliteTableExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
+  'sqlite.syntaxCheck': { input: {sessionId: string; taskId: string; sql: string}; output: import('./sqlSyntaxCheck').SqlSyntaxCheckResult };
   'sqlite.queryExport': { input: import('./sqliteQueryExport').SqliteQueryExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
   'sqlite.queryExportParameterNames': { input: { sql: string }; output: QueryParameterNames };
   'sqliteDraftFiles.save': { input: { source: import('./sqliteTableEdit').SqliteTableEditPreviewInput; activeSnapshotId?: string }; output: { name: string } | null };

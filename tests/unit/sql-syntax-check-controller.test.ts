@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { SqlSyntaxCheckController, type SqlSyntaxCheckView } from '../../src/renderer/sqlSyntaxCheckController';
 import { checkMysqlSyntax } from '../../src/shared/mysqlSyntaxCheck';
 import type { CompletionSessionState } from '../../src/shared/sqlCompletion';
-import { validSqlSyntaxCheckResult } from '../../src/shared/sqlSyntaxCheck';
+import { validSqlSyntaxCheckResult, type SqlSyntaxCheckResult } from '../../src/shared/sqlSyntaxCheck';
 
 const source = 'SELECT * FROM;', mode = { ansiQuotes: false, noBackslashEscapes: false };
 it.each(['SELECT \0', 'SELECT \ud800'])('非法原文不能接受伪造的ready结果：%j', source => {
@@ -11,12 +11,12 @@ it.each(['SELECT \0', 'SELECT \ud800'])('非法原文不能接受伪造的ready�
 });
 /** 可控缓存和线程只验证生命周期；真实生产解析结果仍经过正式回包校验。 */
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
-function fixture(sessionId?: string) {
+function fixture(sessionId?: string, native?: (signal: AbortSignal) => Promise<SqlSyntaxCheckResult>) {
   let valid = true, observe: (() => void) | undefined;
   const views: SqlSyntaxCheckView[] = [], result = checkMysqlSyntax(source, mode), decorate = vi.fn(), clear = vi.fn(), dispose = vi.fn();
   const state = vi.fn(async (): Promise<CompletionSessionState> => ({ ...mode, dialect: 'mysql', database: 'original', databaseKnown: true, busy: false, broken: false, objectsRevision: 0 }));
   const syntax = vi.fn(async () => result), worker = { syntax, dispose }, create = vi.fn(() => worker), release = vi.fn();
-  const controller = new SqlSyntaxCheckController({ source, sessionId, current: () => valid, subscribe: changed => { observe = changed; return release; }, state, create, decorate, clear, changed: view => views.push(view) });
+  const controller = new SqlSyntaxCheckController({ source, sessionId, current: () => valid, subscribe: changed => { observe = changed; return release; }, state, create, native, decorate, clear, changed: view => views.push(view) });
   return { controller, result, syntax, state, create, decorate, clear, dispose, release, views, change: (next: boolean) => { valid = next; observe?.(); }, observe: () => observe?.() };
 }
 it('无会话检查不建立连接或读缓存，原输入只在线程分析中出现一次', async () => {
@@ -50,4 +50,31 @@ it('原线程不合法回包不能注入SQL或任意标记字段', async () => {
 });
 it('绘制失败仍清除所属标记并释放原线程', async () => {
   const f = fixture(); f.decorate.mockImplementation(() => { throw Error('本例绘制失败'); }); await f.controller.start(); expect(f.views.at(-1)?.result).toEqual({ status: 'blocked', reason: 'worker' }); expect(f.dispose).toHaveBeenCalledOnce(); expect(f.clear.mock.calls.length).toBeGreaterThanOrEqual(2); f.controller.dispose();
+});
+
+
+it('SQLite 原生结果不调用 MySQL 解析器或模式缓存，仍校验原文范围', async () => {
+  const native = vi.fn(async (): Promise<SqlSyntaxCheckResult> => ({
+    status: 'ready', statementCount: 1, issues: [{code: 'sqlite-prepare', start: 0, end: source.length}],
+  }));
+  const f = fixture('sqlite-original', native);
+  await f.controller.start();
+  expect(native).toHaveBeenCalledOnce();
+  expect(f.create).not.toHaveBeenCalled();
+  expect(f.state).not.toHaveBeenCalled();
+  expect(f.decorate).toHaveBeenCalledOnce();
+  f.controller.dispose();
+});
+
+it('原生检查失效时取消准确任务，迟到结果不重画标记', async () => {
+  const pending = deferred<SqlSyntaxCheckResult>();
+  const native = vi.fn((_signal: AbortSignal) => pending.promise);
+  const f = fixture('sqlite-original', native), work = f.controller.start();
+  await Promise.resolve();
+  f.change(false);
+  expect(native.mock.calls[0][0].aborted).toBe(true);
+  pending.resolve({status: 'ready', statementCount: 1, issues: []});
+  await work;
+  expect(f.decorate).not.toHaveBeenCalled();
+  expect(f.views.at(-1)?.result).toEqual({status: 'blocked', reason: 'stale'});
 });
