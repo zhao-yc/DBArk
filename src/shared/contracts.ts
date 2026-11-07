@@ -1,6 +1,7 @@
 import type { ObjectDefinitionInput, ObjectDefinitionOutput } from './objectDefinition';
 import type { PostgresTransactionApplyInput, PostgresTransactionSnapshot } from './postgresTransactionSettings';
 import type { PostgresSearchPathApplyInput, PostgresSearchPathSnapshot } from './postgresSearchPath';
+import type { PostgresQueryTimeoutApply, PostgresQueryTimeoutSnapshot } from './postgresQueryTimeouts';
 import type { QueryFileCheckInput, QueryFileCheckResult, QueryFileReloadInput, QueryFileReloadResult, QueryFileDiscardInput } from './queryFileReload';
 import type { SqliteCompletionInput, SqliteCompletionOutput } from './sqliteCompletion';
 import type { UiCommandInvocation, UiMenuState, ObjectCategory } from './uiCommands';
@@ -250,6 +251,8 @@ export interface CommandMap {
   'postgres.transactionSettings.apply': {input: PostgresTransactionApplyInput; output: PostgresTransactionSnapshot};
   'postgres.searchPath.read': {input: {sessionId: string; taskId: string}; output: PostgresSearchPathSnapshot};
   'postgres.searchPath.apply': {input: PostgresSearchPathApplyInput; output: PostgresSearchPathSnapshot};
+  'postgres.queryTimeouts.read': {input: {sessionId: string; taskId: string}; output: PostgresQueryTimeoutSnapshot};
+  'postgres.queryTimeouts.apply': {input: PostgresQueryTimeoutApply; output: PostgresQueryTimeoutSnapshot};
   'postgres.analyzePreview': { input: { sessionId: string; sql: string; currentStatement?: { offset: number } }; output: { token: string; source: string } };
   'postgres.analyze': { input: { sessionId: string; token: string; taskId: string; acknowledged: true }; output: QueryOutcome };
   'postgres.analyzeDiscard': { input: { sessionId: string; token: string }; output: void };

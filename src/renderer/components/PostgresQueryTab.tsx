@@ -69,6 +69,8 @@ import { PostgresTransactionSettingsDialog } from './PostgresTransactionSettings
 import { postgresTransactionSettingsZh as transactionText } from '../locales/postgresTransactionSettings.zh-CN';
 import { PostgresSearchPathDialog } from './PostgresSearchPathDialog';
 import { postgresSearchPathZh as searchPathText } from '../locales/postgresSearchPath.zh-CN';
+import { PostgresQueryTimeoutsDialog } from './PostgresQueryTimeoutsDialog';
+import { postgresQueryTimeoutsZh as timeoutText } from '../locales/postgresQueryTimeouts.zh-CN';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
 import { PostgresNoticesPanel } from './PostgresNoticesPanel';
@@ -224,7 +226,7 @@ export function PostgresQueryTab({
   const failureSource = useRef<QueryFailureSourceLease | undefined>(undefined);
   const [, refreshFailureSource] = useState(0);
   const [continueOnError, setContinueOnError] = useState(false);
-  const [sessionSetting, setSessionSetting] = useState<{intent: QueryTransactionSettingsIntent; scope: Scope; mode: 'transaction' | 'search-path'}>();
+  const [sessionSetting, setSessionSetting] = useState<{intent: QueryTransactionSettingsIntent; scope: Scope; mode: 'transaction' | 'search-path' | 'timeouts'; changed: string}>();
   const sessionSettingRef = useRef(sessionSetting); sessionSettingRef.current = sessionSetting;
   const scriptFailureRanges = useRef(new Set<QueryFailure>());
   const noticeRanges = useRef(new Set<PostgresNoticeEntry>());
@@ -681,14 +683,15 @@ export function PostgresQueryTab({
     if (!available()) return;
     try {
       const original = scope;
+      const changed = {transaction: transactionText.changed, 'search-path': searchPathText.changed, timeouts: timeoutText.changed}[mode];
       const intent = new QueryTransactionSettingsIntent(() => {
         const now = useWorkspace.getState(), current = currentTab();
         return {tabId: tab.id, connectionId: current?.connectionId ?? tab.connectionId,
           connectionVersion: now.connectionVersions[tab.connectionId] ?? 0,
           connection: now.connections.find(item => item.id === current?.connectionId), sessionId: session.current?.id ?? '',
           present: same(original), active: now.settings.activeTabId === tab.id, closing: !!closeRef.current};
-      }, changed => useWorkspace.subscribe(changed), mode === 'transaction' ? transactionText.changed : searchPathText.changed);
-      const owner = {intent, scope: original, mode}; sessionSettingRef.current = owner; setSessionSetting(owner);
+      }, listener => useWorkspace.subscribe(listener), changed);
+      const owner = {intent, scope: original, mode, changed}; sessionSettingRef.current = owner; setSessionSetting(owner);
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 元数据请求保留原结果和历史，所有等待边界核对原弹窗及物理会话。 */
@@ -696,8 +699,7 @@ export function PostgresQueryTab({
     send: (request: {sessionId: string; taskId: string}) => Promise<T>): Promise<T> {
     const assertCurrent = () => {
       owner.intent.assertCurrent();
-      if (sessionSettingRef.current !== owner || !same(owner.scope))
-        throw Error(owner.mode === 'transaction' ? transactionText.changed : searchPathText.changed);
+      if (sessionSettingRef.current !== owner || !same(owner.scope)) throw Error(owner.changed);
     };
     assertCurrent();
     if (phase.current || useWorkspace.getState().activeJobs[tab.id]) throw Error('原标签已有活动作业');
@@ -1774,6 +1776,7 @@ export function PostgresQueryTab({
             </button>
             <button disabled={!editable} onClick={() => openSessionSetting('transaction')}>{transactionText.open}</button>
             <button disabled={!editable} onClick={() => openSessionSetting('search-path')}>{searchPathText.open}</button>
+            <button disabled={!editable} onClick={() => openSessionSetting('timeouts')}>{timeoutText.open}</button>
             {snapshotActions}
           </div>
         )}
@@ -2065,6 +2068,10 @@ export function PostgresQueryTab({
       {sessionSetting?.mode === 'search-path' && <PostgresSearchPathDialog intent={sessionSetting.intent}
         onRead={() => requestSessionSetting(sessionSetting, request => invoke('postgres.searchPath.read', request))}
         onApply={(expected, change) => requestSessionSetting(sessionSetting, request => invoke('postgres.searchPath.apply', {...request, expected, change}))}
+        onClose={() => closeSessionSetting(sessionSetting)} />}
+      {sessionSetting?.mode === 'timeouts' && <PostgresQueryTimeoutsDialog intent={sessionSetting.intent}
+        onRead={() => requestSessionSetting(sessionSetting, request => invoke('postgres.queryTimeouts.read', request))}
+        onApply={(expected, change) => requestSessionSetting(sessionSetting, request => invoke('postgres.queryTimeouts.apply', {...request, expected, change}))}
         onClose={() => closeSessionSetting(sessionSetting)} />}
       {snippets && <SnippetsDialog dialect="postgresql" initialSql={snippets.initialSql} startWithDraft={snippets.create}
         onInsert={insertSnippet} onClose={closeSnippets} />}

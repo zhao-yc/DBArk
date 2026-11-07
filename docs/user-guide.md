@@ -544,6 +544,8 @@ PostgreSQL 查询页的「事务默认设置」可[读取并设置本会话后�
 
 在 PostgreSQL 查询页打开「会话搜索路径」，可查看配置路径和实际查找顺序。选中 schema 可追加到末尾，也可直接编辑优先级。点「应用本会话路径」后会读回实际值。该窗口仅在原事务空闲时读取和修改，其他查询标签使用各自的路径。[PostgreSQL 会话搜索路径](development/postgres-search-path-20261107.md)
 
+在 PostgreSQL 查询页打开「查询超时」，可为当前会话设置语句超时和锁等待超时。以毫秒填写，0 表示禁用相应超时。可恢复服务器为该会话提供的默认值，修改后会读回实际设置。[PostgreSQL 会话查询超时](development/postgres-query-timeouts-20261107.md)
+
 PostgreSQL 查询收到 NOTICE 或 WARNING 等服务端消息时，在当前结果中展开「服务端消息」。可搜索消息、展开详情、提示或上下文，也可定位对应原语句。查询失败前已收到的消息仍可查看；位置参数执行只显示级别和 SQLSTATE。[PostgreSQL 查询服务端消息](development/postgres-query-notices-20261107.md)
 
 PostgreSQL 当前查询结果会显示语句序号、服务器回执、服务端计数及本条耗时。行结果还会显示客户端实际接收的行数。开启「遇错继续」时，结果选择器保留原序号，失败语句的序号可在错误摘要中找到。底栏显示本次执行总耗时。[PostgreSQL 查询回执](development/postgres-query-receipts-20261107.md)

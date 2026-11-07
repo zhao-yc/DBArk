@@ -15,6 +15,7 @@ import { postgresParameterValues } from './parameters';
 import { PostgresNoticeCollector } from './notices';
 import { readPostgresTransactionSettings, applyPostgresTransactionSettings } from './transactionSettings';
 import { readPostgresSearchPath, applyPostgresSearchPath } from './searchPath';
+import { readPostgresQueryTimeouts, applyPostgresQueryTimeouts } from './queryTimeouts';
 import { canContinuePostgresQueryError, postgresQueryErrorMessage } from './queryContinue';
 import { queryContinueOnErrorLimits, queryScriptReportSummary, truncateQueryScriptMessage, type QueryScriptReport } from '../../shared/queryContinueOnError';
 import {
@@ -1474,6 +1475,12 @@ export class PostgresEngine {
           command === 'postgres.searchPath.apply'
             ? applyPostgresSearchPath(session.managed, input.expected, input.change, check)
             : readPostgresSearchPath(session.managed, check)), true);
+      case 'postgres.queryTimeouts.read':
+      case 'postgres.queryTimeouts.apply':
+        return this.session(input.sessionId, session => this.sessionSetting(session, input, '查询超时', check =>
+          command === 'postgres.queryTimeouts.apply'
+            ? applyPostgresQueryTimeouts(session.managed, input.expected, input.change, check)
+            : readPostgresQueryTimeouts(session.managed, check)), true);
       case 'metadata.databases':
         return this.use(this.profile(input.connectionId), undefined, async (m) =>
           (

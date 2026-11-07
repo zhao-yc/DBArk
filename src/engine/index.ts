@@ -244,7 +244,7 @@ export class Engine {
       else await this.cancelTask(input.taskId);
       return this.dataSearches.release(input);
     }
-    const postgresSessionSetting = command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.');
+    const postgresSessionSetting = command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.') || command.startsWith('postgres.queryTimeouts.');
     if (command === '__connections.prepareSave') this.postgres.prepareSave(input);
     else if (postgresSessionSetting || command.startsWith('postgres.compareData') || command === 'postgres.explain' || command.startsWith('postgres.analyze') || command === 'postgres.completion' || command.startsWith('postgres.routine.') || command.startsWith('postgres.structure.') || command.startsWith('postgres.sequence.') || command.startsWith('postgres.createTable.') || command.startsWith('postgres.createView.') || command.startsWith('postgres.editView.') || command.startsWith('postgres.viewManage.') || command.startsWith('postgres.materializedRefresh.') || command.startsWith('postgres.columnEdit.') || command.startsWith('postgres.indexEdit.') || command.startsWith('postgres.keyEdit.') || command.startsWith('postgres.foreignEdit.') || command.startsWith('postgres.checkEdit.') || command.startsWith('postgres.table.') || this.postgres.accepts(input)) {
       if (this.closing && !['connections.close', 'sessions.close', 'query.cancel', 'query.sessionState', 'postgres.table.release'].includes(command)) {

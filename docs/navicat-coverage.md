@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 查询标签可分别设置原会话语句超时和锁等待超时，读回实际毫秒值或恢复会话默认值。Q02、R01 仍为部分覆盖。[PostgreSQL 会话查询超时](development/postgres-query-timeouts-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 查询标签可查看并修改原会话搜索路径，从可用 schema 追加名称，并读回实际查找顺序或恢复会话默认路径。Q02、R01 仍为部分覆盖。[PostgreSQL 会话搜索路径](development/postgres-search-path-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 当前回执可直接查看实际结果 SQL，也可按执行时的范围定位原语句。草稿变化后仍能查看旧 SQL，旧范围停止定位。Q02、R01 仍为部分覆盖。[PostgreSQL 结果来源](development/postgres-result-source-20261107.md)

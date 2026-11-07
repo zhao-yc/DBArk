@@ -1086,7 +1086,7 @@ async function applySqliteSync(input: import('../shared/sqliteTableEdit').Sqlite
 
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
-  if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.')) {
+  if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.') || command.startsWith('postgres.queryTimeouts.')) {
     const session = sessions.get(input.sessionId);
     // 会话能力保留原事务和临时对象来源，仅允许创建该会话的真实文档发起。
     if (shuttingDown || !session?.postgres || session.postgres.closing || !columns ||
@@ -3002,7 +3002,7 @@ else {
         if (payload.command === 'app.menuState' || payload.command.startsWith('postgres.backup.') || payload.command.startsWith('mysql.backup.') ||
             payload.command === 'query.cancel' && (['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
               ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
-        if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') ||
+        if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') || payload.command.startsWith('postgres.transactionSettings.') || payload.command.startsWith('postgres.searchPath.') || payload.command.startsWith('postgres.queryTimeouts.') ||
             payload.command === 'postgres.completion' || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') || payload.command.startsWith('mysql.sqlFile.') ||
             payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);

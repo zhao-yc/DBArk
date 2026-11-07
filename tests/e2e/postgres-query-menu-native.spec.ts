@@ -21,6 +21,7 @@ import { queryPartialOutcomeZh as partialText } from '../../src/renderer/locales
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { postgresTransactionSettingsZh as transactionText } from '../../src/renderer/locales/postgresTransactionSettings.zh-CN';
 import { postgresSearchPathZh as searchPathText } from '../../src/renderer/locales/postgresSearchPath.zh-CN';
+import { postgresQueryTimeoutsZh as timeoutText } from '../../src/renderer/locales/postgresQueryTimeouts.zh-CN';
 import { postgresNoticesZh as noticesText } from '../../src/renderer/locales/postgresNotices.zh-CN';
 import { postgresNoticeHiddenMessage } from '../../src/shared/postgresNotices';
 
@@ -85,6 +86,69 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 查询超时分别中止慢语句和锁等待并可恢复', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const dialog = () => page.getByRole('dialog', {name: timeoutText.title, exact: true});
+  const toolbar = () => tab().getByRole('button', {name: timeoutText.open, exact: true});
+  const field = (name: string) => dialog().getByLabel(name, {exact: true});
+  const button = (name: string) => dialog().getByRole('button', {name, exact: true});
+  const open = async () => { await toolbar().click(); await expect(dialog()).toContainText(timeoutText.ready); };
+  const close = () => button(timeoutText.close).click();
+  const grid = () => tab().locator('.postgres-results .rdg');
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const sessions = async () => (await observer.query("SELECT pid, state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+  const records = async () => (await observer.query('SELECT value FROM public.query_timeout_guard')).rows.map(row => row.value);
+  try {
+    await observer.query('CREATE TABLE public.query_timeout_guard (value int)');
+    await observer.query('INSERT INTO public.query_timeout_guard VALUES (1)');
+    await prepare({id: '', name: '隔离 PostgreSQL 查询超时', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, "SELECT '原结果' AS value;");
+    await command('execute-all'); await expect(grid()).toContainText('原结果');
+    const baseline = await history(), original = await sessions(); expect(original).toHaveLength(1);
+    await expect(toolbar()).toBeVisible(); await open();
+    const defaults = [await field(timeoutText.statement).inputValue(), await field(timeoutText.lock).inputValue()];
+    await field(timeoutText.statement).fill('1.5');
+    await expect(dialog()).toContainText(timeoutText.invalid);
+    await expect(button(timeoutText.apply)).toBeDisabled();
+    await field(timeoutText.statement).fill('600'); await field(timeoutText.lock).fill('150');
+    await button(timeoutText.apply).click(); await expect(dialog()).toContainText(timeoutText.applied);
+    await expect(field(timeoutText.statement)).toHaveValue('600'); await expect(field(timeoutText.lock)).toHaveValue('150');
+    await page.screenshot({path: info.outputPath('PostgreSQL会话查询超时.png')});
+    await close();
+    expect(await history()).toEqual(baseline); expect(await sessions()).toEqual(original);
+    await expect(grid()).toContainText('原结果');
+
+    const choice = tab().getByRole('checkbox', {name: continueText.option, exact: true});
+    await replaceDraft('SELECT pg_sleep(2); INSERT INTO public.query_timeout_guard VALUES (9);');
+    await choice.check(); await command('execute-all');
+    await expect(tab()).toContainText('statement timeout'); await expect(tab()).toContainText(continueText.counts(1, 0, 1));
+    expect(await records()).toEqual([1]);
+    await choice.uncheck();
+    await observer.query('BEGIN'); await observer.query('SELECT * FROM public.query_timeout_guard FOR UPDATE');
+    await replaceDraft('UPDATE public.query_timeout_guard SET value = 2;'); await command('execute-all');
+    await expect(tab()).toContainText('lock timeout');
+    expect(await records()).toEqual([1]); await observer.query('ROLLBACK');
+    await expect.poll(sessions).toEqual(original);
+
+    await page.locator('.tab-strip').getByText('另一 PostgreSQL 查询', {exact: true}).click();
+    await open();
+    await expect(field(timeoutText.statement)).toHaveValue(defaults[0]); await expect(field(timeoutText.lock)).toHaveValue(defaults[1]); await close();
+    await page.locator('.tab-strip').getByText('原 PostgreSQL 查询', {exact: true}).click();
+    await open(); await expect(field(timeoutText.statement)).toHaveValue('600');
+    await button(timeoutText.reset).click(); await expect(dialog()).toContainText(timeoutText.applied);
+    await expect(field(timeoutText.statement)).toHaveValue(defaults[0]); await expect(field(timeoutText.lock)).toHaveValue(defaults[1]); await close();
+    await command('execute-all');
+    await expect(tab().getByRole('group', {name: postgresZh.receipt, exact: true})).toContainText('服务器回执 UPDATE');
+    expect(await records()).toEqual([2]); expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 会话搜索路径显示实际优先级并隔离查询标签', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');

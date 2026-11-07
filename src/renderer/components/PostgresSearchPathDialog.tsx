@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { postgresIdentifier } from '../../shared/postgresSql';
 import { postgresSearchPathLimit, postgresSearchPathSnapshotSchema,
   type PostgresSearchPathChange, type PostgresSearchPathSnapshot } from '../../shared/postgresSearchPath';
 import type { QueryTransactionSettingsIntent } from '../queryTransactionSettingsIntent';
 import { postgresSearchPathZh as text } from '../locales/postgresSearchPath.zh-CN';
-import { errorMessage } from '../lib';
+import { usePostgresSessionSetting } from '../usePostgresSessionSetting';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 /** 只有本窗口最近一次读回的快照可应用。异常和来源变化后须重新读取或打开。 */
@@ -14,56 +14,13 @@ export function PostgresSearchPathDialog({intent, onRead, onApply, onClose}: {
   onApply(expected: PostgresSearchPathSnapshot, change: PostgresSearchPathChange): Promise<PostgresSearchPathSnapshot>;
   onClose(): void;
 }) {
-  const mounted = useRef(false), running = useRef(false), generation = useRef(0);
-  const fresh = useRef<PostgresSearchPathSnapshot | undefined>(undefined);
-  const [snapshot, setSnapshot] = useState<PostgresSearchPathSnapshot>();
   const [path, setPath] = useState(''), [candidate, setCandidate] = useState('');
-  const [pending, setPending] = useState(false), [invalid, setInvalid] = useState(false);
-  const [status, setStatus] = useState(''), [error, setError] = useState('');
-
-  async function request(change?: PostgresSearchPathChange) {
-    if (!mounted.current || running.current || !intent.current()) return;
-    const before = change ? fresh.current : undefined;
-    if (change && (!before || snapshot !== before)) return;
-    const epoch = ++generation.current;
-    running.current = true;
-    fresh.current = undefined;
-    setPending(true);
-    setError('');
-    setStatus(change ? text.applying : text.loading);
-    try {
-      const next = postgresSearchPathSnapshotSchema.parse(await (change ? onApply(before!, change) : onRead()));
-      if (!mounted.current || generation.current !== epoch) return;
-      intent.assertCurrent();
-      fresh.current = next;
-      setSnapshot(next);
-      setPath(next.path);
-      setCandidate('');
-      setStatus(change ? text.applied : text.ready);
-    } catch (reason) {
-      if (mounted.current && generation.current === epoch) {
-        setError(errorMessage(reason));
-        setStatus('');
-      }
-    } finally {
-      if (mounted.current && generation.current === epoch) {
-        running.current = false;
-        setPending(false);
-      }
-    }
-  }
-
-  useEffect(() => {
-    mounted.current = true;
-    running.current = false;
-    const unsubscribe = intent.subscribe(() => { fresh.current = undefined; setInvalid(true); });
-    void request();
-    return () => { mounted.current = false; generation.current++; unsubscribe(); };
-  }, [intent]);
-
-  const editable = !pending && !invalid && !!fresh.current;
+  const {snapshot, pending, invalid, status, error, editable, request, close} = usePostgresSessionSetting({
+    intent, onRead, onApply, onClose, text,
+    parse: value => postgresSearchPathSnapshotSchema.parse(value),
+    onSnapshot: next => { setPath(next.path); setCandidate(''); },
+  });
   const appended = candidate ? (path.trimEnd() ? path.trimEnd() + ', ' : '') + postgresIdentifier(candidate) : '';
-  function close() { if (!running.current) onClose(); }
   return <Modal title={text.title} wide onClose={close}>
     <div className="modal-content">
       <p>{text.intro}</p>
@@ -88,7 +45,7 @@ export function PostgresSearchPathDialog({intent, onRead, onApply, onClose}: {
         </ol> : <p>{text.effectiveEmpty}</p>}
       </>}
       <p role="status">{pending ? <Spinner text={status}/> : status}</p>
-      <ErrorBox message={invalid ? text.changed : error}/>
+      <ErrorBox message={error}/>
     </div>
     <footer className="modal-footer">
       <button disabled={pending || invalid} onClick={() => void request()}>{text.refresh}</button>
