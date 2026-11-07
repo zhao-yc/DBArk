@@ -110,3 +110,43 @@ describe('SQLite完整导出Main来源与文件能力', () => {
     }
   });
 });
+
+describe('SQLite 查询导出 IPC', () => {
+  const request = {
+    connectionId: profile.id, taskId: 'export-query', fileToken: 'chosen', format: 'csv', encoding: 'utf8',
+    sql: 'SELECT :marker AS value', parameters: [{name: 'marker', type: 'text', value: '本次原值'}],
+  };
+  it('只接受文件令牌和有界模板，持久概要不回显 SQL、参数、路径或错误原文', () => {
+    expect(validateCommand('sqlite.queryExport', request)).toEqual(request);
+    for (const patch of [{filePath: '任意路径'}, {profile}, {format: 'xlsx'}, {format: 'json', csvDelimiter: ';'},
+      {parameters: [{name: 'marker', type: 'integer', value: '9223372036854775808'}]}]) {
+      expect(() => validateCommand('sqlite.queryExport', {...request, ...patch})).toThrow();
+    }
+    expect(persistedTaskMessage('sqlite.queryExport', {taskId: request.taskId, status: 'failed', progress: 0, message: request.sql + ' 本次原值 私有路径'}))
+      .toBe(sqliteTableExportMessages.failed);
+  });
+
+  it('保存令牌解析后绑定原主文档，换代时只取消原导出', async () => {
+    const f = fixture(), response = deferred();
+    f.request.mockImplementation(async (command, value) => {
+      if (command === 'query.cancel') return;
+      expect(command).toBe('sqlite.queryExport');
+      expect(value).toMatchObject({...request, filePath: 'selected.csv'});
+      value.assertCurrent();
+      await value.validateDestination();
+      return response.promise;
+    });
+    const work = f.run('sqlite.queryExport', request);
+    const rejected = expect(work).rejects.toThrow();
+    await flush();
+    expect(f.owners.has(request.taskId)).toBe(true);
+    f.setRevision(8);
+    f.owners.observe();
+    await flush();
+    expect(f.request.mock.calls.filter(([command]) => command === 'query.cancel')).toEqual([['query.cancel', {taskId: request.taskId}]]);
+    response.reject(Error('原导出已结束'));
+    await rejected;
+    expect(f.release).toHaveBeenCalledOnce();
+    expect(f.owners.has(request.taskId)).toBe(false);
+  });
+});

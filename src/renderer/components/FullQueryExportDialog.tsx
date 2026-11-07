@@ -6,19 +6,23 @@ import type { QueryParameter } from '../../shared/queryParameters';
 import { acquireWorkspaceBusy, useWorkspace } from '../store';
 import { errorMessage, invoke, uid } from '../lib';
 import { zh } from '../locales/zh-CN';
-import { postgresQueryExportZh as text } from '../locales/postgresQueryExport.zh-CN';
+import { postgresQueryExportZh } from '../locales/postgresQueryExport.zh-CN';
+import { sqliteQueryExportZh } from '../locales/sqliteQueryExport.zh-CN';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { postgresZh } from '../locales/postgres.zh-CN';
 
-export interface PostgresQueryExportSource {
+export interface FullQueryExportSource {
+  dialect?: 'sqlite';
   tabId: string; connectionId: string; database: string; sql: string;
   current(): boolean;
 }
 
 /** 文件授权与实际导出各持有当前来源，变更格式或执行一次后需重新选择文件。 */
-export function PostgresQueryExportDialog({source, onClose}: {source: PostgresQueryExportSource; onClose(): void}) {
+export function FullQueryExportDialog({source, onClose}: {source: FullQueryExportSource; onClose(): void}) {
+  const sqlite = source.dialect === 'sqlite';
+  const text = sqlite ? sqliteQueryExportZh : postgresQueryExportZh;
   const [format, setFormat] = useState<PostgresQueryExportInput['format']>('csv');
   const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
@@ -63,9 +67,10 @@ export function PostgresQueryExportDialog({source, onClose}: {source: PostgresQu
     try {
       job = acquireWorkspaceBusy(source.tabId);
       if (!current()) throw Error(text.changed);
-      const result = await invoke('postgres.query.export', {connectionId: source.connectionId, database: source.database,
-        sql: source.sql, taskId, fileToken: file.token, format, encoding, ...csvExportOptions(format, delimiter),
-        ...(parameters ? {parameters} : {})});
+      const input = {connectionId: source.connectionId, sql: source.sql, taskId, fileToken: file.token,
+        format, encoding, ...csvExportOptions(format, delimiter), ...(parameters ? {parameters} : {})};
+      const result = sqlite ? await invoke('sqlite.queryExport', input)
+        : await invoke('postgres.query.export', {...input, database: source.database});
       if (alive.current) setRows(result.rows);
     } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
     finally {
@@ -81,9 +86,9 @@ export function PostgresQueryExportDialog({source, onClose}: {source: PostgresQu
     catch (reason) { if (alive.current) { setError(errorMessage(reason)); setCancelling(false); } }
   }
 
-  if (editingParameters) return <QueryParametersDialog source={source.sql} syntaxHint={postgresZh.parameterHint}
+  if (editingParameters) return <QueryParametersDialog source={source.sql} syntaxHint={sqlite ? sqliteQueryExportZh.parameterHint : postgresZh.parameterHint}
     initialParameters={parameters} submitLabel={text.applyParameters}
-    loadNames={() => Promise.resolve(postgresExportParameterNames(source.sql))}
+    loadNames={() => sqlite ? invoke('sqlite.queryExportParameterNames', {sql: source.sql}) : Promise.resolve(postgresExportParameterNames(source.sql))}
     onClose={() => setEditingParameters(false)} onExecute={values => {
       if (!current()) throw Error(text.changed);
       setParameters(values.map(value => ({...value}))); setFile(null); setRows(undefined); setEditingParameters(false);
@@ -100,6 +105,7 @@ export function PostgresQueryExportDialog({source, onClose}: {source: PostgresQu
         onChange={event => { setFormat(event.target.value === 'json' ? 'json' : 'csv'); setFile(null); setRows(undefined); }}>
         <option value="csv">CSV</option><option value="json">JSON</option>
       </select></Field>
+      {sqlite && <p>{sqliteQueryExportZh.formatHint}</p>}
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={encoding} disabled={!!pending}
         onChange={event => { const value = event.target.value; if (value === 'utf8' || value === 'utf16le' || value === 'gb18030') setEncoding(value); }}>
         <option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option>

@@ -36,7 +36,7 @@ export function persistedTaskMessage(command: string, event: TaskEvent): string 
   if (command === 'sqlite.tableCreate.preview') return event.status === 'completed' ? 'SQLite建表预览已生成，尚未写入；设计、SQL和默认值未保存。' : 'SQLite建表预览未交付；设计、SQL和默认值未保存。';
   if (command === 'sqlite.tableEdit.apply') return event.status === 'completed' ? sqliteTableEditMessages.committed : event.status === 'running' ? sqliteTableEditMessages.running : sqliteTableEditMessages.unknown;
   if (command === 'sqlite.tableEdit.preview') return event.status === 'completed' ? 'SQLite修改预览已生成，尚未提交；原值和SQL未保存到任务概要。' : 'SQLite修改预览未提交；原值和SQL未保存到任务概要。';
-  if (command === 'sqlite.tableExport') return event.status === 'completed' ? sqliteTableExportMessages.completed : event.status === 'running' ? sqliteTableExportMessages.running : sqliteTableExportMessages.failed;
+  if (command === 'sqlite.tableExport' || command === 'sqlite.queryExport') return event.status === 'completed' ? sqliteTableExportMessages.completed : event.status === 'running' ? sqliteTableExportMessages.running : sqliteTableExportMessages.failed;
   if (command === 'files.preflight') return event.status === 'completed' ? '整文件导入预检已结束；未写入数据库，报告仅在当前窗口保留，字段名、字段值、文件路径和错误原文未保存。' : event.status === 'running' ? '正在只读预检导入文件；字段名、字段值、文件路径和错误原文未保存。' : '整文件导入预检未正常完成；未写入数据库，字段名、字段值、文件路径和错误原文未保存，请在当前窗口核对。';
   if (command.startsWith('table.filteredDelete.')) {
     const progress = event.tableFilteredDelete;

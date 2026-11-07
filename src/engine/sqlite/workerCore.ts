@@ -345,10 +345,13 @@ export class SqliteWorkerCore {
     try {
       const { sql, options } = request;
       const stream = request.kind === 'streamRead';
+      const querySource = stream && request.querySource === true;
       if (stream && !this.readOnly) throw new DriverFailure('SQLITE_STREAM_REQUIRES_READONLY', 'SQLite完整流读取只允许物理只读连接');
       if (typeof sql !== 'string' || !unicode(sql) || Buffer.byteLength(sql) > limits.sqlBytes || !object(options) || !integer(options.batchRows, 1, limits.batchRows)
         || !stream && (!integer(options.maxRows, 1, limits.rows) || !integer(options.maxBytes, 1, limits.resultBytes))) throw invalid();
-      if (stream && Object.hasOwn(request, 'namedParameters') || request.namedParameters !== undefined && request.parameters !== undefined) throw invalidNamedParameters();
+      if (querySource && (request.namedParameters === undefined || Object.hasOwn(request, 'parameters')) ||
+        stream && !querySource && (Object.hasOwn(request, 'querySource') || Object.hasOwn(request, 'namedParameters')) ||
+        request.namedParameters !== undefined && request.parameters !== undefined) throw invalidNamedParameters();
       const named = request.namedParameters === undefined ? undefined : namedParameters(sql, request.namedParameters);
       if (request.parameters !== undefined && (!Array.isArray(request.parameters) || request.parameters.length > limits.columns)) throw invalid();
       const parameters = request.parameters?.map(parameter);
@@ -367,7 +370,11 @@ export class SqliteWorkerCore {
       let heading = 0;
       const afterDelimiter = (next: number) => { heading = next; };
       let offset = skipTrivia(sql, 0, afterDelimiter);
-      if (stream && (!Array.isArray(request.parameters) || !/^SELECT\b/i.test(sql.slice(offset)))) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite完整流读取只接受单条SELECT');
+      if (querySource) {
+        // 原生只读授权还会在 prepare 时拒绝 WITH 后接写语句；其尾部必须在首次 step 前核完。
+        while (sql[offset] === '\uFEFF') offset = skipTrivia(sql, offset + 1);
+        if (!/^(?:SELECT|WITH)(?![A-Za-z0-9_$\u0080-\uFFFF])/i.test(sql.slice(offset))) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite 查询导出只接受单条只读 SELECT 或 WITH 查询');
+      } else if (stream && (!Array.isArray(request.parameters) || !/^SELECT\b/i.test(sql.slice(offset)))) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite完整流读取只接受单条SELECT');
       if (parameters && offset === sql.length) throw invalid();
       while (offset < sql.length) {
         this.check(active); if (active.results.length >= limits.statements) throw invalid();
@@ -381,6 +388,10 @@ export class SqliteWorkerCore {
           const title = stream ? undefined : queryResultTitle(sql.slice(heading, Math.min(offset + prefix.length, heading + queryResultTitlePrefixLimit + 1)), 'sqlite');
           heading = offset + prefix.length;
           offset = skipTrivia(sql, heading, afterDelimiter);
+          if (querySource) {
+            while (sql[offset] === '\uFEFF') offset = skipTrivia(sql, offset + 1);
+            if (offset !== sql.length || !statement.hasStatement || !statement.columns().length) throw new DriverFailure('SQLITE_STREAM_REQUIRES_SELECT', 'SQLite 查询导出必须恰好产生一组查询结果');
+          }
           if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');
           if (this.guardedCreate && !this.guardedCreate.matched) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite没有观察到本次准确CREATE原生授权，尚未执行任何语句');
           if (this.guardedCreate && statement.columns().length !== 0) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite对象创建不能使用EXPLAIN或带结果列的其它语句');

@@ -101,7 +101,9 @@ export type SqliteWorkerRequest =
   | { kind: 'backupFile'; id: string; source: SqliteFileIdentity; staging: SqliteFileIdentity }
   | { kind: 'open'; id: string; options: SqliteWorkerOpenOptions }
   | { kind: 'execute'; id: string; sql: string; parameters?: SqliteValue[]; namedParameters?: Record<string, SqliteValue>; createGuard?: SqliteCreateGuard; captureFailureRange?: true; captureQueryReceipt?: true; options: SqliteExecutionOptions }
-  | { kind: 'streamRead'; id: string; sql: string; parameters: SqliteValue[]; namedParameters?: never; createGuard?: never; captureFailureRange?: never; captureQueryReceipt?: never; options: SqliteStreamReadOptions }
+  | ({ kind: 'streamRead'; id: string; sql: string; createGuard?: never; captureFailureRange?: never; captureQueryReceipt?: never; options: SqliteStreamReadOptions } & (
+    { querySource?: never; parameters: SqliteValue[]; namedParameters?: never } |
+    { querySource: true; parameters?: never; namedParameters: Record<string, SqliteValue> }))
   | { kind: 'rebuildCompare'; id: string; input: SqliteRebuildComparisonInput }
   | { kind: 'ack'; id: string; frame: number }
   | { kind: 'cancel'; id: string }

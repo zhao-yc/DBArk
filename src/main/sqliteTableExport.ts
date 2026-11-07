@@ -15,10 +15,11 @@ import { readSqliteSchemaExport } from './sqliteSchemaExport';
 
 export const sqliteTableExportLimits = { fileBytes: 10 * 1024 ** 3 } as const;
 /** 只有Main同进程可注入原窗口、目标复核及跨入口预留，公共IPC没有这些能力。 */
-export interface SqliteTableExportRequest extends SqliteTableExportInput {
+export interface SqliteExportDestination {
   filePath: string; assertCurrent(): void; validateDestination(): Promise<void>;
   retainDestinationUntil(recovered: Promise<void>): void;
 }
+export type SqliteTableExportRequest = SqliteTableExportInput & SqliteExportDestination;
 interface FileRecord {
   path: string; handle?: WritableFile; closed: boolean; removed: boolean;
   closeWork?: Promise<void>; removeWork?: Promise<void>; removeOwned?: () => Promise<void>;
@@ -85,7 +86,7 @@ export class SqliteTableExportFile {
   private finishRecovery!: () => void;
   readonly recovered: Promise<void>;
 
-  constructor(private readonly input: SqliteTableExportRequest, private readonly check: () => void, private readonly commitStart: () => void, private readonly io: AtomicFileIO = nativeAtomicFileIO, private readonly maxBytes = sqliteTableExportLimits.fileBytes) {
+  constructor(private readonly input: Pick<SqliteTableExportRequest, 'filePath' | 'format' | 'encoding' | 'validateDestination'>, private readonly check: () => void, private readonly commitStart: () => void, private readonly io: AtomicFileIO = nativeAtomicFileIO, private readonly maxBytes = sqliteTableExportLimits.fileBytes) {
     if (!isAbsolute(input.filePath) || input.filePath.includes('\0')) throw Error('Main未提供已授权的SQLite导出目标');
     this.target = resolve(input.filePath); this.recovered = new Promise<void>(resolve => { this.finishRecovery = resolve; });
   }

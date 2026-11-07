@@ -389,6 +389,8 @@ export interface CommandMap {
   'sqlite.referencePage': { input: import('./sqliteReference').SqliteReferenceInput; output: import('./sqliteReference').SqliteReferenceOutput };
   'sqlite.relationships': { input: import('./sqliteRelationships').SqliteRelationshipsInput; output: import('./sqliteRelationships').SqliteRelationshipsOutput };
   'sqlite.tableExport': { input: import('./sqliteTableExport').SqliteTableExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
+  'sqlite.queryExport': { input: import('./sqliteQueryExport').SqliteQueryExportInput; output: import('./sqliteTableExport').SqliteTableExportOutput };
+  'sqlite.queryExportParameterNames': { input: { sql: string }; output: QueryParameterNames };
   'sqliteDraftFiles.save': { input: { source: import('./sqliteTableEdit').SqliteTableEditPreviewInput; activeSnapshotId?: string }; output: { name: string } | null };
   'sqliteDraftFiles.open': { input: { target: import('./sqliteTableDraft').SqliteTableDraftDocument['target'] }; output: { name: string; document: import('./sqliteTableDraft').SqliteTableDraftDocument } | null };
   'sqliteDraftFiles.restore': { input: import('./sqliteTableDraft').SqliteTableDraftDocument['target'] & { taskId: string; document: import('./sqliteTableDraft').SqliteTableDraftDocument }; output: import('./sqliteTableDraft').SqliteDraftRestored };

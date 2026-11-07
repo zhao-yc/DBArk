@@ -49,6 +49,7 @@ import { sqliteImportSourceInspectSchema, sqliteImportSourceReleaseSchema } from
 import { sqliteIndexesInspectSchema, sqliteIndexesPreviewSchema, sqliteIndexesApplySchema, sqliteIndexesReleaseSchema } from './sqliteIndexes';
 import { sqliteTableCreatePreviewSchema, sqliteTableCreateApplySchema, sqliteTableCreateReleaseSchema } from './sqliteTableCreate';
 import { sqliteTableImportInspectSchema, sqliteTableImportPreviewSchema, sqliteTableImportApplySchema, sqliteTableImportReleaseSchema } from './sqliteTableImport';
+import { sqliteQueryExportSchema, sqliteQueryExportSourceSchema } from './sqliteQueryExport';
 import { sqliteTableExportSchema } from './sqliteTableExport';
 import { sqliteTableEditPreviewSchema, sqliteTableEditApplySchema, sqliteTableEditReleaseSchema } from './sqliteTableEdit';
 import { tableCheckGetSchema, tableCheckPreviewSchema, tableCheckApplySchema, tableCheckReleaseSchema } from './tableChecks';
@@ -346,6 +347,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.referencePage': sqliteReferenceInputSchema,
   'sqlite.incomingPage': sqliteIncomingInputSchema,
   'sqlite.tableExport': sqliteTableExportSchema,
+  'sqlite.queryExport': sqliteQueryExportSchema,
+  'sqlite.queryExportParameterNames': sqliteQueryExportSourceSchema,
   'sqliteDraftFiles.save': sqliteDraftSaveSchema,
   'sqliteDraftFiles.open': sqliteDraftOpenSchema,
   'sqliteDraftFiles.restore': sqliteDraftRestoreSchema,

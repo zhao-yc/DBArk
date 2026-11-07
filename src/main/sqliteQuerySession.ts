@@ -6,7 +6,7 @@ import { sqliteDriverLimits, type SqliteCancellation, type SqliteStatementResult
 import { currentSqliteStatement, sqliteStatementRanges } from '../engine/sqlite/currentStatement';
 import { sqliteExplainSource } from '../engine/sqlite/explainSource';
 import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
-import { sqliteNamedParameterNames } from '../engine/sqlite/parameters';
+import { sqliteNamedParameterNames, sqliteParameterInfo } from '../engine/sqlite/parameters';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
 import { validQueryResultTitle } from '../shared/queryResultTitle';
 
@@ -79,7 +79,7 @@ export class SqliteQuerySession {
   /** 参数识别只用SQLite完整词法与原会话身份；不prepare用户模板、不建立任务或读取MySQL模式。 */
   parameterNames(input: CommandMap['query.parameterNames']['input']): CommandMap['query.parameterNames']['output'] {
     this.available(input.sessionId);
-    return { dialect: 'sqlite', names: sqliteNamedParameterNames(input.sql), warnings: [], noBackslashEscapes: true, ansiQuotes: true, noBackslashEscapesKnown: true, ansiQuotesKnown: true, maxDecimalScale: 38, allowTimeEndpointFraction: true };
+    return sqliteParameterInfo(input.sql);
   }
 
   /** 全组值及完整脚本先验证，再原生绑定；所有前序结果及事务均归原物理会话，不重放部分写入。 */

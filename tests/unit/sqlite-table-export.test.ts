@@ -17,6 +17,8 @@ import { nativeAtomicFileIO, type AtomicFileIO } from '../../src/engine/atomicFi
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import type { SqliteTableExportRequest } from '../../src/main/sqliteTableExport';
 import { sqliteInsertLiteral } from '../../src/main/sqliteTableExport';
+import type { SqliteQueryExportRequest } from '../../src/main/sqliteQueryExport';
+import { assertSqliteExportDestination } from '../../src/main/sqliteExportDestination';
 
 vi.mock('electron', () => ({ utilityProcess: { fork: () => { throw Error('SQLite导出单测必须注入真实Node子进程'); } } }));
 import { SqliteRuntime } from '../../src/main/sqliteRuntime';
@@ -340,5 +342,84 @@ describe('SQLite完整导出真实只读流、原子文件与精度回放', () =
       expect(readFileSync(input.filePath, 'utf8')).toBe('原目标不可损失'); expect(readdirSync(dirname(input.filePath)).filter(path => path.endsWith('.partial'))).toEqual([]); expect(events.at(-1)?.status).toBe('failed');
       expect(disk(profile, db => db.prepare('SELECT typeof(note) AS storage,hex(CAST(note AS BLOB)) AS bytes FROM subject WHERE id=99').get())).toEqual(raw);
     }
+  });
+});
+
+
+function queryRequest(profile: SqliteConnectionProfile, patch: Partial<SqliteQueryExportRequest> = {}): SqliteQueryExportRequest {
+  const filePath = patch.filePath ?? join(dirname(profile.sqlite.filePath!), 'query-result.json');
+  return {
+    connectionId: profile.id, fileToken: '本例授权', taskId: 'SQLite查询导出', sql: 'SELECT id FROM subject', format: 'json', encoding: 'utf8',
+    filePath, assertCurrent: () => {}, validateDestination: () => assertSqliteExportDestination(filePath, [profile]), retainDestinationUntil: () => {}, ...patch,
+  };
+}
+
+describe('SQLite 完整查询导出', () => {
+  it('独立原生只读 CTE 导出超过预览上限的结果并按原生类型绑定', async () => {
+    const profile = fixture(), { app, events } = runtime(profile), before = await hash(profile.sqlite.filePath!);
+    const sql = `/* 分号 ; 和参数 :ignored */ WITH RECURSIVE series(n) AS (
+      VALUES(1) UNION ALL SELECT n+1 FROM series WHERE n < 1205
+    ) SELECT n AS position,:exact AS exact,:blob AS blob,:none AS "null",:note AS note,value
+      FROM series CROSS JOIN subject WHERE id=1 ORDER BY n; -- 尾部 ;`;
+    const input = queryRequest(profile, {sql, parameters: [
+      {name: 'exact', type: 'integer', value: '-9223372036854775808'}, {name: 'blob', type: 'binary', value: '00ff'},
+      {name: 'none', type: 'null'}, {name: 'note', type: 'text', value: "原文';--\0🚢"},
+    ]});
+    await expect(app.request('sqlite.queryExport', input)).resolves.toEqual({rows: 1205, fileCommitted: true});
+    const rows = JSON.parse(readFileSync(input.filePath, 'utf8'));
+    expect(rows).toHaveLength(1205);
+    expect(rows[0]).toEqual({position: '1', exact: '-9223372036854775808', blob: {type: 'binary', base64: 'AP8='}, null: null, note: "原文';--\0🚢", value: '9223372036854775807'});
+    expect(rows.at(-1).position).toBe('1205');
+    const original = processes.at(-1)!;
+    expect(await original.exited).toEqual({code: 0, signal: null});
+    expect(original.sent.find(message => message.kind === 'open')).toMatchObject({options: {readOnly: true}});
+    expect(original.sent.filter(message => message.kind === 'execute')).toEqual([]);
+    expect(original.sent.filter(message => message.kind === 'streamRead')).toEqual([expect.objectContaining({querySource: true, sql})]);
+    expect(events.at(-1)).toMatchObject({status: 'completed', rows: 1205});
+    expect(await hash(profile.sqlite.filePath!)).toBe(before);
+  });
+
+  it('CSV 保留重名及列顺序，空结果仍写表头；JSON 重名拒绝原子替换', async () => {
+    const profile = fixture(), {app} = runtime(profile);
+    const sql = "SELECT 9223372036854775807 AS same,'分;号' AS same";
+    const input = queryRequest(profile, {sql, format: 'csv', csvDelimiter: ';'});
+    await expect(app.request('sqlite.queryExport', input)).resolves.toEqual({rows: 1, fileCommitted: true});
+    expect(parse(readFileSync(input.filePath), {delimiter: ';'})).toEqual([['same', 'same'], ['9223372036854775807', '分;号']]);
+    const empty = queryRequest(profile, {taskId: '空结果', sql: 'SELECT id FROM subject WHERE 0', format: 'csv'});
+    await expect(app.request('sqlite.queryExport', empty)).resolves.toEqual({rows: 0, fileCommitted: true});
+    expect(readFileSync(empty.filePath, 'utf8')).toBe('id\r\n');
+    await expect(app.request('sqlite.queryExport', queryRequest(profile, {taskId: '重名JSON', sql}))).rejects.toThrow('不同的列名');
+    expect(readFileSync(empty.filePath, 'utf8')).toBe('id\r\n');
+  });
+
+  it('拒绝多个语句、CTE 写入、漏绑参数与源库覆盖，且保留旧文件和源库', async () => {
+    const profile = fixture(), {app} = runtime(profile), before = await hash(profile.sqlite.filePath!);
+    const cases = ['SELECT id FROM subject; DELETE FROM subject', 'WITH ids AS (SELECT id FROM subject) DELETE FROM subject WHERE id IN ids RETURNING id', 'SELECT :missing'];
+    for (const [index, sql] of cases.entries()) {
+      const input = queryRequest(profile, {sql, taskId: '拒绝-' + index});
+      writeFileSync(input.filePath, '旧文件');
+      await expect(app.request('sqlite.queryExport', input)).rejects.toThrow();
+      expect(readFileSync(input.filePath, 'utf8')).toBe('旧文件');
+    }
+    await expect(app.request('sqlite.queryExport', queryRequest(profile, {filePath: profile.sqlite.filePath!}))).rejects.toThrow();
+    expect(await hash(profile.sqlite.filePath!)).toBe(before);
+    expect(readdirSync(dirname(profile.sqlite.filePath!)).filter(path => path.endsWith('.partial'))).toEqual([]);
+  });
+
+  it('流读取期间取消只撤销本次暂存并保留旧目标', async () => {
+    const profile = fixture(), reached = deferred<void>();
+    let paused = false;
+    const {app, events} = runtime(profile, {create: () => transport((message, forward) => {
+      if (!paused && message.kind === 'batch') { paused = true; reached.resolve(); } else forward();
+    })});
+    const input = queryRequest(profile);
+    writeFileSync(input.filePath, '旧文件');
+    const work = app.request('sqlite.queryExport', input).catch(reason => reason);
+    await reached.promise;
+    await app.request('query.cancel', {taskId: input.taskId});
+    expect(await work).toBeInstanceOf(Error);
+    expect(events.at(-1)?.status).toBe('cancelled');
+    expect(readFileSync(input.filePath, 'utf8')).toBe('旧文件');
+    expect(readdirSync(dirname(input.filePath)).filter(path => path.endsWith('.partial'))).toEqual([]);
   });
 });

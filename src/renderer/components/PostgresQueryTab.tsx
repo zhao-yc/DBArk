@@ -44,7 +44,7 @@ import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
-import { PostgresQueryExportDialog, type PostgresQueryExportSource } from './PostgresQueryExportDialog';
+import { FullQueryExportDialog, type FullQueryExportSource } from './FullQueryExportDialog';
 import { postgresQueryExportZh as fullExportText } from '../locales/postgresQueryExport.zh-CN';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
@@ -266,7 +266,7 @@ export function PostgresQueryTab({
   const [presetDraft, setPresetDraft] = useState<PresetDraft>();
   const presetDraftRef = useRef<PresetDraft | undefined>(undefined);
   const [exportView, setExportView] = useState<{ result: QueryResult; selected: boolean }>();
-  const [fullExport, setFullExport] = useState<PostgresQueryExportSource>();
+  const [fullExport, setFullExport] = useState<FullQueryExportSource>();
   const exportOpen = useRef(false);
   const scope: Scope = {
     profile,
@@ -1989,7 +1989,7 @@ export function PostgresQueryTab({
           exportOpen.current = false;
           setExportView(undefined);
         }} />}
-      {fullExport && !closeRequest && <PostgresQueryExportDialog source={fullExport} onClose={() => setFullExport(undefined)} />}
+      {fullExport && !closeRequest && <FullQueryExportDialog source={fullExport} onClose={() => setFullExport(undefined)} />}
       <div className="tab-status">
         {!pin && outcome && resultSources && <span>{text.executionElapsed(outcome.elapsedMs)}</span>}
         <span>

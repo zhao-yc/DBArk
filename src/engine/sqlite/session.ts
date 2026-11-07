@@ -159,8 +159,16 @@ export class SqliteDriverSession {
     if (!this.options.readOnly || typeof options.onBatch !== 'function') return Promise.reject(this.error('SQLite完整流读取必须使用独立物理只读会话和批次消费者', 'SQLITE_STREAM_REQUIRES_READONLY'));
     return this.start(sql, { ...options, maxRows: 1, maxBytes: 1 }, true);
   }
+  /** 用户 SQL 专用流，和生成的表流分开授权，只发送命名绑定。 */
+  streamQuery(sql: string, options: Omit<SqliteStreamReadOptions, 'parameters'> & { namedParameters: Record<string, SqliteValue> }): Promise<SqliteExecutionResult> {
+    if ('createGuard' in options || 'parameters' in options) return Promise.reject(this.error('SQLite 查询导出只接受命名参数', 'SQLITE_INVALID_REQUEST'));
+    const binding = Object.getOwnPropertyDescriptor(options, 'namedParameters');
+    if (!binding || !('value' in binding) || binding.value === undefined) return Promise.reject(this.error('SQLite 查询导出缺少命名参数映射', 'SQLITE_NAMED_PARAMETERS_INVALID'));
+    if (!this.options.readOnly || typeof options.onBatch !== 'function') return Promise.reject(this.error('SQLite 查询导出必须使用独立物理只读会话和批次消费者', 'SQLITE_STREAM_REQUIRES_READONLY'));
+    return this.start(sql, { ...options, maxRows: 1, maxBytes: 1 }, true, true);
+  }
   /** 普通查询继续原100万行/32MiB门槛，流读取不接受其预算覆盖值。 */
-  private start(sql: string, options: SqliteExecuteOptions, stream: boolean): Promise<SqliteExecutionResult> {
+  private start(sql: string, options: SqliteExecuteOptions, stream: boolean, querySource = false): Promise<SqliteExecutionResult> {
     if (!this.opened || this.exited || this.invalid || this.closing || this.active) return Promise.reject(this.error('SQLite会话未就绪或已有运行任务', 'SQLITE_SESSION_UNAVAILABLE'));
     const configured: SqliteExecutionOptions = { maxRows: options.maxRows ?? 1000, batchRows: options.batchRows ?? 200, maxBytes: options.maxBytes ?? limits.resultBytes };
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > limits.sqlBytes || !Number.isInteger(configured.maxRows) || configured.maxRows < 1 || configured.maxRows > limits.rows || !Number.isInteger(configured.batchRows) || configured.batchRows < 1 || configured.batchRows > limits.batchRows || !Number.isInteger(configured.maxBytes) || configured.maxBytes < 1 || configured.maxBytes > limits.resultBytes) return Promise.reject(this.error('SQLite执行参数超出预算', 'SQLITE_INPUT_LIMIT'));
@@ -168,7 +176,7 @@ export class SqliteDriverSession {
     try {
       const descriptor = Object.getOwnPropertyDescriptor(options, 'namedParameters');
       if (descriptor && !('value' in descriptor) || !descriptor && 'namedParameters' in options) throw Error('SQLite命名绑定必须是自有数据字段');
-      if (descriptor?.value !== undefined) { if (stream || options.parameters !== undefined) throw Error('SQLite命名与位置绑定不能混用'); namedParameters = copySqliteNamedParameters(descriptor.value); }
+      if (descriptor?.value !== undefined) { if ((stream && !querySource) || options.parameters !== undefined) throw Error('SQLite命名与位置绑定不能混用'); namedParameters = copySqliteNamedParameters(descriptor.value); }
     } catch { return Promise.reject(this.error('SQLite命名参数映射或绑定模式无效，本次未发送SQL', 'SQLITE_NAMED_PARAMETERS_INVALID')); }
     let createGuard: SqliteCreateGuard | undefined;
     try {
@@ -192,7 +200,8 @@ export class SqliteDriverSession {
     void operation.nativeDone.promise.catch(() => {});
     this.active = operation;
     try { this.transport.send(stream
-      ? { kind: 'streamRead', id: operation.id, sql, parameters: options.parameters ?? [], options: { batchRows: configured.batchRows } }
+      ? { kind: 'streamRead', id: operation.id, sql, options: { batchRows: configured.batchRows },
+        ...(querySource ? { querySource: true, namedParameters: namedParameters! } : { parameters: options.parameters ?? [] }) }
       : { kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), ...(namedParameters === undefined ? {} : { namedParameters }), ...(createGuard === undefined ? {} : { createGuard }),
         ...(operation.captureFailureRange ? {captureFailureRange: true} : {}),
         ...(operation.captureQueryReceipt ? {captureQueryReceipt: true} : {}), options: configured }); }

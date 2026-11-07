@@ -1,4 +1,4 @@
-import { queryParameterLimits } from '../../shared/queryParameters';
+import { queryParameterLimits, type QueryParameterNames } from '../../shared/queryParameters';
 import { sqliteStatementRanges } from './currentStatement';
 
 const identifierStart = (value: string) => /[A-Za-z_\u0080-\uFFFF]/.test(value);
@@ -32,4 +32,15 @@ export function sqliteNamedParameterNames(sql: string): string[] {
     else index++;
   }
   return [...names];
+}
+
+export function sqliteParameterInfo(sql: string): QueryParameterNames {
+  return {dialect: 'sqlite', names: sqliteNamedParameterNames(sql), warnings: [], noBackslashEscapes: true,
+    ansiQuotes: true, noBackslashEscapesKnown: true, ansiQuotesKnown: true, maxDecimalScale: 38, allowTimeEndpointFraction: true};
+}
+
+/** 仅识别一条模板，实际 SQL 类型和原生尾部由物理只读进程复核。 */
+export function sqliteQueryExportParameterNames(sql: string): QueryParameterNames {
+  if (sqliteStatementRanges(sql).length !== 1) throw Error('SQLite 完整导出只接受单条 SELECT 或 WITH 查询');
+  return sqliteParameterInfo(sql);
 }
