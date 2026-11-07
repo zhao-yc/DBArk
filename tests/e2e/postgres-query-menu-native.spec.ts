@@ -15,6 +15,7 @@ import { postgresIdentifier } from '../../src/shared/postgresSql';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { postgresQueryExportZh as fullExportText } from '../../src/renderer/locales/postgresQueryExport.zh-CN';
+import { fullQueryExportProfilesZh as profileText } from '../../src/renderer/locales/fullQueryExportProfiles.zh-CN';
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryParameterReuseZh as reuseText } from '../../src/renderer/locales/queryParameterReuse.zh-CN';
@@ -814,7 +815,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     const owner = (await sessions()).rows;
     expect(owner).toHaveLength(1);
     expect(owner[0].state).toBe('idle in transaction');
-    const output = [csv, json, xlsx, insertFile, unchanged, cancelledExcel, cancelledSql];
+    const output = [csv, csv, json, xlsx, insertFile, unchanged, cancelledExcel, cancelledSql];
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
@@ -841,6 +842,17 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     await open();
     await expect(dialog.getByLabel(fullExportText.source)).toHaveText(sql);
     await dialog.getByLabel(csvExportZh.label).selectOption(';');
+    await dialog.getByText(profileText.title, {exact: true}).click();
+    await dialog.getByLabel(profileText.name, {exact: true}).fill('分号报表');
+    await dialog.getByRole('button', {name: profileText.add, exact: true}).click();
+    await expect(dialog.getByText(profileText.saved, {exact: true})).toBeVisible();
+    await dialog.getByLabel(csvExportZh.label).selectOption(',');
+    await dialog.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
+    await expect(dialog.getByRole('button', {name: fullExportText.start, exact: true})).toBeEnabled();
+    await dialog.getByRole('button', {name: profileText.apply, exact: true}).click();
+    await expect(dialog.getByLabel(csvExportZh.label)).toHaveValue(';');
+    await expect(dialog.getByRole('button', {name: fullExportText.start, exact: true})).toBeDisabled();
+    await dialog.getByText(profileText.title, {exact: true}).click();
     await start();
     await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
     const lines = (await readFile(csv, 'utf8')).split('\r\n');
@@ -886,6 +898,21 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     await dialog.getByLabel(fullExportText.insertDatabase, {exact: true}).fill('回放"模式');
     await dialog.getByLabel(fullExportText.insertTable, {exact: true}).fill('导出结果');
     await dialog.getByLabel(fullExportText.insertColumns, {exact: true}).fill('exact_id\nexact_amount\nnote\nbytes');
+    await dialog.getByText(profileText.title, {exact: true}).click();
+    await dialog.getByLabel(profileText.name, {exact: true}).fill('回放列映射');
+    await dialog.getByRole('button', {name: profileText.add, exact: true}).click();
+    await expect(dialog.getByText(profileText.saved, {exact: true})).toBeVisible();
+    await close();
+    await modelSelection(2, 10);
+    await tab().getByRole('button', {name: fullExportText.openCurrent, exact: true}).click();
+    await dialog.getByText(profileText.title, {exact: true}).click();
+    await dialog.getByLabel(profileText.select, {exact: true}).selectOption('回放列映射');
+    await dialog.getByRole('button', {name: profileText.apply, exact: true}).click();
+    await expect(dialog.getByLabel(fullExportText.insertDatabase, {exact: true})).toHaveValue('回放"模式');
+    await expect(dialog.getByLabel(fullExportText.insertColumns, {exact: true})).toHaveValue('exact_id\nexact_amount\nnote\nbytes');
+    await dialog.getByRole('button', {name: profileText.update, exact: true}).scrollIntoViewIfNeeded();
+    await page.screenshot({path: info.outputPath('PostgreSQL完整查询导出方案.png')});
+    await dialog.getByText(profileText.title, {exact: true}).click();
     await start();
     await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
     const generated = await readFile(insertFile, 'utf8');
@@ -927,7 +954,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
       expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
       await close();
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(7);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(8);
     await expect.poll(async () => (await sessions()).rows).toEqual(owner);
     expect(await history()).toEqual(baseline);
     expect(await grid.innerText()).toBe(original);

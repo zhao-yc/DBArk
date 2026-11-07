@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
+import type { FullQueryExportOptions } from '../../shared/fullQueryExportProfiles';
 import { postgresExportParameterNames, postgresQueryInsertTargetSchema, type PostgresQueryExportInput } from '../../shared/postgresQueryExport';
 import { sqliteQueryInsertTargetSchema, type SqliteQueryExportInput } from '../../shared/sqliteQueryExport';
 import type { QueryParameter } from '../../shared/queryParameters';
@@ -10,6 +11,7 @@ import { zh } from '../locales/zh-CN';
 import { postgresQueryExportZh } from '../locales/postgresQueryExport.zh-CN';
 import { sqliteQueryExportZh } from '../locales/sqliteQueryExport.zh-CN';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
+import { FullQueryExportProfiles } from './FullQueryExportProfiles';
 import { ErrorBox, Field, Modal } from './ui';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { postgresZh } from '../locales/postgres.zh-CN';
@@ -36,6 +38,11 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   const postgresTarget = insert && !sqlite ? postgresQueryInsertTargetSchema.safeParse({schema: insertDatabase, ...mapping}) : undefined;
   const target = sqliteTarget ?? postgresTarget;
   const invalidTarget = target?.success === false;
+  let profileOptions: FullQueryExportOptions | undefined;
+  if (format === 'csv') profileOptions = { format, encoding, delimiter };
+  else if (format === 'json') profileOptions = { format, encoding };
+  else if (format === 'xlsx') profileOptions = { format };
+  else if (target?.success) profileOptions = { format, target: target.data };
   const [file, setFile] = useState<FileChoice | null>(null);
   const [pending, setPending] = useState<'pick' | 'write' | null>(null);
   const [error, setError] = useState(''), [progress, setProgress] = useState('');
@@ -54,6 +61,22 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       if (task.current) void invoke('query.cancel', {taskId: task.current}).catch(() => {});
     };
   }, [source]);
+
+  /** 应用方案只更新导出选项，文件授权必须在新选项下重新获取。 */
+  function applyProfile(options: FullQueryExportOptions): boolean {
+    if (picking.current || task.current || !current()) return false;
+    setFormat(options.format);
+    if (options.format === 'csv') setDelimiter(options.delimiter);
+    if (options.format === 'csv' || options.format === 'json') setEncoding(options.encoding);
+    if (options.format === 'sql') {
+      const { target } = options;
+      setInsertDatabase('database' in target ? target.database : target.schema);
+      setInsertTable(target.table);
+      setInsertColumns(target.columns?.join('\n') ?? '');
+    }
+    setFile(null); setRows(undefined); setError('');
+    return true;
+  }
 
   async function choose() {
     if (picking.current || task.current || !current() || invalidTarget) return;
@@ -128,10 +151,11 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
           onChange={event => { setInsertDatabase(event.target.value); setFile(null); setRows(undefined); }}/></Field>
         <Field label={text.insertTable}><input disabled={!!pending} value={insertTable} maxLength={256}
           onChange={event => { setInsertTable(event.target.value); setFile(null); setRows(undefined); }}/></Field>
-        <Field label={text.insertColumns}><textarea disabled={!!pending} value={insertColumns} rows={3} maxLength={263168}
+        <Field label={text.insertColumns}><textarea aria-label={text.insertColumns} disabled={!!pending} value={insertColumns} rows={3} maxLength={263168}
           onChange={event => { setInsertColumns(event.target.value); setFile(null); setRows(undefined); }}/></Field>
       </>}
       {format === 'csv' && <CsvExportDelimiterField value={delimiter} disabled={!!pending} onChange={setDelimiter}/>}
+      <FullQueryExportProfiles dialect={sqlite ? 'sqlite' : 'postgresql'} options={profileOptions} disabled={!!pending || stale} onApply={applyProfile}/>
       <button disabled={!!pending || stale || invalidTarget} onClick={() => void choose()}>{file?.name ?? zh.resultExport.chooseFile}</button>
       {pending === 'write' && <p role="status">{cancelling ? text.cancelling : progress}</p>}
       {rows !== undefined && <div role="status" className="success-box">{text.done(rows)}</div>}

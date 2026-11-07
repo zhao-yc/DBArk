@@ -1980,6 +1980,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     // 无 await、无引擎调用：全部校验和生成通过后才一次写入系统剪贴板。
     case 'table.copyInsertSql': return copyInsertSql(input, sql => clipboard.writeText(sql));
     case 'workbench.get': return store.workbench();
+    case 'queryExportProfiles.list': return store.fullQueryExportProfiles(input);
+    case 'queryExportProfiles.mutate': return store.mutateFullQueryExportProfiles(input);
     case 'workbench.protocolReady': return externalObjectUris.ready(columns!);
     case 'workbench.protocolTake': return shuttingDown ? null : externalObjectUris.take(columns!);
     case 'workbench.protocolResolve': return externalObjectUris.resolve(columns!, input.id);

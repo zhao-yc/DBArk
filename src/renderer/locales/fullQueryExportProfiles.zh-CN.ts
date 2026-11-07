@@ -1,0 +1,16 @@
+export const fullQueryExportProfilesZh = {
+  title: '导出方案',
+  hint: '保存当前格式和选项，供同类数据库的完整查询复用。每次导出请单独选择文件，查询参数也单独填写。',
+  select: '已保存的方案',
+  placeholder: '选择方案',
+  apply: '应用方案',
+  name: '方案名称',
+  add: '另存为新方案',
+  update: '更新所选方案',
+  delete: '删除所选方案',
+  reload: '重新读取方案',
+  loading: '正在读取方案…',
+  saved: '方案已保存',
+  deleted: '方案已删除',
+  applied: '已应用方案，请选择保存文件',
+};

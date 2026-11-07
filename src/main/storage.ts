@@ -33,6 +33,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { dirname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import type { AppSettings, ConnectionProfile, NetworkConnectionProfile, SqliteConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
+import { fullQueryExportProfileMutation, fullQueryExportProfileScope, readFullQueryExportProfiles, type FullQueryExportProfile } from '../shared/fullQueryExportProfiles';
 import { validateSnippetBudget } from '../shared/snippets';
 import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferencesLimits, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
@@ -1140,6 +1141,39 @@ export class LocalStore {
   tasks(): TaskRecord[] { return this.records('SELECT data FROM tasks ORDER BY started_at DESC LIMIT 200'); }
   /** 更新任务概要并保留至多 200 条记录。 */
   saveTask(task: TaskRecord): void { this.mutate(() => { this.db.run('INSERT INTO tasks VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [task.id, JSON.stringify(task), task.startedAt]); this.db.run('DELETE FROM tasks WHERE id NOT IN (SELECT id FROM tasks ORDER BY started_at DESC LIMIT 200)'); }); }
+  /** 旧配置没有方案表时按空列表读取，首次保存才创建。 */
+  fullQueryExportProfiles(raw: unknown): FullQueryExportProfile[] {
+    const { dialect } = fullQueryExportProfileScope.parse(raw);
+    if (!this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='query_export_profiles'").length) return [];
+    const result = this.db.exec('SELECT data FROM query_export_profiles WHERE dialect=?', [dialect]);
+    const document = result[0]?.values[0]?.[0];
+    return document === undefined ? [] : readFullQueryExportProfiles(dialect, String(document));
+  }
+  /** 在同一次原子写盘中比较选中版本并保存，避免旧弹窗覆盖已修改或重建的同名方案。 */
+  mutateFullQueryExportProfiles(raw: unknown): FullQueryExportProfile[] {
+    const input = fullQueryExportProfileMutation.parse(raw);
+    const { dialect } = input;
+    const current = this.fullQueryExportProfiles({ dialect });
+    const index = input.kind === 'add' ? -1 : current.findIndex(item => item.name === input.selected.name && item.revision === input.selected.revision);
+    if (input.kind !== 'add' && index < 0) throw Error('导出方案已变化，请重新读取后再操作');
+    if (input.kind !== 'delete' && current.some((item, offset) => offset !== index && item.name === input.profile.name))
+      throw Error('已存在同名导出方案');
+
+    const next = [...current];
+    if (input.kind === 'delete') next.splice(index, 1);
+    else {
+      const entry = { ...input.profile, revision: randomUUID() };
+      if (index < 0) next.push(entry);
+      else next[index] = entry;
+    }
+    const data = JSON.stringify({ version: 1, profiles: next });
+    readFullQueryExportProfiles(dialect, data);
+    this.mutate(() => {
+      this.db.run('CREATE TABLE IF NOT EXISTS query_export_profiles (dialect TEXT PRIMARY KEY, data TEXT NOT NULL)');
+      this.db.run('INSERT INTO query_export_profiles VALUES (?,?) ON CONFLICT(dialect) DO UPDATE SET data=excluded.data', [dialect, data]);
+    });
+    return next;
+  }
   /** 合并默认偏好，兼容缺少新增配置字段的旧记录。 */
   settings(): AppSettings {
     const stored = this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0];
