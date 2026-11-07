@@ -7,7 +7,8 @@ import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
-import { zh } from '../../src/renderer/locales/zh-CN';
+import { formatText, zh } from '../../src/renderer/locales/zh-CN';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { postgresIdentifier } from '../../src/shared/postgresSql';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 
@@ -71,6 +72,116 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 片段库支持选区建片段、纯文本插入撤销及失效选区保护', async ({}, info) => {
+  const snippet = "SELECT '片段😀', '$1', '${name}', 0.12345678901234567890;", name = 'PostgreSQL 原文片段';
+  const original = `SELECT 0;\n${snippet}\nSELECT 9;`;
+  const dialog = () => page.getByRole('dialog', {name: zh.snippets.title, exact: true});
+  const choose = (name: string) => dialog().getByRole('button', {name: formatText(zh.snippets.selectName, name), exact: true});
+  await prepare({id: '', name: '离线 PostgreSQL 片段', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, original);
+  await modelSelection(2, 1, snippet.length + 1);
+  await page.keyboard.press('Shift+F10');
+  await page.locator('.monaco-menu-container:visible').getByRole('menuitem', {name: uiCommandLabels['sql-selection-to-snippet'], exact: true}).click({delay: 120});
+  await expect(dialog().getByRole('textbox', {name: zh.snippets.sql, exact: true})).toHaveValue(snippet);
+  await page.keyboard.press('Escape');
+  await expect(dialog()).toHaveCount(0);
+  expect(await page.evaluate(() => window.dbark.invoke('snippets.list', {}))).toEqual([]);
+  await modelSelection(2, 1, snippet.length + 1);
+  await command('sql-selection-to-snippet');
+  await expect(dialog().getByRole('textbox', {name: zh.snippets.sql, exact: true})).toHaveValue(snippet);
+  await dialog().getByLabel(zh.snippets.name, {exact: true}).fill(name);
+  await dialog().getByRole('button', {name: zh.common.save, exact: true}).click();
+  await expect(dialog().getByRole('button', {name: zh.snippets.edit, exact: true})).toBeVisible();
+  const saved = await page.evaluate(() => window.dbark.invoke('snippets.list', {}));
+  expect(saved).toMatchObject([{name, sql: snippet}]);
+  await dialog().getByRole('button', {name: zh.common.close, exact: true}).click();
+  expect((await inspectModel()).sql).toBe(original);
+
+  const placeholder = 'PLACEHOLDER', before = `SELECT 0;\n${placeholder}\nSELECT 9;`;
+  await replaceDraft(before);
+  await modelSelection(2, 1, placeholder.length + 1);
+  await tab().getByRole('button', {name: zh.snippets.title, exact: true}).click();
+  await choose(zh.snippets.selectColumns).click();
+  await expect(dialog().locator('.snippet-details .view-lines')).toContainText('SELECT "id", "name"');
+  await expect(dialog().getByRole('button', {name: zh.snippets.edit, exact: true})).toHaveCount(0);
+  await choose(name).click();
+  await page.keyboard.press('ControlOrMeta+Enter');
+  await dialog().getByRole('button', {name: zh.snippets.insert, exact: true}).click();
+  await expect(dialog()).toHaveCount(0);
+  await expect.poll(async () => (await inspectModel()).sql).toBe(original);
+  await expect(editor().locator('.view-lines')).toContainText('片段😀');
+  await page.screenshot({path: info.outputPath('PostgreSQL片段插入.png')});
+  await editor().getByRole('textbox').focus();
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(before);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+Z' : 'Control+Y');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(original);
+
+  await modelSelection(2, 1, snippet.length + 1);
+  await tab().getByRole('button', {name: zh.snippets.title, exact: true}).click();
+  await choose(name).click();
+  // 公开编辑器API模拟选区漂移及恢复，旧意图不能因回到相同选区而复活。
+  await modelSelection(1, 1);
+  await modelSelection(2, 1, snippet.length + 1);
+  await dialog().getByRole('button', {name: zh.snippets.insert, exact: true}).click();
+  await expect(dialog().getByText(zh.snippets.insertChanged, {exact: true})).toBeVisible();
+  expect((await inspectModel()).sql).toBe(original);
+  await dialog().getByRole('button', {name: zh.common.close, exact: true}).click();
+  expect(await page.evaluate(() => window.dbark.invoke('snippets.list', {}))).toEqual(saved);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 片段插入保留原事务、结果和会话且不自动执行', async () => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query("CREATE TABLE snippet_source(id bigint PRIMARY KEY,note text); INSERT INTO snippet_source VALUES(9007199254740993,'服务器原值')");
+    const sql = "UPDATE snippet_source SET note='片段前未提交事务' WHERE id=9007199254740993 RETURNING id,note,pg_backend_pid() AS session_id;";
+    const snippet = "\nSELECT '$1'::text AS literal, '${name}'::text AS placeholder;";
+    await prepare({id: '', name: '本轮隔离 PostgreSQL 片段', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+    await page.evaluate(sql => window.dbark.invoke('snippets.save', {id: 'pg-live-snippet', name: '实库原文片段', group: '', description: '', sql, updatedAt: ''}), snippet);
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await expect(tab().getByRole('button', {name: postgresZh.rollback, exact: true})).toBeEnabled();
+    await tab().getByRole('button', {name: postgresZh.execute, exact: true}).click();
+    const grid = tab().locator('.postgres-results .rdg');
+    await expect(grid).toContainText('片段前未提交事务');
+    await expect(tab().getByRole('button', {name: zh.snippets.title, exact: true})).toBeEnabled();
+    const originalResult = await grid.innerText();
+    const history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+    const originalSessions = await sessions();
+    expect(originalSessions).toHaveLength(1);
+    expect(originalSessions[0].state).toBe('idle in transaction');
+    await modelSelection(1, sql.length + 1);
+    await tab().getByRole('button', {name: zh.snippets.title, exact: true}).click();
+    const dialog = page.getByRole('dialog', {name: zh.snippets.title, exact: true});
+    await dialog.getByRole('button', {name: formatText(zh.snippets.selectName, '实库原文片段'), exact: true}).click();
+    await dialog.getByRole('button', {name: zh.snippets.insert, exact: true}).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await inspectModel()).sql).toBe(sql + snippet);
+    expect(await grid.innerText()).toBe(originalResult);
+    expect(await sessions()).toEqual(originalSessions);
+    expect((await observer.query('SELECT note FROM snippet_source')).rows).toEqual([{note: '服务器原值'}]);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history);
+    await editor().getByRole('textbox').focus();
+    await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click();
+    await expect.poll(sessions).toEqual([{...originalSessions[0], state: 'idle'}]);
+    expect((await observer.query('SELECT note FROM snippet_source')).rows).toEqual([{note: '服务器原值'}]);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 复制查询保留当前全文和库，副本与保存来源及原撤销记录独立', async ({}, info) => {
   const name = '已保存 PostgreSQL 来源', savedSql = "SELECT '保存原文';";

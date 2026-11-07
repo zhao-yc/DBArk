@@ -1,8 +1,23 @@
 import { expect, it, vi } from 'vitest';
 import type { SqlSnippet } from '../../src/shared/contracts';
-import { createSnippetCatalog, matchSnippetPrefix, snippetAtStatementStart, snippetPrefix } from '../../src/renderer/snippetCompletion';
+import { createSnippetCatalog, matchSnippetPrefix, snippetAtStatementStart, snippetPrefix, snippetTemplates, snippetTemplatesForDialect } from '../../src/renderer/snippetCompletion';
 
 const item = (name: string, group = ''): SqlSnippet => ({ id: name + group, name, group, sql: "SELECT '${name}'\n  ;", description: '', updatedAt: '' });
+
+it('PostgreSQL 内置模板使用双引号且身份稳定，不改旧模板或用户片段', () => {
+  const original = structuredClone(snippetTemplates), user = item('用户原文');
+  const postgres = snippetTemplatesForDialect('postgresql');
+  expect(postgres).toBe(snippetTemplatesForDialect('postgresql'));
+  expect(postgres.map(item => item.id)).toEqual(snippetTemplates.map(item => item.id));
+  for (const template of postgres) {
+    expect(template.sql).not.toContain('`');
+    expect(template.sql).toContain('"your_table"');
+  }
+  expect(postgres[0].sql).toContain('SELECT "id", "name"');
+  expect(snippetTemplates).toEqual(original);
+  for (const dialect of [undefined, 'mysql', 'mariadb', 'sqlite'] as const) expect(snippetTemplatesForDialect(dialect)).toBe(snippetTemplates);
+  expect(matchSnippetPrefix([user], user.name, 'mysql')).toEqual([user]);
+});
 
 it('片段前缀支持 Unicode，仅在独立语句中替换完整名称前缀', () => {
   expect(snippetPrefix('SELECT 1;  临时')).toBe('临时');

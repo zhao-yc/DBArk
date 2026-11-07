@@ -9,6 +9,7 @@ import type { QueryParameterNames, QueryParameter } from '../../shared/queryPara
 import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
 import type { UiCommandId } from '../../shared/uiCommands';
 import { sqlLineCommandIds } from '../../shared/uiCommandIds';
+import { uiCommandLabels } from '../../shared/uiCommands.zh-CN';
 import { queryResultPresetValueSchema, type QueryResultPresetValue } from '../../shared/queryResultPresets';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
 import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } from '../store';
@@ -59,6 +60,8 @@ import { QueryBindingDialog } from './QueryBindingDialog';
 import { QueryDuplicateIntent } from '../queryDuplicateIntent';
 import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
+import { SnippetsDialog } from './SnippetsDialog';
+import { SNIPPET_LIMITS } from '../../shared/snippets';
 import { useQueryFileSource } from '../useQueryFileSource';
 import { captureQueryFileSnapshot } from '../queryFileSnapshot';
 import { flushEditorContent } from '../editorContentBridge';
@@ -149,6 +152,8 @@ export function PostgresQueryTab({
   const duplicateIntent = useRef<QueryDuplicateIntent | undefined>(undefined);
   const duplicateOrigin = useRef({ connectionId: tab.connectionId, version });
   const [duplicating, setDuplicating] = useState(false);
+  const [snippets, setSnippets] = useState<{ initialSql: string; create: boolean }>();
+  const snippetTarget = useRef<HistoryInsertionTarget | null>(null);
   const [busy, setBusy] = useState(false),
     [fileBusy, setFileBusy] = useState(false),
     [error, setError] = useState(''),
@@ -654,6 +659,7 @@ export function PostgresQueryTab({
     return () => {
       alive.current = false;
       duplicateIntent.current?.dispose();
+      snippetTarget.current?.dispose();
       snapshotOperation.current?.invalidate();
       const pending = phase.current,
         owned = session.current;
@@ -720,15 +726,36 @@ export function PostgresQueryTab({
   const results = outcome?.results ?? [],
     result = pin?.result ?? results[selected],
     controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView || !!pinSql,
-    locked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft;
+    operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
+    locked = operationLocked || !!snippets;
   const insertionLocked = useRef(locked);
+  const snippetInsertionLocked = useRef(operationLocked);
   const fileOperation = useRef(files.isBusy);
   useLayoutEffect(() => {
     insertionLocked.current = locked;
+    snippetInsertionLocked.current = operationLocked;
     fileOperation.current = files.isBusy;
     historyInsertion.current?.current();
+    snippetTarget.current?.current();
     if (locked) duplicateIntent.current?.dispose();
   });
+  /** 片段模态只放行自身的插入；会话、正文、选区、关闭和其它操作仍沿原意图保护。 */
+  function captureInsertion(instance: monaco.editor.IStandaloneCodeEditor, ownSnippet = false) {
+    flushEditorContent(instance);
+    return captureHistoryInsertion(instance, () => {
+      const current = useWorkspace.getState();
+      const draft = current.settings.tabs.find(item => item.id === tab.id);
+      return {
+        tab: draft, activeTabId: current.settings.activeTabId,
+        connection: current.connections.find(item => item.id === draft?.connectionId),
+        connectionVersion: current.connectionVersions[draft?.connectionId ?? ''] ?? 0,
+        selection: current.selection, session: session.current?.id ?? '', execution: phase.current?.taskId ?? '',
+        alive: alive.current && editor.current === instance,
+        busy: (ownSnippet ? snippetInsertionLocked.current : insertionLocked.current) || !!phase.current ||
+          !!current.activeJobs[tab.id] || fileOperation.current(), closing: !!closeRef.current,
+      };
+    }, listener => useWorkspace.subscribe(listener));
+  }
   /** 进入历史或保存查询搜索时才捕获原选区。后续执行、切源、关闭或模型变化会撤销插入资格。 */
   useEffect(() => {
     if (!historyInsertionRegistry) return;
@@ -736,23 +763,7 @@ export function PostgresQueryTab({
       historyInsertion.current?.dispose();
       const instance = editor.current;
       if (!instance) return null;
-      flushEditorContent(instance);
-      historyInsertion.current = captureHistoryInsertion(instance, () => {
-        const current = useWorkspace.getState();
-        const draft = current.settings.tabs.find(item => item.id === tab.id);
-        return {
-          tab: draft,
-          activeTabId: current.settings.activeTabId,
-          connection: current.connections.find(item => item.id === draft?.connectionId),
-          connectionVersion: current.connectionVersions[draft?.connectionId ?? ''] ?? 0,
-          selection: current.selection,
-          session: session.current?.id ?? '',
-          execution: phase.current?.taskId ?? '',
-          alive: alive.current && editor.current === instance,
-          busy: insertionLocked.current || !!phase.current || !!current.activeJobs[tab.id] || fileOperation.current(),
-          closing: !!closeRef.current,
-        };
-      }, listener => useWorkspace.subscribe(listener));
+      historyInsertion.current = captureInsertion(instance);
       return historyInsertion.current;
     });
     return () => {
@@ -1294,6 +1305,37 @@ export function PostgresQueryTab({
   function openSaveQuery() {
     if (commandEditor()) setSave(true);
   }
+  /** 打开片段库时捕获原选区；预览编辑器和本地保存不能接管查询模型。 */
+  function openSnippets(create = false, instance = editor.current) {
+    const target = commandEditor();
+    if (!target || target.instance !== instance) return;
+    const ranges = instance.getSelections();
+    if (ranges?.length !== 1) { setError(zh.snippets.singleTarget); return; }
+    const range = ranges[0], length = target.model.getValueLengthInRange(range);
+    if (create && range.isEmpty()) return;
+    if (create && length > SNIPPET_LIMITS.sql) { setError(zh.snippets.selectionTooLong); return; }
+    const selected = length <= SNIPPET_LIMITS.sql ? target.model.getValueInRange(range) : '';
+    if (create && !selected.trim()) { setError(zh.snippets.selectionBlank); return; }
+    const initialSql = selected || (target.model.getValueLength() <= SNIPPET_LIMITS.sql ? target.model.getValue() : '');
+    snippetTarget.current?.dispose();
+    snippetTarget.current = captureInsertion(instance, true);
+    if (snippetTarget.current) setSnippets({ initialSql, create });
+  }
+  function closeSnippets() {
+    snippetTarget.current?.dispose();
+    snippetTarget.current = null;
+    setSnippets(undefined);
+  }
+  /** 只消费捕获的原选区，沿既有正文桥与单一撤销组插入纯文本，不执行SQL。 */
+  function insertSnippet(sql: string) {
+    const instance = editor.current, target = snippetTarget.current;
+    if (!instance || !target?.current()) throw Error(zh.snippets.insertChanged);
+    target.insert(sql);
+    closeSnippets();
+    window.setTimeout(() => {
+      if (alive.current && editor.current === instance && useWorkspace.getState().settings.activeTabId === tab.id) instance.focus();
+    }, 0);
+  }
   /** 复制只读取原草稿和固定数据库上下文，沿既有意图保护新建未绑定的独立查询。 */
   async function duplicateQuery() {
     if (duplicateIntent.current || !commandEditor()) return;
@@ -1381,6 +1423,7 @@ export function PostgresQueryTab({
     parameters: { enabled: canRun, run: openParameters },
     format: { enabled: editable, run: formatQuery },
     'save-query': { enabled: editable, run: openSaveQuery },
+    'sql-selection-to-snippet': { enabled: editable && editorSelection.single, run: () => openSnippets(true) },
     find: { enabled: editable, run: () => editorAction('actions.find') },
     replace: { enabled: editable, run: () => editorAction('editor.action.startFindReplaceAction') },
     'sql-goto-line': { enabled: editable, run: () => { if (!openFocusedGridRowJump()) return editorAction(sqlPositionActions['sql-goto-line']); } },
@@ -1394,6 +1437,17 @@ export function PostgresQueryTab({
     active: workspace.settings.activeTabId === tab.id && !closeRequest,
     contextKey: JSON.stringify([scope.database, session.current?.id, phase.current?.taskId, state.transactionKnown, state.transactionFailed]),
   });
+  useEffect(() => {
+    if (!editorInstance || !editable || workspace.settings.activeTabId !== tab.id) return;
+    let active = true;
+    const action = editorInstance.addAction({
+      id: `dbark-postgres-selection-to-snippet:${uid()}`, label: uiCommandLabels['sql-selection-to-snippet'],
+      precondition: 'editorHasSelection && !editorHasMultipleSelections && !editorReadonly',
+      contextMenuGroupId: 'modification', contextMenuOrder: 6,
+      run: () => { if (active) openSnippets(true, editorInstance); },
+    });
+    return () => { active = false; action.dispose(); };
+  }, [editorInstance, editable, workspace.settings.activeTabId, tab.id, tab.sql, profile, version]);
   return (
     <div className="workspace-tab query-tab postgres-query">
       <div className="context-bar">
@@ -1436,6 +1490,7 @@ export function PostgresQueryTab({
             <button disabled={!editable} onClick={openSaveQuery}>
               {text.save}
             </button>
+            <button disabled={!editable} onClick={() => openSnippets()}>{zh.snippets.title}</button>
             <button disabled={!editable || duplicating || duplicateOrigin.current.connectionId !== tab.connectionId ||
               duplicateOrigin.current.version !== version} title={queryDuplicateZh.hint}
               onClick={() => void duplicateQuery()}>{queryDuplicateZh.action}</button>
@@ -1659,7 +1714,7 @@ export function PostgresQueryTab({
           }}
         />
       )}
-      {closeRequest && !save && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !pinSql && !comparisonDraft && (
+      {closeRequest && !save && !snippets && !exportView && !filterDraft && !columnDraft && !statisticsDraft && !presetDraft && !pinSql && !comparisonDraft && (
         <QueryCloseDialog
           title={tab.title}
           onCancel={() => finishClose(false)}
@@ -1680,6 +1735,8 @@ export function PostgresQueryTab({
           }}
         />
       )}
+      {snippets && <SnippetsDialog dialect="postgresql" initialSql={snippets.initialSql} startWithDraft={snippets.create}
+        onInsert={insertSnippet} onClose={closeSnippets} />}
     </div>
   );
 }

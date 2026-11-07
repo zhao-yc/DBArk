@@ -1,5 +1,5 @@
 import { signatureLexicalContext } from '../shared/completionLexical';
-import type { SqlSnippet } from '../shared/contracts';
+import type { ConnectionProfile, SqlSnippet } from '../shared/contracts';
 import { SNIPPET_LIMITS } from '../shared/snippets';
 import { invoke } from './lib';
 import { zh } from './locales/zh-CN';
@@ -10,6 +10,13 @@ export const snippetTemplates: SqlSnippet[] = [
   { id: 'builtin-count', name: zh.snippets.countName, group: zh.snippets.builtin, description: zh.snippets.countDescription, sql: 'SELECT `category`, COUNT(*) AS `record_count`\nFROM `your_table`\nGROUP BY `category`\nORDER BY `record_count` DESC;', updatedAt: '' },
   { id: 'builtin-explain', name: zh.snippets.explainName, group: zh.snippets.builtin, description: zh.snippets.explainDescription, sql: 'EXPLAIN\nSELECT *\nFROM `your_table`\nWHERE `id` = 1;', updatedAt: '' },
 ];
+
+// 仅转换受控内置模板的标识符占位符；用户片段跨方言共享，正文绝不重写。
+const postgresTemplates = snippetTemplates.map(item => ({ ...item, sql: item.sql.replaceAll('`', '"') }));
+/** 方言模板使用稳定对象，模态重渲染后仍能识别只读的内置记录。 */
+export function snippetTemplatesForDialect(dialect?: ConnectionProfile['dialect']): SqlSnippet[] {
+  return dialect === 'postgresql' ? postgresTemplates : snippetTemplates;
+}
 
 /** 共享本窗口的单次本地读取；写入后的旧回包不能再次发布。 */
 export function createSnippetCatalog(read: () => Promise<SqlSnippet[]>) {
