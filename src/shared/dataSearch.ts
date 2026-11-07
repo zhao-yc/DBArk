@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {searchIdentifier} from './databaseSearch';
+import {searchIdentifier,sqliteSearchName} from './databaseSearch';
 import {databaseSearchPatternSchema} from './databaseSearchPattern';
 import type {CellValue} from './contracts';
 import type{DataSearchNavigationReason}from'./dataSearchRecords';
@@ -17,19 +17,29 @@ const postgresSearchColumns = (max: number) => z.array(dataSearchColumnSchema.ex
 export const postgresDataSearchTargetSchema = dataSearchTargetSchema.extend({
   database: postgresDataSearchName, table: postgresDataSearchRelation, columns: postgresSearchColumns(dataSearchLimits.projectionColumns),
 });
+const sqliteSearchColumns = (max: number) => z.array(dataSearchColumnSchema.extend({ name: sqliteSearchName })).min(1).max(max)
+  .refine(columns => new Set(columns.map(column => column.name)).size === columns.length);
+export const sqliteDataSearchTargetSchema = dataSearchTargetSchema.extend({
+  database: z.literal('main'), table: sqliteSearchName, columns: sqliteSearchColumns(dataSearchLimits.projectionColumns),
+});
+const sqliteDataSearchScopeSchema = sqliteDataSearchTargetSchema.extend({ columns: sqliteSearchColumns(dataSearchLimits.columns) });
+const genericScope = dataSearchTargetSchema.extend({
+  database: postgresDataSearchName, table: postgresDataSearchRelation, columns: sqliteSearchColumns(dataSearchLimits.columns),
+});
 const postgresDataSearchScopeSchema = postgresDataSearchTargetSchema.extend({ columns: postgresSearchColumns(dataSearchLimits.columns) });
 export const dataSearchMatcherSchema=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('text'),pattern:databaseSearchPatternSchema}).strict(),
   z.object({kind:z.literal('null')}).strict(),
 ]);
 export const dataSearchInputSchema=z.object({
-  connectionId:z.string().min(1).max(200),taskId:z.string().uuid(),dialect:z.literal('postgresql').optional(),
-  targets:z.array(postgresDataSearchScopeSchema).min(1).max(dataSearchLimits.targets),
+  connectionId:z.string().min(1).max(200),taskId:z.string().uuid(),dialect:z.enum(['postgresql','sqlite']).optional(),
+  targets:z.array(genericScope).min(1).max(dataSearchLimits.targets),
   matcher:dataSearchMatcherSchema,maxResults:z.number().int().min(1).max(dataSearchLimits.rows),allowViews:z.boolean(),onError:z.enum(['stop','continue']),
 }).strict().superRefine((input,context)=>{
-  if (!input.dialect && input.targets.some(target => !dataSearchScopeSchema.safeParse(target).success))
-    context.addIssue({code:'custom',path:['targets'],message:'数据搜索范围含无效的 MySQL 或 MariaDB 标识符'});
-  if (input.dialect && input.matcher.kind === 'text' && input.matcher.pattern.text.includes('\0'))
+  const scope = input.dialect === 'sqlite' ? sqliteDataSearchScopeSchema : input.dialect === 'postgresql' ? postgresDataSearchScopeSchema : dataSearchScopeSchema;
+  if (input.targets.some(target => !scope.safeParse(target).success))
+    context.addIssue({code:'custom',path:['targets'],message:'数据搜索范围含无效标识符或数据库'});
+  if (input.dialect === 'postgresql' && input.matcher.kind === 'text' && input.matcher.pattern.text.includes('\0'))
     context.addIssue({code:'custom',path:['matcher'],message:'PostgreSQL 搜索文字不能包含 NUL'});
   if(new Set(input.targets.map(target=>JSON.stringify([target.database,target.table]))).size!==input.targets.length)context.addIssue({code:'custom',message:'数据搜索目标不能重复'});
   if(input.targets.reduce((count,target)=>count+target.columns.length,0)>dataSearchLimits.totalColumns)context.addIssue({code:'custom',message:'全部目标最多选择16384个字段'});
@@ -46,7 +56,9 @@ export interface DataSearchColumnMetadata{name:string;dataType:string;binary:boo
 export interface DataSearchTargetMetadata{target:DataSearchTarget;columns:DataSearchColumnMetadata[];keyColumns:DataSearchColumnMetadata[];keyUnavailableReason?:'no-key'|'unsupported-key-type'|'key-not-selectable';indexMetadataIncomplete:boolean}
 export interface DataSearchCell{matched:boolean;preview:string|null;characters:string|null;truncated:boolean}
 export interface PostgresSearchRowIdentity { tableOid:string; tid:string; xmin:string; fileNode:string }
-export interface DataSearchRow{cells:DataSearchCell[];keyValues:CellValue[]|null;keyUnavailableReason?:'no-key'|'unsupported-key-type'|'key-too-large'|'key-not-selectable';timestampEpochs?:(string|null)[];postgresIdentity?:PostgresSearchRowIdentity}
+export type SqliteSearchKey = [kind: 'text' | 'blob' | 'integer' | 'real', value: string];
+export interface SqliteSearchRowIdentity { stamp: string; keys: SqliteSearchKey[] }
+export interface DataSearchRow{cells:DataSearchCell[];keyValues:CellValue[]|null;keyUnavailableReason?:'no-key'|'unsupported-key-type'|'key-too-large'|'key-not-selectable';timestampEpochs?:(string|null)[];postgresIdentity?:PostgresSearchRowIdentity;sqliteIdentity?:SqliteSearchRowIdentity}
 /** 每处匹配单元格为一个命中；同一行多个字段分别列出，候选键与预览保持独立。 */
 export interface DataSearchHit{columnIndex:number;cell:DataSearchCell;keyValues:CellValue[]|null;keyUnavailableReason?:DataSearchRow['keyUnavailableReason'];recordRef?:string;navigationReason?:DataSearchNavigationReason}
 export interface DataSearchProgress{phase:'preparing'|'scanning'|'waiting'|'releasing';targetIndex:number;targets:number;processedBlocks:number;blocks:number;failedBlocks:number;hits:number;bytes:number;sequence:number;limitReached:boolean;limitReason?:'hits'|'bytes';peakBufferedRows:number;peakBufferedBytes:number}
@@ -57,6 +69,6 @@ export type DataSearchReply=
 
 /** 逐块保留原字段位置，每次最多16个投影；调用方据此将每处匹配关联回原选择。 */
 export function* dataSearchBlocks(raw:DataSearchScope,dialect?:DataSearchInput['dialect']):Generator<{target:DataSearchTarget;columnOffset:number}>{
-  const scope=(dialect ? postgresDataSearchScopeSchema : dataSearchScopeSchema).parse(raw);
+  const scope=(dialect === 'sqlite' ? sqliteDataSearchScopeSchema : dialect === 'postgresql' ? postgresDataSearchScopeSchema : dataSearchScopeSchema).parse(raw);
   for(let columnOffset=0;columnOffset<scope.columns.length;columnOffset+=dataSearchLimits.projectionColumns)yield{target:{...scope,columns:scope.columns.slice(columnOffset,columnOffset+dataSearchLimits.projectionColumns)},columnOffset};
 }

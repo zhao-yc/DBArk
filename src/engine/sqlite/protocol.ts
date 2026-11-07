@@ -69,7 +69,7 @@ export interface SqliteExecutionResult { statements: SqliteStatementResult[]; tr
 export interface SqliteOpenOptions { path: string; readOnly: boolean; busyTimeoutMs: number; }
 export const sqliteCopySourceSchema = 'dbark_copy_source';
 /** 固定模式由 Main 独立任务注入，普通查询不能附加文件。 */
-export interface SqliteWorkerOpenOptions extends SqliteOpenOptions { mode?: 'table-rebuild' | 'table-copy'; sourcePath?: string; }
+export interface SqliteWorkerOpenOptions extends SqliteOpenOptions { mode?: 'table-rebuild' | 'table-copy' | 'data-search'; sourcePath?: string; }
 /** 纯自有数据复制，普通入口即使mode为undefined也拒绝，避免扩展字段被透传到特权writer。 */
 function copyOpenOptions(input: unknown, allowRebuild: boolean): SqliteWorkerOpenOptions {
   const fail = () => Error('SQLite连接参数或私有模式无效');
@@ -82,6 +82,7 @@ function copyOpenOptions(input: unknown, allowRebuild: boolean): SqliteWorkerOpe
   if (typeof values.path !== 'string' || !values.path || values.path.includes('\0') || typeof values.readOnly !== 'boolean' || !Number.isInteger(values.busyTimeoutMs) || Number(values.busyTimeoutMs) < 0 || Number(values.busyTimeoutMs) > 5000) throw fail();
   const base = { path: values.path, readOnly: values.readOnly, busyTimeoutMs: values.busyTimeoutMs as number };
   if (mode === 'table-copy' && typeof values.sourcePath === 'string' && values.sourcePath && !values.sourcePath.includes('\0')) return { ...base, mode, sourcePath: values.sourcePath };
+  if (mode === 'data-search' && values.readOnly && !keys.includes('sourcePath')) return { ...base, mode };
   if (mode === 'table-rebuild' && !values.readOnly && !keys.includes('sourcePath')) return { ...base, mode };
   if (keys.includes('mode') || keys.includes('sourcePath')) throw fail();
   return base;

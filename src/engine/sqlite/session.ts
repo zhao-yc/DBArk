@@ -84,6 +84,10 @@ export class SqliteDriverSession {
   static async openTableCopy(create: () => SqliteProcessTransport, options: SqliteOpenOptions, sourcePath: string): Promise<SqliteDriverSession> {
     return this.openOwned(create, copySqliteWorkerOpenOptions({ ...copySqliteOpenOptions(options), mode: 'table-copy', sourcePath }));
   }
+  /** 搜索函数只在专用物理只读会话存在，普通查询无法选择此模式。 */
+  static async openDataSearch(create: () => SqliteProcessTransport, options: SqliteOpenOptions): Promise<SqliteDriverSession> {
+    return this.openOwned(create, copySqliteWorkerOpenOptions({ ...copySqliteOpenOptions(options), mode: 'data-search' }));
+  }
   private static async openOwned(create: () => SqliteProcessTransport, options: SqliteWorkerOpenOptions): Promise<SqliteDriverSession> {
     const session = new SqliteDriverSession(create(), options);
     try { await session.openResult.promise; return session; }

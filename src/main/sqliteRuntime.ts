@@ -14,6 +14,12 @@ import { readSqliteCompletion } from './sqliteCompletion';
 import { readSqliteCatalogDefinition, readSqliteObjectDefinition, sqliteObjectDefinitionDatabase } from './sqliteObjectDefinition';
 import { StructureSearchPages, type StructureSearchState } from '../engine/structureSearchPages';
 import { structureSearchInputSchema, structureSearchContinueSchema } from '../shared/databaseSearch';
+import { DataSearchReferences } from '../engine/dataSearchReferences';
+import { DataSearchScans } from '../engine/dataSearchScans';
+import { dataSearchInputSchema } from '../shared/dataSearch';
+import { dataSearchCatalogueSchema } from '../shared/dataSearchCatalogue';
+import { dataSearchRecordReadSchema } from '../shared/dataSearchRecords';
+import { readSqliteDataSearchCatalogue, readSqliteDataSearchRecord, sqliteDataSearchSource } from './sqliteDataSearch';
 import { readSqliteStructureSearchPage } from './sqliteStructureSearch';
 import { objectDefinitionInputSchema, objectDefinitionLimits, objectDefinitionTaskPrefix, type ObjectDefinitionOutput } from '../shared/objectDefinition';
 import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTaskPrefix, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
@@ -93,7 +99,7 @@ interface BrowseTask {
   cleanupFailure?: unknown; cancelFailure?: unknown;
 }
 interface FinishedBrowseTask { kind: 'browse-finished'; active?: undefined; }
-interface CompletionTask extends BrowseTask { session?: Session; abortRead?: AbortController; }
+interface CompletionTask extends BrowseTask { session?: Session; abortRead?: AbortController; dataSearch?: true; }
 interface ExportTask extends Omit<BrowseTask, 'kind'> {
   kind: 'export'; input: SqliteTableExportRequest; file?: SqliteTableExportFile;
   committing: boolean; retainedDestination: boolean; rows: number;
@@ -151,6 +157,8 @@ export class SqliteRuntime {
   private readonly tasks = new Map<string, Task>();
   private readonly completionReads = new Map<string, CompletionTask>();
   private readonly structureSearches = new StructureSearchPages();
+  private readonly dataSearchReferences = new DataSearchReferences();
+  private readonly dataSearchScans = new DataSearchScans(event => this.options.emit(event), undefined, this.dataSearchReferences);
   private readonly definitionReads = new Map<string, CompletionTask>();
   private stopping = false;
   private closeWork?: Promise<void>;
@@ -202,7 +210,7 @@ export class SqliteRuntime {
     void work.then(() => connection.pending.delete(work), () => connection.pending.delete(work)); return work;
   }
   /** 工厂产生的每个准确对象都登记到真实exit，打开失败也不能只清理Promise。 */
-  private async driver(connection: Connection, profile: SqliteConnectionProfile, readOnly = profile.sqlite.readOnly, register?: (resource: Resource) => void, rebuild = false, sourcePath?: string): Promise<SqliteDriverSession> {
+  private async driver(connection: Connection, profile: SqliteConnectionProfile, readOnly = profile.sqlite.readOnly, register?: (resource: Resource) => void, rebuild = false, sourcePath?: string, dataSearch = false): Promise<SqliteDriverSession> {
     const owned: { resource?: Resource } = {};
     try {
       const create = () => {
@@ -213,7 +221,7 @@ export class SqliteRuntime {
         return transport;
       };
       const options = { path: profile.sqlite.filePath!, readOnly, busyTimeoutMs: profile.sqlite.busyTimeoutMs };
-      const driver = await (sourcePath ? SqliteDriverSession.openTableCopy(create, options, sourcePath) : rebuild ? SqliteDriverSession.openRebuild(create, options) : SqliteDriverSession.open(create, options));
+      const driver = await (sourcePath ? SqliteDriverSession.openTableCopy(create, options, sourcePath) : rebuild ? SqliteDriverSession.openRebuild(create, options) : dataSearch ? SqliteDriverSession.openDataSearch(create, options) : SqliteDriverSession.open(create, options));
       // 并发open始终绑定各自工厂闭包中的原对象，不能依赖资源集合顺序或PID。
       if (!owned.resource || !connection.resources.has(owned.resource)) {
         await driver.close(); throw new SqliteDriverError('SQLite打开期间准确资源已退出', 'SQLITE_PROCESS_EXIT', null, 0, driver.isClosed);
@@ -347,12 +355,12 @@ export class SqliteRuntime {
   }
 
   private async ownedDefinitionRead<T>(task: CompletionTask, profile: SqliteConnectionProfile, check: () => void,
-    action: (driver: SqliteDriverSession) => Promise<T>): Promise<T> {
+    action: (driver: SqliteDriverSession) => Promise<T>, dataSearch = false): Promise<T> {
     const { connection } = task;
     let value!: T, failed = false, failure: unknown;
     try {
       check();
-      task.driver = await this.driver(connection, profile, true, resource => { task.resource = resource; });
+      task.driver = await this.driver(connection, profile, true, resource => { task.resource = resource; }, false, undefined, dataSearch);
       check();
       value = await action(task.driver);
     } catch (reason) {
@@ -395,6 +403,49 @@ export class SqliteRuntime {
     const read = (state: StructureSearchState) => this.trackDefinitionRead(input.taskId, task, () =>
       this.ownedDefinitionRead(task, profile, check, driver => readSqliteStructureSearchPage(driver, state, check, () => { task.cleaning = true; }, abortRead.signal)));
     return next ? this.structureSearches.nextPage(input, 'sqlite', read) : this.structureSearches.startPage(input, 'sqlite', read);
+  }
+
+  private searchData(command: 'search.catalogue' | 'search.dataStart' | 'search.recordRead', raw: Record<string, unknown>) {
+    const { profile: _profile, ...request } = raw;
+    const input = command === 'search.catalogue' ? dataSearchCatalogueSchema.parse(request)
+      : command === 'search.dataStart' ? dataSearchInputSchema.parse(request) : dataSearchRecordReadSchema.parse(request);
+    if (command !== 'search.recordRead' && (!('dialect' in input) || input.dialect !== 'sqlite'))
+      throw Error('搜索方言与保存的 SQLite 连接不匹配');
+    if (this.ownsTask(input.taskId) || this.completionReads.has(input.taskId) || this.definitionReads.size >= objectDefinitionLimits.active)
+      throw Error('SQLite 搜索编号已使用或读取繁忙');
+    const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId);
+    const connection = this.connection(profile.id);
+    this.assertTarget(connection, profile);
+    const abortRead = new AbortController();
+    const task: CompletionTask = { kind: 'browse', connection, cancelled: false, boundaryCancelled: false, cleaning: false, abortRead,
+      ...(command === 'search.dataStart' ? { dataSearch: true as const } : {}) };
+    const check = () => {
+      this.browseCheck(task);
+      if (!sameTarget(profile, this.options.resolveProfile(profile.id))) throw Error('SQLite 搜索连接已变化，请重新搜索');
+    };
+    const control = { check, beginCleanup: () => { task.cleaning = true; }, cleanupFailed: (reason: unknown) => { task.cleanupFailure = reason; } };
+    const read = async <T>(action: (driver: SqliteDriverSession, scope: typeof control) => Promise<T>) => {
+      try { return await this.ownedDefinitionRead(task, profile, check, driver => action(driver, control), command !== 'search.catalogue'); }
+      finally {
+        // 只在当前物理文件会话已释放时丢弃句柄。未知退出必须留给原连接收尾。
+        if (!task.resource || !connection.resources.has(task.resource)) { task.driver = undefined; task.resource = undefined; task.cleaning = false; }
+      }
+    };
+    if ('targets' in input) return this.dataSearchScans.startScan(input, scan =>
+      this.trackDefinitionRead(input.taskId, task, async () => {
+        const interrupt = () => this.dataSearchScans.interrupt(input.taskId);
+        abortRead.signal.addEventListener('abort', interrupt, { once: true });
+        try { await scan(sqliteDataSearchSource(input, this.dataSearchReferences, read, check, () => !!task.cleanupFailure || connection.blocked)); }
+        finally { abortRead.signal.removeEventListener('abort', interrupt); }
+      }));
+    if ('kind' in input) return this.trackDefinitionRead(input.taskId, task, () =>
+      read((driver, scope) => readSqliteDataSearchCatalogue(driver, input, scope)));
+    const entry = this.dataSearchReferences.lookup(input);
+    return this.trackDefinitionRead(input.taskId, task, async () => {
+      const result = await read((driver, scope) => readSqliteDataSearchRecord(driver, entry, scope));
+      if (this.dataSearchReferences.lookup(input) !== entry) throw Error('SQLite 原搜索引用已变化，请重新搜索');
+      return result;
+    });
   }
 
   /** 已有连接身份不能因外部配置变化而静默更换；活动标签持有创建时的完整快照。 */
@@ -1253,6 +1304,7 @@ export class SqliteRuntime {
         if (!connection || !changed) return;
         if (connection.closing || connection.blocked || connection.pending.size || connection.resources.size || connection.files.size || [...this.sessions.values()].some(session => session.connection === connection)) throw Error('SQLite连接仍有打开的会话、运行操作或未确认资源；请先显式关闭标签并断开连接，现有任务未取消');
         this.structureSearches.releaseConnection(input.id);
+        this.dataSearchReferences.releaseConnection(input.id);
         this.edits.releaseConnection(input.id); this.creates.releaseConnection(input.id); this.imports.releaseConnection(input.id); this.importSources.releaseConnection(input.id); this.indexes.releaseConnection(input.id); this.columns.releaseConnection(input.id);this.rebuilds.releaseConnection(input.id); this.objects.releaseConnection(input.id); this.tableMaintenance.releaseConnection(input.id); this.tableRenames.releaseConnection(input.id); this.connections.delete(input.id); return;
       }
       case 'connections.close': return this.closeConnection(input.id);
@@ -1309,6 +1361,15 @@ export class SqliteRuntime {
       case 'sqlite.incomingPage': return this.incoming(input);
       case 'sqlite.referencePage': return this.reference(input);
       case 'sqlite.completion': return this.completion(input);
+      case 'search.catalogue': case 'search.dataStart': case 'search.recordRead': return this.searchData(command, input);
+      case 'search.dataNext': return this.dataSearchScans.next(input);
+      case 'search.recordsRelease': return this.dataSearchReferences.release(input);
+      case 'search.dataRelease': {
+        if (!this.dataSearchScans.assertOwner(input)) return;
+        const task = this.definitionReads.get(input.taskId);
+        if (task?.dataSearch) await this.cancelCompletion(task);
+        return this.dataSearchScans.release(input);
+      }
       case 'search.structure': return this.searchStructure(input, false);
       case 'search.structureContinue': return this.searchStructure(input, true);
       case 'search.release': return this.structureSearches.release(input);
@@ -1399,6 +1460,7 @@ export class SqliteRuntime {
     if (connection.closeWork) return connection.closeWork;
     connection.closing = true;
     this.structureSearches.releaseConnection(id);
+    this.dataSearchReferences.releaseConnection(id);
     this.edits.releaseConnection(id);
     this.creates.releaseConnection(id);
     this.imports.releaseConnection(id);
@@ -1449,7 +1511,7 @@ export class SqliteRuntime {
         const files = await Promise.allSettled([...this.connections.values()].flatMap(connection => [...connection.files]).map(file => file.recover())); failures(files, 'SQLite强退仍有原导出文件未确认清理');
         if ([...this.connections.values()].some(connection => connection.resources.size)) throw Error('SQLite强退资源账本仍未清零');
         if ([...this.connections.values()].some(connection => connection.files.size)) throw Error('SQLite强退原导出文件账本仍未清零');
-        this.sessions.clear(); this.connections.clear(); this.completionReads.clear(); this.definitionReads.clear();
+        this.sessions.clear(); this.connections.clear(); this.completionReads.clear(); this.definitionReads.clear(); this.dataSearchReferences.close();
       } finally { clearTimeout(timer); }
     })();
     this.forceWork = work; void work.catch(() => { if (this.forceWork === work) this.forceWork = undefined; }); return work;

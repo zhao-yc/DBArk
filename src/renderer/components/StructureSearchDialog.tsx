@@ -19,7 +19,7 @@ function searchKinds(dialect: string | undefined, content: 'name' | 'definition'
 }
 
 /** 搜索窗口独占自己的任务和续页；不借用、关闭或刷新任何已有查询/表格标签。 */
-export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{onClose:()=>void;onOpen:(connectionId:string,hit:StructureSearchHit,definitionSearch?:DefinitionSearchOpen)=>void;onData?:()=>void;onSavedQueries?:()=>void}){
+export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{onClose:()=>void;onOpen:(connectionId:string,hit:StructureSearchHit,definitionSearch?:DefinitionSearchOpen)=>void;onData?:(connectionId:string)=>void;onSavedQueries?:()=>void}){
   const state=useWorkspace(),activeTab=state.settings.tabs.find(tab=>tab.id===state.settings.activeTabId);
   const initial=structureSearchContext(state.selection,activeTab,state.connections[0]?.id??'');
   const initialProfile=state.connections.find(profile=>profile.id===initial.connectionId);
@@ -80,7 +80,7 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
   /** 关闭及跳转先等待当前批次与续页释放，清理失败时保留窗口供用户核对。 */
   async function close(open?:StructureSearchHit|'data'|'queries'){
     if(closeRequested.current)return;closeRequested.current=true;setClosing(true);setError('');
-    try{await cancel();await work.current;await releaseCursor();if(open==='data')onData?.();else if(open==='queries')onSavedQueries?.();else if(open){const lease=resultLease.current;
+    try{await cancel();await work.current;await releaseCursor();if(open==='data')onData?.(connectionId);else if(open==='queries')onSavedQueries?.();else if(open){const lease=resultLease.current;
       if (open.matchedIn !== 'definition' && !lease?.current()) throw Error(definitionNavigationZh.invalid);
       onOpen(resultConnection.current,open,open.matchedIn==='definition'&&lease&&open.parentKind!=='sequence'?{connectionId:resultConnection.current,connectionVersion:lease.version,database:open.database,name:open.dialect==='sqlite'&&open.kind==='index'?open.name:open.object,kind:open.dialect==='sqlite'&&open.kind==='index'?'index':open.parentKind,invalidated:!lease.current(),result:open.definitionNavigation,...(open.dialect?{dialect:open.dialect}:{})}:undefined);}else onClose();}
     catch(reason){setError(errorMessage(reason));closeRequested.current=false;setClosing(false);}
@@ -88,7 +88,7 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
   const columns:Column<StructureSearchHit>[]=[{key:'database',name:text.databaseColumn,width:170},{key:'kind',name:text.kindColumn,width:100,renderCell:({row})=>text.kinds[row.kind]},{key:'object',name:text.objectColumn,width:220},{key:'name',name:searchIn==='definition'?text.definitionLocation:text.nameColumn,width:260,renderCell:({row})=>row.matchedIn==='definition'?text.definitionMatch(row.definitionCharacters??0):row.name}];
   return <Modal title={searchIn==='definition'?text.definitionsTitle:text.title} wide onClose={()=>void close()}>
     <div className="modal-content database-search-content">
-      {onData&&!sqlite&&<div><button disabled={closing} onClick={()=>void close('data')}>{text.dataMode}</button></div>}
+      {onData&&<div><button disabled={closing} onClick={()=>void close('data')}>{text.dataMode}</button></div>}
       {onSavedQueries&&<div><button disabled={closing} onClick={()=>void close('queries')}>{text.savedQueries}</button></div>}
       <fieldset disabled={busy||closing} className="database-search-options">
         <div className="form-grid"><Field label={text.searchIn}><select aria-label={text.searchIn} value={searchIn} onChange={event=>{const value=event.target.value as 'name'|'definition';setSearchIn(value);setKinds([...searchKinds(dialect,value)]);}}><option value="name">{text.names}</option><option value="definition">{text.definitions}</option></select></Field><Field label={text.connection}><select aria-label={text.connection} value={connectionId} onChange={event=>{

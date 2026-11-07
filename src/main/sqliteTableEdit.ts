@@ -23,11 +23,11 @@ function sqliteDraftParameter(value: SqliteOriginalValue): SqliteValue {
   return { type: value.kind, value: value.value };
 }
 
-interface Locator { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[]; collations: string[]; rowid?: string; }
+export interface SqliteTableLocator { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[]; collations: string[]; rowid?: string; }
 interface Snapshot {
   relation?: SqliteTableRelation;
   id: string; pageOffset: number; pageLimit: number; restoredGroup?: boolean; target: SqliteEditTarget; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
-  catalogue: SqliteTableCatalogue; columns: SqliteTableDraftDocument['columns']; schemaVersion: string; locator: Locator;
+  catalogue: SqliteTableCatalogue; columns: SqliteTableDraftDocument['columns']; schemaVersion: string; locator: SqliteTableLocator;
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
 }
 interface Statement { sql: string; parameters: SqliteValue[]; row?: number; source?: number; kind: SqliteTableChange['kind']; }
@@ -101,6 +101,29 @@ function display(statement: Statement): string {
   if (index !== statement.parameters.length) throw Error('SQLite预览参数与语句不一致'); return result;
 }
 
+/** 同一目录快照下选择原生唯一键。编辑及搜索定位共用 rowid 遮蔽、索引和排序规则判定。 */
+export async function chooseSqliteTableLocator(driver: SqliteDriverSession, table: string, catalogue: SqliteTableCatalogue,
+  control: Pick<SqliteTableBrowseControl, 'check'>): Promise<{ locator?: SqliteTableLocator; strict: boolean }> {
+  const facts = await read(driver, "SELECT type,wr,strict FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY", [table], control, 2);
+  if (facts.length !== 1 || facts[0][0] !== 'table') return { locator: undefined, strict: false };
+  const withoutRowid = integer(facts[0][1]) === '1', strict = integer(facts[0][2]) === '1';
+  const columns = catalogue.xinfo.filter(row => integer(row[6]) !== '1')
+    .map(row => ({ name: row[1] as string, nullable: integer(row[3]) === '0' }));
+  let locator: SqliteTableLocator | undefined;
+  const fieldNames = new Set(columns.map(column => column.name.toLowerCase())), rowid = ['rowid', '_rowid_', 'oid'].find(name => !fieldNames.has(name));
+  if (!withoutRowid && rowid && columns.length < 1024) locator = { kind: 'rowid', columns: [], rowid, collations: ['BINARY'] };
+  if (!locator) {
+    const indexes = await read(driver, 'SELECT name,origin FROM pragma_index_list(?,\'main\') WHERE "unique"=1 AND partial=0 ORDER BY seq', [table], control);
+    for (const item of indexes) {
+      if (typeof item[0] !== 'string' || withoutRowid && item[1] !== 'pk') continue;
+      const parts = await read(driver, 'SELECT cid,name,coll FROM pragma_index_xinfo(?,\'main\') WHERE key=1 ORDER BY seqno', [item[0]], control);
+      if (!parts.length || parts.some(part => BigInt(integer(part[0])) < 0n || typeof part[1] !== 'string' || !['BINARY', 'NOCASE', 'RTRIM'].includes(String(part[2])) || !columns.some(column => column.name === part[1] && (!column.nullable || withoutRowid)))) continue;
+      locator = { kind: item[1] === 'pk' ? 'primary-key' : 'unique-key', columns: parts.map(part => part[1] as string), collations: parts.map(part => part[2] as string) }; break;
+    }
+  }
+  return { locator, strict };
+}
+
 /** Main专有快照与一次性预览账本；释放不取消已经claim的写事务。 */
 export class SqliteTableEdits {
   private readonly snapshots = new Map<string, Snapshot>();
@@ -121,26 +144,12 @@ export class SqliteTableEdits {
   releaseConnection(connectionId: string): void { for (const snapshot of this.snapshots.values()) if (snapshot.target.connectionId === connectionId) this.invalidate(snapshot); }
   release(input: SqliteTableEditReleaseInput): void { const value = sqliteTableEditReleaseSchema.parse(input); if (value.previewId) this.dropPreview(value.previewId); if (value.snapshotId) { const snapshot = this.snapshots.get(value.snapshotId); if (snapshot) this.invalidate(snapshot); } }
   /** 只读判断也沿真实目录；virtual/shadow/系统表不靠名称猜测成普通可写表。 */
-  async preparePage(driver: SqliteDriverSession, input: SqliteTablePageInput, profile: SqliteConnectionProfile, catalogue: SqliteTableCatalogue, control: SqliteTableBrowseControl, inspectLocator?: (value: Locator) => void): Promise<SqliteEditReadPlan> {
+  async preparePage(driver: SqliteDriverSession, input: SqliteTablePageInput, profile: SqliteConnectionProfile, catalogue: SqliteTableCatalogue, control: SqliteTableBrowseControl, inspectLocator?: (value: SqliteTableLocator) => void): Promise<SqliteEditReadPlan> {
     const readonly = (reason = text.readonly): SqliteEditReadPlan => ({ capture: () => ({ kind: 'readonly', reason }) });
     if (profile.sqlite.readOnly || catalogue.kind !== 'table' || /^sqlite_/i.test(input.table) || !driver.identity) return readonly();
-    const facts = await read(driver, "SELECT type,wr,strict FROM pragma_table_list WHERE schema='main' AND name=? COLLATE BINARY", [input.table], control, 2);
-    if (facts.length !== 1 || facts[0][0] !== 'table') return readonly();
-    const withoutRowid = integer(facts[0][1]) === '1', strict = integer(facts[0][2]) === '1';
+    const { locator, strict } = await chooseSqliteTableLocator(driver, input.table, catalogue, control);
     const fields = catalogue.xinfo.filter(row => integer(row[6]) !== '1');
     const columns = fields.map(row => ({ name: row[1] as string, declaredType: row[2] as string, generated: ['2', '3'].includes(integer(row[6])), nullable: integer(row[3]) === '0', hasDefault: row[4] !== null }));
-    let locator: Locator | undefined;
-    const fieldNames = new Set(columns.map(column => column.name.toLowerCase())), rowid = ['rowid', '_rowid_', 'oid'].find(name => !fieldNames.has(name));
-    if (!withoutRowid && rowid && columns.length < 1024) locator = { kind: 'rowid', columns: [], rowid, collations: ['BINARY'] };
-    if (!locator) {
-      const indexes = await read(driver, 'SELECT name,origin FROM pragma_index_list(?,\'main\') WHERE "unique"=1 AND partial=0 ORDER BY seq', [input.table], control);
-      for (const item of indexes) {
-        if (typeof item[0] !== 'string' || withoutRowid && item[1] !== 'pk') continue;
-        const parts = await read(driver, 'SELECT cid,name,coll FROM pragma_index_xinfo(?,\'main\') WHERE key=1 ORDER BY seqno', [item[0]], control);
-        if (!parts.length || parts.some(part => BigInt(integer(part[0])) < 0n || typeof part[1] !== 'string' || !['BINARY', 'NOCASE', 'RTRIM'].includes(String(part[2])) || !columns.some(column => column.name === part[1] && (!column.nullable || withoutRowid)))) continue;
-        locator = { kind: item[1] === 'pk' ? 'primary-key' : 'unique-key', columns: parts.map(part => part[1] as string), collations: parts.map(part => part[2] as string) }; break;
-      }
-    }
     if (!locator) return readonly();
     const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1), schemaVersion = integer(schema[0]?.[0]);
     const identity = driver.identity!, chosen = locator; inspectLocator?.(structuredClone(chosen));
@@ -192,10 +201,10 @@ export class SqliteTableEdits {
       const schema = await read(driver, 'PRAGMA main.schema_version', [], control, 1);
       if (catalogue.kind !== 'table' || catalogue.schemaKey !== document.schemaKey || integer(schema[0]?.[0]) !== document.schemaVersion) throw Error(sqliteTableDraftMessages.changed);
       await verifySqliteTableScope(driver, input, control);
-      let chosen: Locator | undefined;
+      let chosen: SqliteTableLocator | undefined;
       for (const group of groups) plans.push(await this.preparePage(driver, { ...input, offset: group.offset, limit: group.limit }, profile, catalogue, control, value => { chosen = value; }));
       plan = plans[0];
-      const signature = (value: Locator) => JSON.stringify([value.kind, value.columns, value.collations, value.rowid ?? null]);
+      const signature = (value: SqliteTableLocator) => JSON.stringify([value.kind, value.columns, value.collations, value.rowid ?? null]);
       if (!chosen || signature(chosen) !== signature(document.locator)) throw Error(sqliteTableDraftMessages.changed);
       const projectionSql = catalogue.columns.map(column => projection('"__dbark_source".' + quote(column.name))).join(','), savedKeys = originalChanges.map(change => change.key.map(sqliteDraftParameter)), rows: SqliteValue[][] = [];
       const scoped = document.relation ? buildSqliteTableRelationWhere(document.relation) : undefined;

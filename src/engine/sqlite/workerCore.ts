@@ -10,6 +10,7 @@ import { sqliteNamedParameterNames } from './parameters';
 import { createSqliteNativeInvoke, resolveSqliteNativeResource, sqliteNativeFunction } from './nativeRuntime';
 import { SqliteRawStatement, type SqliteRawInvoke } from './rawStatement';
 import { consumeSqliteRawFrames } from './rawFrames';
+import { installSqliteSearchFunctions } from './dataSearchFunctions';
 import { SqliteRawValueError } from './rawValue';
 
 interface Port { send(message: SqliteWorkerResponse): void; exit(code: number): void; }
@@ -207,6 +208,13 @@ export class SqliteWorkerCore {
         if (!label) throw invalid();
         // ignoreBOM=true保留真实U+FEFF，不能把字段开头BOM当文件标记剥离；fatal禁止静默替换坏字节。
         const decoder = new TextDecoder(label, { fatal: true, ignoreBOM: true });
+        if (options.mode === 'data-search') installSqliteSearchFunctions(opened, decoder, reason => {
+          const message = reason instanceof Error && reason.message.startsWith('SQLite ')
+            ? reason.message : 'SQLite 搜索正则或字段编码无效';
+          const failure = new DriverFailure('SQLITE_DATA_SEARCH_VALUE', message);
+          if (this.active) this.active.fault = failure;
+          throw failure;
+        });
         opened.function(sqliteExportTextFunction, { deterministic: true, directOnly: true, useBigIntArguments: true }, (text, bytes) => {
           try {
             // 内部record预算不授权复制或导出超量单格；原库编码与UTF8输出表示均保留原1MiB门。
