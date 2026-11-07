@@ -18,6 +18,26 @@ function tableInfo(table = 'items'): TableInfo {
 }
 
 describe('文件导入预览的异步上下文', () => {
+  it('批量映射整份替换当前草稿，按可写顺序跳过生成列并拒绝旧文件上下文', async () => {
+    const info = tableInfo();
+    info.columns = [info.columns[1], info.columns[2], info.columns[0]];
+    const preview = vi.fn(async () => sample), published = vi.fn();
+    const controller = new ImportPreviewController({ metadata: async () => info, preview }, published);
+    await controller.prepare(context);
+    const original = controller.ready(context);
+    published.mockClear();
+    controller.remap({ ...context, fileToken: '旧文件' }, 'position');
+    expect(published).not.toHaveBeenCalled();
+    controller.remap(context, 'position');
+    expect(published).toHaveBeenCalledTimes(1);
+    expect(controller.ready(context)?.mapping).toEqual({ id: 'content', content: 'id', computed: '' });
+    expect(original?.mapping).toEqual({ id: 'id', content: 'content', computed: '' });
+    controller.remap(context, 'clear');
+    expect(controller.ready(context)?.mapping).toEqual({ id: '', content: '', computed: '' });
+    controller.remap(context, 'name');
+    expect(controller.ready(context)?.mapping).toEqual(original?.mapping);
+    expect(preview).toHaveBeenCalledExactlyOnceWith(context);
+  });
   it('CSV标题默认兼容，关闭后预览身份不同，位置源键即使与目标同名也绝不自动映射', async () => {
     const csv: ImportPreviewContext = { ...context, format: 'csv' }, positional = { ...csv, csvHasHeader: false };
     expect(importPreviewKey(csv)).toBe(importPreviewKey({ ...csv, csvHasHeader: true })); expect(importPreviewKey(csv)).not.toBe(importPreviewKey(positional));

@@ -1,4 +1,5 @@
 import { excelImportZh } from '../../src/shared/excelTransfer';
+import { importMappingZh } from '../../src/renderer/locales/importMapping.zh-CN';
 import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 import { test, expect, desktop, page } from './desktop-fixture';
 import { Client } from 'pg';
@@ -103,6 +104,14 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       await expect(key.getByRole('option', {name: 'import_partial (code)', exact: true})).toHaveCount(0);
       await expect(key.getByRole('option', {name: /^import_expression|^import_nullable/})).toHaveCount(0);
       await key.selectOption({label: 'import_match (tenant, code)'});
+      if (item.format === 'xlsx') {
+        await modal.getByRole('button', {name: importMappingZh.clear, exact: true}).click();
+        await expect(modal.getByLabel(conflict.mode, {exact: true})).toHaveValue('insert');
+        await modal.getByRole('button', {name: importMappingZh.name, exact: true}).click();
+        await modal.getByLabel(conflict.mode, {exact: true}).selectOption(item.mode);
+        await expect(apply).toBeDisabled();
+        await key.selectOption({label: 'import_match (tenant, code)'});
+      }
       if (index === 1) await modal.screenshot({path: info.outputPath('PostgreSQL 匹配键导入.png')});
       if (item.format === 'txt') await modal.screenshot({path: info.outputPath('PostgreSQL TXT 字段映射.png')});
       if (item.format === 'xlsx') await modal.screenshot({path: info.outputPath('PostgreSQL XLSX 字段映射.png')});

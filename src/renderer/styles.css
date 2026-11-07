@@ -25,3 +25,5 @@
 /* URI操作是文字按钮，不继承输入框旁35px图标按钮；窄空间允许整组换行。 */
 .connection-uri-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 16px}
 .connection-uri-actions>button{flex:0 0 auto;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+
+.import-mapping-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }

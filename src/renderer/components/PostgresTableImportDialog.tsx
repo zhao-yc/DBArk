@@ -17,6 +17,8 @@ import { acquireWorkspaceBusy } from '../store';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { XmlDocumentImportFields } from './XmlDocumentImportFields';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { matchImportColumns } from '../importMapping';
+import { ImportMappingActions } from './ImportMappingActions';
 
 /** 显示原文件的样本和列映射，只在用户确认后申请一次性导入。 */
 export function PostgresTableImportDialog({ target, page, initialSource, isCurrent, onClose, onOutcome }: {
@@ -89,13 +91,8 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         { csvDelimiter: delimiter, csvHasHeader: hasHeader };
       const selected = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...selection });
       if (!isCurrent()) throw Error(text.stale);
-      const assigned = new Set<string>();
-      setMapping(selected?.header.map(name => {
-        const key = records || hasHeader ? candidates.find(column => column.name === name)?.key : undefined;
-        if (!key || assigned.has(key)) return '';
-        assigned.add(key);
-        return key;
-      }) ?? []);
+      setMapping(matchImportColumns(records || hasHeader ? 'name' : 'clear', selected?.header ?? [], candidates)
+        .map(column => column?.key ?? ''));
       setFile(selected);
     } catch (reason) { setError(errorMessage(reason)); }
     finally { occupied.current = false; setChoosing(false); }
@@ -173,9 +170,10 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         <p>{text.file} · {file.name} · {file.bytes.toLocaleString('zh-CN')} {text.bytes}{file.records !== undefined && <> · {format === 'xml' && xmlOptions.documentResult !== undefined ? xmlImportZh.documentRecords(file.records) : text.records(file.records)}</>}</p>
         <fieldset disabled={locked}>
           <legend>{text.columns}</legend>
-          {!records && !hasHeader && file.header.length <= candidates.length && <button onClick={() => {
-            changeMapping(candidates.slice(0, file.header.length).map(column => column.key));
-          }}>{text.position}</button>}
+          <ImportMappingActions disabled={locked} positionDisabled={!records && file.header.length > candidates.length} onAction={action => {
+            if (occupied.current || !isCurrent()) return;
+            changeMapping(matchImportColumns(action, file.header, candidates).map(column => column?.key ?? ''));
+          }}/>
           <div className="pg-table-export-columns">
             {file.header.map((name, index) => <label key={index}>{index + 1}. {name || text.unnamed}
               <select aria-label={text.target(index)} value={mapping[index]} onChange={event => {

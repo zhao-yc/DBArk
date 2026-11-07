@@ -1,4 +1,5 @@
 import { excelImportZh } from '../../src/shared/excelTransfer';
+import { importMappingZh } from '../../src/renderer/locales/importMapping.zh-CN';
 import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 import { test, expect, desktop, page } from './desktop-fixture';
 import { isolatedDatabase } from './live-helpers';
@@ -131,6 +132,17 @@ test('XML 从文件新建表独立确认建表和导入，原文件变化时保�
       await importer.getByRole('button', {name: preflight.run, exact: true}).click();
       await expect(importer).toContainText(preflight.summary(2, 2, 0, 0, 0));
       await expect(start).toBeEnabled();
+      if (workbook) {
+        await importer.getByRole('button', {name: importMappingZh.clear, exact: true}).click();
+        await expect(start).toBeDisabled();
+        await importer.getByRole('button', {name: importMappingZh.position, exact: true}).click();
+        await expect(importer.getByRole('combobox', {name: formatText(zh.transfer.text020, 'late'), exact: true})).toHaveValue('late');
+        await expect(start).toBeDisabled();
+        await importer.getByRole('button', {name: preflight.run, exact: true}).click();
+        await expect(importer).toContainText(preflight.summary(2, 2, 0, 0, 0));
+        await expect(start).toBeEnabled();
+        await importer.screenshot({path: info.outputPath('XLSX 批量映射预检.png')});
+      }
       expect(await records()).toEqual([]);
       if (index === 1) await writeFile(files[index], source.replace('尾部字段', '改写字段'));
       await start.click();

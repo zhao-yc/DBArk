@@ -1,4 +1,5 @@
 import { excelImportZh } from '../../src/shared/excelTransfer';
+import { importMappingZh } from '../../src/renderer/locales/importMapping.zh-CN';
 import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 import { xmlImportZh } from '../../src/shared/xmlImport';
 import { navigationMenuItem } from './navigation-menu';
@@ -181,7 +182,12 @@ test('SQLite真实CSV/JSON/XML映射预检、原子导入、末行约束回滚�
     const xlsxInspection = await inspect();
     expect(xlsxInspection.fact.request.excelOptions).toEqual({sheetId: '2', headerRow: 2, firstDataRow: 4, lastDataRow: 5, protocol: 'dbark-v1'});
     expect(xlsxInspection.output.source.sha256).toBe(createHash('sha256').update(readFileSync(xlsx)).digest('hex'));
-    await mappings('xlsx');
+    await step(() => dialog().getByRole('button', {name: importMappingZh.name, exact: true}).click());
+    await step(() => expect(dialog().getByLabel(text.kind('exact_int'), {exact: true})).toHaveValue('integer'));
+    await step(() => expect(dialog().getByLabel(text.kind('payload'), {exact: true})).toHaveValue('blob-base64'));
+    await select(text.kind('flag'), 'boolean');
+    await step(() => dialog().getByRole('button', {name: importMappingZh.name, exact: true}).click());
+    await step(() => expect(dialog().getByLabel(text.kind('flag'), {exact: true})).toHaveValue('boolean'));
     const xlsxPreview = await preview();
     if (!xlsxPreview.output.ok) throw Error('XLSX 必须通过整文件预检');
     expect(disk()).toEqual(afterXml);

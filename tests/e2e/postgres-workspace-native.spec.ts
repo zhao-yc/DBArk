@@ -32,6 +32,7 @@ import { tableFilterGroupsZh as tableFilterGroupsText } from '../../src/renderer
 import { tablePresetsZh as tablePresetText } from '../../src/renderer/locales/tablePresets.zh-CN';
 import { postgresTableExportZh as tableExportText } from '../../src/renderer/locales/postgresTableExport.zh-CN';
 import { postgresTableImportZh as tableImportText } from '../../src/renderer/locales/postgresTableImport.zh-CN';
+import { importMappingZh } from '../../src/renderer/locales/importMapping.zh-CN';
 import { csvImportHeaderZh } from '../../src/renderer/locales/csvImportHeader.zh-CN';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
@@ -984,7 +985,7 @@ test('PostgreSQL窗口补全、建表、表页及正常退出', async ({}, info)
       await chooseImport.click();
       await expect(sample.getByRole('columnheader', { name: '第1列', exact: true })).toBeVisible();
       await expect(sample.getByRole('cell', { name: '首行;无表头', exact: true })).toBeVisible();
-      await csv.getByRole('button', { name: tableImportText.position, exact: true }).click();
+      await csv.getByRole('button', { name: importMappingZh.position, exact: true }).click();
       await expect(grid).not.toContainText('首行;无表头');
       await page.screenshot({ path: info.outputPath('PostgreSQL无表头CSV导入预览.png') });
       await confirm.click();

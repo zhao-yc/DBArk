@@ -8,7 +8,6 @@ export const postgresTableImportZh = {
   nullNote: '使用 UTF-8。未加引号的空字段写为 NULL，两个双引号表示空字符串。映射标识列时保留文件中的值。',
   columns: '列映射', target: (index: number) => '第 ' + (index + 1) + ' 列的目标字段',
   unnamed: '空表头', select: '请选择目标字段', skip: '跳过此源字段', file: '源文件', bytes: '字节',
-  position: '按目标列顺序映射',
   sample: '数据预览', sampleLimit: '最多显示前 5 条数据、前 12 列，长值会截短。',
   sampleLimited: '有记录超出预览范围或无法完整解析，数据库将在导入时校验全文件。',
   recordSampleLimited: '已读取完整文件和字段目录。此处仅显示有限样本，数据库将在导入时校验目标类型与约束。',

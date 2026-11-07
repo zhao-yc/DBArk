@@ -5,6 +5,7 @@ import type { DataRow, TableInfo } from '../shared/contracts';
 import { csvImportDelimiter, csvImportHasHeader, type CsvImportDelimiter } from '../shared/csvImport';
 import { importPresetConfigurationSchema, type ImportPresetConfiguration } from '../shared/importPresets';
 import { importPresetsZh } from './locales/importPresets.zh-CN';
+import { matchImportColumns, type ImportMappingAction } from './importMapping';
 
 export interface ImportPreviewTarget { connectionId: string; database: string; table: string; }
 export interface ImportPreviewContext extends ImportPreviewTarget {
@@ -92,6 +93,15 @@ export class ImportPreviewController {
     if (!current || !Object.hasOwn(current.mapping, source)) return;
     if (target !== '' && !current.info.columns.some(column => column.name === target && !column.generated)) return;
     this.update({ ...current, mapping: { ...current.mapping, [source]: target } });
+  }
+
+  /** 批量操作仅替换当前快照的映射，按一次状态更新撤下旧预检。 */
+  remap(context: ImportPreviewContext, action: ImportMappingAction): void {
+    const current = this.ready(context);
+    if (!current) return;
+    const { columns } = current.sample;
+    const targets = matchImportColumns(action, columns, current.info.columns.filter(column => !column.generated));
+    this.update({ ...current, mapping: Object.fromEntries(columns.map((source, index) => [source, targets[index]?.name ?? ''])) });
   }
 
   /** 原就绪对象与完整配置同时核验，失败撤销整份ready，绝不保留自动映射继续导入。 */

@@ -5,6 +5,7 @@ import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, desktop, page, dataDir } from './desktop-fixture';
 import { enabled, isolatedDatabase, type LiveContext } from './live-helpers';
 import { excelImportZh } from '../../src/shared/excelTransfer';
+import { importMappingZh } from '../../src/renderer/locales/importMapping.zh-CN';
 
 test.use({ trace: 'off' });
 
@@ -53,8 +54,15 @@ test('XLSX 无标题时按列位置映射，并仅提交首末行之间的数据
     await expect(apply).toBeDisabled();
     await expect(modal.locator('.error-box')).toContainText('末行不能早于首行');
     await modal.getByRole('spinbutton', { name: excelImportZh.firstDataRow, exact: true }).fill('2');
-    await modal.getByRole('combobox', { name: '字段“第1列”的目标列', exact: true }).fill('id');
-    await modal.getByRole('combobox', { name: '字段“第2列”的目标列', exact: true }).fill('note');
+    const firstTarget = modal.getByRole('combobox', { name: '字段“第1列”的目标列', exact: true });
+    await expect(firstTarget).toHaveValue('');
+    await modal.getByRole('button', { name: importMappingZh.position, exact: true }).click();
+    await expect(firstTarget).toHaveValue('id');
+    await expect(modal.getByRole('combobox', { name: '字段“第2列”的目标列', exact: true })).toHaveValue('note');
+    await modal.getByRole('button', { name: importMappingZh.clear, exact: true }).click();
+    await expect(firstTarget).toHaveValue('');
+    await expect(apply).toBeDisabled();
+    await modal.getByRole('button', { name: importMappingZh.position, exact: true }).click();
     await expect(modal.locator('.excel-preview tbody tr')).toHaveCount(2);
     await expect(modal.locator('.excel-preview')).toContainText('首条');
     await expect(modal.locator('.excel-preview')).toContainText('末条');

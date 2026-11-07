@@ -4,6 +4,8 @@ import { excelImportZh, excelRowRangeMessage, excelRowRangeSchema, validateExcel
 import { excelTransferZh as text } from '../locales/excelTransfer.zh-CN';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import { ExcelRowRangeFields } from './ExcelImportFields';
+import { ImportMappingActions } from './ImportMappingActions';
+import { matchImportColumns } from '../importMapping';
 import { ExcelTransferLifecycle, type ExcelTaskSnapshot } from '../excelTransferLifecycle';
 import { ExcelPreviewTasks } from '../excelPreviewTasks';
 import '../excelTransfer.css';
@@ -61,12 +63,13 @@ export function ExcelTransferDialog(props: Props) {
     setLoading(true);
     void reads.pair(taskId => services.preview({ fileToken: file.token, taskId, sheetId, ...rowRange, protocol }), taskId => services.targetColumns({ connectionId, database, table }, taskId)).then(([sample, targets]) => {
       if (!mounted.current || generation.current !== revision) return;
-      const mapping = sample.columns.map(source => ({ source, target: targets.some(column => column.name === source) ? source : '' }));
+      const matches = matchImportColumns(headerRow === 0 ? 'clear' : 'name', sample.columns, targets);
+      const mapping = sample.columns.map((source, index) => ({ source, target: matches[index]?.name ?? '' }));
       setReady({ key, sample, targets, mapping });
     }, reason => { if (mounted.current && generation.current === revision) setError(reason instanceof Error ? reason.message : text.error); })
       .finally(() => { if (mounted.current && generation.current === revision) setLoading(false); });
     return () => { generation.current++; void reads.cancel().catch(() => undefined); };
-  }, [mode, file?.token, sheetId, protocol, connectionId, database, table, services, key, reads, rowRange, rangeValid]);
+  }, [mode, file?.token, sheetId, protocol, connectionId, database, table, services, key, reads, rowRange, rangeValid, headerRow]);
 
   /** 文件选择串行化，且校验响应仍属于本轮选择，避免快速点击或关闭导致状态回滚。 */
   async function chooseFile() {
@@ -130,7 +133,17 @@ export function ExcelTransferDialog(props: Props) {
       {mode === 'import' && sheets.length > 0 && <p className="muted small">{excelImportZh.rangeHint}</p>}
       {loading && <Spinner text={text.loading}/>}
       {loading && <button onClick={() => void reads.cancel().catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message : text.error); })}>{text.cancel}</button>}
-      {current && <><h3>{text.mapping}</h3><datalist id={targetListId}>{current.targets.map(column => <option key={column.name} value={column.name}/>)}</datalist><div className="mapping-grid">{current.mapping.slice(mappingPage * 50, (mappingPage + 1) * 50).map((item, index) => <div className="mapping-row" key={item.source}><span className="truncate">{item.source}</span><span aria-hidden="true">→</span><input list={targetListId} placeholder={text.skip} aria-label={text.mappingLabel.replace('{name}', item.source)} value={item.target} disabled={busy} onChange={event => {
+      {current && <><h3>{text.mapping}</h3>
+        <ImportMappingActions disabled={busy || done !== undefined} onAction={action => {
+          if (lifecycle.busy || done !== undefined) return;
+          const matches = matchImportColumns(action, current.sample.columns, current.targets);
+          setReady(previous => previous?.key === key ? { ...previous, mapping: current.sample.columns.map((source, index) => ({
+            source, target: matches[index]?.name ?? '',
+          })) } : previous);
+          setMappingPage(0);
+          setError('');
+        }}/>
+        <datalist id={targetListId}>{current.targets.map(column => <option key={column.name} value={column.name}/>)}</datalist><div className="mapping-grid">{current.mapping.slice(mappingPage * 50, (mappingPage + 1) * 50).map((item, index) => <div className="mapping-row" key={item.source}><span className="truncate">{item.source}</span><span aria-hidden="true">→</span><input list={targetListId} placeholder={text.skip} aria-label={text.mappingLabel.replace('{name}', item.source)} value={item.target} disabled={busy} onChange={event => {
         const target = event.target.value;
         setReady(previous => previous?.key === key ? { ...previous, mapping: previous.mapping.map((mapping, position) => position === mappingPage * 50 + index ? { ...mapping, target } : mapping) } : previous);
       }}/></div>)}</div>
@@ -144,6 +157,6 @@ export function ExcelTransferDialog(props: Props) {
       {done !== undefined && <div className={failures.length ? 'error-box' : 'success-box'}>{text.completed.replace('{rows}', String(done))}</div>}
       <ErrorBox message={error || (mode === 'import' && !rangeValid ? excelRowRangeMessage : '') || (taskState.cancellationError ? text.cancelFailed + taskState.cancellationError : '')}/>{failures.length > 0 && <details className="error-box"><summary>{text.failureCount}</summary><pre>{failures.join('\n')}</pre></details>}
     </div>
-    <footer className="modal-footer"><button disabled={busy && lifecycle.ownsActiveTask} onClick={close}>{done === undefined ? text.close : text.done}</button><span className="grow"/>{busy ? <button disabled={!lifecycle.ownsActiveTask} onClick={() => void lifecycle.cancel()}>{text.cancel}</button> : <button className="primary" disabled={!file || loading || (mode === 'import' && !current) || done !== undefined} onClick={() => void execute()}>{mode === 'import' ? text.startImport : text.startExport}</button>}</footer>
+    <footer className="modal-footer"><button disabled={busy && lifecycle.ownsActiveTask} onClick={close}>{done === undefined ? text.close : text.done}</button><span className="grow"/>{busy ? <button disabled={!lifecycle.ownsActiveTask} onClick={() => void lifecycle.cancel()}>{text.cancel}</button> : <button className="primary" disabled={!file || loading || (mode === 'import' && !current?.mapping.some(item => item.target)) || done !== undefined} onClick={() => void execute()}>{mode === 'import' ? text.startImport : text.startExport}</button>}</footer>
   </Modal>;
 }
