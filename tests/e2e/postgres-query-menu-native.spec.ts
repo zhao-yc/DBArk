@@ -15,6 +15,7 @@ import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { postgresQueryExportZh as fullExportText } from '../../src/renderer/locales/postgresQueryExport.zh-CN';
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
+import { queryParameterReuseZh as reuseText } from '../../src/renderer/locales/queryParameterReuse.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -77,6 +78,67 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 参数显式暂存与填入保持原事务，忘记及正文撤销后不复活', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const sql = 'SELECT $1::numeric(60,38) AS amount, $2::bytea AS bytes, $3::text AS note;',
+    decimal = '0.12345678901234567890123456789012345678', secret = '仅本标签暂存😀';
+  try {
+    await prepare({id: '', name: '隔离 PostgreSQL 参数暂存', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.transaction);
+    const sessions = async () => (await observer.query("SELECT pid,state,xact_start::text FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+    const original = await sessions(); expect(original).toHaveLength(1); expect(original[0].state).toBe('idle in transaction');
+    const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
+    const value = (name: string) => form.getByLabel(parameterZh.value + ' ' + name, {exact: true});
+    const fill = form.getByRole('button', {name: reuseText.fill, exact: true});
+    const remember = form.getByRole('checkbox', {name: reuseText.remember, exact: true});
+    const open = async () => {
+      await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+      await expect(value('p1')).toBeVisible(); await expect(form.getByRole('button', {name: parameterZh.execute, exact: true})).toBeEnabled();
+    };
+    const close = () => form.getByRole('button', {name: zh.common.cancel, exact: true}).click();
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await open(); await expect(remember).not.toBeChecked(); await expect(fill).toBeDisabled();
+    await expect(form.getByText(parameterZh.namesDynamic, {exact: true})).toHaveCount(0);
+    await form.getByLabel(parameterZh.type + ' p1', {exact: true}).selectOption('decimal'); await value('p1').fill(decimal);
+    await form.getByLabel(parameterZh.type + ' p2', {exact: true}).selectOption('binary'); await value('p2').fill('00ff');
+    await value('p3').fill(secret); await remember.check();
+    await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+    const grid = tab().locator('.postgres-results .rdg'); await expect(grid).toContainText(secret); await expect(grid).toContainText(decimal);
+    await expect.poll(sessions).toEqual(original);
+    const afterExecution = await history(); expect(afterExecution.some(entry => entry.sql === sql && entry.success)).toBe(true);
+    await open(); await expect(fill).toBeEnabled(); await expect(remember).not.toBeChecked(); await expect(value('p1')).toHaveValue('');
+    await fill.click(); await expect(value('p1')).toHaveValue(decimal); await expect(value('p2')).toHaveValue('00ff'); await expect(value('p3')).toHaveValue(secret);
+    await expect(form.getByLabel(parameterZh.type + ' p1', {exact: true})).toHaveValue('decimal');
+    await expect(form.getByLabel(parameterZh.type + ' p2', {exact: true})).toHaveValue('binary');
+    expect(await history()).toEqual(afterExecution); await expect.poll(sessions).toEqual(original);
+    await page.screenshot({path: info.outputPath('PostgreSQL参数显式填入.png')});
+    await close(); await open(); await expect(fill).toBeEnabled(); await fill.click();
+    await form.getByRole('button', {name: reuseText.forget, exact: true}).click();
+    await expect(fill).toBeDisabled(); await expect(value('p3')).toHaveValue(secret);
+    await remember.check(); await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+    await expect.poll(async () => (await history()).filter(entry => entry.sql === sql && entry.success).length)
+      .toBe(afterExecution.filter(entry => entry.sql === sql && entry.success).length + 1);
+    await open(); await expect(fill).toBeEnabled(); await close();
+    await editor().getByRole('textbox').focus(); await page.keyboard.press('ControlOrMeta+End'); await page.keyboard.insertText(' ');
+    await page.keyboard.press('ControlOrMeta+Z'); await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+    await open(); await expect(fill).toBeDisabled(); await expect(value('p3')).toHaveValue(''); await close();
+    const persisted = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
+    expect(JSON.stringify(persisted)).not.toContain(secret); expect(JSON.stringify(await history())).not.toContain(secret);
+    expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('tasks.list', {})))).not.toContain(secret);
+    await expect.poll(sessions).toEqual(original);
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle); expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参数隐私', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');

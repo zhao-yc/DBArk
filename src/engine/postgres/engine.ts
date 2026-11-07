@@ -1332,11 +1332,14 @@ export class PostgresEngine {
           if (part.parameters.some((n, i) => n !== i + 1)) throw Error('PostgreSQL位置参数必须从$1连续编号');
           return {
             names: part.parameters.map((n) => 'p' + n),
-            warnings: ['PostgreSQL使用$1、$2等位置参数，对应p1、p2；参数值不会拼接SQL。'],
+            // 连续位置参数已完整识别；语法说明由表单提供，不冒充动态脚本警告。
+            warnings: [],
             maxDecimalScale: 38,
             allowTimeEndpointFraction: false,
             ansiQuotes: true,
-            noBackslashEscapes: true,
+            ansiQuotesKnown: true,
+            noBackslashEscapes: s.managed.standardStrings,
+            noBackslashEscapesKnown: true,
           };
         });
       case 'query.execute':

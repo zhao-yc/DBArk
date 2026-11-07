@@ -64,6 +64,8 @@ import { QueryBindingDialog } from './QueryBindingDialog';
 import { QueryDuplicateIntent } from '../queryDuplicateIntent';
 import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
+import { QueryParameterReuseOwner, type QueryParameterReuseOwnerInput } from '../queryParameterReuseOwner';
+import type { QueryParameterReusePort } from '../queryParameterReusePort';
 import { SnippetsDialog } from './SnippetsDialog';
 import { SNIPPET_LIMITS } from '../../shared/snippets';
 import { useQueryFileSource } from '../useQueryFileSource';
@@ -111,6 +113,7 @@ interface ParameterOwner {
   version: number;
   valid: boolean;
   session?: string;
+  reuse: QueryParameterReusePort | null;
 }
 interface AnalyzeOwner {
   token: string;
@@ -202,6 +205,8 @@ export function PostgresQueryTab({
     [parameterOwner, setParameterOwner] = useState<ParameterOwner>(),
     parameters = useRef<ParameterOwner | undefined>(undefined);
   parameters.current = parameterOwner;
+  const parameterReuse = useRef<QueryParameterReuseOwner | null>(null), parameterTask = useRef('');
+  const parameterState = useRef<{ sessionId: string; known: boolean }>({ sessionId: '', known: false });
   const [completionStatus, setCompletionStatus] = useState<SqlCompletionStatus>('idle');
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
@@ -242,6 +247,31 @@ export function PostgresQueryTab({
   };
   const currentTab = () => useWorkspace.getState().settings.tabs.find((t) => t.id === tab.id);
   const source = () => editor.current?.getModel()?.getValue() ?? currentTab()?.sql ?? '';
+  /** 暂存只读取本标签原模型及已确认的物理会话；不把参数值写入工作区或来源键。 */
+  function parameterReuseInput(): QueryParameterReuseOwnerInput | null {
+    const now = useWorkspace.getState(), current = currentTab(), owned = session.current;
+    if (!current || current.kind !== 'query') return null;
+    const connection = now.connections.find(item => item.id === current.connectionId);
+    const saved = current.sourceBinding, file = current.fileSourceBinding;
+    const database = current.database || (connection?.dialect === 'postgresql' && connection.database) || 'postgres';
+    return { tabId: current.id, connectionId: current.connectionId, connectionVersion: now.connectionVersions[current.connectionId] ?? 0,
+      sessionId: owned?.id ?? null, editor: editor.current, present: alive.current && connection?.dialect === 'postgresql' && !closeRef.current,
+      draft: current.sql, savedSourceKey: JSON.stringify(saved ? [saved.id, saved.digest, saved.connectionId ?? null,
+        saved.connectionDigest ?? null, saved.context.state, 'database' in saved.context ? saved.context.database ?? null : null] : null),
+      fileSourceKey: JSON.stringify(file ? [file.id, file.revision] : null), databaseKey: JSON.stringify([database]),
+      databaseKnown: !!owned && owned.scope.database === database && parameterState.current.sessionId === owned.id && parameterState.current.known,
+      taskId: parameterTask.current };
+  }
+  useLayoutEffect(() => { parameterReuse.current?.observe(); });
+  useEffect(() => {
+    if (!editorInstance) return;
+    const changed = () => parameterReuse.current?.observe();
+    const subscriptions = [editorInstance.onDidChangeModel(changed), editorInstance.onDidChangeModelContent(changed),
+      editorInstance.onDidChangeCursorSelection(changed), editorInstance.onDidDispose(() => {
+        parameterReuse.current?.dispose(); parameterReuse.current = null;
+      })];
+    return () => subscriptions.forEach(item => item.dispose());
+  }, [editorInstance]);
   /** 来源判断不靠同名连接或旧渲染闭包；等待中的配置／默认库ABA会留下永久失效标记。 */
   function same(original: Scope) {
     const now = useWorkspace.getState(),
@@ -339,11 +369,15 @@ export function PostgresQueryTab({
     try {
       const next = await invoke('query.sessionState', { sessionId: id });
       if (phase.current === owner && owner.valid && same(owner.scope)) {
+        parameterState.current = { sessionId: id, known: next.transactionKnown && !next.broken };
+        parameterReuse.current?.observe();
         setState({ ...next, transactionFailed: next.transactionFailed === true });
         useWorkspace.getState().setDirty(tab.id, next.transactionOpen || !next.transactionKnown);
       }
     } catch {
       if (same(owner.scope)) {
+        parameterState.current = { sessionId: id, known: false };
+        parameterReuse.current?.observe();
         setState({ transactionOpen: true, transactionKnown: false, transactionFailed: false, broken: true });
         useWorkspace.getState().setDirty(tab.id, true);
       }
@@ -423,6 +457,7 @@ export function PostgresQueryTab({
         sent: false,
       };
     phase.current = owner;
+    parameterTask.current = owner.taskId;
     setBusy(true);
     setError('');
     if (mode !== 'analyzePreview') {
@@ -432,6 +467,7 @@ export function PostgresQueryTab({
       setSelected(0);
     }
     owner.work = (async () => {
+      let succeeded = false;
       try {
         const id = await ensure(owner);
         if (
@@ -456,8 +492,13 @@ export function PostgresQueryTab({
           } else void invoke('postgres.analyzeDiscard', { sessionId: id, token: preview.token }).catch(() => {});
           return;
         }
-        owner.sent = true;
+        if (parameter?.reuse) {
+          const reuse = parameterReuse.current;
+          // 暂存失效只撤销可选记忆能力；原表单的明确执行仍沿原来源校验。
+          if (reuse?.bind(parameter.reuse, owner.taskId)) reuse.beforeLedger(owner.taskId);
+        }
         if (parameter) setParameterOwner(undefined);
+        owner.sent = true;
         const result = confirmed
           ? await invoke('postgres.analyze', { sessionId: id, taskId: owner.taskId, token: confirmed.token, acknowledged: true })
           : values
@@ -475,6 +516,7 @@ export function PostgresQueryTab({
               maxRows: useWorkspace.getState().settings.resultLimit,
               ...(offset === undefined ? {} : { currentStatement: { offset } }),
             });
+        succeeded = !result.failure && !result.scriptReport?.errors.length && result.scriptReport?.reachedEnd !== false;
         if (owner.valid && same(owner.scope) && life.current === owner.life) {
           setOutcome(result);
           if (result.failure) setError(result.failure.message);
@@ -485,6 +527,11 @@ export function PostgresQueryTab({
         if (owner.cancel) await owner.cancel;
         const id = session.current?.id;
         if (id) await readState(id, owner);
+        if (parameter?.reuse) {
+          const reuse = parameterReuse.current;
+          const success = succeeded && !owner.cancelled && owner.valid && same(owner.scope) && life.current === owner.life;
+          if (reuse?.settled(owner.taskId, success)) reuse.confirmed(owner.taskId, JSON.stringify([owner.scope.database]));
+        }
         if (phase.current === owner) phase.current = undefined;
         job.release();
         if (alive.current && life.current === owner.life) {
@@ -517,6 +564,9 @@ export function PostgresQueryTab({
         const result = await invoke('query.parameterNames', { sessionId: id, sql: owner.source });
         if (!parameterCurrent(owner)) throw Error(text.changed);
         owner.session = id;
+        await readState(id, operation);
+        if (!parameterCurrent(owner)) throw Error(text.changed);
+        if (owner.reuse) parameterReuse.current?.recognized(owner.reuse);
         return result;
       } finally {
         if (phase.current === operation) phase.current = undefined;
@@ -536,8 +586,11 @@ export function PostgresQueryTab({
     const model = editor.current?.getModel(),
       selection = editor.current?.getSelection();
     if (!model) return;
-    const sql = selection && !selection.isEmpty() ? model.getValueInRange(selection) : model.getValue();
-    setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true });
+    if (editor.current?.getSelections()?.length !== 1) return;
+    const selected = selection && !selection.isEmpty() ? model.getValueInRange(selection) : '';
+    const sql = selected.trim() ? selected : model.getValue();
+    const reuse = (parameterReuse.current ??= new QueryParameterReuseOwner(parameterReuseInput)).begin(sql);
+    setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true, reuse });
   }
   /** 显式重连先正常关闭旧会话；旧事务或未知写入不会被自动恢复和重放。 */
   async function reconnect() {
@@ -685,6 +738,7 @@ export function PostgresQueryTab({
     alive.current = true;
     return () => {
       alive.current = false;
+      parameterReuse.current?.dispose(); parameterReuse.current = null;
       duplicateIntent.current?.dispose();
       snippetTarget.current?.dispose();
       snapshotOperation.current?.invalidate();
@@ -704,6 +758,7 @@ export function PostgresQueryTab({
   useEffect(
     () =>
       useWorkspace.subscribe((next, previous) => {
+        parameterReuse.current?.observe();
         const beforeTab = previous.settings.tabs.find((item) => item.id === tab.id);
         const afterTab = next.settings.tabs.find((item) => item.id === tab.id);
         const changed =
@@ -1812,9 +1867,11 @@ export function PostgresQueryTab({
         <QueryParametersDialog
           syntaxHint={text.parameterHint}
           source={parameterOwner.source}
+          reuse={parameterOwner.reuse ?? undefined}
           loadNames={() => names(parameterOwner)}
           onExecute={(values) => run('normal', values, parameterOwner)}
           onClose={() => {
+            if (parameterOwner.reuse) parameterReuse.current?.close(parameterOwner.reuse);
             parameterOwner.valid = false;
             setParameterOwner(undefined);
           }}
