@@ -10,6 +10,7 @@ export interface TableApplyControl {
   lockInfo(): Promise<TableInfo>; rollback(): Promise<ResultSetHeader>; emit(p: TableApplyProgress): void;
   afterWrite?(index: number): Promise<void>;
   strictSync?: true;
+  searchKey?: { sql: string; params: CellValue[] };
 }
 
 /** 保留原单表InnoDB事务；实际ACK先于取消/收尾，未知提交不补发、不反称回滚。 */
@@ -18,7 +19,7 @@ export async function applyTableTransaction(info: TableInfo, changes: RowChange[
   const emit = () => { if (c.operationId) c.emit({ operationId: c.operationId, sequence: ++sequence, phase, reason, evidence: { ...e } }); };
   const acknowledged = (r: ResultSetHeader) => { e.transactionKnown = Number.isInteger(r.serverStatus) && r.serverStatus >= 0 && r.serverStatus <= 65535; e.transactionOpen = e.transactionKnown && Boolean(r.serverStatus & 1); };
   try {
-    const options = c.strictSync ? { binaryText: 'cast' as const } : undefined;
+    const options = { ...(c.strictSync || c.searchKey ? { binaryText: 'cast' as const } : {}), searchKey: c.searchKey };
     const plan = buildChanges(info, changes, options);
     if (c.expectedPlan && JSON.stringify(c.expectedPlan) !== JSON.stringify(plan.statements)) throw Error('提交计划自预览后已变化，请重新预览；未发送本批数据写入');
     await c.send('START TRANSACTION', [], r => { transactionStarted = true; acknowledged(r); });

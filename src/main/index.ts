@@ -2056,6 +2056,22 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       input = profile.dialect === 'sqlite' ? original : { ...original, profile };
       break;
     }
+    case 'search.recordEditRead': {
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown || completionTasks.size >= 8 || tasks.has(input.taskId) || completionTasks.has(input.taskId) ||
+          savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId) || historyDelete?.owns(input.taskId))
+        throw Error('命中编辑读取繁忙，请重新发起操作');
+      const profile = store.resolveConnection(input.connectionId), revision = store.connectionRevision();
+      if (profile.dialect !== 'mysql' && profile.dialect !== 'mariadb') throw Error('此命中编辑入口需要 MySQL 或 MariaDB 连接');
+      completionTasks.add(input.taskId);
+      try {
+        const result = await broker.request(command, { ...input, profile });
+        columnsMain.assertCapturedOwner(columns);
+        connectionConfig.assertAvailable(input.connectionId);
+        if (shuttingDown || store.connectionRevision() !== revision) throw Error('命中编辑的原连接或窗口已变化');
+        return result;
+      } finally { completionTasks.delete(input.taskId); }
+    }
     case 'metadata.completion':case 'search.catalogue': {
       if(shuttingDown)throw new Error('客户端正在退出，不能读取补全目录');
       if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(input.taskId)))throw new Error('任务编号已使用，请重新发起操作');
@@ -2479,6 +2495,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let filteredExportLease: TableFilteredExportMainLease | undefined;
   let sentToEngine = false;
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
+  const focusedTableEdit = (command === 'table.preview' || command === 'table.apply') && input.searchRecordRef;
+  if (focusedTableEdit) columnsMain.assertCapturedOwner(columns);
+  const focusedTableOwner = focusedTableEdit ? columns!.owner.document : undefined;
   try {
     if (command === 'postgres.table.import') postgresImportTaskOwners.set(taskId!, columns!);
     if ((command === 'postgres.sqlFile.execute' || command === 'postgres.backup.database' || command === 'mysql.sqlFile.execute' || command === 'mysql.backup.database') || command === 'postgres.table.export' && input.format === 'sql-backup-set') sqlFileTaskOwners.set(taskId!, columns!);
@@ -2516,7 +2535,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
   if (command === 'schema.databaseDefaultEncoding.apply' || command === 'schema.tableCreate.apply' || command === 'schema.tableCopyData.apply') structureTokens.delete(input.previewToken);
     if (command === 'table.apply') {
-      const binding = tableApplyReceipts.prepare(input.taskId, input.previewId, { connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes);
+      if (focusedTableEdit) columnsMain.assertCapturedOwner(columns);
+      const binding = tableApplyReceipts.prepare(input.taskId, input.previewId, { connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, input.searchRecordRef, focusedTableOwner);
       const linked = { ...tasks.get(input.taskId)!, tableApplyReceiptId: binding.operationId };
       store.saveTask(linked); tasks.set(input.taskId, linked);
       input = { ...input, tableApplyBinding: binding };
@@ -2581,7 +2601,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       throw Error(tableCreateMessages.stale);
     }
     if (command === 'table.preview' && previewConnectionRevision !== store.connectionRevision()) throw Error('连接配置自预览开始后已变化，请重新预览');
-    if (command === 'table.preview') return { ...result, ...tableApplyReceipts.preview({ connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, result) };
+    if (command === 'table.preview') {
+      if (focusedTableEdit) columnsMain.assertCapturedOwner(columns);
+      return { ...result, ...tableApplyReceipts.preview({ connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, result, input.searchRecordRef, focusedTableOwner) };
+    }
     if (structurePurpose === 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) publishDatabaseDrop(input, result, columns!);
     if (structurePurpose !== 'columns' && structurePurpose !== 'tableChecks' && structurePurpose !== 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) {
       const token = command === structurePrefix + 'get' ? result.snapshotId : result.previewToken;
@@ -2945,6 +2968,9 @@ else {
         if (sqliteCreateRequest) columns = columnsMain.capture(event);
         const sqliteEditRequest = payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('sqlite.tableEdit.') || payload.command === 'sqlite.tablePage' && !!payload.input && typeof payload.input === 'object' && 'editing' in payload.input && payload.input.editing === true || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['sqlite.tableEdit.apply', 'sqliteDraftFiles.restore'].includes(tasks.get(payload.input.taskId)?.kind ?? '');
         if (sqliteEditRequest) columns = columnsMain.capture(event);
+        if (payload.command === 'search.recordEditRead' ||
+            (payload.command === 'table.preview' || payload.command === 'table.apply') &&
+            !!payload.input && typeof payload.input === 'object' && 'searchRecordRef' in payload.input) columns = columnsMain.capture(event);
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && ['table.exportFiltered', 'sqlite.tableExport'].includes(tasks.get(payload.input.taskId)?.kind ?? '') && tableFilteredExports.has(payload.input.taskId);

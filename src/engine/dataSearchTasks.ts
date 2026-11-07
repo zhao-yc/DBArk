@@ -2,7 +2,7 @@ import { dataSearchInputSchema, dataSearchLimits, type DataSearchReply } from '.
 import type { TaskEvent } from '../shared/contracts';
 import type { ManagedConnection } from './connection';
 import type { StructureTaskContext } from './structureDefinition';
-import { readDataSearchTarget, buildDataSearchPlan, decodeDataSearchRow } from './dataSearchPlan';
+import { readDataSearchTarget, buildDataSearchPlan, decodeDataSearchRow, readMysqlSearchEditColumns, mysqlSearchEditProjection, mysqlSearchEditStamp } from './dataSearchPlan';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { completionQuery } from './completionQuery';
 import { DataSearchRecords, prepareDataSearchRecord, type RecordPreparation } from './dataSearchRecords';
@@ -24,6 +24,7 @@ export class DataSearchTasks extends DataSearchScans {
       const { managed } = control;
       if (this.networkRecords) await completionQuery(managed, control, 'START TRANSACTION READ ONLY', []);
       const preparations = new Map<string, RecordPreparation>();
+      const editing = new Map<string, Awaited<ReturnType<typeof readMysqlSearchEditColumns>>>();
       await scan({
         checkCancelled: () => control.checkCancelled(), broken: () => managed.broken,
         read: async (target, rows, open, peak) => {
@@ -36,11 +37,20 @@ export class DataSearchTasks extends DataSearchScans {
           }
           const captured = prepared;
           const receive = open(metadata, captured && this.networkRecords ? row => this.networkRecords!.capture(input.connectionId, input.taskId, metadata, row, captured) : undefined);
-          const plan = buildDataSearchPlan(metadata, input.matcher, rows);
+          if (prepared && 'identity' in prepared && !editing.has(key))
+            editing.set(key, await readMysqlSearchEditColumns(managed, control, target));
+          const editColumns = editing.get(key), extra = editColumns ? mysqlSearchEditProjection(editColumns).length : 0;
+          const plan = buildDataSearchPlan(metadata, input.matcher, rows, editColumns);
           await consumeQueryFrames(managed, plan.sql, 'binary', {
             statementOrdinal: 1, ordinals: { results: 0, rows: 0 }, checkCancelled: () => control.checkCancelled(),
             commandStarted: () => control.commandStarted(), stop: () => control.stop(), queuePeak: peak,
-            consume: async frame => { if (frame.kind === 'row') await receive(decodeDataSearchRow(metadata, frame.values)); },
+            consume: async frame => {
+              if (frame.kind !== 'row') return;
+              const values = extra ? frame.values.slice(0, -extra) : frame.values;
+              const row = decodeDataSearchRow(metadata, values);
+              if (extra) row.mysqlEditStamp = mysqlSearchEditStamp(frame.values.slice(-extra));
+              await receive(row);
+            },
           }, plan.params);
         },
       });

@@ -2,10 +2,11 @@ import{Buffer}from'node:buffer';
 import{createHash}from'node:crypto';
 import{dataSearchRecordLimits as limits,type DataSearchRecord,type DataSearchNavigationReason}from'../shared/dataSearchRecords';
 import type{DataSearchTargetMetadata,DataSearchTarget}from'../shared/dataSearch';
-import type{CellValue}from'../shared/contracts';
+import type{CellValue,RowChange}from'../shared/contracts';
 import type{StructureTaskContext}from'./structureDefinition';
 import{completionQuery}from'./completionQuery';
-import{readDataSearchTarget}from'./dataSearchPlan';
+import{readDataSearchTarget,readMysqlSearchEditColumns,mysqlSearchEditProjection,mysqlSearchEditStamp}from'./dataSearchPlan';
+import{tableInfo}from'./metadata';
 import{identifier,qualified,serializeCell,deserializeCell}from'./sql';
 import{tableDefinitionTokens}from'./tableColumnDefinition';
 import{definitionOmittingSqlModes}from'../shared/tableColumnPatches';
@@ -77,6 +78,71 @@ export async function prepareDataSearchRecord(context:Context,target:DataSearchT
 }
 
 export class DataSearchRecords extends DataSearchReferences {
+ /** 写入也使用搜索的精确键表达式，避免 BIGINT 字符串比较误命中相邻整数。 */
+ editKey(input: { connectionId: string; taskId: string; recordRef: string }) {
+  const entry = this.lookup(input);
+  if (!entry.mysqlEditStamp) throw Error('此搜索命中没有完整原行证据，请重新搜索');
+  const { sql, params } = buildDataSearchRecordWhere(entry.metadata, entry.keyValues, entry.timestampEpochs);
+  return { sql, params: params.map(serializeCell) };
+ }
+
+ /** 按原引用重新读取完整行；预览核对渲染端原值，提交阶段同时锁定准确命中。 */
+ async verifyEdit(context: Context, input: { connectionId: string; taskId: string; recordRef: string },
+   target?: { database: string; table: string; changes: RowChange[] }, lock = false) {
+  const entry = this.lookup(input), selected = entry.metadata.target;
+  if (!entry.mysqlEditStamp || selected.kind !== 'table') throw Error('此搜索命中没有完整原行证据，请重新搜索');
+  const change = target?.changes[0];
+  if (target && (target.database !== selected.database || target.table !== selected.table ||
+    target.changes.length !== 1 || change?.kind !== 'update' || !Object.keys(change.values).length))
+    throw Error('搜索命中只允许修改原库表中的本条记录');
+  const read = <T>(sql: string, params: Parameter[] = []) => completionQuery<T>(context.managed, context, sql, params);
+  const metadata = await readDataSearchTarget(context.managed, selected, context);
+  const identity = await prepareDataSearchRecord(context, selected);
+  if ('reason' in identity || JSON.stringify(identity.identity) !== JSON.stringify(entry.identity) ||
+    JSON.stringify(metadata) !== JSON.stringify(entry.metadata)) throw Error('原服务器、表实例或结构已变化，请重新搜索');
+  const columns = await readMysqlSearchEditColumns(context.managed, context, selected);
+  if (!columns) throw Error('原记录已无法完整读取，请重新搜索');
+  const where = buildDataSearchRecordWhere(metadata, entry.keyValues, entry.timestampEpochs);
+  const from = ' FROM ' + qualified(selected.database, selected.table) + ' WHERE ' + where.sql;
+  const projected = mysqlSearchEditProjection(columns);
+  const bytes = columns.map(column => 'COALESCE(OCTET_LENGTH(CAST(' + identifier(column.name) + ' AS BINARY)),0)').join('+');
+  const evidence = await read<Record<string, unknown>[]>('SELECT ' + projected.join(',') + ',(' + bytes + ') AS __dbark_edit_size' +
+    from + ' LIMIT 2' + (lock ? ' FOR UPDATE' : ''), where.params);
+  const original = evidence.rows[0];
+  if (evidence.rows.length !== 1 || mysqlSearchEditStamp(evidence.fields.slice(0, projected.length).map(field => serializeCell(original[field.name]))) !== entry.mysqlEditStamp)
+    throw Error('原记录已变化、删除或替换，请重新搜索');
+  const size = Number(original.__dbark_edit_size);
+  if (!Number.isSafeInteger(size) || size < 0 || size > 128 * 1024) throw Error('命中记录超出完整编辑预算');
+  const info = await tableInfo(context.managed, selected.database, selected.table, read);
+  if (info.objectKind !== 'table' || info.engine.toUpperCase() !== 'INNODB' ||
+    JSON.stringify(info.editableKey) !== JSON.stringify(metadata.keyColumns.map(column => column.name)) ||
+    info.columns.length !== columns.length || info.columns.some((column, index) => column.name !== columns[index].name))
+    throw Error('普通表编辑无法复用该搜索记录的完整可靠键');
+  const names = columns.map(column => column.name);
+  const result = await read<Record<string, unknown>[]>('SELECT ' + names.map(identifier).join(',') + from +
+    ' LIMIT 2' + (lock ? ' FOR UPDATE' : ''), where.params);
+  context.checkCancelled();
+  if (result.rows.length !== 1 || names.some(name => !Object.hasOwn(result.rows[0], name))) throw Error('命中记录完整原值不可读取');
+  const row = Object.fromEntries(names.map(name => [name, serializeCell(result.rows[0][name])]));
+  if (Buffer.byteLength(JSON.stringify({ info, row })) > limits.recordBytes) throw Error('命中记录超出完整编辑预算');
+  if (change?.kind === 'update' && (Object.keys(change.before).length !== names.length ||
+    names.some(name => !Object.hasOwn(change.before, name) || JSON.stringify(change.before[name]) !== JSON.stringify(row[name]))))
+    throw Error('命中修改的原始值与搜索证据不符，请重新搜索');
+  if (this.lookup(input) !== entry) throw Error('原搜索引用已释放，请重新搜索');
+  return { info, row };
+ }
+
+ async readEdit(context: Context, input: { connectionId: string; taskId: string; recordRef: string },
+   target?: { database: string; table: string; changes: RowChange[] }) {
+  const read = (sql: string) => completionQuery(context.managed, context, sql, []);
+  await read("SET SESSION time_zone = '+00:00'");
+  await read('SET SESSION lock_wait_timeout = 5');
+  await read('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+  await read('START TRANSACTION READ ONLY');
+  try { return await this.verifyEdit(context, input, target); }
+  finally { if (!context.managed.broken) await read('ROLLBACK'); }
+ }
+
  /** 重新持有目标MDL后核身份和定义，读取当前行；结果只有所选字段与键，始终只读。 */
  async read(context:Context,raw:unknown):Promise<DataSearchRecord>{
   const entry=this.lookup(raw);
@@ -93,6 +159,6 @@ export class DataSearchRecords extends DataSearchReferences {
   const result=await query('SELECT '+projections.join(',')+' FROM '+qualified(metadata.target.database,metadata.target.table)+' WHERE '+where.sql+' LIMIT 2',where.params);context.checkCancelled();
   if(result.rows.length===0)throw Error('命中记录已删除或定位键已改变，请重新搜索');if(result.rows.length!==1)throw Error('定位条件不再唯一，未选择任意一条记录');
   const row=result.rows[0],fields=columns.map((column,index)=>{const value=serializeCell(row['v'+index]),count=row['n'+index];if(value===null){if(count!==null)throw Error('定位字段NULL状态不一致');return{name:column.name,dataType:column.dataType,value,characters:null,truncated:false,binary:column.binary};}if((typeof count!=='string'&&typeof count!=='number')||!/^\d{1,20}$/.test(String(count)))throw Error('定位字段长度信息不完整');return{name:column.name,dataType:column.dataType,value,characters:String(count),truncated:BigInt(String(count))>BigInt(characters),binary:column.binary};});
-  const output:DataSearchRecord={target:metadata.target,fields,timeZone:'+00:00',searchedAt:entry.searchedAt,readAt:new Date().toISOString(),readOnly:true};if(Buffer.byteLength(JSON.stringify(output))>limits.recordBytes)throw Error('定位记录超过1MiB，请缩小所选字段范围');await query('ROLLBACK');return output;
+  const output:DataSearchRecord={target:metadata.target,fields,timeZone:'+00:00',searchedAt:entry.searchedAt,readAt:new Date().toISOString(),readOnly:true,...(entry.mysqlEditStamp?{mysqlEditAvailable:true as const}:{})};if(Buffer.byteLength(JSON.stringify(output))>limits.recordBytes)throw Error('定位记录超过1MiB，请缩小所选字段范围');await query('ROLLBACK');return output;
  }
 }

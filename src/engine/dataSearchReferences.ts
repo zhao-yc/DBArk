@@ -6,7 +6,7 @@ import type { CellValue } from '../shared/contracts';
 
 interface Identity{server:string;tableId:string;definition:string}
 export type RecordPreparation={identity:Identity}|{reason:DataSearchNavigationReason};
-interface Locator{connectionId:string;sourceTaskId:string;metadata:DataSearchTargetMetadata;keyValues:CellValue[];timestampEpochs?:(string|null)[];postgresIdentity?:PostgresSearchRowIdentity;sqliteIdentity?:SqliteSearchRowIdentity;identity:Identity;searchedAt:string;expires:number;bytes:number}
+interface Locator{connectionId:string;sourceTaskId:string;metadata:DataSearchTargetMetadata;keyValues:CellValue[];timestampEpochs?:(string|null)[];postgresIdentity?:PostgresSearchRowIdentity;sqliteIdentity?:SqliteSearchRowIdentity;mysqlEditStamp?:string;identity:Identity;searchedAt:string;expires:number;bytes:number}
 /** 引用只保留有界键和摘要，不保留数据库连接；窗口、新搜索、到期和连接更改均可清理。 */
 export class DataSearchReferences{
  private entries=new Map<string,Locator>();private bytes=0;private timer?:ReturnType<typeof setTimeout>;
@@ -18,7 +18,7 @@ export class DataSearchReferences{
  capture(connectionId:string,sourceTaskId:string,metadata:DataSearchTargetMetadata,row:DataSearchRow,prepared:RecordPreparation):{recordRef?:string;navigationReason?:DataSearchNavigationReason}{
   this.prune();if(!row.keyValues)return{navigationReason:'no-key'};if('reason'in prepared)return{navigationReason:prepared.reason};
   if([...this.entries.values()].some(entry=>entry.sourceTaskId===sourceTaskId&&entry.connectionId!==connectionId))throw Error('记录来源不属于此连接');
-  const data={connectionId,sourceTaskId,metadata,keyValues:row.keyValues,timestampEpochs:row.timestampEpochs,postgresIdentity:row.postgresIdentity,sqliteIdentity:row.sqliteIdentity,identity:prepared.identity,searchedAt:new Date().toISOString(),expires:Date.now()+limits.retentionMs},bytes=Buffer.byteLength(JSON.stringify(data));
+  const data={connectionId,sourceTaskId,metadata,keyValues:row.keyValues,timestampEpochs:row.timestampEpochs,postgresIdentity:row.postgresIdentity,sqliteIdentity:row.sqliteIdentity,mysqlEditStamp:row.mysqlEditStamp,identity:prepared.identity,searchedAt:new Date().toISOString(),expires:Date.now()+limits.retentionMs},bytes=Buffer.byteLength(JSON.stringify(data));
   if(this.entries.size>=limits.references||this.bytes+bytes>limits.bytes)return{navigationReason:'budget'};
   const recordRef=randomUUID();this.entries.set(recordRef,{...structuredClone(data),bytes});this.bytes+=bytes;this.prune();return{recordRef};
  }

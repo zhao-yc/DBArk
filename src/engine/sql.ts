@@ -72,7 +72,9 @@ export function buildPageSql(info: TableInfo, page: number, pageSize: number, fi
 }
 
 /** 全旧值比较避免丢失更新；唯一键是可靠定位的必要条件，不能仅凭 LIMIT 1 写入。 */
-export function buildChanges(info: TableInfo, changes: RowChange[], options?: { binaryText?: 'cast' }): SqlPreview {
+export function buildChanges(info: TableInfo, changes: RowChange[], options?: {
+  binaryText?: 'cast'; searchKey?: { sql: string; params: CellValue[] };
+}): SqlPreview {
   if (info.engine.toUpperCase() !== 'INNODB') throw new Error('仅允许对 InnoDB 事务表集中提交修改');
   if (!info.editableKey.length) throw new Error('此表没有全部非空的主键或唯一键，数据仅可读取');
   const columns = new Map(info.columns.map(column => [column.name, column]));
@@ -94,7 +96,14 @@ export function buildChanges(info: TableInfo, changes: RowChange[], options?: { 
     for (const name of columns.keys()) if (!Object.hasOwn(change.before, name)) throw new Error(`缺少完整原始行：${name}，请刷新数据后重试`);
     for (const name of info.editableKey) if (change.before[name] === null || change.before[name] === undefined) throw new Error('原始行唯一键不得为空');
     // 键条件保持可用索引；全文本旧值另做精确比较，不受 CI/AI/PAD SPACE 排序规则影响。
-    const keyClauses = info.editableKey.map(name => { params.push(change.before[name]); return `${identifier(name)} <=> ${typedCellPlaceholder(columns.get(name)!, change.before[name])}`; });
+    const keyClauses: string[] = [];
+    if (options?.searchKey) {
+      keyClauses.push(options.searchKey.sql);
+      params.push(...options.searchKey.params);
+    } else for (const name of info.editableKey) {
+      params.push(change.before[name]);
+      keyClauses.push(`${identifier(name)} <=> ${typedCellPlaceholder(columns.get(name)!, change.before[name])}`);
+    }
     // 非文本可靠键已由同一before值精确定位；实测部分版本重复大整数条件会异常不命中，去重避免该路径。
     // 文本键的索引比较受CI/AI/PAD SPACE影响，仍须保留下面独立的UTF-8字节旧值检查。
     const originalClauses = [...columns.values()].filter(column => !info.editableKey.includes(column.name) || /^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET|JSON)\b/i.test(column.type)).map(column => {

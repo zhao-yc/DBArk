@@ -8,6 +8,7 @@ import{dataSearchRecordsZh as t}from'../locales/dataSearchRecords.zh-CN';
 import{Modal,ErrorBox,Spinner}from'./ui';
 import { SqliteSearchRecordEditDialog } from './SqliteSearchRecordEditDialog';
 import { PostgresSearchRecordEditDialog } from './PostgresSearchRecordEditDialog';
+import { MysqlSearchRecordEditDialog } from './MysqlSearchRecordEditDialog';
 
 /** 二进制以HEX只读显示，JSON和精确数字保持服务器原文，不隐式解析或转Number。 */
 function recordText(value:CellValue){if(value===null)return t.null;if(typeof value==='object')return Array.from(atob(value.base64),character=>character.charCodeAt(0).toString(16).padStart(2,'0')).join('').toUpperCase();return value===''?t.empty:String(value);}
@@ -20,7 +21,8 @@ export function DataSearchRecordDialog({connectionId,recordRef,focusColumn,sqlit
  const source=useRef({profile,version}).current;
  const [editing,setEditing]=useState(false), editingRef=useRef(false);
  const canEdit=result?.target.kind==='table'&&profile===source.profile&&version===source.version&&
-   (sqlite ? profile?.dialect==='sqlite'&&!profile.sqlite.readOnly : profile?.dialect==='postgresql');
+   (sqlite ? profile?.dialect==='sqlite'&&!profile.sqlite.readOnly : profile?.dialect==='postgresql' ||
+     (profile?.dialect==='mysql' || profile?.dialect==='mariadb') && result.mysqlEditAvailable);
 
  /** 读取后直达原命中字段，宽表不能先把用户停在字段块开头的NULL值。 */
  useEffect(()=>{if(!result||requested.current)return;const field=Array.from(content.current?.querySelectorAll<HTMLTextAreaElement>('textarea')??[]).find(element=>element.getAttribute('aria-label')===t.value(focusColumn??result.fields[0]?.name??''));field?.focus({preventScroll:true});field?.scrollIntoView({block:'center'});},[result,focusColumn]);
@@ -37,8 +39,10 @@ export function DataSearchRecordDialog({connectionId,recordRef,focusColumn,sqlit
  if(editing&&result){
    const editor={connectionId,table:result.target.table,recordRef,focusColumn,
      onDirty:(value:boolean)=>onEditDirty?.(value),onDone:(committed:boolean)=>{editingRef.current=false;setEditing(false);if(committed)back();}};
-   return sqlite ? <SqliteSearchRecordEditDialog {...editor}/> :
-     <PostgresSearchRecordEditDialog {...editor} database={result.target.database}/>;
+   if (sqlite) return <SqliteSearchRecordEditDialog {...editor}/>;
+   const networkEditor={...editor,database:result.target.database};
+   return source.profile?.dialect==='postgresql' ? <PostgresSearchRecordEditDialog {...networkEditor}/> :
+     <MysqlSearchRecordEditDialog {...networkEditor}/>;
  }
  return <Modal title={t.title} wide onClose={back}><div ref={content} className="modal-content data-search-record"><UsageHelp><p>{sqlite?t.sqliteHint:t.hint}</p><p>{t.expires}</p></UsageHelp><ErrorBox message={error}/>{busy&&<Spinner text={closing?t.closing:t.reading}/>}<div role="status">{result&&<><strong>{result.target.database}.{result.target.table}</strong><p>{t.searched}：{result.searchedAt} · {t.read}：{result.readAt} · UTC</p></>}</div>{result?.fields.map(field=>{const text=recordText(field.value);return <section key={field.name}><h3>{field.name} <small className="muted">{field.dataType} · {field.binary?t.binary:t.readOnly}</small> {field.value===null&&<span className="tag">{t.null}</span>}{field.value===''&&<span className="tag">{t.empty}</span>}</h3>{field.truncated&&<p className="warning-text">{t.truncated(field.characters)}</p>}<textarea aria-label={t.value(field.name)} readOnly value={text} rows={field.truncated?6:text.includes('\n')?3:1} spellCheck={false}/></section>;})}</div><footer className="modal-footer"><span className="grow"/>{canEdit&&<button disabled={busy||closing} onClick={()=>{editingRef.current=true;setEditing(true);}}>{t.edit}</button>}<button disabled={closing} onClick={back}>{t.back}</button></footer></Modal>;
 }

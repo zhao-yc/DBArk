@@ -36,7 +36,7 @@ import type {SessionObjectSnapshot,SessionObjectCompletion,SessionObjectReadResu
 import type {StructureSearchInput,StructureSearchContinue,StructureSearchPage} from './databaseSearch';
 import type {DataSearchInput,DataSearchNext,DataSearchReply,DataSearchProgress} from './dataSearch';
 import type {DataSearchCatalogueInput,DataSearchCataloguePage} from './dataSearchCatalogue';
-import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRecord}from'./dataSearchRecords';
+import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRecord,MysqlSearchEditRecord}from'./dataSearchRecords';
 import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,SavedQueryOpenResult}from'./savedQuerySearch';
 import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
 import type { SavedQueryOrganizationApply, SavedQueryOrganizationSnapshot } from './savedQueryOrganization';
@@ -225,6 +225,7 @@ export interface CommandMap {
   'search.release':{input:{connectionId:string;cursor:string};output:void};
   'search.dataStart':{input:DataSearchInput;output:DataSearchReply};
   'search.recordRead':{input:DataSearchRecordReadInput;output:DataSearchRecord};
+  'search.recordEditRead':{input:DataSearchRecordReadInput;output:MysqlSearchEditRecord};
   'search.recordsRelease':{input:DataSearchRecordsReleaseInput;output:void};
   'search.catalogue':{input:DataSearchCatalogueInput;output:DataSearchCataloguePage};
   'search.dataNext':{input:DataSearchNext;output:DataSearchReply};
@@ -423,8 +424,8 @@ export interface CommandMap {
   'table.statistics': { input: import('./tableStatistics').TableStatisticsInput; output: import('./tableStatistics').TableStatisticsOutput };
   'table.valueOptions': { input: import('./tableValueOptions').TableValueOptionsInput; output: import('./tableValueOptions').TableValueOptionsOutput };
   'table.exportFiltered': { input: import('./tableFilteredExport').TableFilteredExportInput; output: import('./tableFilteredExport').TableFilteredExportOutput };
-  'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };
-  'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string; previewId?: string }; output: { affectedRows: number; receiptId?: string; receiptSaved?: boolean; cleanupWarning?: boolean } };
+  'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; searchRecordRef?: string }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };
+  'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string; previewId?: string; searchRecordRef?: string }; output: { affectedRows: number; receiptId?: string; receiptSaved?: boolean; cleanupWarning?: boolean } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };
   'schema.apply': { input: { connectionId: string; database: string; sql: string; taskId: string }; output: QueryOutcome };
   'schema.compare': { input: SchemaCompareInput; output: SchemaCompareResult };

@@ -4,7 +4,7 @@ import type { RowChange, SqlPreview } from '../shared/contracts';
 import { emptyTableApplyEvidence, interruptTableApplyReceipt, mergeTableApplyProgress, parseTableApplyReceipt, tableApplyReceiptLimits, type TableApplyProgress, type TableApplyReceipt, type TableApplyTarget, type TableApplyBinding } from '../shared/tableApplyReceipt';
 
 export interface TableApplyReceiptStore { saveTableApplyReceipt(r: TableApplyReceipt): void; }
-interface Preview { target: TableApplyTarget; changes: string; plan: SqlPreview['statements']; bytes: number; expires: number; timer: ReturnType<typeof setTimeout>; }
+interface Preview { target: TableApplyTarget; changes: string; plan: SqlPreview['statements']; searchRecordRef?: string; document?: object; bytes: number; expires: number; timer: ReturnType<typeof setTimeout>; }
 
 /** 敏感计划仅驻留有界RAM；renderer只拿随机预览编号，不能签发结果证据。 */
 export class TableApplyReceipts {
@@ -16,23 +16,24 @@ export class TableApplyReceipts {
   constructor(private readonly store: TableApplyReceiptStore, private readonly warning: () => void = () => {}, private readonly now = Date.now) {}
 
   /** 主进程在可信预览返回后固定目标修订、changes和所展示计划；过期内容立即释放。 */
-  preview(target: TableApplyTarget, changes: RowChange[], plan: SqlPreview): { previewId: string; previewExpiresAt: string } {
+  preview(target: TableApplyTarget, changes: RowChange[], plan: SqlPreview, searchRecordRef?: string, document?: object): { previewId: string; previewExpiresAt: string } {
     for (const [id, value] of this.previews) if (value.expires <= this.now()) { clearTimeout(value.timer); this.previews.delete(id); }
     const content = JSON.stringify(changes), statements = structuredClone(plan.statements);
     const bytes = Buffer.byteLength(content) + Buffer.byteLength(JSON.stringify(statements));
     if (this.previews.size >= tableApplyReceiptLimits.previews || [...this.previews.values()].reduce((n, p) => n + p.bytes, bytes) > tableApplyReceiptLimits.previewBytes) throw Error('提交预览缓存已满，请关闭或等待旧预览过期后重新预览');
     const previewId = randomUUID(), expires = this.now() + tableApplyReceiptLimits.previewMs;
     const timer = setTimeout(() => this.previews.delete(previewId), tableApplyReceiptLimits.previewMs); timer.unref();
-    this.previews.set(previewId, { timer, target: { ...target }, changes: content, plan: statements, bytes, expires });
+    this.previews.set(previewId, { timer, target: { ...target }, changes: content, plan: statements, searchRecordRef, document, bytes, expires });
     return { previewId, previewExpiresAt: new Date(expires).toISOString() };
   }
 
   /** 两次原子保存都先于broker派发；任何异常都不能发送本批DML，令牌仍单次消费。 */
-  prepare(taskId: string, previewId: string | undefined, target: TableApplyTarget, changes: RowChange[]): TableApplyBinding {
+  prepare(taskId: string, previewId: string | undefined, target: TableApplyTarget, changes: RowChange[], searchRecordRef?: string, document?: object): TableApplyBinding {
     const p = previewId ? this.previews.get(previewId) : undefined;
     if (p) clearTimeout(p.timer);
     if (previewId) this.previews.delete(previewId);
-    if (!p || p.expires <= this.now() || JSON.stringify(p.target) !== JSON.stringify(target) || p.changes !== JSON.stringify(changes)) throw Error('提交预览已变化或失效，请重新预览；未发送本批数据写入');
+    if (!p || p.expires <= this.now() || p.searchRecordRef !== searchRecordRef || p.document !== document ||
+      JSON.stringify(p.target) !== JSON.stringify(target) || p.changes !== JSON.stringify(changes)) throw Error('提交预览已变化或失效，请重新预览；未发送本批数据写入');
     if (this.active.has(taskId) || this.completed.has(taskId)) throw Error('提交任务编号已使用');
     const operationId = randomUUID(), intent = { insert: 0, update: 0, delete: 0, statementCount: p.plan.length };
     for (const change of changes) intent[change.kind]++;

@@ -510,9 +510,12 @@ export class Engine {
         if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
         return this.dataSearches.start(request,action=>this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>action({managed,...control,stop:()=>this.stopIndependentRead(input.taskId)}),undefined,'搜索数据',true,()=>this.dataSearches.detail(input.taskId)));
       }
-      case 'search.recordRead':{
+      case 'search.recordRead':case 'search.recordEditRead':{
         const{profile,...request}=input;if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效记录连接配置');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
-        return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>this.dataSearchRecords.read({managed,...control},request),undefined,'正在定位命中记录',true);
+        return this.withIndependentTask(input.connectionId,input.taskId,async (managed,control)=>command==='search.recordRead'
+          ? this.dataSearchRecords.read({managed,...control},request)
+          : this.dataSearchRecords.readEdit({managed,...control},
+            {connectionId:input.connectionId,taskId:input.taskId,recordRef:input.recordRef}),undefined,'正在定位命中记录',true);
       }
       case 'search.catalogue':{
         const{profile,...request}=input;if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效范围连接配置');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
@@ -759,7 +762,13 @@ export class Engine {
         this.copySourceProfile(input);
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => verifyTableDraft({ managed, ...control }, input as TableDraftVerifyInput), undefined, '核对待恢复草稿原行', true);
       }
-      case 'table.preview': return this.withConnection(input.connectionId, async managed => buildChanges(await metadata.tableInfo(managed, input.database, input.table), input.changes));
+      case 'table.preview': return this.withConnection(input.connectionId, async managed => {
+        if (!input.searchRecordRef) return buildChanges(await metadata.tableInfo(managed, input.database, input.table), input.changes);
+        const locator = { connectionId: input.connectionId, taskId: randomUUID(), recordRef: input.searchRecordRef };
+        const { info } = await this.dataSearchRecords.readEdit({ managed, checkCancelled: () => {}, commandStarted: () => () => {} }, locator,
+          { database: input.database, table: input.table, changes: input.changes });
+        return buildChanges(info, input.changes, { binaryText: 'cast', searchKey: this.dataSearchRecords.editKey(locator) });
+      });
       case 'table.apply': return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '提交数据修改', task => this.applyChanges(task, input)));
       case 'schema.preview': return this.withConnection(input.connectionId, async managed => {
         const design = input.design as TableDesign;
@@ -2118,16 +2127,34 @@ export class Engine {
   private async applyChanges(task: RunningTask, input: Input): Promise<{ affectedRows: number }> {
     const evidence = task.tableApply = emptyTableApplyEvidence(), binding = input.tableApplyBinding as TableApplyBinding | undefined;
     let info: import('../shared/contracts').TableInfo;
-    try { info = await metadata.tableInfo(task.managed, input.database, input.table); }
+    const locator = input.searchRecordRef ? { connectionId: input.connectionId, taskId: task.id, recordRef: input.searchRecordRef } : undefined;
+    let searchKey: ReturnType<DataSearchRecords['editKey']> | undefined;
+    try {
+      if (locator) {
+        searchKey = this.dataSearchRecords.editKey(locator);
+        await this.statement(task, "SET SESSION time_zone = '+00:00'");
+        await this.statement(task, 'SET SESSION lock_wait_timeout = 5, innodb_lock_wait_timeout = 5');
+      }
+      info = await metadata.tableInfo(task.managed, input.database, input.table);
+    }
     catch (error) {
       if (binding) this.emit({ taskId: task.id, status: 'running', progress: 0, message: '提交前检查未完成', tableApply: { operationId: binding.operationId, sequence: 1, phase: 'terminal', reason: 'validation', evidence } });
       throw error;
     }
     return applyTableTransaction(info, input.changes, {
-      evidence, operationId: binding?.operationId, expectedPlan: binding?.plan,
+      evidence, operationId: binding?.operationId, expectedPlan: binding?.plan, searchKey,
       checkCancelled: () => this.checkCancelled(task), broken: () => task.managed.broken, cancelled: () => task.cancelled,
       send: (sql, params, ack) => this.statement(task, sql, params, ack),
-      lockInfo: async () => { await this.statement(task, 'SELECT 1 FROM ' + qualified(input.database, input.table) + ' LIMIT 0'); return metadata.tableInfo(task.managed, input.database, input.table); },
+      lockInfo: async () => {
+        await this.statement(task, 'SELECT 1 FROM ' + qualified(input.database, input.table) + ' LIMIT 0');
+        if (!locator) return metadata.tableInfo(task.managed, input.database, input.table);
+        const { info } = await this.dataSearchRecords.verifyEdit({
+          managed: task.managed, checkCancelled: () => this.checkCancelled(task),
+          commandStarted: () => { task.inFlight = true; task.generation++; return () => { task.inFlight = false; }; },
+        }, locator,
+        { database: input.database, table: input.table, changes: input.changes }, true);
+        return info;
+      },
       rollback: async () => (await execute<ResultSetHeader>(task.managed, 'ROLLBACK')).rows,
       emit: progress => this.emit({ taskId: task.id, status: 'running', progress: 0, message: progress.phase === 'committing' ? '正在确认提交，暂不能取消' : '数据提交结果请查看提交记录', tableApply: progress })
     });

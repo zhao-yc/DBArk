@@ -1,4 +1,5 @@
 import {Buffer} from 'node:buffer';
+import { createHash } from 'node:crypto';
 import {TextDecoder} from 'node:util';
 import {dataSearchLimits,dataSearchTargetSchema,dataSearchMatcherSchema,type DataSearchTargetMetadata,type DataSearchColumnMetadata,type DataSearchRow} from '../shared/dataSearch';
 import type {CellValue} from '../shared/contracts';
@@ -11,6 +12,55 @@ import type {StructureTaskContext} from './structureDefinition';
 type Control=Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>;
 const binaryType=/^(?:binary|varbinary|tinyblob|blob|mediumblob|longblob|bit|geometry|point|linestring|polygon|multipoint|multilinestring|multipolygon|geometrycollection)$/i;
 const exact=(field:string)=>'CAST('+field+' AS BINARY)=CAST(? AS BINARY)';
+type EditColumn = { name: string; dataType: string };
+const floatType = /^(?:float|double|real)$/i;
+const editType = /^(?:tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|float|double|real|year|date|datetime|timestamp|time|char|varchar|tinytext|text|mediumtext|longtext|enum|set|json|binary|varbinary|tinyblob|blob|mediumblob|longblob|bit)$/i;
+
+/** 摘要在服务器处理大值，只有浮点数使用二进制协议传原值，避免文本舍入混淆相邻值。 */
+export function mysqlSearchEditProjection(columns: readonly EditColumn[]) {
+  const floats = columns.filter(column => floatType.test(column.dataType));
+  const cells = columns.filter(column => !floatType.test(column.dataType)).map(column => {
+    const name = identifier(column.name);
+    const value = column.dataType === 'timestamp' ? "COALESCE(CAST(UNIX_TIMESTAMP(" + name + ") AS CHAR),CONCAT('date:'," + name + "))" :
+      /^(?:enum|set)$/i.test(column.dataType) ? 'CAST(' + name + ' AS UNSIGNED)' : name;
+    return "IFNULL(SHA2(CAST(" + value + " AS BINARY),256),'-')";
+  });
+  const stamp = cells.length ? "SHA2(CONCAT_WS(''," + cells.join(',') + '),256)' : "SHA2('',256)";
+  return [stamp + ' AS __dbark_edit_stamp', ...floats.map((column, index) => identifier(column.name) + ' AS __dbark_edit_f' + index)];
+}
+
+export function mysqlSearchEditStamp(values: readonly CellValue[]) {
+  const [stamp, ...floats] = values;
+  if (typeof stamp !== 'string' || !/^[0-9a-f]{64}$/.test(stamp) ||
+      floats.some(value => value !== null && (typeof value !== 'number' || !Number.isFinite(value)))) return undefined;
+  const hash = createHash('sha256').update(stamp);
+  const bytes = Buffer.alloc(8);
+  for (const value of floats) {
+    if (value === null) hash.update('n');
+    else { bytes.writeDoubleBE(value as number); hash.update('f').update(bytes); }
+  }
+  return hash.digest('hex');
+}
+
+/** 只在可读取完整原行时添加摘要。字段级 SELECT 拒绝仍允许原有只读搜索。 */
+export async function readMysqlSearchEditColumns(managed: ManagedConnection, control: Control, target: DataSearchTargetMetadata['target']) {
+  const rows = (await completionQuery<EditColumn[]>(managed, control,
+    'SELECT COLUMN_NAME AS name, DATA_TYPE AS dataType FROM information_schema.COLUMNS WHERE ' +
+    exact('TABLE_SCHEMA') + ' AND ' + exact('TABLE_NAME') + ' ORDER BY ORDINAL_POSITION LIMIT 1025',
+    [target.database, target.table])).rows;
+  if (!rows.length || rows.length > 1024 || rows.some(column => !editType.test(column.dataType))) return undefined;
+  try {
+    const { fields } = await completionQuery(managed, control,
+      'SELECT ' + rows.map(column => identifier(column.name)).join(',') + ' FROM ' + qualified(target.database, target.table) + ' LIMIT 0', []);
+    if (fields.length !== rows.length || fields.some((field, index) => field.name !== rows[index].name)) return undefined;
+  } catch (error) {
+    control.checkCancelled();
+    const failure = error as { errno?: number };
+    if (managed.broken || ![1142, 1143].includes(failure.errno ?? 0)) throw error;
+    return undefined;
+  }
+  return rows;
+}
 /** 长度仅用于预览状态，保留服务器十进制计数字符串，不转换BIGINT或单元格数值。 */
 function lengthText(value:CellValue):string|null{if(value===null)return null;const text=String(value);if(!/^\d{1,20}$/.test(text))throw Error('搜索预览长度不完整');return text;}
 
@@ -70,7 +120,7 @@ export async function readDataSearchTarget(managed:ManagedConnection,raw:unknown
 }
 
 /** 固定投影只传有界文字预览及独立可靠键，原始大字段不进入驱动结果；匹配本身仍由服务器对完整值执行。 */
-export function buildDataSearchPlan(metadata:DataSearchTargetMetadata,rawMatcher:unknown,rows:number):{sql:string;params:string[]}{
+export function buildDataSearchPlan(metadata:DataSearchTargetMetadata,rawMatcher:unknown,rows:number, editColumns?: readonly EditColumn[]):{sql:string;params:string[]}{
   const target=dataSearchTargetSchema.parse(metadata.target),matcher=dataSearchMatcherSchema.parse(rawMatcher);
   if(!Number.isInteger(rows)||rows<1||rows>dataSearchLimits.rows+1)throw Error('数据搜索行预算无效');
   if(metadata.columns.length!==target.columns.length||metadata.columns.some((column,index)=>column.name!==target.columns[index].name))throw Error('数据搜索字段与元数据目标不一致');
@@ -88,6 +138,7 @@ export function buildDataSearchPlan(metadata:DataSearchTargetMetadata,rawMatcher
     // TIMESTAMP原显示值保持不变，另取内部UTC秒数供跨会话定位，不能对已文本化日期反推时区。
     if(column.dataType.toLowerCase()==='timestamp')projections.push('CONVERT(UNIX_TIMESTAMP('+identifier(column.name)+') USING utf8mb4) AS e'+index);
   }
+  if (editColumns) projections.push(...mysqlSearchEditProjection(editColumns));
   return{sql:'SELECT '+projections.join(',')+' FROM '+qualified(target.database,target.table)+' WHERE ('+predicates.join(' OR ')+') LIMIT '+rows,params:[...projectionParams,...whereParams]};
 }
 

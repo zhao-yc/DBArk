@@ -1,5 +1,5 @@
 import{z}from'zod';
-import type{CellValue}from'./contracts';
+import type{CellValue,DataRow,TableInfo}from'./contracts';
 import type{DataSearchTarget}from'./dataSearch';
 
 /** 导航只接受引擎签发的随机引用，不接受渲染进程提供SQL、表名、键或对象身份证明。 */
@@ -10,4 +10,5 @@ export type DataSearchRecordReadInput=z.infer<typeof dataSearchRecordReadSchema>
 export type DataSearchRecordsReleaseInput=z.infer<typeof dataSearchRecordsReleaseSchema>;
 export type DataSearchNavigationReason='no-key'|'identity-permission'|'identity-unproven'|'budget';
 export interface DataSearchRecordField{name:string;dataType:string;value:CellValue;characters:string|null;truncated:boolean;binary:boolean}
-export interface DataSearchRecord{target:DataSearchTarget;fields:DataSearchRecordField[];timeZone:'+00:00';searchedAt:string;readAt:string;readOnly:true}
+export interface DataSearchRecord{target:DataSearchTarget;fields:DataSearchRecordField[];timeZone:'+00:00';searchedAt:string;readAt:string;readOnly:true;mysqlEditAvailable?:true}
+export interface MysqlSearchEditRecord{info:TableInfo;row:DataRow}

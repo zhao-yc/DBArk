@@ -58,7 +58,7 @@ export interface DataSearchCell{matched:boolean;preview:string|null;characters:s
 export interface PostgresSearchRowIdentity { tableOid:string; tid:string; xmin:string; fileNode:string }
 export type SqliteSearchKey = [kind: 'text' | 'blob' | 'integer' | 'real', value: string];
 export interface SqliteSearchRowIdentity { stamp: string; keys: SqliteSearchKey[] }
-export interface DataSearchRow{cells:DataSearchCell[];keyValues:CellValue[]|null;keyUnavailableReason?:'no-key'|'unsupported-key-type'|'key-too-large'|'key-not-selectable';timestampEpochs?:(string|null)[];postgresIdentity?:PostgresSearchRowIdentity;sqliteIdentity?:SqliteSearchRowIdentity}
+export interface DataSearchRow{cells:DataSearchCell[];keyValues:CellValue[]|null;keyUnavailableReason?:'no-key'|'unsupported-key-type'|'key-too-large'|'key-not-selectable';timestampEpochs?:(string|null)[];postgresIdentity?:PostgresSearchRowIdentity;sqliteIdentity?:SqliteSearchRowIdentity;mysqlEditStamp?:string}
 /** 每处匹配单元格为一个命中；同一行多个字段分别列出，候选键与预览保持独立。 */
 export interface DataSearchHit{columnIndex:number;cell:DataSearchCell;keyValues:CellValue[]|null;keyUnavailableReason?:DataSearchRow['keyUnavailableReason'];recordRef?:string;navigationReason?:DataSearchNavigationReason}
 export interface DataSearchProgress{phase:'preparing'|'scanning'|'waiting'|'releasing';targetIndex:number;targets:number;processedBlocks:number;blocks:number;failedBlocks:number;hits:number;bytes:number;sequence:number;limitReached:boolean;limitReason?:'hits'|'bytes';peakBufferedRows:number;peakBufferedBytes:number}
