@@ -146,11 +146,14 @@ describe('SQLite原查询会话与真实磁盘driver适配', () => {
 
   it('maxRows约束整个脚本而非每个结果集，RETURNING截断后仍完整写入', async () => {
     const path = fixture(), harness = await open(path);
-    const outcome = await execute(harness, "SELECT 1 UNION ALL SELECT 2; INSERT INTO subject SELECT value,NULL FROM json_each('[1,2,3,4,5]') RETURNING id; SELECT '最后结果'", { maxRows: 3 });
+    const statements = ["SELECT 1 UNION ALL SELECT 2;", "INSERT INTO subject SELECT value,NULL FROM json_each('[1,2,3,4,5]') RETURNING id;", "SELECT '最后结果'"];
+    const script = statements.join(' ');
+    const outcome = await execute(harness, script, { maxRows: 3 });
     expect(outcome.failure).toBeUndefined(); expect(outcome.results.map(result => result.rows.length)).toEqual([2, 1, 0]);
-    expect(outcome.sqliteResultReceipts).toEqual([
+    expect(outcome.sqliteResultReceipts?.map(({producedRows, changedRows}) => ({producedRows, changedRows}))).toEqual([
       {producedRows: 2, changedRows: 0}, {producedRows: 5, changedRows: 5}, {producedRows: 1, changedRows: 0},
     ]);
+    expect(outcome.sqliteResultReceipts?.map(({sourceRange: {start, end}}) => script.slice(start, end))).toEqual(statements);
     const durations = outcome.results.map(result => result.elapsedMs);
     expect(durations.every(duration => Number.isFinite(duration) && duration > 0)).toBe(true);
     expect(durations.reduce((sum, duration) => sum + duration, 0)).toBeLessThanOrEqual(outcome.elapsedMs);

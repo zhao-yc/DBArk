@@ -371,6 +371,7 @@ export class SqliteWorkerCore {
       if (parameters && offset === sql.length) throw invalid();
       while (offset < sql.length) {
         this.check(active); if (active.results.length >= limits.statements) throw invalid();
+        const statementStart = offset;
         if (request.captureFailureRange) attemptedStart = offset;
         const started = request.captureQueryReceipt ? performance.now() : undefined;
         const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining), prefix = statement.sourceSQL;
@@ -384,7 +385,8 @@ export class SqliteWorkerCore {
           if (this.guardedCreate && !this.guardedCreate.matched) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite没有观察到本次准确CREATE原生授权，尚未执行任何语句');
           if (this.guardedCreate && statement.columns().length !== 0) throw new DriverFailure('SQLITE_CREATE_GUARD_DENIED', 'SQLite对象创建不能使用EXPLAIN或带结果列的其它语句');
           if (!statement.hasStatement) { attemptedStart = undefined; nativeRange = undefined; continue; }
-          const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream, title, started);
+          const receipt = started === undefined ? undefined : {started, sourceRange: {start: statementStart, end: statementStart + prefix.length}};
+          const result = await this.statement(active, statement, prefix, named ?? parameters ?? [], stream ? { maxRows: 1, maxBytes: 1, batchRows: options.batchRows } : options as SqliteExecutionOptions, stream, title, receipt);
           active.results.push(result); this.port.send({ kind: 'statementEnd', id: active.id, result });
         } finally { statement.finish(); }
         attemptedStart = undefined;
@@ -408,7 +410,7 @@ export class SqliteWorkerCore {
 
   /** 结果达到预算后仍drain原语句，避免RETURNING写入因提前return而只执行一部分。 */
   private async statement(active: Execution, statement: SqliteRawStatement, sql: string, parameters: SQLInputValue[] | Record<string, SQLInputValue>,
-    options: SqliteExecutionOptions, stream = false, title?: string, started?: number): Promise<SqliteStatementResult> {
+    options: SqliteExecutionOptions, stream = false, title?: string, receipt?: {started: number; sourceRange: QueryFailureSourceRange}): Promise<SqliteStatementResult> {
     statement.bind(parameters);
     const columns = statement.columns(); if (columns.length > limits.columns) throw invalid();
     const before = this.changes(), index = active.results.length;
@@ -432,7 +434,7 @@ export class SqliteWorkerCore {
           if (!stream && active.bytes + next + 1 > options.maxBytes) { row = undefined; retaining = false; truncated = true; }
           else { row.push(event.value); rowBytes = next; }
         } else if (event.kind === 'rowEnd') {
-          if (started !== undefined) producedRows++;
+          if (receipt) producedRows++;
           if (!row) continue;
           if (row.length !== columns.length) throw invalid(); const bytes = rowBytes + 1;
           if (!Number.isSafeInteger(active.bytes + bytes) || !Number.isSafeInteger(rows + batch.length + 1)) throw invalid();
@@ -447,6 +449,6 @@ export class SqliteWorkerCore {
     const changed = this.changes() - before; if (changed < 0n) throw invalid();
     if (!Number.isSafeInteger(producedRows)) throw invalid();
     return { index, rows, truncated, changes: changed.toString(), transaction: this.transaction(),
-      ...(started === undefined ? {} : {queryReceipt: {producedRows, elapsedMs: performance.now() - started}}) };
+      ...(receipt ? {queryReceipt: {producedRows, elapsedMs: performance.now() - receipt.started, sourceRange: receipt.sourceRange}} : {}) };
   }
 }

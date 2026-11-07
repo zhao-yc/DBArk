@@ -11,7 +11,8 @@ export class SqliteDriverError extends Error {
     super(message); this.name = 'SqliteDriverError';
     // 前序完整结果属于原执行事实；失败后仍须提供截断/变更量，不能只凭语句数猜测成功。
     this.completedResults = Object.freeze(results.map(result => Object.freeze({ ...result,
-      ...(result.queryReceipt ? {queryReceipt: Object.freeze({...result.queryReceipt})} : {}) })));
+      ...(result.queryReceipt ? {queryReceipt: Object.freeze({...result.queryReceipt,
+        sourceRange: Object.freeze({...result.queryReceipt.sourceRange})})} : {}) })));
   }
 }
 export interface SqliteExecuteOptions extends Partial<SqliteExecutionOptions> {
@@ -34,18 +35,20 @@ interface Operation {
   results: SqliteStatementResult[]; delivery: Promise<void>; frame: number; index: number;
   cancelRequested: boolean; cancelPromise?: Promise<SqliteCancellation>; timer?: ReturnType<typeof setTimeout>;
   terminal?: Terminal; finishing?: boolean; consumerError?: Error;
-  failureSource?: string;
+  originalSql?: string;
+  latestStatementSql?: string;
+  captureFailureRange?: true;
   captureQueryReceipt?: true;
   comparison?: { columnGroups: number; comparedRows: bigint; onProgress?(progress: { comparedRows: string; columnGroups: number }): void | Promise<void> };
 }
 
 /** 私有进程也须返回原 UTF-16 边界，不能把偏移带出本次原载荷。 */
-function validateFailureRange(source: string, range: QueryFailureSourceRange): void {
+function validateSourceRange(source: string, range: QueryFailureSourceRange): void {
   const boundary = (offset: number) => Number.isSafeInteger(offset) && offset >= 0 && offset <= source.length &&
     !(source[offset - 1] === '\r' && source[offset] === '\n') &&
     !(/[\ud800-\udbff]/.test(source[offset - 1] ?? '') && /[\udc00-\udfff]/.test(source[offset] ?? ''));
   if (!range || !boundary(range.start) || !boundary(range.end) || range.start >= range.end)
-    throw Error('SQLite失败位置超出本次SQL原文');
+    throw Error('SQLite语句位置超出本次SQL原文');
 }
 
 /** 一个真实SQLite物理连接对应一个由Main持有的进程；不重连、不重放SQL。 */
@@ -182,7 +185,8 @@ export class SqliteDriverSession {
     if (options.captureQueryReceipt && (stream || createGuard))
       return Promise.reject(this.error('SQLite查询回执不用于流式导出或内部创建操作', 'SQLITE_INVALID_REQUEST'));
     const operation: Operation = { id: randomUUID(), options, result: deferred(), nativeDone: deferred(), results: [], delivery: Promise.resolve(), frame: 0, index: -1, cancelRequested: false,
-      ...(options.captureFailureRange ? {failureSource: sql} : {}),
+      ...(options.captureFailureRange || options.captureQueryReceipt ? {originalSql: sql} : {}),
+      ...(options.captureFailureRange ? {captureFailureRange: true} : {}),
       ...(options.captureQueryReceipt ? {captureQueryReceipt: true} : {}) };
     // 无取消调用时也保留原生终态错误的处理端；execute仍通过自己的Promise报告失败。
     void operation.nativeDone.promise.catch(() => {});
@@ -190,7 +194,7 @@ export class SqliteDriverSession {
     try { this.transport.send(stream
       ? { kind: 'streamRead', id: operation.id, sql, parameters: options.parameters ?? [], options: { batchRows: configured.batchRows } }
       : { kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), ...(namedParameters === undefined ? {} : { namedParameters }), ...(createGuard === undefined ? {} : { createGuard }),
-        ...(operation.failureSource === undefined ? {} : {captureFailureRange: true}),
+        ...(operation.captureFailureRange ? {captureFailureRange: true} : {}),
         ...(operation.captureQueryReceipt ? {captureQueryReceipt: true} : {}), options: configured }); }
     catch { void this.breakSession('SQLite请求未能投递，未重试', 'SQLITE_SEND_FAILED'); }
     return operation.result.promise;
@@ -253,7 +257,11 @@ export class SqliteDriverSession {
       } else if (message.kind === 'statement' || message.kind === 'batch') {
         if (operation.comparison) throw Error('SQLite重建比较不能携带SQL或用户结果值');
         if (message.frame !== operation.frame + 1 || message.kind === 'statement' && (message.index !== operation.results.length || operation.index !== operation.results.length - 1) || message.kind === 'batch' && (message.index < 0 || message.index !== operation.index || message.index !== operation.results.length)) throw Error('SQLite结果批次顺序无效');
-        operation.frame = message.frame; if (message.kind === 'statement') operation.index = message.index;
+        operation.frame = message.frame;
+        if (message.kind === 'statement') {
+          operation.index = message.index;
+          if (operation.captureQueryReceipt) operation.latestStatementSql = message.sql;
+        }
         operation.delivery = operation.delivery.then(async () => {
           if (this.invalid || this.active !== operation || operation.cancelRequested || operation.terminal) return;
           if (message.kind === 'statement') await operation.options.onStatement?.({ index: message.index, sql: message.sql, columns: message.columns, ...(message.title === undefined ? {} : { title: message.title }) });
@@ -269,11 +277,20 @@ export class SqliteDriverSession {
             !Number.isSafeInteger(receipt.producedRows) || receipt.producedRows < message.result.rows ||
             !message.result.truncated && receipt.producedRows !== message.result.rows) : receipt !== undefined)
           throw Error('SQLite查询回执与原语句结果不一致');
+        if (receipt) {
+          const source = operation.originalSql!;
+          validateSourceRange(source, receipt.sourceRange);
+          const {start, end} = receipt.sourceRange;
+          // 回执必须对应本次结果头中确认过的原生前缀，且不能落入前一条已确认范围。
+          if (start < (operation.results.at(-1)?.queryReceipt?.sourceRange.end ?? 0) ||
+              source.slice(start, end) !== operation.latestStatementSql) throw Error('SQLite结果与原语句范围不一致');
+          operation.latestStatementSql = undefined;
+        }
         operation.results.push(message.result); this.transactionValue = message.result.transaction;
       } else if (message.kind === 'completed' || message.kind === 'failed' || message.kind === 'cancelled') {
         if (message.kind === 'failed' && message.sourceRange !== undefined) {
-          if (operation.failureSource === undefined || !/^SQLITE_NATIVE_\d+$/.test(message.code)) throw Error('SQLite失败位置不属于本次任务');
-          validateFailureRange(operation.failureSource, message.sourceRange);
+          if (!operation.captureFailureRange || operation.originalSql === undefined || !/^SQLITE_NATIVE_\d+$/.test(message.code)) throw Error('SQLite失败位置不属于本次任务');
+          validateSourceRange(operation.originalSql, message.sourceRange);
           message.sourceRange = {start: message.sourceRange.start, end: message.sourceRange.end};
         }
         if (message.kind === 'completed') {

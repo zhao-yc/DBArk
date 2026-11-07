@@ -68,7 +68,7 @@ export interface SqliteStreamReadOptions { batchRows: number; }
 export interface SqliteStatementResult {
   index: number; rows: number; truncated: boolean; changes: string; transaction: boolean;
   /** 原生语句的完整行数与耗时，仅用户查询明确请求时返回。 */
-  queryReceipt?: { producedRows: number; elapsedMs: number };
+  queryReceipt?: { producedRows: number; elapsedMs: number; sourceRange: QueryFailureSourceRange };
 }
 export interface SqliteExecutionResult { statements: SqliteStatementResult[]; transaction: boolean; comparison?: SqliteRebuildComparisonResult; }
 export interface SqliteOpenOptions { path: string; readOnly: boolean; busyTimeoutMs: number; }

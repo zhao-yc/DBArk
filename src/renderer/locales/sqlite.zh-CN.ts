@@ -21,5 +21,7 @@ export const sqliteZh = {
   receiptChanges: (changes: number) => `行变更计数 ${changes}`,
   receiptChangeHint: 'SQLite 原连接的累计变更差值，可能包含触发器和外键动作。请结合事务状态核对提交。',
   receiptElapsed: (elapsedMs: number) => `本条耗时 ${Math.round(elapsedMs)} ms`,
+  resultLocate: '定位结果原语句',
+  resultLocateUnavailable: '执行时的编辑器、原文或范围已无法确认。',
   executionElapsed: (elapsedMs: number) => `本次总耗时 ${Math.round(elapsedMs)} ms`,
 };

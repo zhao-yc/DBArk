@@ -34,3 +34,16 @@ it('模型换走再换回不能复活；无事件版本漂移也会在点击前�
 it.each(['present', 'connectionId', 'connectionVersion', 'tabId'] as const)('%s的ABA永久失效，不因同ID或修订恢复复活', key => { const f = fixture(), lease = f.create()!; lease.bindRange({ start: 0, end: 3 }); const previous = f.scope[key]; Object.assign(f.scope, { [key]: typeof previous === 'boolean' ? false : typeof previous === 'number' ? previous + 1 : 'other' }); f.emit('scope'); Object.assign(f.scope, { [key]: previous }); f.emit('scope'); expect(lease.locate()).toBe(false); expect(f.subscriptions()).toBe(0); });
 it('旧workspace正文可自然发布为本模型全文，发布后退回旧draft仍失效', () => { const f = fixture('SELECT 2;', 'SELECT 1;'), lease = f.create()!; expect(lease.bindRange({ start: 0, end: 8 })).toBe(true); f.scope.draft = f.source; f.emit('scope'); expect(lease.locate()).toBe(true); f.scope.draft = 'SELECT 1;'; f.emit('scope'); expect(lease.locate()).toBe(false); });
 it('外部不同草稿抢先到来即撤销，之后自然正文到达也不复活', () => { const f = fixture('SELECT 2;', 'SELECT 1;'), lease = f.create()!; lease.bindRange({ start: 0, end: 8 }); f.scope.draft = '外来SQL'; f.emit('scope'); f.scope.draft = f.source; f.emit('scope'); expect(lease.locate()).toBe(false); expect(f.editor.setSelection).not.toHaveBeenCalled(); });
+it('成功回执临时定位保留已绑定的失败范围，错误回执范围不会使有效租约失效', () => {
+  const f = fixture(), lease = f.create()!;
+  const success = {start: 0, end: f.source.indexOf('\r\n')}, failed = {start: f.source.lastIndexOf('SELECT'), end: f.source.length};
+  expect(lease.available()).toBe(false);
+  expect(lease.canLocateRange(success)).toBe(true);
+  expect(lease.locateRange(success)).toBe(true);
+  expect(lease.bindRange(failed)).toBe(true);
+  expect(lease.locateRange({start: -1, end: 2})).toBe(false);
+  expect(lease.locateRange(success)).toBe(true);
+  expect(lease.locate()).toBe(true);
+  expect(f.editor.setSelection.mock.calls.map(([selection]) => selection.startLineNumber)).toEqual([1, 1, 3]);
+  lease.dispose();
+});

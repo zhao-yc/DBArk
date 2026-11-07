@@ -120,12 +120,17 @@ export class SqliteQuerySession {
     const complete = (facts: readonly Readonly<SqliteStatementResult>[]): Pick<QueryOutcome, 'results' | 'sqliteResultReceipts'> => {
       if (facts.length > operation.results.length) throw Error('SQLite完整结果与原语句不匹配');
       const receipts: NonNullable<QueryOutcome['sqliteResultReceipts']> = [];
+      // 当前语句投递的是原文片段。选区及普通脚本的偏移相对各自完整载荷。
+      const base = options.sourceRange?.start ?? 0;
       const results = facts.map((fact, index) => {
         const source = operation.results[index];
         if (fact.index !== index) throw Error('SQLite完整结果顺序无效');
         const changed = BigInt(fact.changes);
         if (changed > BigInt(Number.MAX_SAFE_INTEGER)) throw Error('SQLite语句已执行，但变更量超过现有结果合同；请核对数据库，不要重复执行');
-        if (fact.queryReceipt) receipts.push({producedRows: fact.queryReceipt.producedRows, changedRows: Number(changed)});
+        if (fact.queryReceipt) {
+          const {producedRows, sourceRange} = fact.queryReceipt;
+          receipts.push({producedRows, changedRows: Number(changed), sourceRange: {start: base + sourceRange.start, end: base + sourceRange.end}});
+        }
         return { ...source, ...(!source.columns.length || changed > 0n ? { affectedRows: Number(changed) } : {}), truncated: source.truncated || fact.truncated,
           elapsedMs: fact.queryReceipt?.elapsedMs ?? performance.now() - operation.started };
       });

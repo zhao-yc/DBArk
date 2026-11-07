@@ -3,6 +3,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
 import { queryFailureSourceZh } from '../../src/renderer/locales/queryFailureSource.zh-CN';
+import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 
 // 默认和--list只注册单个跳过项；原生App、NodeSQLite和文件观察均在显式专项内部加载。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -42,6 +43,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
   const audit = () => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteCurrentNative?: Audit & { check(): void } }).__sqliteCurrentNative; if (!state) throw Error('原SQLite当前语句观察器不存在'); state.check(); return { pending: state.pending, denied: state.denied, forks: state.forks, pickerIds: state.pickerIds, profiles: state.profiles, sessions: state.sessions, commands: state.commands, operations: state.operations, events: state.events }; });
   const step = async <T,>(action: () => Promise<T>, skipAuditAfter = false): Promise<T> => { check(); if (armed && !closed) await audit(); const result = await action(); check(); if (armed && !closed && !skipAuditAfter) await audit(); return result; };
   const query = () => page.locator('.query-tab:visible');
+  const locateResult = () => query().getByRole('button', {name: sqliteZh.resultLocate, exact: true});
   const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
   const tasks = () => step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})));
   const history = () => step(() => page.evaluate(() => window.dbark.invoke('history.list', {})));
@@ -186,7 +188,10 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     stage = 'CtrlMetaShiftEnter中句SELECT精度及中文引号'; const selected = await run(select, true); expect(result(selected.fact?.reply)).toMatchObject({ results: [{ statement: select.selected, rows: [{ c0: '9223372036854775807', c1: "🧭当前;?'中文", c2: '1' }] }] }); await step(() => expect(query().getByRole('grid').getByText('9223372036854775807', { exact: true })).toBeVisible()); expect(disk()).toEqual(afterInsert); expect(emittedSql(await step(audit), selected.fact?.request.taskId)).toEqual([select.selected]);
     stage = '当前结果 SQL 预览绑定已执行语句，编辑草稿后也不重新执行';
     const beforePreview = await step(audit);
+    await step(() => expect(locateResult()).toBeEnabled()); await step(() => locateResult().click());
+    expect((await model()).selections).toEqual([{start: select.start, end: select.end}]);
     await write("SELECT '后来编辑的草稿';");
+    await step(() => expect(locateResult()).toBeDisabled());
     await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(query(), { name: zh.query.resultSql, exact: true }, check)).click());
     const resultSql = page.getByRole('dialog', { name: zh.query.resultSqlTitle, exact: true });
     await step(() => expect(resultSql.getByText(zh.query.resultSqlHint, { exact: true })).toBeVisible());
@@ -226,12 +231,21 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     expect(strictFact?.request).toMatchObject({ sql: selectionOnly.selected, sessionId: selected.fact?.request.sessionId });
     expect(strictFact?.request).not.toHaveProperty('currentStatement');
     expect(result(strictFact?.reply)).toMatchObject({ results: [{ rows: [{ c0: '仅选区🚢' }] }] });
+    await step(() => expect(locateResult()).toBeEnabled());
+    await step(() => page.evaluate(() => {
+      const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
+      const editor = api?.editor.getEditors().find(instance => !!instance.getContainerDomNode().closest('.query-tab .sql-editor-wrap'));
+      if (!editor) throw Error('原查询编辑器不可用');
+      editor.setPosition({lineNumber: 1, column: 1});
+    }));
+    await step(() => locateResult().click());
+    expect((await model()).selections).toEqual([{start: selectionOnly.start, end: selectionOnly.end}]);
     expect(emittedSql(await step(audit), strictFact?.request.taskId)).toEqual([selectionOnly.selected]);
     expect(disk()).toEqual(afterInsert);
     stage = 'trigger体内caret创建整个定义且不执行相邻DML'; const created = await run(trigger); expect(result(created.fact?.reply)).toMatchObject({ results: [{ statement: trigger.selected }] }); const afterTrigger = { ...afterInsert, triggers: [{ name: '当前;?触发🚢', sql: trigger.selected }] }; expect(disk()).toEqual(afterTrigger); expect(emittedSql(await step(audit), created.fact?.request.taskId)).toEqual([trigger.selected]);
     stage = '原普通CtrlEnter执行插入触发两条内部语句'; const normal = await run(ordinary); const afterNormal = { ...afterTrigger, subject: [...afterInsert.subject, { id: '20', note: '普通插入🚢' }], audit: [{ id: '20', note: "触发一;?'中文" }, { id: '20', note: '触发二🚢' }] }; expect(disk()).toEqual(afterNormal); const rwSession = inserted.fact?.request.sessionId; expect(typeof rwSession).toBe('string'); for (const execution of [selected, created, normal]) expect(execution.fact?.request.sessionId).toBe(rwSession);
     const receipt = query().getByRole('group', {name: sqliteZh.queryReceipt, exact: true});
-    expect(normal.outcome.sqliteResultReceipts).toEqual([{producedRows: 0, changedRows: 3}]);
+    expect(normal.outcome.sqliteResultReceipts).toEqual([{producedRows: 0, changedRows: 3, sourceRange: {start: 0, end: ordinarySql.length}}]);
     await step(() => expect(receipt).toContainText(sqliteZh.receiptChanges(3)));
     stage = '准确原会话BEGIN当前写与ROLLBACK独立观察'; await step(() => query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeEnabled()); const txWritten = await run(transactionInsert, true); expect(txWritten.fact?.request.sessionId).toBe(rwSession); expect(txWritten.outcome.transactionOpen).toBe(true); expect(disk()).toEqual(afterNormal); const txRead = await run(transactionRead); expect(txRead.fact?.request.sessionId).toBe(rwSession); expect(txRead.outcome).toMatchObject({ transactionOpen: true, results: [{ rows: [{ c0: '3' }] }] }); expect(disk()).toEqual(afterNormal);
     await step(() => query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeDisabled()); const transactionFacts = operations(await step(audit), 'query.transaction'); expect(transactionFacts.map(fact => fact.request)).toEqual([{ sessionId: rwSession, action: 'begin' }, { sessionId: rwSession, action: 'rollback' }]); expect(disk()).toEqual(afterNormal);
@@ -243,7 +257,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     const scriptFailure = await run(ordinaryFailure, false, true);
     expect(scriptFailure.outcome).toMatchObject({
       results: [{truncated: true, rows: expect.arrayContaining([{c0: '普通前序🧭'}])}],
-      sqliteResultReceipts: [{producedRows: 1005, changedRows: 0}],
+      sqliteResultReceipts: [{producedRows: 1005, changedRows: 0, sourceRange: {start: 0, end: priorSql.length}}],
       failure: {statementOrdinal: 2, statementsCompleted: 1, sourceRange: {start: failedStart, end: failedEnd}}});
     expect(emittedSql(await step(audit), scriptFailure.fact?.request.taskId)).toEqual([priorSql]);
     await step(() => expect(receipt).toContainText(/第 1 条语句 · 本条耗时 \d+ ms · 产生 1005 行 · 保留 1000 行/));
@@ -251,13 +265,21 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     const beforeLocate = await step(audit), beforeLocationHistory = await history();
     await step(() => expect(locate).toBeEnabled()); await step(() => locate.click());
     expect((await model()).selections).toEqual([{start: failedStart, end: failedEnd}]);
+    await step(() => query().getByRole('button', {name: queryLayoutZh.placement, exact: true}).click());
+    await step(() => page.getByRole('menuitem', {name: queryLayoutZh.results, exact: true}).click());
+    await step(() => expect(query().locator('.sql-editor-wrap')).toBeHidden());
+    await step(() => expect(locateResult()).toBeEnabled()); await step(() => locateResult().click());
+    expect((await model()).selections).toEqual([{start: 0, end: priorSql.length}]);
+    await step(() => query().getByRole('grid').getByText('普通前序🧭', {exact: true}).scrollIntoViewIfNeeded());
+    await step(() => page.screenshot({path: info.outputPath('SQLite结果定位.png')}));
+    await step(() => locate.click());
+    expect((await model()).selections).toEqual([{start: failedStart, end: failedEnd}]);
     expect((await step(audit)).operations).toEqual(beforeLocate.operations);
     expect(await history()).toEqual(beforeLocationHistory);
     expect(beforeLocationHistory.find(entry => entry.sql === full)?.success).toBe(false);
-    await step(() => query().getByRole('grid').getByText('普通前序🧭', {exact: true}).scrollIntoViewIfNeeded());
-    await step(() => page.screenshot({path: info.outputPath('SQLite查询回执.png')}));
     await write("SELECT '编辑后范围失效';");
     await step(() => expect(locate).toBeDisabled());
+    await step(() => expect(locateResult()).toBeDisabled());
     expect(disk()).toEqual(afterNormal);
     stage = '只读连接当前写拒绝但SELECT仍可用'; await openQuery(roName); const historyBeforeReadonly = await history(), denied = await run(readonlyWrite, false, true); expect(denied.outcome).toMatchObject({ failure: { sourceRange: { start: readonlyWrite.start, end: readonlyWrite.end } } }); expect(emittedSql(await step(audit), denied.fact?.request.taskId)).toEqual([]); expect(await history()).toEqual(historyBeforeReadonly); expect(disk()).toEqual(afterNormal);
     const read = await run(readonlyRead, true); expect(read.fact?.request.sessionId).not.toBe(rwSession); expect(read.outcome).toMatchObject({ results: [{ statement: readonlyRead.selected, rows: [{ c0: '2' }] }] }); const firstFacts = await step(audit); expect(firstFacts.sessions[String(rwSession)]).toBe(rw.id); expect(firstFacts.sessions[String(read.fact?.request.sessionId)]).toBe(ro.id); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerIds).toHaveLength(2); expect(operations(firstFacts, 'query.execute')).toHaveLength(11); expect(disk()).toEqual(afterNormal); const firstHistory = await assertHistory([...successfulSql, full, readonlyRead.selected]); expect(firstHistory.filter(entry => !entry.success).map(entry => entry.sql)).toEqual([full]); expect(runtime.pageErrors).toEqual([]);

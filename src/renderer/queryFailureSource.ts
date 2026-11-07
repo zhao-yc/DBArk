@@ -69,29 +69,53 @@ export class QueryFailureSourceLease {
   /** 单独验证引擎给出的数值范围，不读取访问器，也不按SQL文本搜索重复语句。 */
   bindRange(value: unknown): boolean {
     try {
-      if (!value || typeof value !== 'object' || Array.isArray(value) || Reflect.ownKeys(value).length !== 2) throw Error('范围不可用');
-      const descriptors = Object.getOwnPropertyDescriptors(value), start = descriptors.start, end = descriptors.end;
-      if (!start || !end || !('value' in start) || !('value' in end) || typeof start.value !== 'number' || typeof end.value !== 'number') throw Error('范围不可用');
-      const from = start.value, to = end.value;
-      if (!this.current() || from >= to || !boundary(this.capture.source, from) || !boundary(this.capture.source, to) || !boundary(this.full, this.base + from) || !boundary(this.full, this.base + to)) throw Error('范围不可用');
-      this.range = { start: this.base + from, end: this.base + to }; return true;
+      if (!this.current()) return false;
+      this.range = this.checkedRange(value);
+      return true;
     } catch { this.dispose(); return false; }
+  }
+
+  private checkedRange(value: unknown): {start: number; end: number} {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Reflect.ownKeys(value).length !== 2) throw Error('范围不可用');
+    const descriptors = Object.getOwnPropertyDescriptors(value), start = descriptors.start, end = descriptors.end;
+    if (!start || !end || !('value' in start) || !('value' in end) || typeof start.value !== 'number' || typeof end.value !== 'number') throw Error('范围不可用');
+    const from = start.value, to = end.value;
+    if (from >= to || !boundary(this.capture.source, from) || !boundary(this.capture.source, to) ||
+        !boundary(this.full, this.base + from) || !boundary(this.full, this.base + to)) throw Error('范围不可用');
+    return { start: this.base + from, end: this.base + to };
+  }
+
+  private active(): boolean {
+    if (!this.current()) return false;
+    try { const scope = this.capture.scope(); return scope.active && !scope.busy && !scope.modal && !scope.closing; } catch { this.invalidate(); return false; }
   }
 
   /** 光标和选区移动不会失效；非活动标签、模态、忙碌或关闭期间只暂时禁用。 */
   available(): boolean {
-    if (!this.range || !this.current()) return false;
-    try { const scope = this.capture.scope(); return scope.active && !scope.busy && !scope.modal && !scope.closing; } catch { this.invalidate(); return false; }
+    return !!this.range && this.active();
+  }
+
+  /** 成功结果的临时目标不覆盖首错按钮已绑定的范围。 */
+  canLocateRange(value: unknown): boolean {
+    try { if (!this.active()) return false; this.checkedRange(value); return true; } catch { return false; }
+  }
+
+  locateRange(value: unknown): boolean {
+    try { return this.active() && this.select(this.checkedRange(value)); } catch { return false; }
   }
 
   /** 点击只选择、滚动及聚焦原模型；每个同步端口前重核，不投递IPC或再次执行。 */
   locate(): boolean {
-    if (!this.available() || !this.range) return false;
+    return !!this.range && this.select(this.range);
+  }
+
+  private select(range: {start: number; end: number}): boolean {
+    if (!this.active()) return false;
     try {
-      const start = this.model.getPositionAt(this.range.start), end = this.model.getPositionAt(this.range.end), selection = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
-      if (!this.available()) return false; this.capture.editor.setSelection(selection);
-      if (!this.available()) return false; this.capture.editor.revealRangeInCenter(selection);
-      if (!this.available()) return false; this.capture.editor.focus(); return true;
+      const start = this.model.getPositionAt(range.start), end = this.model.getPositionAt(range.end), selection = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column };
+      if (!this.active()) return false; this.capture.editor.setSelection(selection);
+      if (!this.active()) return false; this.capture.editor.revealRangeInCenter(selection);
+      if (!this.active()) return false; this.capture.editor.focus(); return true;
     } catch { this.invalidate(); return false; }
   }
 
