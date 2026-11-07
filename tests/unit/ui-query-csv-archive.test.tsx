@@ -21,7 +21,7 @@ function fixture() {
   // 正式表单增加归属与配置代次；本夹具模拟每次状态更新后的当前渲染，保留全部原断言。
   context.live={current:true};context.configuration={current:0};context.completedRef={current:false};context.publishingRef={current:false};
   Object.defineProperty(context,'generation',{get:()=>context.configuration.current});
-  for (const name of ['Choosing', 'Error', 'Acknowledged', 'BinaryAcknowledged', 'Busy', 'Progress', 'Cancelling', 'Output', 'Completed', 'Failed', 'File','Publishing','Pending','Confirmation','PublishAck']) context['set' + name] = vi.fn((value: unknown) => { if (name === 'Acknowledged') context.acknowledged = value; if (name === 'BinaryAcknowledged') context.binaryAcknowledged = value; if (name === 'Completed') context.completed = value; });
+  for (const name of ['Choosing', 'Error', 'Acknowledged', 'BinaryAcknowledged', 'Busy', 'Progress', 'Cancelling', 'Output', 'Completed', 'Failed', 'File','Publishing','Pending','Confirmation','PublishAck','Generation']) context['set' + name] = vi.fn((value: unknown) => { if (name === 'Acknowledged') context.acknowledged = value; if (name === 'BinaryAcknowledged') context.binaryAcknowledged = value; if (name === 'Completed') context.completed = value; });
   runInContext(ts.transpileModule(functions.join('\n') + '\nglobalThis.handlers={chooseFile,execute}', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, invoke, onExecute, handlers: context.handlers as { chooseFile(): Promise<void>; execute(): Promise<void> } };
 }

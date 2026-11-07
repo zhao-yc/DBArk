@@ -14,12 +14,14 @@ import { queryInsertTargetSchema, type QueryInsertPending } from '../../shared/q
 import { queryInsertZh as insertText } from '../../shared/queryInsertExport.zh-CN';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
+import { queryHtmlZh } from '../../shared/queryHtml.zh-CN';
 
 export type StreamExportOptions = Omit<QueryStreamExportInput, 'sql' | 'sessionId'>;
 
 /** 只持有打开时捕获的 SQL；选文件、识别参数都不会执行用户 SQL。 */
 export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel, onClose, sessionBusy }: { source: string; sessionBusy: boolean; loadNames(): Promise<QueryParameterNames>; onExecute(options: StreamExportOptions): Promise<QueryStreamExportOutput>; onCancel(taskId: string): Promise<void>; onClose(): void }) {
-  const live=useRef(true),configuration=useRef(0),completedRef=useRef(false);const generation=configuration.current;
+  const live=useRef(true),configuration=useRef(0),completedRef=useRef(false);
+  const [generation, setGeneration] = useState(0);
   const [format, setFormat] = useState<QueryStreamExportInput['format']>('json'); const [encoding, setEncoding] = useState<QueryStreamExportInput['encoding']>('utf8');
   const [csvDelimiter, setCsvDelimiter] = useState<CsvExportDelimiter>(',');
   const [protocol, setProtocol] = useState<QueryStreamExportInput['protocol']>('text-strict'); const [ordinal, setOrdinal] = useState('1');
@@ -55,7 +57,7 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
     try { resultSelection = streamResultSelection(format, ordinal);if(format==='sql')insertTarget=queryInsertTargetSchema.parse({database,table,columns:columns.split('\n')}); } catch (reason) { setError(errorMessage(reason)); return; }
     busyRef.current = true; setBusy(true); setError(''); setProgress(null); setCancelling(false);publishingRef.current=false;setPublishing(false); task.current = uid();
     try {
-      const result = await onExecute({ taskId: task.current, fileToken: file!.token, format, encoding, protocol, resultSelection, parameters, ...csvExportOptions(format === 'csv-zip' ? 'csv' : format, csvDelimiter), ...(insertTarget?{insertTarget}:{}) });
+      const result = await onExecute({ taskId: task.current, fileToken: file!.token, format, encoding: format === 'html' ? 'utf8' : encoding, protocol, resultSelection, parameters, ...csvExportOptions(format === 'csv-zip' ? 'csv' : format, csvDelimiter), ...(insertTarget?{insertTarget}:{}) });
       setOutput(result);
       completedRef.current=true;setCompleted(true);
     } catch (reason) { setError(errorMessage(reason)); setFailed(true); setAcknowledged(false); setBinaryAcknowledged(false); }
@@ -74,14 +76,16 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   /** 旧表单回调也必须核当前同步锁，禁用状态本身不能代替异步归属检查。 */
   function canConfigure(){return live.current&&!busyRef.current&&!choosingRef.current&&!completedRef.current;}
   /** 修改配置使旧启动闭包失效，恢复原值也不能复活旧确认。 */
-  function invalidate() { configuration.current++;setAcknowledged(false); setBinaryAcknowledged(false);setPending(null);setConfirmation('');setPublishAck(false); }
+  /** 立即撤销旧闭包，并确保相同值的事件也会刷新当前闭包的版本。 */
+  function invalidate() { setGeneration(++configuration.current);setAcknowledged(false); setBinaryAcknowledged(false);setPending(null);setConfirmation('');setPublishAck(false); }
   /** 分隔符变化同步撤销原文件及确认；旧渲染闭包不能借A→B→A恢复执行。 */
   function changeDelimiter(value: CsvExportDelimiter) { if (!canConfigure() || generation !== configuration.current || value === csvDelimiter) return; setCsvDelimiter(value); setFile(null); invalidate(); }
   return <>{!parameterDialog && <Modal title={text.title} wide onClose={close}><div className="modal-content">
     <div className="info-strip">{text.warning}</div><h3>{text.source}</h3>{source.length > 65536 && <p className="muted small">{text.sourceLimit}</p>}<pre className="query-stream-source" aria-label={text.source}>{source.slice(0, 65536)}</pre>
-    <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} aria-label={text.format} onChange={event => { if(!canConfigure())return;setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option><option value="csv-zip">{text.csvZip}</option><option value="sql">{insertText.format}</option></select></Field><Field label={text.encoding}><select disabled={busy || completed} value={encoding} onChange={event => { if(!canConfigure())return;setEncoding(event.target.value as typeof encoding); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
+    <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} aria-label={text.format} onChange={event => { if(!canConfigure())return;setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option><option value="csv-zip">{text.csvZip}</option><option value="sql">{insertText.format}</option><option value="html">{queryHtmlZh.format}</option></select></Field><Field label={text.encoding}><select disabled={busy || completed || format === 'html'} value={format === 'html' ? 'utf8' : encoding} onChange={event => { if(!canConfigure())return;setEncoding(event.target.value as typeof encoding); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
     {format==='sql'&&<><p className="warning-text">{insertText.scope}</p><p>{insertText.mapping}</p><div className="form-grid"><Field label={insertText.database}><input disabled={busy||choosing||completed} value={database} aria-label={insertText.database} onChange={event=>{if(!canConfigure())return;setDatabase(event.target.value);invalidate();}}/></Field><Field label={insertText.table}><input disabled={busy||choosing||completed} value={table} aria-label={insertText.table} onChange={event=>{if(!canConfigure())return;setTable(event.target.value);invalidate();}}/></Field></div><Field label={insertText.columns}><textarea disabled={busy||choosing||completed} value={columns} aria-label={insertText.columns} onChange={event=>{if(!canConfigure())return;setColumns(event.target.value);invalidate();}}/></Field></>}
     {(format === 'csv' || format === 'csv-zip') && <CsvExportDelimiterField value={csvDelimiter} disabled={busy || choosing || completed} onChange={changeDelimiter}/>}
+    {format === 'html' && <p>{queryHtmlZh.hint} {queryHtmlZh.streamHint}</p>}
     {format === 'csv-zip' && <UsageHelp><p>{text.csvZipHint}</p></UsageHelp>}
     {format === 'csv' && <><Field label={text.ordinal}><input disabled={busy || completed} value={ordinal} inputMode="numeric" onChange={event => { if(!canConfigure())return;setOrdinal(event.target.value); invalidate(); }}/></Field><UsageHelp><p>{text.ordinalHint}</p></UsageHelp></>}
     <Field label={text.protocol}><select disabled={busy || completed} value={protocol} onChange={event => { if(!canConfigure())return;setProtocol(event.target.value as typeof protocol); invalidate(); }}><option value="text-strict">{text.text}</option><option value="binary-explicit">{text.binary}</option></select></Field><p className="warning-text">{protocol === 'text-strict' ? text.textHint : text.binaryHint}</p>

@@ -10,6 +10,7 @@ import { test, expect, desktop, page, dataDir, pageErrors, answerDialogs, quitDe
 import { enabled, isolatedDatabase, openDatabaseQuery, executeSql, modifier } from './live-helpers';
 import { readQueryCsvZip } from '../helpers/queryCsvZip';
 import { parse as parseCsv } from 'csv-parse/sync';
+import { queryHtmlZh } from '../../src/shared/queryHtml.zh-CN';
 
 // 凭据只进入临时连接表单；关闭追踪，截图和文件仅使用合成测试数据。
 test.use({ trace: 'off' });
@@ -58,7 +59,7 @@ async function count(observer: Connection, database: string, condition = '1=1') 
   return Number(rows[0].total);
 }
 /** 选择格式和目标后仍需明确新执行确认，双协议确认相互独立。 */
-async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
+async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'html' = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
   await observeEvents(); await choosePath(path);
   await (await navigationMenuItem(query(), { name: '新执行并完整导出', exact: true })).click();
   const modal = dialog(); await expect(modal).toBeVisible();
@@ -132,6 +133,47 @@ async function restorePathGate() { await desktop.evaluate(() => { const state = 
 test.describe('实库完整 SQL 流式导出', () => {
   test.skip(!enabled, '需要显式启用 DBARK_INTEGRATION_ENABLED 并配置已核对的远程测试实例');
   test.describe.configure({ timeout: 180000 });
+
+  test('HTML 完整导出保留多组结果和回执，数据库文本不会生成网页元素', async ({}, testInfo) => {
+    await isolatedDatabase(async ({ observer, database }) => {
+      await observer.query(`CREATE TABLE \`${database}\`.stream_guard(id INT PRIMARY KEY)`);
+      await openDatabaseQuery(database);
+      const target = testInfo.outputPath('查询结果.html');
+      await mkdir(testInfo.outputDir, {recursive: true});
+      await writeFile(target, '原文件');
+      await writeSql("INSERT INTO stream_guard VALUES(501); SELECT '<img src=x onerror=alert(1)>' AS `<b>标题</b>`, '' AS empty_value, NULL AS missing; SELECT 1 AS empty_result WHERE 0; SELECT CAST(18446744073709551615 AS UNSIGNED) AS exact, UNHEX('00FF') AS bytes;");
+      const before = await executionIds(), modal = await openExport(target, 'html');
+      await expect(modal).toContainText(queryHtmlZh.streamHint);
+      await expect(modal.locator('select:has(option[value="utf8"])')).toBeDisabled();
+      expect(await executionIds()).toEqual(before);
+      expect(await count(observer, database)).toBe(0);
+      const event = await finish(await start(modal, true));
+      expect(event?.queryExport).toMatchObject({statementsCompleted: 4, rowsWritten: 2, fileCommitted: true});
+      expect(await count(observer, database)).toBe(1);
+      const html = await readFile(target, 'utf8');
+      const parsed = await page.evaluate(source => {
+        const doc = new DOMParser().parseFromString(source, 'text/html');
+        return {
+          headings: [...doc.querySelectorAll('h2')].map(element => element.textContent),
+          headers: [...doc.querySelectorAll('th')].map(element => element.textContent),
+          cells: [...doc.querySelectorAll('td')].map(element => [element.textContent, element.dataset.kind ?? 'text']),
+          tableCounts: [...doc.querySelectorAll('tbody')].map(body => body.rows.length),
+          active: doc.querySelectorAll('script,img,iframe,[onerror]').length,
+          receipt: doc.querySelector('section p')?.textContent,
+        };
+      }, html);
+      expect(parsed).toEqual({
+        headings: ['结果 1 · 语句 1', '结果 2 · 语句 2', '结果 3 · 语句 3', '结果 4 · 语句 4'],
+        headers: ['<b>标题</b>', 'empty_value', 'missing', 'empty_result', 'exact', 'bytes'],
+        cells: [['<img src=x onerror=alert(1)>', 'text'], ['空字符串', 'empty'], ['NULL', 'null'],
+          ['18446744073709551615', 'text'], ['base64:AP8=', 'binary']],
+        tableCounts: [1, 0, 1], active: 0, receipt: '影响 1 行 · 插入 ID 0 · 警告 0 条',
+      });
+      expect(await readdir(testInfo.outputDir)).toEqual(['查询结果.html']);
+      await page.screenshot({path: testInfo.outputPath('HTML完整导出.png')});
+      await closeExport();
+    }, testInfo);
+  });
 
   test('多CSV入口明确新执行，ZIP授权、各行集与清单真实落盘且写入只发生一次', async ({}, testInfo) => {
     await isolatedDatabase(async ({ observer, database }) => {

@@ -14,7 +14,7 @@ export const fullQueryExportProfileScope = z.object({ dialect: z.enum(['sqlite',
 const options = z.discriminatedUnion('format', [
   z.object({ format: z.literal('csv'), encoding, delimiter: z.enum(csvExportDelimiters) }).strict(),
   z.object({ format: z.literal('json'), encoding }).strict(),
-  z.object({ format: z.literal('xlsx') }).strict(),
+  z.object({ format: z.enum(['xlsx', 'html']) }).strict(),
   z.object({ format: z.literal('sql'), target: z.union([sqliteQueryInsertTargetSchema, postgresQueryInsertTargetSchema]) }).strict(),
 ]);
 const profile = z.object({ name, options }).strict();

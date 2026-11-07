@@ -10,6 +10,8 @@ import { csvExportDelimiter } from '../shared/csvExport';
 import { assertResultExcelData } from '../shared/resultExcel';
 import { resultExcelZh } from '../shared/resultExcel.zh-CN';
 import { exportResultExcelFile } from './resultExcelFile';
+import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd } from './queryHtml';
+import { queryHtmlZh } from '../shared/queryHtml.zh-CN';
 
 export type ResultFileIO = AtomicFileIO;
 interface FileTask { cancelled: boolean; committing: boolean; done: Promise<void>; finish(): void; }
@@ -34,7 +36,9 @@ export class ResultFileTasks {
     if (this.closing) throw new Error('客户端正在退出，不能启动结果导出');
     if (!input.taskId || this.has(input.taskId)) throw new Error('任务编号为空或任务已在执行');
     if (!input.filePath) throw new Error('主进程未提供已授权文件路径');
-    if (!['csv', 'json', 'sql', 'xlsx'].includes(input.format)) throw new Error(resultSqlZh.formats);
+    if (!['csv', 'json', 'sql', 'xlsx', 'html'].includes(input.format)) throw new Error(resultSqlZh.formats);
+    const html = input.format === 'html';
+    if (html && input.encoding !== 'utf8') throw Error(queryHtmlZh.utf8);
     validateResultExportData(input.result); const encoding = encodingName(input.encoding), delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
     let sqlTarget: ResultSqlTarget | undefined, sqlStorage: SqliteResultStorage | undefined;
     if (input.format === 'sql') {
@@ -70,16 +74,19 @@ export class ResultFileTasks {
       }
       file = await AtomicFile.create(input.filePath, encoding, checkCancelled, () => { task.committing = true; }, this.io, input.format === 'sql' ? resultSqlLimits.fileBytes : undefined);
       if (encoding === 'utf16le') await write('\uFEFF');
-      await write(sqlTarget ? resultSqlHeader(sqlTarget) : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n' : '[\n');
+      if (html) await write(queryHtmlDocumentStart(true, input.result.truncated) + queryHtmlTableStart(columns.map(column => column.exportName)));
+      else await write(sqlTarget ? resultSqlHeader(sqlTarget) : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n' : '[\n');
       for (const row of input.result.rows) {
         // 按列描述顺序取值，不能依赖行对象的枚举顺序；手工构造 JSON 键值对保留原型同名键。
-        await write(sqlRow ? sqlRow(row, count) : input.format === 'csv'
+        if (html) await write(queryHtmlRow(columns.map(column => row[column.key])));
+        else await write(sqlRow ? sqlRow(row, count) : input.format === 'csv'
           ? columns.map(column => csvCell(row[column.key], delimiter)).join(delimiter) + '\r\n'
           : (count ? ',\n' : '') + '{' + columns.map(column => JSON.stringify(column.exportName) + ':' + JSON.stringify(row[column.key])).join(',') + '}');
         count++;
         if (count % 250 === 0) this.emit({ taskId: input.taskId, status: 'running', progress: Math.floor(count / input.result.rows.length * 98), rows: count, message: `已写入 ${count}/${input.result.rows.length} 行` });
       }
       if (input.format === 'json') await write('\n]\n');
+      if (html) await write(queryHtmlTableEnd(count) + queryHtmlDocumentEnd);
       await file.commit();
       this.emit({ taskId: input.taskId, status: 'completed', progress: 100, rows: count, message: `已导出 ${count} 行已返回结果` });
       return { rows: count };

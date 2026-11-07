@@ -11,9 +11,9 @@ export const queryStreamExportLimits = {
   fileBytes: 10 * 1024 * 1024 * 1024,
   archiveManifestBytes: 8 * 1024 * 1024,
 } as const;
-export type QueryExportFormat = 'csv' | 'json' | 'csv-zip' | 'sql';
+export type QueryExportFormat = 'csv' | 'json' | 'csv-zip' | 'sql' | 'html';
 /** 容器仍是原生保存对话框授权的单个ZIP文件，不能借CSV令牌改写其它类型。 */
-export function queryExportFileFormat(format: QueryExportFormat): 'csv' | 'json' | 'zip' | 'sql' { return format === 'csv-zip' ? 'zip' : format; }
+export function queryExportFileFormat(format: QueryExportFormat): Exclude<QueryExportFormat, 'csv-zip'> | 'zip' { return format === 'csv-zip' ? 'zip' : format; }
 /** 所有包内文件名由有界序号生成，SQL、库表及列名都不参与路径。 */
 export function queryCsvResultFile(ordinal: number): string {
   if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > queryStreamExportLimits.results) throw new Error('CSV容器行结果序号必须在1～200之间');

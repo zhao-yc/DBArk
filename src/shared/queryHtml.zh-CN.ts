@@ -1,0 +1,16 @@
+export const queryHtmlZh = {
+  format: 'HTML 网页',
+  title: '查询结果',
+  returned: '已返回结果',
+  truncated: '原结果已截断，文件只包含本次传入的行。',
+  hint: '生成可直接打开的 UTF-8 网页，保留列顺序，并区分 NULL、空字符串和二进制。',
+  streamHint: '按执行顺序将各组结果和语句回执写入同一网页。',
+  utf8: 'HTML 网页导出固定使用 UTF-8',
+  empty: '空字符串',
+  field: 'HTML 单个字段超过 8 MiB',
+  row: 'HTML 单行超过 16 MiB',
+  invalid: 'HTML 导出单元格类型无效',
+  result: (ordinal: number, statement: number) => `结果 ${ordinal} · 语句 ${statement}`,
+  receipt: (affected: number, insertId: string, warnings: number) => `影响 ${affected} 行 · 插入 ID ${insertId} · 警告 ${warnings} 条`,
+  summary: (rows: number, warnings?: number) => `${rows} 行${warnings === undefined ? '' : ` · 警告 ${warnings} 条`}`,
+};

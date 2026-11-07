@@ -20,6 +20,8 @@ export interface SqliteExportDestination {
   retainDestinationUntil(recovered: Promise<void>): void;
 }
 export type SqliteTableExportRequest = SqliteTableExportInput & SqliteExportDestination;
+type SqliteExportFileInput = Pick<SqliteTableExportRequest, 'filePath' | 'encoding' | 'validateDestination'> &
+  { format: SqliteTableExportRequest['format'] | 'html' };
 interface FileRecord {
   path: string; handle?: WritableFile; closed: boolean; removed: boolean;
   closeWork?: Promise<void>; removeWork?: Promise<void>; removeOwned?: () => Promise<void>;
@@ -38,7 +40,7 @@ export class SqliteTableExportFile {
   private finishRecovery!: () => void;
   readonly recovered: Promise<void>;
 
-  constructor(private readonly input: Pick<SqliteTableExportRequest, 'filePath' | 'format' | 'encoding' | 'validateDestination'>, private readonly check: () => void, private readonly commitStart: () => void, private readonly io: AtomicFileIO = nativeAtomicFileIO, private readonly maxBytes = sqliteTableExportLimits.fileBytes) {
+  constructor(private readonly input: SqliteExportFileInput, private readonly check: () => void, private readonly commitStart: () => void, private readonly io: AtomicFileIO = nativeAtomicFileIO, private readonly maxBytes = sqliteTableExportLimits.fileBytes) {
     if (!isAbsolute(input.filePath) || input.filePath.includes('\0')) throw Error('Main未提供已授权的SQLite导出目标');
     this.target = resolve(input.filePath); this.recovered = new Promise<void>(resolve => { this.finishRecovery = resolve; });
   }

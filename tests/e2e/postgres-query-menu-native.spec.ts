@@ -796,11 +796,13 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     await observer.query('CREATE SEQUENCE export_guard');
     const csv = info.outputPath('完整结果.csv'), json = info.outputPath('完整结果.json'), xlsx = info.outputPath('完整结果.xlsx');
     const insertFile = info.outputPath('完整结果.sql'), cancelledSql = info.outputPath('原文件.sql');
+    const html = info.outputPath('完整结果.html'), cancelledHtml = info.outputPath('原文件.html');
     const unchanged = info.outputPath('原文件.csv'), cancelledExcel = info.outputPath('原文件.xlsx');
     await mkdir(info.outputDir, {recursive: true});
     await writeFile(unchanged, '原文件哨兵');
     await writeFile(cancelledExcel, 'Excel 原文件哨兵');
     await writeFile(cancelledSql, 'SQL 原文件哨兵');
+    await writeFile(cancelledHtml, 'HTML 原文件哨兵');
     await prepare({id: '', name: '隔离 PostgreSQL 查询导出', dialect: 'postgresql', group: '', color: '#123456',
       host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, "SELECT '保留原结果' AS marker;");
     const execute = tab().getByRole('button', {name: postgresZh.execute, exact: true});
@@ -815,7 +817,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     const owner = (await sessions()).rows;
     expect(owner).toHaveLength(1);
     expect(owner[0].state).toBe('idle in transaction');
-    const output = [csv, csv, json, xlsx, insertFile, unchanged, cancelledExcel, cancelledSql];
+    const output = [csv, csv, json, xlsx, html, insertFile, unchanged, cancelledExcel, cancelledSql, cancelledHtml];
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
@@ -892,6 +894,20 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     expect(rowIndex).toBe(4099);
     expect((await observer.query('SELECT is_called FROM export_guard')).rows).toEqual([{is_called: false}]);
     await page.screenshot({path: info.outputPath('PostgreSQL完整查询导出Excel.png')});
+    await dialog.getByLabel(zh.resultExport.format).selectOption('html');
+    await expect(dialog.getByLabel(zh.resultExport.encoding)).toBeDisabled();
+    await start();
+    await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
+    const webpage = await page.evaluate(markup => {
+      const doc = new DOMParser().parseFromString(markup, 'text/html');
+      const table = doc.querySelector('table')!;
+      const body = table.tBodies[0];
+      return {headers: [...table.querySelectorAll('th')].map(cell => cell.textContent), count: body.rows.length,
+        last: [...body.rows[body.rows.length - 1].cells].map(cell => cell.textContent)};
+    }, await readFile(html, 'utf8'));
+    expect(webpage).toEqual({headers: ['id', 'id [2]', 'note', 'bytes'], count: 4099,
+      last: ['9007199254745092', '0.12345678901234567890', '行4099', 'base64:AP8=']});
+    await page.screenshot({path: info.outputPath('PostgreSQL完整查询HTML.png')});
     await dialog.getByLabel(zh.resultExport.format).selectOption('sql');
     await expect(dialog.getByLabel(zh.resultExport.encoding)).toBeDisabled();
     await expect(dialog.getByRole('button', {name: zh.resultExport.chooseFile, exact: true})).toBeDisabled();
@@ -940,6 +956,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     for (const [format, filename, previous] of [
       ['xlsx', cancelledExcel, 'Excel 原文件哨兵'],
       ['sql', cancelledSql, 'SQL 原文件哨兵'],
+      ['html', cancelledHtml, 'HTML 原文件哨兵'],
     ]) {
       await open();
       await dialog.getByLabel(zh.resultExport.format).selectOption(format);
@@ -954,7 +971,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
       expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
       await close();
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(8);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(10);
     await expect.poll(async () => (await sessions()).rows).toEqual(owner);
     expect(await history()).toEqual(baseline);
     expect(await grid.innerText()).toBe(original);
