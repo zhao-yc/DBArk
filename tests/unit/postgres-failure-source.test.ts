@@ -6,9 +6,11 @@ import type { QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import type { QueryParameter } from '../../src/shared/queryParameters';
 import { queryScriptReportSchema } from '../../src/shared/queryContinueOnError';
 import { canContinuePostgresQueryError } from '../../src/engine/postgres/queryContinue';
+import { postgresNoticeReportSchema } from '../../src/shared/postgresNotices';
 
 let engine: PostgresEngine, sent: string[], events: TaskEvent[], next: number;
-let scenario: (sql: string, values?: unknown[]) => Promise<unknown>;
+type Notice = (value: unknown, redact: (value: string) => string) => void;
+let scenario: (sql: string, values?: unknown[], notice?: Notice) => Promise<unknown>;
 let managed: PostgresConnection, session: {id: string; connectionId: string; managed: PostgresConnection; completion?: Promise<any>};
 const ok = (statement: string) => ({columns: [], rows: [], statement, postgresCommand: 'SELECT', elapsedMs: 1});
 
@@ -18,7 +20,7 @@ beforeEach(() => {
   managed = {broken: false, standardStrings: true, database: 'db', close: vi.fn(async () => {}),
     state: () => ({transactionOpen: false, transactionKnown: true, broken: false}),
     error: (reason: unknown) => reason instanceof Error ? reason : Error('未知错误'),
-    query: async (sql: string, values?: unknown[]) => { sent.push(sql); return scenario(sql, values); },
+    query: async (sql: string, values?: unknown[], _budget?: unknown, _rows?: unknown, _protocol?: unknown, notice?: Notice) => { sent.push(sql); return scenario(sql, values, notice); },
   } as unknown as PostgresConnection;
   engine = new PostgresEngine(event => events.push(event));
   session = {id: 's', connectionId: 'c', managed};
@@ -104,6 +106,28 @@ describe('PostgreSQL 失败范围沿用实际执行的原文偏移', () => {
 });
 
 const serverError = (code = '42703', message = '预期服务端错误') => Object.assign(Error(message), {postgresSqlState: code});
+it('消息沿实际发送语句的范围，首错前收到的消息保留但不进入任务事件', async () => {
+  const sql = 'SELECT 1;\r\n/* 前导😀 */ SELECT missing;\r\nSELECT tail;';
+  scenario = async (statement, _values, notice) => {
+    notice?.({severity: 'NOTICE', code: '00000', message: '只在结果内存显示'}, value => value);
+    if (statement.includes('missing')) throw serverError();
+    return ok(statement);
+  };
+  const result = await execute(sql), report = postgresNoticeReportSchema.parse(result.postgresNotices);
+  expect(report.entries.map(entry => [entry.statementOrdinal, sql.slice(entry.sourceRange!.start, entry.sourceRange!.end)])).toEqual([[1, 'SELECT 1'], [2, 'SELECT missing']]);
+  expect(result.results).toHaveLength(1); expect(result.failure?.statementOrdinal).toBe(2); expect(sent).toHaveLength(2);
+  expect(JSON.stringify(events)).not.toContain('只在结果内存显示');
+});
+it('遇错继续按实际语句编号保留前后消息，参数回包隐藏消息内原值', async () => {
+  scenario = async (statement, values, notice) => {
+    notice?.({severity: 'NOTICE', code: '00000', message: values ? String(values[0]) : '原消息'}, value => value);
+    if (statement.includes('missing')) throw serverError(); return ok(statement);
+  };
+  const output = await execute('SELECT missing; SELECT 2;', {continueOnError: true});
+  expect(output.postgresNotices?.entries.map(item => item.statementOrdinal)).toEqual([1, 2]); expect(output.scriptReport?.reachedEnd).toBe(true);
+  const bound = await execute('SELECT $1::text', {parameters: [{name: 'p1', type: 'text', value: '参数保密值'}]});
+  expect(postgresNoticeReportSchema.parse(bound.postgresNotices).redacted).toBe(true); expect(JSON.stringify(bound)).not.toContain('参数保密值');
+});
 describe('PostgreSQL 显式遇错继续仍使用原协议事务', () => {
   it.each(['00000', '01000', '02000', '08006', '53300', '54000', '57014', '57P01', '58000', 'XX000'])('%s必须停止，不使用其它驱动的错误分类', code => {
     expect(canContinuePostgresQueryError(serverError(code), {broken: false, transactionKnown: true}, false)).toBe(false);

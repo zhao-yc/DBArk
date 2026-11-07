@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { QueryOutcome } from '../../src/shared/contracts';
 import type { QueryParameterNames } from '../../src/shared/queryParameters';
 import { QueryParameterReuseOwner } from '../../src/renderer/queryParameterReuseOwner';
+import { confirmedQueryContinueRange } from '../../src/renderer/components/QueryContinueOnErrorNotice';
 import type { QueryParameterReusePort } from '../../src/renderer/queryParameterReusePort';
 
 const source = readFileSync(new URL('../../src/renderer/components/PostgresQueryTab.tsx', import.meta.url), 'utf8');
@@ -58,7 +59,7 @@ function fixture() {
     text: {changed: '来源已变', unknown: '未知状态', noSql: '空 SQL'}, pinStateRef: {current: {items: []}},
     setBusy: vi.fn(), setError: vi.fn(), resetResultView: vi.fn(), setOutcome: vi.fn(), setSelected: vi.fn(),
     clearFailureSource: vi.fn(), captureFailureSource: vi.fn(), failureSource: {current: undefined},
-    continueOnError: false, scriptFailureRanges: {current: new Set()},
+    continueOnError: false, scriptFailureRanges: {current: new Set()}, noticeRanges: {current: new Set()}, confirmedQueryContinueRange,
     setState: (value: object) => { context.state = value; },
     setParameterOwner: (value: unknown) => { context.parameters.current = value; },
   });

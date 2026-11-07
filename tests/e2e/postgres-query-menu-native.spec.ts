@@ -20,6 +20,8 @@ import { queryFailureSourceZh as failureText } from '../../src/renderer/locales/
 import { queryPartialOutcomeZh as partialText } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 import { queryContinueOnErrorZh as continueText } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
 import { postgresTransactionSettingsZh as transactionText } from '../../src/renderer/locales/postgresTransactionSettings.zh-CN';
+import { postgresNoticesZh as noticesText } from '../../src/renderer/locales/postgresNotices.zh-CN';
+import { postgresNoticeHiddenMessage } from '../../src/shared/postgresNotices';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -147,6 +149,86 @@ test('PostgreSQL 会话事务默认设置保持原结果并按实际事务隔离
     await page.locator('.tab-strip').getByText('原 PostgreSQL 查询', {exact: true}).click(); await open();
     await expect(dialog().getByLabel(transactionText.isolation, {exact: true})).toHaveValue('REPEATABLE READ'); await close();
     expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
+test('PostgreSQL 服务端消息保留失败前提示、原文定位、参数隐私及有界续执行', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const first = "DO $$ BEGIN RAISE NOTICE '普通消息🧭' USING DETAIL = '原始详情', HINT = '原始提示'; RAISE WARNING '实际警告'; END; $$";
+  const failed = "DO $$ BEGIN RAISE NOTICE '失败前消息'; RAISE EXCEPTION '预期首错'; END; $$";
+  const panel = () => tab().locator('details.postgres-notices');
+  const open = (n: number) => panel().getByText(noticesText.count(n), {exact: true}).click();
+  const entry = (message: string) => panel().getByRole('listitem').filter({hasText: message});
+  const search = () => panel().getByRole('searchbox', {name: noticesText.search, exact: true});
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const records = async () => (await observer.query('SELECT id FROM public.notice_calls ORDER BY id')).rows.map(row => row.id);
+  try {
+    await observer.query('CREATE TABLE public.notice_calls (id int)');
+    await observer.query(`CREATE FUNCTION public.notice_echo(v text) RETURNS int LANGUAGE plpgsql AS $$
+      BEGIN
+        INSERT INTO public.notice_calls VALUES (1);
+        RAISE NOTICE '回显 %', v USING DETAIL = '详情 ' || v, HINT = '提示 ' || v;
+        RETURN 1;
+      END; $$`);
+    await prepare({id: '', name: '隔离 PostgreSQL 服务端消息', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false},
+    first + ';\nSELECT 1;\n' + failed + ';\nINSERT INTO public.notice_calls VALUES (9);');
+    await command('execute-all');
+    const error = () => tab().getByRole('status', {name: partialText.title, exact: true});
+    await expect(error()).toContainText(partialText.position(3, 2));
+    await expect(tab()).toContainText('预期首错');
+    await open(3);
+    await expect(panel()).toContainText(noticesText.retained(3, 3));
+    await expect(entry('普通消息🧭')).toContainText('NOTICE · 00000');
+    await expect(entry('实际警告')).toContainText('WARNING · 01000');
+    await expect(entry('失败前消息')).toContainText(noticesText.ordinal(3));
+    const beforeLocate = await history();
+    for (const [message, ordinal, statement] of [['普通消息🧭', 1, first], ['失败前消息', 3, failed]] as const) {
+      await entry(message).getByRole('button', {name: noticesText.locate(ordinal), exact: true}).click();
+      await expect.poll(async () => (await inspectModel()).selected).toBe(statement);
+    }
+    await entry('普通消息🧭').getByRole('button', {name: noticesText.locate(1), exact: true}).click();
+    await error().getByRole('button', {name: failureText.locate, exact: true}).click();
+    await expect.poll(async () => (await inspectModel()).selected).toBe(failed);
+    expect(await history()).toEqual(beforeLocate); expect(await records()).toEqual([]);
+    await search().fill('原始提示');
+    await expect(panel().getByRole('listitem')).toHaveCount(1);
+    for (const [label, value] of [[noticesText.detail, '原始详情'], [noticesText.hint, '原始提示'], [noticesText.context, 'PL/pgSQL']] as const) {
+      await entry('普通消息🧭').getByText(label, {exact: true}).click();
+      await expect(entry('普通消息🧭').getByText(value, {exact: label !== noticesText.context})).toBeVisible();
+    }
+    await page.screenshot({path: info.outputPath('PostgreSQL服务端消息.png')});
+
+    await replaceDraft('SELECT public.notice_echo($1::text) AS call_result;');
+    await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+    const form = page.getByRole('dialog', {name: parameterZh.title, exact: true}), secret = '仅参数消息保密😀';
+    await form.getByLabel(parameterZh.value + ' p1', {exact: true}).fill(secret);
+    await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+    await open(1);
+    await expect(panel()).toContainText(noticesText.redacted);
+    await expect(panel()).toContainText(postgresNoticeHiddenMessage);
+    await expect(panel()).not.toContainText(secret);
+    expect(await records()).toEqual([1]);
+    expect(JSON.stringify(await history())).not.toContain(secret);
+    expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('tasks.list', {})))).not.toContain(secret);
+    expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('settings.get', {})))).not.toContain(secret);
+
+    await replaceDraft("DO $$ BEGIN FOR i IN 1..205 LOOP RAISE NOTICE '批次 %', i; END LOOP; END; $$;\nINSERT INTO public.notice_calls VALUES (2);");
+    await command('execute-all'); await open(205);
+    await expect(panel()).toContainText(noticesText.retained(205, 200));
+    await expect(panel()).toContainText(noticesText.truncated);
+    await expect(panel()).toContainText(noticesText.page(1, 8));
+    await panel().getByRole('button', {name: noticesText.next, exact: true}).click();
+    await expect(panel().getByText('批次 26', {exact: true})).toBeVisible();
+    await search().fill('批次 200'); await expect(panel().getByRole('listitem')).toHaveCount(1);
+    await search().fill('批次 205'); await expect(panel()).toContainText(noticesText.empty);
+    expect(await records()).toEqual([1, 2]); expect(pageErrors).toEqual([]);
   } finally { await observer.end(); }
   await quitDesktop();
 });

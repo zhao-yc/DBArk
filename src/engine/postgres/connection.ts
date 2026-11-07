@@ -97,9 +97,8 @@ export class PostgresConnection {
     readonly profile: PostgresConnectionProfile,
     readonly requestedDatabase = profile.database || 'postgres',
   ) {}
-  /** 错误不回显认证材料或附加原异常对象，避免任务与IPC保存秘密。 */
-  error(reason: unknown): Error {
-    let message = reason instanceof Error ? reason.message : String(reason);
+  /** 消息在截断前清除完整认证材料，避免长密码只被截断一部分后泄露。 */
+  private redactMessage(message: string): string {
     for (const secret of [
       this.profile.password,
       this.profile.ssh?.password,
@@ -107,6 +106,11 @@ export class PostgresConnection {
       this.profile.tls?.passphrase,
     ])
       if (secret) message = message.replaceAll(secret, '[已隐藏]');
+    return message;
+  }
+  /** 错误不回显认证材料或附加原异常对象，避免任务与IPC保存秘密。 */
+  error(reason: unknown): Error {
+    const message = this.redactMessage(reason instanceof Error ? reason.message : String(reason));
     const safe = Error(message.slice(0, 8192));
     // 建连时仅标记目标库不存在或未授权。传输错误仍不能充当服务端语句回执。
     if (reason instanceof DatabaseError && reason.severity === 'FATAL' && ['3D000', '42501'].includes(reason.code ?? ''))
@@ -277,6 +281,7 @@ export class PostgresConnection {
     budget: PostgresBudget,
     onRows?: (rows: QueryResult['rows'], columns: QueryResult['columns']) => void,
     protocol?: 'extended' | 'parse',
+    onNotice?: (notice: unknown, redact: (value: string) => string) => void,
   ): Promise<QueryResult> {
     const client = this.client;
     if (!client || this.broken)
@@ -316,11 +321,16 @@ export class PostgresConnection {
       }));
     return new Promise((resolve, reject) => {
       const parsedStatement = () => { parsed = true; };
+      const notice = (value: unknown) => {
+        try { onNotice?.(value, message => this.redactMessage(message)); }
+        catch { /* 消息旁路异常不能打断正在执行的 SQL 或改变协议收尾。 */ }
+      };
       const cleanup = () => {
         wire.removeListener('readyForQuery', ready);
         wire.removeListener('parseComplete', parsedStatement);
         client.removeListener('error', dead);
         client.removeListener('end', ended);
+        if (onNotice) client.removeListener('notice', notice);
       };
       const finish = () => {
         if (completed) return;
@@ -356,6 +366,7 @@ export class PostgresConnection {
       if (protocol === 'parse') wire.once('parseComplete', parsedStatement);
       client.once('error', dead);
       client.once('end', ended);
+      if (onNotice) client.on('notice', notice);
       query.on('row', (row: unknown[], result?: { fields: FieldDef[] }) => {
         if (!result) {
           failure = Error('PostgreSQL行元数据缺失');

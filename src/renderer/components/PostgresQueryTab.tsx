@@ -70,6 +70,8 @@ import { postgresTransactionSettingsZh as transactionText } from '../locales/pos
 import type { PostgresTransactionDefaults, PostgresTransactionSnapshot } from '../../shared/postgresTransactionSettings';
 import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
 import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
+import { PostgresNoticesPanel } from './PostgresNoticesPanel';
+import type { PostgresNoticeEntry } from '../../shared/postgresNotices';
 import { QueryContinueOnErrorNotice, confirmedQueryContinueRange } from './QueryContinueOnErrorNotice';
 import { queryContinueOnErrorZh as continueText } from '../locales/queryContinueOnError.zh-CN';
 import type { QueryFailure } from '../../shared/queryFailure';
@@ -224,6 +226,7 @@ export function PostgresQueryTab({
   const [transactionSettings, setTransactionSettings] = useState<{intent: QueryTransactionSettingsIntent; scope: Scope}>();
   const transactionSettingsRef = useRef(transactionSettings); transactionSettingsRef.current = transactionSettings;
   const scriptFailureRanges = useRef(new Set<QueryFailure>());
+  const noticeRanges = useRef(new Set<PostgresNoticeEntry>());
   useLayoutEffect(() => {
     const current = transactionSettingsRef.current; current?.intent.current();
     if (current && closeRef.current && !phase.current) closeTransactionSettings(current);
@@ -282,7 +285,13 @@ export function PostgresQueryTab({
       subscribe: changed => useWorkspace.subscribe(changed),
       onInvalidated: () => { if (alive.current) refreshFailureSource(value => value + 1); } });
   }
-  function clearFailureSource(): void { failureSource.current?.dispose(); failureSource.current = undefined; scriptFailureRanges.current.clear(); }
+  function clearFailureSource(): void { failureSource.current?.dispose(); failureSource.current = undefined; scriptFailureRanges.current.clear(); noticeRanges.current.clear(); }
+  /** 消息沿同一原模型租约定位；旧结果、固定副本和无可靠偏移的消息不能接管选择。 */
+  function locateNotice(entry: PostgresNoticeEntry): void {
+    if (pinStateRef.current.selected || !noticeRanges.current.has(entry) || !failureSource.current?.available() ||
+        !failureSource.current.bindRange(entry.sourceRange)) return;
+    locateFailure();
+  }
   /** 多错摘要共用原模型租约；旧错误对象不能重绑后继执行的范围。 */
   function locateFailure(failure?: QueryFailure): void {
     const locator = failureSource.current;
@@ -572,10 +581,12 @@ export function PostgresQueryTab({
             });
         succeeded = !result.failure && !result.scriptReport?.errors.length && result.scriptReport?.reachedEnd !== false;
         if (owner.valid && same(owner.scope) && life.current === owner.life) {
-          const failures = result.scriptReport?.errors.filter(item => confirmedQueryContinueRange(sql, item));
-          if (failures) scriptFailureRanges.current = new Set(failures);
-          const firstFailure = failures?.[0] ?? result.failure;
-          if (firstFailure && locator?.bindRange(firstFailure.sourceRange)) {
+          const failures = (result.scriptReport?.errors ?? (result.failure ? [result.failure] : [])).filter(item => confirmedQueryContinueRange(sql, item));
+          scriptFailureRanges.current = new Set(failures);
+          const messages = result.postgresNotices?.entries.filter(item => confirmedQueryContinueRange(sql, item)) ?? [];
+          noticeRanges.current = new Set(messages);
+          const range = failures[0]?.sourceRange ?? messages[0]?.sourceRange;
+          if (range && locator?.bindRange(range)) {
             failureSource.current = locator; retainLocator = true;
           }
           setOutcome(result);
@@ -1748,7 +1759,10 @@ export function PostgresQueryTab({
         locateAvailable={failure => !pin && scriptFailureRanges.current.has(failure) && !!failureSource.current?.available()}
         onLocate={locateFailure} />}
       {outcome?.failure && !outcome.scriptReport && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
-        locateAvailable={!pin && !!failureSource.current?.available()} onLocate={() => locateFailure()} />}
+        locateAvailable={!pin && scriptFailureRanges.current.has(outcome.failure) && !!failureSource.current?.available()}
+        onLocate={() => locateFailure(outcome.failure)} />}
+      {!pin && outcome?.postgresNotices && <PostgresNoticesPanel report={outcome.postgresNotices}
+        locateAvailable={entry => noticeRanges.current.has(entry) && !!failureSource.current?.available()} onLocate={locateNotice} />}
       {!busy && completionStatus !== 'idle' && <p className="muted small" role="status">{completionStatus === 'limited'
         ? text.completionLimited : completionStatus === 'partial' ? text.completionPartial
           : completionStatus === 'sessionUnknown' ? text.completionTransaction : text.completionUnavailable}</p>}

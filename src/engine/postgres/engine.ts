@@ -12,6 +12,7 @@ import { connectionTransportChanged } from '../../shared/connectionProfile';
 import { queryFailureMessage } from '../../shared/queryFailure';
 import type { QueryParameter } from '../../shared/queryParameters';
 import { postgresParameterValues } from './parameters';
+import { PostgresNoticeCollector } from './notices';
 import { readPostgresTransactionSettings, applyPostgresTransactionSettings } from './transactionSettings';
 import type { PostgresTransactionSnapshot } from '../../shared/postgresTransactionSettings';
 import { canContinuePostgresQueryError, postgresQueryErrorMessage } from './queryContinue';
@@ -912,6 +913,7 @@ export class PostgresEngine {
       budget = { rows: input.maxRows, bytes: 16 * 1024 * 1024 };
     const report: QueryScriptReport | undefined = input.continueOnError === true
       ? {mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: []} : undefined;
+    const notices = new PostgresNoticeCollector(input.parameters !== undefined);
     let offset = 0,
       count = 0,
       activeOrdinal: number | undefined,
@@ -941,7 +943,8 @@ export class PostgresEngine {
         task.sent = true;
         this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已投递PostgreSQL实际执行分析',
           executionSql: analysisSql, executionDatabase: { state: 'known', database: session.managed.database } });
-        const result = await session.managed.query(analysisSql, undefined, { rows: 1, bytes: explainLimits.jsonBytes }, undefined, 'extended');
+        const result = await session.managed.query(analysisSql, undefined, { rows: 1, bytes: explainLimits.jsonBytes }, undefined, 'extended',
+          (notice, redact) => notices.record(1, undefined, notice, redact));
         // 即使取消与回包交叉，也保留服务器已确认的实际执行结果。
         results.push(result);
         analysis = parsePostgresAnalyze(this.planOutput(result), session.managed.version, result.truncated);
@@ -977,7 +980,7 @@ export class PostgresEngine {
             throw Error('PostgreSQL参数查询一次只能执行一条语句');
         }
         task.sent = true;
-        const index = results.length;
+        const index = results.length, ordinal = count, noticeRange = sourceRange;
         try {
           const result = await session.managed.query(part.sql, parameters, budget, (batch, columns) =>
             this.emit({
@@ -989,7 +992,7 @@ export class PostgresEngine {
               columns,
               batch,
             }),
-          );
+            undefined, (notice, redact) => notices.record(ordinal, noticeRange, notice, redact));
           results.push(result);
           if (report) report.statementsCompleted++;
           if (report && (session.managed.broken || !session.managed.state().transactionKnown)) {
@@ -1042,6 +1045,7 @@ export class PostgresEngine {
       failure = {statementOrdinal: first.statementOrdinal, statementsCompleted: first.statementsCompleted,
         message: queryScriptReportSummary(report), ...(first.sourceRange ? {sourceRange: {...first.sourceRange}} : {})};
     }
+    const postgresNotices = notices.report();
     this.emit({
       taskId: task.id,
       status: failure ? (task.cancelled ? 'cancelled' : 'failed') : 'completed',
@@ -1056,6 +1060,7 @@ export class PostgresEngine {
       ...(analysis ? { analysis } : {}),
       ...(failure ? { failure } : {}),
       ...(report ? {scriptReport: report} : {}),
+      ...(postgresNotices ? {postgresNotices} : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */

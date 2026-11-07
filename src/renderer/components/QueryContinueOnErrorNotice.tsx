@@ -3,7 +3,7 @@ import type { QueryFailure } from '../../shared/queryFailure';
 import { queryContinueOnErrorZh as t } from '../locales/queryContinueOnError.zh-CN';
 
 /** 仅确认原模板的UTF16半开范围，不搜索SQL文字，不复制或插值参数模板。 */
-export function confirmedQueryContinueRange(source: string, failure: QueryFailure): boolean {
+export function confirmedQueryContinueRange(source: string, failure: Pick<QueryFailure, 'sourceRange'>): boolean {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(failure, 'sourceRange');
     if (!descriptor || !('value' in descriptor) || !descriptor.value || typeof descriptor.value !== 'object' || Reflect.ownKeys(descriptor.value).length !== 2) return false;
