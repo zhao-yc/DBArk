@@ -70,6 +70,30 @@ describe('导入配置正式TransferDialog流程（真实React RAM，零实际�
   it('首帧显式读取沿协调器原状态生效，选择配置后应用入口可用', async () => {
     await mount(); const id = installPreset(); await click(namedButton(presetText.read)); expect(requests('files.importPresets.list')).toHaveLength(1); await change(named(presetText.choose, 'select'), id); expect(namedButton(presetText.apply).disabled).toBe(false);
   });
+  it('先应用配置可等待选文件，取消选择和不兼容文件都不消费意图，成功一次后换文件恢复普通预览', async () => {
+    const choices = [null, {token: 'bad', name: 'bad.csv'}, {token: 'good', name: 'good.csv'}, {token: 'next', name: 'next.csv'}];
+    await mount({
+      choose: async () => choices.shift(),
+      preview: async input => input.fileToken === 'bad' ? {columns: ['第1列', '第2列', '第3列'], rows: []} : positional,
+    });
+    await selectPreset(installPreset());
+    await click(namedButton(presetText.apply));
+    expect(doc.body.textContent).toContain(presetText.needFile);
+    await click(picker());
+    expect(requests('files.preview')).toHaveLength(0);
+    expect(doc.body.textContent).toContain(presetText.needFile);
+    await click(picker());
+    expect(doc.body.textContent).toContain(presetText.incompatible);
+    expect(execute().disabled).toBe(true);
+    await click(picker());
+    expect(named('映射字段 第1列', 'select').value).toBe('id');
+    expect(named('映射字段 第2列', 'select').value).toBe('内容');
+    expect(doc.body.textContent).toContain(presetText.applied);
+    expect(requests('files.import')).toHaveLength(0);
+    await click(picker());
+    expect(named('映射字段 第1列', 'select').value).toBe('');
+    expect(named('映射字段 第2列', 'select').value).toBe('');
+  });
   it.each(['manual', 'preset'] as const)('取消文件选择保留%s原文件/完整映射及套用提示，不重新预览或读取metadata', async kind => {
     const pending = deferred<any>(); let choices = 0; await mount({ choose: async () => ++choices === 1 ? { token: 'original-file', name: 'original.csv' } : pending.promise }); const id = installPreset(); await click(picker());
     if (kind === 'preset') { await selectPreset(id); await click(namedButton(presetText.apply)); } else { await change(named('映射字段 内容', 'select'), '第1列'); }
