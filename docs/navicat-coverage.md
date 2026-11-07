@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 完整查询导出可通过现有类型参数表单绑定连续位置参数，保留精确数字、NULL 和字节。Q05、Q06、R01 仍为部分覆盖。[参数查询完整导出](development/postgres-export-parameters-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 查询页可在独立只读会话执行单条 SELECT／WITH 查询，以游标分批保存完整 CSV 或 JSON，支持取数取消及原子文件发布。Q05、R01 仍为部分覆盖。[完整查询导出](development/postgres-query-export-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 查询结果支持按实际执行语句的 `NAME:` 注释命名，单组、多组及固定结果均可辨认名称。R01 仍为部分覆盖。[PostgreSQL 命名结果](development/postgres-result-names-20261107.md)

@@ -6,6 +6,7 @@ import { queryStreamExportLimits } from '../../shared/queryStreamExport';
 import { postgresQueryExportSchema, type PostgresQueryExportInput, type PostgresQueryExportOutput } from '../../shared/postgresQueryExport';
 import { createQueryStreamFile, type QueryStreamFile } from '../queryStreamFile';
 import type { PostgresConnection } from './connection';
+import { postgresParameterValues } from './parameters';
 
 export type PostgresQueryExportRequest = PostgresQueryExportInput & {filePath: string};
 
@@ -13,9 +14,9 @@ export type PostgresQueryExportRequest = PostgresQueryExportInput & {filePath: s
 export async function exportPostgresQuery(input: PostgresQueryExportRequest,
   connect: (action: (connection: PostgresConnection) => Promise<void>) => Promise<void>,
   check: () => void, publish: () => void, progress: (rows: number) => void): Promise<PostgresQueryExportOutput> {
-  const { filePath, sql, format, encoding, csvDelimiter } = input;
+  const { filePath, sql, format, encoding, csvDelimiter, parameters } = input;
   postgresQueryExportSchema.parse({connectionId: input.connectionId, database: input.database, taskId: input.taskId,
-    fileToken: input.fileToken, sql, format, encoding, csvDelimiter});
+    fileToken: input.fileToken, sql, format, encoding, csvDelimiter, parameters});
   if (!isAbsolute(filePath) || filePath.includes('\0')) throw Error('主进程未提供授权的导出路径');
   let file: QueryStreamFile | undefined;
   try {
@@ -23,15 +24,16 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
       check();
       const parts = splitPostgresSql(sql, connection.standardStrings);
       const part = parts[0];
-      if (parts.length !== 1 || !['SELECT', 'WITH'].includes(part.keyword) || part.parameters.length)
-        throw Error('完整导出需要一条无位置参数的 SELECT 或 WITH 查询');
+      if (parts.length !== 1 || !['SELECT', 'WITH'].includes(part.keyword))
+        throw Error('完整导出需要一条 SELECT 或 WITH 查询');
+      const values = postgresParameterValues(part.parameters, parameters);
       const small = {rows: 0, bytes: 1024};
       const begun = await connection.query('BEGIN READ ONLY', undefined, small);
       if (begun.postgresCommand !== 'BEGIN' || !connection.state().transactionOpen) throw Error('PostgreSQL 未确认只读事务');
       check();
       // 扩展协议拒绝多命令，服务端同时约束游标查询及只读事务内的写入。
       const declared = await connection.query('DECLARE dbark_query_export NO SCROLL CURSOR FOR\n' + part.sql,
-        undefined, small, undefined, 'extended');
+        values, small, undefined, 'extended');
       if (declared.postgresCommand !== 'DECLARE') throw Error('PostgreSQL 未确认导出游标');
       const output = file = await createQueryStreamFile({filePath, format, encoding, csvDelimiter,
         resultSelection: format === 'csv' ? {kind: 'row-result', ordinal: 1} : {kind: 'all'},

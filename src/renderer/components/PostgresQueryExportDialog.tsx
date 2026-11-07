@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
-import type { PostgresQueryExportInput } from '../../shared/postgresQueryExport';
+import { postgresExportParameterNames, type PostgresQueryExportInput } from '../../shared/postgresQueryExport';
+import type { QueryParameter } from '../../shared/queryParameters';
 import { acquireWorkspaceBusy, useWorkspace } from '../store';
 import { errorMessage, invoke, uid } from '../lib';
 import { zh } from '../locales/zh-CN';
 import { postgresQueryExportZh as text } from '../locales/postgresQueryExport.zh-CN';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
+import { QueryParametersDialog } from './QueryParametersDialog';
+import { postgresZh } from '../locales/postgres.zh-CN';
 
 export interface PostgresQueryExportSource {
   tabId: string; connectionId: string; database: string; sql: string;
@@ -19,6 +22,7 @@ export function PostgresQueryExportDialog({source, onClose}: {source: PostgresQu
   const [format, setFormat] = useState<PostgresQueryExportInput['format']>('csv');
   const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
+  const [parameters, setParameters] = useState<QueryParameter[]>(), [editingParameters, setEditingParameters] = useState(false);
   const [file, setFile] = useState<FileChoice | null>(null);
   const [pending, setPending] = useState<'pick' | 'write' | null>(null);
   const [error, setError] = useState(''), [progress, setProgress] = useState('');
@@ -60,7 +64,8 @@ export function PostgresQueryExportDialog({source, onClose}: {source: PostgresQu
       job = acquireWorkspaceBusy(source.tabId);
       if (!current()) throw Error(text.changed);
       const result = await invoke('postgres.query.export', {connectionId: source.connectionId, database: source.database,
-        sql: source.sql, taskId, fileToken: file.token, format, encoding, ...csvExportOptions(format, delimiter)});
+        sql: source.sql, taskId, fileToken: file.token, format, encoding, ...csvExportOptions(format, delimiter),
+        ...(parameters ? {parameters} : {})});
       if (alive.current) setRows(result.rows);
     } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
     finally {
@@ -76,11 +81,21 @@ export function PostgresQueryExportDialog({source, onClose}: {source: PostgresQu
     catch (reason) { if (alive.current) { setError(errorMessage(reason)); setCancelling(false); } }
   }
 
+  if (editingParameters) return <QueryParametersDialog source={source.sql} syntaxHint={postgresZh.parameterHint}
+    initialParameters={parameters} submitLabel={text.applyParameters}
+    loadNames={() => Promise.resolve(postgresExportParameterNames(source.sql))}
+    onClose={() => setEditingParameters(false)} onExecute={values => {
+      if (!current()) throw Error(text.changed);
+      setParameters(values.map(value => ({...value}))); setFile(null); setRows(undefined); setEditingParameters(false);
+    }} />;
+
   return <Modal title={text.title} wide onClose={() => { if (!picking.current && !task.current) onClose(); }}>
     <div className="modal-content">
       <p>{source.database} · {text.scope}</p>
       <pre className="result-sql-preview" aria-label={text.source}>{source.sql.slice(0, 4000)}</pre>
       {source.sql.length > 4000 && <p>{text.sourcePrefix}</p>}
+      <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>
+      {parameters && <p>{text.parameterCount(parameters.length)}</p>}
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
         onChange={event => { setFormat(event.target.value === 'json' ? 'json' : 'csv'); setFile(null); setRows(undefined); }}>
         <option value="csv">CSV</option><option value="json">JSON</option>

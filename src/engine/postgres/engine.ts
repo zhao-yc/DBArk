@@ -10,7 +10,8 @@ import type {
 } from '../../shared/contracts';
 import { connectionTransportChanged } from '../../shared/connectionProfile';
 import { queryFailureMessage } from '../../shared/queryFailure';
-import { validateQueryParameters, type QueryParameter } from '../../shared/queryParameters';
+import type { QueryParameter } from '../../shared/queryParameters';
+import { postgresParameterValues } from './parameters';
 import {
   firstPostgresStatement,
   currentPostgresStatement,
@@ -925,17 +926,7 @@ export class PostgresEngine {
         });
         let parameters: unknown[] | undefined;
         if (input.parameters) {
-          const values = input.parameters as QueryParameter[];
-          validateQueryParameters(values);
-          const max = part.parameters.at(-1) ?? 0;
-          if (max !== values.length || part.parameters.some((n, i) => n !== i + 1))
-            throw Error('PostgreSQL参数必须连续使用$1至$N，名称为p1至pN');
-          parameters = values.map((p, i) => {
-            if (p.name !== 'p' + (i + 1)) throw Error('PostgreSQL参数顺序或名称已变化');
-            if (p.type === 'null') return null;
-            if (p.type === 'binary') return Buffer.from(p.value!, 'hex');
-            return p.value!;
-          });
+          parameters = postgresParameterValues(part.parameters, input.parameters as QueryParameter[]);
           if (firstPostgresStatement(source.slice(part.end + 1), session.managed.standardStrings))
             throw Error('PostgreSQL参数查询一次只能执行一条语句');
         }

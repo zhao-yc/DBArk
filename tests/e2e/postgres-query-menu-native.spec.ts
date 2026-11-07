@@ -14,6 +14,7 @@ import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-C
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { postgresQueryExportZh as fullExportText } from '../../src/renderer/locales/postgresQueryExport.zh-CN';
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
+import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -76,6 +77,84 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参数隐私', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await prepare({id: '', name: '隔离 PostgreSQL 导出参数', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, 'SELECT 1 AS original;');
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await tab().getByRole('button', {name: postgresZh.execute, exact: true}).click();
+    const grid = tab().locator('.postgres-results .rdg');
+    await expect.poll(() => grid.innerText()).toContain('original');
+    const result = await grid.innerText(), history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+    const originalSessions = await sessions();
+    expect(originalSessions).toHaveLength(1);
+    expect(originalSessions[0].state).toBe('idle in transaction');
+    const sql = "SELECT $1::bigint AS id, $2::numeric(60,38) AS amount, $3::text AS note, $4::bytea AS bytes, $5::text AS nullable, '$6' AS literal, $$ $7 $$ AS body FROM generate_series(1,130) AS g WHERE g <= $6::int;";
+    const value = "导出参数原文😀'; SELECT '文本内容\n第二行", decimal = '0.12345678901234567890123456789012345678';
+    await replaceDraft(sql);
+    await tab().getByRole('button', {name: fullExportText.open, exact: true}).click();
+    const dialog = page.getByRole('dialog', {name: fullExportText.title, exact: true});
+    await dialog.getByRole('button', {name: fullExportText.parameters, exact: true}).click();
+    const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
+    const values = [['integer', '9007199254740993'], ['decimal', decimal], ['text', value], ['binary', '00ff'], ['null', ''], ['integer', '129']] as const;
+    const fillParameters = async () => {
+      for (const [index, [type, value]] of values.entries()) {
+        const name = 'p' + (index + 1);
+        await form.getByLabel(parameterZh.type + ' ' + name, {exact: true}).selectOption(type);
+        if (type !== 'null') await form.getByLabel(parameterZh.value + ' ' + name, {exact: true}).fill(value);
+      }
+    };
+    await fillParameters();
+    await expect(form.getByLabel(parameterZh.name + ' 7', {exact: true})).toHaveCount(0);
+    await form.getByRole('button', {name: fullExportText.applyParameters, exact: true}).click();
+    await expect(dialog).toContainText(fullExportText.parameterCount(6));
+    await dialog.getByLabel(zh.resultExport.format).selectOption('json');
+    const path = info.outputPath('绑定参数完整结果.json');
+    await mkdir(info.outputDir, {recursive: true});
+    await desktop.evaluate(({dialog, BrowserWindow}, path) => {
+      const original = dialog.showSaveDialog;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        if (args[0] !== BrowserWindow.getAllWindows()[0] || !(args.at(-1) as Electron.SaveDialogOptions).filters?.some(filter => filter.extensions.includes('json')))
+          throw Error('拒绝本例范围外的文件选择');
+        return {canceled: false, filePath: path};
+      }) as typeof dialog.showSaveDialog;
+      Object.assign(globalThis, {restorePgParameterExportPicker: () => { dialog.showSaveDialog = original; }});
+    }, path);
+    await dialog.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
+    await dialog.getByRole('button', {name: fullExportText.start, exact: true}).click();
+    await expect(dialog.getByText(fullExportText.done(129), {exact: true})).toBeVisible();
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    expect(parsed.results[0].rows).toEqual(Array.from({length: 129}, () => ({id: '9007199254740993', amount: decimal,
+      note: value, bytes: {type: 'binary', base64: 'AP8='}, nullable: null, literal: '$6', body: ' $7 '})));
+    await page.screenshot({path: info.outputPath('PostgreSQL参数完整导出.png')});
+    await dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await expect.poll(sessions).toEqual(originalSessions);
+    expect(await grid.innerText()).toBe(result);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history);
+    const persisted = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
+    expect(JSON.stringify(persisted)).not.toContain('导出参数原文😀');
+    expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('tasks.list', {})))).not.toContain('导出参数原文😀');
+    await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgParameterExportPicker(): void}).restorePgParameterExportPicker());
+    await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+    await fillParameters();
+    await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+    await expect(grid).toContainText(decimal);
+    await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('history.list', {}))).some(entry => entry.sql === sql && entry.success)).toBe(true);
+    expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('history.list', {})))).not.toContain('导出参数原文😀');
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 完整查询导出分批保存 CSV 和 JSON 并保护原事务及目标文件', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
