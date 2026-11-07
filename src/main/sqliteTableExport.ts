@@ -1,11 +1,10 @@
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
-import type { CellValue } from '../shared/contracts';
 import { sqliteTableExportSchema, type SqliteTableExportInput } from '../shared/sqliteTableExport';
 import type { SqliteTableColumn } from '../shared/sqliteTableBrowse';
 import { sqliteExportTextFunction, type SqliteValue } from '../engine/sqlite/protocol';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import { AtomicFile, AtomicFileTargetReservation, nativeAtomicFileIO, type AtomicFileIO, type WritableFile } from '../engine/atomicFile';
-import { exportExcelFile } from '../engine/excelFiles';
+import { startExcelExportRows } from '../engine/excelExportRows';
 import { EXCEL_LIMITS } from '../shared/excelTransfer';
 import { csvExportDelimiter } from '../shared/csvExport';
 import { csvCell, csvHeader } from '../engine/files';
@@ -44,33 +43,6 @@ export function sqliteInsertLiteral(value: SqliteValue): string {
   if (value.value === 'Infinity') return '9e999';
   if (value.value === '-Infinity') return '-9e999';
   return /[.eE]/.test(value.value) ? value.value : value.value + '.0';
-}
-
-/** Excel只交接一行，消费者下一次next才确认原行已编码并通过XML背压。 */
-class RowChannel implements AsyncIterableIterator<CellValue[]> {
-  private pending?: { row: CellValue[]; resolve(): void; reject(reason: unknown): void };
-  private taken?: { resolve(): void; reject(reason: unknown): void };
-  private wake?: () => void;
-  private failure?: { reason: unknown };
-  private ended = false;
-  [Symbol.asyncIterator](): AsyncIterableIterator<CellValue[]> { return this; }
-  async write(row: CellValue[]): Promise<void> {
-    if (this.failure) throw this.failure.reason;
-    if (this.ended || this.pending || this.taken) throw Error('SQLite Excel行背压状态无效');
-    return new Promise<void>((resolve, reject) => { this.pending = { row, resolve, reject }; this.wake?.(); this.wake = undefined; });
-  }
-  async next(): Promise<IteratorResult<CellValue[]>> {
-    this.taken?.resolve(); this.taken = undefined;
-    for (;;) {
-      if (this.failure) throw this.failure.reason;
-      if (this.pending) { const item = this.pending; this.pending = undefined; this.taken = item; return { done: false, value: item.row }; }
-      if (this.ended) return { done: true, value: undefined };
-      await new Promise<void>(resolve => { this.wake = resolve; });
-    }
-  }
-  end(): void { this.ended = true; this.wake?.(); this.wake = undefined; }
-  fail(reason: unknown): void { this.failure ??= { reason }; this.pending?.reject(reason); this.pending = undefined; this.taken?.reject(reason); this.taken = undefined; this.wake?.(); this.wake = undefined; }
-  async return(): Promise<IteratorResult<CellValue[]>> { this.fail(Error('SQLite Excel行消费者已停止')); return { done: true, value: undefined }; }
 }
 
 /** 即使AtomicFile.dispose永久失败，也保留原handle和精确删除能力供显式收尾恢复。 */
@@ -186,7 +158,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
   if (!driver.readOnly) throw Error('SQLite完整导出必须使用独立物理只读连接');
   const { filePath: _path, assertCurrent: _owner, validateDestination: _destination, retainDestinationUntil: _retain, ...publicInput } = input;
   const parsed = sqliteTableExportSchema.parse(publicInput); let count = 0, failed = false, failure: unknown;
-  const channel = parsed.format === 'xlsx' ? new RowChannel() : undefined; let excel: Promise<{ rows: number; bytes: number }> | undefined;
+  let excel: ReturnType<typeof startExcelExportRows> | undefined;
   try {
     control.check(); await driver.execute('BEGIN'); control.check();
     const source = await readSqliteTableCatalogue(driver, parsed.table, control);
@@ -208,9 +180,8 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     if (parsed.format === 'csv') await file.write(selected.map(column => csvHeader(column.name, delimiter)).join(delimiter) + '\r\n');
     if (parsed.format === 'json') await file.write('[\n');
     if (schema) await file.write(schema.beforeData);
-    if (channel) {
-      excel = exportExcelFile({ filePath: input.filePath, columns: selected.map(column => ({ name: column.name, type: 'SQLITE' })), rows: channel, deferredAtomicFile: file.excelFile(), checkCancelled: control.check, onCommitStart: () => { throw Error('SQLite Excel不能自行发布文件'); } });
-      void excel.catch(reason => { channel.fail(reason); });
+    if (parsed.format === 'xlsx') {
+      excel = startExcelExportRows({ filePath: input.filePath, columns: selected.map(column => ({ name: column.name, type: 'SQLITE' })), deferredAtomicFile: file.excelFile(), checkCancelled: control.check, onCommitStart: () => { throw Error('SQLite Excel不能自行发布文件'); } });
     }
     const result = plan ? await driver.streamRead(plan.sql, {
       parameters: plan.parameters, batchRows: 100,
@@ -219,7 +190,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
         control.check(); if (batch.index !== 0) throw Error('SQLite完整导出出现了额外结果集');
         for (const row of batch.rows) {
           control.check(); if (row.length !== selected.length || !Number.isSafeInteger(count + 1)) throw Error('SQLite导出原结果行或计数无效');
-          if (channel) await channel.write(row.map(sqliteWorkspaceValue));
+          if (excel) await excel.write(row.map(sqliteWorkspaceValue));
           else if (parsed.format === 'sql') await file.write('INSERT INTO "main".' + quoteSqliteIdentifier(parsed.table) + ' (' + selected.map(column => quoteSqliteIdentifier(column.name)).join(', ') + ') VALUES (' + row.map(sqliteInsertLiteral).join(', ') + ');\n');
           else {
             const values = row.map(sqliteWorkspaceValue);
@@ -230,10 +201,10 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
       },
     }) : undefined;
     if (result && (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== count)) throw Error('SQLite完整导出没有取得完整原生终态，文件未发布');
-    channel?.end(); if (excel && (await excel).rows !== count) throw Error('SQLite Excel导出行数与原结果不一致');
+    if (excel && (await excel.complete()).rows !== count) throw Error('SQLite Excel导出行数与原结果不一致');
     if (parsed.format === 'json') await file.write('\n]\n');
     if (schema) await file.write(schema.afterData);
-  } catch (reason) { failed = true; failure = reason; channel?.fail(reason); if (excel) await excel.catch(() => {}); }
+  } catch (reason) { failed = true; failure = reason; await excel?.abort(reason); }
   control.beginCleanup();
   if (driver.isUsable && driver.transaction === true) {
     try { await driver.execute('ROLLBACK'); }

@@ -1,5 +1,7 @@
 import type { SqliteQueryExportInput } from '../shared/sqliteQueryExport';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
+import { resultExportColumns } from '../shared/resultExport';
+import { startExcelExportRows } from '../engine/excelExportRows';
 import { csvExportDelimiter } from '../shared/csvExport';
 import { csvCell, csvHeader } from '../engine/files';
 import { sqliteQueryExportParameterNames } from '../engine/sqlite/parameters';
@@ -23,36 +25,51 @@ export async function prepareSqliteQueryExport(driver: SqliteDriverSession, inpu
   namedParameters: Record<string, SqliteValue>, file: SqliteTableExportFile, check: () => void, progress: (rows: number) => void): Promise<number> {
   const delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
   let columns: string[] | undefined;
+  let excel: ReturnType<typeof startExcelExportRows> | undefined;
   let count = 0;
-  check();
-  const result = await driver.streamQuery(input.sql, {
-    namedParameters, batchRows: 100,
-    onStatement: async statement => {
-      check();
-      if (statement.index !== 0 || columns || !statement.columns.length) throw Error('SQLite 查询导出必须恰好产生一组查询结果');
-      columns = statement.columns.map(column => column.name);
-      if (input.format === 'json' && new Set(columns).size !== columns.length) throw Error('JSON 导出需要不同的列名，请为重名列设置别名或选择 CSV');
-      await file.open();
-      await file.write(input.format === 'csv' ? columns.map(name => csvHeader(name, delimiter)).join(delimiter) + '\r\n' : '[');
-    },
-    onBatch: async batch => {
-      check();
-      if (batch.index !== 0 || !columns) throw Error('SQLite 查询导出结果与原生列定义不一致');
-      for (const row of batch.rows) {
+  try {
+    check();
+    const result = await driver.streamQuery(input.sql, {
+      namedParameters, batchRows: 100,
+      onStatement: async statement => {
         check();
-        if (row.length !== columns.length || !Number.isSafeInteger(count + 1)) throw Error('SQLite 查询导出行或计数无效');
-        const values = row.map(sqliteWorkspaceValue);
-        await file.write(input.format === 'csv' ? values.map(value => csvCell(value, delimiter)).join(delimiter) + '\r\n'
-          : (count ? ',\n' : '') + '{' + columns.map((name, index) => JSON.stringify(name) + ':' + JSON.stringify(values[index])).join(',') + '}');
-        count++;
-      }
-      progress(count);
-    },
-  });
-  check();
-  if (!columns || result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== count) {
-    throw Error('SQLite 查询导出未取得完整原生结果，文件未发布');
+        if (statement.index !== 0 || columns || !statement.columns.length) throw Error('SQLite 查询导出必须恰好产生一组查询结果');
+        columns = statement.columns.map(column => column.name);
+        if (input.format === 'json' && new Set(columns).size !== columns.length) throw Error('JSON 导出需要不同的列名，请为重名列设置别名或选择 CSV／Excel');
+        await file.open();
+        if (input.format === 'xlsx') {
+          const headers = resultExportColumns(columns.map((name, index) => ({key: String(index), name})));
+          excel = startExcelExportRows({filePath: input.filePath, columns: headers.map(({exportName}) => ({name: exportName, type: 'SQLITE'})),
+            deferredAtomicFile: file.excelFile(), checkCancelled: check, onCommitStart: () => { throw Error('SQLite Excel 不能自行发布文件'); }});
+        } else {
+          if (input.encoding === 'utf16le') await file.write('\uFEFF');
+          await file.write(input.format === 'csv' ? columns.map(name => csvHeader(name, delimiter)).join(delimiter) + '\r\n' : '[');
+        }
+      },
+      onBatch: async batch => {
+        check();
+        if (batch.index !== 0 || !columns) throw Error('SQLite 查询导出结果与原生列定义不一致');
+        for (const row of batch.rows) {
+          check();
+          if (row.length !== columns.length || !Number.isSafeInteger(count + 1)) throw Error('SQLite 查询导出行或计数无效');
+          const values = row.map(sqliteWorkspaceValue);
+          if (excel) await excel.write(values);
+          else await file.write(input.format === 'csv' ? values.map(value => csvCell(value, delimiter)).join(delimiter) + '\r\n'
+            : (count ? ',\n' : '') + '{' + columns.map((name, index) => JSON.stringify(name) + ':' + JSON.stringify(values[index])).join(',') + '}');
+          count++;
+        }
+        progress(count);
+      },
+    });
+    check();
+    if (!columns || result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== count) {
+      throw Error('SQLite 查询导出未取得完整原生结果，文件未发布');
+    }
+    if (excel && (await excel.complete()).rows !== count) throw Error('SQLite Excel 导出行数与原结果不一致');
+    if (input.format === 'json') await file.write('\n]\n');
+    return count;
+  } catch (reason) {
+    await excel?.abort(reason);
+    throw reason;
   }
-  if (input.format === 'json') await file.write('\n]\n');
-  return count;
 }

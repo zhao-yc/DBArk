@@ -12,10 +12,12 @@ const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParamet
 export const postgresQueryExportSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.string().min(1).max(256),
   taskId: z.string().min(1).max(200), fileToken: z.string().min(1).max(200),
-  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json']),
+  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json', 'xlsx']),
   encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
   parameters: parameters.optional(),
-}).strict().refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出');
+}).strict()
+  .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
+  .refine(input => input.format !== 'xlsx' || input.encoding === 'utf8', 'Excel 导出仅使用 UTF-8 内部编码');
 
 export type PostgresQueryExportInput = z.infer<typeof postgresQueryExportSchema>;
 export interface PostgresQueryExportOutput { rows: number; fileCommitted: true; }

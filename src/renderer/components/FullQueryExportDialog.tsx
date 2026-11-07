@@ -68,7 +68,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       job = acquireWorkspaceBusy(source.tabId);
       if (!current()) throw Error(text.changed);
       const input = {connectionId: source.connectionId, sql: source.sql, taskId, fileToken: file.token,
-        format, encoding, ...csvExportOptions(format, delimiter), ...(parameters ? {parameters} : {})};
+        format, encoding: format === 'xlsx' ? 'utf8' as const : encoding, ...csvExportOptions(format, delimiter), ...(parameters ? {parameters} : {})};
       const result = sqlite ? await invoke('sqlite.queryExport', input)
         : await invoke('postgres.query.export', {...input, database: source.database});
       if (alive.current) setRows(result.rows);
@@ -102,11 +102,11 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>
       {parameters && <p>{text.parameterCount(parameters.length)}</p>}
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
-        onChange={event => { setFormat(event.target.value === 'json' ? 'json' : 'csv'); setFile(null); setRows(undefined); }}>
-        <option value="csv">CSV</option><option value="json">JSON</option>
+        onChange={event => { const value = event.target.value; if (value === 'csv' || value === 'json' || value === 'xlsx') setFormat(value); setFile(null); setRows(undefined); }}>
+        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option>
       </select></Field>
-      {sqlite && <p>{sqliteQueryExportZh.formatHint}</p>}
-      <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={encoding} disabled={!!pending}
+      {sqlite && format === 'json' && <p>{sqliteQueryExportZh.formatHint}</p>}
+      <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={format === 'xlsx' ? 'utf8' : encoding} disabled={!!pending || format === 'xlsx'}
         onChange={event => { const value = event.target.value; if (value === 'utf8' || value === 'utf16le' || value === 'gb18030') setEncoding(value); }}>
         <option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option>
       </select></Field>

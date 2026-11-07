@@ -27,9 +27,11 @@ test.describe.configure({timeout: 120000, retries: 0});
 test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并保护源文件', async ({}, info) => {
   const runtime = require('./desktop-fixture') as Desktop;
   const {DatabaseSync} = require('node:sqlite') as typeof import('node:sqlite');
+  const {listExcelSheets, readExcelRows} = require('../../src/engine/excelFiles') as typeof import('../../src/engine/excelFiles');
   const {application, page} = runtime.ownedDesktopResources(info);
   const originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'query-export.sqlite'), target = join(directory, 'query-export.json');
+  const xlsx = join(directory, 'query-export.xlsx');
   const connectionName = 'SQLite查询导出本例';
   const prefix = "DELETE FROM subject;\n";
   const sql = 'WITH RECURSIVE series(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM series WHERE n<1205) ' +
@@ -69,8 +71,8 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
         return {canceled: false, filePaths: [input.database]};
       }) as typeof dialog.showOpenDialog;
       dialog.showSaveDialog = (async () => {
-        if (chooser !== 'export' || ++facts.saveCalls !== 1) throw Error('本例不允许其它保存对话框');
-        return {canceled: false, filePath: input.target};
+        if (chooser !== 'export' || ++facts.saveCalls > 2) throw Error('本例不允许其它保存对话框');
+        return {canceled: false, filePath: facts.saveCalls === 1 ? input.target : input.xlsx};
       }) as typeof dialog.showSaveDialog;
       const wrapped: Handler = async (event, payload) => {
         if (event.senderFrame !== owner.webContents.mainFrame) throw Error('本例 IPC 窗口归属已改变');
@@ -93,7 +95,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       Object.assign(globalThis, {sqliteQueryExportProof: {facts, restore() {
         handlers.set('dbark:request', original); dialog.showOpenDialog = open; dialog.showSaveDialog = save;
       }}});
-    }, {database, target, sql});
+    }, {database, target, xlsx, sql});
 
     stage = '保存连接及从树打开查询';
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), {name: zh.common.newConnection, exact: true}, check)).click();
@@ -137,13 +139,29 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
 
     stage = '真实流导出并读回磁盘';
     await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption('json');
+    await modal.getByLabel(zh.resultExport.encoding, {exact: true}).selectOption('utf16le');
     await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
     await modal.getByRole('button', {name: text.start, exact: true}).click();
     await expect(modal.getByRole('status')).toHaveText(text.done(1205));
-    const rows = JSON.parse(readFileSync(target, 'utf8'));
+    const bytes = readFileSync(target);
+    expect(bytes.subarray(0, 2).toString('hex')).toBe('fffe');
+    const rows = JSON.parse(bytes.toString('utf16le').slice(1));
     expect(rows).toHaveLength(1205);
     expect(rows[0]).toEqual({position: '1', exact: '9223372036854775807', marker: "中文';🚢", payload: {type: 'binary', base64: 'AP8='}});
     expect(rows.at(-1).position).toBe('1205');
+    stage = '同一原选区逐行导出 XLSX';
+    await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption('xlsx');
+    await expect(modal.getByLabel(zh.resultExport.encoding, {exact: true})).toBeDisabled();
+    await expect(modal.getByLabel(zh.resultExport.encoding, {exact: true})).toHaveValue('utf8');
+    await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
+    await modal.getByRole('button', {name: text.start, exact: true}).click();
+    await expect(modal.getByRole('status')).toHaveText(text.done(1205));
+    const [sheet] = await listExcelSheets({filePath: xlsx});
+    let excelRows = 0;
+    for await (const row of readExcelRows({filePath: xlsx, sheetId: sheet.id, protocol: 'dbark-v1'})) {
+      expect(row).toEqual(rows[excelRows++]);
+    }
+    expect(excelRows).toBe(1205);
     expect(digest()).toBe(before);
     expect(readdirSync(directory).filter(name => name.endsWith('.partial'))).toEqual([]);
     const facts = await application.evaluate(() => {
@@ -151,10 +169,11 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       state.restore(); return state.facts;
     });
     expect(facts).toMatchObject({
-      denied: [], openCalls: 1, saveCalls: 1, requests: [
+      denied: [], openCalls: 1, saveCalls: 2, requests: [
         {command: 'sqlite.queryExportParameterNames', value: {sql}},
-        {command: 'sqlite.queryExport', value: {sql, format: 'json', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
-      ], replies: [{ok: true, result: {rows: 1205, fileCommitted: true}}],
+        {command: 'sqlite.queryExport', value: {sql, format: 'json', encoding: 'utf16le', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
+        {command: 'sqlite.queryExport', value: {sql, format: 'xlsx', encoding: 'utf8', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
+      ], replies: Array.from({length: 2}, () => ({ok: true, result: {rows: 1205, fileCommitted: true}})),
     });
     const observed = await page.evaluate(async () => ({
       history: await window.dbark.invoke('history.list', {}),
@@ -170,7 +189,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
     await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
     await runtime.confirmOwnedDesktopExit(info);
     expect(originalProcess.exitCode).toBe(0);
-    await info.attach('SQLite 查询导出证据', {body: JSON.stringify({platform: process.platform, directory, rows: rows.length, sourceSha256: before, facts, exitCode: originalProcess.exitCode}), contentType: 'application/json'});
+    await info.attach('SQLite 查询导出证据', {body: JSON.stringify({platform: process.platform, directory, rows: rows.length, excelRows, sourceSha256: before, facts, exitCode: originalProcess.exitCode}), contentType: 'application/json'});
   } catch (error) {
     runtime.retainOwnedDesktopResources(info);
     try {

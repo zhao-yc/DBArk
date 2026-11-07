@@ -38,7 +38,8 @@ it('参数导出IPC接纳严格类型，拒绝附加字段、重复名称及超�
 it('完整导出只接纳文件令牌及支持的格式，拒绝渲染进程指定的路径或会话', () => {
   const input = {...base, sql: 'SELECT 1', csvDelimiter: ';'};
   expect(validateCommand('postgres.query.export', input)).toEqual(input);
-  for (const patch of [{filePath: '/tmp/other.csv'}, {sessionId: 'workbench'}, {format: 'sql'}, {format: 'json'}]) {
+  expect(validateCommand('postgres.query.export', {...base, sql: input.sql, format: 'xlsx'})).toMatchObject({format: 'xlsx'});
+  for (const patch of [{filePath: '/tmp/other.csv'}, {sessionId: 'workbench'}, {format: 'sql'}, {format: 'json'}, {format: 'xlsx'}, {format: 'xlsx', csvDelimiter: undefined, encoding: 'utf16le'}]) {
     expect(() => validateCommand('postgres.query.export', {...input, ...patch})).toThrow();
   }
 });

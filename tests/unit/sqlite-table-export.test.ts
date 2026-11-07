@@ -406,13 +406,41 @@ describe('SQLite 完整查询导出', () => {
     expect(readdirSync(dirname(profile.sqlite.filePath!)).filter(path => path.endsWith('.partial'))).toEqual([]);
   });
 
-  it('流读取期间取消只撤销本次暂存并保留旧目标', async () => {
+  it('Excel 保留列顺序及类型，空名和重名按位置改名', async () => {
+    const profile = fixture(), {app} = runtime(profile);
+    const input = queryRequest(profile, {format: 'xlsx', filePath: join(dirname(profile.sqlite.filePath!), 'result.xlsx'),
+      sql: 'SELECT value AS item, payload AS item, NULL AS "", 1 AS "item [2]" FROM subject WHERE id=1'});
+    await expect(app.request('sqlite.queryExport', input)).resolves.toEqual({rows: 1, fileCommitted: true});
+    const [sheet] = await listExcelSheets({filePath: input.filePath});
+    const rows = [];
+    for await (const row of readExcelRows({filePath: input.filePath, sheetId: sheet.id, protocol: 'dbark-v1'})) rows.push(row);
+    expect(Object.keys(rows[0])).toEqual(['item', 'item [3]', '列 [3]', 'item [2]']);
+    expect(rows).toEqual([{item: '9223372036854775807', 'item [3]': {type: 'binary', base64: 'AP8='}, '列 [3]': null, 'item [2]': '1'}]);
+  });
+
+  it('Excel 空结果保留标题，超过单格上限时拒绝替换目标并清理暂存', async () => {
+    const profile = fixture(), {app} = runtime(profile);
+    const filePath = join(dirname(profile.sqlite.filePath!), 'result.xlsx');
+    const empty = queryRequest(profile, {format: 'xlsx', filePath, sql: 'SELECT id FROM subject WHERE 0'});
+    await expect(app.request('sqlite.queryExport', empty)).resolves.toEqual({rows: 0, fileCommitted: true});
+    const [sheet] = await listExcelSheets({filePath});
+    const rows = [];
+    for await (const row of readExcelRows({filePath, sheetId: sheet.id, protocol: 'dbark-v1'})) rows.push(row);
+    expect(rows).toEqual([]);
+    const before = readFileSync(filePath);
+    const long = queryRequest(profile, {taskId: '拒绝超长Excel', format: 'xlsx', filePath, sql: "SELECT printf('%032768d', id) AS too_long FROM subject"});
+    await expect(app.request('sqlite.queryExport', long)).rejects.toThrow('32767');
+    expect(readFileSync(filePath)).toEqual(before);
+    expect(readdirSync(dirname(filePath)).filter(path => path.endsWith('.partial'))).toEqual([]);
+  });
+
+  it.each(['json', 'xlsx'] as const)('%s 流读取期间取消只撤销本次暂存并保留旧目标', async format => {
     const profile = fixture(), reached = deferred<void>();
     let paused = false;
     const {app, events} = runtime(profile, {create: () => transport((message, forward) => {
       if (!paused && message.kind === 'batch') { paused = true; reached.resolve(); } else forward();
     })});
-    const input = queryRequest(profile);
+    const input = queryRequest(profile, {format, filePath: join(dirname(profile.sqlite.filePath!), 'result.' + format)});
     writeFileSync(input.filePath, '旧文件');
     const work = app.request('sqlite.queryExport', input).catch(reason => reason);
     await reached.promise;

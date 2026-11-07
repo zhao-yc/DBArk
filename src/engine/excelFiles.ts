@@ -20,7 +20,7 @@ export interface ExcelSheetReadOptions extends ExcelReadOptions { sheetId: strin
 export interface ExcelExportOptions extends ExcelReadOptions {
   columns: ExcelColumn[]; rows: AsyncIterable<CellValue[]>; onCommitStart: () => void;
   onProgress?: (rows: number) => void; io?: AtomicFileIO;
-  /** 仅内部完整表导出协调器持有：完成ZIP与暂存后交回，外层在数据库严格关闭后提交和清理。 */
+  /** 仅内部完整导出协调器持有：完成ZIP与暂存后交回，外层在数据库严格关闭后提交和清理。 */
   deferredAtomicFile?: AtomicFile;
 }
 
@@ -40,7 +40,7 @@ function checkCellCount(rows: number, columns: number, maximum: number): void {
   if (rows * columns > maximum) throw new Error('Excel 单元格总数（含标题）超过预算，请拆分文件');
 }
 
-/** 表数据逐行写入真实 XLSX；旧文件仅在完整 ZIP 写完、fsync 和最后一次取消检查之后替换。 */
+/** 数据逐行写入真实 XLSX；旧文件仅在完整 ZIP 写完、fsync 和最后一次取消检查之后替换。 */
 export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows: number; bytes: number }> {
   const check = input.checkCancelled ?? (() => undefined);
   if (excelJsPackage.version !== '4.4.0') throw new Error('Excel 流适配需要重新验证当前 ExcelJS 版本');

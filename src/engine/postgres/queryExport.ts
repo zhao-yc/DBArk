@@ -2,6 +2,9 @@ import { isAbsolute } from 'node:path';
 import type { ResultColumn } from '../../shared/contracts';
 import { splitPostgresSql } from '../../shared/postgresSql';
 import { resultExportColumns } from '../../shared/resultExport';
+import { EXCEL_LIMITS } from '../../shared/excelTransfer';
+import { AtomicFile, nativeAtomicFileIO } from '../atomicFile';
+import { startExcelExportRows } from '../excelExportRows';
 import { queryStreamExportLimits } from '../../shared/queryStreamExport';
 import { postgresQueryExportSchema, type PostgresQueryExportInput, type PostgresQueryExportOutput } from '../../shared/postgresQueryExport';
 import { createQueryStreamFile, type QueryStreamFile } from '../queryStreamFile';
@@ -18,7 +21,9 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
   postgresQueryExportSchema.parse({connectionId: input.connectionId, database: input.database, taskId: input.taskId,
     fileToken: input.fileToken, sql, format, encoding, csvDelimiter, parameters});
   if (!isAbsolute(filePath) || filePath.includes('\0')) throw Error('主进程未提供授权的导出路径');
-  let file: QueryStreamFile | undefined;
+  let file: QueryStreamFile | undefined, workbook: AtomicFile | undefined;
+  let excel: ReturnType<typeof startExcelExportRows> | undefined;
+  let rows = 0;
   try {
     await connect(async connection => {
       check();
@@ -35,7 +40,7 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
       const declared = await connection.query('DECLARE dbark_query_export NO SCROLL CURSOR FOR\n' + part.sql,
         values, small, undefined, 'extended');
       if (declared.postgresCommand !== 'DECLARE') throw Error('PostgreSQL 未确认导出游标');
-      const output = file = await createQueryStreamFile({filePath, format, encoding, csvDelimiter,
+      const output = file = format === 'xlsx' ? undefined : await createQueryStreamFile({filePath, format, encoding, csvDelimiter,
         resultSelection: format === 'csv' ? {kind: 'row-result', ordinal: 1} : {kind: 'all'},
         checkCancelled: check, onCommitStart: publish});
       const batchRows = 64;
@@ -48,17 +53,28 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
           throw Error('PostgreSQL 导出批次不完整或超过大小预算');
         if (!columns) {
           columns = batch.columns;
-          await output.write({kind: 'rows-start', resultOrdinal: 1, statementOrdinal: 1, rowResultOrdinal: 1,
-            columns: resultExportColumns(columns).map((column, i) => ({...column, position: i + 1, type: columns![i].type}))});
+          const headers = resultExportColumns(columns).map((column, index) => ({
+            ...column, position: index + 1, type: batch.columns[index].type,
+          }));
+          if (output) await output.write({kind: 'rows-start', resultOrdinal: 1, statementOrdinal: 1, rowResultOrdinal: 1, columns: headers});
+          else {
+            workbook = await AtomicFile.create(filePath, 'utf8', check, publish, nativeAtomicFileIO, EXCEL_LIMITS.maxCompressedBytes, undefined, true);
+            excel = startExcelExportRows({filePath, columns: headers.map(({exportName, type}) => ({name: exportName, type})),
+              deferredAtomicFile: workbook, checkCancelled: check, onCommitStart: publish});
+          }
         } else if (batch.columns.length !== columns.length || batch.columns.some((column, i) =>
           column.name !== columns![i].name || column.type !== columns![i].type)) throw Error('PostgreSQL 导出列描述已变化');
         for (const row of batch.rows) {
-          await output.write({kind: 'row', resultOrdinal: 1, values: batch.columns.map(column => row[column.key])});
+          const values = batch.columns.map(column => row[column.key]);
+          if (output) await output.write({kind: 'row', resultOrdinal: 1, values});
+          else await excel!.write(values);
+          rows++;
         }
         if (batch.rows.length < batchRows) break;
-        if (output.rowsWritten % 256 === 0) progress(output.rowsWritten);
+        if (rows % 256 === 0) progress(rows);
       }
-      await output.write({kind: 'rows-end', resultOrdinal: 1});
+      if (output) await output.write({kind: 'rows-end', resultOrdinal: 1});
+      else if ((await excel!.complete()).rows !== rows) throw Error('PostgreSQL Excel 导出行数与原结果不一致');
       check();
       const closed = await connection.query('CLOSE dbark_query_export', undefined, small);
       if (closed.postgresCommand !== 'CLOSE') throw Error('PostgreSQL 未确认游标关闭');
@@ -68,8 +84,15 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
         throw Error('PostgreSQL 未确认完整读取结束');
     });
     check();
-    if (!file) throw Error('PostgreSQL 导出未生成文件');
-    await file.complete();
-    return {rows: file.rowsWritten, fileCommitted: true};
-  } finally { await file?.abort(); }
+    if (workbook) await workbook.commit();
+    else if (file) await file.complete();
+    else throw Error('PostgreSQL 导出未生成文件');
+    return {rows, fileCommitted: true};
+  } catch (reason) {
+    await excel?.abort(reason);
+    throw reason;
+  } finally {
+    await workbook?.dispose();
+    await file?.abort();
+  }
 }

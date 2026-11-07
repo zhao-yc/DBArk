@@ -1,5 +1,6 @@
 import { Client } from 'pg';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { test, expect, page, desktop, pageErrors, quitDesktop } from './desktop-fixture';
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
@@ -781,7 +782,7 @@ test('PostgreSQL 完整导出按协议绑定类型参数并保留原会话及参
   await quitDesktop();
 });
 
-test('PostgreSQL 完整查询导出分批保存 CSV 和 JSON 并保护原事务及目标文件', async ({}, info) => {
+test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护原事务及目标文件', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
   const port = Number(process.env.DBARK_PGSEARCH_PORT);
@@ -791,9 +792,11 @@ test('PostgreSQL 完整查询导出分批保存 CSV 和 JSON 并保护原事务�
   await observer.connect();
   try {
     await observer.query('CREATE SEQUENCE export_guard');
-    const csv = info.outputPath('完整结果.csv'), json = info.outputPath('完整结果.json'), unchanged = info.outputPath('原文件.csv');
+    const csv = info.outputPath('完整结果.csv'), json = info.outputPath('完整结果.json'), xlsx = info.outputPath('完整结果.xlsx');
+    const unchanged = info.outputPath('原文件.csv'), cancelledExcel = info.outputPath('原文件.xlsx');
     await mkdir(info.outputDir, {recursive: true});
     await writeFile(unchanged, '原文件哨兵');
+    await writeFile(cancelledExcel, 'Excel 原文件哨兵');
     await prepare({id: '', name: '隔离 PostgreSQL 查询导出', dialect: 'postgresql', group: '', color: '#123456',
       host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, "SELECT '保留原结果' AS marker;");
     const execute = tab().getByRole('button', {name: postgresZh.execute, exact: true});
@@ -808,7 +811,7 @@ test('PostgreSQL 完整查询导出分批保存 CSV 和 JSON 并保护原事务�
     const owner = (await sessions()).rows;
     expect(owner).toHaveLength(1);
     expect(owner[0].state).toBe('idle in transaction');
-    const output = [csv, json, unchanged, unchanged];
+    const output = [csv, json, xlsx, unchanged, cancelledExcel];
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
@@ -850,7 +853,22 @@ test('PostgreSQL 完整查询导出分批保存 CSV 和 JSON 并保护原事务�
     const parsed = JSON.parse(bytes.toString('utf16le').slice(1));
     expect(parsed.results[0].rows).toEqual(Array.from({length: 4099}, (_, i) => ({id: String(9007199254740994n + BigInt(i)),
       'id [2]': '0.12345678901234567890', note: i % 2 === 0 ? `行${i + 1}` : null, bytes: {type: 'binary', base64: 'AP8='}})));
-    await page.screenshot({path: info.outputPath('PostgreSQL完整查询导出.png')});
+    await dialog.getByLabel(zh.resultExport.format).selectOption('xlsx');
+    await expect(dialog.getByLabel(zh.resultExport.encoding)).toBeDisabled();
+    await expect(dialog.getByLabel(zh.resultExport.encoding)).toHaveValue('utf8');
+    await expect(dialog.getByLabel(csvExportZh.label)).toHaveCount(0);
+    await start();
+    await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
+    const [sheet] = await listExcelSheets({filePath: xlsx});
+    let rowIndex = 0;
+    for await (const row of readExcelRows({filePath: xlsx, sheetId: sheet.id, protocol: 'dbark-v1'})) {
+      expect(Object.keys(row)).toEqual(['id', 'id [2]', 'note', 'bytes']);
+      expect(row).toEqual({id: String(9007199254740994n + BigInt(rowIndex)), 'id [2]': '0.12345678901234567890',
+        note: rowIndex % 2 === 0 ? `行${rowIndex + 1}` : null, bytes: {type: 'binary', base64: 'AP8='}});
+      rowIndex++;
+    }
+    expect(rowIndex).toBe(4099);
+    await page.screenshot({path: info.outputPath('PostgreSQL完整查询导出Excel.png')});
     await close();
 
     await replaceDraft("SELECT nextval('export_guard');");
@@ -860,14 +878,19 @@ test('PostgreSQL 完整查询导出分批保存 CSV 和 JSON 并保护原事务�
     expect((await observer.query('SELECT is_called FROM export_guard')).rows).toEqual([{is_called: false}]);
     await close();
 
-    await replaceDraft('SELECT pg_sleep(30) AS delay;');
-    await open(); await start();
+    await replaceDraft("SELECT g, CASE WHEN g > 64 THEN pg_sleep(30)::text ELSE '' END AS delay FROM generate_series(1,65) AS g;");
+    await open();
+    await dialog.getByLabel(zh.resultExport.format).selectOption('xlsx');
+    await start();
+    // 暂存已存在，且真实后端进入下一批 FETCH 时取消，避免只测试尚未打开文件的准备阶段。
+    await expect.poll(async () => (await readdir(info.outputDir)).some(name => name.startsWith('原文件.xlsx.dbark-') && name.endsWith('.partial'))).toBe(true);
     await expect.poll(async () => (await observer.query("SELECT count(*)::int AS count FROM pg_stat_activity WHERE usename=$1 AND state='active' AND query LIKE 'FETCH FORWARD 64 FROM dbark_query_export%'", [user])).rows[0].count).toBe(1);
     await dialog.getByRole('button', {name: zh.common.cancel, exact: true}).click();
     await expect(dialog.locator('.error-box')).toContainText(/取消|cancel/i);
-    expect(await readFile(unchanged, 'utf8')).toBe('原文件哨兵');
+    expect(await readFile(cancelledExcel, 'utf8')).toBe('Excel 原文件哨兵');
+    expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
     await close();
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(4);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(5);
     await expect.poll(async () => (await sessions()).rows).toEqual(owner);
     expect(await history()).toEqual(baseline);
     expect(await grid.innerText()).toBe(original);

@@ -118,7 +118,7 @@ describe('SQLite 查询导出 IPC', () => {
   };
   it('只接受文件令牌和有界模板，持久概要不回显 SQL、参数、路径或错误原文', () => {
     expect(validateCommand('sqlite.queryExport', request)).toEqual(request);
-    for (const patch of [{filePath: '任意路径'}, {profile}, {format: 'xlsx'}, {format: 'json', csvDelimiter: ';'},
+    for (const patch of [{filePath: '任意路径'}, {profile}, {format: 'xlsx', encoding: 'gb18030'}, {format: 'json', csvDelimiter: ';'},
       {parameters: [{name: 'marker', type: 'integer', value: '9223372036854775808'}]}]) {
       expect(() => validateCommand('sqlite.queryExport', {...request, ...patch})).toThrow();
     }
