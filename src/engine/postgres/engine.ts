@@ -58,7 +58,7 @@ import { dataSearchCatalogueSchema } from '../../shared/dataSearchCatalogue';
 import { dataSearchRecordReadSchema } from '../../shared/dataSearchRecords';
 import type { DataSearchTasks } from '../dataSearchTasks';
 import type { DataSearchRecords } from '../dataSearchRecords';
-import { postgresDataSearchSource, readPostgresDataSearchCatalogue, readPostgresDataSearchRecord } from './dataSearch';
+import { postgresDataSearchSource, readPostgresDataSearchCatalogue, readPostgresDataSearchRecord, verifyPostgresSearchEdit } from './dataSearch';
 interface Session {
   id: string;
   connectionId: string;
@@ -1192,7 +1192,22 @@ export class PostgresEngine {
         if (command === 'postgres.table.histogram') return this.tables.histogram(input as Parameters<PostgresTableWorkspace['histogram']>[0], connect);
         if (command === 'postgres.table.filteredUpdate') return this.tables.previewFilteredUpdate(input as Parameters<PostgresTableWorkspace['previewFilteredUpdate']>[0], connect);
         if (command === 'postgres.table.filteredDelete') return this.tables.previewFilteredDelete(input as Parameters<PostgresTableWorkspace['previewFilteredDelete']>[0], connect);
-        return command === 'postgres.table.page' ? this.tables.page(input as Parameters<PostgresTableWorkspace['page']>[0], connect) : this.tables.apply(input as Parameters<PostgresTableWorkspace['apply']>[0], connect);
+        if (command === 'postgres.table.page') {
+          const page = input as Parameters<PostgresTableWorkspace['page']>[0];
+          if (!page.searchRecordRef) return this.tables.page(page, connect);
+          const records = this.dataSearch?.records;
+          if (!records) throw Error('PostgreSQL 搜索记录来源不可用');
+          const locator = { connectionId: page.connectionId, taskId: page.tabId, recordRef: page.searchRecordRef };
+          const entry = records.lookup(locator), target = entry.metadata.target;
+          if (!entry.postgresIdentity || target.kind !== 'table' || target.database !== page.database || target.table !== page.table)
+            throw Error('PostgreSQL 搜索记录不属于当前库表');
+          const { owner, connectionRevision, connectionId, database, table, tabId } = page;
+          return this.tables.searchEdit({ owner, connectionRevision, connectionId, database, table, tabId }, connect,
+            connection => verifyPostgresSearchEdit(connection, entry), () => {
+              if (records.lookup(locator) !== entry) throw Error('原搜索记录引用已变化，请重新搜索');
+            });
+        }
+        return this.tables.apply(input as Parameters<PostgresTableWorkspace['apply']>[0], connect);
       }
       case 'postgres.table.preview':
         if (this.stopping || this.closing.has(input.connectionId)) throw Error('PostgreSQL连接正在关闭');

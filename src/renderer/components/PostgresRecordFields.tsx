@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DataRow } from '../../shared/contracts';
 import { postgresTableLimits, type PostgresTableChange, type PostgresTableColumn, type PostgresTableField, type PostgresTablePage } from '../../shared/postgresTable';
 import { cellPreview, cellText, errorMessage, ownCell } from '../lib';
@@ -129,11 +129,12 @@ export function PostgresRecordJsonEditor({ buffer, disabled, onChange }: {
     onValueChange={source => onChange({ ...buffer, source })}/></>;
 }
 
-export function PostgresRecordForm({ page, row, initial, reference, duplicate, editingDraft, current, onSave, onClose }: {
+export function PostgresRecordForm({ page, row, initial, reference, duplicate, editingDraft, initialFocus, current, onSave, onClose }: {
   page: PostgresTablePage; row: number | null; initial?: PostgresEditableRecord;
   reference?: PostgresReferenceSource;
   duplicate?: { rowNumber: number; omitted: readonly string[] };
   editingDraft?: boolean;
+  initialFocus?: string;
   current(): boolean;
   onSave(change: PostgresEditableRecord): void; onClose(): void;
 }) {
@@ -143,6 +144,17 @@ export function PostgresRecordForm({ page, row, initial, reference, duplicate, e
   const [tree, setTree] = useState(false);
   const [error, setError] = useState('');
   const original = row === null ? undefined : page.rows[row];
+  const content = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!initialFocus) return;
+    const key = page.columns.find(column => column.name === initialFocus)?.key;
+    const field = Array.from(content.current?.querySelectorAll<HTMLElement>('[data-record-column]') ?? [])
+      .find(element => element.dataset.recordColumn === key);
+    const input = field?.querySelector<HTMLElement>('select');
+    if (input) input.focus();
+    else field?.scrollIntoView({ block: 'center' });
+  }, [initialFocus, page]);
 
   function sourceCurrent() {
     return current() && origin.page === page && origin.row === row && (row === null || !!original);
@@ -173,7 +185,7 @@ export function PostgresRecordForm({ page, row, initial, reference, duplicate, e
   }
 
   return <Modal title={editingDraft ? text.editInsertDraft : duplicate ? duplicateText.title : row === null ? text.add : text.edit} onClose={onClose} wide>
-    <div className={duplicate ? 'modal-content pg-record-form pg-record-duplicate' : 'modal-content pg-record-form'}>
+    <div ref={content} className={duplicate ? 'modal-content pg-record-form pg-record-duplicate' : 'modal-content pg-record-form'}>
       {duplicate && <>
         <p>{duplicateText.source(duplicate.rowNumber)} {duplicateText.notice}</p>
         {!!duplicate.omitted.length && <p>{duplicateText.omitted(duplicate.omitted.join('、'))}</p>}

@@ -61,6 +61,7 @@ interface Snapshot {
   window?: Pick<PostgresTablePageInput, 'offset' | 'limit'>;
   writeEligible: boolean;
   related?: RelatedScope;
+  searchServerCheck?: (connection: PostgresConnection) => Promise<void>;
   preview?: { token: string; expires: number; writes: Write[]; filtered?: FilteredWriteMatch };
 }
 interface TableSnapshots { current: Snapshot; retained: Map<string, Snapshot>; }
@@ -200,14 +201,14 @@ function rowPredicate(values: unknown[], row: Pick<Original, 'tid' | 'version'>)
 }
 
 /** 关联读取和编辑共用原行核对。分区 OID、物理版本和完整值摘要都必须匹配。 */
-async function readOriginalRow(connection: PostgresConnection, relation: Relation, row: Omit<Original, 'key'>): Promise<DataRow> {
+async function readOriginalRow(connection: PostgresConnection, relation: Relation, row: PostgresReferenceRowVersion & { digest?: string }): Promise<DataRow> {
   const args: unknown[] = [];
   const predicate = rowPredicate(args, row);
   const projection = relation.columns.map(column => postgresIdentifier(column.name)).join(', ');
   const current = await connection.query('SELECT ' + projection + ' FROM ' + only(relation) + ' WHERE ' + predicate +
     ' AND tableoid = $3::oid AND pg_catalog.to_regclass($4)::oid = $5::oid',
   [...args, row.tableOid, relation.sql, relation.oid], { rows: 2, bytes: 8 * 1024 * 1024 });
-  if (current.truncated || current.rows.length !== 1 || digest(current.rows[0]) !== row.digest)
+  if (current.truncated || current.rows.length !== 1 || (row.digest !== undefined && digest(current.rows[0]) !== row.digest))
     throw Error('原记录已变化，请刷新后重试');
   return current.rows[0];
 }
@@ -252,7 +253,48 @@ export class PostgresTableWorkspace {
 
   /** 当前草稿必须保留。只在同一目录和筛选范围内尽量保留撤销历史，过期历史不阻断翻页。 */
   async page(input: Scoped<PostgresTablePageInput>, connect: Connect): Promise<PostgresTablePage> {
+    if (input.searchRecordRef) throw Error('PostgreSQL 搜索编辑缺少原行核验');
     return (await this.loadPage(input, connect)).page;
+  }
+
+  /** 搜索详情单独持有一行的更新能力，不能替换已有表页或借此获得整表操作。 */
+  async searchEdit(input: Scoped<PostgresTableTarget>, connect: Connect, verify: (connection: PostgresConnection) =>
+    Promise<{ original: PostgresReferenceRowVersion; checkServer(connection: PostgresConnection): Promise<void> }>,
+    assertReference: () => void): Promise<PostgresTablePage> {
+    const key = this.key(input);
+    if (this.active.has(key) || this.snapshots.has(key) || this.related.has(key))
+      throw Error('搜索编辑需要独立的 PostgreSQL 表页');
+    this.active.add(key);
+    try {
+      const { relation, row, original, checkServer } = await connect(async connection => {
+        await begin(connection, 'page');
+        const { schema, name } = postgresRelationName(input.table);
+        // 原表锁跨保存点保留，防止复核后按普通会话读取时换成同名对象。
+        const locked = await connection.query('LOCK TABLE ONLY ' + postgresIdentifier(schema) + '.' + postgresIdentifier(name) +
+          ' IN ACCESS SHARE MODE', undefined, small());
+        if (locked.postgresCommand !== 'LOCK') throw Error('PostgreSQL 搜索编辑原表锁未确认');
+        const relation = await readRelation(connection, input.table);
+        if (!relation.capabilities.update) throw Error('此 PostgreSQL 表没有记录更新能力');
+        const { original, checkServer } = await verify(connection);
+        if (original.tableOid !== relation.oid) throw Error('PostgreSQL 搜索编辑原表已变化，请重新搜索');
+        const row = await readOriginalRow(connection, relation, original);
+        if ((await connection.query('COMMIT', undefined, small())).postgresCommand !== 'COMMIT')
+          throw Error('PostgreSQL 搜索编辑读取事务未完成');
+        return { relation, row, original, checkServer };
+      });
+      assertReference();
+      const now = Date.now(), pageToken = randomUUID(), capabilities = { ...noWrites, update: true };
+      for (const [id, group] of this.snapshots) if (group.current.expires <= now) this.snapshots.delete(id);
+      if (this.snapshots.size >= 128) throw Error('PostgreSQL表页快照已满，请关闭空闲表标签');
+      const snapshot: Snapshot = {
+        scope: input, token: pageToken, expires: now + 5 * 60 * 1000, relation: { ...relation, capabilities },
+        rows: [{ ...original, digest: digest(row), key: digest(original) }], options: {}, writeEligible: true,
+        searchServerCheck: checkServer,
+      };
+      this.snapshots.set(key, { current: snapshot, retained: new Map() });
+      return { pageToken, columns: relation.columns, rows: [row], order: 'primary', relationKind: relation.kind,
+        hasNext: false, truncated: false, capabilities };
+    } finally { this.active.delete(key); }
   }
 
   /** 恢复需要当前普通表页能力，核对失败时当前表页及已签能力保持。 */
@@ -451,7 +493,7 @@ export class PostgresTableWorkspace {
   }
 
   /** 令牌不能跨标签、库、连接修订或文档使用。 */
-  private snapshot(input: Scoped<PostgresTableReleaseInput>, writing = false, allowRetained = false, relatedEdit = false): Snapshot {
+  private snapshot(input: Scoped<PostgresTableReleaseInput>, writing = false, allowRetained = false, singleRowEdit = false): Snapshot {
     const group = this.snapshots.get(this.key(input));
     const snapshot = group?.current.token === input.pageToken ? group.current : allowRetained ? group?.retained.get(input.pageToken) : undefined;
     const scope = snapshot?.scope;
@@ -459,8 +501,9 @@ export class PostgresTableWorkspace {
         scope.connectionId !== input.connectionId || scope.connectionRevision !== input.connectionRevision ||
         scope.database !== input.database || scope.table !== input.table) throw Error('PostgreSQL表页快照已过期或来源变化，请刷新');
     if (writing && !snapshot.writeEligible) throw Error('原表页没有记录修改能力，请刷新');
-    if (snapshot.related && (!relatedEdit || !this.relatedCurrent(snapshot.related)))
+    if (snapshot.related && (!singleRowEdit || !this.relatedCurrent(snapshot.related)))
       throw Error('关联编辑令牌只可用于原记录修改');
+    if (snapshot.searchServerCheck && !singleRowEdit) throw Error('搜索编辑令牌只可用于原记录修改');
     return snapshot;
   }
 
@@ -747,6 +790,12 @@ export class PostgresTableWorkspace {
   private planDraft(input: Scoped<PostgresTablePreviewInput>) {
     if (this.active.has(this.key(input))) throw Error('当前PostgreSQL表页仍有在途操作');
     const snapshot = this.snapshot(input, false, false, true), relation = snapshot.relation;
+    if (snapshot.searchServerCheck) {
+      const [change] = input.changes;
+      if (input.changes.length !== 1 || change.kind !== 'update' || change.row !== 0 ||
+          (change.pageToken && change.pageToken !== input.pageToken))
+        throw Error('PostgreSQL 搜索命中只允许修改本条记录');
+    }
     const counts = { insert: 0, update: 0, delete: 0 };
     const sources = new Map<string, Snapshot>();
     const keys = new Set<string>(), tids = new Set<string>();
@@ -875,7 +924,8 @@ export class PostgresTableWorkspace {
     try {
       try {
         await connect(async connection => {
-          receipt = await this.applyTransaction(connection, snapshot.relation, input.table, preview.writes, snapshot.related, preview.filtered);
+          receipt = await this.applyTransaction(connection, snapshot.relation, input.table, preview.writes,
+            snapshot.related, preview.filtered, undefined, snapshot.searchServerCheck);
         }, true);
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);
@@ -942,13 +992,15 @@ export class PostgresTableWorkspace {
 
   /** 提交回执以实际命令标签及空闲状态为准，断线时保留未知终态。 */
   private async applyTransaction(connection: PostgresConnection, expected: Relation, table: string, writes: Write[],
-    related?: RelatedScope, filtered?: FilteredWriteMatch, synchronize?: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
+    related?: RelatedScope, filtered?: FilteredWriteMatch, synchronize?: (connection: PostgresConnection) => Promise<void>,
+    checkSearchServer?: (connection: PostgresConnection) => Promise<void>): Promise<PostgresTableOutcome> {
     let sent = false;
     let commitAttempted = false;
     try {
       // 等锁期间可能有事务提交。显式使用读已提交，锁后的复核才能取得新快照。
       await begin(connection, filtered || synchronize ? 'filteredWrite' : 'write');
       if (synchronize) await synchronize(connection);
+      if (checkSearchServer) await checkSearchServer(connection);
       const current = await readRelation(connection, table);
       if (current.fingerprint !== expected.fingerprint || current.sql !== expected.sql) throw Error('关系结构或权限已变化，请重新读取');
       // 筛选集合复核和写入期间阻止其他事务增删改，避免新匹配行在核对后进入原范围。

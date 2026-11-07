@@ -55,15 +55,19 @@ export const postgresTableBrowseSchema = z.object({
 }).strict();
 export const postgresTablePageSchema = target.extend({
   ...postgresTableBrowseSchema.shape,
+  searchRecordRef: token.optional(),
   checkFilterColumns: z.literal(true).optional(),
   navigation: z.enum(['count', 'last']).optional(),
   retainPageTokens: z.array(token).max(postgresTableLimits.draftPages)
     .refine(value => new Set(value).size === value.length, '保留的草稿原页不能重复').optional(),
   retainHistoryPageTokens: z.array(token).max(postgresTableLimits.draftPages).optional(),
-}).strict().superRefine(({ retainPageTokens, retainHistoryPageTokens }, context) => {
-  const pins = [...retainPageTokens ?? [], ...retainHistoryPageTokens ?? []];
+}).strict().superRefine((input, context) => {
+  const pins = [...input.retainPageTokens ?? [], ...input.retainHistoryPageTokens ?? []];
   if (pins.length > postgresTableLimits.draftPages || new Set(pins).size !== pins.length)
     context.addIssue({ code: 'custom', message: '草稿与撤销历史的原页不能重复或超过保留上限' });
+  if (input.searchRecordRef && (input.offset !== 0 || input.limit !== 1 || input.filter || input.sort ||
+      input.navigation || input.checkFilterColumns || pins.length))
+    context.addIssue({ code: 'custom', path: ['searchRecordRef'], message: '搜索编辑只允许读取原命中行' });
 });
 
 /** 精确计数始终以十进制字符串传输，只有已限制到浏览窗口的偏移和行数才转换为 number。 */

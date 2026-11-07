@@ -846,6 +846,8 @@ SQL 文件按顺序执行，支持 `DELIMITER`。文件结束时若仍有未提�
 
 在全库搜索中选择 PostgreSQL 连接，点击「搜索数据」，逐库勾选对象和字段。搜索在服务器上匹配完整值，结果中显示短预览，BYTEA 以 HEX 表示。双击可定位的命中会读取原记录并聚焦该字段。记录更新后，旧命中需重新搜索。[PostgreSQL 数据搜索和记录定位](development/postgres-data-search-20261107.md)
 
+从 PostgreSQL 普通表的命中详情点击「编辑命中记录」，在表单里设定字段写入方式并加入草稿。检查 SQL 和待写入值，勾选确认后提交。其他操作已经修改原行时，请重新搜索。[PostgreSQL 命中编辑](development/postgres-search-record-edit-20261107.md)
+
 在「全库搜索」中也可选择 SQLite 文件连接。数据库范围固定为 `main`。结构名称支持表、视图、字段、显式索引和触发器，定义正文可直接搜索并打开这些对象的目录 SQL。字段名称命中打开所属表或视图。目录改动后，需重新搜索再继续翻页。[SQLite 全库搜索](development/sqlite-structure-search-20261107.md)
 
 SQLite 也可切换到「搜索数据」，在 `main` 中勾选普通表、视图和字段。双击可定位的命中会按实际存储类型显示只读记录。若文件、表目录或记录变化，需重新搜索。[SQLite 数据搜索和记录定位](development/sqlite-data-search-20261107.md) 读写连接的只读详情提供「编辑命中记录」。核验原行后打开表单，保存本地修改，再确认 SQL 预览并提交。[SQLite 命中编辑](development/sqlite-search-record-edit-20261107.md)

@@ -72,6 +72,10 @@ export async function readPostgresDataSearchCatalogue(connection: PostgresConnec
 async function begin(connection: PostgresConnection) {
   if ((await connection.query('BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY', undefined, budget())).postgresCommand !== 'BEGIN')
     throw Error('PostgreSQL 搜索只读事务未确认');
+  await configureSearch(connection);
+}
+
+async function configureSearch(connection: PostgresConnection) {
   await connection.query(`SELECT pg_catalog.set_config('search_path','pg_catalog',true),
     pg_catalog.set_config('TimeZone','UTC',true), pg_catalog.set_config('DateStyle','ISO, YMD',true),
     pg_catalog.set_config('bytea_output','hex',true), pg_catalog.set_config('extra_float_digits','3',true),
@@ -109,14 +113,21 @@ async function searchTarget(connection: PostgresConnection, raw: DataSearchTarge
 
 type SearchTarget = Awaited<ReturnType<typeof searchTarget>>;
 async function prepareRecord(connection: PostgresConnection, { relation }: SearchTarget): Promise<RecordPreparation> {
+  const server = await postgresSearchServerIdentity(connection);
+  if (!server) return { reason: 'identity-unproven' };
+  return { identity: { server, tableId: relation.oid, definition: relation.fingerprint } };
+}
+
+/** 服务端身份使用 epoch，搜索和普通编辑会话的显示时区不会影响比较。 */
+async function postgresSearchServerIdentity(connection: PostgresConnection) {
   const result = await connection.query(`SELECT pg_catalog.current_database(), current_user, pg_catalog.inet_server_addr()::text,
-    pg_catalog.inet_server_port()::text, pg_catalog.pg_postmaster_start_time()::text, d.oid::text,
+    pg_catalog.inet_server_port()::text, extract(epoch from pg_catalog.pg_postmaster_start_time())::text, d.oid::text,
     CASE WHEN pg_catalog.has_function_privilege('pg_catalog.pg_control_system()', 'EXECUTE')
       THEN (pg_catalog.pg_control_system()).system_identifier::text END
     FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()`, undefined, budget());
   if (result.truncated || result.rows.length !== 1 || !id(result.rows[0].c5) || typeof result.rows[0].c4 !== 'string')
-    return { reason: 'identity-unproven' };
-  return { identity: { server: sha(result.rows[0]), tableId: relation.oid, definition: relation.fingerprint } };
+    return undefined;
+  return sha(result.rows[0]);
 }
 
 /** 服务器匹配完整文字，驱动仅接收短预览、长度及独立的有界键。 */
@@ -209,15 +220,41 @@ export function postgresDataSearchSource(input: DataSearchInput, records: DataSe
   };
 }
 
-export async function readPostgresDataSearchRecord(connection: PostgresConnection, entry: ReturnType<DataSearchRecords['lookup']>): Promise<DataSearchRecord> {
+async function resolveSearchRecord(connection: PostgresConnection, entry: ReturnType<DataSearchRecords['lookup']>) {
   const identity: PostgresSearchRowIdentity | undefined = entry.postgresIdentity;
   if (!identity) throw Error('记录定位方言与保存的连接不匹配');
-  await begin(connection);
   const target = await searchTarget(connection, entry.metadata.target, false);
   const prepared = await prepareRecord(connection, target);
   if ('reason' in prepared || JSON.stringify(prepared.identity) !== JSON.stringify(entry.identity) ||
       JSON.stringify(target.metadata) !== JSON.stringify(entry.metadata))
     throw Error('PostgreSQL 原表或字段已变化，请重新搜索');
+  const keys = target.metadata.keyColumns.map((column, index) => `${postgresIdentifier(column.name)}::text ${cOrder} = $${index + 5}::text`);
+  const condition = `tableoid = $1::oid AND ctid = $2::tid AND xmin::text = $3::text AND pg_catalog.pg_relation_filenode(tableoid) = $4::oid
+    AND ${keys.join(' AND ')}`;
+  return { target, identity, condition, params: [identity.tableOid, identity.tid, identity.xmin, identity.fileNode, ...entry.keyValues] };
+}
+
+/** 借保存点隔离搜索显示设置，之后用普通表编辑会话的值格式捕获快照。外层持有原表锁。 */
+export async function verifyPostgresSearchEdit(connection: PostgresConnection, entry: ReturnType<DataSearchRecords['lookup']>) {
+  await connection.query('SAVEPOINT dbark_search_edit', undefined, budget());
+  await configureSearch(connection);
+  const { target, identity, condition, params } = await resolveSearchRecord(connection, entry);
+  const result = await connection.query('SELECT 1 FROM ' + target.from + ' WHERE ' + condition + ' LIMIT 2', params, budget(2));
+  if (result.truncated || result.rows.length !== 1) throw Error('PostgreSQL 原记录已变化、移除或不可见，请重新搜索');
+  await connection.query('ROLLBACK TO SAVEPOINT dbark_search_edit', undefined, budget());
+  await connection.query('RELEASE SAVEPOINT dbark_search_edit', undefined, budget());
+  const server = entry.identity.server;
+  return {
+    original: { tableOid: identity.tableOid, tid: identity.tid, version: identity.xmin },
+    async checkServer(connection: PostgresConnection) {
+      if (await postgresSearchServerIdentity(connection) !== server) throw Error('PostgreSQL 原搜索服务器已变化，请重新搜索');
+    },
+  };
+}
+
+export async function readPostgresDataSearchRecord(connection: PostgresConnection, entry: ReturnType<DataSearchRecords['lookup']>): Promise<DataSearchRecord> {
+  await begin(connection);
+  const { target, condition, params } = await resolveSearchRecord(connection, entry);
   const columns = [...target.metadata.columns];
   for (const key of target.metadata.keyColumns) if (!columns.some(column => column.name === key.name)) columns.push(key);
   const width = Math.min(dataSearchRecordLimits.fieldCharacters, Math.floor((dataSearchRecordLimits.recordBytes - 16_384) / (6 * columns.length)));
@@ -226,11 +263,8 @@ export async function readPostgresDataSearchRecord(connection: PostgresConnectio
     return column.binary ? [`pg_catalog.encode(pg_catalog.substr(${name}, 1, ${width}), 'hex')`, `pg_catalog.octet_length(${name})::text`]
       : [`pg_catalog.left(${name}::text, ${width})`, `pg_catalog.char_length(${name}::text)::text`];
   });
-  const keys = target.metadata.keyColumns.map((column, index) => `${postgresIdentifier(column.name)}::text ${cOrder} = $${index + 5}::text`);
-  const result = await connection.query(`SELECT ${projection.join(', ')} FROM ${target.from}
-    WHERE tableoid = $1::oid AND ctid = $2::tid AND xmin::text = $3::text AND pg_catalog.pg_relation_filenode(tableoid) = $4::oid
-      AND ${keys.join(' AND ')} LIMIT 2`, [identity.tableOid, identity.tid, identity.xmin, identity.fileNode, ...entry.keyValues],
-    budget(2, dataSearchRecordLimits.recordBytes));
+  const result = await connection.query(`SELECT ${projection.join(', ')} FROM ${target.from} WHERE ${condition} LIMIT 2`,
+    params, budget(2, dataSearchRecordLimits.recordBytes));
   if (result.truncated || result.rows.length !== 1) throw Error('PostgreSQL 原记录已变化、移除或不可见，请重新搜索');
   const fields = columns.map((column, index) => {
     const raw = result.rows[0]['c' + index * 2], length = result.rows[0]['c' + (index * 2 + 1)];

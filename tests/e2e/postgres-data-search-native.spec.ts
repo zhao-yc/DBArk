@@ -2,9 +2,10 @@ import { Client } from 'pg';
 import { databaseSearchZh } from '../../src/renderer/locales/databaseSearch.zh-CN';
 import { dataSearchZh as t } from '../../src/renderer/locales/dataSearch.zh-CN';
 import { dataSearchRecordsZh as record } from '../../src/renderer/locales/dataSearchRecords.zh-CN';
+import { postgresTableZh as editText } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { postgresIdentifier as q } from '../../src/shared/postgresSql';
-import { confirmOwnedDesktopExit, dialogCalls, expect, ownedDesktopResources, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
+import { answerDialogs, confirmOwnedDesktopExit, dialogCalls, expect, ownedDesktopResources, pageErrors, retainOwnedDesktopResources, test } from './desktop-fixture';
 import { navigationMenuItem } from './navigation-menu';
 
 test.skip(process.env.DBARK_POSTGRES_SEARCH_NATIVE !== '1', '只运行隔离 PostgreSQL 数据搜索专项');
@@ -19,7 +20,7 @@ test('PostgreSQL 跨库搜索完整值、分批接收、定位精确记录并拒
       ![password, adminPassword].every(value => /^[a-f0-9]{64}$/.test(value ?? '')) || !Number.isInteger(port) || port < 1025 || port > 65535 ||
       ['DBARK_EXECUTABLE_PATH', 'DBARK_DEV_URL', 'DBARK_USER_DATA'].some(key => process.env[key]))
     throw Error('只允许隔离回环 PostgreSQL 和源码 Electron');
-  const { page } = ownedDesktopResources(info);
+  const { application, page } = ownedDesktopResources(info);
   const own = () => { if (ownedDesktopResources(info).page !== page) throw Error('测试窗口归属已变化'); };
   const dbOther = user + '_other', clients: Client[] = [];
   const connect = async (database: string, name = 'postgres', secret = adminPassword) => {
@@ -30,6 +31,7 @@ test('PostgreSQL 跨库搜索完整值、分批接收、定位精确记录并拒
   };
   try {
     const admin = await connect('postgres');
+    await admin.query("ALTER ROLE " + q(user) + " SET TimeZone TO 'Asia/Shanghai'");
     await admin.query('CREATE DATABASE ' + q(dbOther) + ' OWNER ' + q(user));
     const baseAdmin = await connect(user);
     await baseAdmin.query('CREATE SCHEMA "search.区" AUTHORIZATION ' + q(user));
@@ -42,8 +44,8 @@ test('PostgreSQL 跨库搜索完整值、分批接收、定位精确记录并拒
     await first.query('ALTER TABLE "search.区"."many" ENABLE ROW LEVEL SECURITY');
     await first.query('ALTER TABLE "search.区"."many" FORCE ROW LEVEL SECURITY');
     await first.query('CREATE POLICY permitted_rows ON "search.区"."many" FOR SELECT USING (id < 57)');
-    await second.query('CREATE TABLE public.one(id bigint PRIMARY KEY, note text, payload bytea, absent text)');
-    await second.query(`INSERT INTO public.one VALUES (9007199254740993, 'MARK%_😀', decode('00FEFF','hex'), NULL)`);
+    await second.query('CREATE TABLE public.one(id bigint PRIMARY KEY, note text, payload bytea, absent text, guard timestamptz NOT NULL)');
+    await second.query(`INSERT INTO public.one VALUES (9007199254740993, 'MARK%_😀', decode('00FEFF','hex'), NULL, '2026-11-07T00:00:00Z')`);
     await second.query('CREATE VIEW public.one_view AS SELECT note FROM public.one');
     await second.query(`CREATE FUNCTION public.plan_probe() RETURNS text LANGUAGE plpgsql IMMUTABLE AS
       $$ BEGIN RAISE EXCEPTION '意外执行未确认视图'; END $$`);
@@ -108,12 +110,97 @@ test('PostgreSQL 跨库搜索完整值、分批接收、定位精确记录并拒
     await expect(read.getByRole('textbox', { name: record.value('payload'), exact: true })).toHaveValue('00FEFF');
     await expect(read.getByRole('textbox', { name: record.value('payload'), exact: true })).toBeFocused();
     await page.screenshot({ path: info.outputPath('只读记录与原字节.png') });
+
+    const editButton = () => read.getByRole('button', { name: record.edit, exact: true });
+    const edit = page.getByRole('dialog', { name: editText.edit, exact: true });
+    const preview = page.getByRole('dialog', { name: editText.preview, exact: true });
+    const open = async () => {
+      await run('whole', '00FEFF', 1);
+      await search.getByRole('gridcell', { name: '00FEFF', exact: true }).click();
+      await button(record.open).click();
+      await expect(read.getByRole('textbox', { name: record.value('id'), exact: true })).toHaveValue('9007199254740993');
+    };
+    const stage = async (note: string) => {
+      await editButton().click();
+      await expect(edit.getByLabel('payload ' + editText.valueMode, { exact: true })).toBeFocused();
+      await edit.getByLabel('note ' + editText.valueMode, { exact: true }).selectOption('text');
+      await edit.getByLabel('note ' + editText.value, { exact: true }).fill(note);
+      await edit.getByRole('button', { name: editText.stage, exact: true }).click();
+      await expect(preview.locator('pre')).toContainText('UPDATE ONLY "public"."one"');
+    };
+    const submit = async () => {
+      const apply = preview.getByRole('button', { name: editText.apply, exact: true });
+      await expect(apply).toBeDisabled();
+      await preview.getByRole('checkbox', { name: record.postgresConfirm, exact: true }).check();
+      await apply.click();
+    };
+    const value = async () => (await second.query('SELECT note FROM public.one WHERE id = 9007199254740993')).rows[0].note;
+    // 未参与搜索的列发生变化也必须使原行版本失效。
+    await second.query("UPDATE public.one SET guard = guard + interval '1 second'");
+    await editButton().click();
+    const rejected = page.getByRole('dialog', { name: record.edit, exact: true });
+    await expect(rejected.locator('.error-box')).toContainText('原记录已变化');
+    await rejected.getByRole('button', { name: record.editBack, exact: true }).click();
     await read.getByRole('button', { name: record.back, exact: true }).click();
-    await second.query("UPDATE public.one SET note = '新行版本' WHERE id = 9007199254740993");
+    await open();
+    await stage('冲突时不得写入');
+    expect(await value()).toBe('MARK%_😀');
+    await second.query("UPDATE public.one SET guard = guard + interval '1 second'");
+    await submit();
+    await expect(preview.locator('.error-box')).toContainText('原记录已被修改、删除或替换，整批未写入');
+    expect(await value()).toBe('MARK%_😀');
+    await answerDialogs([0], application);
+    const [discard] = await Promise.all([page.waitForEvent('dialog'),
+      preview.getByRole('button', { name: record.editBack, exact: true }).click()]);
+    expect(discard.message()).toBe(record.editDiscard);
+    await read.getByRole('button', { name: record.back, exact: true }).click();
+
+    await open();
+    await stage('新行版本');
+    await page.screenshot({ path: info.outputPath('原行编辑预览.png') });
+    await submit();
+    await expect(search).toBeVisible();
+    expect(await value()).toBe('新行版本');
     await button(record.open).click();
     await expect(read.locator('.error-box')).toContainText('原记录已变化');
     await expect(read.getByRole('textbox')).toHaveCount(0);
     await read.getByRole('button', { name: record.back, exact: true }).click();
+    const scope = await page.evaluate(async ({ connectionName, dbOther, user }) => {
+      const profile = (await window.dbark.invoke('connections.list', {})).find(value => value.name === connectionName)!;
+      const connectionId = profile.id, taskId = crypto.randomUUID(), table = '"public"."one"';
+      const reply = await window.dbark.invoke('search.dataStart', { connectionId, taskId, dialect: 'postgresql',
+        targets: [{ database: dbOther, table, kind: 'table', columns: [{ name: 'note', representation: 'text' }] }],
+        matcher: { kind: 'text', pattern: { mode: 'whole', text: '新行版本', caseSensitive: true } },
+        maxResults: 20, allowViews: false, onError: 'stop' });
+      if (reply.kind !== 'batch' || !reply.hits[0]?.recordRef) throw Error('缺少真实搜索引用');
+      const searchRecordRef = reply.hits[0].recordRef;
+      await window.dbark.invoke('search.dataNext', { connectionId, taskId, sequence: reply.sequence });
+      const original = { connectionId, database: dbOther, table, tabId: crypto.randomUUID() };
+      const focused = { ...original, tabId: crypto.randomUUID() };
+      const normal = await window.dbark.invoke('postgres.table.page', { ...original, limit: 10, offset: 0 });
+      if (!normal.pageToken) throw Error('原表页缺少编辑快照');
+      const reason = async (work: Promise<unknown>) => {
+        try { await work; return ''; } catch (error) { return String(error); }
+      };
+      const query = { searchRecordRef, limit: 1, offset: 0 };
+      const other = await reason(window.dbark.invoke('postgres.table.page', { ...focused, database: user, ...query }));
+      const occupied = await reason(window.dbark.invoke('postgres.table.page', { ...original, ...query }));
+      const narrow = await window.dbark.invoke('postgres.table.page', { ...focused, ...query });
+      if (!narrow.pageToken) throw Error('命中缺少编辑快照');
+      const bound = { ...focused, pageToken: narrow.pageToken };
+      const remove = await reason(window.dbark.invoke('postgres.table.preview', { ...bound, changes: [{ kind: 'delete', row: 0 }] }));
+      const filtered = await reason(window.dbark.invoke('postgres.table.filteredDelete', bound));
+      const retained = await window.dbark.invoke('postgres.table.preview', { ...original, pageToken: normal.pageToken,
+        changes: [{ kind: 'update', row: 0, fields: [{ column: 'c1', value: { mode: 'text', value: '原页草稿' } }] }] });
+      await window.dbark.invoke('postgres.table.release', bound);
+      await window.dbark.invoke('postgres.table.release', { ...original, pageToken: normal.pageToken });
+      await window.dbark.invoke('search.dataRelease', { connectionId, taskId });
+      await window.dbark.invoke('search.recordsRelease', { connectionId, sourceTaskId: taskId });
+      return { other, occupied, remove, filtered, rows: narrow.rows.length, retained: retained.counts.update };
+    }, { connectionName, dbOther, user });
+    expect(scope).toMatchObject({ other: expect.stringContaining('不属于当前库表'), occupied: expect.stringContaining('需要独立'),
+      remove: expect.stringContaining('只允许修改本条记录'), filtered: expect.stringContaining('只可用于原记录修改'), rows: 1, retained: 1 });
+    expect(await value()).toBe('新行版本');
     await button(t.clear).click();
     await select(dbOther, '"public"."one_view"', ['note']);
     await keyword.fill('新行版本');
