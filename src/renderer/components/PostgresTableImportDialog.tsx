@@ -4,7 +4,8 @@ import { isPostgresSqlExportColumn, type PostgresTableImportChoice, type Postgre
 import { errorMessage, invoke } from '../lib';
 import { postgresTableImportZh as text } from '../locales/postgresTableImport.zh-CN';
 import { csvImportHeaderZh } from '../locales/csvImportHeader.zh-CN';
-import { xmlImportOptionsSchema, xmlImportZh, type XmlImportOptions } from '../../shared/xmlImport';
+import { xmlImportOptionsSchema, xmlImportZh, type RecordImportFormat, type XmlImportOptions } from '../../shared/xmlImport';
+import { importNewTableZh as newTableText } from '../locales/importNewTable.zh-CN';
 import { acquireWorkspaceBusy } from '../store';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
@@ -12,10 +13,10 @@ import { ErrorBox, Field, Modal } from './ui';
 /** 显示原文件的样本和列映射，只在用户确认后申请一次性导入。 */
 export function PostgresTableImportDialog({ target, page, initialSource, isCurrent, onClose, onOutcome }: {
   target: PostgresTableTarget; page: PostgresTablePage; isCurrent(): boolean; onClose(): void;
-  initialSource?: { file: PostgresTableImportChoice; mapping: Record<string, string> };
+  initialSource?: { file: PostgresTableImportChoice; mapping: Record<string, string>; format: RecordImportFormat };
   onOutcome(message: string, committed: boolean): void;
 }) {
-  const [format, setFormat] = useState<'csv' | 'xml'>(initialSource ? 'xml' : 'csv');
+  const [format, setFormat] = useState<RecordImportFormat>(initialSource?.format ?? 'csv');
   const [xmlOptions, setXmlOptions] = useState<XmlImportOptions>({ rowTag: 'RECORD', attributes: true, binaryBase64: false });
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [hasHeader, setHasHeader] = useState(true);
@@ -27,9 +28,10 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const [cancelling, setCancelling] = useState(false), [error, setError] = useState('');
   const occupied = useRef(false), cancelRequested = useRef(false);
   const locked = choosing || !!taskId;
+  const records = !!initialSource || format === 'xml';
   const selectedKeys = mapping.filter(Boolean);
   const mapped = !!file && mapping.length === file.header.length && selectedKeys.length > 0 &&
-    new Set(selectedKeys).size === selectedKeys.length && (format === 'xml' || selectedKeys.length === mapping.length);
+    new Set(selectedKeys).size === selectedKeys.length && (records || selectedKeys.length === mapping.length);
   const validXml = format !== 'xml' || xmlImportOptionsSchema.safeParse(xmlOptions).success;
   const previewHeaders = file?.header.slice(0, file.sample[0]?.length ?? 0) ?? [];
 
@@ -69,7 +71,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     setTaskId(id); setError('');
     let message: string, committed = false;
     try {
-      const selection = format === 'xml' ? { format, columns: mapping.map(key => key || null) } : { columns: mapping };
+      const selection = records ? { format, columns: mapping.map(key => key || null) } : { columns: mapping };
       const outcome = await invoke('postgres.table.import', { ...target, pageToken: page.exportToken, fileToken: file.token, taskId: id, ...selection });
       committed = outcome.outcome === 'committed';
       message = outcome.message;
@@ -90,7 +92,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     <div className="modal-content pg-table-export">
       <p><strong>{target.table}</strong> · {target.database}</p>
       <p>{text.note}</p>
-      <p>{format === 'xml' ? xmlImportZh.hint : text.nullNote}</p>
+      <p>{format === 'xml' ? xmlImportZh.hint : format === 'json' ? newTableText.postgresJson : initialSource ? newTableText.postgresCsv : text.nullNote}</p>
       {!initialSource && <><Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
         setFormat(event.target.value as typeof format); resetSource();
       }}><option value="csv">CSV</option><option value="xml">XML</option></select></Field>
@@ -119,7 +121,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         <p>{text.file} · {file.name} · {file.bytes.toLocaleString('zh-CN')} {text.bytes}</p>
         <fieldset disabled={locked}>
           <legend>{text.columns}</legend>
-          {format === 'csv' && !hasHeader && file.header.length <= candidates.length && <button onClick={() => {
+          {!records && !hasHeader && file.header.length <= candidates.length && <button onClick={() => {
             setMapping(candidates.slice(0, file.header.length).map(column => column.key));
           }}>{text.position}</button>}
           <div className="pg-table-export-columns">
@@ -127,7 +129,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
               <select aria-label={text.target(index)} value={mapping[index]} onChange={event => {
                 setMapping(mapping.map((key, i) => i === index ? event.target.value : key));
               }}>
-                <option value="">{format === 'xml' ? text.skip : text.select}</option>
+                <option value="">{records ? text.skip : text.select}</option>
                 {candidates.map(column => <option key={column.key} value={column.key}
                   disabled={mapping.some((key, i) => i !== index && key === column.key)}>{column.name}</option>)}
               </select>
@@ -135,7 +137,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
           </div>
         </fieldset>
         <section aria-label={text.sample}>
-          <p>{file.sampleLimited ? format === 'xml' ? text.xmlSampleLimited : text.sampleLimited : file.sample.length ? text.sampleLimit : text.sampleEmpty}</p>
+          <p>{file.sampleLimited ? records ? text.xmlSampleLimited : text.sampleLimited : file.sample.length ? text.sampleLimit : text.sampleEmpty}</p>
           {file.sample.length > 0 && <div className="pg-copy-import-sample">
             <table className="design-table" aria-label={text.sample}>
               <thead><tr>{previewHeaders.map((name, i) => <th scope="col" key={i}>{name || text.unnamed}</th>)}</tr></thead>

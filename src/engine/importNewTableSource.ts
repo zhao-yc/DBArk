@@ -7,7 +7,7 @@ import { importFileInspectInputSchema, importFileSampleRowBytes, importFileSourc
 import { readRecords } from './files';
 
 export interface ImportFileInspectProgress { records: number; bytes: number; }
-/** 仅内部调用可要求严格字节编码；公共IPC合同及旧MySQL读取默认行为均不增加该字段。 */
+/** 调用方可要求严格字节编码，默认保持旧来源扫描的解码行为。 */
 export type ReadInput = ImportFileReadOptions & { filePath: string; expectedSource?: ImportFileSource; strictEncoding?: true; requiredColumns?: readonly string[] };
 /** 仅本模块构造的中文有界诊断可穿过解析错误边界，避免路径和源字段值进入任务历史。 */
 class SourceReadError extends Error {}
@@ -52,7 +52,7 @@ async function* sourceRecords(input: ReadInput, checkCancelled: () => void, sign
 }
 
 /** 扫完整文件发现联合源列，仅保留前20条有界完整样本；后续字段不被样本上限遮蔽。 */
-export async function inspectImportFile(input: ImportFileInspectInput & { filePath: string; strictEncoding?: true }, checkCancelled: () => void, onProgress?: (value: ImportFileInspectProgress) => void, signal?: AbortSignal): Promise<ImportFileInspectOutput> {
+export async function inspectImportFile(input: ImportFileInspectInput & { filePath: string }, checkCancelled: () => void, onProgress?: (value: ImportFileInspectProgress) => void, signal?: AbortSignal): Promise<ImportFileInspectOutput> {
   const { filePath, strictEncoding, ...raw } = input, selected = importFileInspectInputSchema.parse(raw), names = new Set<string>(), rows: DataRow[] = [], completion: { source?: ImportFileSource } = {}; let records = 0, sampleBytes = 2, sampleFull = false;
   const columns = (values: string[]) => { for (const value of values) { let name: string; try { name = importSourceColumn(value); } catch { throw new SourceReadError('源字段名称超过256字符或编码无效，请先整理源文件'); } names.add(name); if (names.size > limits.columns) throw new SourceReadError('全文件联合源字段超过1000列，未截断字段目录'); } };
   // 字节进度由原raw观察器累计，不能另读文件或把解码字符数当作原字节数。

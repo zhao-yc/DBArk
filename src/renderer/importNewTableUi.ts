@@ -57,12 +57,10 @@ export function importNewTableDesign(database: string, table: string, columns: r
 export class ImportNewTableController {
   private value: ImportNewTableState = { stage: 'source', options: { format: 'csv', encoding: 'utf8', csvDelimiter: ',', csvHasHeader: true }, tableName: '', reviewed: false, busy: false, closing: false, invalid: false, childDirty: false };
   private lifetime: object | undefined; private active?: Operation; private child?: object; private childLifetime?: object;
-  constructor(readonly target: ImportNewTableTarget, private readonly services: ImportNewTableServices, private readonly isCurrent: () => boolean, private readonly publish: (state: ImportNewTableState) => void, private readonly closed: () => void, private readonly created: (result: TableCreateApplyOutput, version: number) => void) {
-    if (target.postgres) this.value.options = { format: 'xml', encoding: 'utf8', xmlOptions: newTableXmlDefaults };
-  }
+  constructor(readonly target: ImportNewTableTarget, private readonly services: ImportNewTableServices, private readonly isCurrent: () => boolean, private readonly publish: (state: ImportNewTableState) => void, private readonly closed: () => void, private readonly created: (result: TableCreateApplyOutput, version: number) => void) {}
   get state(): ImportNewTableState { return this.value; }
   get canContinue(): boolean { return !!this.value.postgresTable || !!this.value.created?.definitionVerified && this.value.created.resourcesReleased; }
-  get dirty(): boolean { const options = this.value.options; return this.value.busy || this.value.closing || this.value.childDirty || this.value.stage !== 'source' || !!this.value.file || !!this.value.tableName || (this.target.postgres ? JSON.stringify(options.xmlOptions) !== JSON.stringify(newTableXmlDefaults) : options.format !== 'csv' || options.encoding !== 'utf8' || options.csvDelimiter !== ',' || options.csvHasHeader !== true); }
+  get dirty(): boolean { const options = this.value.options; return this.value.busy || this.value.closing || this.value.childDirty || this.value.stage !== 'source' || !!this.value.file || !!this.value.tableName || options.format !== 'csv' || options.encoding !== 'utf8' || options.csvDelimiter !== ',' || options.csvHasHeader !== true; }
   /** StrictMode每次挂载重新签发身份，旧Promise只保留真实终态锁，不能复活旧数据。 */
   mount(): void { this.lifetime = {}; this.update({}); }
   dispose(): void { this.lifetime = undefined; this.cancel(); }
@@ -80,7 +78,7 @@ export class ImportNewTableController {
     if (!this.editable(expected)) return;
     const next = { ...this.value.options, ...patch };
     if (next.format === 'xml') { next.encoding = 'utf8'; next.xmlOptions = { ...(next.xmlOptions ?? newTableXmlDefaults) }; }
-    if (!recordImportFormats.includes(next.format) || this.target.postgres && next.format !== 'xml' || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
+    if (!recordImportFormats.includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
     this.update({ options: next, file: undefined, inspection: undefined, reviewed: false, error: undefined, progress: undefined });
   }
   name(expected: ImportNewTableState, tableName: string): void { if (this.editable(expected)) this.update({ tableName, reviewed: false, error: undefined }); }
@@ -104,7 +102,8 @@ export class ImportNewTableController {
       if (!this.current() || this.lifetime !== lifetime || active.cancelled) return;
       const file = await this.services.choose({ purpose: 'import', format: options.format });
       if (!file || !this.current() || this.lifetime !== lifetime || active.cancelled) return;
-      const request = importFileInspectInputSchema.parse({ fileToken: file.token, taskId: active.taskId, ...options });
+      const request = importFileInspectInputSchema.parse({ fileToken: file.token, taskId: active.taskId, ...options,
+        ...(this.target.postgres ? { strictEncoding: true } : {}) });
       active.dispatched = true;
       const inspection = importFileInspectOutputSchema.parse(await this.services.inspect(request));
       if (!this.current() || this.lifetime !== lifetime || active.cancelled || this.value.closing) return;

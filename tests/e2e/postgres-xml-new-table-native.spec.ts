@@ -49,7 +49,7 @@ test('从 XML 新建 PostgreSQL 表时独立确认建表和写入，源变化时
       const qualified = `"XML 导入"."${table}"`;
       const records = async () => (await observer.query(`SELECT id::text, encode(raw,'hex') AS raw, note, late FROM ${qualified} ORDER BY id`)).rows;
       await (await sidebarMenuItem(databaseRow, {name: wizardText.title + ' ' + database, exact: true})).click();
-      await expect(wizard.getByLabel(wizardText.format, {exact: true})).toHaveValue('xml');
+      await wizard.getByLabel(wizardText.format, {exact: true}).selectOption('xml');
       await wizard.getByLabel(xmlImportZh.rowTag, {exact: true}).fill('entry');
       await wizard.getByRole('checkbox', {name: xmlImportZh.binary, exact: true}).check();
       await wizard.getByRole('button', {name: wizardText.choose, exact: true}).click();

@@ -27,14 +27,17 @@ export function PostgresNewTableImportStage({ connectionId, database, table, see
     queueMicrotask(async () => {
       if (!live) return;
       try {
-        if (!isCurrent() || seed.format !== 'xml' || !seed.xmlOptions) throw Error(text.stale);
+        if (!isCurrent()) throw Error(text.stale);
         const page = await invoke('postgres.table.page', { ...target, offset: 0, limit: 1 });
         pageToken = page.exportToken ?? page.pageToken;
         if (!live) { release(); return; }
         if (!isCurrent()) throw Error(text.stale);
         if (!page.exportToken || !page.canImport) throw Error(text.postgresTargetUnavailable);
-        const file = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken,
-          format: 'xml', xmlOptions: seed.xmlOptions, scannedFile: { token: seed.file.token, expectedSource: seed.expectedSource } });
+        const scannedFile = { token: seed.file.token, expectedSource: seed.expectedSource };
+        const options = seed.format === 'xml' ? { format: seed.format, xmlOptions: seed.xmlOptions!, scannedFile } :
+          seed.format === 'csv' ? { format: seed.format, encoding: seed.encoding, csvDelimiter: seed.csvDelimiter ?? ',',
+            csvHasHeader: seed.csvHasHeader ?? true, scannedFile } : { format: seed.format, encoding: seed.encoding, scannedFile };
+        const file = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...options });
         if (!live) return;
         if (!file || !isCurrent()) throw Error(text.stale);
         setReady({ page, file });
@@ -47,7 +50,7 @@ export function PostgresNewTableImportStage({ connectionId, database, table, see
   }, [target, seed, isCurrent]);
 
   if (ready) return <PostgresTableImportDialog target={target} page={ready.page} isCurrent={isCurrent}
-    initialSource={{ file: ready.file, mapping: seed.mapping }} onClose={onClose} onOutcome={(message, committed) => {
+    initialSource={{ file: ready.file, mapping: seed.mapping, format: seed.format }} onClose={onClose} onOutcome={(message, committed) => {
       useWorkspace.getState().notify(message, !committed);
       onClose();
     }}/>;

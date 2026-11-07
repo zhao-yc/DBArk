@@ -6,7 +6,7 @@ import { xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions 
 export const importNewTableLimits = Object.freeze({ columns: 1000, sourceName: 256, sampleRows: 20, sampleBytes: 256 * 1024 });
 export interface ImportFileSource { sha256: string; bytes: number; }
 export interface ImportFileReadOptions { format: RecordImportFormat; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions; }
-export interface ImportFileInspectInput extends ImportFileReadOptions { fileToken: string; taskId: string; }
+export interface ImportFileInspectInput extends ImportFileReadOptions { fileToken: string; taskId: string; strictEncoding?: true; }
 export interface ImportFileInspectOutput { columns: string[]; rows: DataRow[]; records: number; source: ImportFileSource; sampleOmitted: boolean; }
 export interface ImportNewTableSeed extends ImportFileReadOptions { file: FileChoice; columns: string[]; expectedSource: ImportFileSource; mapping: Record<string, string>; }
 const invalid = (): never => { throw Error('文件检查或新表导入配置无效，请重新选择文件并检查映射'); };
@@ -48,8 +48,10 @@ function options(value: Record<string, unknown>): ImportFileReadOptions {
 function schema<T>(parse: (input: unknown) => T) { return z.unknown().transform((input, context): T => { try { return parse(input); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '文件导入配置无效' }); return z.NEVER; } }); }
 export const importFileSourceSchema = schema(source);
 export const importFileInspectInputSchema = schema((input): ImportFileInspectInput => {
-  const value = object(input, 7, ['fileToken', 'taskId', 'format', 'encoding'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions']);
-  return { fileToken: string(value.fileToken, 1, 200), taskId: string(value.taskId, 1, 200), ...options(value) };
+  const value = object(input, 8, ['fileToken', 'taskId', 'format', 'encoding'], ['csvDelimiter', 'csvHasHeader', 'xmlOptions', 'strictEncoding']);
+  if (Object.hasOwn(value, 'strictEncoding') && value.strictEncoding !== true) return invalid();
+  return { fileToken: string(value.fileToken, 1, 200), taskId: string(value.taskId, 1, 200), ...options(value),
+    ...(value.strictEncoding === true ? { strictEncoding: true } : {}) };
 });
 
 /** 有界计算完整JSON文字量大小，超预算即停止计量，不先分配巨大转义字符串。 */

@@ -1,4 +1,4 @@
-import { inspectPostgresXmlImportSource, type PostgresXmlImportSource } from '../engine/postgres/xmlImportFile';
+import { inspectPostgresRecordImportSource, type PostgresRecordImportSource } from '../engine/postgres/recordImportFile';
 import { mysqlDatabaseBackupTitle, mysqlDatabaseBackupPathMatches, mysqlDumpToolTitle, type MysqlDatabaseBackupChooseInput } from '../shared/mysqlDatabaseBackup';
 import { inspectMysqlDumpTool, type MysqlDumpTool } from '../engine/mysqlDumpTool';
 import { mysqlSqlFileTitle, type MysqlSqlFileChooseInput } from '../shared/mysqlSqlFile';
@@ -907,7 +907,7 @@ const postgresDatabaseBackupFiles = new WeakMap<object, PostgresDatabaseBackupCh
 const databaseBackupChoosing = new WeakSet<object>();
 const postgresExportChoosing = new WeakSet<object>();
 const postgresImportChoosing = new WeakSet<object>();
-const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource | PostgresXmlImportSource; revision: number; expires: number }>();
+const postgresImportFiles = new WeakMap<object, { token: string; target: PostgresTableImportChooseInput; source: PostgresCopySource | PostgresRecordImportSource; revision: number; expires: number }>();
 const postgresImportTaskOwners = new Map<string, ColumnsInvocation>();
 const sqlFileTaskOwners = new Map<string, ColumnsInvocation>();
 
@@ -1339,21 +1339,23 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       };
       try {
         check();
-        const xml = 'format' in target;
-        const scanned = xml ? target.scannedFile : undefined;
-        const path = scanned ? resolveFileToken(files, scanned.token, 'import', 'xml') : await dialog.showOpenDialog(columns!.owner.window,
+        const records = 'format' in target, xml = records && target.format === 'xml';
+        const scanned = records ? target.scannedFile : undefined;
+        const path = records && scanned ? resolveFileToken(files, scanned.token, 'import', target.format) : await dialog.showOpenDialog(columns!.owner.window,
           { title: xml ? '选择 PostgreSQL XML 文件' : '选择 PostgreSQL CSV 文件', properties: ['openFile'],
             filters: [xml ? { name: 'XML', extensions: ['xml'] } : { name: 'CSV', extensions: ['csv', 'tsv'] }] })
           .then(chosen => chosen.canceled ? undefined : chosen.filePaths[0]);
         check();
         if (!path) return null;
-        const { source, sample, sampleLimited } = xml
-          ? await inspectPostgresXmlImportSource(path, target.xmlOptions, check)
+        const { source, sample, sampleLimited } = records
+          ? await inspectPostgresRecordImportSource(path, target.format === 'xml' ? { format: 'xml', encoding: 'utf8', xmlOptions: target.xmlOptions } :
+            target.format === 'csv' ? { format: 'csv', encoding: target.encoding, csvDelimiter: target.csvDelimiter, csvHasHeader: target.csvHasHeader } :
+              { format: 'json', encoding: target.encoding }, check)
           : await inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader);
         check();
         // 新表向导沿用已选文件，只有原字节指纹匹配才签发原表页导入能力。
         if (scanned && (!('sha256' in source) || source.sha256 !== scanned.expectedSource.sha256 || source.bytes !== scanned.expectedSource.bytes))
-          throw Error('XML 源文件已变化，请退出向导并核对已创建的表');
+          throw Error(`${records ? target.format.toUpperCase() : 'CSV'} 源文件已变化，请退出向导并核对已创建的表`);
         const token = randomUUID();
         postgresImportFiles.set(document, { token, target, source, revision, expires: Date.now() + 5 * 60 * 1000 });
         return { token, name: basename(source.path), header: source.header, bytes: source.bytes, sample, sampleLimited };
@@ -2389,7 +2391,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const document = columns!.owner.document, owner = postgresTableOwners.get(document);
       const file = postgresImportFiles.get(document), revision = store.connectionRevision();
       if (shuttingDown || !owner || !file || file.token !== input.fileToken || file.revision !== revision || file.expires <= Date.now() ||
-          ('format' in file.target) !== (input.format === 'xml') ||
+          ('format' in file.target ? file.target.format : undefined) !== input.format ||
           (['connectionId', 'database', 'table', 'tabId', 'pageToken'] as const).some(key => file.target[key] !== input[key]))
         throw Error('PostgreSQL 导入的原表页或源文件选择已失效');
       const profile = store.resolveConnection(input.connectionId);

@@ -251,16 +251,24 @@ export type PostgresTableExportInput = z.infer<typeof postgresTableExportSchema>
 export type PostgresTableExportChooseInput = z.infer<typeof postgresTableExportChooseSchema>;
 export interface PostgresTableExportOutput { rows: number; fileCommitted: true }
 /** 预览绑定原表页及文件解释，保留原 CSV 调用形状。 */
+const scannedImportFile = z.object({ token, expectedSource: importFileSourceSchema }).strict();
+const recordImportEncoding = z.enum(['utf8', 'utf16le', 'gb18030']);
 export const postgresTableImportChooseSchema = z.union([
   target.extend({ pageToken: token, csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean().optional() }).strict(),
   target.extend({ pageToken: token, format: z.literal('xml'), xmlOptions: xmlImportOptionsSchema,
-    scannedFile: z.object({ token, expectedSource: importFileSourceSchema }).strict().optional(),
+    scannedFile: scannedImportFile.optional(),
+  }).strict(),
+  target.extend({ pageToken: token, format: z.literal('csv'), encoding: recordImportEncoding,
+    csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), scannedFile: scannedImportFile,
+  }).strict(),
+  target.extend({ pageToken: token, format: z.literal('json'), encoding: recordImportEncoding,
+    scannedFile: scannedImportFile,
   }).strict(),
 ]);
 const importTarget = target.extend({ pageToken: token, taskId: identity, fileToken: token });
 export const postgresTableImportSchema = z.union([
   importTarget.extend({ columns: z.array(column).min(1).max(1022).refine(value => new Set(value).size === value.length, '导入目标列不能重复') }).strict(),
-  importTarget.extend({ format: z.literal('xml'), columns: z.array(column.nullable()).min(1).max(1022).refine(value => {
+  importTarget.extend({ format: z.enum(['csv', 'json', 'xml']), columns: z.array(column.nullable()).min(1).max(1022).refine(value => {
     const mapped = value.filter(key => key !== null);
     return mapped.length > 0 && new Set(mapped).size === mapped.length;
   }, '至少映射一列，导入目标列不能重复') }).strict(),

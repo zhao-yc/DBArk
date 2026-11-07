@@ -75,7 +75,7 @@ function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreate
   return <Modal title={text.title} wide onClose={() => event(() => { void controller.close(state); })}><div className="modal-content" aria-busy={state.busy || state.closing}>
     <UsageHelp><p>{text.scope}</p><p>{postgres ? text.postgresTypes : text.types}</p>{inspection && <><p>{text.bytes}：{inspection.source.bytes}</p><p style={{ overflowWrap: 'anywhere' }}>{text.fingerprint}：{inspection.source.sha256}</p></>}</UsageHelp><p className="warning-text">{text.ddl}</p>
     {state.stage === 'source' ? <>
-      <div className="form-grid"><Field label={text.format}><select aria-label={text.format} value={state.options.format} disabled={disabled || postgres} onChange={value => event(() => controller.change(state, { format: value.target.value as RecordImportFormat }))}>{!postgres && <><option value="csv">CSV</option><option value="json">JSON</option></>}<option value="xml">XML</option></select></Field>
+      <div className="form-grid"><Field label={text.format}><select aria-label={text.format} value={state.options.format} disabled={disabled} onChange={value => event(() => controller.change(state, { format: value.target.value as RecordImportFormat }))}><option value="csv">CSV</option><option value="json">JSON</option><option value="xml">XML</option></select></Field>
         <Field label={text.encoding}><select aria-label={text.encoding} value={state.options.encoding} disabled={disabled || xml} onChange={value => event(() => controller.change(state, { encoding: value.target.value as 'utf8' | 'utf16le' | 'gb18030' }))}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option></select></Field>
         {state.options.format === 'csv' && <><Field label={text.delimiter}><select aria-label={text.delimiter} value={state.options.csvDelimiter ?? ','} disabled={disabled} onChange={value => event(() => controller.change(state, { csvDelimiter: value.target.value as CsvImportDelimiter }))}>{csvImportDelimiters.map(delimiter => <option key={delimiter} value={delimiter}>{text.separators[delimiter]}</option>)}</select></Field><label><input type="checkbox" aria-label={text.header} checked={state.options.csvHasHeader ?? true} disabled={disabled} onChange={value => event(() => controller.change(state, { csvHasHeader: value.target.checked }))}/>{text.header}</label></>}
         {xml && <>
@@ -85,10 +85,12 @@ function NetworkImportNewTableDialog({ connectionId, database, onClose, onCreate
         </>}
       </div>
       {xml && <p>{xmlImportZh.hint}</p>}
+      {postgres && state.options.format === 'csv' && <p>{text.postgresCsv}</p>}
+      {postgres && state.options.format === 'json' && <p>{text.postgresJson}</p>}
       <button disabled={disabled || !validXml} onClick={() => event(() => { void controller.scan(state); })}>{state.busy ? <Spinner/> : null}{text.choose}</button>
       {state.file && <p>{text.source}：{state.file.name}</p>}
       {inspection && <section><p>{text.records(inspection.records)}</p><p>{text.columns}：{inspection.columns.length}</p><p>{text.sample}</p>
-        <div style={{ overflow: 'auto', maxHeight: 280 }}><table><thead><tr>{inspection.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{inspection.rows.map((row, index) => <tr key={index}>{inspection.columns.map(column => <td key={column}>{cellPreview(Object.hasOwn(row, column) ? row[column] : xml ? null : undefined, 120)}</td>)}</tr>)}</tbody></table></div>
+        <div style={{ overflow: 'auto', maxHeight: 280 }}><table><thead><tr>{inspection.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{inspection.rows.map((row, index) => <tr key={index}>{inspection.columns.map(column => <td key={column}>{cellPreview(Object.hasOwn(row, column) ? row[column] : xml || postgres ? null : undefined, 120)}</td>)}</tr>)}</tbody></table></div>
         {inspection.sampleOmitted && <p>{text.omitted}</p>}
         <Field label={text.table}><input aria-label={text.table} value={state.tableName} disabled={disabled} maxLength={64} onChange={value => event(() => controller.name(state, value.target.value))}/></Field><label><input type="checkbox" aria-label={text.reviewed} checked={state.reviewed} disabled={disabled || !state.tableName} onChange={value => event(() => controller.review(state, value.target.checked))}/>{text.reviewed}</label>
       </section>}
