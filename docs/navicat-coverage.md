@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。SQLite 可从多语句脚本按光标生成单条优化器计划，并从计划返回原 SQL。Q02、Q07、R02 仍为部分覆盖。[SQLite 当前语句执行计划](development/sqlite-explain-current-20261107.md)
+
 2026-11-07 源码增量。SQLite 查询可按光标识别并执行单条语句的类型参数，沿用原会话和原文定位，历史只保留本条模板。Q02、Q06、R02 仍为部分覆盖。[SQLite 参数执行当前语句](development/sqlite-current-parameters-20261107.md)
 
 2026-11-07 源码增量。SQLite 查询标签支持每条语句原生超时，超时保留完整前序结果及真实事务状态。Q02、R02 仍为部分覆盖。[SQLite 查询标签语句超时](development/sqlite-statement-timeout-20261107.md)

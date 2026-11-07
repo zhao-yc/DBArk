@@ -77,8 +77,11 @@ export class SqliteQuerySession {
   async explain(input: ExplainInput): Promise<QueryOutcome> {
     this.available(input.sessionId);
     if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || typeof input.sql !== 'string' || !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000 || input.format !== undefined && input.format !== 'auto' && input.format !== 'text') throw Error('SQLite执行计划请求或结果预算无效');
-    const source = sqliteExplainSource(input.sql);
-    return this.run({ ...input, maxRows: Math.min(input.maxRows, 1000) }, source.sql, { single: true, sourceRange: source.sourceRange, explainView: input.format === 'text' ? 'table' : 'tree' });
+    const current = this.locateCurrent(input);
+    const source = sqliteExplainSource(current?.sql ?? input.sql);
+    const base = current?.start ?? 0;
+    const sourceRange = { start: base + source.sourceRange.start, end: base + source.sourceRange.end };
+    return this.run({ ...input, maxRows: Math.min(input.maxRows, 1000) }, source.sql, { single: true, sourceRange, explainView: input.format === 'text' ? 'table' : 'tree' });
   }
 
   /** 编译检查占用原会话，但不执行用户 SQL 或推进对象修订。 */
@@ -232,7 +235,9 @@ export class SqliteQuerySession {
       if (!outcome.statements.length) throw Error('SQLite脚本中没有可执行语句');
       const completed = complete(outcome.statements), {results} = completed;
       // 即使原表受行预算截断，也交共享builder显式降级为不完整表格；只有原生成功才附计划。
-      const sqliteExplain = options.explainView && results.length === 1 ? buildSqliteExplainPlan(results[0], this.driver.version, options.explainView) : undefined;
+      const sqliteExplain = options.explainView && results.length === 1
+        ? { ...buildSqliteExplainPlan(results[0], this.driver.version, options.explainView), sourceRange: options.sourceRange }
+        : undefined;
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
       return { ...completed, ...displayTitles(results.length), elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
     } catch (reason) {

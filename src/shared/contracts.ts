@@ -247,7 +247,7 @@ export interface CommandMap {
   'sessions.open': { input: { connectionId: string; database?: string|null }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
   'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; continueOnError?: boolean; /** 仅true插入SHOW诊断，false或省略保持既有查询行为。 */ collectWarnings?: boolean; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
-  'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; format?: 'auto' | 'text' }; output: QueryOutcome };
+  'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; currentStatement?: { offset: number }; format?: 'auto' | 'text' }; output: QueryOutcome };
   'postgres.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text'; currentStatement?: { offset: number } }; output: QueryOutcome };
   'postgres.transactionSettings.read': {input: {sessionId: string; taskId: string}; output: PostgresTransactionSnapshot};
   'postgres.transactionSettings.apply': {input: PostgresTransactionApplyInput; output: PostgresTransactionSnapshot};

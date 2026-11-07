@@ -94,6 +94,26 @@ describe('SQLite计划真实原会话、EQP和零原SQL执行', () => {
     expect((await execute(harness, 'SELECT 7')).results[0].rows).toEqual([{ c0: '7' }]);
   });
 
+  it('光标仅包装原文中的一个目标，错误与计划共享原全文范围，零原始写入', async () => {
+    const profile = fixture(), harness = await open(profile), before = state(profile);
+    const prefix = "INSERT INTO audit VALUES('前哨🚢');\r\n";
+    const target = "UPDATE subject SET note='不得更新' WHERE id=1";
+    const suffix = ";\r\nDELETE FROM subject;";
+    const source = prefix + target + suffix, currentStatement = { offset: prefix.length + 7 };
+    const outcome = await explain(harness, source, { currentStatement });
+    expect(outcome.sqliteExplain?.sourceRange).toEqual({ start: prefix.length, end: prefix.length + target.length });
+    expect(harness.process.statements).toEqual(['EXPLAIN QUERY PLAN ' + target]);
+    expect(state(profile)).toEqual(before);
+    const invalid = 'SELECT * FROM missing_table';
+    const failed = await explain(harness, prefix + invalid + suffix, { currentStatement });
+    expect(failed.failure?.sourceRange).toEqual({ start: prefix.length, end: prefix.length + invalid.length });
+    const count = harness.process.sent.length;
+    await expect(explain(harness, source, { currentStatement: { offset: prefix.length - 1 } })).rejects.toThrow();
+    await expect(explain(harness, prefix + 'PRAGMA user_version=2' + suffix, { currentStatement })).rejects.toThrow('PRAGMA');
+    expect(harness.process.sent).toHaveLength(count);
+    expect(state(profile)).toEqual(before);
+  });
+
   it('readonly SELECT仍能计划，DML按原authorizer拒绝且明确说明，不获得写能力', async () => {
     const profile = fixture(), harness = await open(profile, { readOnly: true }); expect((await explain(harness, 'SELECT * FROM subject')).sqliteExplain?.dialect).toBe('sqlite');
     for (const sql of ["INSERT INTO subject VALUES(3,'拒写')", "UPDATE subject SET note='拒写'", 'DELETE FROM subject', "REPLACE INTO subject VALUES(1,'拒写')"]) { const outcome = await explain(harness, sql); expect(outcome.failure).toMatchObject({ statementOrdinal: 1, statementsCompleted: 0 }); expect(outcome.failure?.message).toContain('原只读会话'); expect(outcome.sqliteExplain).toBeUndefined(); }

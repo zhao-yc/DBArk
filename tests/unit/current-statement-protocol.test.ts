@@ -10,9 +10,12 @@ describe('当前语句可选协议的严格边界', () => {
   it.each([{}, null, { offset: -1 }, { offset: 0.5 }, { offset: NaN }, { offset: Infinity }, { offset: input.sql.length + 1 }, { offset: '3' }, { offset: 3, sql: '其它SQL' }])('严格拒绝无效currentStatement：%j', currentStatement => {
     expect(() => validateCommand('query.execute', { ...input, currentStatement })).toThrow();
   });
-  it('其它查询命令不能偷带当前语句标志或未知顶层字段', () => {
+  it('计划和命名参数协议接收原光标，分析请求仍拒绝未知范围', () => {
     expect(() => validateCommand('query.execute', { ...input, currentStatement: { offset: 3 }, all: true })).toThrow();
-    expect(() => validateCommand('query.explain', { ...input, currentStatement: { offset: 3 } })).toThrow();
-    expect(() => validateCommand('query.executeParameterized', { ...input, parameters: [], currentStatement: { offset: 3 } })).toThrow();
+    const currentStatement = { offset: 3 };
+    expect(validateCommand('query.explain', { ...input, currentStatement })).toEqual({ ...input, currentStatement });
+    expect(() => validateCommand('query.explain', { ...input, currentStatement: { offset: input.sql.length + 1 } })).toThrow();
+    expect(validateCommand('query.executeParameterized', { ...input, parameters: [], currentStatement })).toMatchObject({ currentStatement });
+    expect(() => validateCommand('query.analyze', { ...input, acknowledged: true, expectedDatabase: null, currentStatement })).toThrow();
   });
 });

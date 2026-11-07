@@ -15,6 +15,8 @@ export interface SqliteExplainNode { id: string; parent?: string; depth: number;
 export interface SqliteExplainPlan {
   dialect: 'sqlite'; version: string; initialView: 'tree' | 'table'; nodes: SqliteExplainNode[];
   raw: string; rawTruncated: boolean; warnings: string[];
+  /** 原 IPC 正文的 UTF-16 范围，排除生成的 EXPLAIN QUERY PLAN 前缀。 */
+  sourceRange?: { start: number; end: number };
 }
 
 /** 只读取自有数据字段；损坏的关系不能通过访问器执行代码或假装成有效节点。 */

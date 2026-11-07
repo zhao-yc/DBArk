@@ -1090,9 +1090,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if ((command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.sqliteStatementTimeoutMs !== undefined && !broker.isSqliteSession(input.sessionId))
     throw Error('SQLite 语句超时只能用于原 SQLite 查询会话');
-  if ((command === 'query.parameterNames' || command === 'query.executeParameterized') &&
+  if ((command === 'query.parameterNames' || command === 'query.executeParameterized' || command === 'query.explain') &&
       input.currentStatement !== undefined && !broker.isSqliteSession(input.sessionId))
-    throw Error('当前语句的命名参数只能用于原 SQLite 查询会话');
+    throw Error('此当前语句操作只用于原 SQLite 查询会话');
   if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input.sql);
   if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.') || command.startsWith('postgres.queryTimeouts.')) {
     const session = sessions.get(input.sessionId);

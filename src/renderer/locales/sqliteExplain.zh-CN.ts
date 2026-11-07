@@ -1,5 +1,8 @@
 /** SQLite 优化器计划只呈现原生四列，不推测 MySQL 指标或实际执行效果。 */
 export const sqliteExplainZh = {
+  current: '查看当前语句执行计划',
+  currentHint: '只为光标所在语句生成 SQLite 优化器计划。',
+  locate: '定位计划原语句',
   title: 'SQLite 执行计划', tree: '树形', table: '表格', raw: '原文',
   treeLabel: 'SQLite 计划树', tableLabel: 'SQLite 计划表格', rawLabel: 'SQLite 计划原文', rawContent: 'SQLite 计划原文内容',
   source: 'SQLite EXPLAIN QUERY PLAN', estimates: '这是优化器计划，不是实际执行或实测耗时。节点说明保留 SQLite 原文，不推测成本、耗时或索引结构；输出可能随 SQLite 版本变化。',
