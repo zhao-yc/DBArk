@@ -7,10 +7,11 @@ export type DefinitionNavigationState = SavedQueryNavigationState & { line?: num
 export interface DefinitionNavigationIdentity extends DefinitionNavigationTarget { uri: string; sql: string; digest: string; }
 /** URI沿用工作台完整身份编码；无法表示的对象只降级查看，不自行创造另一套URI。 */
 export function definitionUri(target: DefinitionNavigationTarget): string | undefined {
-  if (target.dialect === 'postgresql') {
-    // 重载签名可能超出收藏 URI 的长度，这个身份仅供当前只读编辑器核对。
-    return 'postgresql-definition:' + JSON.stringify([target.connectionId, target.database, target.kind, target.name]);
+  if (target.dialect === 'postgresql' || target.dialect === 'sqlite') {
+    // 重载签名和 SQLite 索引超出通用工作台 URI 合同，此身份只供当前只读编辑器核对。
+    return target.dialect + '-definition:' + JSON.stringify([target.connectionId, target.database, target.kind, target.name]);
   }
+  if (target.kind === 'index') return;
   try { return objectUri({ connectionId: target.connectionId, database: target.database, name: target.name, kind: target.kind }); } catch { return; }
 }
 /** 完整目标和修订逐字段绑定；名称包含分隔符时也不会碰撞。 */

@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {DataGrid,type Column} from 'react-data-grid';
-import {structureSearchInputSchema,structureSearchKinds,postgresStructureSearchKinds,postgresDefinitionSearchKinds,definitionSearchKinds,structureSearchLimits,type StructureSearchHit,type StructureSearchPage} from '../../shared/databaseSearch';
+import {structureSearchInputSchema,structureSearchKinds,postgresStructureSearchKinds,postgresDefinitionSearchKinds,sqliteStructureSearchKinds,sqliteDefinitionSearchKinds,definitionSearchKinds,structureSearchLimits,type StructureSearchHit,type StructureSearchPage} from '../../shared/databaseSearch';
 import type {DatabaseSearchMode} from '../../shared/databaseSearchPattern';
 import {databaseSearchZh as text} from '../locales/databaseSearch.zh-CN';
 import {structureSearchContext} from '../structureSearchContext';
@@ -12,17 +12,24 @@ import type {DefinitionSearchOpen} from '../../shared/definitionNavigation';
 import {DefinitionSearchConnectionLease} from '../definitionNavigation';
 import {definitionNavigationZh} from '../locales/definitionNavigation.zh-CN';
 
+function searchKinds(dialect: string | undefined, content: 'name' | 'definition') {
+  if (dialect === 'sqlite') return content === 'definition' ? sqliteDefinitionSearchKinds : sqliteStructureSearchKinds;
+  if (dialect === 'postgresql') return content === 'definition' ? postgresDefinitionSearchKinds : postgresStructureSearchKinds;
+  return content === 'definition' ? definitionSearchKinds : structureSearchKinds;
+}
+
 /** 搜索窗口独占自己的任务和续页；不借用、关闭或刷新任何已有查询/表格标签。 */
 export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{onClose:()=>void;onOpen:(connectionId:string,hit:StructureSearchHit,definitionSearch?:DefinitionSearchOpen)=>void;onData?:()=>void;onSavedQueries?:()=>void}){
   const state=useWorkspace(),activeTab=state.settings.tabs.find(tab=>tab.id===state.settings.activeTabId);
   const initial=structureSearchContext(state.selection,activeTab,state.connections[0]?.id??'');
-  const initialProfile=state.connections.find(profile=>profile.id===initial.connectionId&&profile.dialect!=='sqlite');
-  const [connectionId,setConnectionId]=useState(initialProfile?.id??''),[databases,setDatabases]=useState(initial.database??
+  const initialProfile=state.connections.find(profile=>profile.id===initial.connectionId);
+  const [connectionId,setConnectionId]=useState(initialProfile?.id??''),[databases,setDatabases]=useState(initialProfile?.dialect==='sqlite'?'main':initial.database??
     (!activeTab&&initialProfile?.dialect==='postgresql'?initialProfile.database??'postgres':''));
-  const postgres = state.connections.find(profile => profile.id === connectionId)?.dialect === 'postgresql';
+  const dialect = state.connections.find(profile => profile.id === connectionId)?.dialect;
+  const postgres = dialect === 'postgresql', sqlite = dialect === 'sqlite';
   const [keyword,setKeyword]=useState(''),[mode,setMode]=useState<DatabaseSearchMode>('contains'),[caseSensitive,setCaseSensitive]=useState(false);
   const [searchIn,setSearchIn]=useState<'name'|'definition'>('name');
-  const [kinds,setKinds]=useState<StructureSearchHit['kind'][]>([...(postgres ? postgresStructureSearchKinds : structureSearchKinds)]),[limit,setLimit]=useState(200),[onError,setOnError]=useState<'stop'|'continue'>('stop');
+  const [kinds,setKinds]=useState<StructureSearchHit['kind'][]>([...searchKinds(dialect, 'name')]),[limit,setLimit]=useState(200),[onError,setOnError]=useState<'stop'|'continue'>('stop');
   const [page,setPage]=useState<StructureSearchPage|null>(null),[hits,setHits]=useState<StructureSearchHit[]>([]),[failures,setFailures]=useState<StructureSearchPage['failures']>([]);
   const [selected,setSelected]=useState<StructureSearchHit|null>(null),[busy,setBusy]=useState(false),[closing,setClosing]=useState(false),[error,setError]=useState('');
   const cursor=useRef<{connectionId:string;value:string}|null>(null),activeTask=useRef<string|null>(null),work=useRef<Promise<void>|null>(null),stopRequested=useRef(false),closeRequested=useRef(false),cancelWork=useRef<Promise<void>|null>(null);
@@ -50,7 +57,7 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
         }else{
           // 先校验全部范围，非法请求不会释放旧搜索或查询数据库。
           const targetDialect = useWorkspace.getState().connections.find(profile => profile.id === connectionId)?.dialect;
-          const parsed=structureSearchInputSchema.safeParse({connectionId,taskId:uid(),databases:databases.split(/\r?\n/).filter(value=>value.length>0),kinds,pattern:{mode,text:keyword,caseSensitive},maxResults:limit,onError,...(targetDialect==='postgresql'?{dialect:'postgresql'}:{}),...(searchIn==='definition'?{searchIn}:{})});
+          const parsed=structureSearchInputSchema.safeParse({connectionId,taskId:uid(),databases:databases.split(/\r?\n/).filter(value=>value.length>0),kinds,pattern:{mode,text:keyword,caseSensitive},maxResults:limit,onError,...((targetDialect==='postgresql'||targetDialect==='sqlite')?{dialect:targetDialect}:{}),...(searchIn==='definition'?{searchIn}:{})});
           if(!parsed.success)throw Error(text.invalidRequest);const input=parsed.data;
           // 首次await前绑定修订；释放旧游标期间改过连接也不能默默在新连接上开始搜索。
           const version=useWorkspace.getState().connectionVersions[input.connectionId]??0;
@@ -75,29 +82,31 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
     if(closeRequested.current)return;closeRequested.current=true;setClosing(true);setError('');
     try{await cancel();await work.current;await releaseCursor();if(open==='data')onData?.();else if(open==='queries')onSavedQueries?.();else if(open){const lease=resultLease.current;
       if (open.matchedIn !== 'definition' && !lease?.current()) throw Error(definitionNavigationZh.invalid);
-      onOpen(resultConnection.current,open,open.matchedIn==='definition'&&lease&&open.parentKind!=='sequence'?{connectionId:resultConnection.current,connectionVersion:lease.version,database:open.database,name:open.object,kind:open.parentKind,invalidated:!lease.current(),result:open.definitionNavigation,...(open.dialect?{dialect:open.dialect}:{})}:undefined);}else onClose();}
+      onOpen(resultConnection.current,open,open.matchedIn==='definition'&&lease&&open.parentKind!=='sequence'?{connectionId:resultConnection.current,connectionVersion:lease.version,database:open.database,name:open.dialect==='sqlite'&&open.kind==='index'?open.name:open.object,kind:open.dialect==='sqlite'&&open.kind==='index'?'index':open.parentKind,invalidated:!lease.current(),result:open.definitionNavigation,...(open.dialect?{dialect:open.dialect}:{})}:undefined);}else onClose();}
     catch(reason){setError(errorMessage(reason));closeRequested.current=false;setClosing(false);}
   }
   const columns:Column<StructureSearchHit>[]=[{key:'database',name:text.databaseColumn,width:170},{key:'kind',name:text.kindColumn,width:100,renderCell:({row})=>text.kinds[row.kind]},{key:'object',name:text.objectColumn,width:220},{key:'name',name:searchIn==='definition'?text.definitionLocation:text.nameColumn,width:260,renderCell:({row})=>row.matchedIn==='definition'?text.definitionMatch(row.definitionCharacters??0):row.name}];
   return <Modal title={searchIn==='definition'?text.definitionsTitle:text.title} wide onClose={()=>void close()}>
     <div className="modal-content database-search-content">
-      {onData&&<div><button disabled={closing} onClick={()=>void close('data')}>{text.dataMode}</button></div>}
+      {onData&&!sqlite&&<div><button disabled={closing} onClick={()=>void close('data')}>{text.dataMode}</button></div>}
       {onSavedQueries&&<div><button disabled={closing} onClick={()=>void close('queries')}>{text.savedQueries}</button></div>}
       <fieldset disabled={busy||closing} className="database-search-options">
-        <div className="form-grid"><Field label={text.searchIn}><select aria-label={text.searchIn} value={searchIn} onChange={event=>{const value=event.target.value as 'name'|'definition';setSearchIn(value);setKinds([...(value==='definition'?(postgres?postgresDefinitionSearchKinds:definitionSearchKinds):(postgres?postgresStructureSearchKinds:structureSearchKinds))]);}}><option value="name">{text.names}</option><option value="definition">{text.definitions}</option></select></Field><Field label={text.connection}><select aria-label={text.connection} value={connectionId} onChange={event=>{
+        <div className="form-grid"><Field label={text.searchIn}><select aria-label={text.searchIn} value={searchIn} onChange={event=>{const value=event.target.value as 'name'|'definition';setSearchIn(value);setKinds([...searchKinds(dialect,value)]);}}><option value="name">{text.names}</option><option value="definition">{text.definitions}</option></select></Field><Field label={text.connection}><select aria-label={text.connection} value={connectionId} onChange={event=>{
           const profile=state.connections.find(item=>item.id===event.target.value);
           setConnectionId(event.target.value);
           const nextPostgres=profile?.dialect==='postgresql';
-          if(nextPostgres!==postgres){setSearchIn('name');setKinds([...(nextPostgres?postgresStructureSearchKinds:structureSearchKinds)]);}
-          if(nextPostgres||postgres)setDatabases(profile && profile.dialect !== 'sqlite' ? profile.database ?? (nextPostgres?'postgres':'') : '');
-        }}>{!connectionId&&<option value="" disabled>{text.chooseConnection}</option>}{state.connections.filter(profile=>profile.dialect!=='sqlite').map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></Field>
-          <Field label={text.databases}><textarea aria-label={text.databases} rows={2} value={databases} onChange={event=>setDatabases(event.target.value)}/></Field>
+          const nextSqlite=profile?.dialect==='sqlite';
+          if(nextPostgres!==postgres||nextSqlite!==sqlite){setSearchIn('name');setKinds([...searchKinds(profile?.dialect,'name')]);}
+          if(nextSqlite)setDatabases('main');
+          else if(nextPostgres||postgres||sqlite)setDatabases(profile?.database ?? (nextPostgres?'postgres':''));
+        }}>{!connectionId&&<option value="" disabled>{text.chooseConnection}</option>}{state.connections.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></Field>
+          <Field label={text.databases}><textarea aria-label={text.databases} rows={2} readOnly={sqlite} value={databases} onChange={event=>setDatabases(event.target.value)}/></Field>
           <Field label={text.pattern}><input aria-label={text.pattern} value={keyword} onChange={event=>setKeyword(event.target.value)}/></Field>
-          <Field label={text.mode}><select aria-label={text.mode} value={mode} onChange={event=>setMode(event.target.value as DatabaseSearchMode)}>{Object.entries(text.modes).map(([value,label])=><option key={value} value={value}>{value==='whole'&&searchIn==='definition'?text.wholeDefinition:label}</option>)}</select></Field>
+          <Field label={text.mode}><select aria-label={text.mode} value={mode} onChange={event=>setMode(event.target.value as DatabaseSearchMode)}>{Object.entries(text.modes).map(([value,label])=><option key={value} value={value}>{value==='whole'&&searchIn==='definition'?text.wholeDefinition:sqlite&&value==='regexp'?text.sqliteRegexp:label}</option>)}</select></Field>
           <Field label={text.limit}><input aria-label={text.limit} type="number" min={1} max={structureSearchLimits.maxHits} value={limit} onChange={event=>setLimit(Number(event.target.value))}/></Field>
           <Field label={text.onError}><select aria-label={text.onError} value={onError} onChange={event=>setOnError(event.target.value as 'stop'|'continue')}><option value="stop">{text.stop}</option><option value="continue">{text.continueOnError}</option></select></Field></div>
-        <div className="database-search-kinds">{(searchIn==='definition'?(postgres?postgresDefinitionSearchKinds:definitionSearchKinds):(postgres?postgresStructureSearchKinds:structureSearchKinds)).map(kind=><label key={kind}><input type="checkbox" checked={kinds.includes(kind)} onChange={event=>setKinds(previous=>event.target.checked?[...previous,kind]:previous.filter(value=>value!==kind))}/>{text.kinds[kind]}</label>)}<label><input type="checkbox" checked={caseSensitive} onChange={event=>setCaseSensitive(event.target.checked)}/>{text.caseSensitive}</label></div>
-        <UsageHelp><p>{searchIn==='definition'?(postgres?text.postgresDefinitionHint:text.definitionHint):(postgres?text.postgresHint:text.databaseHint)}</p><p>{text.ruleHint}</p><p>{text.currentDefinition}</p></UsageHelp>
+        <div className="database-search-kinds">{searchKinds(dialect,searchIn).map(kind=><label key={kind}><input type="checkbox" checked={kinds.includes(kind)} onChange={event=>setKinds(previous=>event.target.checked?[...previous,kind]:previous.filter(value=>value!==kind))}/>{text.kinds[kind]}</label>)}<label><input type="checkbox" checked={caseSensitive} onChange={event=>setCaseSensitive(event.target.checked)}/>{text.caseSensitive}</label></div>
+        <UsageHelp><p>{sqlite?(searchIn==='definition'?text.sqliteDefinitionHint:text.sqliteHint):searchIn==='definition'?(postgres?text.postgresDefinitionHint:text.definitionHint):(postgres?text.postgresHint:text.databaseHint)}</p><p>{sqlite?text.sqliteRuleHint:text.ruleHint}</p><p>{text.currentDefinition}</p></UsageHelp>
       </fieldset>
       <ErrorBox message={error}/>
       <div role="status" className="database-search-status">{busy||closing?<Spinner text={closing?text.closing:text.opening}/>:page?<><span>{text.resultConnection}：{state.connections.find(profile=>profile.id===resultConnection.current)?.name}；{text.summary(page.totalHits,page.completedScopes,page.scopeCount)}{page.scannedDefinitions!==undefined&&text.definitionCount(page.scannedDefinitions)}</span> {page.limitReached?text.capped:page.stoppedOnError?text.stopped:page.cursor?text.more:page.completedScopes<page.scopeCount?text.failed:failures.length?text.finishedWithErrors:page.scannedDefinitions!==undefined?text.definitionsDone:text.done}</>:text.emptyHint}</div>

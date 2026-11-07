@@ -11,7 +11,10 @@ import { sqliteDriverLimits, type SqliteProcessExit, type SqliteProcessTransport
 import { createSqliteProcess } from './sqliteProcess';
 import { SqliteQuerySession } from './sqliteQuerySession';
 import { readSqliteCompletion } from './sqliteCompletion';
-import { readSqliteObjectDefinition, sqliteObjectDefinitionDatabase } from './sqliteObjectDefinition';
+import { readSqliteCatalogDefinition, readSqliteObjectDefinition, sqliteObjectDefinitionDatabase } from './sqliteObjectDefinition';
+import { StructureSearchPages, type StructureSearchState } from '../engine/structureSearchPages';
+import { structureSearchInputSchema, structureSearchContinueSchema } from '../shared/databaseSearch';
+import { readSqliteStructureSearchPage } from './sqliteStructureSearch';
 import { objectDefinitionInputSchema, objectDefinitionLimits, objectDefinitionTaskPrefix, type ObjectDefinitionOutput } from '../shared/objectDefinition';
 import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTaskPrefix, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
 import { sqliteTablePageSchema, type SqliteTablePage, type SqliteTablePageInput } from '../shared/sqliteTableBrowse';
@@ -90,7 +93,7 @@ interface BrowseTask {
   cleanupFailure?: unknown; cancelFailure?: unknown;
 }
 interface FinishedBrowseTask { kind: 'browse-finished'; active?: undefined; }
-interface CompletionTask extends BrowseTask { session?: Session; }
+interface CompletionTask extends BrowseTask { session?: Session; abortRead?: AbortController; }
 interface ExportTask extends Omit<BrowseTask, 'kind'> {
   kind: 'export'; input: SqliteTableExportRequest; file?: SqliteTableExportFile;
   committing: boolean; retainedDestination: boolean; rows: number;
@@ -147,6 +150,7 @@ export class SqliteRuntime {
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, Task>();
   private readonly completionReads = new Map<string, CompletionTask>();
+  private readonly structureSearches = new StructureSearchPages();
   private readonly definitionReads = new Map<string, CompletionTask>();
   private stopping = false;
   private closeWork?: Promise<void>;
@@ -300,7 +304,7 @@ export class SqliteRuntime {
   }
   /** 原事务上的补全只登记取消并等待短读边界，不interrupt、kill、rollback或关闭用户会话。 */
   private cancelCompletion(task: CompletionTask): Promise<void> {
-    if (!task.session) return this.cancelBrowse(task);
+    if (!task.session) { const work = this.cancelBrowse(task); task.abortRead?.abort(); return work; }
     task.cancelled = true;
     return task.active?.then(() => {}, () => {}) ?? Promise.resolve();
   }
@@ -318,32 +322,81 @@ export class SqliteRuntime {
     const task: CompletionTask = { kind: 'browse', connection, session, cancelled: false, boundaryCancelled: false, cleaning: false };
     // 借用原资源但不关闭它；若失效且exit未确认，该任务仍占并发槽，直到显式断开连接。
     if (session) task.resource = [...connection.resources].find(resource => resource.driver === session.driver);
-    this.definitionReads.set(input.taskId, task);
     const check = () => {
       this.browseCheck(task);
       if (!sameTarget(profile, this.options.resolveProfile(profile.id)) || session && (session.closing || !session.driver.isUsable || this.sessions.get(input.sessionId!) !== session || session.query.completionState().objectsRevision !== revision)) throw Error('SQLite对象定义原连接或会话目录已失效');
     };
-    const action = async () => {
-      if (session) { check(); return readSqliteObjectDefinition(session.driver, input, { check, revision }); }
-      let value: ObjectDefinitionOutput | undefined, failed = false, failure: unknown;
-      try { check(); task.driver = await this.driver(connection, profile, true, resource => { task.resource = resource; }); check(); value = await readSqliteObjectDefinition(task.driver, input, { check }); }
-      catch (reason) { failed = true; failure = reason; if (task.driver && !task.driver.isUsable && !task.driver.isClosed) this.block(connection, reason); }
-      if (task.driver) {
-        task.cleaning = true;
-        try { await task.driver.close(); }
-        catch (reason) { task.cleanupFailure = reason; if (!task.driver.isClosed) this.block(connection, reason); failure = failed ? new AggregateError([failure, reason], 'SQLite对象定义读取失败且原资源关闭未确认') : reason; failed = true; }
-      }
-      if (task.resource && connection.resources.has(task.resource)) { task.cleanupFailure = Error('SQLite对象定义准确进程exit尚未确认'); this.block(connection, task.cleanupFailure); failure = task.cleanupFailure; failed = true; }
-      if (failed) throw failure; check(); return value!;
-    };
-    const work = session ? this.sessionOperation(session, action) : this.track(connection, action); task.active = work;
+    return this.trackDefinitionRead(input.taskId, task, session
+      ? () => { check(); return readSqliteObjectDefinition(session.driver, input, { check, revision }); }
+      : () => this.ownedDefinitionRead(task, profile, check, driver => readSqliteObjectDefinition(driver, input, { check })));
+  }
+
+  /** 搜索和定义短读共用准确进程退出、取消与故障隔离规则。 */
+  private trackDefinitionRead<T>(taskId: string, task: CompletionTask, action: () => Promise<T>): Promise<T> {
+    const { connection, session } = task;
+    this.definitionReads.set(taskId, task);
+    const work = session ? this.sessionOperation(session, action) : this.track(connection, action);
+    task.active = work;
     const retire = () => {
       task.active = undefined;
       const safe = session ? session.driver.isUsable || session.driver.isClosed : !task.resource || !connection.resources.has(task.resource);
-      if (safe && this.definitionReads.get(input.taskId) === task) this.definitionReads.delete(input.taskId);
+      if (safe && this.definitionReads.get(taskId) === task) this.definitionReads.delete(taskId);
     };
-    void work.then(retire, retire); return work;
+    void work.then(retire, retire);
+    return work;
   }
+
+  private async ownedDefinitionRead<T>(task: CompletionTask, profile: SqliteConnectionProfile, check: () => void,
+    action: (driver: SqliteDriverSession) => Promise<T>): Promise<T> {
+    const { connection } = task;
+    let value!: T, failed = false, failure: unknown;
+    try {
+      check();
+      task.driver = await this.driver(connection, profile, true, resource => { task.resource = resource; });
+      check();
+      value = await action(task.driver);
+    } catch (reason) {
+      failed = true; failure = reason;
+      if (task.driver && !task.driver.isUsable && !task.driver.isClosed) this.block(connection, reason);
+    }
+    if (task.driver) {
+      task.cleaning = true;
+      try { await task.driver.close(); }
+      catch (reason) {
+        task.cleanupFailure = reason;
+        if (!task.driver.isClosed) this.block(connection, reason);
+        failure = failed ? new AggregateError([failure, reason], 'SQLite目录读取失败且原资源关闭未确认') : reason;
+        failed = true;
+      }
+    }
+    if (task.resource && connection.resources.has(task.resource)) {
+      task.cleanupFailure = Error('SQLite目录读取准确进程exit尚未确认');
+      this.block(connection, task.cleanupFailure); failure = task.cleanupFailure; failed = true;
+    }
+    if (failed) throw failure;
+    check();
+    return value;
+  }
+
+  private searchStructure(raw: Record<string, unknown>, next: boolean) {
+    const { profile: _profile, ...request } = raw;
+    const input = next ? structureSearchContinueSchema.parse(request) : structureSearchInputSchema.parse(request);
+    if (this.ownsTask(input.taskId) || this.completionReads.has(input.taskId) || this.definitionReads.size >= objectDefinitionLimits.active)
+      throw Error('SQLite 搜索编号已使用或目录读取繁忙');
+    const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId);
+    const connection = this.connection(profile.id);
+    this.assertTarget(connection, profile);
+    const abortRead = new AbortController();
+    const task: CompletionTask = { kind: 'browse', connection, cancelled: false, boundaryCancelled: false, cleaning: false, abortRead };
+    const check = () => {
+      this.browseCheck(task);
+      if (!sameTarget(profile, this.options.resolveProfile(profile.id))) throw Error('SQLite 搜索连接已变化，请重新搜索');
+    };
+    const read = (state: StructureSearchState) => this.trackDefinitionRead(input.taskId, task, () =>
+      this.ownedDefinitionRead(task, profile, check, driver => readSqliteStructureSearchPage(driver, state, check, () => { task.cleaning = true; }, abortRead.signal)));
+    return next ? this.structureSearches.nextPage(input, 'sqlite', read) : this.structureSearches.startPage(input, 'sqlite', read);
+  }
+
   /** 已有连接身份不能因外部配置变化而静默更换；活动标签持有创建时的完整快照。 */
   private assertTarget(connection: Connection, profile: SqliteConnectionProfile): void {
     if (connection.profile && !sameTarget(connection.profile, profile)) throw Error('SQLite连接配置已变化，请先显式关闭原连接，现有会话未重连');
@@ -1199,6 +1252,7 @@ export class SqliteRuntime {
         const changed = input.transportChanged || connection && (!connection.profile || !sameTarget(connection.profile, next));
         if (!connection || !changed) return;
         if (connection.closing || connection.blocked || connection.pending.size || connection.resources.size || connection.files.size || [...this.sessions.values()].some(session => session.connection === connection)) throw Error('SQLite连接仍有打开的会话、运行操作或未确认资源；请先显式关闭标签并断开连接，现有任务未取消');
+        this.structureSearches.releaseConnection(input.id);
         this.edits.releaseConnection(input.id); this.creates.releaseConnection(input.id); this.imports.releaseConnection(input.id); this.importSources.releaseConnection(input.id); this.indexes.releaseConnection(input.id); this.columns.releaseConnection(input.id);this.rebuilds.releaseConnection(input.id); this.objects.releaseConnection(input.id); this.tableMaintenance.releaseConnection(input.id); this.tableRenames.releaseConnection(input.id); this.connections.delete(input.id); return;
       }
       case 'connections.close': return this.closeConnection(input.id);
@@ -1255,6 +1309,9 @@ export class SqliteRuntime {
       case 'sqlite.incomingPage': return this.incoming(input);
       case 'sqlite.referencePage': return this.reference(input);
       case 'sqlite.completion': return this.completion(input);
+      case 'search.structure': return this.searchStructure(input, false);
+      case 'search.structureContinue': return this.searchStructure(input, true);
+      case 'search.release': return this.structureSearches.release(input);
       case 'query.objectDefinition': return this.objectDefinition(input);
       case 'sqlite.tableExport': return this.tableExport(input);
       // 私有命令不在公开CommandMap或IPC校验表中，只供Main草稿文件服务调用。
@@ -1308,10 +1365,13 @@ export class SqliteRuntime {
         if (rows.length > 10000) throw Error('SQLite对象数量超过10000，请缩小范围');
         return rows.map(row => ({ name: row[0], kind: row[1] })) as DatabaseObject[];
       });
-      case 'metadata.ddl': return this.metadata(input, async driver => {
-        if (typeof input.name !== 'string' || !input.name || !['table', 'view', 'trigger'].includes(input.kind)) throw Error('SQLite对象定义类型或名称无效');
-        const rows = await this.rows(driver, 'SELECT sql FROM main.sqlite_schema WHERE name = ? AND type = ? AND substr(name,1,7) <> ? LIMIT 1', [input.name, input.kind, 'sqlite_'], 1);
-        if (!rows.length || typeof rows[0][0] !== 'string') throw Error('SQLite对象不存在或没有可读取定义'); return rows[0][0];
+      case 'metadata.ddl': return this.metadata(input, async (driver, check) => {
+        if (typeof input.name !== 'string' || !input.name || /^sqlite_/i.test(input.name) ||
+            !['table', 'view', 'trigger', 'index'].includes(input.kind)) throw Error('SQLite对象定义类型或名称无效');
+        try {
+          await driver.execute('BEGIN');
+          return await readSqliteCatalogDefinition(driver, input.name, input.kind, { check });
+        } finally { if (driver.isUsable && driver.transaction) await driver.execute('ROLLBACK'); }
       });
       default: throw Error('SQLite尚未接入此功能：' + command);
     }
@@ -1338,6 +1398,7 @@ export class SqliteRuntime {
     const connection = this.connections.get(id); if (!connection) return Promise.resolve();
     if (connection.closeWork) return connection.closeWork;
     connection.closing = true;
+    this.structureSearches.releaseConnection(id);
     this.edits.releaseConnection(id);
     this.creates.releaseConnection(id);
     this.imports.releaseConnection(id);
@@ -1376,8 +1437,8 @@ export class SqliteRuntime {
     const work = (async () => {
       for (const task of this.tasks.values()) if (readTask(task) && !committing(task) && task.active) { task.cancelled = true; if (task.kind === 'import') task.abort.abort(); }
       for (const task of this.completionReads.values()) task.cancelled = true;
-      for (const task of this.definitionReads.values()) task.cancelled = true;
-      for (const id of this.connections.keys()) { this.edits.releaseConnection(id); this.creates.releaseConnection(id); this.imports.releaseConnection(id); this.importSources.releaseConnection(id); this.indexes.releaseConnection(id); this.columns.releaseConnection(id);this.rebuilds.releaseConnection(id); this.objects.releaseConnection(id); this.tableMaintenance.releaseConnection(id); this.tableRenames.releaseConnection(id); }
+      for (const task of this.definitionReads.values()) { task.cancelled = true; task.abortRead?.abort(); }
+      for (const id of this.connections.keys()) { this.structureSearches.releaseConnection(id); this.edits.releaseConnection(id); this.creates.releaseConnection(id); this.imports.releaseConnection(id); this.importSources.releaseConnection(id); this.indexes.releaseConnection(id); this.columns.releaseConnection(id);this.rebuilds.releaseConnection(id); this.objects.releaseConnection(id); this.tableMaintenance.releaseConnection(id); this.tableRenames.releaseConnection(id); }
       const protectedResources = new Set([...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && committing(task) && !!task.active).map(task => task.resource));
       const resources = [...this.connections.values()].flatMap(connection => { connection.closing = true; return [...connection.resources]; });
       for (const resource of resources) if (!protectedResources.has(resource)) try { resource.transport.terminate(); } catch { /* 仍等待真实exit，终止调用异常不能跳过其它句柄。 */ }

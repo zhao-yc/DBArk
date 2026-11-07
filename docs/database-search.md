@@ -6,7 +6,7 @@
 
 选择连接，数据库范围每行填写一个实际库名，最多 32 个，空行忽略，其余空格保留。选择对象类别，输入搜索文字并点击“开始搜索”。输入和勾选不会自动访问数据库。“结构名称”搜索当前账号可见的持久对象名称。“搜索保存查询”进入独立的本地搜索。
 
-MySQL 和 MariaDB 可按表、视图、字段、索引、主外键、过程、函数、触发器或事件筛选，另有定义正文和表数据搜索。PostgreSQL 可跨数据库搜索表、视图、物化视图、字段、索引、约束、序列和例程的名称。[PostgreSQL 结构搜索](development/postgres-structure-search-20261107.md)
+MySQL 和 MariaDB 可按表、视图、字段、索引、主外键、过程、函数、触发器或事件筛选，另有定义正文和表数据搜索。PostgreSQL 可跨数据库搜索表、视图、物化视图、字段、索引、约束、序列和例程的名称。[PostgreSQL 结构搜索](development/postgres-structure-search-20261107.md) SQLite 支持搜索保存文件的 `main` 目录，涵盖表、视图、字段、显式索引和触发器。[SQLite 结构搜索](development/sqlite-structure-search-20261107.md)
 
 | 方式 | 含义 |
 | --- | --- |
@@ -25,7 +25,7 @@ MySQL 和 MariaDB 可按表、视图、字段、索引、主外键、过程、�
 
 ## 定义正文搜索
 
-PostgreSQL 连接也提供「定义正文」模式，覆盖表、视图及物化视图、函数和存储过程的可见目录文本。打开命中会重新读取正文，内容一致后显示可核对的位置。[PostgreSQL 定义正文搜索](development/postgres-definition-search-20261107.md)
+PostgreSQL 连接也提供「定义正文」模式，覆盖表、视图及物化视图、函数和存储过程的可见目录文本。打开命中会重新读取正文，内容一致后显示可核对的位置。[PostgreSQL 定义正文搜索](development/postgres-definition-search-20261107.md) SQLite 可搜索表、视图、显式索引及触发器的目录 SQL，打开后按摘要核对正文并定位命中。[SQLite 定义正文搜索](development/sqlite-structure-search-20261107.md)
 
 选择 MySQL 或 MariaDB 连接后，把“搜索内容”切换为“定义正文”，明确选择数据库和表、视图、存储过程、函数、触发器或事件。所属表的定义包含字段、索引及约束。开始搜索后，独立会话逐个读取当前账号可见对象的完整 SHOW CREATE 定义，包括名称、字段、注释及例程正文。
 

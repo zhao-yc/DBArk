@@ -38,6 +38,39 @@ async function stamp(driver: SqliteDriverSession, schema: 'main' | 'temp', contr
   return value.value;
 }
 
+type SchemaTextTarget = { schema: 'main' | 'temp'; name: string; kind: 'table' | 'view' | 'trigger' | 'index'; bytes: number };
+
+/** 目录正文按源编码分块读取，搜索和重新打开采用相同的严格原文。 */
+async function readSchemaText(driver: SqliteDriverSession, target: SchemaTextTarget, encoding: string, control: DefinitionControl): Promise<string> {
+  const chunks: Buffer[] = [];
+  // 每个原生单值不超过256KiB；完整DDL按字节拼接后统一严格解码，允许多字节字符跨块。
+  for (let offset = 1; offset <= target.bytes; offset += chunkBytes) {
+    const value = (await read(driver, 'SELECT substr(CAST(sql AS BLOB),?,?) FROM ' + target.schema + '.sqlite_schema WHERE name = ? COLLATE BINARY AND type = ?', [offset, chunkBytes, target.name, target.kind].map(value => typeof value === 'number' ? { type: 'integer' as const, value: String(value) } : value), control))[0]?.[0];
+    if (!value || typeof value !== 'object' || value.type !== 'binary') throw Error('SQLite对象定义分块目录已失效');
+    const chunk = Buffer.from(value.base64, 'base64'); if (chunk.length !== Math.min(chunkBytes, target.bytes - offset + 1)) throw Error('SQLite对象定义分块不完整'); chunks.push(chunk);
+  }
+  const ddl = decode({ type: 'binary', base64: Buffer.concat(chunks).toString('base64') }, encoding);
+  if (ddl.includes('\0') || Buffer.byteLength(ddl, 'utf8') > definitionBytes) throw Error('SQLite对象定义包含无效NUL或超过2MiB，未返回部分内容');
+  return ddl;
+}
+
+export async function readSqliteCatalogDefinition(driver: SqliteDriverSession, name: string, kind: SchemaTextTarget['kind'], control: DefinitionControl): Promise<string> {
+  const encoding = await readSchemaEncoding(driver, control);
+  const size = (await read(driver, 'SELECT length(CAST(sql AS BLOB)) FROM main.sqlite_schema WHERE name = ? COLLATE BINARY AND type = ?', [name, kind], control))[0]?.[0];
+  if (!size || typeof size !== 'object' || size.type !== 'integer' || !/^\d+$/.test(size.value) || Number(size.value) === 0)
+    throw Error('SQLite对象不存在或没有可读取定义');
+  const bytes = Number(size.value);
+  if (bytes > definitionBytes * (encoding === 'utf-8' ? 1 : 2)) throw Error('SQLite对象定义超过2MiB，未截断返回');
+  return readSchemaText(driver, { schema: 'main', name, kind, bytes }, encoding, control);
+}
+
+async function readSchemaEncoding(driver: SqliteDriverSession, control: DefinitionControl): Promise<string> {
+  const value = (await read(driver, 'PRAGMA encoding', [], control))[0]?.[0];
+  const encoding = value === 'UTF-8' ? 'utf-8' : value === 'UTF-16le' ? 'utf-16le' : value === 'UTF-16be' ? 'utf-16be' : undefined;
+  if (!encoding) throw Error('SQLite对象定义数据库编码未知');
+  return encoding;
+}
+
 /** 原session沿用已有事务；仅独立物理只读连接建立并回滚自己的准确目录快照。 */
 export async function readSqliteObjectDefinition(driver: SqliteDriverSession, input: ObjectDefinitionInput, control: DefinitionControl): Promise<ObjectDefinitionOutput> {
   const database = sqliteObjectDefinitionDatabase(input.database);
@@ -45,9 +78,7 @@ export async function readSqliteObjectDefinition(driver: SqliteDriverSession, in
   let began = false, failed = false, failure: unknown, output: ObjectDefinitionOutput | undefined;
   try {
     if (!input.sessionId) { if (!driver.readOnly) throw Error('SQLite独立对象定义读取要求物理只读连接'); began = true; await read(driver, 'BEGIN', [], control); }
-    const encodingValue = (await read(driver, 'PRAGMA encoding', [], control))[0]?.[0];
-    const encoding = encodingValue === 'UTF-8' ? 'utf-8' : encodingValue === 'UTF-16le' ? 'utf-16le' : encodingValue === 'UTF-16be' ? 'utf-16be' : undefined;
-    if (!encoding) throw Error('SQLite对象定义数据库编码未知');
+    const encoding = await readSchemaEncoding(driver, control);
     const schemas: ('main' | 'temp')[] = database ? [database] : input.sessionId ? ['temp', 'main'] : ['main'];
     const versions: [schema: 'main' | 'temp', version: string][] = [];
     for (const schema of schemas) versions.push([schema, await stamp(driver, schema, control)]);
@@ -66,15 +97,7 @@ export async function readSqliteObjectDefinition(driver: SqliteDriverSession, in
       if (/^sqlite_(?:schema|master|temp_schema|temp_master)$/i.test(input.table)) throw Error('SQLite系统对象没有可读取的完整SQL定义');
       throw Error('SQLite原目录中不存在指定表或视图');
     }
-    const chunks: Buffer[] = [];
-    // 每个原生单值不超过256KiB；完整DDL按字节拼接后统一严格解码，允许多字节字符跨块。
-    for (let offset = 1; offset <= target.bytes; offset += chunkBytes) {
-      const value = (await read(driver, 'SELECT substr(CAST(sql AS BLOB),?,?) FROM ' + target.schema + '.sqlite_schema WHERE name = ? COLLATE BINARY AND type = ?', [offset, chunkBytes, target.name, target.kind].map(value => typeof value === 'number' ? { type: 'integer' as const, value: String(value) } : value), control))[0]?.[0];
-      if (!value || typeof value !== 'object' || value.type !== 'binary') throw Error('SQLite对象定义分块目录已失效');
-      const chunk = Buffer.from(value.base64, 'base64'); if (chunk.length !== Math.min(chunkBytes, target.bytes - offset + 1)) throw Error('SQLite对象定义分块不完整'); chunks.push(chunk);
-    }
-    const ddl = decode({ type: 'binary', base64: Buffer.concat(chunks).toString('base64') }, encoding);
-    if (ddl.includes('\0') || Buffer.byteLength(ddl, 'utf8') > definitionBytes) throw Error('SQLite对象定义包含无效NUL或超过2MiB，未返回部分内容');
+    const ddl = await readSchemaText(driver, target, encoding, control);
     for (const [schema, version] of versions) if (await stamp(driver, schema, control) !== version) throw Error('SQLite目录在对象定义读取期间变化，请重新请求');
     control.check();
     output = objectDefinitionOutputSchema.parse({ request: input, database: target.schema, name: target.name, kind: target.kind, temporary: target.schema === 'temp', ddl, ...(control.revision === undefined ? {} : { revision: control.revision }) });

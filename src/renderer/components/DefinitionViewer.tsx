@@ -29,10 +29,13 @@ function DefinitionMatches({ source, editor, current }: { source: DefinitionNavi
 }
 
 /** 复用原connections.open/metadata.ddl读取；无SQL执行、应用、保存查询或定义写回入口。 */
-export function DefinitionViewer({ connectionId, database, object, search, onClose }: { connectionId: string; database: string; object: DatabaseObject; search?: DefinitionSearchOpen; onClose(): void }) {
+export function DefinitionViewer({ connectionId, database, object, search, sqliteIndex, onClose }: { connectionId: string; database: string; object: DatabaseObject; search?: DefinitionSearchOpen; sqliteIndex?: string; onClose(): void }) {
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
-  const dialect = search?.dialect;
-  const latest = useRef({ connectionId, database, object, search }); latest.current = { connectionId, database, object, search };
+  const sqlite = useWorkspace(state => state.connections.some(profile => profile.id === connectionId && profile.dialect === 'sqlite'));
+  const dialect = search?.dialect ?? (sqlite ? 'sqlite' : undefined);
+  const name = sqliteIndex ?? object.name;
+  const kind: DatabaseObject['kind'] | 'index' = sqliteIndex ? 'index' : object.kind;
+  const latest = useRef({ connectionId, database, name, kind, search, dialect }); latest.current = { connectionId, database, name, kind, search, dialect };
   const binding = useRef(new DefinitionSearchLifetime()), generation = useRef(0);
   const [read, setRead] = useState<{ lease: DefinitionReadLease; generation: number; value?: DefinitionReadResult; busy: boolean; error?: string }>();
   const [editor, setEditor] = useState<DefinitionEditorLease | null>(null), modelLease = useRef<{ owner: DefinitionReadLease; lease: DefinitionEditorLease } | undefined>(undefined);
@@ -40,16 +43,16 @@ export function DefinitionViewer({ connectionId, database, object, search, onClo
   function current(): DefinitionNavigationTarget | undefined {
     const props = latest.current, workspace = useWorkspace.getState();
     const profile = workspace.connections.find(connection => connection.id === props.connectionId);
-    const sourceDialect = props.search?.dialect;
-    if (props.object.kind === 'sequence' || !profile || (sourceDialect === 'postgresql' && profile.dialect !== sourceDialect)) return;
-    const target = { connectionId: props.connectionId, connectionVersion: workspace.connectionVersions[props.connectionId] ?? 0, database: props.database, name: props.object.name, kind: props.object.kind, dialect: sourceDialect };
+    const sourceDialect = props.dialect;
+    if (props.kind === 'sequence' || !profile || (sourceDialect && profile.dialect !== sourceDialect)) return;
+    const target = { connectionId: props.connectionId, connectionVersion: workspace.connectionVersions[props.connectionId] ?? 0, database: props.database, name: props.name, kind: props.kind, dialect: sourceDialect };
     if (props.search && !binding.current.claim(props.search, target)) return;
     return target;
   }
   useEffect(() => {
     // PostgreSQL 序列通过独立目录详情打开，不能落入通用 SHOW CREATE。
-    if (object.kind === 'sequence') return;
-    const target = { connectionId, connectionVersion: version, database, name: object.name, kind: object.kind, dialect }, lease = new DefinitionReadLease(target, current), request = ++generation.current;
+    if (kind === 'sequence') return;
+    const target = { connectionId, connectionVersion: version, database, name, kind, dialect }, lease = new DefinitionReadLease(target, current), request = ++generation.current;
     setEditor(null); setRead({ lease, generation: request, busy: true });
     const unsubscribe = useWorkspace.subscribe(() => { if (!lease.current()) setRead(previous => previous?.lease === lease ? { ...previous, busy: false, value: { sql: '', status: 'invalid' } } : previous); });
     if (!lease.current()) setRead({ lease, generation: request, busy: false, value: { sql: '', status: 'invalid' } });
@@ -57,12 +60,13 @@ export function DefinitionViewer({ connectionId, database, object, search, onClo
       if (dialect === 'postgresql') return invoke('postgres.structure.definition', postgresDefinitionTargetSchema.parse({
         connectionId, database, name: target.name, kind: target.kind,
       }));
-      await invoke('connections.open', { id: target.connectionId }); if (!lease.current()) return '';
+      if (dialect !== 'sqlite') await invoke('connections.open', { id: target.connectionId });
+      if (!lease.current()) return '';
       return invoke('metadata.ddl', { connectionId: target.connectionId, database: target.database, name: target.name, kind: target.kind });
     }).then(value => { if (value && lease.current()) setRead({ lease, generation: request, value, busy: false }); }).catch(reason => { if (lease.current()) setRead({ lease, generation: request, busy: false, error: errorMessage(reason) }); });
     return () => { lease.cancel(); unsubscribe(); if (modelLease.current?.owner === lease) { modelLease.current.lease.dispose(); modelLease.current = undefined; } };
-  }, [connectionId, database, object.name, object.kind, version, dialect, search]);
+  }, [connectionId, database, name, kind, version, dialect, search]);
   // 旧目标即使在效果清理前重绘，也不能继续展示其原文或高亮。
   const owned = read?.lease.current(), value = owned ? read?.value : undefined, invalid = !!read && !owned || value?.status === 'invalid';
-  return <Modal title={databaseSearchZh.definitionTitle(kindLabels[object.kind], object.name)} wide onClose={() => { read?.lease.cancel(); onClose(); }}><div className="modal-content"><UsageHelp><p>{dialect ? databaseSearchZh.postgresDefinitionReadOnly : databaseSearchZh.definitionReadOnly}</p></UsageHelp>{invalid && <p role="status">{t.invalid}</p>}{owned && read?.busy && <Spinner/>}{value?.status === 'unavailable' && <p role="status">{t.unavailable}</p>}{value?.source && <DefinitionMatches source={value.source} editor={editor} current={() => read?.lease.current() ? current() : undefined}/ >}{value?.sql && <SqlEditor key={read?.generation} value={value.sql} dialect={dialect} readOnly height={340} onReady={instance => { if (read?.lease.current()) { modelLease.current?.lease.dispose(); const prepared = new DefinitionEditorLease(instance); modelLease.current = { owner: read.lease, lease: prepared }; setEditor(prepared); } }}/ >}{owned && read?.error && <><p role="status">{t.failed}</p><ErrorBox message={read.error}/></>}</div><footer className="modal-footer"><span className="grow"/><button onClick={() => { read?.lease.cancel(); onClose(); }}>{zh.common.cancel}</button></footer></Modal>;
+  return <Modal title={databaseSearchZh.definitionTitle(kind === 'index' ? databaseSearchZh.kinds.index : kindLabels[kind], name)} wide onClose={() => { read?.lease.cancel(); onClose(); }}><div className="modal-content"><UsageHelp><p>{dialect === 'postgresql' ? databaseSearchZh.postgresDefinitionReadOnly : databaseSearchZh.definitionReadOnly}</p></UsageHelp>{invalid && <p role="status">{t.invalid}</p>}{owned && read?.busy && <Spinner/>}{value?.status === 'unavailable' && <p role="status">{t.unavailable}</p>}{value?.source && <DefinitionMatches source={value.source} editor={editor} current={() => read?.lease.current() ? current() : undefined}/ >}{value?.sql && <SqlEditor key={read?.generation} value={value.sql} dialect={dialect} readOnly height={340} onReady={instance => { if (read?.lease.current()) { modelLease.current?.lease.dispose(); const prepared = new DefinitionEditorLease(instance); modelLease.current = { owner: read.lease, lease: prepared }; setEditor(prepared); } }}/ >}{owned && read?.error && <><p role="status">{t.failed}</p><ErrorBox message={read.error}/></>}</div><footer className="modal-footer"><span className="grow"/><button onClick={() => { read?.lease.cancel(); onClose(); }}>{zh.common.cancel}</button></footer></Modal>;
 }

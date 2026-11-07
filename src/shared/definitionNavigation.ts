@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { definitionSearchKinds, postgresDefinitionTargetSchema, searchIdentifier, type DefinitionSearchKind } from './databaseSearch';
+import { definitionSearchKinds, postgresDefinitionTargetSchema, searchIdentifier, sqliteSearchName, sqliteDefinitionSearchKinds, type DefinitionSearchKind } from './databaseSearch';
 import type { SavedQueryMatchSpan } from './savedQuerySearch';
 
 export const definitionNavigationLimits = { matches: 200, sourceBytes: 2 * 1024 * 1024, payloadBytes: 12 * 1024 } as const;
@@ -19,11 +19,13 @@ export const definitionNavigationResultSchema = z.discriminatedUnion('status', [
 });
 export type DefinitionNavigationResult = z.infer<typeof definitionNavigationResultSchema>;
 /** 搜索时的连接修订与位置一起保存在窗口内存，不写工作台或保存查询。 */
-export interface DefinitionNavigationTarget { connectionId: string; connectionVersion: number; database: string; name: string; kind: DefinitionSearchKind; dialect?: 'postgresql'; }
+export interface DefinitionNavigationTarget { connectionId: string; connectionVersion: number; database: string; name: string; kind: DefinitionSearchKind | 'index'; dialect?: 'postgresql' | 'sqlite'; }
 export interface DefinitionSearchOpen extends DefinitionNavigationTarget { invalidated: boolean; result?: DefinitionNavigationResult; }
 export interface DefinitionNavigationSource extends DefinitionNavigationTarget { uri: string; digest: string; sql: string; ranges: SavedQueryMatchSpan[]; limitReached: boolean; }
 const searchEvidence = { connectionVersion: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), invalidated: z.boolean(), result: definitionNavigationResultSchema.optional() };
 export const definitionSearchOpenSchema = z.union([
+  z.object({ ...searchEvidence, connectionId: z.string().min(1).max(200), database: z.literal('main'),
+    name: sqliteSearchName, kind: z.enum(sqliteDefinitionSearchKinds), dialect: z.literal('sqlite') }).strict(),
   postgresDefinitionTargetSchema.extend({ ...searchEvidence, dialect: z.literal('postgresql') }),
   z.object({ ...searchEvidence, connectionId: z.string().min(1).max(200), database: searchIdentifier, name: searchIdentifier, kind: z.enum(definitionSearchKinds) }).strict(),
 ]);

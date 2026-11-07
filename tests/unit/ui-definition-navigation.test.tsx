@@ -37,7 +37,7 @@ afterEach(async () => { if (root) { await act(async () => root!.unmount()); root
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 来源使用实际正文匹配器计算摘要及UTF16跨度，不伪造组件导航状态。 */
-function search(text = sql, name = '对象'): DefinitionSearchOpen { return { connectionId: 'c', connectionVersion: 1, database: '库', name, kind: 'view', invalidated: false, result: definitionNavigationResult(text, { mode: 'contains', text: '标记', caseSensitive: true }) }; }
+function search(text = sql, name = '对象'): DefinitionSearchOpen & { kind: 'view' } { return { connectionId: 'c', connectionVersion: 1, database: '库', name, kind: 'view', invalidated: false, result: definitionNavigationResult(text, { mode: 'contains', text: '标记', caseSensitive: true }) }; }
 /** 保持同一React根，覆盖原组件props切换及StrictMode重订阅。 */
 async function render(source = search(), strict = false): Promise<void> { renderStart = editors.mounts.length; renderEpoch++; await act(async () => { const element = <Viewer connectionId={source.connectionId} database={source.database} object={{ name: source.name, kind: source.kind }} search={source} onClose={closed}/>; root!.render(strict ? <StrictMode>{element}</StrictMode> : element); }); }
 async function click(label: string): Promise<void> { const button = document.querySelectorAll('button').find(node => node.textContent === label); expect(button, label).toBeDefined(); await act(async () => { button!.dispatchEvent(new MemoryEvent('click')); }); }

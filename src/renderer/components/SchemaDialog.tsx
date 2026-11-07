@@ -268,12 +268,12 @@ function template(kind: string, database: string, name: string) {
 }
 
 /** 统一入口分流：新建库与既有对象编辑分别维护确认生命周期，无默认库也能创建。 */
-interface DdlDialogProps { onDirtyChange?(dirty: boolean): void; connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; }
+interface DdlDialogProps { onDirtyChange?(dirty: boolean): void; connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; sqliteIndex?: string; }
 /** 只读定义使用独立组件生命周期，切换编辑/查看模式不会改变同一组件的Hook顺序。 */
 export function DdlDialog(props: DdlDialogProps) {
   // 新建库走独立编码目录与一次性预览，原对象DDL编辑器保持原生命周期。
   if (!props.database && !props.object && !props.readOnly) return <DatabaseCreateDialog connectionId={props.connectionId} onClose={props.onClose} onApplied={props.onApplied} onDirtyChange={props.onDirtyChange}/>;
-  return props.readOnly && props.object && props.database ? <DefinitionViewer connectionId={props.connectionId} database={props.database} object={props.object} search={props.definitionSearch} onClose={props.onClose}/> : <DdlEditorDialog {...props}/>;
+  return props.readOnly && props.object && props.database ? <DefinitionViewer connectionId={props.connectionId} database={props.database} object={props.object} search={props.definitionSearch} sqliteIndex={props.sqliteIndex} onClose={props.onClose}/> : <DdlEditorDialog {...props}/>;
 }
 /** 原有显式DDL编辑、预览与确认执行路径保持独立。 */
 function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, readOnly=false }: DdlDialogProps) {
