@@ -1,18 +1,22 @@
 import { txtImportOptionsSchema, validTxtImport, type TxtImportOptions } from './txtImport';
 import { z } from 'zod';
-import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions } from './xmlImport';
+import { recordImportFormats, sqliteXmlImportOptionsSchema, validXmlImport, xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions } from './xmlImport';
 import { csvImportDelimiters, csvImportHasHeader, type CsvImportDelimiter } from './csvImport';
 import { excelImportOptionsSchema, type ExcelImportOptions } from './excelTransfer';
+import { sqliteTableImportLimits, sqliteTableImportMappingSchema, type SqliteTableImportMapping } from './sqliteTableImport';
 
-export interface ImportPresetConfiguration {
+interface ImportPresetReadOptions {
   format: RecordImportFormat; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
   excelOptions?: Omit<ExcelImportOptions, 'sheetId'>;
-  csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; columns: string[]; mapping: Record<string, string>;
+  csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; columns: string[];
 }
-export interface ImportPresetEntry { id: string; name: string; configuration: ImportPresetConfiguration; createdAt: string; updatedAt: string; }
+export interface ImportPresetConfiguration extends ImportPresetReadOptions { mapping: Record<string, string>; }
+export interface SqliteImportPresetConfiguration extends ImportPresetReadOptions { sqliteMapping: SqliteTableImportMapping[]; }
+export type StoredImportPresetConfiguration = ImportPresetConfiguration | SqliteImportPresetConfiguration;
+export interface ImportPresetEntry { id: string; name: string; configuration: StoredImportPresetConfiguration; createdAt: string; updatedAt: string; }
 export interface ImportPresetSnapshot { generation: string; revision: number; entries: ImportPresetEntry[]; }
 export interface ImportPresetDocument { version: 1; revision: number; entries: ImportPresetEntry[]; }
-export interface ImportPresetSaveInput { generation: string; revision: number; id?: string; name: string; configuration: ImportPresetConfiguration; }
+export interface ImportPresetSaveInput { generation: string; revision: number; id?: string; name: string; configuration: StoredImportPresetConfiguration; }
 export interface ImportPresetDeleteInput { generation: string; revision: number; id: string; }
 export const importPresetLimits = { name: 80, columns: 4096, sourceUnits: 4096, targetUnits: 64, entries: 100, configurationBytes: 256 * 1024, documentBytes: 4 * 1024 * 1024 } as const;
 export const importPresetText = {
@@ -68,27 +72,39 @@ function name(input: unknown): string { const value = string(input, 1, importPre
 function date(input: unknown): string { const value = string(input, 24, 24); if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/u.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) return invalid(); return value; }
 
 /** 配置仅含文件解释、源列身份及显式映射，不接收路径、行值、SQL或任何连接身份。 */
-function configuration(input: unknown): ImportPresetConfiguration {
-  const source = record(input, ['format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'excelOptions', 'columns', 'mapping'], ['format', 'encoding', 'columns', 'mapping']);
+function configuration(input: unknown): StoredImportPresetConfiguration {
+  const source = record(input, ['format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'excelOptions', 'columns', 'mapping', 'sqliteMapping'], ['format', 'encoding', 'columns']);
+  const sqlite = Object.hasOwn(source, 'sqliteMapping');
+  if (sqlite === Object.hasOwn(source, 'mapping')) return invalid();
   const format = source.format as RecordImportFormat;
   if (!recordImportFormats.includes(format) || !['utf8', 'utf16le', 'gb18030'].includes(source.encoding as string)) return invalid();
   let units = 0;
-  const columns = array(source.columns, importPresetLimits.columns, 1).map(value => {
-    const column = string(value, 1, importPresetLimits.sourceUnits); units += column.length * 2;
+  const columns = array(source.columns, sqlite ? sqliteTableImportLimits.sourceColumns : importPresetLimits.columns, 1).map(value => {
+    const column = string(value, sqlite && format === 'json' ? 0 : 1, sqlite ? 256 : importPresetLimits.sourceUnits); units += column.length * 2;
     // 源键在columns和mapping各出现一次；先按最小字节计费，避免构造超大JSON后才拒绝。
     if (units > importPresetLimits.configurationBytes) throw Error(importPresetText.configurationBudget);
     return column;
   });
-  if (new Set(columns).size !== columns.length) return invalid();
-  const rawMapping = record(source.mapping, columns), mapping: Record<string, string> = Object.create(null), targets = new Set<string>();
-  for (const column of columns) {
-    const target = string(rawMapping[column], 0, importPresetLimits.targetUnits);
-    units += target.length; if (units > importPresetLimits.configurationBytes) throw Error(importPresetText.configurationBudget);
-    if (target.includes('\0') || target !== '' && targets.has(target)) return invalid();
-    if (target !== '') targets.add(target); mapping[column] = target;
+  const names = new Set(columns);
+  if (names.size !== columns.length) return invalid();
+  const options: ImportPresetReadOptions = { format, encoding: source.encoding as ImportPresetConfiguration['encoding'], columns };
+  let output: StoredImportPresetConfiguration;
+  if (sqlite) {
+    // SQLite 可将同一源字段写入多列，每一对都保留自己的转换类型。
+    const sqliteMapping = sqliteTableImportMappingSchema.parse(source.sqliteMapping);
+    if (sqliteMapping.some(item => !names.has(item.source))) return invalid();
+    output = { ...options, sqliteMapping };
+  } else {
+    const rawMapping = record(source.mapping, columns), mapping: Record<string, string> = Object.create(null), targets = new Set<string>();
+    for (const column of columns) {
+      const target = string(rawMapping[column], 0, importPresetLimits.targetUnits);
+      units += target.length; if (units > importPresetLimits.configurationBytes) throw Error(importPresetText.configurationBudget);
+      if (target.includes('\0') || target !== '' && targets.has(target)) return invalid();
+      if (target !== '') targets.add(target); mapping[column] = target;
+    }
+    if (!targets.size) return invalid();
+    output = { ...options, mapping };
   }
-  if (!targets.size) return invalid();
-  const output: ImportPresetConfiguration = { format, encoding: source.encoding as ImportPresetConfiguration['encoding'], columns, mapping };
   if (Object.hasOwn(source, 'csvDelimiter')) {
     if (source.format !== 'csv' || !csvImportDelimiters.includes(source.csvDelimiter as CsvImportDelimiter)) return invalid();
     output.csvDelimiter = source.csvDelimiter as CsvImportDelimiter;
@@ -99,7 +115,7 @@ function configuration(input: unknown): ImportPresetConfiguration {
   }
   if (Object.hasOwn(source, 'xmlOptions')) {
     const fields = record(source.xmlOptions, ['rowTag', 'attributes', 'binaryBase64', 'documentResult'], ['rowTag', 'attributes', 'binaryBase64']);
-    output.xmlOptions = xmlImportOptionsSchema.parse(fields);
+    output.xmlOptions = (sqlite ? sqliteXmlImportOptionsSchema : xmlImportOptionsSchema).parse(fields);
   }
   if (Object.hasOwn(source, 'txtOptions')) output.txtOptions = txtImportOptionsSchema.parse(record(source.txtOptions, ['mode', 'recordDelimiter', 'hasHeader', 'delimiter', 'quote', 'widths', 'trimPadding'], ['mode', 'recordDelimiter', 'hasHeader']));
   if (format === 'xlsx') {
@@ -115,14 +131,19 @@ function configuration(input: unknown): ImportPresetConfiguration {
   return output;
 }
 
-/** 按当前文件列顺序返回完整映射；任何来源或目标不兼容都拒绝整份套用。 */
-export function resolveImportPresetMapping(value: ImportPresetConfiguration, columns: readonly string[], targets: ReadonlySet<string>): string[] | undefined {
+/** 具名文件可重排列，位置列须保持原顺序。 */
+export function importPresetColumnsMatch(value: StoredImportPresetConfiguration, columns: readonly string[]): boolean {
   const positional = value.format === 'csv' && !csvImportHasHeader(value.format, value.csvHasHeader) ||
     value.format === 'txt' && value.txtOptions?.hasHeader === false ||
     value.format === 'xlsx' && value.excelOptions?.headerRow === 0;
   const names = new Set(value.columns);
-  if (columns.length !== names.size || new Set(columns).size !== columns.length ||
-      !columns.every((name, index) => positional ? name === value.columns[index] : names.has(name))) return;
+  return columns.length === names.size && new Set(columns).size === columns.length &&
+    columns.every((name, index) => positional ? name === value.columns[index] : names.has(name));
+}
+
+/** 按当前文件列顺序返回完整映射；任何来源或目标不兼容都拒绝整份套用。 */
+export function resolveImportPresetMapping(value: ImportPresetConfiguration, columns: readonly string[], targets: ReadonlySet<string>): string[] | undefined {
+  if (!importPresetColumnsMatch(value, columns)) return;
   const mapping = columns.map(name => value.mapping[name]);
   if (mapping.some(target => target && !targets.has(target))) return;
   return mapping;
@@ -154,7 +175,11 @@ function document(input: unknown): ImportPresetDocument {
 function guarded<T>(parse: (input: unknown) => T) {
   return z.unknown().transform((input, context): T => { try { return parse(input); } catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : importPresetText.invalid }); return z.NEVER; } });
 }
-export const importPresetConfigurationSchema = guarded(configuration);
+export const storedImportPresetConfigurationSchema = guarded(configuration);
+export const importPresetConfigurationSchema = guarded(input => {
+  const value = configuration(input);
+  return 'mapping' in value ? value : invalid();
+});
 export const importPresetEntrySchema = guarded(entry);
 export const importPresetDocumentSchema = guarded(document);
 export const importPresetListSchema = guarded(input => { record(input, []); return {}; });

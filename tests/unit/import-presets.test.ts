@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { importPresetColumnsMatch, storedImportPresetConfigurationSchema } from '../../src/shared/importPresets';
 import { importPresetConfigurationSchema, importPresetDocumentSchema, importPresetSnapshotSchema, importPresetEntrySchema, importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, resolveImportPresetMapping, type ImportPresetConfiguration } from '../../src/shared/importPresets';
 
 /** 手工构造源键，原型同名及换行只属于列身份，不携带任何真实文件或数据。 */
@@ -10,6 +11,20 @@ function entry() { return { id: randomUUID(), name: '财务 CSV 导入', configu
 function packet() { return { generation: randomUUID(), revision: 0, name: '财务 CSV 导入', configuration: configuration() }; }
 
 describe('导入配置严格共享合同', () => {
+  it('SQLite 配置保留空 JSON 键和同源多目标的独立转换，拒绝跨形态或不在目录的映射', () => {
+    const sqliteMapping = [{ source: '', target: 'original', kind: 'text' }, { source: '', target: 'number', kind: 'integer' }];
+    const raw = { format: 'json', encoding: 'utf8', columns: ['', 'note'], sqliteMapping };
+    const value = storedImportPresetConfigurationSchema.parse(raw);
+    expect(value).toEqual(raw);
+    expect(importPresetColumnsMatch(value, ['note', ''])).toBe(true);
+    expect(importPresetColumnsMatch(value, ['note', 'other'])).toBe(false);
+    expect(importPresetConfigurationSchema.safeParse(raw).success).toBe(false);
+    expect(storedImportPresetConfigurationSchema.safeParse({ ...raw, mapping: {} }).success).toBe(false);
+    expect(storedImportPresetConfigurationSchema.safeParse({ ...raw, sqliteMapping: [{ ...sqliteMapping[0], source: 'missing' }] }).success).toBe(false);
+    expect(storedImportPresetConfigurationSchema.safeParse({ ...raw, sqliteMapping: [...sqliteMapping, { ...sqliteMapping[0], target: 'ORIGINAL' }] }).success).toBe(false);
+    expect(storedImportPresetConfigurationSchema.safeParse({ ...raw, format: 'xml', columns: ['note'],
+      sqliteMapping: [{ ...sqliteMapping[0], source: 'note' }], xmlOptions: { rowTag: 'entry', attributes: true, binaryBase64: true } }).success).toBe(false);
+  });
   it('XLSX 配置保留读取范围并拒绝工作表令牌、无效范围和目标漂移', () => {
     const raw = { format: 'xlsx', encoding: 'utf8', columns: ['第1列', '第2列'], mapping: { 第1列: 'id', 第2列: 'note' },
       excelOptions: { headerRow: 0, firstDataRow: 2, lastDataRow: 9, protocol: 'plain' } };

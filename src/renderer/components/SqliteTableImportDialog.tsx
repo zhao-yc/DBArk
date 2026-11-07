@@ -2,13 +2,13 @@ import { excelImportDefaults, excelImportOptionsSchema, excelImportZh, type Exce
 import { ExcelImportFields } from './ExcelImportFields';
 import { txtImportDefaults, txtImportZh, type TxtImportOptions } from '../../shared/txtImport';
 import { TxtImportFields } from './TxtImportFields';
-import { xmlImportZh, type SqliteXmlImportOptions } from '../../shared/xmlImport';
+import { sqliteXmlImportOptionsSchema, xmlImportZh, type SqliteXmlImportOptions } from '../../shared/xmlImport';
 import { SqliteXmlImportFields, sqliteXmlImportDefaults } from './SqliteXmlImportFields';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FileChoice, TaskEvent } from '../../shared/contracts';
 import type { SqliteTablePage } from '../../shared/sqliteTableBrowse';
 import { sqliteTableCreateOutcomeSchema, type SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
-import { sqliteTableImportInspectSchema, sqliteTableImportInspectionSchema, sqliteTableImportMappingSchema, sqliteTableImportPreviewOutputSchema, sqliteTableImportOutcomeSchema, sqliteTableImportLimits, sqliteImportWriteFactSchema, assertSqliteImportWriteFactTransition, type SqliteImportWriteFact, type SqliteTableImportInspectInput, type SqliteTableImportInspectOutput, type SqliteTableImportPreviewInput, type SqliteTableImportPreviewOutput, type SqliteTableImportApplyInput, type SqliteTableImportReleaseInput, type SqliteTableImportOutcome, type SqliteTableImportMapping } from '../../shared/sqliteTableImport';
+import { buildSqliteTableImportPlan, sqliteTableImportInspectSchema, sqliteTableImportInspectionSchema, sqliteTableImportMappingSchema, sqliteTableImportPreviewOutputSchema, sqliteTableImportOutcomeSchema, sqliteTableImportLimits, sqliteImportWriteFactSchema, assertSqliteImportWriteFactTransition, type SqliteImportWriteFact, type SqliteTableImportInspectInput, type SqliteTableImportInspectOutput, type SqliteTableImportPreviewInput, type SqliteTableImportPreviewOutput, type SqliteTableImportApplyInput, type SqliteTableImportReleaseInput, type SqliteTableImportOutcome, type SqliteTableImportMapping } from '../../shared/sqliteTableImport';
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteTableImportZh as text } from '../locales/sqliteTableImport.zh-CN';
 import { sqliteImportFactMessage } from '../../shared/sqliteTableImportFact';
@@ -18,6 +18,21 @@ import { csvImportDelimiters } from '../../shared/csvImport';
 import { matchImportColumns, type ImportMappingAction } from '../importMapping';
 import { importMappingZh } from '../locales/importMapping.zh-CN';
 import { ImportMappingActions } from './ImportMappingActions';
+import { importPresetColumnsMatch, storedImportPresetConfigurationSchema, type SqliteImportPresetConfiguration, type StoredImportPresetConfiguration } from '../../shared/importPresets';
+import { ImportPresets } from './ImportPresets';
+import { importPresetsZh as presetsText } from '../locales/importPresets.zh-CN';
+
+/** 检查精确源字段和当前可写目标，再复用 SQLite 预检的类型与必填列规则。 */
+function presetMapping(value: SqliteImportPresetConfiguration, inspection: SqliteTableImportInspectOutput): SqliteTableImportMapping[] {
+  const targets = new Set(inspection.columns.filter(column => !column.generated).map(column => column.name));
+  if (!importPresetColumnsMatch(value, inspection.sourceColumns) || value.sqliteMapping.some(item => !targets.has(item.target)))
+    throw Error(presetsText.incompatible);
+  try {
+    buildSqliteTableImportPlan({ target: inspection.target, columns: inspection.columns, sourceColumns: inspection.sourceColumns,
+      strict: inspection.strict, mapping: value.sqliteMapping });
+  } catch { throw Error(presetsText.incompatible); }
+  return value.sqliteMapping;
+}
 
 /** 只捕获原表页来源；不把当前页数据、筛选草稿或编辑快照当成导入内容。 */
 export class SqliteTableImportSource {
@@ -59,7 +74,7 @@ export const sqliteTableImportServices: SqliteTableImportServices = {
 export interface SqliteTableImportInitialSource { file: FileChoice; sourceId: string; format: SqliteTableImportInspectInput['format']; encoding: SqliteTableImportInspectInput['encoding']; csvDelimiter?: NonNullable<SqliteTableImportInspectInput['csvDelimiter']>; csvHasHeader?: boolean; xmlOptions?: SqliteXmlImportOptions; txtOptions?: TxtImportOptions; excelOptions?: ExcelImportOptions; }
 interface Props { source: SqliteTableImportSource; initialSource?: SqliteTableImportInitialSource; services?: SqliteTableImportServices; onActivity(delta: 1 | -1): void; onDirtyChange?(dirty: boolean): void; onClose(): void; onCommitted?(output: SqliteTableImportOutcome, sourceChanged: boolean): void; onCleanupError(message: string): void; }
 type Mapping = { id: string; source: string | null; target: string; kind: SqliteTableImportMapping['kind'] };
-type Draft = { format: SqliteTableImportInspectInput['format']; encoding: SqliteTableImportInspectInput['encoding']; delimiter: NonNullable<SqliteTableImportInspectInput['csvDelimiter']>; header: boolean; xmlOptions: SqliteXmlImportOptions; txtOptions: TxtImportOptions; excelOptions: ExcelImportOptions; file?: FileChoice; inspection?: SqliteTableImportInspectOutput; mapping: Mapping[]; preview?: SqliteTableImportPreviewOutput; confirmation: string; outcome?: SqliteTableImportOutcome; locked: boolean; };
+type Draft = { preset?: SqliteImportPresetConfiguration; format: SqliteTableImportInspectInput['format']; encoding: SqliteTableImportInspectInput['encoding']; delimiter: NonNullable<SqliteTableImportInspectInput['csvDelimiter']>; header: boolean; xmlOptions: SqliteXmlImportOptions; txtOptions: TxtImportOptions; excelOptions: ExcelImportOptions; file?: FileChoice; inspection?: SqliteTableImportInspectOutput; mapping: Mapping[]; preview?: SqliteTableImportPreviewOutput; confirmation: string; outcome?: SqliteTableImportOutcome; locked: boolean; };
 type Operation = { kind: 'choose' | 'inspect' | 'preview' | 'apply'; id?: string; draft: Draft; generation: number; readonly expectedRows?: number; cancelled: boolean; sent: boolean; resultReceived?: boolean; receivedOutcome?: SqliteTableImportOutcome; commitBoundary: boolean; fact?: SqliteImportWriteFact; cancel?: Promise<void>; promise?: Promise<void>; committed?: SqliteTableImportOutcome; committedNotified?: boolean; };
 
 /** 完整文件检查与显式映射分阶段进行；只有一次明确确认才能提交原表的独立事务。 */
@@ -72,6 +87,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
   const mounted = useRef(true), closed = useRef(false), invalid = useRef(false), generation = useRef(0), operation = useRef<Operation | undefined>(undefined), consumed = useRef(new Set<string>()), closedProps = useRef({ source, services, initialSource }); closedProps.current = { source, services, initialSource };
   const propsEpoch = useRef(0), observedProps = useRef({ source, services, initialSource });
   if (observedProps.current.source !== source || observedProps.current.services !== services || observedProps.current.initialSource !== initialSource) { observedProps.current = { source, services, initialSource }; propsEpoch.current++; }
+  const presetOperation = useRef(false), [presetBusy, setPresetBusy] = useState(false);
   const inspections = useRef(new Set<string>()), previews = useRef(new Set<string>()), releases = useRef(new Map<string, Promise<void>>());
   const renderTicket = {}, committed = useRef<object | undefined>(undefined);
   useLayoutEffect(() => { committed.current = renderTicket; return () => { if (committed.current === renderTicket) committed.current = undefined; }; });
@@ -79,7 +95,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
   const sameTarget = (value: { connectionId: string; database: string; table: string }) => value.connectionId === owner.source.target.connectionId && value.database === 'main' && value.table === owner.source.target.table;
   function current(): boolean { if (!mounted.current || closed.current || invalid.current) return false; if (!owner.source.current()) invalid.current = true; return !invalid.current; }
   function localCurrent(): boolean { return mounted.current && !closed.current && committed.current === renderTicket && live.current === draft; }
-  function editable(): boolean { return localCurrent() && current() && !operation.current && !closing && !draft.locked; }
+  function editable(): boolean { return localCurrent() && current() && !operation.current && !presetOperation.current && !closing && !draft.locked; }
   function report(reason: unknown): void { const value = errorMessage(reason); if (mounted.current && !closed.current) setError(value); else try { owner.callbacks.onCleanupError(value); } catch { /* 收尾反馈不能替代原事务事实。 */ } }
   /** dirty先同步登记到原表页，退出守卫不能错过尚未提交的映射或预检。 */
   function replace(next: Draft): void { live.current = next; owner.callbacks.onDirtyChange?.(!next.outcome?.fact.commitAcknowledged && (!!next.file || !!next.inspection || next.mapping.some(row => !!row.target) || next.locked)); setDraft(next); }
@@ -88,11 +104,66 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     if (!promise) { promise = Promise.resolve().then(() => owner.services.release({ [kind]: id })).then(() => { (kind === 'inspectionId' ? inspections.current : previews.current).delete(id); }); releases.current.set(key, promise); }
     try { await promise; } finally { if (releases.current.get(key) === promise) releases.current.delete(key); }
   }
-  async function releaseAll(): Promise<void> { const errors: string[] = []; for (const [kind, values] of [['previewId', previews.current], ['inspectionId', inspections.current]] as const) for (const id of [...values]) try { await releaseOne(kind, id); } catch (reason) { errors.push(errorMessage(reason)); } if (errors.length) throw Error(errors.join('\n')); }
+  async function releaseAll(): Promise<void> {
+    // 在首次等待前固定两种能力，旧清理不得领取随后新签发的检查。
+    const owned = [['previewId', [...previews.current]], ['inspectionId', [...inspections.current]]] as const;
+    const errors: string[] = [];
+    for (const [kind, values] of owned) for (const id of values) {
+      try { await releaseOne(kind, id); } catch (reason) { errors.push(errorMessage(reason)); }
+    }
+    if (errors.length) throw Error(errors.join('\n'));
+  }
   function revokePreview(): void { if (draft.preview?.ok) void releaseOne('previewId', draft.preview.previewId).catch(report); }
+  /** 配置仓库的原调用结束前占住父表页，避免关闭或改映射后发布过期回执。 */
+  function presetActivity(delta: 1 | -1): void {
+    if (delta === 1) {
+      if (!editable()) throw Error(presetsText.unavailable);
+      presetOperation.current = true;
+      try { owner.callbacks.onActivity(1); }
+      catch (reason) { presetOperation.current = false; throw reason; }
+    } else if (presetOperation.current) {
+      presetOperation.current = false;
+      try { owner.callbacks.onActivity(-1); } catch (reason) { report(reason); }
+    }
+    if (mounted.current) setPresetBusy(presetOperation.current);
+  }
+
+  function capturePreset(): SqliteImportPresetConfiguration {
+    const inspection = draft.inspection;
+    if (!inspection || Date.parse(inspection.expiresAt) <= Date.now() || !current()) throw Error(presetsText.unavailable);
+    const { sheetId: _sheetId, ...workbookOptions } = draft.excelOptions;
+    const configuration = storedImportPresetConfigurationSchema.parse({
+      format: draft.format, encoding: draft.encoding, columns: inspection.sourceColumns,
+      sqliteMapping: draft.mapping.flatMap(({ source, target, kind }) => source !== null && target ? [{ source, target, kind }] : []),
+      ...(draft.format === 'csv' ? { csvDelimiter: draft.delimiter, csvHasHeader: draft.header } : {}),
+      ...(draft.format === 'xml' ? { xmlOptions: draft.xmlOptions } : {}),
+      ...(draft.format === 'txt' ? { txtOptions: draft.txtOptions } : {}),
+      ...(draft.format === 'xlsx' ? { excelOptions: workbookOptions } : {}),
+    });
+    if (!('sqliteMapping' in configuration)) throw Error(presetsText.unavailable);
+    presetMapping(configuration, inspection);
+    return configuration;
+  }
+
+  /** 只恢复配置。原检查和预检能力全部撤销，本次文件与工作表需重新选择。 */
+  function applyPreset(value: StoredImportPresetConfiguration): boolean {
+    if (!editable() || owner.initialSource || !('sqliteMapping' in value)) return false;
+    const xmlOptions = value.xmlOptions ? sqliteXmlImportOptionsSchema.parse(value.xmlOptions) : sqliteXmlImportDefaults;
+    void releaseAll().catch(report);
+    replace({ ...draft, preset: value, format: value.format, encoding: value.encoding, delimiter: value.csvDelimiter ?? ',',
+      header: value.csvHasHeader ?? true, xmlOptions, txtOptions: value.txtOptions ?? txtImportDefaults,
+      excelOptions: { ...excelImportDefaults, ...value.excelOptions },
+      file: undefined, inspection: undefined, mapping: [], preview: undefined, confirmation: '', outcome: undefined, locked: false });
+    setError('');
+    setMessage(value.format === 'xlsx' ? presetsText.chooseNewSheet : presetsText.chooseNewFile);
+    return true;
+  }
+
   /** 配置变化撤销文件授权和原检查，不继承旧格式的令牌或旧SQL。 */
   function configure(patch: Partial<Pick<Draft, 'format' | 'encoding' | 'delimiter' | 'header' | 'xmlOptions' | 'txtOptions' | 'excelOptions'>>): void {
-    if (!editable() || owner.initialSource) return; void releaseAll().catch(report); replace({ ...draft, ...patch, ...(['xml', 'xlsx'].includes(patch.format ?? '') ? { encoding: 'utf8' } : {}), file: draft.format === 'xlsx' && patch.excelOptions ? draft.file : undefined, inspection: undefined, mapping: [], preview: undefined, confirmation: '', outcome: undefined, locked: false }); setError(''); setMessage('');
+    if (!editable() || owner.initialSource) return;
+    const keepPreset = !!patch.excelOptions && patch.excelOptions.sheetId !== draft.excelOptions.sheetId;
+    void releaseAll().catch(report); replace({ ...draft, ...patch, preset: keepPreset ? draft.preset : undefined, ...(['xml', 'xlsx'].includes(patch.format ?? '') ? { encoding: 'utf8' } : {}), file: draft.format === 'xlsx' && patch.excelOptions ? draft.file : undefined, inspection: undefined, mapping: [], preview: undefined, confirmation: '', outcome: undefined, locked: false }); setError(''); setMessage('');
   }
   function mappingAt(row: Mapping, patch: Partial<Pick<Mapping, 'target' | 'kind'>>): void { if (!editable() || !draft.inspection || Date.parse(draft.inspection.expiresAt) <= Date.now() || row.source === null || !draft.mapping.includes(row)) return; revokePreview(); replace({ ...draft, mapping: draft.mapping.map(value => value === row ? { ...value, ...patch } : value), preview: undefined, confirmation: '', outcome: undefined }); setError(''); setMessage(''); }
   function addMapping(): void { if (!editable() || !draft.inspection || Date.parse(draft.inspection.expiresAt) <= Date.now() || draft.mapping.length >= sqliteTableImportLimits.mapping) return; revokePreview(); replace({ ...draft, mapping: [...draft.mapping, { id: uid(), source: null, target: '', kind: 'text' }], preview: undefined, confirmation: '', outcome: undefined }); }
@@ -149,7 +220,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     if (owner.initialSource) return;
     const op = begin('choose'); if (!op) return;
     op.promise = (async () => {
-      try { const file = await owner.services.choose({ purpose: 'import', format: op.draft.format }); if (!accepts(op)) return; if (!file) { replace({ ...op.draft }); return; } if (!file.token || !file.name) throw Error(text.invalid); op.draft = { ...op.draft, ...(op.draft.format === 'xlsx' ? { excelOptions: excelImportDefaults } : {}), file, inspection: undefined, preview: undefined, confirmation: '', outcome: undefined }; replace(op.draft); await releaseAll(); if (!accepts(op)) return; }
+      try { const file = await owner.services.choose({ purpose: 'import', format: op.draft.format }); if (!accepts(op)) return; if (!file) { replace({ ...op.draft }); return; } if (!file.token || !file.name) throw Error(text.invalid); op.draft = { ...op.draft, ...(op.draft.format === 'xlsx' ? { excelOptions: { ...excelImportDefaults, ...op.draft.preset?.excelOptions } } : {}), file, inspection: undefined, preview: undefined, confirmation: '', outcome: undefined }; replace(op.draft); await releaseAll(); if (!accepts(op)) return; }
       catch (reason) { if (mounted.current && generation.current === op.generation) report(reason); }
       finally { await finish(op); }
     })();
@@ -166,8 +237,15 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
         await releaseAll(); if (!accepts(op)) return; op.sent = true; const raw = await owner.services.inspect(input); if (typeof raw.inspectionId === 'string') inspections.current.add(raw.inspectionId); const value = sqliteTableImportInspectionSchema.parse(raw);
         if (!accepts(op)) { await releaseOne('inspectionId', value.inspectionId); return; }
         if (!sameTarget(value.target) || value.readOnly !== owner.source.readOnly || Date.parse(value.expiresAt) <= Date.now()) { await releaseOne('inspectionId', value.inspectionId); throw Error(text.invalid); }
-        const mapping = op.draft.mapping.filter(row => row.source !== null && value.sourceColumns.includes(row.source) && value.columns.some(column => column.name === row.target && !column.generated)).map(row => ({ ...row, id: uid() }));
+        let restored: SqliteTableImportMapping[] | undefined;
+        if (op.draft.preset) {
+          try { restored = presetMapping(op.draft.preset, value); }
+          catch (reason) { await releaseOne('inspectionId', value.inspectionId); throw reason; }
+        }
+        const mapping = (restored ?? op.draft.mapping.filter(row => row.source !== null && value.sourceColumns.includes(row.source) &&
+          value.columns.some(column => column.name === row.target && !column.generated))).map(row => ({ ...row, id: uid() }));
         replace({ ...op.draft, inspection: value, mapping, preview: undefined, confirmation: '', outcome: undefined });
+        if (restored) setMessage(presetsText.sqliteApplied);
       } catch (reason) { if (mounted.current && generation.current === op.generation && !op.cancelled) { replace({ ...op.draft, file: undefined, inspection: undefined, preview: undefined, confirmation: '' }); report(reason); } }
       finally { await finish(op); }
     })();
@@ -242,7 +320,7 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
   }
   /** 关闭只处理原owner，等待真实任务与取消ACK后再释放所有准确能力。 */
   function close(confirmed = false): void {
-    if (!localCurrent() || closing) return;
+    if (!localCurrent() || closing || presetOperation.current) return;
     if (!confirmed && !draft.outcome?.fact.commitAcknowledged && (!!draft.file || !!draft.inspection || draft.locked)) { setDiscard(true); return; }
     const token = generation.current, epoch = propsEpoch.current; setClosing(true); closed.current = true; const active = operation.current; stop(active);
     void (async () => { if (active?.promise) await active.promise; if (active?.cancel) await active.cancel; await releaseAll(); if (mounted.current && generation.current === token && propsEpoch.current === epoch && closedProps.current.source === owner.source && closedProps.current.services === owner.services && closedProps.current.initialSource === owner.initialSource) { owner.callbacks.onDirtyChange?.(false); owner.callbacks.onClose(); } })().catch(reason => { closed.current = false; if (mounted.current) setClosing(false); report(reason); });
@@ -275,15 +353,26 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     return () => { mounted.current = false; generation.current++; unsubscribeSource(); unsubscribe(); stop(); if (!operation.current) void releaseAll().catch(report); owner.callbacks.onDirtyChange?.(false); };
   }, []);
   useEffect(() => { const now = Date.now(), deadlines = [draft.inspection?.expiresAt, draft.preview?.ok ? draft.preview.expiresAt : undefined].filter((value): value is string => !!value).map(Date.parse).filter(value => Number.isFinite(value) && value > now); if (!deadlines.length) return; const timer = setTimeout(() => tick(value => value + 1), Math.max(1, Math.min(...deadlines) - now + 1)); return () => clearTimeout(timer); }, [draft.preview, draft.inspection, timeRevision]);
-  const valid = current(), disabled = busy || closing || !valid || draft.locked, inspection = draft.inspection, selected = draft.preview?.ok ? draft.preview : undefined;
+  const valid = current(), disabled = busy || closing || presetBusy || !valid || draft.locked, inspection = draft.inspection, selected = draft.preview?.ok ? draft.preview : undefined;
   const configurationDisabled = disabled || !!owner.initialSource;
   const inspectionExpired = !!inspection && Date.parse(inspection.expiresAt) <= Date.now(), previewExpired = !!selected && Date.parse(selected.expiresAt) <= Date.now();
   const renderedOperation = operation.current;
-  return <Modal title={text.title} wide onClose={() => close()}><div className="modal-content sqlite-table-import" aria-busy={busy || closing}>
+  let canSavePreset = false;
+  if (!owner.initialSource && inspection && !inspectionExpired && draft.mapping.length > 0) {
+    try { capturePreset(); canSavePreset = true; } catch { /* 仍可在原预检流程查看映射诊断。 */ }
+  }
+  return <Modal title={text.title} wide onClose={() => close()}><div className="modal-content sqlite-table-import" aria-busy={busy || closing || presetBusy}>
     <p>{owner.source.target.connectionId} / {owner.source.target.database} / {owner.source.target.table}</p><UsageHelp><p>{text.inspectHint}</p><p>{text.mappingHint}</p><p>{draft.format === 'xml' ? draft.xmlOptions?.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : text.nullHint}</p><p>{text.triggerHint}</p></UsageHelp>{owner.source.readOnly && <p className="warning-text">{text.readonly}</p>}{(!valid || stale) && !draft.outcome?.fact.commitAcknowledged && <ErrorBox message={text.stale}/>}
     <div className="form-grid"><Field label={text.format}><select aria-label={text.format} value={draft.format} disabled={configurationDisabled} onChange={event => configure({ format: event.target.value as Draft['format'] })}><option value="csv">CSV</option><option value="json">JSON</option><option value="txt">{txtImportZh.format}</option><option value="xlsx">{excelImportZh.format}</option><option value="xml">XML</option></select></Field><Field label={text.encoding}><select aria-label={text.encoding} value={draft.encoding} disabled={configurationDisabled || draft.format === 'xml' || draft.format === 'xlsx'} onChange={event => configure({ encoding: event.target.value as Draft['encoding'] })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <><Field label={text.delimiter}><select aria-label={text.delimiter} value={draft.delimiter} disabled={configurationDisabled} onChange={event => configure({ delimiter: event.target.value as Draft['delimiter'] })}>{csvImportDelimiters.map(value => <option value={value} key={value}>{value === '\t' ? 'Tab' : value}</option>)}</select></Field><label><input type="checkbox" aria-label={text.header} checked={draft.header} disabled={configurationDisabled} onChange={event => configure({ header: event.target.checked })}/>{text.header}</label></>}{draft.format === 'xlsx' && <ExcelImportFields fileToken={draft.file?.token} options={draft.excelOptions} disabled={configurationDisabled} frozen={!!owner.initialSource} onChange={excelOptions => configure({ excelOptions })}/>}
       {draft.format === 'txt' && <TxtImportFields options={draft.txtOptions} disabled={configurationDisabled} onChange={txtOptions => configure({ txtOptions })}/>}{draft.format === 'xml' && <SqliteXmlImportFields options={draft.xmlOptions} disabled={configurationDisabled} onChange={xmlOptions => configure({ xmlOptions })}/>}</div>
     <div className="sqlite-import-actions"><button type="button" disabled={configurationDisabled} onClick={choose}>{draft.file ? text.chooseAgain : text.choose}</button><span aria-label={text.source}>{draft.file?.name ?? text.noFile}</span><button type="button" disabled={disabled || !draft.file || draft.format === 'xlsx' && !excelImportOptionsSchema.safeParse(draft.excelOptions).success} onClick={inspect}>{text.inspect}</button></div>
+    {!owner.initialSource && <details><summary>{presetsText.title}</summary>
+      <ImportPresets source={JSON.stringify([owner.source.id, draft.file?.token, inspection?.inspectionId, draft.mapping, draft.preset])}
+        busy={busy || closing || !valid || draft.locked} canSave={canSavePreset} isCurrent={current}
+        supports={value => 'sqliteMapping' in value} applyHint={presetsText.sqliteApplyHint}
+        capture={capturePreset} onApply={applyPreset} onActivity={presetActivity}/>
+    </details>}
+    {draft.preset && <button type="button" disabled={disabled} onClick={() => configure({})}>{presetsText.cancelApply}</button>}
     {inspection && <><p>{draft.format === 'xml' && draft.xmlOptions?.documentResult !== undefined ? xmlImportZh.documentRecords(inspection.records) : text.records(inspection.records)} · {inspection.strict ? text.strict : ''}</p><p className="muted small">{text.sourceHash}：{inspection.source.sha256}</p><details><summary>{text.targetColumns}</summary><ul>{inspection.columns.map(column => <li key={column.name}>{column.name} · {column.declaredType} · {text.affinity} {column.affinity} · {column.nullable ? text.nullable : text.notNull} · {column.hasDefault ? text.hasDefault : text.noDefault}{column.generated ? ' · ' + text.generated : ''}</li>)}</ul></details>
       <section aria-label={text.mapping}><h3>{text.mapping}</h3><ImportMappingActions disabled={disabled || inspectionExpired} onAction={remap}/><button type="button" disabled={disabled || inspectionExpired || draft.mapping.length >= sqliteTableImportLimits.mapping} onClick={addMapping}>{text.addMapping}</button>{draft.mapping.map((row, index) => <div className="sqlite-import-mapping" key={row.id}><select aria-label={text.sourceColumn(index + 1)} value={row.source === null ? '' : 's' + inspection.sourceColumns.indexOf(row.source)} disabled={disabled || inspectionExpired} onChange={event => sourceAt(row, event.target.value)}><option value="">{text.noSource}</option>{inspection.sourceColumns.map((name, at) => <option key={at} value={'s' + at}>{name || text.emptySource}</option>)}</select><select aria-label={text.target(row.source ?? text.noSource)} value={row.target} disabled={disabled || inspectionExpired || row.source === null} onChange={event => mappingAt(row, { target: event.target.value })}><option value="">{text.exclude}</option>{inspection.columns.map(column => <option key={column.name} value={column.name} disabled={column.generated}>{column.name}{column.generated ? ' · ' + text.generated : ''}</option>)}</select><select aria-label={text.kind(row.source ?? text.noSource)} value={row.kind} disabled={disabled || inspectionExpired || !row.target} onChange={event => mappingAt(row, { kind: event.target.value as Mapping['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select><button type="button" aria-label={text.removeMapping(index + 1)} disabled={disabled || inspectionExpired} onClick={() => removeMapping(row)}>×</button></div>)}</section>
       <details><summary>{text.sample}</summary>{inspection.sampleOmitted && <p>{text.sampleLimit}</p>}<div className="sqlite-import-scroll"><table aria-label={text.sample}><thead><tr>{inspection.sourceColumns.map(name => <th key={name}>{name}</th>)}</tr></thead><tbody>{inspection.sample.map((row, index) => <tr key={index}>{inspection.sourceColumns.map(name => <td key={name}>{!Object.hasOwn(row, name) ? draft.format === 'xml' ? text.null : text.missing : row[name] === null ? text.null : row[name] === '' ? text.empty : typeof row[name] === 'object' ? JSON.stringify(row[name]) : String(row[name])}</td>)}</tr>)}</tbody></table></div></details>
@@ -292,5 +381,5 @@ export function SqliteTableImportDialog({ source, initialSource, services = sqli
     {draft.outcome && <details aria-label={text.factTitle}><summary>{text.phases[draft.outcome.fact.phase]}</summary><dl><dt>{text.factOperation}</dt><dd>{draft.outcome.operationId}</dd><dt>{text.factTarget}</dt><dd>{draft.outcome.target.connectionId} / {draft.outcome.target.database} / {draft.outcome.target.table}</dd><dt>{text.factRequested}</dt><dd>{draft.outcome.fact.requestedRows}</dd><dt>{text.factApplied}</dt><dd>{draft.outcome.fact.appliedRows}</dd></dl></details>}
     {draft.outcome?.failure && <table aria-label={text.failure}><thead><tr><th>{text.reportRow}</th><th>{text.reportColumn}</th><th>{text.reportReason}</th></tr></thead><tbody><tr><td>{draft.outcome.failure.record ?? ''}</td><td>{[draft.outcome.failure.source, draft.outcome.failure.target].filter(Boolean).join(' → ')}</td><td>{draft.outcome.failure.code} · {draft.outcome.failure.message}</td></tr></tbody></table>}
     {(previewExpired || !selected && inspectionExpired) && <ErrorBox message={text.expired}/>} {selected && !previewExpired && inspectionExpired && <p className="info-strip">{text.inspectionExpiredPreviewValid}</p>}<ErrorBox message={error}/>{message && <p role="status">{message}</p>}{progress && <p role="status">{progress.message}{progress.rows === undefined ? '' : ' · ' + progress.rows}<progress max={100} value={progress.progress}/></p>}{busy && <Spinner text={text.working}/>} {discard && <p className="warning-text">{text.discard}</p>}
-  </div><footer className="modal-footer">{discard ? <><button type="button" disabled={closing} onClick={() => { if (localCurrent()) setDiscard(false); }}>{text.keep}</button><button type="button" disabled={closing} onClick={() => close(true)}>{text.discardClose}</button></> : <><button type="button" disabled={closing} onClick={() => close()}>{text.close}</button><span className="grow"/>{busy && renderedOperation?.id && <button type="button" disabled={renderedOperation.commitBoundary || renderedOperation.resultReceived || renderedOperation.fact?.commitAcknowledged || renderedOperation.fact?.rollbackAcknowledged} title={renderedOperation.fact?.commitAcknowledged ? text.committed(renderedOperation.fact.appliedRows) : renderedOperation.fact?.rollbackAcknowledged ? sqliteImportFactMessage(renderedOperation.fact) : renderedOperation.commitBoundary ? text.commitBoundary : undefined} onClick={() => { if (localCurrent() && operation.current === renderedOperation) stop(renderedOperation); }}>{text.stop}</button>}<button type="button" disabled={disabled || !inspection || inspectionExpired} onClick={preview}>{text.preview}</button><button type="button" className="primary" disabled={disabled || !selected || previewExpired || owner.source.readOnly || inspection?.readOnly || draft.confirmation !== selected.confirmation || consumed.current.has(selected.previewId)} onClick={apply}>{text.apply}</button></>}</footer></Modal>;
+  </div><footer className="modal-footer">{discard ? <><button type="button" disabled={closing} onClick={() => { if (localCurrent()) setDiscard(false); }}>{text.keep}</button><button type="button" disabled={closing} onClick={() => close(true)}>{text.discardClose}</button></> : <><button type="button" disabled={closing || presetBusy} onClick={() => close()}>{text.close}</button><span className="grow"/>{busy && renderedOperation?.id && <button type="button" disabled={renderedOperation.commitBoundary || renderedOperation.resultReceived || renderedOperation.fact?.commitAcknowledged || renderedOperation.fact?.rollbackAcknowledged} title={renderedOperation.fact?.commitAcknowledged ? text.committed(renderedOperation.fact.appliedRows) : renderedOperation.fact?.rollbackAcknowledged ? sqliteImportFactMessage(renderedOperation.fact) : renderedOperation.commitBoundary ? text.commitBoundary : undefined} onClick={() => { if (localCurrent() && operation.current === renderedOperation) stop(renderedOperation); }}>{text.stop}</button>}<button type="button" disabled={disabled || !inspection || inspectionExpired} onClick={preview}>{text.preview}</button><button type="button" className="primary" disabled={disabled || !selected || previewExpired || owner.source.readOnly || inspection?.readOnly || draft.confirmation !== selected.confirmation || consumed.current.has(selected.previewId)} onClick={apply}>{text.apply}</button></>}</footer></Modal>;
 }

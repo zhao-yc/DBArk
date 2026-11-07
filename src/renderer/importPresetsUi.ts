@@ -1,4 +1,4 @@
-import { importPresetConfigurationSchema, importPresetDeleteSchema, importPresetSaveSchema, importPresetSnapshotSchema, type ImportPresetConfiguration, type ImportPresetDeleteInput, type ImportPresetSaveInput, type ImportPresetSnapshot } from '../shared/importPresets';
+import { importPresetConfigurationSchema, importPresetDeleteSchema, importPresetSaveSchema, importPresetSnapshotSchema, storedImportPresetConfigurationSchema, type ImportPresetConfiguration, type ImportPresetDeleteInput, type ImportPresetSaveInput, type ImportPresetSnapshot, type StoredImportPresetConfiguration } from '../shared/importPresets';
 import { readyImportPreview, type ImportPreviewContext, type ReadyImportPreview } from './importPreview';
 import { importPresetsZh as text } from './locales/importPresets.zh-CN';
 
@@ -11,7 +11,7 @@ export function captureImportPresetConfiguration(context: ImportPreviewContext |
 }
 export interface ImportPresetsServices { list(): Promise<ImportPresetSnapshot>; save(input: ImportPresetSaveInput): Promise<ImportPresetSnapshot>; delete(input: ImportPresetDeleteInput): Promise<ImportPresetSnapshot>; }
 export interface ImportPresetsState { snapshot?: ImportPresetSnapshot; selected: string; name: string; busy: boolean; error: string; needsRefresh: boolean; }
-interface Options { services: ImportPresetsServices; source(): unknown; available(): boolean; capture(): ImportPresetConfiguration; apply(value: ImportPresetConfiguration): boolean; activity(delta: 1 | -1): void; publish(state: ImportPresetsState): void; }
+interface Options { services: ImportPresetsServices; source(): unknown; available(): boolean; capture(): StoredImportPresetConfiguration; apply(value: StoredImportPresetConfiguration): boolean; activity(delta: 1 | -1): void; publish(state: ImportPresetsState): void; }
 
 /** CAS只携带用户已见修订；迟到或冲突必须显式刷新，不重试写盘或拼接成功结果。 */
 export class ImportPresetsController {
@@ -26,7 +26,7 @@ export class ImportPresetsController {
   /** 选择本身不恢复格式、不读取文件，更不导入；只有显式应用才交父级。 */
   apply(expected = this.#state, source = this.options.source()): void {
     if (!this.current(expected, source) || expected.needsRefresh) return; const entry = expected.snapshot?.entries.find(item => item.id === expected.selected); if (!entry) return;
-    try { this.options.apply(importPresetConfigurationSchema.parse(entry.configuration)); } catch (reason) { this.publish({ ...expected, error: reason instanceof Error ? reason.message : String(reason) }); }
+    try { this.options.apply(storedImportPresetConfigurationSchema.parse(entry.configuration)); } catch (reason) { this.publish({ ...expected, error: reason instanceof Error ? reason.message : String(reason) }); }
   }
   async load(expected = this.#state, source = this.options.source()): Promise<void> { if (!this.current(expected, source)) return; await this.run('list', expected); }
   async mutate(kind: 'create' | 'update' | 'delete', expected = this.#state, source = this.options.source()): Promise<void> {

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ImportPresetConfiguration } from '../../shared/importPresets';
+import type { StoredImportPresetConfiguration } from '../../shared/importPresets';
 import { ImportPresetsController, type ImportPresetsServices, type ImportPresetsState } from '../importPresetsUi';
 import { importPresetsZh as text } from '../locales/importPresets.zh-CN';
 import { invoke } from '../lib';
 import { ErrorBox, Field, Spinner, UsageHelp } from './ui';
 const services: ImportPresetsServices = { list: () => invoke('files.importPresets.list', {}), save: input => invoke('files.importPresets.save', input), delete: input => invoke('files.importPresets.delete', input) };
-interface Props { source: string; busy: boolean; canSave: boolean; isCurrent(): boolean; capture(): ImportPresetConfiguration; onApply(value: ImportPresetConfiguration): boolean; onActivity(delta: 1 | -1): void; supports?(value: ImportPresetConfiguration): boolean; applyHint?: string; services?: ImportPresetsServices; }
+interface Props { source: string; busy: boolean; canSave: boolean; isCurrent(): boolean; capture(): StoredImportPresetConfiguration; onApply(value: StoredImportPresetConfiguration): boolean; onActivity(delta: 1 | -1): void; supports?(value: StoredImportPresetConfiguration): boolean; applyHint?: string; services?: ImportPresetsServices; }
 /** 独立内联本地配置区，显式读取列表，不给旧导入默认流程增加请求。 */
 export function ImportPresets(props: Props) {
   const live = useRef(props); live.current = props;

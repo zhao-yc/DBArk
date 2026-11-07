@@ -19,13 +19,13 @@ import { XmlDocumentImportFields } from './XmlDocumentImportFields';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { matchImportColumns } from '../importMapping';
 import { ImportMappingActions } from './ImportMappingActions';
-import { importPresetConfigurationSchema, resolveImportPresetMapping, type ImportPresetConfiguration } from '../../shared/importPresets';
+import { importPresetConfigurationSchema, resolveImportPresetMapping, type ImportPresetConfiguration, type StoredImportPresetConfiguration } from '../../shared/importPresets';
 import { ImportPresets } from './ImportPresets';
 import { importPresetsZh as presetsText } from '../locales/importPresets.zh-CN';
 
 /** 原生 COPY 直接读取 UTF-8。其它连接保存的非 UTF-8 CSV 配置不套用到此入口。 */
-function supportsPreset(configuration: ImportPresetConfiguration): boolean {
-  return configuration.format !== 'csv' || configuration.encoding === 'utf8';
+function supportsPreset(configuration: StoredImportPresetConfiguration): configuration is ImportPresetConfiguration {
+  return 'mapping' in configuration && (configuration.format !== 'csv' || configuration.encoding === 'utf8');
 }
 
 /** 显示原文件的样本和列映射，只在用户确认后申请一次性导入。 */
@@ -79,7 +79,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   }
 
   /** 套用只恢复草稿，必须由用户重新选择文件并由当前表页能力复核。 */
-  function applyPreset(value: ImportPresetConfiguration): boolean {
+  function applyPreset(value: StoredImportPresetConfiguration): boolean {
     if (occupied.current || presetOperation.current || !isCurrent() || !supportsPreset(value)) return false;
     setFormat(value.format); setEncoding(value.encoding);
     setDelimiter(value.csvDelimiter ?? ','); setHasHeader(value.csvHasHeader ?? true);
@@ -87,7 +87,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     if (value.txtOptions) setTxtOptions(value.txtOptions);
     setWorkbook(null); setExcelOptions({ ...excelImportDefaults, ...value.excelOptions });
     setPendingPreset(value); resetSource();
-    setPresetNotice(value.format === 'xlsx' ? presetsText.postgresChooseSheet : presetsText.postgresChoose);
+    setPresetNotice(value.format === 'xlsx' ? presetsText.chooseNewSheet : presetsText.chooseNewFile);
     return true;
   }
 
@@ -125,7 +125,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
       if (!isCurrent()) throw Error(text.stale);
       if (selected) {
         setWorkbook(selected); setExcelOptions({ ...excelImportDefaults, ...pendingPreset?.excelOptions }); resetSource();
-        if (pendingPreset) setPresetNotice(presetsText.postgresChooseSheet);
+        if (pendingPreset) setPresetNotice(presetsText.chooseNewSheet);
       }
     } catch (reason) { setError(errorMessage(reason)); }
     finally { occupied.current = false; setChoosing(false); }
@@ -136,7 +136,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     if (initialSource || occupied.current || presetOperation.current || !page.exportToken || !validXml || !validTxt || !validWorkbook) return;
     occupied.current = true;
     setChoosing(true); resetSource();
-    if (pendingPreset) setPresetNotice(format === 'xlsx' ? presetsText.postgresChooseSheet : presetsText.postgresChoose);
+    if (pendingPreset) setPresetNotice(format === 'xlsx' ? presetsText.chooseNewSheet : presetsText.chooseNewFile);
     try {
       if (!isCurrent()) throw Error(text.stale);
       const selection = format === 'xml' ? { format, xmlOptions } : format === 'txt' ? { format, encoding, txtOptions } : format === 'json' ? { format, encoding } :
@@ -227,7 +227,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
         setExcelOptions(options);
         if (options.sheetId !== excelOptions.sheetId) {
           resetSource();
-          if (pendingPreset) setPresetNotice(presetsText.postgresChooseSheet);
+          if (pendingPreset) setPresetNotice(presetsText.chooseNewSheet);
         } else editSource();
       }}/></div>
         <button disabled={locked || !validWorkbook} onClick={() => void choose()}>{excelImportZh.inspect}</button></>}
