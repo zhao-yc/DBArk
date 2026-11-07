@@ -1,13 +1,14 @@
 import type { CompletionSessionState } from '../shared/sqlCompletion';
 import type { CompletionLexicalMode } from '../shared/completionLexical';
-import { validStatementNavigationResult, type StatementNavigationResult } from '../shared/statementNavigation';
+import { validStatementNavigationResult, type StatementNavigationDialect, type StatementNavigationResult } from '../shared/statementNavigation';
 import { sameCompletionState } from './completionContext';
 
 export interface StatementNavigationView { busy: boolean; result?: StatementNavigationResult; }
-interface NavigationWorker { analyze(source: string, dialect: 'mysql' | 'mariadb' | 'sqlite', mode: CompletionLexicalMode, signal: AbortSignal): Promise<StatementNavigationResult>; dispose(): void; }
+type NavigationSessionState = CompletionSessionState | { dialect: 'postgresql'; busy: boolean; broken: boolean; noBackslashEscapes?: boolean; ansiQuotes?: undefined };
+interface NavigationWorker { analyze(source: string, dialect: StatementNavigationDialect, mode: CompletionLexicalMode, signal: AbortSignal): Promise<StatementNavigationResult>; dispose(): void; }
 interface Ports {
-  source: string; dialect: 'mysql' | 'mariadb' | 'sqlite'; sessionId?: string; current(): boolean; subscribe(changed: () => void): () => void;
-  state(sessionId: string): Promise<CompletionSessionState>; create(): NavigationWorker;
+  source: string; dialect: StatementNavigationDialect; sessionId?: string; current(): boolean; subscribe(changed: () => void): () => void;
+  state(sessionId: string): Promise<NavigationSessionState>; create(): NavigationWorker;
   decorate(result: Extract<StatementNavigationResult, { status: 'ready' }>): void; clear(): void;
   changed(view: StatementNavigationView): void;
 }
@@ -62,7 +63,9 @@ export class StatementNavigationController {
       this.clear(); this.publish({ busy: true });
       const cached = this.ports.sessionId ? { ...await this.ports.state(this.ports.sessionId) } : undefined;
       if (!this.current()) return this.observe();
-      if (cached && (cached.busy || cached.broken || (this.ports.dialect === 'sqlite' ? cached.dialect !== 'sqlite' : !['mysql', 'mariadb'].includes(cached.dialect ?? '')))) { this.publish({ busy: false, result: { status: 'blocked', reason: 'context' } }); return; }
+      const dialect = this.ports.dialect;
+      const matchingDialect = dialect === 'sqlite' || dialect === 'postgresql' ? cached?.dialect === dialect : cached?.dialect === 'mysql' || cached?.dialect === 'mariadb';
+      if (cached && (cached.busy || cached.broken || !matchingDialect || dialect === 'postgresql' && typeof cached.noBackslashEscapes !== 'boolean')) { this.publish({ busy: false, result: { status: 'blocked', reason: 'context' } }); return; }
       const mode = cached ? { ansiQuotes: cached.ansiQuotes, noBackslashEscapes: cached.noBackslashEscapes } : {};
       this.worker = this.ports.create();
       if (!this.current()) return this.observe();
@@ -72,7 +75,10 @@ export class StatementNavigationController {
       if (this.ports.sessionId) {
         const latest = await this.ports.state(this.ports.sessionId);
         if (!this.current()) return this.observe();
-        if (!sameCompletionState(cached!, latest)) { this.dead = true; return this.observe(); }
+        const unchanged = cached?.dialect === 'postgresql'
+          ? latest.dialect === 'postgresql' && !latest.busy && !latest.broken && cached.noBackslashEscapes === latest.noBackslashEscapes
+          : latest.dialect !== 'postgresql' && sameCompletionState(cached!, latest);
+        if (!unchanged) { this.dead = true; return this.observe(); }
       }
       if (!validStatementNavigationResult(result, this.source)) { this.publish({ busy: false, result: { status: 'blocked', reason: 'worker' } }); return; }
       if (result.status === 'ready') this.ports.decorate(result);

@@ -66,6 +66,9 @@ import { useUiCommandScope, type UiCommandHandler } from '../uiCommands';
 import { bracketCommands, sqlPositionActions, sqlTextActions } from '../sqlEditorActions';
 import { hasExplicitCaseSelection } from '../sqlSelectionCase';
 import { openFocusedGridRowJump } from './GridRowJump';
+import { StatementNavigationPanel } from './StatementNavigationPanel';
+import { usePostgresStatementNavigation } from '../usePostgresStatementNavigation';
+import { statementNavigationZh as navigationText } from '../locales/statementNavigation.zh-CN';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
 import './PostgresQueryTab.css';
 import '../queryPins.css';
@@ -1282,11 +1285,23 @@ export function PostgresQueryTab({
   const canRun = editable && state.transactionKnown;
   const canPlan = canRun && !state.transactionFailed;
   const canStop = busy && !!phase.current && !phase.current.cancelled;
+  const navigation = usePostgresStatementNavigation(() => {
+    const target = commandEditor(), draft = currentTab(), original = session.current;
+    if (!target || !draft || locked) return;
+    return { ...target, sessionId: original?.id, current: () =>
+      available() && !files.isBusy() && currentTab() === draft && session.current === original &&
+      editor.current === target.instance && !target.instance.getRawOptions().readOnly };
+  });
+  const canNavigate = editable && !navigation.busy;
   const commands: Partial<Record<UiCommandId, UiCommandHandler>> = {
     execute: { enabled: canRun, run: () => run() },
     'execute-selection': { enabled: canRun && editorSelection.single, run: () => run('selection') },
     'execute-current': { enabled: canRun, run: () => run('current') },
     'execute-all': { enabled: canRun, run: () => run('all') },
+    'statement-navigation': { enabled: canNavigate, run: () => navigation.open() },
+    'select-current-statement': { enabled: canNavigate, run: () => navigation.open('select') },
+    'previous-statement': { enabled: canNavigate, run: () => navigation.open('previous') },
+    'next-statement': { enabled: canNavigate, run: () => navigation.open('next') },
     stop: { enabled: canStop, run: stop },
     explain: { enabled: canPlan, run: () => run('explain') },
     analyze: { enabled: canPlan, run: () => run('analyzePreview') },
@@ -1327,6 +1342,9 @@ export function PostgresQueryTab({
             <button disabled={!canRun} onClick={() => run('current')}>
               {text.current}
             </button>
+            <button disabled={!canNavigate} onClick={() => navigation.open()}>
+              {navigationText.entry}
+            </button>
             <button disabled={!canPlan} onClick={() => run('explain')}>
               {text.explain}
             </button>
@@ -1356,7 +1374,7 @@ export function PostgresQueryTab({
         )}
       />} />
       <SavedQueryMatchNavigation tabId={tab.id} source={searchNavigation} editor={editorInstance} />
-      <div className="postgres-editor">
+      <div className="postgres-editor query-editor-region">
         <SqlEditor
           value={tab.sql ?? ''}
           dialect="postgresql"
@@ -1375,10 +1393,12 @@ export function PostgresQueryTab({
           }}
           onExecute={() => run()}
           onExecuteCurrent={() => run('current')}
+          onSelectCurrent={() => navigation.open('select')}
           onFormat={formatQuery}
           onToggleComment={() => editorAction('editor.action.commentLine')}
           onSelectionState={updateEditorSelection}
         />
+        {navigation.panel && <StatementNavigationPanel {...navigation.panel} />}
       </div>
       <ErrorBox message={error} />
       {!busy && completionStatus !== 'idle' && <p className="muted small" role="status">{completionStatus === 'limited'

@@ -87,7 +87,7 @@ describe('本地定向检查入口', () => {
     expect(localCheck.runLocalCheck(['--build', 'tests/unit/space name.test.tsx'], root, execute)).toBe(0);
     const options = { cwd: root, stdio: 'inherit', shell: false, windowsHide: true };
     expect(execute.mock.calls).toEqual([
-      [process.execPath, ['--max-old-space-size=4096', join(root, 'node_modules/typescript/bin/tsc'), '--noEmit'], options],
+      [process.execPath, ['--max-old-space-size=5120', join(root, 'node_modules/typescript/bin/tsc'), '--noEmit'], options],
       [process.execPath, [join(root, 'node_modules/vitest/vitest.mjs'), 'run', 'tests/unit/space name.test.tsx'], options],
       [process.execPath, [join(root, 'scripts/build.mjs')], options],
     ]);

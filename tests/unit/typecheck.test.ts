@@ -8,7 +8,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('共享固定类型检查入口', () => {
   it('纯参数使用绝对编译器路径，每次返回独立数组', () => {
-    const project = resolve('.cache', '含空格的合成工程'), original = ['--max-old-space-size=4096', resolve(project, 'node_modules/typescript/bin/tsc'), '--noEmit'];
+    const project = resolve('.cache', '含空格的合成工程'), original = ['--max-old-space-size=5120', resolve(project, 'node_modules/typescript/bin/tsc'), '--noEmit'];
     expect(typecheck.typecheckArguments(project)).toEqual(original);
     const changed = typecheck.typecheckArguments(project); changed.push('--watch');
     expect(typecheck.typecheckArguments(project)).toEqual(original);
@@ -16,7 +16,7 @@ describe('共享固定类型检查入口', () => {
   it('默认仅运行一次原编译器且继承stdout/stderr，不经shell或附加环境', () => {
     const execute = vi.fn(() => ({ status: 0, signal: null })), project = resolve('.');
     expect(typecheck.runTypecheck([], execute)).toBe(0);
-    expect(execute.mock.calls).toEqual([[process.execPath, ['--max-old-space-size=4096', resolve(project, 'node_modules/typescript/bin/tsc'), '--noEmit'], { cwd: project, stdio: 'inherit', shell: false, windowsHide: true }]]);
+    expect(execute.mock.calls).toEqual([[process.execPath, ['--max-old-space-size=5120', resolve(project, 'node_modules/typescript/bin/tsc'), '--noEmit'], { cwd: project, stdio: 'inherit', shell: false, windowsHide: true }]]);
   });
   it.each([
     { result: { status: 7, signal: null }, code: 7 },

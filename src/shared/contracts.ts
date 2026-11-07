@@ -246,7 +246,7 @@ export interface CommandMap {
   'query.analyze': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; acknowledged: true; expectedDatabase: string | null }; output: QueryOutcome };
   'query.analyzeContext': { input: { sessionId: string; taskId: string }; output: CompletionSessionState };
   'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
-  'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; transactionFailed?: boolean; broken: boolean } };
+  'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; transactionFailed?: boolean; broken: boolean; standardConformingStrings?: boolean } };
   'query.completionState':{input:{sessionId:string};output:CompletionSessionState};
   'query.databaseSwitch': { input: QueryDatabaseSwitchInput; output: QueryDatabaseSwitchOutput };
   'query.temporaryState':{input:{sessionId:string};output:SessionObjectSnapshot};

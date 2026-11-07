@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** 各入口直接运行同一个编译器；显式堆预算仅属于tsc，不读取环境或附加调用者参数。 */
+/** 各入口使用同一编译器和堆预算。完整严格检查实测超过 4 GiB，预算仅用于 tsc。 */
 export function typecheckArguments(project) {
-  return ['--max-old-space-size=4096', resolve(project, 'node_modules/typescript/bin/tsc'), '--noEmit'];
+  return ['--max-old-space-size=5120', resolve(project, 'node_modules/typescript/bin/tsc'), '--noEmit'];
 }
 
 /** 标准命令固定本项目、一次执行并继承原输出；未知退出或启动错误不能当作通过。 */

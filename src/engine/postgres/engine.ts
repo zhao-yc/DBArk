@@ -1306,7 +1306,10 @@ export class PostgresEngine {
         const state = s.managed.state();
         if (s.completion) return { ...state, transactionOpen: false, transactionFailed: false,
           transactionKnown: !s.pending && !s.closing && !state.broken };
-        return { ...state, transactionKnown: !s.pending && !s.closing && state.transactionKnown };
+        // 导航只读 ParameterStatus 缓存，事务期间也不会发送额外 SQL。
+        const transactionKnown = !s.pending && !s.closing && state.transactionKnown;
+        return { ...state, transactionKnown, ...(transactionKnown && !state.broken
+          ? { standardConformingStrings: s.managed.standardStrings } : {}) };
       }
       case 'query.parameterNames':
         return this.session(input.sessionId, async (s) => {

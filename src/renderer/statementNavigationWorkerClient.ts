@@ -1,4 +1,4 @@
-import { statementNavigationLimits, validStatementNavigationResult, type StatementNavigationResult } from '../shared/statementNavigation';
+import { statementNavigationLimits, validStatementNavigationResult, type StatementNavigationDialect, type StatementNavigationResult } from '../shared/statementNavigation';
 import type { CompletionLexicalMode } from '../shared/completionLexical';
 
 type WorkerPort = Pick<Worker, 'postMessage' | 'terminate' | 'onmessage' | 'onerror' | 'onmessageerror'>;
@@ -7,7 +7,7 @@ export class StatementNavigationWorkerClient {
   private active?: { stop(reason: string): void }; private disposed = false;
   constructor(private readonly create: () => WorkerPort) {}
   /** 8秒启动／2秒扫描分别限时，超时整份拒绝，不保留部分语句目录。 */
-  analyze(source: string, dialect: 'mysql' | 'mariadb' | 'sqlite', mode: CompletionLexicalMode, signal: AbortSignal): Promise<StatementNavigationResult> {
+  analyze(source: string, dialect: StatementNavigationDialect, mode: CompletionLexicalMode, signal: AbortSignal): Promise<StatementNavigationResult> {
     if (this.disposed || signal.aborted) return Promise.resolve({ status: 'blocked', reason: 'cancelled' });
     if (source.length > statementNavigationLimits.sourceUnits) return Promise.resolve({ status: 'blocked', reason: 'budget' });
     this.active?.stop('replaced');

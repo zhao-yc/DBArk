@@ -1,9 +1,12 @@
 import { SqlScriptScanner } from './sqlScriptScanner';
 import { scanSqliteStatementPositions } from './sqliteStatementScanner';
 import type { CompletionLexicalMode } from './completionLexical';
+import { postgresSqlContentStart, PostgresStatementLimit, splitPostgresSql } from './postgresSql';
 
 export const statementNavigationLimits = { sourceUnits: 262144, statements: 1000, previewPoints: 160 } as const;
 export interface NavigableStatement { start: number; end: number; delimiterStart: number; delimiterEnd: number; }
+export const statementNavigationDialects = ['mysql', 'mariadb', 'sqlite', 'postgresql'] as const;
+export type StatementNavigationDialect = typeof statementNavigationDialects[number];
 export type StatementNavigationResult = { status: 'ready'; statements: NavigableStatement[] } | { status: 'blocked'; reason: string };
 const reasons = ['input', 'budget', 'mode', 'script', 'context', 'stale', 'worker', 'cancelled', 'disposed', 'replaced', 'timeout', 'startup-timeout'];
 
@@ -35,15 +38,27 @@ export function validStatementNavigationResult(raw: unknown, source: string): ra
 }
 
 /** 使用真正执行路径的原扫描器；导航不会prepare、执行或预测前面SET/CALL的效果。 */
-export function analyzeStatementNavigation(source: string, dialect: 'mysql' | 'mariadb' | 'sqlite', mode: CompletionLexicalMode = {}): StatementNavigationResult {
+export function analyzeStatementNavigation(source: string, dialect: StatementNavigationDialect, mode: CompletionLexicalMode = {}): StatementNavigationResult {
   if (typeof source === 'string' && source.length > statementNavigationLimits.sourceUnits) return { status: 'blocked', reason: 'budget' };
-  if (!sourceValid(source) || !['mysql', 'mariadb', 'sqlite'].includes(dialect)) return { status: 'blocked', reason: 'input' };
+  if (!sourceValid(source) || !statementNavigationDialects.includes(dialect)) return { status: 'blocked', reason: 'input' };
   const modeKeys = mode && typeof mode === 'object' && !Array.isArray(mode) ? Reflect.ownKeys(mode).filter((key): key is string => typeof key === 'string') : [];
   if (!record(mode, modeKeys) || Object.keys(mode).some(key => !['ansiQuotes', 'noBackslashEscapes'].includes(key)) || [mode.ansiQuotes, mode.noBackslashEscapes].some(value => value !== undefined && typeof value !== 'boolean')) return { status: 'blocked', reason: 'mode' };
   const statements: NavigableStatement[] = [];
   const accept = (start: number, end: number, delimiterStart: number, delimiterEnd: number) => { if (statements.length >= statementNavigationLimits.statements) throw Error('budget'); statements.push({ start, end, delimiterStart, delimiterEnd }); };
   try {
     if (dialect === 'sqlite') scanSqliteStatementPositions(source, accept);
+    else if (dialect === 'postgresql') {
+      const original = splitPostgresSql(source, mode.noBackslashEscapes !== false);
+      if (mode.noBackslashEscapes === undefined && source.includes('\\')) {
+        // 离线时无法读取 standard_conforming_strings，只有两种模式边界一致才能发布目录。
+        let alternative;
+        try { alternative = splitPostgresSql(source, false); }
+        catch { return { status: 'blocked', reason: 'mode' }; }
+        if (alternative.length !== original.length || alternative.some((part, index) => part.start !== original[index].start || part.end !== original[index].end))
+          return { status: 'blocked', reason: 'mode' };
+      }
+      for (const part of original) accept(part.start, part.end, part.end, Math.min(source.length, part.end + 1));
+    }
     else {
       const scanner = new SqlScriptScanner(mode.noBackslashEscapes === true, mode.ansiQuotes === true, mode.ansiQuotes !== undefined, mode.noBackslashEscapes !== undefined);
       const ranges = scanner.pushRanges(source, true, statementNavigationLimits.statements + 1);
@@ -52,31 +67,38 @@ export function analyzeStatementNavigation(source: string, dialect: 'mysql' | 'm
     }
     const result: StatementNavigationResult = { status: 'ready', statements };
     return validStatementNavigationResult(result, source) ? result : { status: 'blocked', reason: 'script' };
-  } catch (reason) { return { status: 'blocked', reason: reason instanceof Error && reason.message === 'budget' ? 'budget' : 'script' }; }
+  } catch (reason) { return { status: 'blocked', reason: reason instanceof PostgresStatementLimit || reason instanceof Error && reason.message === 'budget' ? 'budget' : 'script' }; }
 }
 
 /** 光标归属使用执行当前语句的边界规则，语句间空白不回退到相邻语句。 */
-export function currentNavigableStatement(source: string, ranges: readonly NavigableStatement[], offset: number): number {
+export function currentNavigableStatement(source: string, ranges: readonly NavigableStatement[], offset: number, dialect?: StatementNavigationDialect): number {
   if (!boundary(source, offset)) return -1;
   const containing = ranges.findIndex(range => offset >= range.start && offset < range.delimiterEnd);
+  if (dialect === 'postgresql') return containing < 0 && offset === source.length ? ranges.length - 1 : containing;
   if (containing >= 0 || offset !== source.length && source[offset] !== '\r' && source[offset] !== '\n') return containing;
   return ranges.findIndex(range => offset >= range.start && offset === range.delimiterEnd);
 }
 
 /** 从语句内跳相邻语句，从间隔跳指定方向最近的一条；首尾不循环。 */
-export function adjacentNavigableStatement(source: string, ranges: readonly NavigableStatement[], offset: number, direction: -1 | 1): NavigableStatement | undefined {
+export function adjacentNavigableStatement(source: string, ranges: readonly NavigableStatement[], offset: number, direction: -1 | 1, dialect?: StatementNavigationDialect): NavigableStatement | undefined {
   if (!boundary(source, offset)) return undefined;
-  const current = currentNavigableStatement(source, ranges, offset);
+  const current = currentNavigableStatement(source, ranges, offset, dialect);
   if (current >= 0) return ranges[current + direction];
   if (direction === 1) return ranges.find(range => range.start > offset);
   for (let index = ranges.length - 1; index >= 0; index--) if (ranges[index].delimiterEnd <= offset) return ranges[index];
   return undefined;
 }
 
+/** PostgreSQL 原执行范围包含前导注释，导航落点使用该范围内首个正文字符。 */
+export function statementNavigationStart(source: string, range: NavigableStatement, dialect: StatementNavigationDialect): number {
+  return dialect === 'postgresql' ? range.start + postgresSqlContentStart(source.slice(range.start, range.end)) : range.start;
+}
+
 /** 预览仅在本地从原文生成，不改分段；跳过普通前导注释，执行注释保留给用户辨认。 */
-export function statementNavigationPreview(source: string, range: NavigableStatement, dialect: 'mysql' | 'mariadb' | 'sqlite'): string {
+export function statementNavigationPreview(source: string, range: NavigableStatement, dialect: StatementNavigationDialect): string {
   let text = source.slice(range.start, range.end), index = 0;
-  while (index < text.length) {
+  if (dialect === 'postgresql') index = statementNavigationStart(source, range, dialect) - range.start;
+  while (dialect !== 'postgresql' && index < text.length) {
     const tail = text.slice(index), whitespace = dialect === 'sqlite' ? /^[\t\n\f\r \uFEFF]+/.exec(tail) : /^\s+/.exec(tail);
     if (whitespace) { index += whitespace[0].length; continue; }
     if (tail.startsWith('--') && (dialect === 'sqlite' || /[\x00-\x20\x7f]/.test(tail[2] ?? ' ')) || dialect !== 'sqlite' && tail.startsWith('#')) { const end = text.indexOf('\n', index); index = end < 0 ? text.length : end + 1; continue; }

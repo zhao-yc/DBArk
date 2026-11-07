@@ -13,6 +13,7 @@ const identifierStart = /[A-Za-z_\u0080-\uFFFF]/;
 const identifierPart = /[A-Za-z_0-9$\u0080-\uFFFF]/;
 const tagPart = /[A-Za-z_0-9\u0080-\uFFFF]/;
 export class IncompletePostgresSql extends Error {}
+export class PostgresStatementLimit extends Error {}
 
 /** 扫描普通引号、标识符引号及转义字符串，返回紧随闭引号的位置。 */
 function quotedEnd(source: string, opening: number, backslash: boolean): number {
@@ -39,6 +40,22 @@ function blockCommentEnd(source: string, opening: number): number {
   return index;
 }
 
+/** 导航显示第一处正文，执行范围仍保留原前导注释和偏移。 */
+export function postgresSqlContentStart(source: string): number {
+  let index = 0;
+  while (index < source.length) {
+    if (whitespace.test(source[index])) { index++; continue; }
+    if (source.startsWith('--', index)) {
+      index += 2;
+      while (index < source.length && source[index] !== '\r' && source[index] !== '\n') index++;
+      continue;
+    }
+    if (source.startsWith('/*', index)) { index = blockCommentEnd(source, index); continue; }
+    break;
+  }
+  return index;
+}
+
 /** 识别完整dollar标签；标签本身允许非ASCII标识符字符。 */
 function dollarTag(source: string, opening: number): string | undefined {
   let index = opening + 1;
@@ -60,7 +77,7 @@ function scanPostgresSql(source: string, standardStrings: boolean, firstOnly: bo
   let parameters = new Set<number>();
   const finish = (end: number) => {
     if (meaningful) {
-      if (statements.length >= 1000) throw Error('PostgreSQL脚本最多1000条语句');
+      if (statements.length >= 1000) throw new PostgresStatementLimit('PostgreSQL脚本最多1000条语句');
       statements.push({ sql: source.slice(start, end), start, end, parameters: [...parameters].sort((a, b) => a - b), keyword });
     }
     start = end + 1;

@@ -4,6 +4,7 @@ import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
 import { postgresZh } from '../../src/renderer/locales/postgres.zh-CN';
 import { queryBindingZh } from '../../src/renderer/locales/queryBinding.zh-CN';
+import { statementNavigationZh as navigationText } from '../../src/renderer/locales/statementNavigation.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -51,9 +52,85 @@ async function inspectModel() {
     const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
     const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
     if (!instance?.getModel()) throw Error('缺少当前 PostgreSQL 编辑器');
-    return {sql: instance.getModel()!.getValue(), position: instance.getPosition()};
+    const model = instance.getModel()!, selection = instance.getSelection();
+    return {sql: model.getValue(), position: instance.getPosition(), selected: selection ? model.getValueInRange(selection) : ''};
   });
 }
+
+const navigationPanel = () => tab().getByRole('region', {name: navigationText.title, exact: true});
+const ambiguousScript = String.raw`SELECT 'a\'; SELECT 2; -- '`;
+async function replaceDraft(sql: string) {
+  await editor().getByRole('textbox').focus();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.insertText(sql);
+  await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
+}
+
+test('PostgreSQL 语句导航支持离线目录、原生跳转、选中和编辑失效', async ({}, info) => {
+  const body = 'DO $body$BEGIN PERFORM 1; END;$body$';
+  const sql = '/* 外层😀 /* 内层; */ */\n' + body + ";\n--第二条\nSELECT '片段;二';\nSELECT 3";
+  await prepare({id: '', name: '离线 PostgreSQL 导航', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'offline_db'}, sql);
+  const panel = navigationPanel();
+  await modelSelection(2, 8);
+  await page.keyboard.press('ControlOrMeta+E');
+  await expect.poll(async () => (await inspectModel()).selected).toBe(body);
+  await expect(panel).toHaveCount(0);
+  await command('statement-navigation');
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(3));
+  await panel.getByRole('button', {name: navigationText.position(0, 2)}).click();
+  await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 2, column: 1});
+  await command('next-statement');
+  await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 4, column: 1});
+  await command('previous-statement');
+  await expect.poll(async () => (await inspectModel()).position).toMatchObject({lineNumber: 2, column: 1});
+  await command('select-current-statement');
+  await expect.poll(async () => (await inspectModel()).selected).toBe(body);
+  await panel.getByRole('textbox', {name: navigationText.search}).fill('片段;二');
+  await expect(panel.getByRole('status')).toHaveText(navigationText.total(1));
+  await panel.getByRole('button', {name: navigationText.select + ' 2'}).click();
+  await expect.poll(async () => (await inspectModel()).selected).toBe("SELECT '片段;二'");
+  await page.screenshot({path: info.outputPath('PostgreSQL语句导航.png')});
+
+  await replaceDraft(ambiguousScript);
+  await expect(panel.getByRole('status')).toHaveText(navigationText.reasons.stale);
+  await panel.getByRole('button', {name: navigationText.refresh}).click();
+  await expect(panel.getByRole('status')).toHaveText(navigationText.reasons.mode);
+  await panel.getByRole('button', {name: navigationText.close}).click();
+  await expect(panel).toHaveCount(0);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 语句导航读取真实会话字符串模式且不执行导航正文', async () => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const sql = 'SET standard_conforming_strings = ';
+  await prepare({id: '', name: '本轮隔离 PostgreSQL', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql + 'off');
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  for (const [mode, count] of [['off', 1], ['on', 2]] as const) {
+    if (mode === 'on') await replaceDraft(sql + mode);
+    await command('execute-all');
+    await expect.poll(async () => (await history()).some(entry => entry.success && entry.sql === sql + mode)).toBe(true);
+    await expect(tab().getByText('原查询会话', {exact: true})).toBeVisible();
+    const baseline = await history();
+    await replaceDraft(ambiguousScript);
+    const panel = navigationPanel();
+    await tab().getByRole('button', {name: navigationText.entry, exact: true}).click();
+    await expect(panel.getByRole('status')).toHaveText(navigationText.total(count));
+    await panel.getByRole('button', {name: navigationText.select + ' ' + count}).click();
+    await expect.poll(async () => (await inspectModel()).selected).toBe(mode === 'off' ? ambiguousScript : 'SELECT 2');
+    expect(await history()).toEqual(baseline);
+    await panel.getByRole('button', {name: navigationText.close}).click();
+  }
+  expect(pageErrors).toEqual([]);
+  await quitDesktop();
+});
 
 test('PostgreSQL 原生菜单在活动查询中查找、替换、导航、编辑和保存', async ({}, info) => {
   const sql = '--紧邻注释😀\nselect (1 + 2) as value;\nselect 3 as tail;';

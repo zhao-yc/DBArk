@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { adjacentNavigableStatement, analyzeStatementNavigation, currentNavigableStatement, statementNavigationPreview, validStatementNavigationResult } from '../../src/shared/statementNavigation';
+import { adjacentNavigableStatement, analyzeStatementNavigation, currentNavigableStatement, statementNavigationPreview, statementNavigationStart, validStatementNavigationResult } from '../../src/shared/statementNavigation';
+import { currentPostgresStatement, splitPostgresSql } from '../../src/shared/postgresSql';
 import { sqlStatementRanges } from '../../src/engine/currentStatement';
 import { sqliteStatementRanges } from '../../src/engine/sqlite/currentStatement';
 import { SqlScriptScanner as EngineScanner } from '../../src/engine/sql';
@@ -8,6 +9,32 @@ import type { CompletionLexicalMode } from '../../src/shared/completionLexical';
 
 const mode = { ansiQuotes: false, noBackslashEscapes: false };
 const fields = ({ start, end, delimiterStart, delimiterEnd }: { start: number; end: number; delimiterStart: number; delimiterEnd: number }) => ({ start, end, delimiterStart, delimiterEnd });
+it('PostgreSQL 目录保留原执行范围，正文落点跳过嵌套注释并核对 CRLF 和 UTF-16', () => {
+  const source = "/* 外层😀 /* 内层; */ */\r\nDO $主体$BEGIN PERFORM 1; END;$主体$;\r\n--第二段\r\nSELECT '😀;';\r\n-- 尾注释";
+  const result = analyzeStatementNavigation(source, 'postgresql');
+  if (result.status !== 'ready') throw Error('本例分段未完成');
+  const original = splitPostgresSql(source);
+  expect(result.statements.map(({start, end}) => ({start, end}))).toEqual(original.map(({start, end}) => ({start, end})));
+  const positions = [0, source.indexOf('PERFORM'), source.indexOf('--第二段'), source.indexOf('SELECT'), source.length];
+  for (const position of positions) {
+    const index = currentNavigableStatement(source, result.statements, position, 'postgresql');
+    expect(result.statements[index].start).toBe(currentPostgresStatement(source, position).start);
+  }
+  expect(statementNavigationStart(source, result.statements[0], 'postgresql')).toBe(source.indexOf('DO'));
+  expect(statementNavigationStart(source, result.statements[1], 'postgresql')).toBe(source.indexOf('SELECT'));
+  expect(statementNavigationPreview(source, result.statements[0], 'postgresql')).toBe('DO $主体$BEGIN PERFORM 1; END;$主体$');
+});
+it('PostgreSQL 离线拒绝两种字符串模式的歧义，已知模式保留实际语句边界', () => {
+  const source = String.raw`SELECT 'a\'; SELECT 2; -- '`;
+  expect(analyzeStatementNavigation(source, 'postgresql')).toEqual({ status: 'blocked', reason: 'mode' });
+  for (const standard of [true, false]) {
+    const result = analyzeStatementNavigation(source, 'postgresql', { noBackslashEscapes: standard });
+    if (result.status !== 'ready') throw Error('已知模式未完成');
+    expect(result.statements.map(range => source.slice(range.start, range.end))).toEqual(splitPostgresSql(source, standard).map(part => part.sql));
+    expect(result.statements).toHaveLength(standard ? 2 : 1);
+  }
+  expect(analyzeStatementNavigation('SELECT 1;'.repeat(1001), 'postgresql')).toEqual({ status: 'blocked', reason: 'budget' });
+});
 it('选中当前语句区分紧邻语句、空白、行末和代理对边界', () => {
   const source = "SELECT '😀';SELECT 2;\r\n  \r\nSELECT 3;";
   const result = analyzeStatementNavigation(source, 'mysql', mode);
