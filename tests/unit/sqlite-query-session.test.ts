@@ -548,3 +548,66 @@ describe('SQLite 原生语法检查', () => {
     expect(await h.session.syntaxCheck({...input, sql: 'SELECT 1\0'})).toEqual({status: 'blocked', reason: 'input'});
   });
 });
+
+describe('SQLite 原生语句超时', () => {
+  const series = 'WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000)';
+  it('保留完整前序结果及原事务，超时定位到长查询，后续写入不执行', async () => {
+    const path = fixture(), h = await open(path);
+    await h.session.transaction({sessionId: h.session.sessionId, action: 'begin'});
+    const slow = series + ' SELECT sum(x) FROM n;';
+    const prefix = "SELECT '前序🧭';\r\n";
+    const sql = prefix + slow + "\r\nINSERT INTO subject VALUES(11,'不得写入');";
+    const result = await execute(h, sql, {sqliteStatementTimeoutMs: 100});
+    expect(result.results.map(result => result.rows)).toEqual([[{c0: '前序🧭'}]]);
+    expect(result.failure).toMatchObject({message: expect.stringContaining('执行超时'), statementOrdinal: 2, statementsCompleted: 1,
+      sourceRange: {start: prefix.length, end: prefix.length + slow.length}});
+    expect(h.session.state()).toEqual({transactionKnown: true, transactionOpen: true, broken: false});
+    expect(h.process.kills).toBe(0);
+    expect(h.process.statements.some(text => text.includes('不得写入'))).toBe(false);
+    expect((await execute(h, 'SELECT 12')).results[0].rows).toEqual([{c0: '12'}]);
+    await h.session.transaction({sessionId: h.session.sessionId, action: 'rollback'});
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+
+  it('写入被 SQLite 中断时以真实回执报告事务，不补发回滚或重放', async () => {
+    const path = fixture(), h = await open(path);
+    await execute(h, "BEGIN; INSERT INTO subject VALUES(1,'同一事务');");
+    const sql = series + " INSERT INTO subject SELECT x+1, '长写入' FROM n;";
+    const result = await execute(h, sql, {sqliteStatementTimeoutMs: 120});
+    expect(result.failure?.message).toContain('执行超时');
+    expect(h.session.state()).toEqual({transactionKnown: true, transactionOpen: false, broken: false});
+    expect(h.process.kills).toBe(0);
+    expect(h.process.sent.filter(message => message.kind === 'execute').map(message => message.sql))
+      .toEqual(["BEGIN; INSERT INTO subject VALUES(1,'同一事务');", sql]);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+    expect((await execute(h, 'SELECT 5')).results[0].rows).toEqual([{c0: '5'}]);
+  });
+
+  it('遇错继续下超时仍停止，原生范围保留，私有无效预算不投递', async () => {
+    const path = fixture(), h = await open(path);
+    const slow = series + ' SELECT sum(x) FROM n;';
+    const sql = "SELECT 1;\r\n" + slow + "\r\nINSERT INTO subject VALUES(1,NULL);";
+    const result = await execute(h, sql, {continueOnError: true, sqliteStatementTimeoutMs: 100});
+    expect(result.scriptReport).toMatchObject({reachedEnd: false, statementsAttempted: 2, statementsCompleted: 1,
+      stopReason: expect.stringContaining('超时'), errors: [{kind: 'stopped', statementOrdinal: 2}]});
+    const range = result.scriptReport?.errors[0].sourceRange;
+    expect(sql.slice(range?.start, range?.end)).toBe(slow);
+    const count = h.process.sent.length;
+    for (const value of [0, -1, 1.5, 3600001, Infinity]) {
+      await expect(execute(h, 'SELECT 1', {sqliteStatementTimeoutMs: value})).rejects.toThrow('超时设置无效');
+      expect(() => validateCommand('query.execute', {sessionId: 'sqlite:session', taskId: 'timeout', sql: 'SELECT 1', maxRows: 2, sqliteStatementTimeoutMs: value})).toThrow();
+    }
+    expect(h.process.sent).toHaveLength(count);
+    expect(diskValue(path, 'SELECT COUNT(*) FROM subject')).toBe(0);
+  });
+
+  it('类型参数继续原生绑定，超时可定位且不回显参数值', async () => {
+    const h = await open(fixture());
+    const sql = 'WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<:count) SELECT sum(x) FROM n;';
+    const result = await h.session.executeParameterized({sessionId: h.session.sessionId, taskId: '绑定超时', sql, maxRows: 20,
+      parameters: [{name: 'count', type: 'integer', value: '100000000'}], sqliteStatementTimeoutMs: 100});
+    expect(result.failure).toMatchObject({message: expect.stringContaining('超时'), sourceRange: {start: 0, end: sql.length - 1}});
+    expect(result.failure?.message).not.toContain('100000000');
+    expect(h.session.state().broken).toBe(false);
+  });
+});

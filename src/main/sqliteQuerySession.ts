@@ -8,6 +8,7 @@ import { sqliteExplainSource } from '../engine/sqlite/explainSource';
 import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
 import { sqliteNamedParameterNames, sqliteParameterInfo } from '../engine/sqlite/parameters';
 import { validateSqliteQueryParameters } from '../shared/sqliteQueryParameters';
+import { validSqliteStatementTimeout } from '../shared/sqliteStatementTimeout';
 import { validQueryResultTitle } from '../shared/queryResultTitle';
 import { queryScriptReportSummary } from '../shared/queryContinueOnError';
 import type { SqlStatementRange } from '../shared/sqlScriptScanner';
@@ -112,9 +113,10 @@ export class SqliteQuerySession {
   }
 
   /** 查询与计划共用同一active任务、ACK、预算、原生终态和通知失效保护，不能绕开会话忙态或重放。 */
-  private async run(input: Pick<ExecuteInput, 'taskId' | 'maxRows'>, sql: string, options: RunOptions): Promise<QueryOutcome> {
+  private async run(input: Pick<ExecuteInput, 'taskId' | 'maxRows' | 'sqliteStatementTimeoutMs'>, sql: string, options: RunOptions): Promise<QueryOutcome> {
     // 任何明确执行均撤销此前目录建议，即使它最终报错或回滚；目录短读本身不推进此修订。
-    const {continueRanges} = options;
+    const {continueRanges} = options, {sqliteStatementTimeoutMs: statementTimeoutMs} = input;
+    if (statementTimeoutMs !== undefined && !validSqliteStatementTimeout(statementTimeoutMs)) throw Error('SQLite 语句超时设置无效');
     if (continueRanges && !continueRanges.length) throw Error('SQLite 脚本中没有可执行语句');
     if (this.objectsRevision >= Number.MAX_SAFE_INTEGER) throw Error('SQLite会话目录修订已达上限，请明确重开会话');
     this.objectsRevision++;
@@ -184,7 +186,7 @@ export class SqliteQuerySession {
       event({ executionDatabase: { state: 'known', database: 'main' } });
       if (continueRanges) {
         let checkpoint = {results: 0, rows: 0, bytes: 0};
-        const {facts, ordinals, report, cancelled, transaction} = await continueSqliteScript(this.driver, sql, continueRanges, options.namedParameters, resultLimit, {
+        const {facts, ordinals, report, cancelled, transaction} = await continueSqliteScript(this.driver, sql, continueRanges, options.namedParameters, resultLimit, statementTimeoutMs, {
           cancelled: () => operation.cancelled,
           budget: () => {
             checkpoint = {results: operation.results.length, rows: operation.rows, bytes: retainedBytes};
@@ -209,6 +211,7 @@ export class SqliteQuerySession {
       }
       const outcome = await this.driver.execute(sql, {
         maxRows: input.maxRows, batchRows: 200, maxBytes: queryBytes,
+        ...(statementTimeoutMs === undefined ? {} : {statementTimeoutMs}),
         // 空绑定数组显式启用原worker的原生单完整语句复核；词法定位错误也不能偷偷step第二句。
         ...(options.single ? { parameters: [] } : {}),
         ...(options.namedParameters ? { namedParameters: options.namedParameters } : {}),
@@ -229,7 +232,7 @@ export class SqliteQuerySession {
         : reason instanceof Error ? reason.message : 'SQLite查询失败';
       terminalEvent({ status: cancelled ? 'cancelled' : 'failed', progress: 0, message });
       // 只返回原生确认完成的前序结果；失败语句的部分流式行不能冒充完整结果。
-      if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || options.namedParameters && reason.code === 'SQLITE_NAMED_PARAMETERS_INVALID' || options.single && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
+      if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || reason.code === 'SQLITE_STATEMENT_TIMEOUT' || options.namedParameters && reason.code === 'SQLITE_NAMED_PARAMETERS_INVALID' || options.single && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
         if (reason.completedResults.length !== reason.completedStatements) throw Error('SQLite失败回执缺少前序完整结果，不能发布成功摘要');
         const sourceRange = options.sourceRange ?? options.parameterRanges?.[reason.completedStatements] ?? reason.sourceRange;
         return { ...complete(reason.completedResults), ...displayTitles(reason.completedStatements), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) } };

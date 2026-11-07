@@ -1,3 +1,4 @@
+import { validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { sqlSyntaxCheckLimits, validSqlSyntaxCheckResult, type SqlSyntaxCheckResult } from '../../shared/sqlSyntaxCheck';
 import { randomUUID } from 'node:crypto';
 import { copySqliteNamedParameters, copySqliteCreateGuard, copySqliteOpenOptions, copySqliteWorkerOpenOptions, sqliteDriverLimits as limits, type SqliteCreateGuard, type SqliteCancellation, type SqliteColumn, type SqliteExecutionOptions, type SqliteExecutionResult, type SqliteOpenOptions, type SqliteWorkerOpenOptions, type SqliteProcessExit, type SqliteProcessTransport, type SqliteStatementResult, type SqliteValue, type SqliteWorkerResponse, type SqliteFileIdentity } from './protocol';
@@ -188,6 +189,11 @@ export class SqliteDriverSession {
     if (!this.opened || this.exited || this.invalid || this.closing || this.active) return Promise.reject(this.error('SQLite会话未就绪或已有运行任务', 'SQLITE_SESSION_UNAVAILABLE'));
     const configured: SqliteExecutionOptions = { maxRows: options.maxRows ?? 1000, batchRows: options.batchRows ?? 200, maxBytes: options.maxBytes ?? limits.resultBytes };
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > limits.sqlBytes || !Number.isInteger(configured.maxRows) || configured.maxRows < 1 || configured.maxRows > limits.rows || !Number.isInteger(configured.batchRows) || configured.batchRows < 1 || configured.batchRows > limits.batchRows || !Number.isInteger(configured.maxBytes) || configured.maxBytes < 1 || configured.maxBytes > limits.resultBytes) return Promise.reject(this.error('SQLite执行参数超出预算', 'SQLITE_INPUT_LIMIT'));
+    if (options.statementTimeoutMs !== undefined) {
+      if (stream || options.createGuard || !validSqliteStatementTimeout(options.statementTimeoutMs))
+        return Promise.reject(this.error('SQLite 语句超时设置无效', 'SQLITE_INVALID_REQUEST'));
+      configured.statementTimeoutMs = options.statementTimeoutMs;
+    }
     let namedParameters: Record<string, SqliteValue> | undefined;
     try {
       const descriptor = Object.getOwnPropertyDescriptor(options, 'namedParameters');
@@ -319,7 +325,7 @@ export class SqliteDriverSession {
         operation.results.push(message.result); this.transactionValue = message.result.transaction;
       } else if (message.kind === 'completed' || message.kind === 'failed' || message.kind === 'cancelled') {
         if (message.kind === 'failed' && message.sourceRange !== undefined) {
-          if (!operation.captureFailureRange || operation.originalSql === undefined || !/^SQLITE_NATIVE_\d+$/.test(message.code)) throw Error('SQLite失败位置不属于本次任务');
+          if (!operation.captureFailureRange || operation.originalSql === undefined || !(/^SQLITE_NATIVE_\d+$/.test(message.code) || message.code === 'SQLITE_STATEMENT_TIMEOUT')) throw Error('SQLite失败位置不属于本次任务');
           validateSourceRange(operation.originalSql, message.sourceRange);
           message.sourceRange = {start: message.sourceRange.start, end: message.sourceRange.end};
         }

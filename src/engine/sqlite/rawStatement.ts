@@ -1,5 +1,6 @@
 import type { SQLInputValue } from 'node:sqlite';
 import { sqliteDriverLimits as limits, type SqliteColumn, type SqliteValue } from './protocol';
+import { validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { decodeSqliteRawValue } from './rawValue';
 
 /** 只由持有原连接的worker提供，不接受扩展路径或跨进程可执行内容。 */
@@ -39,9 +40,10 @@ export class SqliteRawStatement {
   private constructor(private readonly invoke: SqliteRawInvoke, readonly sourceSQL: string, readonly hasStatement: boolean) {}
 
   /** 先取得独占材料阶段再传入分段；未取得能力时绝不收尾别人的statement。 */
-  static prepare(invoke: SqliteRawInvoke, sql: string): SqliteRawStatement {
+  static prepare(invoke: SqliteRawInvoke, sql: string, statementTimeoutMs?: number): SqliteRawStatement {
     if (typeof sql !== 'string' || !sql.length || sql.includes('\0') || !validUnicode(sql) || Buffer.byteLength(sql) > limits.sqlBytes) throw invalid();
-    const source = Buffer.from(sql), acquired = invoke(12, null);
+    if (statementTimeoutMs !== undefined && !validSqliteStatementTimeout(statementTimeoutMs)) throw invalid();
+    const source = Buffer.from(sql), acquired = invoke(12, statementTimeoutMs === undefined ? null : BigInt(statementTimeoutMs));
     try {
       if (acquired !== 0) throw invalid();
       for (let offset = 0; offset < source.length; offset += chunkBytes) {

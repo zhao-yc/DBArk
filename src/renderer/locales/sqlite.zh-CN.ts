@@ -9,6 +9,8 @@ export const sqliteZh = {
   selectQuery: '生成 SELECT 查询', definition: '查看定义',
   structureScript: schemaScriptZh.label,
   wrongFileKind: '网络连接不能授权 SQLite 数据库文件',
+  statementTimeout: '每条语句超时（毫秒）',
+  statementTimeoutHint: '0 为不限时。每条 SQLite 查询语句分别计时，超时停止后续语句。仅在当前标签生效，锁等待沿用连接设置。',
   unsupported: 'SQLite 当前入口尚未实现，请在查询标签中执行明确的 SQL。',
   formatCaseUnavailable: 'SQLite 格式化暂仅支持保留关键字大小写，请在偏好中选择保留。',
   mainOnly: 'SQLite 当前仅支持 main 数据库；原查询指定了其他数据库，正文和来源保持不变，请显式新建 main 查询。',

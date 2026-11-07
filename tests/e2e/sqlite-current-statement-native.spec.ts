@@ -52,7 +52,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
   /** 原始IPC必须有成功封套才读取结果，不用UI预期伪造查询或会话事实。 */
   const result = (reply: unknown): Record<string, unknown> => { if (!reply || typeof reply !== 'object' || !('ok' in reply) || reply.ok !== true || !('result' in reply) || !reply.result || typeof reply.result !== 'object' || Array.isArray(reply.result)) throw Error('SQLite当前语句没有成功原IPC结果'); return reply.result as Record<string, unknown>; };
   const operations = (facts: Audit, command: string) => facts.operations.filter(operation => operation.command === command);
-  type Script = { name: string; source: string; selected: string; offset: number; current: boolean; start: number; end: number; continueOnError?: true };
+  type Script = { name: string; source: string; selected: string; offset: number; current: boolean; start: number; end: number; continueOnError?: true; timeoutMs?: number };
   /** 预期范围由本例固定三段文本独立给出，不调用产品分句器来生成自己的断言。 */
   const marked = (name: string, value: string, id: number): Script => {
     const point = value.indexOf('┃'); if (point < 0 || point !== value.lastIndexOf('┃')) throw Error('本例必须恰好一个caret标记');
@@ -81,7 +81,16 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
   const continuedSource = continuedStatements.join('\r\n');
   const continued: Script = {name: '遇错继续', source: continuedSource, selected: continuedSource, offset: 0, current: false,
     start: 0, end: continuedSource.length, continueOnError: true};
-  const scripts = [insert, select, trigger, ordinary, transactionInsert, transactionRead, syntax, ordinaryFailure, continued, readonlyWrite, readonlyRead];
+  const slow = 'WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n;';
+  const timedPrefix = "SELECT '超时前结果🧭';\r\n";
+  const timedSource = timedPrefix + slow + "\r\nINSERT INTO subject VALUES(90,'超时后不得写入');";
+  const timed: Script = {name: '语句超时', source: timedSource, selected: slow, current: false, offset: 0,
+    start: timedPrefix.length, end: timedPrefix.length + slow.length, timeoutMs: 100};
+  const nextSql = "SELECT '同一会话继续🚢';";
+  const afterTimeout: Script = {name: '超时后原会话', source: nextSql, selected: nextSql, current: false, offset: 0,
+    start: 0, end: nextSql.length, timeoutMs: 100};
+  const scripts = [insert, select, trigger, ordinary, transactionInsert, transactionRead, syntax, ordinaryFailure, continued,
+    timed, afterTimeout, readonlyWrite, readonlyRead];
   const checkedStatements = ["/* 🧭 */ INSERT INTO subject VALUES(77,'不应执行');",
     'SELECT missing_column FROM subject;', 'EXPLAIN PRAGMA user_version=73;'];
   const checkedSql = checkedStatements.join('\r\n');
@@ -119,7 +128,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
       if (command === 'query.completionState' && (typeof value.sessionId !== 'string' || Object.keys(value).length !== 1 || !Object.hasOwn(value, 'sessionId'))) return deny('非本例会话协议缓存请求');
       if (command === 'query.cancel' && !state.operations.some(operation => operation.command === 'query.execute' && operation.request.taskId === value.taskId)) return deny('其它查询任务取消');
       if (command === 'query.transaction' && !['begin', 'rollback'].includes(String(value.action))) return deny('非本例明确事务动作');
-      if (command === 'query.execute') { const script = input.scripts.find(script => script.source === value.sql), current = value.currentStatement; if (!script || value.continueOnError !== script.continueOnError || value.collectWarnings === true) return deny('非本例全文/执行选项'); if (script.offset === undefined ? current !== undefined : !current || typeof current !== 'object' || Object.keys(current).length !== 1 || !('offset' in current) || current.offset !== script.offset) return deny('非本例准确光标'); }
+      if (command === 'query.execute') { const script = input.scripts.find(script => script.source === value.sql), current = value.currentStatement; if (!script || value.continueOnError !== script.continueOnError || value.sqliteStatementTimeoutMs !== script.timeoutMs || value.collectWarnings === true) return deny('非本例全文/执行选项'); if (script.offset === undefined ? current !== undefined : !current || typeof current !== 'object' || Object.keys(current).length !== 1 || !('offset' in current) || current.offset !== script.offset) return deny('非本例准确光标'); }
       if (command === 'sqlite.syntaxCheck' && (value.sql !== input.checkedSql || !Object.hasOwn(state.sessions, String(value.sessionId)) ||
           state.operations.some(item => item.command === 'sqlite.syntaxCheck'))) return deny('语法检查正文或会话越界');
       const fact: Fact | undefined = command === 'sqlite.syntaxCheck' || command.startsWith('query.') || command.startsWith('sessions.') ? { command, request: structuredClone(value) } : undefined; if (fact) state.operations.push(fact); state.commands.push(command); state.pending++;
@@ -129,7 +138,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     };
     state.check = check; state.restore = () => { check(); if (state.pending) throw Error('SQLite当前语句请求仍在途'); handlers.set('dbark:request', original); dialog.showOpenDialog = originalPicker; dialog.showSaveDialog = originalSave; utilityProcess.fork = originalFork; window.webContents.send = originalSend; delete root.__sqliteCurrentNative; };
     root.__sqliteCurrentNative = state; handlers.set('dbark:request', wrapped); dialog.showOpenDialog = picker; dialog.showSaveDialog = save; utilityProcess.fork = fork; window.webContents.send = send; check();
-  }, { database, savedProfiles, rwName, roName, checkedSql, scripts: [...scripts.map(script => ({ source: script.source, offset: script.current ? script.offset : undefined, continueOnError: script.continueOnError })), { source: selectionOnly.selected, offset: undefined, continueOnError: undefined }] }));
+  }, { database, savedProfiles, rwName, roName, checkedSql, scripts: [...scripts.map(script => ({ source: script.source, offset: script.current ? script.offset : undefined, continueOnError: script.continueOnError, timeoutMs: script.timeoutMs })), { source: selectionOnly.selected, offset: undefined, continueOnError: undefined, timeoutMs: undefined }] }));
   /** 两个连接都通过真实表单保存；读写连接必须明确取消产品默认只读。 */
   const createConnection = async (name: string, readOnly: boolean) => {
     await step(async () => (await (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
@@ -355,15 +364,40 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     await step(() => page.screenshot({path: info.outputPath('SQLite脚本遇错继续.png')}));
     await step(async () => (await continueOption()).uncheck());
     await step(() => page.keyboard.press('Escape'));
+    stage = '语句超时保留完整前序结果，后继 SQL 仍可用同一会话';
+    const timeoutInput = async () => (require('./navigation-menu') as typeof import('./navigation-menu'))
+      .navigationMenuInput(query(), {name: sqliteZh.statementTimeout, exact: true}, check);
+    await step(async () => expect(await timeoutInput()).toHaveValue(''));
+    await step(async () => (await timeoutInput()).fill('100'));
+    await step(async () => expect(await timeoutInput()).toHaveValue('100'));
+    await step(() => page.keyboard.press('Escape'));
+    const beforeTimeout = await step(audit);
+    const timeoutRun = await run(timed, false, true);
+    expect(timeoutRun.fact?.request).toMatchObject({sessionId: rwSession, sqliteStatementTimeoutMs: 100});
+    expect(timeoutRun.outcome).toMatchObject({results: [{rows: [{c0: '超时前结果🧭'}]}],
+      failure: {message: expect.stringContaining('执行超时'), statementOrdinal: 2, statementsCompleted: 1,
+        sourceRange: {start: timed.start, end: timed.end}}});
+    await step(() => expect(locate).toBeEnabled());
+    await step(() => locate.click());
+    expect((await model()).selections).toEqual([{start: timed.start, end: timed.end}]);
+    await step(() => page.screenshot({path: info.outputPath('SQLite语句超时.png')}));
+    const resumed = await run(afterTimeout);
+    expect(resumed.fact?.request.sessionId).toBe(rwSession);
+    expect(resumed.outcome).toMatchObject({results: [{rows: [{c0: '同一会话继续🚢'}]}]});
+    expect((await step(audit)).forks).toEqual(beforeTimeout.forks);
+    expect(disk()).toEqual(afterNormal);
+    await step(async () => (await timeoutInput()).fill(''));
+    await step(() => page.keyboard.press('Escape'));
+
     stage = '只读连接当前写拒绝但SELECT仍可用'; await openQuery(roName); const historyBeforeReadonly = await history(), denied = await run(readonlyWrite, false, true); expect(denied.outcome).toMatchObject({ failure: { sourceRange: { start: readonlyWrite.start, end: readonlyWrite.end } } }); expect(emittedSql(await step(audit), denied.fact?.request.taskId)).toEqual([]); expect(await history()).toEqual(historyBeforeReadonly); expect(disk()).toEqual(afterNormal);
-    const read = await run(readonlyRead, true); expect(read.fact?.request.sessionId).not.toBe(rwSession); expect(read.outcome).toMatchObject({ results: [{ statement: readonlyRead.selected, rows: [{ c0: '2' }] }] }); const firstFacts = await step(audit); expect(firstFacts.sessions[String(rwSession)]).toBe(rw.id); expect(firstFacts.sessions[String(read.fact?.request.sessionId)]).toBe(ro.id); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerIds).toHaveLength(2); expect(operations(firstFacts, 'query.execute')).toHaveLength(12); expect(disk()).toEqual(afterNormal); const firstHistory = await assertHistory([...successfulSql, full, continuedSource, readonlyRead.selected]); expect(firstHistory.filter(entry => !entry.success).map(entry => entry.sql).sort()).toEqual([full, continuedSource].sort()); expect(runtime.pageErrors).toEqual([]);
-    stage = '保存未执行写草稿并正常退出'; const tabs = await settings(), rwTab = tabs.tabs.find(tab => tab.connectionId === rw.id && tab.kind === 'query'); if (!rwTab) throw Error('原读写QueryTab丢失'); await step(() => page.locator(`[data-workspace-tab-id="${rwTab.id}"]`).getByRole('button', { name: rwTab.title, exact: true }).click()); await step(() => expect(query().locator('.monaco-editor')).toBeVisible()); await write(restoredSql); const persisted = await settings(), firstTasks = await tasks(); expect(firstTasks.filter(task => task.kind === 'query.execute').map(task => task.status).sort()).toEqual(['completed', 'completed', 'completed', 'completed', 'completed', 'completed', 'completed', 'completed', 'failed', 'failed', 'failed', 'failed']); expect(operations(await step(audit), 'query.execute')).toHaveLength(12); expect(disk()).toEqual(afterNormal);
+    const read = await run(readonlyRead, true); expect(read.fact?.request.sessionId).not.toBe(rwSession); expect(read.outcome).toMatchObject({ results: [{ statement: readonlyRead.selected, rows: [{ c0: '2' }] }] }); const firstFacts = await step(audit); expect(firstFacts.sessions[String(rwSession)]).toBe(rw.id); expect(firstFacts.sessions[String(read.fact?.request.sessionId)]).toBe(ro.id); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerIds).toHaveLength(2); expect(operations(firstFacts, 'query.execute')).toHaveLength(14); expect(disk()).toEqual(afterNormal); const firstHistory = await assertHistory([...successfulSql, full, continuedSource, timedSource, nextSql, readonlyRead.selected]); expect(firstHistory.filter(entry => !entry.success).map(entry => entry.sql).sort()).toEqual([full, continuedSource, timedSource].sort()); expect(runtime.pageErrors).toEqual([]);
+    stage = '保存未执行写草稿并正常退出'; const tabs = await settings(), rwTab = tabs.tabs.find(tab => tab.connectionId === rw.id && tab.kind === 'query'); if (!rwTab) throw Error('原读写QueryTab丢失'); await step(() => page.locator(`[data-workspace-tab-id="${rwTab.id}"]`).getByRole('button', { name: rwTab.title, exact: true }).click()); await step(() => expect(query().locator('.monaco-editor')).toBeVisible()); await write(restoredSql); const persisted = await settings(), firstTasks = await tasks(); expect(firstTasks.filter(task => task.kind === 'query.execute').map(task => task.status).sort()).toEqual([...Array(9).fill('completed'), ...Array(5).fill('failed')]); expect(operations(await step(audit), 'query.execute')).toHaveLength(14); expect(disk()).toEqual(afterNormal);
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); const beforeQuit = await step(audit); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteCurrentNative?: { restore(): void } }).__sqliteCurrentNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;
     stage = '第一owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); const firstPid = originalProcess.pid;
     stage = '同profile新owner恢复全文不重放SQL'; await runtime.restartOwnedDesktop(info); owner = runtime.ownedDesktopResources(info); application = owner.application; page = owner.page; originalProcess = application.process(); closed = false; check(); expect(originalProcess.pid).not.toBe(firstPid); await arm({ [rw.id]: false, [ro.id]: true }); armed = true; await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible()); expect(await settings()).toEqual(persisted); expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual(profiles); expect(await history()).toEqual(firstHistory); expect(await tasks()).toEqual(firstTasks); expect(disk()).toEqual(afterNormal); await step(() => expect(query().locator('.monaco-editor .view-lines')).toContainText('原未执行写哨兵'));
     const secondFacts = await step(audit); expect(secondFacts.denied).toEqual([]); expect(secondFacts.pickerIds).toEqual([]); expect(operations(secondFacts, 'query.execute')).toEqual([]); expect(operations(secondFacts, 'query.transaction')).toEqual([]); expect(runtime.pageErrors).toEqual([]); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteCurrentNative?: { restore(): void } }).__sqliteCurrentNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;
     stage = '第二owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); expect(disk()).toEqual(afterNormal);
-    await info.attach('SQLite当前语句真实原源光标历史及磁盘原件', { body: JSON.stringify({ platform: process.platform, rawDatabase: database, canonicalDatabaseBeforePicker: canonicalDatabase, firstPid, secondPid: originalProcess.pid, scripts, modelFacts, baseline, finalDisk: disk(), firstFacts, beforeQuit, secondFacts, firstHistory, firstTasks, syntaxFailure, located, scriptFailure, continuedRun, checked, readonlyFailure: denied, currentRequests: 8, ordinaryRequests: 3, selectionOnlyRequests: 1, nativeCurrentStatementsWithHeader: 6, prePostSentinelWrites: 0, userTransactionActions: ['begin', 'rollback'], sameSessionRollback: true, prepareFailureHistoryAdded: 0, sourceCRLFAndUtf16Observed: true, inputScope: '仅本例官方Monaco模型API设置全文/EOL/caret；真实菜单和按键执行，不冒称实体键盘文字输入验收', pickerScope: '只替换两次自身Main chooser准确路径，不冒称验证OS原生对话框输入', observationScope: '每个原窗口就绪后安装至正常退出前撤销，不补造恢复前事实', systemClipboardOperations: 0, firstExitCode: 0, secondExitCode: originalProcess.exitCode, automaticRetry: false, automaticTrace: false }), contentType: 'application/json' }); completed = { directory, database, platform: process.platform, firstPid, secondPid: originalProcess.pid };
+    await info.attach('SQLite当前语句真实原源光标历史及磁盘原件', { body: JSON.stringify({ platform: process.platform, rawDatabase: database, canonicalDatabaseBeforePicker: canonicalDatabase, firstPid, secondPid: originalProcess.pid, scripts, modelFacts, baseline, finalDisk: disk(), firstFacts, beforeQuit, secondFacts, firstHistory, firstTasks, syntaxFailure, located, scriptFailure, continuedRun, checked, timeoutRun, resumed, readonlyFailure: denied, currentRequests: 8, ordinaryRequests: 5, selectionOnlyRequests: 1, nativeCurrentStatementsWithHeader: 6, prePostSentinelWrites: 0, userTransactionActions: ['begin', 'rollback'], sameSessionRollback: true, prepareFailureHistoryAdded: 0, sourceCRLFAndUtf16Observed: true, inputScope: '仅本例官方Monaco模型API设置全文/EOL/caret；真实菜单和按键执行，不冒称实体键盘文字输入验收', pickerScope: '只替换两次自身Main chooser准确路径，不冒称验证OS原生对话框输入', observationScope: '每个原窗口就绪后安装至正常退出前撤销，不补造恢复前事实', systemClipboardOperations: 0, firstExitCode: 0, secondExitCode: originalProcess.exitCode, automaticRetry: false, automaticTrace: false }), contentType: 'application/json' }); completed = { directory, database, platform: process.platform, firstPid, secondPid: originalProcess.pid };
   } catch (reason) {
     runtime.retainOwnedDesktopResources(info); let partial: Audit | undefined;
     if (armed && !closed) try { partial = await application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteCurrentNative?: Audit }).__sqliteCurrentNative; return state ? { pending: state.pending, denied: state.denied, forks: state.forks, pickerIds: state.pickerIds, profiles: state.profiles, sessions: state.sessions, commands: state.commands, operations: state.operations, events: state.events } : undefined; }); } catch { /* 原端口失效不重建、不补造事实。 */ }

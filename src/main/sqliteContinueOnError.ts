@@ -23,7 +23,7 @@ function sqliteCanContinue(code: number): boolean {
 
 /** 始终在原物理连接上逐条执行，上一条的原生终态确认后才发送下一条。 */
 export async function continueSqliteScript(driver: SqliteDriverSession, source: string, ranges: SqlStatementRange[],
-  namedParameters: Record<string, SqliteValue> | undefined, resultLimit: number, control: ScriptControl) {
+  namedParameters: Record<string, SqliteValue> | undefined, resultLimit: number, statementTimeoutMs: number | undefined, control: ScriptControl) {
   const facts: SqliteStatementResult[] = [], ordinals: number[] = [];
   const report: QueryScriptReport = {mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: []};
   let cancelled = false;
@@ -46,6 +46,7 @@ export async function continueSqliteScript(driver: SqliteDriverSession, source: 
       const bindings = namedParameters && Object.fromEntries(sqliteNamedParameterNames(sql).map(name => [':' + name, namedParameters[':' + name]]));
       const result = await driver.execute(sql, {
         singleStatement: true, captureQueryReceipt: true, ...(bindings ? {namedParameters: bindings} : {}),
+        ...(statementTimeoutMs === undefined ? {} : {statementTimeoutMs}),
         maxRows: Math.max(1, budget.rows), maxBytes: Math.max(1, budget.bytes), batchRows: 200,
         onStatement: header => control.statement({...header, index: facts.length}),
         onBatch: batch => control.batch({...batch, index: facts.length}),
@@ -66,7 +67,8 @@ export async function continueSqliteScript(driver: SqliteDriverSession, source: 
         report.errors.push({kind: 'server', statementOrdinal: ordinal, statementsCompleted: facts.length,
           message: 'SQLite 语句失败（' + code + '）', sourceRange: {start: range.start, end: range.delimiterEnd}});
       } else {
-        const message = cancelled ? 'SQLite 脚本已取消' : native ? 'SQLite 原生错误要求停止（' + code + '）'
+        const message = cancelled ? 'SQLite 脚本已取消' : code === 'SQLITE_STATEMENT_TIMEOUT' ? 'SQLite 语句执行超时，已停止脚本'
+          : native ? 'SQLite 原生错误要求停止（' + code + '）'
           : 'SQLite 未确认语句或连接的执行终态，已停止脚本';
         stop(message, range, ordinal);
         break;

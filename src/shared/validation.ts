@@ -1,3 +1,4 @@
+import { sqliteStatementTimeoutMaximumMs } from './sqliteStatementTimeout';
 import { postgresQueryExportSchema } from './postgresQueryExport';
 import { postgresTransactionReadSchema, postgresTransactionApplySchema } from './postgresTransactionSettings';
 import { postgresSearchPathReadSchema, postgresSearchPathApplySchema } from './postgresSearchPath';
@@ -447,8 +448,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : routineInvocationZh.invalid }); }
   }),
   'sessions.open': z.object({ connectionId: id, database: name.nullable().optional() }).strict(), 'sessions.close': z.object({ sessionId: id }).strict(),
-  'query.execute': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), continueOnError: z.boolean().optional(), collectWarnings: z.boolean().optional(), currentStatement: z.object({ offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional() }).strict().refine(value => value.currentStatement === undefined || value.currentStatement.offset <= value.sql.length, '当前语句光标超出完整正文范围'),
-  'query.explain': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), format: z.enum(['auto', 'text']).optional() }).strict(),
+  'query.execute': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), sqliteStatementTimeoutMs: z.number().int().min(1).max(sqliteStatementTimeoutMaximumMs).optional(), continueOnError: z.boolean().optional(), collectWarnings: z.boolean().optional(), currentStatement: z.object({ offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional() }).strict().refine(value => value.currentStatement === undefined || value.currentStatement.offset <= value.sql.length, '当前语句光标超出完整正文范围'),
+  'query.explain': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), sqliteStatementTimeoutMs: z.number().int().min(1).max(sqliteStatementTimeoutMaximumMs).optional(), format: z.enum(['auto', 'text']).optional() }).strict(),
   'postgres.explain': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), format: z.enum(['auto', 'text']).optional(),
     currentStatement: z.object({ offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
   }).strict().refine(value => value.currentStatement === undefined || value.currentStatement.offset <= value.sql.length, '当前语句光标超出完整正文范围'),
@@ -473,7 +474,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.temporaryCompletion':z.discriminatedUnion('kind',[z.object({sessionId:id,database:completionName,prefix:completionPrefix,kind:z.literal('objects')}).strict(),z.object({sessionId:id,database:completionName,table:completionName,prefix:completionPrefix,kind:z.literal('columns'),details:z.literal(true).optional()}).strict()]),
   'query.temporaryRead':z.object({sessionId:id,database:completionName,table:completionName,taskId:id}).strict(),
   'query.objectDefinition': objectDefinitionInputSchema,
-  'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000), continueOnError: z.boolean().optional(), collectWarnings: z.boolean().optional() }).strict(),
+  'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000), sqliteStatementTimeoutMs: z.number().int().min(1).max(sqliteStatementTimeoutMaximumMs).optional(), continueOnError: z.boolean().optional(), collectWarnings: z.boolean().optional() }).strict(),
   'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json', 'csv-zip', 'sql']), csvDelimiter: z.enum(csvExportDelimiters).optional(), insertTarget: queryInsertTargetSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {
     if (Object.hasOwn(input, 'csvDelimiter') && (input.csvDelimiter === undefined || input.format !== 'csv' && input.format !== 'csv-zip')) context.addIssue({ code: 'custom', path: ['csvDelimiter'], message: '分隔符只适用于CSV或CSV ZIP，且必须为逗号、分号或Tab' });
     if ((input.format === 'sql') !== (input.insertTarget !== undefined)) context.addIssue({ code:'custom',path:['insertTarget'],message:'仅完整INSERT必须携带明确目标映射' });

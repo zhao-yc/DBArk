@@ -5,18 +5,29 @@
 SQLITE_EXTENSION_INIT1
 #include <string.h>
 #include <stdint.h>
+#ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 #define RAW_SQL_BYTES (20*1024*1024)
 #define RAW_SQL_CHUNK 65536
 #define RAW_VALUE_BYTES (1024*1024)
 #define RAW_TEXT_ERROR 0x7fff0001
 #define RAW_VALUE_ERROR 0x7fff0002
+#define RAW_TIMEOUT_ERROR 0x7fff0109
+#define RAW_TIMEOUT_MAX_MS 3600000
 typedef struct RawProbe {
   sqlite3 *db; sqlite3_stmt *statement; int done; int row; int result; int started; int bind_index;
   unsigned char *sql; int sql_length; int sql_capacity; int sql_stage; int consumed;
   int read_mode; int frame_phase; int frame_column; sqlite3_uint64 frame_sequence;
   sqlite3_value *frame_value; const unsigned char *frame_data; unsigned char frame_numeric[8];
   int frame_size; int frame_offset;
+  sqlite3_int64 deadline_ms; int deadline_hit;
 } RawProbe;
 
 /* 固定提示不泄露SQL、参数或数据库路径。 */
@@ -26,6 +37,42 @@ static void invalid(sqlite3_context *ctx) { sqlite3_result_error(ctx,"DBARK_RAW_
 static int failure_code(sqlite3 *db, int rc) {
   int detail=sqlite3_extended_errcode(db);
   return (detail & 255) == (rc & 255) ? detail : rc;
+}
+
+/* 使用单调时钟；系统时间调整不会延长或缩短原语句预算。 */
+static sqlite3_int64 monotonic_ms(void) {
+#ifdef _WIN32
+  return (sqlite3_int64)GetTickCount64();
+#else
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC,&now)!=0) return -1;
+  return (sqlite3_int64)now.tv_sec*1000 + now.tv_nsec/1000000;
+#endif
+}
+
+/* 原生进度回调只读时钟。它不碰连接，也不伪造 SQLite 的事务终态。 */
+static int deadline_progress(void *raw) {
+  RawProbe *p=raw;
+  sqlite3_int64 now=monotonic_ms();
+  if (now>=0 && now<p->deadline_ms) return 0;
+  p->deadline_hit=1; return 1;
+}
+
+static void deadline_handler(RawProbe *p, int install) {
+  if (p->deadline_ms) sqlite3_progress_handler(p->db,install ? 1000 : 0,install ? deadline_progress : 0,install ? p : 0);
+}
+
+static int statement_failure(RawProbe *p, int rc) {
+  return p->deadline_hit && (rc&255)==SQLITE_INTERRUPT ? RAW_TIMEOUT_ERROR : failure_code(p->db,rc);
+}
+
+/* 超时只围绕用户语句，固定控制壳和后继语句不会继承中断。 */
+static int step_source(RawProbe *p) {
+  int rc;
+  deadline_handler(p,1);
+  rc=sqlite3_step(p->statement);
+  deadline_handler(p,0);
+  return rc;
 }
 
 /* 完整UTF8到齐后一次核验；分段边界允许落在多字节字符内部，禁止NUL及无效Unicode。 */
@@ -74,7 +121,7 @@ static void release_frame_value(RawProbe *p) {
 static void clear_source(RawProbe *p) {
   release_frame_value(p);
   sqlite3_free(p->sql); p->sql=0; p->sql_length=0; p->sql_capacity=0; p->sql_stage=0; p->consumed=0;
-  p->done=0; p->row=0; p->result=SQLITE_OK; p->started=0; p->bind_index=0;
+  p->done=0; p->row=0; p->result=SQLITE_OK; p->started=0; p->bind_index=0; p->deadline_ms=0; p->deadline_hit=0;
   p->read_mode=0; p->frame_phase=0; p->frame_column=0; p->frame_sequence=0;
 }
 
@@ -97,8 +144,11 @@ static int append_sql(sqlite3_context *ctx, RawProbe *p, const void *bytes, int 
 static void prepare_source(sqlite3_context *ctx, RawProbe *p) {
   const char *tail; int rc;
   if (p->sql_stage!=1 || !p->sql_length || !valid_utf8(p->sql,p->sql_length,0)) { invalid(ctx); return; }
+  if (p->deadline_ms && deadline_progress(p)) { clear_source(p); sqlite3_result_error_code(ctx,RAW_TIMEOUT_ERROR); return; }
+  deadline_handler(p,1);
   rc=sqlite3_prepare_v3(p->db,(const char *)p->sql,p->sql_length,0,&p->statement,&tail);
-  if (rc!=SQLITE_OK) { rc=failure_code(p->db,rc); sqlite3_finalize(p->statement); p->statement=0; clear_source(p); sqlite3_result_error_code(ctx,rc); return; }
+  deadline_handler(p,0);
+  if (rc!=SQLITE_OK) { rc=statement_failure(p,rc); sqlite3_finalize(p->statement); p->statement=0; clear_source(p); sqlite3_result_error_code(ctx,rc); return; }
   p->sql_stage=2; p->consumed=(int)(tail-(const char *)p->sql);
   sqlite3_result_int(ctx,p->consumed);
 }
@@ -127,9 +177,9 @@ static void read_frame(sqlite3_context *ctx, RawProbe *p, sqlite3_int64 request)
       if (rows>=max_rows) break;
       if (max_bytes-used<5) break;
       if (p->done || !p->statement) { if (!p->done) { p->done=1; p->result=SQLITE_DONE; } p->frame_phase=5; continue; }
-      p->row=0; rc=sqlite3_step(p->statement);
+      p->row=0; rc=step_source(p);
       if (rc==SQLITE_ROW) { p->row=1; p->frame_column=0; p->frame_phase=1; }
-      else { p->done=1; p->result=rc==SQLITE_DONE ? rc : failure_code(p->db,rc); p->frame_phase=5; }
+      else { p->done=1; p->result=rc==SQLITE_DONE ? rc : statement_failure(p,rc); p->frame_phase=5; }
     } else if (p->frame_phase==1) {
       int columns=sqlite3_column_count(p->statement);
       if (columns<1 || columns>1024) { frame_failure(p,RAW_VALUE_ERROR); continue; }
@@ -245,7 +295,13 @@ static void run(sqlite3_context *ctx, int argc, sqlite3_value **args) {
     return;
   }
   if (op==12) {
-    if (p->sql_stage || sqlite3_value_type(args[1])!=SQLITE_NULL) { invalid(ctx); return; }
+    int kind=sqlite3_value_type(args[1]);
+    if (p->sql_stage || (kind!=SQLITE_NULL && kind!=SQLITE_INTEGER)) { invalid(ctx); return; }
+    if (kind==SQLITE_INTEGER) {
+      sqlite3_int64 budget=sqlite3_value_int64(args[1]), now=monotonic_ms();
+      if (budget<1 || budget>RAW_TIMEOUT_MAX_MS || now<0) { invalid(ctx); return; }
+      p->deadline_ms=now+budget;
+    }
     p->sql_stage=1; sqlite3_result_int(ctx,0); return;
   }
   if (op==13) {
@@ -312,9 +368,9 @@ static void run(sqlite3_context *ctx, int argc, sqlite3_value **args) {
     if (p->result == SQLITE_DONE) sqlite3_result_null(ctx); else sqlite3_result_error_code(ctx,p->result);
     return;
   }
-  p->row=0; p->started=1; rc=sqlite3_step(p->statement);
+  p->row=0; p->started=1; rc=step_source(p);
   if (rc == SQLITE_ROW) { p->row=1; sqlite3_result_int(ctx,sqlite3_column_count(p->statement)); return; }
-  p->done=1; p->result = rc == SQLITE_DONE ? rc : failure_code(p->db,rc);
+  p->done=1; p->result = rc == SQLITE_DONE ? rc : statement_failure(p,rc);
   if (rc == SQLITE_DONE) sqlite3_result_null(ctx); else sqlite3_result_error_code(ctx,p->result);
 }
 

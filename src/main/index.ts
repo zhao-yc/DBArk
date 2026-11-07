@@ -1087,6 +1087,9 @@ async function applySqliteSync(input: import('../shared/sqliteTableEdit').Sqlite
 
 /** 只将真实主文档、连接修订和已保存配置交给表页引擎；提交后以原事务回执为准。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  if ((command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.explain') &&
+      input.sqliteStatementTimeoutMs !== undefined && !broker.isSqliteSession(input.sessionId))
+    throw Error('SQLite 语句超时只能用于原 SQLite 查询会话');
   if (command === 'sqlite.queryExportParameterNames') return sqliteQueryExportParameterNames(input.sql);
   if (command === 'postgres.explain' || command.startsWith('postgres.analyze') || command.startsWith('postgres.transactionSettings.') || command.startsWith('postgres.searchPath.') || command.startsWith('postgres.queryTimeouts.')) {
     const session = sessions.get(input.sessionId);

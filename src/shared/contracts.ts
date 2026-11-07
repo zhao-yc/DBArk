@@ -246,8 +246,8 @@ export interface CommandMap {
   'metadata.routineInvocation': { input: RoutineInvocationTarget & { taskId: string }; output: RoutineInvocationMetadata };
   'sessions.open': { input: { connectionId: string; database?: string|null }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
-  'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; continueOnError?: boolean; /** 仅true插入SHOW诊断，false或省略保持既有查询行为。 */ collectWarnings?: boolean; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
-  'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text' }; output: QueryOutcome };
+  'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; continueOnError?: boolean; /** 仅true插入SHOW诊断，false或省略保持既有查询行为。 */ collectWarnings?: boolean; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
+  'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; format?: 'auto' | 'text' }; output: QueryOutcome };
   'postgres.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text'; currentStatement?: { offset: number } }; output: QueryOutcome };
   'postgres.transactionSettings.read': {input: {sessionId: string; taskId: string}; output: PostgresTransactionSnapshot};
   'postgres.transactionSettings.apply': {input: PostgresTransactionApplyInput; output: PostgresTransactionSnapshot};
@@ -267,7 +267,7 @@ export interface CommandMap {
   'query.temporaryState':{input:{sessionId:string};output:SessionObjectSnapshot};
   'query.temporaryCompletion':{input:{sessionId:string;database:string;prefix:string;kind:'objects'}|{sessionId:string;database:string;table:string;prefix:string;kind:'columns';details?:true};output:SessionObjectCompletion};
   'query.temporaryRead':{input:{sessionId:string;database:string;table:string;taskId:string};output:SessionObjectReadResult};
-  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; continueOnError?: boolean; /** 显式采集时警告消息隐藏参数展开值。 */ collectWarnings?: boolean }; output: QueryOutcome };
+  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; sqliteStatementTimeoutMs?: number; continueOnError?: boolean; /** 显式采集时警告消息隐藏参数展开值。 */ collectWarnings?: boolean }; output: QueryOutcome };
   'query.exportStream': { input: QueryStreamExportInput; output: QueryStreamExportOutput };
   'query.confirmInsertExport': { input: import('zod').infer<typeof import('./queryInsertExport').queryInsertConfirmationSchema>; output: void };
   'query.cancel': { input: { taskId: string }; output: void };

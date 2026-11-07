@@ -9,6 +9,7 @@ import { queryParameterLimits } from '../../shared/queryParameters';
 import { sqliteNamedParameterNames } from './parameters';
 import { createSqliteNativeInvoke, resolveSqliteNativeResource, sqliteNativeFunction } from './nativeRuntime';
 import { SqliteRawStatement, type SqliteRawInvoke } from './rawStatement';
+import { validSqliteStatementTimeout } from '../../shared/sqliteStatementTimeout';
 import { checkSqliteSyntax } from './syntaxCheck';
 import { consumeSqliteRawFrames } from './rawFrames';
 import { installSqliteSearchFunctions } from './dataSearchFunctions';
@@ -370,6 +371,8 @@ export class SqliteWorkerCore {
       const { sql, options } = request;
       const stream = request.kind === 'streamRead';
       const querySource = stream && request.querySource === true;
+      const timeout = (options as SqliteExecutionOptions | undefined)?.statementTimeoutMs;
+      if (timeout !== undefined && (stream || request.createGuard || !validSqliteStatementTimeout(timeout))) throw invalid();
       if (stream && !this.readOnly) throw new DriverFailure('SQLITE_STREAM_REQUIRES_READONLY', 'SQLite完整流读取只允许物理只读连接');
       if (typeof sql !== 'string' || !unicode(sql) || Buffer.byteLength(sql) > limits.sqlBytes || !object(options) || !integer(options.batchRows, 1, limits.batchRows)
         || !stream && (!integer(options.maxRows, 1, limits.rows) || !integer(options.maxBytes, 1, limits.resultBytes))) throw invalid();
@@ -406,7 +409,7 @@ export class SqliteWorkerCore {
         const statementStart = offset;
         if (request.captureFailureRange) attemptedStart = offset;
         const started = request.captureQueryReceipt ? performance.now() : undefined;
-        const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining), prefix = statement.sourceSQL;
+        const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining, timeout), prefix = statement.sourceSQL;
         try {
           if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
           if (attemptedStart !== undefined && statement.hasStatement) nativeRange = {start: attemptedStart, end: attemptedStart + prefix.length};
@@ -438,10 +441,12 @@ export class SqliteWorkerCore {
       else if (active.cancelled && !this.closing) this.port.send({ kind: 'cancelled', id: active.id, transaction: this.transaction(), completedStatements: active.results.length });
       else if (!this.closing) {
         // 原生整数错误码可用于后续诊断；错误正文可能含SQL、路径或参数，仍禁止回传。
-        const nativeCode = object(error) && integer(error.errcode, 0, 2147483647) ? 'SQLITE_NATIVE_' + error.errcode : 'SQLITE_EXECUTION_FAILED';
-        const range = attemptedStart !== undefined && nativeCode.startsWith('SQLITE_NATIVE_')
+        const code = object(error) && integer(error.errcode, 0, 2147483647) ? error.errcode : undefined;
+        const timedOut = code === 0x7fff0109;
+        const nativeCode = timedOut ? 'SQLITE_STATEMENT_TIMEOUT' : code === undefined ? 'SQLITE_EXECUTION_FAILED' : 'SQLITE_NATIVE_' + code;
+        const range = attemptedStart !== undefined && code !== undefined
           ? nativeRange ?? failedPrepareRange(request.sql, attemptedStart) : undefined;
-        this.failure(active.id, error instanceof DriverFailure ? error : error instanceof SqliteRawValueError ? new DriverFailure(error.code === 'SQLITE_RAW_VALUE_INVALID' ? 'SQLITE_VALUE_INVALID' : error.code, error.message) : new DriverFailure(nativeCode, 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length, range);
+        this.failure(active.id, error instanceof DriverFailure ? error : error instanceof SqliteRawValueError ? new DriverFailure(error.code === 'SQLITE_RAW_VALUE_INVALID' ? 'SQLITE_VALUE_INVALID' : error.code, error.message) : new DriverFailure(nativeCode, timedOut ? 'SQLite 语句执行超时，已停止后续语句' : 'SQLite语句执行失败，已停止后续语句；未自动回滚或重放'), active.results.length, range);
       }
     } finally { if (this.guardedCreate?.owner === active) this.guardedCreate = undefined; active.waiting = undefined; if (this.active === active) this.active = undefined; }
   }

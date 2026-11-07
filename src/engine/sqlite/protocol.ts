@@ -63,7 +63,7 @@ export function copySqliteNamedParameters(input: unknown): Record<string, Sqlite
   return output;
 }
 export interface SqliteColumn { name: string; database: string | null; table: string | null; column: string | null; type: string | null; }
-export interface SqliteExecutionOptions { maxRows: number; batchRows: number; maxBytes: number; }
+export interface SqliteExecutionOptions { maxRows: number; batchRows: number; maxBytes: number; statementTimeoutMs?: number; }
 /** 只读完整导出没有累计行/结果截断；仍逐帧ACK且受原单值、批次预算约束。 */
 export interface SqliteStreamReadOptions { batchRows: number; }
 export interface SqliteStatementResult {
