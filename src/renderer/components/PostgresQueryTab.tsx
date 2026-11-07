@@ -1,4 +1,4 @@
-import { appModalSelector } from '../modalSelectors';
+import { appModalSelector, isAppModalNode } from '../modalSelectors';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
@@ -56,6 +56,8 @@ import { queryAnalyzeZh } from '../locales/queryAnalyze.zh-CN';
 import { ErrorBox, Spinner, Empty, Modal } from './ui';
 import { QueryCloseDialog } from './QueryCloseDialog';
 import { QueryBindingDialog } from './QueryBindingDialog';
+import { QueryDuplicateIntent } from '../queryDuplicateIntent';
+import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { useQueryFileSource } from '../useQueryFileSource';
 import { captureQueryFileSnapshot } from '../queryFileSnapshot';
@@ -144,6 +146,9 @@ export function PostgresQueryTab({
     setEditorSelection(previous => previous.explicit === explicit && previous.single === single ? previous : { explicit, single });
   }, []);
   const historyInsertion = useRef<HistoryInsertionTarget | null>(null);
+  const duplicateIntent = useRef<QueryDuplicateIntent | undefined>(undefined);
+  const duplicateOrigin = useRef({ connectionId: tab.connectionId, version });
+  const [duplicating, setDuplicating] = useState(false);
   const [busy, setBusy] = useState(false),
     [fileBusy, setFileBusy] = useState(false),
     [error, setError] = useState(''),
@@ -648,6 +653,7 @@ export function PostgresQueryTab({
     alive.current = true;
     return () => {
       alive.current = false;
+      duplicateIntent.current?.dispose();
       snapshotOperation.current?.invalidate();
       const pending = phase.current,
         owned = session.current;
@@ -721,6 +727,7 @@ export function PostgresQueryTab({
     insertionLocked.current = locked;
     fileOperation.current = files.isBusy;
     historyInsertion.current?.current();
+    if (locked) duplicateIntent.current?.dispose();
   });
   /** 进入历史或保存查询搜索时才捕获原选区。后续执行、切源、关闭或模型变化会撤销插入资格。 */
   useEffect(() => {
@@ -1287,6 +1294,66 @@ export function PostgresQueryTab({
   function openSaveQuery() {
     if (commandEditor()) setSave(true);
   }
+  /** 复制只读取原草稿和固定数据库上下文，沿既有意图保护新建未绑定的独立查询。 */
+  async function duplicateQuery() {
+    if (duplicateIntent.current || !commandEditor()) return;
+    let intent: QueryDuplicateIntent | undefined;
+    try {
+      intent = new QueryDuplicateIntent({
+        editor: () => editor.current,
+        flush: flushEditorContent,
+        scope: () => {
+          const workspace = useWorkspace.getState();
+          const current = workspace.settings.tabs.find(item => item.id === tab.id);
+          const connection = workspace.connections.find(item => item.id === current?.connectionId);
+          const origin = duplicateOrigin.current;
+          return {
+            tab: current, connection, connectionVersion: workspace.connectionVersions[current?.connectionId ?? ''] ?? 0,
+            sessionId: session.current?.id ?? '',
+            present: alive.current && current?.kind === 'query' && connection?.dialect === 'postgresql' &&
+              current.connectionId === origin.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === origin.version,
+            active: workspace.settings.activeTabId === tab.id,
+            blocked: insertionLocked.current || !!phase.current || !!workspace.activeJobs[tab.id] || !!closeRef.current ||
+              fileOperation.current() || !!document.querySelector(appModalSelector),
+          };
+        },
+        subscribe: changed => {
+          const release = useWorkspace.subscribe(changed);
+          const observer = new MutationObserver(records => {
+            if (records.some(record => [...record.addedNodes].some(node =>
+              isAppModalNode(node) || node.nodeType === 1 && !!(node as Element).querySelector(appModalSelector))))
+              intent?.dispose();
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+          return () => { release(); observer.disconnect(); };
+        },
+        database: initial => {
+          const connection = initial.connection;
+          if (connection?.dialect !== 'postgresql') throw Error(queryDuplicateZh.changed);
+          const original = session.current;
+          if (initial.sessionId && (!original || original.id !== initial.sessionId || !same(original.scope)))
+            throw Error(queryDuplicateZh.changed);
+          return { state: 'known', database: original?.scope.database || initial.tab?.database || connection.database || 'postgres' };
+        },
+        open: candidate => {
+          const workspace = useWorkspace.getState();
+          if (workspace.settings.tabs.length >= 100) throw Error(queryDuplicateZh.tooMany);
+          workspace.openTab(candidate);
+        },
+      });
+      duplicateIntent.current = intent;
+      setDuplicating(true);
+      await intent.run();
+    } catch (reason) {
+      if (alive.current) setError(errorMessage(reason));
+    } finally {
+      intent?.dispose();
+      if (duplicateIntent.current === intent) {
+        duplicateIntent.current = undefined;
+        if (alive.current) setDuplicating(false);
+      }
+    }
+  }
   const editable = !!profile && !!editorInstance && !locked;
   const canRun = editable && state.transactionKnown;
   const canPlan = canRun && !state.transactionFailed;
@@ -1369,6 +1436,9 @@ export function PostgresQueryTab({
             <button disabled={!editable} onClick={openSaveQuery}>
               {text.save}
             </button>
+            <button disabled={!editable || duplicating || duplicateOrigin.current.connectionId !== tab.connectionId ||
+              duplicateOrigin.current.version !== version} title={queryDuplicateZh.hint}
+              onClick={() => void duplicateQuery()}>{queryDuplicateZh.action}</button>
             <button disabled={locked} onClick={onHistory}>
               {text.history}
             </button>

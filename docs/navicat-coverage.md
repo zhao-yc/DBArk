@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 查询页支持将当前完整 SQL 和明确数据库上下文复制成独立草稿。原结果、活动事务及保存来源保留在原标签。Q03、R01 仍为部分覆盖。[PostgreSQL 复制查询](development/postgres-query-duplicate-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 查询结果可按明确 schema、表和列映射导出 UTF-8 INSERT 文件。预览和文件共享生成器，沿用原结果快照及一次性文件授权。Q05、R01 仍为部分覆盖。[PostgreSQL 查询结果 SQL 导出](development/postgres-result-sql-export-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 查询页支持按语句折叠多行 SQL。折叠沿用原语句分段和可用的会话字符串模式缓存，并保留带有相邻语句的末行。Q01、R01 仍为部分覆盖。[PostgreSQL 语句折叠](development/postgres-statement-folding-20261107.md)

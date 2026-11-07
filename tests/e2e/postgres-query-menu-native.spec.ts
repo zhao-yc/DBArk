@@ -9,6 +9,7 @@ import { statementNavigationZh as navigationText } from '../../src/renderer/loca
 import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { postgresIdentifier } from '../../src/shared/postgresSql';
+import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -70,6 +71,101 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 复制查询保留当前全文和库，副本与保存来源及原撤销记录独立', async ({}, info) => {
+  const name = '已保存 PostgreSQL 来源', savedSql = "SELECT '保存原文';";
+  const draft = "-- 当前完整草稿😀\nSELECT '0.12345678901234567890', '$1';";
+  await prepare({id: '', name: '离线 PostgreSQL 复制', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'configured_database'}, savedSql);
+  await page.evaluate(async ({name, sql}) => {
+    const settings = await window.dbark.invoke('settings.get', {});
+    const original = settings.tabs.find(tab => tab.id === 'pg-original');
+    if (!original) throw Error('原查询缺失');
+    const saved = await window.dbark.invoke('queries.create', {
+      name, sql, connectionId: original.connectionId, context: {state: 'known', database: 'saved_database'},
+    });
+    await window.dbark.invoke('settings.save', {...settings, tabs: settings.tabs.map(tab => tab.id === original.id
+      ? {...tab, title: name, database: 'saved_database', sourceBinding: saved.source, databaseContext: {state: 'known', database: 'saved_database'}} : tab)});
+  }, {name, sql: savedSql});
+  await page.reload();
+  await expect(editor().getByRole('textbox')).toBeVisible();
+  await replaceDraft(draft);
+  // 先记录真实编辑器的一步撤销结果。输入桥可能保留多个原生撤销组，复制须保持同一基线。
+  await page.keyboard.press('ControlOrMeta+Z');
+  const undoBaseline = (await inspectModel()).sql;
+  expect(undoBaseline).not.toBe(draft);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+Z' : 'Control+Y');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+  const settings = () => page.evaluate(() => window.dbark.invoke('settings.get', {}));
+  await expect.poll(async () => (await settings()).tabs.find(tab => tab.id === 'pg-original')?.sql).toBe(draft);
+  const original = (await settings()).tabs.find(tab => tab.id === 'pg-original')!;
+  const saved = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
+  await tab().getByRole('button', {name: queryDuplicateZh.action, exact: true}).click();
+  await expect.poll(async () => (await settings()).tabs.length).toBe(3);
+  const copiedSettings = await settings(), copied = copiedSettings.tabs.find(tab => tab.id === copiedSettings.activeTabId)!;
+  expect(copied).toMatchObject({kind: 'query', title: name + queryDuplicateZh.suffix, sql: draft,
+    connectionId: original.connectionId, database: 'saved_database', databaseContext: {state: 'known', database: 'saved_database'}});
+  expect(copied.id).not.toBe(original.id);
+  expect(copied.sourceBinding).toBeUndefined();
+  expect(copied.fileSourceBinding).toBeUndefined();
+  expect(copiedSettings.tabs.find(tab => tab.id === original.id)).toEqual(original);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  await expect.poll(async () => (await inspectModel()).sql).toBe(draft);
+  await expect(editor().locator('.view-lines')).toContainText('当前完整草稿');
+  await page.screenshot({path: info.outputPath('PostgreSQL复制为新查询.png')});
+  await replaceDraft("SELECT '仅修改副本';");
+  await page.locator('[data-workspace-tab-id="pg-original"]').getByRole('button', {name, exact: true}).click();
+  expect((await inspectModel()).sql).toBe(draft);
+  await editor().getByRole('textbox').focus();
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe(undoBaseline);
+  expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual(saved);
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 复制查询保留原事务、结果和会话且副本不自动执行', async () => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query("CREATE TABLE duplicate_source(id bigint PRIMARY KEY,note text); INSERT INTO duplicate_source VALUES(9007199254740993,'服务器原值')");
+    const sql = "UPDATE duplicate_source SET note='原未提交事务' WHERE id=9007199254740993 RETURNING id,note,pg_backend_pid() AS session_id";
+    await prepare({id: '', name: '本轮隔离 PostgreSQL 复制', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await expect(tab().getByRole('button', {name: postgresZh.rollback, exact: true})).toBeEnabled();
+    await tab().getByRole('button', {name: postgresZh.execute, exact: true}).click();
+    const grid = tab().locator('.postgres-results .rdg');
+    await expect(grid).toContainText('原未提交事务');
+    await expect(tab().getByRole('button', {name: queryDuplicateZh.action, exact: true})).toBeEnabled();
+    const originalResult = await grid.innerText();
+    const history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+    const originalSessions = await sessions();
+    expect(originalSessions).toHaveLength(1);
+    expect(originalSessions[0].state).toBe('idle in transaction');
+    await tab().getByRole('button', {name: queryDuplicateZh.action, exact: true}).click();
+    await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+    await expect(tab().locator('.postgres-results .rdg')).toHaveCount(0);
+    expect((await inspectModel()).sql).toBe(sql);
+    expect(await sessions()).toEqual(originalSessions);
+    expect((await observer.query('SELECT note FROM duplicate_source')).rows).toEqual([{note: '服务器原值'}]);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history);
+    await page.locator('[data-workspace-tab-id="pg-original"]').getByRole('button', {name: '原 PostgreSQL 查询', exact: true}).click();
+    await expect.poll(() => grid.innerText()).toBe(originalResult);
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click();
+    await expect(tab().getByRole('button', {name: postgresZh.rollback, exact: true})).toBeDisabled();
+    await expect.poll(sessions).toEqual([{...originalSessions[0], state: 'idle'}]);
+    expect((await observer.query('SELECT note FROM duplicate_source')).rows).toEqual([{note: '服务器原值'}]);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 查询结果 INSERT 文件预览、截断范围、勾选和真实回放', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
