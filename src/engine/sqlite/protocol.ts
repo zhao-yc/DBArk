@@ -65,7 +65,11 @@ export interface SqliteColumn { name: string; database: string | null; table: st
 export interface SqliteExecutionOptions { maxRows: number; batchRows: number; maxBytes: number; }
 /** 只读完整导出没有累计行/结果截断；仍逐帧ACK且受原单值、批次预算约束。 */
 export interface SqliteStreamReadOptions { batchRows: number; }
-export interface SqliteStatementResult { index: number; rows: number; truncated: boolean; changes: string; transaction: boolean; }
+export interface SqliteStatementResult {
+  index: number; rows: number; truncated: boolean; changes: string; transaction: boolean;
+  /** 原生语句的完整行数与耗时，仅用户查询明确请求时返回。 */
+  queryReceipt?: { producedRows: number; elapsedMs: number };
+}
 export interface SqliteExecutionResult { statements: SqliteStatementResult[]; transaction: boolean; comparison?: SqliteRebuildComparisonResult; }
 export interface SqliteOpenOptions { path: string; readOnly: boolean; busyTimeoutMs: number; }
 export const sqliteCopySourceSchema = 'dbark_copy_source';
@@ -96,8 +100,8 @@ export interface SqliteFileIdentity { path: string; device: string; inode: strin
 export type SqliteWorkerRequest =
   | { kind: 'backupFile'; id: string; source: SqliteFileIdentity; staging: SqliteFileIdentity }
   | { kind: 'open'; id: string; options: SqliteWorkerOpenOptions }
-  | { kind: 'execute'; id: string; sql: string; parameters?: SqliteValue[]; namedParameters?: Record<string, SqliteValue>; createGuard?: SqliteCreateGuard; captureFailureRange?: true; options: SqliteExecutionOptions }
-  | { kind: 'streamRead'; id: string; sql: string; parameters: SqliteValue[]; namedParameters?: never; createGuard?: never; captureFailureRange?: never; options: SqliteStreamReadOptions }
+  | { kind: 'execute'; id: string; sql: string; parameters?: SqliteValue[]; namedParameters?: Record<string, SqliteValue>; createGuard?: SqliteCreateGuard; captureFailureRange?: true; captureQueryReceipt?: true; options: SqliteExecutionOptions }
+  | { kind: 'streamRead'; id: string; sql: string; parameters: SqliteValue[]; namedParameters?: never; createGuard?: never; captureFailureRange?: never; captureQueryReceipt?: never; options: SqliteStreamReadOptions }
   | { kind: 'rebuildCompare'; id: string; input: SqliteRebuildComparisonInput }
   | { kind: 'ack'; id: string; frame: number }
   | { kind: 'cancel'; id: string }

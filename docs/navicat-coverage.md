@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。SQLite 当前查询可区分每条语句的客户端耗时、原生产生行数、已保留行数和连接行变更计数。首错停止后完整前序仍附回执。Q02、R02 仍为部分覆盖。[SQLite 查询回执](development/sqlite-query-receipts-20261107.md)
+
 2026-11-07 源码增量。SQLite 普通脚本首错后可定位原语句并查看完整前序结果。准备失败仅在原尝试起点的语句边界明确时提供定位。Q02、R02 仍为部分覆盖。[SQLite 脚本失败定位](development/sqlite-script-failure-source-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 查询标签可分别设置原会话语句超时和锁等待超时，读回实际毫秒值或恢复会话默认值。Q02、R01 仍为部分覆盖。[PostgreSQL 会话查询超时](development/postgres-query-timeouts-20261107.md)

@@ -15,4 +15,11 @@ export const sqliteZh = {
   recoveryHint: 'SQLite 文件查询仅支持 main。确认后恢复到 main，原 SQL 正文保持不变，仍需显式执行。',
   brokenTransaction: 'SQLite 原会话已失效，事务结果未知。请先核对数据库结果，再显式断开连接并新建查询；不会自动重连或重放。',
   required: '请重新选择现有 SQLite 数据库文件。',
+  queryReceipt: 'SQLite 当前语句回执',
+  receiptOrdinal: (ordinal: number) => `第 ${ordinal} 条语句`,
+  receiptRows: (produced: number, retained: number) => `产生 ${produced} 行 · 保留 ${retained} 行`,
+  receiptChanges: (changes: number) => `行变更计数 ${changes}`,
+  receiptChangeHint: 'SQLite 原连接的累计变更差值，可能包含触发器和外键动作。请结合事务状态核对提交。',
+  receiptElapsed: (elapsedMs: number) => `本条耗时 ${Math.round(elapsedMs)} ms`,
+  executionElapsed: (elapsedMs: number) => `本次总耗时 ${Math.round(elapsedMs)} ms`,
 };

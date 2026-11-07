@@ -117,15 +117,19 @@ export class SqliteQuerySession {
     const terminalEvent = (patch: Omit<Partial<TaskEvent>, 'taskId'>) => {
       try { event(patch); } catch { this.terminalNotificationFailed = true; }
     };
-    const complete = (facts: readonly Readonly<SqliteStatementResult>[]): QueryResult[] => {
+    const complete = (facts: readonly Readonly<SqliteStatementResult>[]): Pick<QueryOutcome, 'results' | 'sqliteResultReceipts'> => {
       if (facts.length > operation.results.length) throw Error('SQLite完整结果与原语句不匹配');
-      return facts.map((fact, index) => {
+      const receipts: NonNullable<QueryOutcome['sqliteResultReceipts']> = [];
+      const results = facts.map((fact, index) => {
         const source = operation.results[index];
         if (fact.index !== index) throw Error('SQLite完整结果顺序无效');
         const changed = BigInt(fact.changes);
         if (changed > BigInt(Number.MAX_SAFE_INTEGER)) throw Error('SQLite语句已执行，但变更量超过现有结果合同；请核对数据库，不要重复执行');
-        return { ...source, ...(!source.columns.length || changed > 0n ? { affectedRows: Number(changed) } : {}), truncated: source.truncated || fact.truncated, elapsedMs: performance.now() - operation.started };
+        if (fact.queryReceipt) receipts.push({producedRows: fact.queryReceipt.producedRows, changedRows: Number(changed)});
+        return { ...source, ...(!source.columns.length || changed > 0n ? { affectedRows: Number(changed) } : {}), truncated: source.truncated || fact.truncated,
+          elapsedMs: fact.queryReceipt?.elapsedMs ?? performance.now() - operation.started };
       });
+      return {results, ...(receipts.length && receipts.length === results.length ? {sqliteResultReceipts: receipts} : {})};
     };
     try {
       event({ executionDatabase: { state: 'known', database: 'main' } });
@@ -135,6 +139,7 @@ export class SqliteQuerySession {
         ...(options.single ? { parameters: [] } : {}),
         ...(options.namedParameters ? { namedParameters: options.namedParameters } : {}),
         ...(!options.single && !options.namedParameters && !options.explainView ? {captureFailureRange: true as const} : {}),
+        ...(!options.explainView ? {captureQueryReceipt: true as const} : {}),
         onStatement: statement => {
           if (statement.index !== operation.results.length) throw Error('SQLite结果集顺序与原任务不匹配');
           if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
@@ -161,11 +166,11 @@ export class SqliteQuerySession {
         },
       });
       if (!outcome.statements.length) throw Error('SQLite脚本中没有可执行语句');
-      const results = complete(outcome.statements);
+      const completed = complete(outcome.statements), {results} = completed;
       // 即使原表受行预算截断，也交共享builder显式降级为不完整表格；只有原生成功才附计划。
       const sqliteExplain = options.explainView && results.length === 1 ? buildSqliteExplainPlan(results[0], this.driver.version, options.explainView) : undefined;
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
-      return { results, ...displayTitles(results.length), elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
+      return { ...completed, ...displayTitles(results.length), elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
     } catch (reason) {
       const cancelled = reason instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(reason.code);
       const message = options.explainView && this.driver.readOnly && reason instanceof SqliteDriverError && reason.code === 'SQLITE_NATIVE_23'
@@ -176,7 +181,7 @@ export class SqliteQuerySession {
       if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || options.namedParameters && reason.code === 'SQLITE_NAMED_PARAMETERS_INVALID' || options.single && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
         if (reason.completedResults.length !== reason.completedStatements) throw Error('SQLite失败回执缺少前序完整结果，不能发布成功摘要');
         const sourceRange = options.sourceRange ?? options.parameterRanges?.[reason.completedStatements] ?? reason.sourceRange;
-        return { results: complete(reason.completedResults), ...displayTitles(reason.completedStatements), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) } };
+        return { ...complete(reason.completedResults), ...displayTitles(reason.completedStatements), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}) } };
       }
       throw reason;
     } finally { if (this.active === operation) this.active = undefined; }

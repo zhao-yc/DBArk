@@ -96,6 +96,8 @@ export interface QueryResult { /** PostgreSQL真实CommandComplete标签，COMMI
 export interface QueryOutcome { results: QueryResult[]; /** SQLite执行时跳过注释，名称单独按已完成结果的序号传回。 */ resultTitles?: (string | null)[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; /** SQLite原始四列计划，与MySQL指标和实际执行分析分别建模。 */ sqliteExplain?: import('./sqliteExplain').SqliteExplainPlan; /** 独立于估算计划；该结果来自用户明确确认后的实际执行。 */ analysis?: QueryAnalyzePlan; /** 默认首错停止；显式遇错继续也只保留完整结果，失败语句不保证未执行且不重放。 */ failure?: import('./queryFailure').QueryFailure; /** 仅显式遇错继续携带，不改变默认首错停止回包。 */ scriptReport?: QueryScriptReport; /** 仅显式采集携带；SHOW诊断会改变ROW_COUNT等原会话诊断信息。 */ warnings?: QueryWarningsReport; /** 原会话本次执行期间的有界 NoticeResponse，只在结果内存展示。 */ postgresNotices?: import('./postgresNotices').PostgresNoticeReport;
   /** PostgreSQL 普通执行专用。与完整结果逐项对应，范围相对本次提交的 SQL。 */
   postgresResultSources?: PostgresResultSource[];
+  /** 与本次 SQLite 的完整结果逐项对应，不随固定快照写入文件。 */
+  sqliteResultReceipts?: { producedRows: number; changedRows: number }[];
 }
 export interface PostgresResultSource { statementOrdinal: number; sourceRange: import('./queryFailure').QueryFailureSourceRange; }
 export type FilterMode = 'all' | 'any';

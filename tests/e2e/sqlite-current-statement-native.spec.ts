@@ -67,7 +67,8 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
   const readonlyWrite = marked('只读写拒绝', "INSERT INTO subject(id,note) ┃VALUES(40,'只读必须拒绝')", 113);
   const readonlyRead = marked('只读SELECT', 'SELECT COUNT(*) AS tota┃l FROM subject', 115);
   const failedSql = 'SELECT missing_column FROM subject;';
-  const full = "SELECT '普通前序🧭' AS prior;\r\n/* 原文注释😀 */ " + failedSql +
+  const priorSql = "WITH RECURSIVE nums(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM nums WHERE n < 1005) SELECT CASE n WHEN 1 THEN '普通前序🧭' ELSE CAST(n AS TEXT) END AS prior FROM nums;";
+  const full = priorSql + '\r\n/* 原文注释😀 */ ' + failedSql +
     "\r\nINSERT INTO subject VALUES(92,'普通失败后不得执行');";
   const failedStart = full.indexOf(failedSql), failedEnd = failedStart + failedSql.length;
   const ordinaryFailure: Script = {name: '普通脚本首错', source: full, selected: failedSql, offset: 0, current: false,
@@ -229,16 +230,24 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     expect(disk()).toEqual(afterInsert);
     stage = 'trigger体内caret创建整个定义且不执行相邻DML'; const created = await run(trigger); expect(result(created.fact?.reply)).toMatchObject({ results: [{ statement: trigger.selected }] }); const afterTrigger = { ...afterInsert, triggers: [{ name: '当前;?触发🚢', sql: trigger.selected }] }; expect(disk()).toEqual(afterTrigger); expect(emittedSql(await step(audit), created.fact?.request.taskId)).toEqual([trigger.selected]);
     stage = '原普通CtrlEnter执行插入触发两条内部语句'; const normal = await run(ordinary); const afterNormal = { ...afterTrigger, subject: [...afterInsert.subject, { id: '20', note: '普通插入🚢' }], audit: [{ id: '20', note: "触发一;?'中文" }, { id: '20', note: '触发二🚢' }] }; expect(disk()).toEqual(afterNormal); const rwSession = inserted.fact?.request.sessionId; expect(typeof rwSession).toBe('string'); for (const execution of [selected, created, normal]) expect(execution.fact?.request.sessionId).toBe(rwSession);
+    const receipt = query().getByRole('group', {name: sqliteZh.queryReceipt, exact: true});
+    expect(normal.outcome.sqliteResultReceipts).toEqual([{producedRows: 0, changedRows: 3}]);
+    await step(() => expect(receipt).toContainText(sqliteZh.receiptChanges(3)));
     stage = '准确原会话BEGIN当前写与ROLLBACK独立观察'; await step(() => query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeEnabled()); const txWritten = await run(transactionInsert, true); expect(txWritten.fact?.request.sessionId).toBe(rwSession); expect(txWritten.outcome.transactionOpen).toBe(true); expect(disk()).toEqual(afterNormal); const txRead = await run(transactionRead); expect(txRead.fact?.request.sessionId).toBe(rwSession); expect(txRead.outcome).toMatchObject({ transactionOpen: true, results: [{ rows: [{ c0: '3' }] }] }); expect(disk()).toEqual(afterNormal);
     await step(() => query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click()); await step(() => expect(query().getByRole('button', { name: zh.common.transactionRollback, exact: true })).toBeDisabled()); const transactionFacts = operations(await step(audit), 'query.transaction'); expect(transactionFacts.map(fact => fact.request)).toEqual([{ sessionId: rwSession, action: 'begin' }, { sessionId: rwSession, action: 'rollback' }]); expect(disk()).toEqual(afterNormal);
     const successfulSql = [actualInsertSql, select.selected, selectionOnly.selected, trigger.selected, ordinary.source, transactionInsert.selected, transactionRead.selected]; await assertHistory(successfulSql);
     stage = '语法错误保原CRLF非BMP范围且无伪造历史'; const historyBeforeSyntax = await history(), syntaxFailure = await run(syntax, true, true); expect(syntaxFailure.outcome).toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, sourceRange: { start: syntax.start, end: syntax.end } } }); expect(emittedSql(await step(audit), syntaxFailure.fact?.request.taskId)).toEqual([]); expect(await history()).toEqual(historyBeforeSyntax); expect(disk()).toEqual(afterNormal);
     const locate = query().getByRole('button', { name: queryFailureSourceZh.locate, exact: true }); await step(() => expect(locate).toBeEnabled()); await step(() => locate.click()); const located = await model(); expect(located.source).toBe(syntax.source); expect(located.eol).toBe('\r\n'); expect(located.selections).toEqual([{ start: syntax.start, end: syntax.end }]); expect(syntax.source.slice(syntax.start, syntax.end)).toBe(syntax.selected); expect(operations(await step(audit), 'query.execute')).toHaveLength(8);
     stage = '普通脚本保留完整前序并定位首条准备失败';
+    expect((await settings()).resultLimit).toBe(1000);
     const scriptFailure = await run(ordinaryFailure, false, true);
-    expect(scriptFailure.outcome).toMatchObject({results: [{rows: [{c0: '普通前序🧭'}]}],
+    expect(scriptFailure.outcome).toMatchObject({
+      results: [{truncated: true, rows: expect.arrayContaining([{c0: '普通前序🧭'}])}],
+      sqliteResultReceipts: [{producedRows: 1005, changedRows: 0}],
       failure: {statementOrdinal: 2, statementsCompleted: 1, sourceRange: {start: failedStart, end: failedEnd}}});
-    expect(emittedSql(await step(audit), scriptFailure.fact?.request.taskId)).toEqual(["SELECT '普通前序🧭' AS prior;"]);
+    expect(emittedSql(await step(audit), scriptFailure.fact?.request.taskId)).toEqual([priorSql]);
+    await step(() => expect(receipt).toContainText(/第 1 条语句 · 本条耗时 \d+ ms · 产生 1005 行 · 保留 1000 行/));
+    await step(() => expect(query().locator('.tab-status')).toContainText(/本次总耗时 \d+ ms/));
     const beforeLocate = await step(audit), beforeLocationHistory = await history();
     await step(() => expect(locate).toBeEnabled()); await step(() => locate.click());
     expect((await model()).selections).toEqual([{start: failedStart, end: failedEnd}]);
@@ -246,7 +255,7 @@ test('SQLite真实菜单及快捷键只执行当前语句、完整触发器与�
     expect(await history()).toEqual(beforeLocationHistory);
     expect(beforeLocationHistory.find(entry => entry.sql === full)?.success).toBe(false);
     await step(() => query().getByRole('grid').getByText('普通前序🧭', {exact: true}).scrollIntoViewIfNeeded());
-    await step(() => page.screenshot({path: info.outputPath('SQLite脚本失败定位.png')}));
+    await step(() => page.screenshot({path: info.outputPath('SQLite查询回执.png')}));
     await write("SELECT '编辑后范围失效';");
     await step(() => expect(locate).toBeDisabled());
     expect(disk()).toEqual(afterNormal);

@@ -10,7 +10,8 @@ export class SqliteDriverError extends Error {
     results: readonly SqliteStatementResult[] = [], readonly sourceRange?: QueryFailureSourceRange) {
     super(message); this.name = 'SqliteDriverError';
     // 前序完整结果属于原执行事实；失败后仍须提供截断/变更量，不能只凭语句数猜测成功。
-    this.completedResults = Object.freeze(results.map(result => Object.freeze({ ...result })));
+    this.completedResults = Object.freeze(results.map(result => Object.freeze({ ...result,
+      ...(result.queryReceipt ? {queryReceipt: Object.freeze({...result.queryReceipt})} : {}) })));
   }
 }
 export interface SqliteExecuteOptions extends Partial<SqliteExecutionOptions> {
@@ -20,6 +21,7 @@ export interface SqliteExecuteOptions extends Partial<SqliteExecutionOptions> {
   createGuard?: SqliteCreateGuard;
   /** 仅普通用户脚本要求保留失败语句在本次载荷内的原始范围。 */
   captureFailureRange?: true;
+  captureQueryReceipt?: true;
   onStatement?(statement: { index: number; sql: string; columns: SqliteColumn[]; title?: string }): void | Promise<void>;
   onBatch?(batch: { index: number; rows: SqliteValue[][] }): void | Promise<void>;
 }
@@ -33,6 +35,7 @@ interface Operation {
   cancelRequested: boolean; cancelPromise?: Promise<SqliteCancellation>; timer?: ReturnType<typeof setTimeout>;
   terminal?: Terminal; finishing?: boolean; consumerError?: Error;
   failureSource?: string;
+  captureQueryReceipt?: true;
   comparison?: { columnGroups: number; comparedRows: bigint; onProgress?(progress: { comparedRows: string; columnGroups: number }): void | Promise<void> };
 }
 
@@ -176,15 +179,19 @@ export class SqliteDriverSession {
     } catch { return Promise.reject(this.error('SQLite对象创建内部能力或绑定模式无效，本次未发送SQL', 'SQLITE_CREATE_GUARD_INVALID')); }
     if (options.captureFailureRange && (stream || namedParameters || options.parameters !== undefined || createGuard))
       return Promise.reject(this.error('SQLite失败定位只允许普通脚本', 'SQLITE_INVALID_REQUEST'));
+    if (options.captureQueryReceipt && (stream || createGuard))
+      return Promise.reject(this.error('SQLite查询回执不用于流式导出或内部创建操作', 'SQLITE_INVALID_REQUEST'));
     const operation: Operation = { id: randomUUID(), options, result: deferred(), nativeDone: deferred(), results: [], delivery: Promise.resolve(), frame: 0, index: -1, cancelRequested: false,
-      ...(options.captureFailureRange ? {failureSource: sql} : {}) };
+      ...(options.captureFailureRange ? {failureSource: sql} : {}),
+      ...(options.captureQueryReceipt ? {captureQueryReceipt: true} : {}) };
     // 无取消调用时也保留原生终态错误的处理端；execute仍通过自己的Promise报告失败。
     void operation.nativeDone.promise.catch(() => {});
     this.active = operation;
     try { this.transport.send(stream
       ? { kind: 'streamRead', id: operation.id, sql, parameters: options.parameters ?? [], options: { batchRows: configured.batchRows } }
       : { kind: 'execute', id: operation.id, sql, ...(options.parameters === undefined ? {} : { parameters: options.parameters }), ...(namedParameters === undefined ? {} : { namedParameters }), ...(createGuard === undefined ? {} : { createGuard }),
-        ...(operation.failureSource === undefined ? {} : {captureFailureRange: true}), options: configured }); }
+        ...(operation.failureSource === undefined ? {} : {captureFailureRange: true}),
+        ...(operation.captureQueryReceipt ? {captureQueryReceipt: true} : {}), options: configured }); }
     catch { void this.breakSession('SQLite请求未能投递，未重试', 'SQLITE_SEND_FAILED'); }
     return operation.result.promise;
   }
@@ -257,6 +264,11 @@ export class SqliteDriverSession {
       } else if (message.kind === 'statementEnd') {
         if (operation.comparison) throw Error('SQLite重建比较不能冒充执行DDL');
         if (message.result.index !== operation.results.length || message.result.index !== operation.index) throw Error('SQLite语句完成顺序无效');
+        const receipt = message.result.queryReceipt;
+        if (operation.captureQueryReceipt ? (!receipt || !Number.isFinite(receipt.elapsedMs) || receipt.elapsedMs < 0 ||
+            !Number.isSafeInteger(receipt.producedRows) || receipt.producedRows < message.result.rows ||
+            !message.result.truncated && receipt.producedRows !== message.result.rows) : receipt !== undefined)
+          throw Error('SQLite查询回执与原语句结果不一致');
         operation.results.push(message.result); this.transactionValue = message.result.transaction;
       } else if (message.kind === 'completed' || message.kind === 'failed' || message.kind === 'cancelled') {
         if (message.kind === 'failed' && message.sourceRange !== undefined) {
