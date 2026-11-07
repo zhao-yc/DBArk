@@ -4,12 +4,13 @@ import { writeXlsxImportFixture } from '../helpers/xlsxImportFixture';
 import { test, expect, desktop, page } from './desktop-fixture';
 import { Client } from 'pg';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, extname } from 'node:path';
 import { postgresTableImportZh as text } from '../../src/renderer/locales/postgresTableImport.zh-CN';
 import { postgresTableZh } from '../../src/renderer/locales/postgresTable.zh-CN';
 import { fileImportConflictZh as conflict } from '../../src/renderer/locales/fileImportConflict.zh-CN';
 import { txtImportZh } from '../../src/shared/txtImport';
 import { navigationMenuItem } from './navigation-menu';
+import { importPresetsZh } from '../../src/renderer/locales/importPresets.zh-CN';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_POSTGRES_WORKSPACE_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
@@ -58,10 +59,15 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
     ] as const;
     await mkdir(info.outputDir, {recursive: true});
     const paths = cases.map(item => info.outputPath(item.name));
+    const incompatible = info.outputPath('缺少原字段.xlsx');
     for (const [index, path] of paths.entries()) {
       if (cases[index].format !== 'xlsx') await writeFile(path, cases[index].data);
-      else await writeXlsxImportFixture(path, ['tenant', 'code', 'payload', 'raw'], [['华东', '7', '工作簿更新', '\\B:AAE=']], true);
+      else {
+        await writeXlsxImportFixture(path, ['tenant', 'code', 'memo', 'raw'], [['华东', '7', '工作簿更新', '\\B:AAE=']], true);
+        await writeXlsxImportFixture(incompatible, ['tenant', 'code', 'other', 'raw'], [['华东', '7', '不同字段', '\\B:AAE=']], true);
+      }
     }
+    const pickerPaths = paths.flatMap(path => extname(path) === '.xlsx' ? [path, incompatible, path] : [path]);
     await desktop.evaluate(({dialog, BrowserWindow}, files) => {
       const original = dialog.showOpenDialog;
       let count = 0;
@@ -73,7 +79,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         return { canceled: false, filePaths: [path] };
       }) as typeof original;
       Object.assign(globalThis, {restorePgConflictPicker: () => { dialog.showOpenDialog = original; return count; }});
-    }, paths);
+    }, pickerPaths);
     const modal = page.getByRole('dialog', {name: text.title, exact: true});
     let committed: Awaited<ReturnType<typeof snapshot>> = [];
     for (const [index, item] of cases.entries()) {
@@ -96,6 +102,47 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
       const pick = item.format === 'xlsx' ? excelImportZh.inspect : item.format === 'csv' ? text.choose : item.format === 'json' ? text.chooseJson : item.format === 'txt' ? text.chooseTxt : text.chooseXml;
       await modal.getByRole('button', {name: pick, exact: true}).click();
       await expect(modal).toContainText(basename(paths[index]));
+      if (item.format === 'xlsx') {
+        const before = await snapshot();
+        const preset = '本例 XLSX 按范围映射';
+        await modal.getByLabel(text.target(2), {exact: true}).selectOption({label: 'payload'});
+        await modal.locator('summary').filter({hasText: importPresetsZh.title}).click();
+        await modal.getByRole('button', {name: importPresetsZh.read, exact: true}).click();
+        await modal.getByLabel(importPresetsZh.name, {exact: true}).fill(preset);
+        await modal.getByRole('button', {name: importPresetsZh.create, exact: true}).click();
+        const choice = modal.getByLabel(importPresetsZh.choose, {exact: true});
+        await expect(choice.getByRole('option', {name: preset, exact: true})).toHaveCount(1);
+        const entries = await page.evaluate(async () => (await window.dbark.invoke('files.importPresets.list', {})).entries);
+        expect(entries.map(entry => entry.configuration)).toEqual([{
+          format: 'xlsx', encoding: 'utf8', columns: ['tenant', 'code', 'memo', 'raw'],
+          mapping: {tenant: 'tenant', code: 'code', memo: 'payload', raw: 'raw'},
+          excelOptions: {headerRow: 2, firstDataRow: 4, lastDataRow: 4, protocol: 'dbark-v1'},
+        }]);
+        await modal.getByRole('button', {name: text.close, exact: true}).click();
+        await (await navigationMenuItem(tab, {name: text.open, exact: true})).click();
+        await modal.locator('summary').filter({hasText: importPresetsZh.title}).click();
+        await modal.getByRole('button', {name: importPresetsZh.read, exact: true}).click();
+        await choice.selectOption({label: preset});
+        await modal.getByRole('button', {name: importPresetsZh.apply, exact: true}).click();
+        await expect(modal.getByLabel(text.format, {exact: true})).toHaveValue('xlsx');
+        await expect(modal.getByLabel(excelImportZh.header, {exact: true})).toHaveValue('2');
+        await expect(modal.getByLabel(excelImportZh.firstDataRow, {exact: true})).toHaveValue('4');
+        await expect(modal.getByLabel(excelImportZh.lastDataRow, {exact: true})).toHaveValue('4');
+        await expect(modal.getByRole('button', {name: text.confirm, exact: true})).toBeDisabled();
+        for (const workbook of [excelImportZh.workbook, basename(incompatible)]) {
+          await modal.getByRole('button', {name: workbook, exact: true}).click();
+          await modal.getByLabel(excelImportZh.sheet, {exact: true}).selectOption({label: '导入🚢'});
+          await modal.getByRole('button', {name: pick, exact: true}).click();
+          if (workbook === excelImportZh.workbook) {
+            await expect(modal.locator('.error-box')).toContainText(importPresetsZh.incompatible);
+            await expect(modal.getByRole('button', {name: text.confirm, exact: true})).toBeDisabled();
+          }
+        }
+        await expect(modal.getByLabel(text.target(2), {exact: true}).locator('option:checked')).toHaveText('payload');
+        await expect(modal).toContainText(importPresetsZh.applied);
+        expect(await snapshot()).toEqual(before);
+        await modal.screenshot({path: info.outputPath('PostgreSQL XLSX 配置恢复.png')});
+      }
       await expect(modal.getByLabel(conflict.mode, {exact: true})).toHaveValue('insert');
       await modal.getByLabel(conflict.mode, {exact: true}).selectOption(item.mode);
       const apply = modal.getByRole('button', {name: text.confirmConflict, exact: true});
@@ -108,6 +155,7 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         await modal.getByRole('button', {name: importMappingZh.clear, exact: true}).click();
         await expect(modal.getByLabel(conflict.mode, {exact: true})).toHaveValue('insert');
         await modal.getByRole('button', {name: importMappingZh.name, exact: true}).click();
+        await modal.getByLabel(text.target(2), {exact: true}).selectOption({label: 'payload'});
         await modal.getByLabel(conflict.mode, {exact: true}).selectOption(item.mode);
         await expect(apply).toBeDisabled();
         await key.selectOption({label: 'import_match (tenant, code)'});
@@ -162,6 +210,6 @@ test('PostgreSQL 用明确的复合唯一键处理 CSV、JSON 和 XML 并按事�
         await tab.getByRole('button', {name: postgresTableZh.refresh, exact: true}).click();
       }
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgConflictPicker(): number}).restorePgConflictPicker())).toBe(cases.length);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgConflictPicker(): number}).restorePgConflictPicker())).toBe(pickerPaths.length);
   } finally { await observer.end(); }
 });

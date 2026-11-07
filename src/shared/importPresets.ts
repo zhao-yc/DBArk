@@ -1,10 +1,12 @@
 import { txtImportOptionsSchema, validTxtImport, type TxtImportOptions } from './txtImport';
 import { z } from 'zod';
-import { validXmlImport, xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions } from './xmlImport';
-import { csvImportDelimiters, type CsvImportDelimiter } from './csvImport';
+import { recordImportFormats, validXmlImport, xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions } from './xmlImport';
+import { csvImportDelimiters, csvImportHasHeader, type CsvImportDelimiter } from './csvImport';
+import { excelImportOptionsSchema, type ExcelImportOptions } from './excelTransfer';
 
 export interface ImportPresetConfiguration {
   format: RecordImportFormat; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
+  excelOptions?: Omit<ExcelImportOptions, 'sheetId'>;
   csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; columns: string[]; mapping: Record<string, string>;
 }
 export interface ImportPresetEntry { id: string; name: string; configuration: ImportPresetConfiguration; createdAt: string; updatedAt: string; }
@@ -67,8 +69,9 @@ function date(input: unknown): string { const value = string(input, 24, 24); if 
 
 /** 配置仅含文件解释、源列身份及显式映射，不接收路径、行值、SQL或任何连接身份。 */
 function configuration(input: unknown): ImportPresetConfiguration {
-  const source = record(input, ['format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'columns', 'mapping'], ['format', 'encoding', 'columns', 'mapping']);
-  if (source.format !== 'csv' && source.format !== 'json' && source.format !== 'xml' && source.format !== 'txt' || !['utf8', 'utf16le', 'gb18030'].includes(source.encoding as string)) return invalid();
+  const source = record(input, ['format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'excelOptions', 'columns', 'mapping'], ['format', 'encoding', 'columns', 'mapping']);
+  const format = source.format as RecordImportFormat;
+  if (!recordImportFormats.includes(format) || !['utf8', 'utf16le', 'gb18030'].includes(source.encoding as string)) return invalid();
   let units = 0;
   const columns = array(source.columns, importPresetLimits.columns, 1).map(value => {
     const column = string(value, 1, importPresetLimits.sourceUnits); units += column.length * 2;
@@ -85,7 +88,7 @@ function configuration(input: unknown): ImportPresetConfiguration {
     if (target !== '') targets.add(target); mapping[column] = target;
   }
   if (!targets.size) return invalid();
-  const output: ImportPresetConfiguration = { format: source.format, encoding: source.encoding as ImportPresetConfiguration['encoding'], columns, mapping };
+  const output: ImportPresetConfiguration = { format, encoding: source.encoding as ImportPresetConfiguration['encoding'], columns, mapping };
   if (Object.hasOwn(source, 'csvDelimiter')) {
     if (source.format !== 'csv' || !csvImportDelimiters.includes(source.csvDelimiter as CsvImportDelimiter)) return invalid();
     output.csvDelimiter = source.csvDelimiter as CsvImportDelimiter;
@@ -99,10 +102,30 @@ function configuration(input: unknown): ImportPresetConfiguration {
     output.xmlOptions = xmlImportOptionsSchema.parse(fields);
   }
   if (Object.hasOwn(source, 'txtOptions')) output.txtOptions = txtImportOptionsSchema.parse(record(source.txtOptions, ['mode', 'recordDelimiter', 'hasHeader', 'delimiter', 'quote', 'widths', 'trimPadding'], ['mode', 'recordDelimiter', 'hasHeader']));
+  if (format === 'xlsx') {
+    if (output.encoding !== 'utf8') return invalid();
+    const fields = record(source.excelOptions, ['headerRow', 'firstDataRow', 'lastDataRow', 'protocol'], ['protocol']);
+    // 工作表 ID 只属于原工作簿，配置仅保存跨文件可重用的读取设置。
+    const { sheetId: _sheetId, ...excelOptions } = excelImportOptionsSchema.parse({ ...fields, sheetId: 'preset' });
+    output.excelOptions = excelOptions;
+  } else if (Object.hasOwn(source, 'excelOptions')) return invalid();
   if (!validTxtImport(output)) return invalid();
   if (!validXmlImport(output)) return invalid();
   if (bytes(output) > importPresetLimits.configurationBytes) throw Error(importPresetText.configurationBudget);
   return output;
+}
+
+/** 按当前文件列顺序返回完整映射；任何来源或目标不兼容都拒绝整份套用。 */
+export function resolveImportPresetMapping(value: ImportPresetConfiguration, columns: readonly string[], targets: ReadonlySet<string>): string[] | undefined {
+  const positional = value.format === 'csv' && !csvImportHasHeader(value.format, value.csvHasHeader) ||
+    value.format === 'txt' && value.txtOptions?.hasHeader === false ||
+    value.format === 'xlsx' && value.excelOptions?.headerRow === 0;
+  const names = new Set(value.columns);
+  if (columns.length !== names.size || new Set(columns).size !== columns.length ||
+      !columns.every((name, index) => positional ? name === value.columns[index] : names.has(name))) return;
+  const mapping = columns.map(name => value.mapping[name]);
+  if (mapping.some(target => target && !targets.has(target))) return;
+  return mapping;
 }
 
 /** 每项时间与编号独立验证；名称保持原文，精确同名冲突由集合校验拒绝。 */

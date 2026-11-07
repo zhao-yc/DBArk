@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { importPresetConfigurationSchema, importPresetDocumentSchema, importPresetSnapshotSchema, importPresetEntrySchema, importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, type ImportPresetConfiguration } from '../../src/shared/importPresets';
+import { importPresetConfigurationSchema, importPresetDocumentSchema, importPresetSnapshotSchema, importPresetEntrySchema, importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, resolveImportPresetMapping, type ImportPresetConfiguration } from '../../src/shared/importPresets';
 
 /** 手工构造源键，原型同名及换行只属于列身份，不携带任何真实文件或数据。 */
 function configuration(): ImportPresetConfiguration {
@@ -10,6 +10,18 @@ function entry() { return { id: randomUUID(), name: '财务 CSV 导入', configu
 function packet() { return { generation: randomUUID(), revision: 0, name: '财务 CSV 导入', configuration: configuration() }; }
 
 describe('导入配置严格共享合同', () => {
+  it('XLSX 配置保留读取范围并拒绝工作表令牌、无效范围和目标漂移', () => {
+    const raw = { format: 'xlsx', encoding: 'utf8', columns: ['第1列', '第2列'], mapping: { 第1列: 'id', 第2列: 'note' },
+      excelOptions: { headerRow: 0, firstDataRow: 2, lastDataRow: 9, protocol: 'plain' } };
+    const value = importPresetConfigurationSchema.parse(raw);
+    expect(value).toEqual(raw);
+    expect(resolveImportPresetMapping(value, raw.columns, new Set(['id', 'note']))).toEqual(['id', 'note']);
+    expect(resolveImportPresetMapping(value, ['第2列', '第1列'], new Set(['id', 'note']))).toBeUndefined();
+    expect(resolveImportPresetMapping(value, raw.columns, new Set(['id']))).toBeUndefined();
+    for (const options of [{...raw.excelOptions, sheetId: '2'}, {...raw.excelOptions, lastDataRow: 1}, {...raw.excelOptions, fileToken: 'f'}])
+      expect(importPresetConfigurationSchema.safeParse({...raw, excelOptions: options}).success).toBe(false);
+    expect(importPresetConfigurationSchema.safeParse({...raw, encoding: 'gb18030'}).success).toBe(false);
+  });
   it('CSV false、序号或原型源键、跳过和原始列顺序完整保留，返回独立副本', () => {
     const raw = configuration(), result = importPresetConfigurationSchema.parse(raw);
     expect(result).toEqual(raw); expect(Object.hasOwn(result.mapping, '__proto__')).toBe(true); expect(Object.getPrototypeOf(result.mapping)).toBe(null);

@@ -3,7 +3,7 @@ import type { TxtImportOptions } from '../shared/txtImport';
 import type { RecordImportFormat, XmlImportOptions } from '../shared/xmlImport';
 import type { DataRow, TableInfo } from '../shared/contracts';
 import { csvImportDelimiter, csvImportHasHeader, type CsvImportDelimiter } from '../shared/csvImport';
-import { importPresetConfigurationSchema, type ImportPresetConfiguration } from '../shared/importPresets';
+import { importPresetConfigurationSchema, resolveImportPresetMapping, type ImportPresetConfiguration } from '../shared/importPresets';
 import { importPresetsZh } from './locales/importPresets.zh-CN';
 import { matchImportColumns, type ImportMappingAction } from './importMapping';
 
@@ -25,10 +25,9 @@ export interface ImportPreviewPreparation { freshMetadata?: boolean; configurati
 /** 具名字段按完整集合对齐，无标题字段按原列位置；所有目标通过后才整份发布。 */
 function completeMapping(info: TableInfo, sample: ImportSample, configuration: ImportPresetConfiguration): Record<string, string> {
   const value = importPresetConfigurationSchema.parse(configuration), targets = new Set(info.columns.filter(column => !column.generated).map(column => column.name));
-  const positional = value.format === 'csv' && !csvImportHasHeader(value.format, value.csvHasHeader), names = new Set(value.columns);
-  const same = positional ? JSON.stringify(sample.columns) === JSON.stringify(value.columns) : sample.columns.length === value.columns.length && new Set(sample.columns).size === sample.columns.length && sample.columns.every(name => names.has(name));
-  if (!same || Object.values(value.mapping).some(target => target && !targets.has(target))) throw Error(importPresetsZh.incompatible);
-  return Object.fromEntries(sample.columns.map(name => [name, value.mapping[name]]));
+  const mapping = resolveImportPresetMapping(value, sample.columns, targets);
+  if (!mapping) throw Error(importPresetsZh.incompatible);
+  return Object.fromEntries(sample.columns.map((name, index) => [name, mapping[index]]));
 }
 
 /** 元数据只按目标缓存，文件、格式、编码、分隔符和标题设置另行组成预览标识。 */
