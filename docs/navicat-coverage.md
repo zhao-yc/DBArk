@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 当前回执可直接查看实际结果 SQL，也可按执行时的范围定位原语句。草稿变化后仍能查看旧 SQL，旧范围停止定位。Q02、R01 仍为部分覆盖。[PostgreSQL 结果来源](development/postgres-result-source-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 多语句结果保留原执行序号，查询页显示当前语句的服务器回执、服务端计数、接收行数和客户端耗时。Q02、R01 仍为部分覆盖。[PostgreSQL 查询回执](development/postgres-query-receipts-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 查询结果可查看、搜索并定位本次执行的服务端消息，保留失败前消息，限制数量及字节，位置参数执行隐藏正文。Q02、R01 仍为部分覆盖。[PostgreSQL 查询服务端消息](development/postgres-query-notices-20261107.md)

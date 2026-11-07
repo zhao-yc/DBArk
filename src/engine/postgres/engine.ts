@@ -911,7 +911,7 @@ export class PostgresEngine {
     const started = performance.now(),
       results: QueryResult[] = [],
       budget = { rows: input.maxRows, bytes: 16 * 1024 * 1024 };
-    const resultOrdinals = !estimate && !analysisSql ? [] as number[] : undefined;
+    const resultSources: NonNullable<QueryOutcome['postgresResultSources']> = [];
     const report: QueryScriptReport | undefined = input.continueOnError === true
       ? {mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: []} : undefined;
     const notices = new PostgresNoticeCollector(input.parameters !== undefined);
@@ -981,7 +981,7 @@ export class PostgresEngine {
             throw Error('PostgreSQL参数查询一次只能执行一条语句');
         }
         task.sent = true;
-        const index = results.length, ordinal = count, noticeRange = sourceRange;
+        const index = results.length, ordinal = count, statementRange = sourceRange;
         try {
           const result = await session.managed.query(part.sql, parameters, budget, (batch, columns) =>
             this.emit({
@@ -993,10 +993,10 @@ export class PostgresEngine {
               columns,
               batch,
             }),
-            undefined, (notice, redact) => notices.record(ordinal, noticeRange, notice, redact));
+            undefined, (notice, redact) => notices.record(ordinal, statementRange, notice, redact));
           results.push(result);
           // 回执只与完整结果配对。遇错继续时不能用结果数组索引代替原语句编号。
-          resultOrdinals?.push(ordinal);
+          resultSources.push({statementOrdinal: ordinal, sourceRange: statementRange});
           if (report) report.statementsCompleted++;
           if (report && (session.managed.broken || !session.managed.state().transactionKnown)) {
             activeOrdinal = undefined; sourceRange = undefined;
@@ -1064,7 +1064,7 @@ export class PostgresEngine {
       ...(failure ? { failure } : {}),
       ...(report ? {scriptReport: report} : {}),
       ...(postgresNotices ? {postgresNotices} : {}),
-      ...(resultOrdinals ? {postgresResultOrdinals: resultOrdinals} : {}),
+      ...(!estimate && !analysisSql ? {postgresResultSources: resultSources} : {}),
     };
   }
   /** 仅实现PostgreSQL拥有的真实命令；其余能力明确拒绝，绝不降级为MySQL SQL。 */

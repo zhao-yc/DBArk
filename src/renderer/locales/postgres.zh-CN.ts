@@ -37,6 +37,9 @@ export const postgresZh = {
   complete: (command: string, rows?: number) =>
     `服务器回执：${command}${rows === undefined ? '' : ` · 影响 ${rows} 行`}`,
   receipt: '当前语句回执',
+  locateResult: '定位原语句',
+  locateResultUnavailable: '原编辑器已变化或无法确认原语句范围。',
+  resultSqlHint: '这里显示该结果随附的实际语句。位置参数保留为 SQL 模板。',
   receiptStatement: (ordinal: number) => `第 ${ordinal} 条语句`,
   receiptCommand: (command: string) => `服务器回执 ${command}`,
   receiptRows: (rows: number) => `服务端计数 ${rows} 行`,

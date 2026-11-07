@@ -153,6 +153,77 @@ test('PostgreSQL 会话事务默认设置保持原结果并按实际事务隔离
   await quitDesktop();
 });
 
+test('PostgreSQL 成功结果查看实际 SQL 并定位原模型范围', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const duplicate = "SELECT '重复🧭' AS result", commandOnly = 'CREATE TEMP TABLE result_source_guard (id int)';
+  const script = [duplicate, 'SELECT missing_column', '/* 第二份😀 */ ' + duplicate, commandOnly].join(';\r\n') + ';';
+  const receipt = () => tab().getByRole('group', {name: postgresZh.receipt, exact: true});
+  const picker = () => tab().getByRole('combobox', {name: 'PostgreSQL结果集', exact: true});
+  const locate = () => receipt().getByRole('button', {name: postgresZh.locateResult, exact: true});
+  const view = () => receipt().getByRole('button', {name: zh.query.resultSql, exact: true});
+  const dialog = () => page.getByRole('dialog', {name: zh.query.resultSqlTitle, exact: true});
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const close = () => dialog().getByRole('button', {name: zh.common.close, exact: true}).click();
+  const originalSql = () => dialog().locator('.monaco-editor').evaluate(element => {
+    const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+    const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+    if (!instance?.getModel()) throw Error('缺少结果来源编辑器');
+    return {sql: instance.getValue().trim(), readOnly: instance.getRawOptions().readOnly};
+  });
+  await prepare({id: '', name: '隔离 PostgreSQL 结果来源', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, script);
+  await tab().getByRole('checkbox', {name: continueText.option, exact: true}).check(); await command('execute-all');
+  await expect(receipt()).toContainText('第 1 条语句');
+  const before = await history();
+  await picker().selectOption('1');
+  await expect(locate()).toBeEnabled();
+  await locate().click();
+  await expect.poll(async () => {
+    const model = await inspectModel(); return [model.position?.lineNumber, model.selected];
+  }).toEqual([3, duplicate]);
+  await view().click();
+  await expect.poll(originalSql).toEqual({sql: '/* 第二份😀 */ ' + duplicate, readOnly: true});
+  await expect(dialog().locator('.view-lines')).toContainText('第二份😀');
+  await expect.poll(() => enabled('execute-all')).toBe(false);
+  await page.screenshot({path: info.outputPath('PostgreSQL结果来源.png')});
+  await close();
+  await picker().selectOption('2');
+  await view().click(); await expect.poll(originalSql).toEqual({sql: commandOnly, readOnly: true}); await close();
+  await locate().click(); await expect.poll(async () => (await inspectModel()).selected).toBe(commandOnly);
+
+  await replaceDraft('SELECT 3 AS revised;');
+  await expect(locate()).toBeDisabled();
+  await view().click(); await expect.poll(originalSql).toEqual({sql: commandOnly, readOnly: true}); await close();
+  expect(await history()).toEqual(before);
+
+  // Monaco 插入文本时沿用当前模型的 CRLF 格式。
+  const two = duplicate + ';\r\n' + duplicate + ';';
+  await replaceDraft(two);
+  await modelSelection(2, 1, duplicate.length + 1);
+  await command('execute-selection');
+  await expect(locate()).toBeEnabled();
+  await modelSelection(1, 1);
+  await locate().click();
+  await expect.poll(async () => {
+    const model = await inspectModel(); return [model.position?.lineNumber, model.selected];
+  }).toEqual([2, duplicate]);
+
+  const template = 'SELECT length($1::text) AS size', secret = '参数绑定原值🧭';
+  await replaceDraft(template + ';');
+  await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+  const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
+  await form.getByLabel(parameterZh.value + ' p1', {exact: true}).fill(secret);
+  await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+  await expect(locate()).toBeEnabled();
+  await view().click(); await expect.poll(originalSql).toEqual({sql: template, readOnly: true}); await close();
+  await locate().click(); await expect.poll(async () => (await inspectModel()).selected).toBe(template);
+  expect(JSON.stringify(await history())).not.toContain(secret); expect(pageErrors).toEqual([]);
+  await quitDesktop();
+});
+
 test('PostgreSQL 查询回执区分原编号、事务回执和实际接收行数', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
   const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);

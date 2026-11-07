@@ -149,7 +149,8 @@ describe('PostgreSQL 显式遇错继续仍使用原协议事务', () => {
     expect(report.errors.map(error => [error.statementOrdinal, error.statementsCompleted, error.kind])).toEqual([[2, 1, 'server'], [4, 2, 'server']]);
     expect(report.errors.map(error => sql.slice(error.sourceRange!.start, error.sourceRange!.end))).toEqual(['SELECT missing', 'SELECT other']);
     expect(output.results).toHaveLength(2); expect(sent).toHaveLength(4); expect(events.at(-1)?.status).toBe('failed'); expect(output.failure?.message).toContain('已到脚本末尾');
-    expect(output.postgresResultOrdinals).toEqual([1, 3]);
+    expect(output.postgresResultSources?.map(item => [item.statementOrdinal, sql.slice(item.sourceRange.start, item.sourceRange.end)]))
+      .toEqual([[1, 'SELECT 1'], [3, 'SELECT 2']]);
   });
   it('原事务失败后继续记录错误，仅脚本显式ROLLBACK才能恢复，不注入补偿SQL', async () => {
     const state = {transactionOpen: false, transactionKnown: true, transactionFailed: false, broken: false};

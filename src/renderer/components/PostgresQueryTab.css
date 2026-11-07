@@ -36,6 +36,15 @@
 .postgres-result-actions > select {
   max-width: 100%;
 }
+.postgres-result-receipt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.postgres-result-receipt > span {
+  margin-inline-end: auto;
+}
 .postgres-result-name {
   min-width: 0;
   overflow-wrap: anywhere;

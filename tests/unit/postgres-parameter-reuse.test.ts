@@ -59,7 +59,7 @@ function fixture() {
     text: {changed: '来源已变', unknown: '未知状态', noSql: '空 SQL'}, pinStateRef: {current: {items: []}},
     setBusy: vi.fn(), setError: vi.fn(), resetResultView: vi.fn(), setOutcome: vi.fn(), setSelected: vi.fn(),
     clearFailureSource: vi.fn(), captureFailureSource: vi.fn(), failureSource: {current: undefined},
-    continueOnError: false, scriptFailureRanges: {current: new Set()}, noticeRanges: {current: new Set()}, confirmedQueryContinueRange,
+    continueOnError: false, scriptFailureRanges: {current: new Set()}, noticeRanges: {current: new Set()}, resultRanges: {current: new Set()}, confirmedQueryContinueRange,
     setState: (value: object) => { context.state = value; },
     setParameterOwner: (value: unknown) => { context.parameters.current = value; },
   });
