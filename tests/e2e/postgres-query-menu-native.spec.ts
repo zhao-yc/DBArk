@@ -73,6 +73,93 @@ async function replaceDraft(sql: string) {
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
 
+async function triggerSuggestions() {
+  await editor().evaluate(element => {
+    const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+    const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element));
+    if (!instance) throw Error('缺少当前 PostgreSQL 编辑器');
+    instance.focus(); instance.trigger('keyboard', 'editor.action.triggerSuggest', {});
+  });
+}
+
+test('PostgreSQL 名称补全插入用户原文和方言模板并保留一次撤销', async ({}, info) => {
+  const name = 'pgQuick原文', sql = "-- 原样 $1 ${name}😀\n  SELECT 9007199254740993, 0.12345678901234567890;";
+  await prepare({id: '', name: '离线 PostgreSQL 片段补全', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port: 1, user: 'offline', database: 'postgres'}, 'SELECT 0;\n  ');
+  await page.evaluate(({name, sql}) => window.dbark.invoke('snippets.save', {id: 'pg-completion', name, group: '离线', description: '', sql, updatedAt: ''}), {name, sql});
+  await modelSelection(2, 3);
+  await page.keyboard.type('pgQuick');
+  const widget = () => page.locator('.suggest-widget.visible');
+  await expect(widget().locator('.monaco-list-row.focused .label-name')).toHaveText(name);
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await inspectModel()).sql).toBe('SELECT 0;\n  ' + sql);
+  await expect(editor().locator('.view-lines')).toContainText('原样 $1 ${name}😀');
+  await page.screenshot({path: info.outputPath('PostgreSQL片段名称补全.png')});
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe('SELECT 0;\n  pgQuick');
+  await replaceDraft('按条件');
+  await triggerSuggestions();
+  await expect(widget().locator('.monaco-list-row.focused .label-name')).toHaveText(zh.snippets.selectColumns);
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await inspectModel()).sql).toBe('SELECT "id", "name"\nFROM "your_table"\nWHERE "id" > 0\nORDER BY "id"\nLIMIT 100;');
+  await page.keyboard.press('ControlOrMeta+Z');
+  await expect.poll(async () => (await inspectModel()).sql).toBe('按条件');
+  expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
+  await expect(tab().getByText('尚未连接', {exact: true})).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('PostgreSQL 片段补全沿原会话字符串模式且保留事务和结果', async () => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await prepare({id: '', name: '隔离 PostgreSQL 片段补全', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, '');
+    const snippet = "SELECT '$1 ${name}😀' AS literal;", name = 'pgQuick会话';
+    await page.evaluate(({name, sql}) => window.dbark.invoke('snippets.save', {id: 'pg-mode-snippet', name, group: '', description: '', sql, updatedAt: ''}), {name, sql: snippet});
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await expect(tab().getByRole('button', {name: postgresZh.rollback, exact: true})).toBeEnabled();
+    const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+    for (const mode of ['off', 'on'] as const) {
+      await replaceDraft(`SELECT set_config('standard_conforming_strings','${mode}',true) AS mode;`);
+      await tab().getByRole('button', {name: postgresZh.execute, exact: true}).click();
+      const grid = tab().locator('.postgres-results .rdg');
+      // 先等可见网格完成布局，再用相同的innerText口径捕获前后结果。
+      await expect.poll(() => grid.innerText()).toContain(mode);
+      await expect(tab().getByRole('button', {name: postgresZh.execute, exact: true})).toBeEnabled();
+      const result = await grid.innerText(), originalSessions = await sessions();
+      expect(originalSessions).toHaveLength(1); expect(originalSessions[0].state).toBe('idle in transaction');
+      const history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+      // 尾部注释中的闭引号让输入桥不额外补引号，光标处在两种服务器模式下仍有相反归属。
+      const source = "SELECT 'a\\';\npgQuick\n-- close '";
+      await replaceDraft(source); await modelSelection(2, 8); await triggerSuggestions();
+      const widget = page.locator('.suggest-widget.visible');
+      if (mode === 'off') {
+        await expect(widget).toContainText('No suggestions.');
+        await expect(widget.locator('.label-name')).toHaveCount(0);
+        await page.keyboard.press('Escape');
+        expect((await inspectModel()).sql).toBe(source);
+      } else {
+        await expect(widget.locator('.monaco-list-row.focused .label-name')).toHaveText(name);
+        await page.keyboard.press('Enter');
+        await expect.poll(async () => (await inspectModel()).sql).toBe("SELECT 'a\\';\n" + snippet + "\n-- close '");
+        await page.keyboard.press('ControlOrMeta+Z');
+        await expect.poll(async () => (await inspectModel()).sql).toBe(source);
+      }
+      expect(await grid.innerText()).toBe(result); expect(await sessions()).toEqual(originalSessions);
+      expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history);
+    }
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click();
+    await expect.poll(async () => (await sessions()).map(row => row.state)).toEqual(['idle']);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
+
 test('PostgreSQL 片段库支持选区建片段、纯文本插入撤销及失效选区保护', async ({}, info) => {
   const snippet = "SELECT '片段😀', '$1', '${name}', 0.12345678901234567890;", name = 'PostgreSQL 原文片段';
   const original = `SELECT 0;\n${snippet}\nSELECT 9;`;

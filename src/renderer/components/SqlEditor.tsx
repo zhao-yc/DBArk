@@ -46,7 +46,8 @@ import { createSqlRenameProvider } from '../sqlRenameProvider';
 import { localRenameZh } from '../locales/localRename.zh-CN';
 import '../localRename.css';
 import { sqliteCompletionTaskPrefix, sqliteCompletionLimits } from '../../shared/sqliteCompletion';
-import { matchSnippetPrefix, snippetAtStatementStart, snippetCatalog, snippetPrefix } from '../snippetCompletion';
+import { snippetCatalog } from '../snippetCompletion';
+import { createSnippetCompletionProvider } from '../snippetCompletionProvider';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export type { SqlCompletionScope } from '../completionContext';
@@ -57,7 +58,7 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresFoldingStandardStrings, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresFoldingStandardStrings?:boolean;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, dialect: requestedDialect, completion, postgresCompletion, postgresStandardStrings, snippetCompletion = false, onCompletionStatus, onSelectionState, onExecute, onExecuteCurrent, onFormat, onToggleComment, onSelectCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; dialect?: ConnectionProfile['dialect']; completion?:SqlCompletionScope;postgresCompletion?:PostgresCompletionScope;postgresStandardStrings?:boolean;snippetCompletion?:boolean;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onSelectionState?: (caseSelection: boolean, singleSelection: boolean) => void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void; onToggleComment?: () => Promise<void>; onSelectCurrent?: () => void }) {
   // PostgreSQL使用独立查询词法；未接通的MySQL语义服务不接受其上下文。
   const dialect = requestedDialect === 'postgresql' ? undefined : requestedDialect;
   const theme = useWorkspace(state => state.settings.theme);
@@ -72,8 +73,10 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object; indentation?: ReturnType<typeof bindEditorIndentation> } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat });
-  const foldingScope = useRef({ dialect: requestedDialect, standardStrings: postgresFoldingStandardStrings });
-  useLayoutEffect(() => { foldingScope.current = { dialect: requestedDialect, standardStrings: postgresFoldingStandardStrings }; });
+  const foldingScope = useRef({ dialect: requestedDialect, standardStrings: postgresStandardStrings });
+  useLayoutEffect(() => { foldingScope.current = { dialect: requestedDialect, standardStrings: postgresStandardStrings }; });
+  const snippetScope = useRef({ dialect: requestedDialect, postgres: postgresCompletion, standardStrings: postgresStandardStrings });
+  useLayoutEffect(() => { snippetScope.current = { dialect: requestedDialect, postgres: postgresCompletion, standardStrings: postgresStandardStrings }; });
   const completionRef = useRef(completion);
   const dialectRef = useRef(dialect);
   useLayoutEffect(() => { completionRef.current = completion; dialectRef.current = dialect; });
@@ -86,10 +89,10 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const client = new StatementNavigationWorkerClient(() => new StatementNavigationWorker({ name: 'dbark-sql-folding' }));
     const registration = monaco.languages.registerFoldingRangeProvider('sql', sqlStatementFoldingProvider(instance, requestedDialect, client,
       () => active && aliveRef.current && editorRef.current === instance && foldingScope.current.dialect === requestedDialect &&
-        foldingScope.current.standardStrings === postgresFoldingStandardStrings && useWorkspace.getState().settings.editorSqlFolding === true,
-      postgresFoldingStandardStrings === undefined ? {} : { noBackslashEscapes: postgresFoldingStandardStrings }));
+        foldingScope.current.standardStrings === postgresStandardStrings && useWorkspace.getState().settings.editorSqlFolding === true,
+      postgresStandardStrings === undefined ? {} : { noBackslashEscapes: postgresStandardStrings }));
     return () => { active = false; registration.dispose(); client.dispose(); };
-  }, [contentReady, queryEditor, sqlFolding, requestedDialect, postgresFoldingStandardStrings]);
+  }, [contentReady, queryEditor, sqlFolding, requestedDialect, postgresStandardStrings]);
   /** 原生菜单只收到可用状态，选区内容留在当前模型内。 */
   useEffect(() => {
     if (!onSelectionState) return;
@@ -207,42 +210,39 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     return () => { registration.dispose(); void navigation.dispose().catch(() => {}); };
   }, [dialect, readOnly, contentReady, completion?.connectionId, completion?.connectionVersion, completion?.database, completion?.databaseUnknown, completion?.sessionId]);
   useEffect(() => {
-    if (!snippetCompletion || readOnly || !contentReady || !dialect) return;
-    let active = true;
-    const registration = monaco.languages.registerCompletionItemProvider('sql', {
-      /** 独立的本地片段补全，不请求元数据，也不使用 Monaco 的变量插值。 */
-      async provideCompletionItems(model, position, _context, token) {
-        const instance = editorRef.current;
-        const current = () => active && aliveRef.current && contentRef.current?.ready === true
-          && dialectRef.current === dialect && !propsRef.current.readOnly && !token.isCancellationRequested
-          && !!instance?.hasTextFocus() && instance.getModel() === model && !model.isDisposed()
-          && !suggestionsBlocked() && !document.querySelector(appModalSelector);
-        if (!current() || instance?.getSelections()?.length !== 1 || !instance.getSelection()?.isEmpty()) return;
-        if (model.getValueLength() > 65_536) return;
-        const prefix = snippetPrefix(model.getLineContent(position.lineNumber).slice(0, position.column - 1));
-        if (!prefix || !snippetAtStatementStart(model.getValue(), model.getOffsetAt(position), prefix, dialect)) return;
-        const version = model.getVersionId(), rows = await snippetCatalog.list();
-        const cursor = instance.getPosition();
-        if (!rows || !current() || model.getVersionId() !== version || cursor?.lineNumber !== position.lineNumber || cursor.column !== position.column
-          || instance.getSelections()?.length !== 1 || !instance.getSelection()?.isEmpty()) return;
-        const range = {
-          startLineNumber: position.lineNumber, startColumn: position.column - prefix.length,
-          endLineNumber: position.lineNumber, endColumn: position.column,
-        };
-        return { incomplete: true, suggestions: matchSnippetPrefix(rows, prefix, dialect).map((item, index) => ({
-          label: { label: item.name, description: item.group || zh.snippets.ungrouped },
-          detail: zh.snippets.suggestion,
-          documentation: item.description || item.sql.slice(0, 256),
-          kind: monaco.languages.CompletionItemKind.Snippet,
-          range,
-          insertText: item.sql,
-          insertTextRules: monaco.languages.CompletionItemInsertTextRule.KeepWhitespace,
-          sortText: '1' + String(index).padStart(2, '0'),
-        })) };
+    const instance = editorRef.current;
+    if (!snippetCompletion || readOnly || !contentReady || !requestedDialect || !instance) return;
+    const original = postgresCompletion;
+    const provider = createSnippetCompletionProvider({
+      editor: instance, dialect: requestedDialect, standardStrings: postgresStandardStrings,
+      current: () => {
+        if (!aliveRef.current || contentRef.current?.ready !== true || propsRef.current.readOnly ||
+            snippetScope.current.dialect !== requestedDialect || snippetScope.current.standardStrings !== postgresStandardStrings || !instance.hasTextFocus() || suggestionsBlocked() || document.querySelector(appModalSelector)) return false;
+        if (requestedDialect !== 'postgresql') return true;
+        const latest = snippetScope.current.postgres, workspace = useWorkspace.getState();
+        const tab = workspace.settings.tabs.find(item => item.id === original?.tabId);
+        const profile = workspace.connections.find(item => item.id === original?.connectionId);
+        return !!original && latest?.tabId === original.tabId && latest.connectionId === original.connectionId &&
+          latest.connectionVersion === original.connectionVersion && latest.database === original.database && latest.sessionId === original.sessionId &&
+          workspace.settings.activeTabId === original.tabId && !workspace.activeJobs[original.tabId] &&
+          tab?.connectionId === original.connectionId && profile?.dialect === 'postgresql' &&
+          (tab.database || profile.database || 'postgres') === original.database &&
+          (workspace.connectionVersions[original.connectionId] ?? 0) === original.connectionVersion;
       },
+      list: () => snippetCatalog.list(), kind: monaco.languages.CompletionItemKind.Snippet,
+      keepWhitespace: monaco.languages.CompletionItemInsertTextRule.KeepWhitespace,
     });
-    return () => { active = false; registration.dispose(); };
-  }, [snippetCompletion, readOnly, contentReady, dialect]);
+    // 导航及连接ABA也要撤销在途本地读取，不能仅靠回包时的同值判断。
+    const stop = useWorkspace.subscribe((next, previous) => {
+      if (original && (next.settings.activeTabId !== previous.settings.activeTabId || next.selection !== previous.selection ||
+          next.activeJobs[original.tabId] !== previous.activeJobs[original.tabId] || next.connections !== previous.connections ||
+          next.connectionVersions[original.connectionId] !== previous.connectionVersions[original.connectionId] ||
+          next.settings.tabs.find(item => item.id === original.tabId) !== previous.settings.tabs.find(item => item.id === original.tabId))) provider.invalidate();
+    });
+    const registration = monaco.languages.registerCompletionItemProvider('sql', provider);
+    return () => { stop(); registration.dispose(); provider.dispose(); };
+  }, [snippetCompletion, readOnly, contentReady, requestedDialect, postgresStandardStrings, postgresCompletion?.tabId,
+    postgresCompletion?.connectionId, postgresCompletion?.connectionVersion, postgresCompletion?.database, postgresCompletion?.sessionId]);
   useEffect(() => {
     if (requestedDialect !== 'postgresql' || !postgresCompletion || readOnly || !contentReady) return;
     const original = postgresCompletion;

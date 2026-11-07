@@ -1509,7 +1509,8 @@ export function PostgresQueryTab({
         <SqlEditor
           value={tab.sql ?? ''}
           dialect="postgresql"
-          postgresFoldingStandardStrings={session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined}
+          snippetCompletion
+          postgresStandardStrings={session.current && !busy && same(session.current.scope) ? state.standardConformingStrings : undefined}
           postgresCompletion={{ tabId: tab.id, connectionId: tab.connectionId, database: scope.database,
             connectionVersion: scope.version, sessionId: session.current?.id }}
           onCompletionStatus={setCompletionStatus}
