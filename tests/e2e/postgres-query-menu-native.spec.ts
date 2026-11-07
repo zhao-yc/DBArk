@@ -16,6 +16,8 @@ import { postgresQueryExportZh as fullExportText } from '../../src/renderer/loca
 import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { queryParameterReuseZh as reuseText } from '../../src/renderer/locales/queryParameterReuse.zh-CN';
+import { queryFailureSourceZh as failureText } from '../../src/renderer/locales/queryFailureSource.zh-CN';
+import { queryPartialOutcomeZh as partialText } from '../../src/renderer/locales/queryPartialOutcome.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -78,6 +80,81 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 失败语句定位覆盖脚本、选区、当前及参数，保持提交事实和原事务', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '', port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  const sql = "/* 已完成😀 */ INSERT INTO public.failure_sentinel VALUES (1) RETURNING id;\r\n/* 未完成🧭 */ SELECT missing_column FROM public.failure_sentinel;\r\nINSERT INTO public.failure_sentinel VALUES (2);";
+  const notice = () => tab().getByRole('status', {name: partialText.title, exact: true});
+  const locate = () => notice().getByRole('button', {name: failureText.locate, exact: true});
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  const records = async () => (await observer.query('SELECT id FROM public.failure_sentinel ORDER BY id')).rows;
+  const select = async (start: number, end = start) => editor().evaluate((element, offsets) => {
+    const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+    const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element)), model = instance?.getModel();
+    if (!instance || !model) throw Error('缺少原查询模型');
+    const from = model.getPositionAt(offsets.start), to = model.getPositionAt(offsets.end);
+    instance.setSelection({startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column}); instance.focus();
+  }, {start, end});
+  const unchangedLocate = async (expected: string) => {
+    await expect(locate()).toBeEnabled(); const before = await history();
+    await locate().click(); await expect.poll(async () => (await inspectModel()).selected).toBe(expected);
+    await expect.poll(() => editor().evaluate(element => {
+      const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+      const instance = api?.editor.getEditors().find(item => item.getContainerDomNode().contains(element)), selection = instance?.getSelection();
+      if (!instance || !selection) return JSON.stringify({visible: false});
+      const position = instance.getScrolledVisiblePosition(selection.getStartPosition()), layout = instance.getLayoutInfo();
+      return JSON.stringify({visible: !!position && position.top >= 0 && position.top + position.height <= layout.height - layout.horizontalScrollbarHeight,
+        position, editorHeight: layout.height, scrollbarHeight: layout.horizontalScrollbarHeight, scrollTop: instance.getScrollTop()});
+    }), {message: '失败语句正文起点应完整显示在编辑区内'}).toContain('"visible":true');
+    expect(await history()).toEqual(before); expect(await records()).toEqual([{id: 1}]);
+  };
+  try {
+    await observer.query('CREATE TABLE public.failure_sentinel (id int PRIMARY KEY)');
+    await prepare({id: '', name: '隔离 PostgreSQL 失败定位', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+    const actual = (await inspectModel()).sql, firstEnd = actual.indexOf(';'), secondEnd = actual.indexOf(';', firstEnd + 1);
+    await command('execute-all'); await expect(notice()).toContainText(partialText.position(2, 1));
+    await expect(tab().locator('.postgres-results .rdg')).toContainText('id');
+    await tab().getByLabel(queryLayoutZh.placement, {exact: true}).selectOption('results');
+    await unchangedLocate(actual.slice(actual.indexOf('SELECT missing_column'), secondEnd)); await expect(editor()).toBeVisible();
+    await page.screenshot({path: info.outputPath('PostgreSQL未完成语句定位.png')});
+    await editor().getByRole('textbox').focus(); await page.keyboard.press('ControlOrMeta+End'); await page.keyboard.insertText(' '); await page.keyboard.press('ControlOrMeta+Z');
+    await expect.poll(async () => (await inspectModel()).sql).toBe(actual); await expect(locate()).toBeDisabled();
+
+    const selectedScript = "INSERT INTO public.failure_sentinel VALUES (3);\r\nSELECT '选区🧭' AS selected_ok;\r\nSELECT missing_column FROM public.failure_sentinel;\r\nINSERT INTO public.failure_sentinel VALUES (4);";
+    await replaceDraft(selectedScript);
+    const start = selectedScript.indexOf('SELECT'), failedStart = selectedScript.indexOf(';', start) + 1, end = selectedScript.indexOf(';', failedStart);
+    await select(start, end + 1); await command('execute-selection');
+    await expect(notice()).toContainText(partialText.position(2, 1));
+    await unchangedLocate(selectedScript.slice(failedStart, end).trimStart());
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await select(selectedScript.indexOf('missing_column')); await command('execute-current');
+    await expect(notice()).toContainText(partialText.position(1, 0));
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.failedTransaction);
+    const sessions = async () => (await observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user])).rows;
+    const failedSession = await sessions(); expect(failedSession).toHaveLength(1); expect(failedSession[0].state).toBe('idle in transaction (aborted)');
+    await unchangedLocate(selectedScript.slice(failedStart, end).trimStart()); expect(await sessions()).toEqual(failedSession);
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click(); await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+
+    const parameterSql = 'SELECT $1::int AS parameter_failure;', secret = '参数失败不应留存😀';
+    await replaceDraft(parameterSql); await tab().getByRole('button', {name: postgresZh.parameters, exact: true}).click();
+    const form = page.getByRole('dialog', {name: parameterZh.title, exact: true});
+    await form.getByLabel(parameterZh.value + ' p1', {exact: true}).fill(secret);
+    await form.getByRole('button', {name: parameterZh.execute, exact: true}).click();
+    await expect(notice()).toContainText(partialText.position(1, 0)); await expect(tab()).toContainText('SQLSTATE 22P02');
+    await unchangedLocate(parameterSql.slice(0, -1));
+    expect(JSON.stringify(await history())).not.toContain(secret);
+    expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('tasks.list', {})))).not.toContain(secret);
+    expect(JSON.stringify(await page.evaluate(() => window.dbark.invoke('settings.get', {})))).not.toContain(secret);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 参数显式暂存与填入保持原事务，忘记及正文撤销后不复活', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');

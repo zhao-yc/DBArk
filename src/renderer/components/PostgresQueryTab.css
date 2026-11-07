@@ -17,6 +17,10 @@
   min-height: 120px;
   flex-shrink: 0;
 }
+/* 失败摘要占用额外高度，保留可读编辑区；短窗口沿外层滚动，不把正文压成一行。 */
+.postgres-query:has(> .query-partial-outcome) .postgres-editor {
+  min-height: 130px;
+}
 /* 下方布局共享可测量的包装层，结果工具条和内部复制栏各自计费，窄窗口仅压缩显示。 */
 .postgres-results {
   display: contents;

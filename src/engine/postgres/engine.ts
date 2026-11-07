@@ -16,6 +16,7 @@ import {
   firstPostgresStatement,
   currentPostgresStatement,
   postgresIdentifier,
+  postgresSqlContentStart,
 } from '../../shared/postgresSql';
 import { PostgresConnection } from './connection';
 import { PostgresTableWorkspace, type PostgresTableImportRequest } from './tableWorkspace';
@@ -878,6 +879,7 @@ export class PostgresEngine {
     let offset = 0,
       count = 0,
       failure: QueryOutcome['failure'],
+      sourceRange: NonNullable<QueryOutcome['failure']>['sourceRange'],
       explain: QueryOutcome['explain'],
       analysis: QueryOutcome['analysis'];
     this.emit({ taskId: task.id, status: 'running', progress: 0, message: analysisSql ? '正在实际执行分析'
@@ -908,14 +910,18 @@ export class PostgresEngine {
         analysis = parsePostgresAnalyze(this.planOutput(result), session.managed.version, result.truncated);
       }
       while (!estimate && !analysisSql) {
+        // 每次扫描先撤旧范围；尾部词法失败不能误指向上一条已完成语句。
+        sourceRange = undefined;
         if (task.cancelled) throw Error('PostgreSQL任务已取消，已执行语句未重放');
         const part =
           selected ?? firstPostgresStatement(source.slice(offset), session.managed.standardStrings);
         if (!part) break;
+        const statementOffset = selected ? 0 : offset;
+        // 定位从正文起始，避免前导换行和长注释占住窄编辑区；执行仍保留原文。
+        sourceRange = { start: statementOffset + part.start + postgresSqlContentStart(part.sql), end: statementOffset + part.end };
         if (++count > 1000) throw Error('PostgreSQL脚本最多1000条语句');
         if (part.keyword === 'COPY')
           throw Error('PostgreSQL COPY数据流需专用导入导出接口，当前SQL执行未发送此语句');
-        const statementOffset = selected ? 0 : offset;
         this.emit({
           taskId: task.id,
           status: 'running',
@@ -949,10 +955,16 @@ export class PostgresEngine {
         if (offset >= source.length) break;
       }
     } catch (reason) {
+      const detail = session.managed.error(reason);
+      const sqlState = 'postgresSqlState' in detail && typeof detail.postgresSqlState === 'string' && /^[0-9A-Z]{5}$/.test(detail.postgresSqlState)
+        ? detail.postgresSqlState : undefined;
       failure = {
         statementOrdinal: results.length + 1,
         statementsCompleted: results.length,
-        message: queryFailureMessage(results.length, session.managed.error(reason).message),
+        // 服务端参数错误可能包含绑定原值；任务与历史仅保留状态码和原模板范围。
+        message: queryFailureMessage(results.length, input.parameters
+          ? 'PostgreSQL参数查询未完成' + (sqlState ? '（SQLSTATE ' + sqlState + '）' : '') : detail.message),
+        ...(sourceRange ? { sourceRange } : {}),
       };
     } finally {
       task.terminal = true;

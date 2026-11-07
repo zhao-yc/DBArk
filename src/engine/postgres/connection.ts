@@ -111,8 +111,12 @@ export class PostgresConnection {
     // 建连时仅标记目标库不存在或未授权。传输错误仍不能充当服务端语句回执。
     if (reason instanceof DatabaseError && reason.severity === 'FATAL' && ['3D000', '42501'].includes(reason.code ?? ''))
       return Object.assign(safe, { postgresDatabaseUnavailable: true });
-    return reason instanceof DatabaseError && reason.severity === 'ERROR' && /^[0-9A-Z]{5}$/.test(reason.code ?? '')
-      ? Object.assign(safe, { postgresSqlState: reason.code }) : safe;
+    // 已脱敏错误再次经过上层收尾时保留原状态码；只读自有数据字段，不执行访问器。
+    const previous = reason instanceof Error ? Object.getOwnPropertyDescriptor(reason, 'postgresSqlState') : undefined;
+    const code = reason instanceof DatabaseError && reason.severity === 'ERROR' ? reason.code
+      : previous && 'value' in previous ? previous.value : undefined;
+    return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)
+      ? Object.assign(safe, { postgresSqlState: code }) : safe;
   }
   private check() {
     if (this.stopped) throw Error('PostgreSQL连接已取消');

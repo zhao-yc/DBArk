@@ -64,6 +64,8 @@ import { QueryBindingDialog } from './QueryBindingDialog';
 import { QueryDuplicateIntent } from '../queryDuplicateIntent';
 import { queryDuplicateZh } from '../locales/queryDuplicate.zh-CN';
 import { QueryParametersDialog } from './QueryParametersDialog';
+import { captureQueryFailureSource, type QueryFailureSourceLease, type QueryFailureSourceScope } from '../queryFailureSource';
+import { QueryPartialOutcomeNotice } from './QueryPartialOutcomeNotice';
 import { QueryParameterReuseOwner, type QueryParameterReuseOwnerInput } from '../queryParameterReuseOwner';
 import type { QueryParameterReusePort } from '../queryParameterReusePort';
 import { SnippetsDialog } from './SnippetsDialog';
@@ -114,6 +116,7 @@ interface ParameterOwner {
   valid: boolean;
   session?: string;
   reuse: QueryParameterReusePort | null;
+  failureSource?: QueryFailureSourceLease;
 }
 interface AnalyzeOwner {
   token: string;
@@ -207,6 +210,8 @@ export function PostgresQueryTab({
   parameters.current = parameterOwner;
   const parameterReuse = useRef<QueryParameterReuseOwner | null>(null), parameterTask = useRef('');
   const parameterState = useRef<{ sessionId: string; known: boolean }>({ sessionId: '', known: false });
+  const failureSource = useRef<QueryFailureSourceLease | undefined>(undefined);
+  const [, refreshFailureSource] = useState(0);
   const [completionStatus, setCompletionStatus] = useState<SqlCompletionStatus>('idle');
   const [analyze, setAnalyze] = useState<AnalyzeOwner>();
   const analyzeRef = useRef<AnalyzeOwner | undefined>(undefined);
@@ -247,6 +252,21 @@ export function PostgresQueryTab({
   };
   const currentTab = () => useWorkspace.getState().settings.tabs.find((t) => t.id === tab.id);
   const source = () => editor.current?.getModel()?.getValue() ?? currentTab()?.sql ?? '';
+  /** 定位只持原模型和执行范围，来源变化永久撤销；忙碌或模态期间仅暂时禁用。 */
+  function failureSourceScope(): QueryFailureSourceScope {
+    const now = useWorkspace.getState(), current = currentTab(), connectionId = current?.connectionId ?? tab.connectionId;
+    return { tabId: tab.id, connectionId, connectionVersion: now.connectionVersions[connectionId] ?? 0,
+      draft: current?.sql, present: alive.current && current?.kind === 'query' && now.connections.some(item => item.id === connectionId),
+      active: now.settings.activeTabId === tab.id, busy: !!phase.current || !!now.activeJobs[tab.id],
+      modal: !!document.querySelector(appModalSelector), closing: !!closeRef.current };
+  }
+  function captureFailureSource(sql: string, all = false): QueryFailureSourceLease | undefined {
+    if (!editor.current) return;
+    return captureQueryFailureSource({ editor: editor.current, source: sql, all, scope: failureSourceScope,
+      subscribe: changed => useWorkspace.subscribe(changed),
+      onInvalidated: () => { if (alive.current) refreshFailureSource(value => value + 1); } });
+  }
+  function clearFailureSource(): void { failureSource.current?.dispose(); failureSource.current = undefined; }
   /** 暂存只读取本标签原模型及已确认的物理会话；不把参数值写入工作区或来源键。 */
   function parameterReuseInput(): QueryParameterReuseOwnerInput | null {
     const now = useWorkspace.getState(), current = currentTab(), owned = session.current;
@@ -446,6 +466,10 @@ export function PostgresQueryTab({
       setError(text.noSql);
       return;
     }
+    clearFailureSource();
+    const locator = parameter?.failureSource ?? (!sqlOverride && !confirmed && mode !== 'explain' && mode !== 'analyzePreview'
+      ? captureFailureSource(sql, mode === 'all' || mode === 'current') : undefined);
+    if (parameter) parameter.failureSource = undefined;
     const modelVersion = model?.getVersionId(),
       job = acquireWorkspaceBusy(tab.id),
       owner: Phase = {
@@ -468,6 +492,7 @@ export function PostgresQueryTab({
     }
     owner.work = (async () => {
       let succeeded = false;
+      let retainLocator = false;
       try {
         const id = await ensure(owner);
         if (
@@ -518,12 +543,16 @@ export function PostgresQueryTab({
             });
         succeeded = !result.failure && !result.scriptReport?.errors.length && result.scriptReport?.reachedEnd !== false;
         if (owner.valid && same(owner.scope) && life.current === owner.life) {
+          if (result.failure && locator?.bindRange(result.failure.sourceRange)) {
+            failureSource.current = locator; retainLocator = true;
+          }
           setOutcome(result);
           if (result.failure) setError(result.failure.message);
         }
       } catch (reason) {
         if (alive.current && life.current === owner.life) setError(errorMessage(reason));
       } finally {
+        if (!retainLocator) locator?.dispose();
         if (owner.cancel) await owner.cancel;
         const id = session.current?.id;
         if (id) await readState(id, owner);
@@ -590,12 +619,15 @@ export function PostgresQueryTab({
     const selected = selection && !selection.isEmpty() ? model.getValueInRange(selection) : '';
     const sql = selected.trim() ? selected : model.getValue();
     const reuse = (parameterReuse.current ??= new QueryParameterReuseOwner(parameterReuseInput)).begin(sql);
-    setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true, reuse });
+    clearFailureSource();
+    setParameterOwner({ source: sql, scope, model, version: model.getVersionId(), valid: true, reuse,
+      failureSource: captureFailureSource(sql) });
   }
   /** 显式重连先正常关闭旧会话；旧事务或未知写入不会被自动恢复和重放。 */
   async function reconnect() {
     const original = session.current;
     if (!original || !available() || !window.confirm(text.confirmReconnect) || !available()) return;
+    clearFailureSource();
     const job = acquireWorkspaceBusy(tab.id);
     const owner: Phase = { life: life.current, scope, valid: true, cancelled: false, taskId: uid(), sent: false };
     phase.current = owner;
@@ -738,6 +770,7 @@ export function PostgresQueryTab({
     alive.current = true;
     return () => {
       alive.current = false;
+      clearFailureSource(); parameters.current?.failureSource?.dispose();
       parameterReuse.current?.dispose(); parameterReuse.current = null;
       duplicateIntent.current?.dispose();
       snippetTarget.current?.dispose();
@@ -771,6 +804,7 @@ export function PostgresQueryTab({
         if (phase.current && (changed || (left && !phase.current.sent))) phase.current.valid = false;
         if (changed || left) resultSelection.invalidate();
         if (changed) {
+          clearFailureSource();
           resetResultView();
           publishPinState({ items: [], sequence: 0 });
           setOutcome(undefined);
@@ -786,6 +820,7 @@ export function PostgresQueryTab({
         if ((changed || left) && comparisonDraftRef.current) closeResultComparison(comparisonDraftRef.current);
         const parameter = parameters.current;
         if (parameter && (changed || left)) {
+          parameter.failureSource?.dispose();
           parameter.valid = false;
           setParameterOwner((current) => (current === parameter ? undefined : current));
         }
@@ -1622,6 +1657,14 @@ export function PostgresQueryTab({
         )}
       />} />
       <ErrorBox message={error} />
+      {outcome?.failure && <QueryPartialOutcomeNotice failure={outcome.failure} completedResults={outcome.results.length}
+        locateAvailable={!pin && !!failureSource.current?.available()} onLocate={() => {
+          if (!pin && failureSource.current?.available()) {
+            flushSync(() => setResultsOnly(false));
+            // 仅结果模式隐藏过容器，须在可见尺寸下重排后再滚到原语句。
+            editor.current?.layout(); failureSource.current?.locate();
+          }
+        }} />}
       {!busy && completionStatus !== 'idle' && <p className="muted small" role="status">{completionStatus === 'limited'
         ? text.completionLimited : completionStatus === 'partial' ? text.completionPartial
           : completionStatus === 'sessionUnknown' ? text.completionTransaction : text.completionUnavailable}</p>}
@@ -1871,6 +1914,7 @@ export function PostgresQueryTab({
           loadNames={() => names(parameterOwner)}
           onExecute={(values) => run('normal', values, parameterOwner)}
           onClose={() => {
+            parameterOwner.failureSource?.dispose();
             if (parameterOwner.reuse) parameterReuse.current?.close(parameterOwner.reuse);
             parameterOwner.valid = false;
             setParameterOwner(undefined);
