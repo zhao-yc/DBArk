@@ -4,12 +4,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { importNewTableZh as wizardText } from '../../src/renderer/locales/importNewTable.zh-CN';
 import { postgresCreateTableZh as designText } from '../../src/renderer/locales/postgresCreateTable.zh-CN';
 import { postgresTableImportZh as importText } from '../../src/renderer/locales/postgresTableImport.zh-CN';
+import { txtImportZh } from '../../src/shared/txtImport';
 import { sidebarMenuItem } from './sidebar-menu';
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.skip(process.env.DBARK_POSTGRES_WORKSPACE_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
 
-test('PostgreSQL 从无表头 UTF-16 LE CSV 和精确 JSON 新建表，文件变化时保留空表', async ({}, info) => {
+test('PostgreSQL 从 CSV、精确 JSON 和分隔 TXT 新建表，文件变化时保留空表', async ({}, info) => {
   const user = process.env.DBARK_POSTGRES_TEST_USER ?? '', database = process.env.DBARK_POSTGRES_TEST_DATABASE ?? '';
   const password = process.env.DBARK_POSTGRES_TEST_PASSWORD ?? '', port = Number(process.env.DBARK_POSTGRES_TEST_PORT);
   if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pg_[a-f0-9]{12}$/.test(user) || database !== user ||
@@ -31,9 +32,15 @@ test('PostgreSQL 从无表头 UTF-16 LE CSV 和精确 JSON 新建表，文件变
     await mkdir(info.outputDir, {recursive: true});
     const csv = '\uFEFF9007199254740993;base64:AP8=;;\\N\r\n9223372036854775807;base64:;\\N;尾部字段\r\n';
     const json = '[{"id":9007199254740993,"raw":{"type":"binary","base64":"AP8="},"note":""},{"id":9223372036854775807,"raw":{"type":"binary","base64":""},"late":{"n":9007199254740993.123456789012}}]';
-    const scenarios = [{format: 'csv', table: 'csv_created'}, {format: 'json', table: 'json_created'}, {format: 'json', table: 'json_changed'}] as const;
+    const txt = 'id|raw|note|late\n9007199254740993|base64:AP8=||\\N\n9223372036854775807|base64:|\\N|尾部字段\n';
+    const scenarios = [
+      {format: 'csv', table: 'csv_created', content: Buffer.from(csv, 'utf16le')},
+      {format: 'json', table: 'json_created', content: json},
+      {format: 'txt', table: 'txt_created', content: txt},
+      {format: 'json', table: 'json_changed', content: json},
+    ] as const;
     const paths = scenarios.map(({format, table}) => info.outputPath(`${table}.${format}`));
-    for (const [index, path] of paths.entries()) await writeFile(path, index === 0 ? Buffer.from(csv, 'utf16le') : json);
+    for (const [index, path] of paths.entries()) await writeFile(path, scenarios[index].content);
     await desktop.evaluate(({dialog, BrowserWindow}, files) => {
       const original = dialog.showOpenDialog;
       let count = 0;
@@ -41,7 +48,7 @@ test('PostgreSQL 从无表头 UTF-16 LE CSV 和精确 JSON 新建表，文件变
         const path = files[count];
         const options = args[1] as Electron.OpenDialogOptions;
         if (args[0] !== BrowserWindow.getAllWindows()[0] || !path || !path.endsWith('.' + options.filters?.[0]?.extensions[0]))
-          throw Error('仅允许本例 CSV 和 JSON 文件选择');
+          throw Error('仅允许本例 CSV、JSON 和 TXT 文件选择');
         count++;
         return { canceled: false, filePaths: [path] };
       }) as typeof original;
@@ -56,6 +63,9 @@ test('PostgreSQL 从无表头 UTF-16 LE CSV 和精确 JSON 新建表，文件变
         await wizard.getByLabel(wizardText.encoding, {exact: true}).selectOption('utf16le');
         await wizard.getByLabel(wizardText.delimiter, {exact: true}).selectOption(';');
         await wizard.getByRole('checkbox', {name: wizardText.header, exact: true}).uncheck();
+      } else if (format === 'txt') {
+        await wizard.getByLabel(txtImportZh.delimiter, {exact: true}).selectOption('|');
+        await wizard.getByRole('checkbox', {name: txtImportZh.hasHeader, exact: true}).check();
       }
       await wizard.getByRole('button', {name: wizardText.choose, exact: true}).click();
       await expect(wizard.getByText(wizardText.records(2), {exact: true})).toBeVisible();
@@ -80,7 +90,7 @@ test('PostgreSQL 从无表头 UTF-16 LE CSV 和精确 JSON 新建表，文件变
       if (format === 'csv') for (const [i, label] of ['id', 'raw', 'note', 'late'].entries()) {
         await importer.getByLabel(importText.target(i), {exact: true}).selectOption({label});
       }
-      const changed = index === 2;
+      const changed = table === 'json_changed';
       if (changed) await writeFile(paths[index], json.replace('9007199254740993.123456789012', '9007199254740994.123456789012'));
       else await importer.screenshot({path: info.outputPath(`${format.toUpperCase()} 新表列映射.png`)});
       await importer.getByRole('button', {name: importText.confirm, exact: true}).click();
@@ -92,10 +102,10 @@ test('PostgreSQL 从无表头 UTF-16 LE CSV 和精确 JSON 新建表，文件变
         await expect(page.getByText('PostgreSQL 已提交导入，共 2 行', {exact: true})).toBeVisible();
         expect(await records()).toEqual([
           {id: '9007199254740993', raw: '00ff', note: '', late: null},
-          {id: '9223372036854775807', raw: '', note: null, late: format === 'csv' ? '尾部字段' : '{"n":9007199254740993.123456789012}'},
+          {id: '9223372036854775807', raw: '', note: null, late: format === 'json' ? '{"n":9007199254740993.123456789012}' : '尾部字段'},
         ]);
       }
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgCsvJsonPicker(): number}).restorePgCsvJsonPicker())).toBe(3);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgCsvJsonPicker(): number}).restorePgCsvJsonPicker())).toBe(scenarios.length);
   } finally { await observer.end(); }
 });

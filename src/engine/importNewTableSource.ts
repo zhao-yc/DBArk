@@ -36,11 +36,11 @@ function identical(before: BigIntStats, after: BigIntStats): boolean { return be
 /** 全部摘要只来自同一条readRecords原字节链；提前return只收尾，不会产生完整核验证明。 */
 async function* sourceRecords(input: ReadInput, checkCancelled: () => void, signal?: AbortSignal, onColumns?: (columns: string[]) => void, completed?: (source: ImportFileSource) => void, onBytes?: (bytes: number) => void): AsyncGenerator<DataRow> {
   const { filePath, expectedSource: rawExpected } = input;
-  const selected = importFileInspectInputSchema.parse({ fileToken: '内部来源核验', taskId: '内部来源核验', format: input.format, encoding: input.encoding, ...(Object.hasOwn(input, 'csvDelimiter') ? { csvDelimiter: input.csvDelimiter } : {}), ...(Object.hasOwn(input, 'csvHasHeader') ? { csvHasHeader: input.csvHasHeader } : {}), ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}) }), expected = rawExpected === undefined ? undefined : importFileSourceSchema.parse(rawExpected);
+  const selected = importFileInspectInputSchema.parse({ fileToken: '内部来源核验', taskId: '内部来源核验', format: input.format, encoding: input.encoding, ...(Object.hasOwn(input, 'csvDelimiter') ? { csvDelimiter: input.csvDelimiter } : {}), ...(Object.hasOwn(input, 'csvHasHeader') ? { csvHasHeader: input.csvHasHeader } : {}), ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}), ...(Object.hasOwn(input, 'txtOptions') ? { txtOptions: input.txtOptions } : {}) }), expected = rawExpected === undefined ? undefined : importFileSourceSchema.parse(rawExpected);
   const check = () => { checkCancelled(); if (signal?.aborted) throw new SourceReadError('导入文件读取已取消'); };
-  check(); const strict = selected.format === 'xml' ? undefined : encodingCheck(input), before = await regularFile(filePath); check(); const hash = createHash('sha256'); let bytes = 0;
+  check(); const strict = selected.format === 'xml' || selected.format === 'txt' ? undefined : encodingCheck(input), before = await regularFile(filePath); check(); const hash = createHash('sha256'); let bytes = 0;
   try {
-    for await (const row of readRecords(filePath, selected.format, selected.encoding, selected.csvDelimiter, selected.csvHasHeader, { signal, ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions, requiredColumns: input.requiredColumns } : {}), onColumns: columns => { check(); onColumns?.(columns); }, onBytes: chunk => { check(); strict?.chunk(chunk); hash.update(chunk); bytes += chunk.length; if (!Number.isSafeInteger(bytes)) throw new SourceReadError('导入文件字节数超过可安全确认范围'); onBytes?.(bytes); } })) { check(); yield row; }
+    for await (const row of readRecords(filePath, selected.format, selected.encoding, selected.csvDelimiter, selected.csvHasHeader, { signal, ...(selected.xmlOptions ? { xmlOptions: selected.xmlOptions, requiredColumns: input.requiredColumns } : {}), ...(selected.txtOptions ? { txtOptions: selected.txtOptions } : {}), onColumns: columns => { check(); onColumns?.(columns); }, onBytes: chunk => { check(); strict?.chunk(chunk); hash.update(chunk); bytes += chunk.length; if (!Number.isSafeInteger(bytes)) throw new SourceReadError('导入文件字节数超过可安全确认范围'); onBytes?.(bytes); } })) { check(); yield row; }
     check(); strict?.finish(); const after = await regularFile(filePath); check();
     if (!identical(before, after) || BigInt(bytes) !== before.size) throw changed();
     const source = { sha256: hash.digest('hex'), bytes };
@@ -48,7 +48,7 @@ async function* sourceRecords(input: ReadInput, checkCancelled: () => void, sign
   } catch (error) {
     // 先恢复原任务取消原因；其余第三方错误不能携带源行值、SQL或本机路径进入持久任务。
     check(); if (error instanceof SourceReadError || error instanceof XmlDocumentReadError) throw error;
-    throw new SourceReadError(selected.format === 'xml' ? 'XML 文件未完整读取或解析，请核对 UTF-8、记录标签和字段结构' : '导入文件未完整读取或解析，请检查文件格式、编码和CSV配置');
+    throw new SourceReadError(selected.format === 'xml' ? 'XML 文件未完整读取或解析，请核对 UTF-8、记录标签和字段结构' : '导入文件未完整读取或解析，请检查文件格式、编码和文本配置');
   }
 }
 

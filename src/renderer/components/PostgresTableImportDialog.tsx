@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
 import type { ImportFileReadOptions } from '../../shared/importNewTable';
+import { txtImportDefaults, txtImportOptionsSchema, txtImportZh, type TxtImportOptions } from '../../shared/txtImport';
+import { TxtImportFields } from './TxtImportFields';
 import { isPostgresImportUpdateColumn, isPostgresSqlExportColumn, type PostgresImportConflict, type PostgresTableImportChoice, type PostgresTablePage, type PostgresTableTarget } from '../../shared/postgresTable';
 import { errorMessage, invoke } from '../lib';
 import { postgresTableImportZh as text } from '../locales/postgresTableImport.zh-CN';
@@ -24,6 +26,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
   const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
   const [hasHeader, setHasHeader] = useState(true);
   const [encoding, setEncoding] = useState<ImportFileReadOptions['encoding']>('utf8');
+  const [txtOptions, setTxtOptions] = useState<TxtImportOptions>(txtImportDefaults);
   const [file, setFile] = useState<PostgresTableImportChoice | null>(initialSource?.file ?? null);
   const candidates = page.columns.filter(isPostgresSqlExportColumn);
   const [mapping, setMapping] = useState<string[]>(() => initialSource?.file.header.map(name =>
@@ -43,6 +46,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     key.columns.some(column => !selectedKeys.includes(column)) ? conflictText.unmapped :
       mode !== 'skip-existing' && !candidates.some(column => selectedKeys.includes(column.key) && isPostgresImportUpdateColumn(column, key)) ? conflictText.noUpdate : '';
   const validXml = format !== 'xml' || xmlImportOptionsSchema.safeParse(xmlOptions).success;
+  const validTxt = format !== 'txt' || txtImportOptionsSchema.safeParse(txtOptions).success;
   const previewHeaders = file?.header.slice(0, file.sample[0]?.length ?? 0) ?? [];
 
   /** 文件解释变化后，旧样本、令牌和映射须一起撤下。 */
@@ -57,12 +61,12 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
 
   /** 预填准确同名字段，余下字段留给用户映射。 */
   async function choose() {
-    if (initialSource || occupied.current || !page.exportToken || !validXml) return;
+    if (initialSource || occupied.current || !page.exportToken || !validXml || !validTxt) return;
     occupied.current = true;
     setChoosing(true); resetSource();
     try {
       if (!isCurrent()) throw Error(text.stale);
-      const selection = format === 'xml' ? { format, xmlOptions } : format === 'json' ? { format, encoding } :
+      const selection = format === 'xml' ? { format, xmlOptions } : format === 'txt' ? { format, encoding, txtOptions } : format === 'json' ? { format, encoding } :
         { csvDelimiter: delimiter, csvHasHeader: hasHeader };
       const selected = await invoke('postgres.table.importChoose', { ...target, pageToken: page.exportToken, ...selection });
       if (!isCurrent()) throw Error(text.stale);
@@ -110,10 +114,10 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
     <div className="modal-content pg-table-export">
       <p><strong>{target.table}</strong> · {target.database}</p>
       <p>{mode === 'insert' ? text.note : text.conflictNote}</p>
-      <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : initialSource ? newTableText.postgresCsv : text.nullNote}</p>
+      {(format !== 'txt' || initialSource) && <p>{format === 'xml' ? xmlOptions.documentResult === undefined ? xmlImportZh.hint : xmlImportZh.documentHint : format === 'json' ? text.jsonNote : format === 'txt' ? txtImportZh.hint : initialSource ? newTableText.postgresCsv : text.nullNote}</p>}
       {!initialSource && <><Field label={text.format}><select aria-label={text.format} value={format} disabled={locked} onChange={event => {
         setFormat(event.target.value as typeof format); resetSource();
-      }}><option value="csv">CSV</option><option value="json">JSON</option><option value="xml">XML</option></select></Field>
+      }}><option value="csv">CSV</option><option value="json">JSON</option><option value="txt">{txtImportZh.format}</option><option value="xml">XML</option></select></Field>
       <div className="pg-table-controls">
         {format === 'xml' ? <>
           <XmlDocumentImportFields options={xmlOptions} disabled={locked} onChange={options => { setXmlOptions(options); resetSource(); }}/>
@@ -125,7 +129,7 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
           <label className="check"><input type="checkbox" checked={xmlOptions.binaryBase64} disabled={locked}
             onChange={event => { setXmlOptions({ ...xmlOptions, binaryBase64: event.target.checked }); resetSource(); }}/> {xmlImportZh.binary}</label>
           </>}
-        </> : format === 'json' ? <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
+        </> : format === 'json' || format === 'txt' ? <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
           onChange={event => { setEncoding(event.target.value as typeof encoding); resetSource(); }}>
           <option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option>
         </select></Field> : <>
@@ -138,8 +142,10 @@ export function PostgresTableImportDialog({ target, page, initialSource, isCurre
           }}/> {csvImportHeaderZh.label}
         </label>
         </>}
-        <button disabled={locked || !validXml} onClick={() => void choose()}>{format === 'xml' ? text.chooseXml : format === 'json' ? text.chooseJson : text.choose}</button>
+        <button disabled={locked || !validXml || !validTxt} onClick={() => void choose()}>{format === 'xml' ? text.chooseXml : format === 'json' ? text.chooseJson : format === 'txt' ? text.chooseTxt : text.choose}</button>
       </div>
+      {format === 'txt' && <div className="form-grid"><TxtImportFields options={txtOptions} disabled={locked} onChange={options => { setTxtOptions(options); resetSource(); }}/></div>}
+      {!validTxt && <ErrorBox message={txtImportZh.invalid}/>}
       {!validXml && <ErrorBox message={xmlImportZh.invalid}/>}</>}
       {choosing && <Spinner text={text.reading}/>}
       {file && <>

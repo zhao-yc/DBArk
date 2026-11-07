@@ -49,7 +49,7 @@ export async function preflightImportFile(context: StructureTaskContext, input: 
   const hash = createHash('sha256');
   let finished = false;
   try {
-    for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, { signal: context.managed.signal, ...(input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source) } : {}), onBytes: chunk => { hash.update(chunk); report.sourceBytes += chunk.length; } })) {
+    for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, { signal: context.managed.signal, ...(input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source) } : {}), ...(input.txtOptions ? { txtOptions: input.txtOptions } : {}), onBytes: chunk => { hash.update(chunk); report.sourceBytes += chunk.length; } })) {
       checkCancelled(); report.checkedRecords++;
       let invalid = false;
       for (const [source, target] of mapping) {

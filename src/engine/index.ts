@@ -1,3 +1,4 @@
+import { txtImportZh, validTxtImport } from '../shared/txtImport';
 import { recordImportFormats, validXmlImport, xmlImportZh } from '../shared/xmlImport';
 import { createMysqlDatabaseBackup } from './mysqlDatabaseBackup';
 import { readMysqlSqlFile, type MysqlSqlFileSource } from './mysqlSqlFile';
@@ -881,6 +882,7 @@ export class Engine {
       case 'files.import': {
         this.assertFile(input); const mode = fileImportTransactionMode(input.format, input);
         if (!validXmlImport({ ...input, format: input.format, encoding: input.encoding })) throw Error(xmlImportZh.invalid);
+        if (!validTxtImport({ ...input, format: input.format })) throw Error(txtImportZh.invalid);
         const conflict = fileImportConflict(input.format, input);
         // 指纹绑定必须在建连前拒绝批提交、冲突模式及其它格式，内部调用不能绕过IPC。
         this.assertExpectedImportSource(input, mode);
@@ -894,7 +896,7 @@ export class Engine {
           const evidence = createFileImportConflictEvidence(input.taskId, conflict.mode);
           return this.withConflictImport(input, evidence, task => {
             const xml = input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: Object.keys(input.mapping), signal: task.managed.signal } : undefined;
-            const records = readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, xml);
+            const records = readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, { ...xml, ...(input.txtOptions ? { txtOptions: input.txtOptions } : {}), signal: task.managed.signal });
             return importFileWithConflict({ connectionId: input.connectionId, database: input.database, table: input.table }, input.format, input.mapping, conflict, mode, records, evidence, this.conflictImportControl(task), xml?.xmlOptions.binaryBase64);
           });
         }
@@ -2268,7 +2270,7 @@ export class Engine {
       const xml = input.format === 'xml' ? { xmlOptions: input.xmlOptions, requiredColumns: mapping.map(([source]) => source) } : undefined;
       const sourceRecords = expectedSource
         ? readVerifiedImportRecords({ ...input, ...xml, expectedSource } as Parameters<typeof readVerifiedImportRecords>[0], () => this.checkCancelled(task), task.managed.signal)
-        : readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, xml && { ...xml, signal: task.managed.signal });
+        : readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, { ...xml, ...(input.txtOptions ? { txtOptions: input.txtOptions } : {}), signal: task.managed.signal });
       for await (const row of records ?? sourceRecords) {
         this.checkCancelled(task); checkTransaction(); sourceLine++;
         const values = mapping.map(([source, target]) => {

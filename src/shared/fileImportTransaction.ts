@@ -4,7 +4,7 @@ import { xmlImportZh } from './xmlImport';
 export const fileImportTransactionModeSchema = z.enum(['batch', 'atomic']);
 export type FileImportTransactionMode = z.infer<typeof fileImportTransactionModeSchema>;
 export const fileImportTransactionText = {
-  invalid: '事务模式仅支持 batch 或 atomic，且只适用于 CSV/JSON 导入',
+  invalid: '事务模式仅支持 batch 或 atomic，且只适用于 CSV/JSON/TXT 导入',
   atomicScope: '整文件原子提交仅覆盖目标 InnoDB 事务；触发器写入非事务表或外部副作用不保证回滚',
   transactionUnknown: '无法确认目标写入仍在同一事务内；未自动重放，请核对服务器',
   lockFailed: '整文件原子提交需要目标表 SELECT 权限以持有元数据锁；读取失败，未降级为分批提交',
@@ -21,6 +21,6 @@ export function fileImportTransactionMode(format: string, input: object): FileIm
     if (!('value' in descriptor) || !descriptor.enumerable || descriptor.value !== 'atomic') throw Error(xmlImportZh.atomic);
     return 'atomic';
   }
-  if (!('value' in descriptor) || !descriptor.enumerable || !['csv', 'json'].includes(format) || !fileImportTransactionModeSchema.safeParse(descriptor.value).success) throw Error(fileImportTransactionText.invalid);
+  if (!('value' in descriptor) || !descriptor.enumerable || !['csv', 'json', 'txt'].includes(format) || !fileImportTransactionModeSchema.safeParse(descriptor.value).success) throw Error(fileImportTransactionText.invalid);
   return descriptor.value as FileImportTransactionMode;
 }

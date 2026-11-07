@@ -37,7 +37,7 @@ function copyField(value: CellValue, binary: boolean, options: ImportFileReadOpt
   if (binary) {
     const base64 = typeof value === 'object' ? value.base64 :
       options.format === 'xml' && options.xmlOptions?.binaryBase64 ? text :
-        options.format === 'csv' && text.startsWith('base64:') ? text.slice(7) : undefined;
+        (options.format === 'csv' || options.format === 'txt') && text.startsWith('base64:') ? text.slice(7) : undefined;
     if (base64 !== undefined) {
       const bytes = Buffer.from(base64, 'base64');
       if (bytes.toString('base64') !== base64) throw Error('二进制字段须使用规范 Base64');

@@ -1,9 +1,10 @@
+import { txtImportOptionsSchema, validTxtImport, type TxtImportOptions } from './txtImport';
 import { z } from 'zod';
 import { validXmlImport, xmlImportOptionsSchema, type RecordImportFormat, type XmlImportOptions } from './xmlImport';
 import { csvImportDelimiters, type CsvImportDelimiter } from './csvImport';
 
 export interface ImportPresetConfiguration {
-  format: RecordImportFormat; xmlOptions?: XmlImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
+  format: RecordImportFormat; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions; encoding: 'utf8' | 'utf16le' | 'gb18030';
   csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; columns: string[]; mapping: Record<string, string>;
 }
 export interface ImportPresetEntry { id: string; name: string; configuration: ImportPresetConfiguration; createdAt: string; updatedAt: string; }
@@ -66,8 +67,8 @@ function date(input: unknown): string { const value = string(input, 24, 24); if 
 
 /** 配置仅含文件解释、源列身份及显式映射，不接收路径、行值、SQL或任何连接身份。 */
 function configuration(input: unknown): ImportPresetConfiguration {
-  const source = record(input, ['format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'columns', 'mapping'], ['format', 'encoding', 'columns', 'mapping']);
-  if (source.format !== 'csv' && source.format !== 'json' && source.format !== 'xml' || !['utf8', 'utf16le', 'gb18030'].includes(source.encoding as string)) return invalid();
+  const source = record(input, ['format', 'encoding', 'csvDelimiter', 'csvHasHeader', 'xmlOptions', 'txtOptions', 'columns', 'mapping'], ['format', 'encoding', 'columns', 'mapping']);
+  if (source.format !== 'csv' && source.format !== 'json' && source.format !== 'xml' && source.format !== 'txt' || !['utf8', 'utf16le', 'gb18030'].includes(source.encoding as string)) return invalid();
   let units = 0;
   const columns = array(source.columns, importPresetLimits.columns, 1).map(value => {
     const column = string(value, 1, importPresetLimits.sourceUnits); units += column.length * 2;
@@ -97,6 +98,8 @@ function configuration(input: unknown): ImportPresetConfiguration {
     const fields = record(source.xmlOptions, ['rowTag', 'attributes', 'binaryBase64', 'documentResult'], ['rowTag', 'attributes', 'binaryBase64']);
     output.xmlOptions = xmlImportOptionsSchema.parse(fields);
   }
+  if (Object.hasOwn(source, 'txtOptions')) output.txtOptions = txtImportOptionsSchema.parse(record(source.txtOptions, ['mode', 'recordDelimiter', 'hasHeader', 'delimiter', 'quote', 'widths', 'trimPadding'], ['mode', 'recordDelimiter', 'hasHeader']));
+  if (!validTxtImport(output)) return invalid();
   if (!validXmlImport(output)) return invalid();
   if (bytes(output) > importPresetLimits.configurationBytes) throw Error(importPresetText.configurationBudget);
   return output;

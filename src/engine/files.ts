@@ -11,6 +11,7 @@ import { csvImportColumnName, csvImportDelimiter, csvImportHasHeader, type CsvIm
 import type { CsvExportDelimiter } from '../shared/csvExport';
 import { validXmlImport, xmlImportZh, type RecordImportFormat, type XmlImportOptions } from '../shared/xmlImport';
 import { readXmlRecords, type XmlImportReadControl } from './xmlImport';
+import { txtFixedWidths, txtImportOptionsSchema, txtImportZh, validTxtImport, type TxtImportOptions } from '../shared/txtImport';
 
 /** 保存 JSON 数字的原始 token，避免经过 JavaScript 浮点数再序列化。 */
 class JsonNumber {
@@ -55,23 +56,32 @@ export function csvValue(value: string): CellValue {
   return value.startsWith('\\\\') ? value.slice(1) : value;
 }
 
-/** JSON 顶层必须是对象数组；数字保留原始字符串，避免大整数在解析阶段舍入。 */
-export async function* readRecords(filePath: string, format: RecordImportFormat, encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: XmlImportReadControl & { xmlOptions?: XmlImportOptions; onColumns?: (columns: string[]) => void }): AsyncGenerator<DataRow> {
+/** 在同一条流上解析记录及校验原始字节，JSON 数字保留原始字符串。 */
+export async function* readRecords(filePath: string, format: RecordImportFormat, encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: XmlImportReadControl & { xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions }): AsyncGenerator<DataRow> {
   const selectedDelimiter = csvImportDelimiter(format, delimiter);
   const selectedHasHeader = csvImportHasHeader(format, hasHeader);
   // 所有配置先校验，错误选项不能触发文件打开或遗留尚未接入 pipeline 的句柄。
   const selectedEncoding = encodingName(encoding);
   if (!validXmlImport({ ...control, format, encoding })) throw Error(xmlImportZh.invalid);
+  if (!validTxtImport({ ...control, format })) throw Error(txtImportZh.invalid);
   if (format === 'xml') {
     yield* readXmlRecords(filePath, control!.xmlOptions!, control);
     return;
   }
+  const txt = format === 'txt' ? txtImportOptionsSchema.parse(control?.txtOptions) : undefined;
+  const fixed = txt?.mode === 'fixed' ? txt : undefined;
+  const widths = fixed ? txtFixedWidths(fixed.widths) : undefined;
+  const width = widths?.reduce((total, value) => total + value, 0) ?? 0;
+  const delimited = format === 'csv' || format === 'txt';
+  const header = txt?.hasHeader ?? selectedHasHeader;
+  const quote = txt?.mode === 'delimited' && (txt.quote === 'single' ? "'" : txt.quote === 'double' && '"');
+  const strictText = txt ? new TextDecoder(selectedEncoding === 'utf16le' ? 'utf-16le' : selectedEncoding, { fatal: true }) : undefined;
   control?.signal?.throwIfAborted();
   const source = createReadStream(filePath);
   // 原始字节观察器置于同一条背压链中，摘要不能另开文件或忽略观察器失败。
   const observed = new Transform({ transform(chunk: Buffer, _encoding, callback) {
-    try { control?.onBytes?.(chunk); callback(null, chunk); } catch (error) { callback(error as Error); }
-  } });
+    try { strictText?.decode(chunk, { stream: true }); control?.onBytes?.(chunk); callback(null, chunk); } catch (error) { callback(error as Error); }
+  }, flush(callback) { try { strictText?.decode(); callback(); } catch (error) { callback(error as Error); } } });
   // iconv的GB18030解码缓冲按本次write字节数分配；跨write补完四字节字符时可能不足以输出代理对。
   // 按原编码语法只保留末尾未完整的1..3字节，让每次write从完整序列边界开始，不改变原iconv映射。
   let pendingGbBytes = Buffer.alloc(0);
@@ -121,36 +131,51 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
     // Assembler 会保留 stringValue 的对象值；独立类区分真实文字字符串与数字 token。
     callback(null, token.name === 'numberValue' ? { name: 'stringValue', value: new JsonNumber(token.value) } : token.name === 'keyValue' ? { ...token, value: jsonKeyPrefix + token.value } : token);
   } });
-  const output = format === 'csv'
-    ? parse({ columns: false, delimiter: selectedDelimiter, bom: true, skip_empty_lines: selectedHasHeader, max_record_size: 64 * 1024 * 1024 })
+  const output = delimited
+    ? parse({ columns: false, delimiter: txt?.mode === 'delimited' ? txt.delimiter : fixed ? '\0' : selectedDelimiter,
+      ...(txt ? { quote, escape: quote,
+        ...(txt.recordDelimiter === 'auto' ? {} : { record_delimiter: { lf: '\n', crlf: '\r\n', cr: '\r' }[txt.recordDelimiter] }) } : {}),
+      bom: true, skip_empty_lines: !txt && selectedHasHeader, max_record_size: fixed ? width * 4 : 64 * 1024 * 1024 })
     : streamArray({ highWaterMark: 16 });
   const options = { signal: control?.signal };
   const decoding = [source, observed, ...(gbFrames ? [gbFrames] : []), decoder, codepoints];
-  const completed = format === 'csv' ? pipeline([...decoding, output], options) : pipeline([...decoding, parser(), numberTokens, output], options);
+  const completed = delimited ? pipeline([...decoding, output], options) : pipeline([...decoding, parser(), numberTokens, output], options);
   // 避免迭代器尚未挂接时上游读取错误成为未处理的 Promise rejection。
   void completed.catch(() => undefined);
   let finished = false;
   let headers: string[] | undefined;
   try {
     for await (const item of output) {
-      if (format === 'csv' && !headers) {
-        if (selectedHasHeader) {
-          headers = (item as string[]).map(String);
-          if (new Set(headers).size !== headers.length || headers.some(name => !name.length)) throw new Error('CSV 标题不能包含重复或空字段名');
+      let values = item as string[];
+      if (fixed && widths) {
+        // 先限制 UTF-16 长度，随后按码点切列，非 BMP 字符只占一个位置。
+        if (values.length !== 1 || values[0].length > width * 2) throw Error(txtImportZh.invalidWidth);
+        const characters = [...values[0]];
+        if (characters.length !== width) throw Error(txtImportZh.invalidWidth);
+        let offset = 0;
+        values = widths.map(size => {
+          const value = characters.slice(offset, offset += size).join('');
+          return fixed.trimPadding ? value.replace(/^ +| +$/g, '') : value;
+        });
+      }
+      if (delimited && !headers) {
+        if (header) {
+          headers = values.map(String);
+          if (new Set(headers).size !== headers.length || headers.some(name => !name.length)) throw new Error(`${format.toUpperCase()} 标题不能包含重复或空字段名`);
           // 原标题一经校验即报告，即使没有数据行也能保留完整源列；副本不能反向修改解析器。
           control?.onColumns?.([...headers]);
           continue;
         }
         // 首条数组同时确定列数并作为数据产出，不把重复值、空串或原型同名文字当标题。
-        headers = (item as string[]).map((_value, index) => csvImportColumnName(index));
+        headers = values.map((_value, index) => csvImportColumnName(index));
         control?.onColumns?.([...headers]);
       }
-      if (format === 'csv' && (item as string[]).length !== headers!.length) throw new Error('CSV 每行列数必须与首行一致');
-      const record = format === 'csv' ? Object.fromEntries(headers!.map((name, index) => [name, item[index]])) : restoreKeys(item.value);
+      if (delimited && values.length !== headers!.length) throw new Error(`${format.toUpperCase()} 每行列数必须与首行一致`);
+      const record = delimited ? Object.fromEntries(headers!.map((name, index) => [name, values[index]])) : restoreKeys(item.value);
       if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('导入文件每行必须是字段到值的对象');
       const row: DataRow = Object.create(null) as DataRow;
       for (const [key, value] of Object.entries(record)) {
-        if (format === 'csv') row[key] = csvValue(String(value));
+        if (delimited) row[key] = csvValue(String(value));
         else if (value instanceof JsonNumber) row[key] = value.value;
         else if (value && typeof value === 'object' && !Array.isArray(value) && (value as { type?: string }).type === 'binary' && typeof (value as { base64?: string }).base64 === 'string') row[key] = value as CellValue;
         else if (value !== null && typeof value === 'object') row[key] = preciseJson(value);
@@ -176,15 +201,18 @@ export async function* readText(filePath: string, encoding: string): AsyncGenera
   finally { source.destroy(); decoded.destroy(); await completed.catch(() => undefined); }
 }
 
-/** 只读取前 20 条记录用于字段映射，提前结束时由生成器释放文件句柄。 */
-export async function previewFile(input: { filePath: string; format: RecordImportFormat; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions }): Promise<{ columns: string[]; rows: DataRow[] }> {
+/** 样本最多 20 条，XML 与 TXT 继续读完以核对来源结构。 */
+export async function previewFile(input: { filePath: string; format: RecordImportFormat; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean; xmlOptions?: XmlImportOptions; txtOptions?: TxtImportOptions }): Promise<{ columns: string[]; rows: DataRow[] }> {
   if (Object.hasOwn(input, 'csvHasHeader') && typeof input.csvHasHeader !== 'boolean') throw new Error('首行为标题选项必须为布尔值，且只适用于 CSV 导入');
   const rows: DataRow[] = [], columns = new Set<string>();
-  const control = Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions,
-    onColumns: (names: string[]) => { for (const name of names) columns.add(name); } } : undefined;
+  const control = {
+    ...(Object.hasOwn(input, 'xmlOptions') ? { xmlOptions: input.xmlOptions } : {}),
+    ...(Object.hasOwn(input, 'txtOptions') ? { txtOptions: input.txtOptions } : {}),
+    ...(input.format === 'xml' || input.format === 'txt' ? { onColumns: (names: string[]) => { for (const name of names) columns.add(name); } } : {}),
+  };
   let sampleBytes = 0;
   for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader, control)) {
-    if (input.format === 'xml') {
+    if (input.format === 'xml' || input.format === 'txt') {
       // 整文件取得列的并集，样本只保留有界数据，避免大字段跨 IPC。
       Object.keys(row).forEach(name => columns.add(name));
       if (rows.length < 20 && sampleBytes < 2 * 1024 * 1024) {

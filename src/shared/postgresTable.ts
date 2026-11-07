@@ -1,4 +1,5 @@
-import { xmlImportOptionsSchema } from './xmlImport';
+import { txtImportOptionsSchema } from './txtImport';
+import { recordImportFormats, xmlImportOptionsSchema } from './xmlImport';
 import { importFileSourceSchema } from './importNewTable';
 import { fileImportConflictModes, type FileImportConflictCounts } from './fileImportConflict';
 import { z } from 'zod';
@@ -262,6 +263,9 @@ export const postgresTableImportChooseSchema = z.union([
   target.extend({ pageToken: token, format: z.literal('csv'), encoding: recordImportEncoding,
     csvDelimiter: z.enum(csvExportDelimiters), csvHasHeader: z.boolean(), scannedFile: scannedImportFile,
   }).strict(),
+  target.extend({ pageToken: token, format: z.literal('txt'), encoding: recordImportEncoding,
+    txtOptions: txtImportOptionsSchema, scannedFile: scannedImportFile.optional(),
+  }).strict(),
   target.extend({ pageToken: token, format: z.literal('json'), encoding: recordImportEncoding,
     scannedFile: scannedImportFile.optional(),
   }).strict(),
@@ -272,7 +276,7 @@ export interface PostgresImportKey { id: string; name: string; columns: string[]
 const importTarget = target.extend({ pageToken: token, taskId: identity, fileToken: token, conflict: postgresImportConflict.optional() });
 export const postgresTableImportSchema = z.union([
   importTarget.extend({ columns: z.array(column).min(1).max(1022).refine(value => new Set(value).size === value.length, '导入目标列不能重复') }).strict(),
-  importTarget.extend({ format: z.enum(['csv', 'json', 'xml']), columns: z.array(column.nullable()).min(1).max(1022).refine(value => {
+  importTarget.extend({ format: z.enum(recordImportFormats), columns: z.array(column.nullable()).min(1).max(1022).refine(value => {
     const mapped = value.filter(key => key !== null);
     return mapped.length > 0 && new Set(mapped).size === mapped.length;
   }, '至少映射一列，导入目标列不能重复') }).strict(),

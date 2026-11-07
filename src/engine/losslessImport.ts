@@ -10,7 +10,7 @@ export function mappedImportValue(row: DataRow, source: string, column: ColumnIn
   }
   const value = row[source];
   if (typeof value !== 'string' || !/^(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)/i.test(column.type)) return value;
-  if (format === 'csv' && value.startsWith('base64:')) return { type: 'binary', base64: value.slice(7) };
+  if ((format === 'csv' || format === 'txt') && value.startsWith('base64:')) return { type: 'binary', base64: value.slice(7) };
   if (format === 'xml' && xmlBase64) {
     if (Buffer.from(value, 'base64').toString('base64') !== value) throw Error('XML 二进制字段须使用规范 Base64');
     return { type: 'binary', base64: value };

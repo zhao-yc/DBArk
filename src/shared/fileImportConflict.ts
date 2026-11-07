@@ -36,7 +36,7 @@ export const fileImportConflictReportSchema = z.object({
 });
 export type FileImportConflictReport = z.infer<typeof fileImportConflictReportSchema>;
 export const fileImportConflictText = {
-  invalid: '冲突处理仅适用于 CSV、JSON 或 XML，必须明确选择有效策略及完整匹配键',
+  invalid: '冲突处理仅适用于 CSV、JSON、XML 或 TXT，必须明确选择有效策略及完整匹配键',
   stale: '目标结构或匹配键已变化，未继续当前批；此前提交保留，请重新核对',
   noKey: '未选择可确认的完整非空主键或唯一键',
   nullable: '匹配键列不能缺失或为NULL',

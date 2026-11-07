@@ -1353,7 +1353,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         const { source, sample, sampleLimited } = records
           ? await inspectPostgresRecordImportSource(path, target.format === 'xml' ? { format: 'xml', encoding: 'utf8', xmlOptions: target.xmlOptions } :
             target.format === 'csv' ? { format: 'csv', encoding: target.encoding, csvDelimiter: target.csvDelimiter, csvHasHeader: target.csvHasHeader } :
-              { format: 'json', encoding: target.encoding }, check)
+              target.format === 'txt' ? { format: 'txt', encoding: target.encoding, txtOptions: target.txtOptions } :
+                { format: 'json', encoding: target.encoding }, check)
           : await inspectPostgresCopySource(path, target.csvDelimiter, target.csvHasHeader);
         check();
         // 新表向导沿用已选文件，只有原字节指纹匹配才签发原表页导入能力。
@@ -2519,7 +2520,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
       // 已返回结果的 Excel 和标记格式只消费本窗口选择的具体格式令牌。
       const checkFormat = command === 'files.preflight' || command === 'files.inspectImport' || input.expectedSource ||
-        (command === 'files.preview' || command === 'files.import') && input.format === 'xml' ||
+        (command === 'files.preview' || command === 'files.import') && ['xml', 'txt'].includes(input.format) ||
         command === 'files.exportResult' && (input.format === 'xlsx' || !!dataMarkupText(input.format));
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) }; break;
     }
