@@ -315,6 +315,7 @@ export interface CommandMap {
   'postgres.checkEdit.preview': { input: import('./postgresCheckEdit').PostgresCheckPreviewInput; output: import('./postgresCreateTable').PostgresCreateTablePreview };
   'postgres.checkEdit.apply': { input: import('./postgresCheckEdit').PostgresCheckApplyInput; output: import('./postgresCreateTable').PostgresCreateTableOutcome };
   'postgres.table.exportChoose': { input: import('./postgresTable').PostgresTableExportChooseInput; output: FileChoice | null };
+  'postgres.query.export': { input: import('./postgresQueryExport').PostgresQueryExportInput; output: import('./postgresQueryExport').PostgresQueryExportOutput };
   'postgres.table.export': { input: import('./postgresTable').PostgresTableExportInput | import('./postgresTable').PostgresBackupSetInput; output: import('./postgresTable').PostgresTableExportOutput };
   'postgres.backup.catalogue': { input: import('./postgresTable').PostgresBackupCatalogueInput; output: string[] };
   'postgres.backup.chooseDumpTool': { input: Record<string, never>; output: FileChoice | null };

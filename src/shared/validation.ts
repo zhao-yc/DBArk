@@ -1,3 +1,4 @@
+import { postgresQueryExportSchema } from './postgresQueryExport';
 import { mysqlDatabaseBackupChooseSchema, mysqlDatabaseBackupExecuteSchema } from './mysqlDatabaseBackup';
 import { mysqlSqlFileChooseSchema, mysqlSqlFileExecuteSchema } from './mysqlSqlFile';
 import { mysqlDataCompareSchema } from './mysqlDataCompare';
@@ -288,6 +289,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'postgres.foreignEdit.apply': postgresForeignApplySchema,
   'postgres.checkEdit.preview': postgresCheckPreviewSchema, 'postgres.checkEdit.apply': postgresCheckApplySchema,
   'postgres.table.exportChoose': postgresTableExportChooseSchema, 'postgres.table.export': z.union([postgresTableExportSchema, postgresBackupSetSchema]),
+  'postgres.query.export': postgresQueryExportSchema,
   'postgres.backup.catalogue': postgresBackupCatalogueSchema,
   'postgres.backup.chooseDumpTool': postgresDatabaseBackupToolSchema,
   'postgres.backup.chooseDatabaseFile': postgresDatabaseBackupChooseSchema,

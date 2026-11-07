@@ -2385,6 +2385,15 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       input = { ...input, profile, owner, filePath: file.path, connectionRevision: store.connectionRevision() };
       break;
     }
+    case 'postgres.query.export': {
+      columnsMain.assertCapturedOwner(columns);
+      const profile = store.resolveConnection(input.connectionId);
+      if (shuttingDown || profile.dialect !== 'postgresql') throw Error('查询导出需要可用的 PostgreSQL 连接');
+      const filePath = resolveFileToken(files, input.fileToken, 'export', input.format);
+      files.delete(input.fileToken);
+      input = { ...input, profile, filePath, connectionRevision: store.connectionRevision() };
+      break;
+    }
     case 'mysql.backup.database': {
       columnsMain.assertCapturedOwner(columns);
       const document = columns!.owner.document;
@@ -2510,8 +2519,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     if (tableFilteredExport) filteredExportLease = tableFilteredExports.begin(taskId!, columns!, assertTableFilteredExportCurrent);
     if(command==='query.exportStream'&&input.format==='sql')input={...input,filePath:queryInsertExports.begin(input,columns)};
-    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || command === 'postgres.table.export' || command === 'postgres.backup.database' || command === 'mysql.backup.database' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
-    if (command === 'postgres.table.export' || command === 'postgres.backup.database' || command === 'mysql.backup.database') {
+    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export' || command === 'postgres.query.export' || command === 'postgres.table.export' || command === 'postgres.backup.database' || command === 'mysql.backup.database' || tableFilteredExport) releaseTarget = await exportReservations.acquire(input.filePath);
+    if (command === 'postgres.query.export' || command === 'postgres.table.export' || command === 'postgres.backup.database' || command === 'mysql.backup.database') {
       await assertSqliteExportDestination(input.filePath, store.connections());
       columnsMain.assertCapturedOwner(columns);
       if (shuttingDown || tableValueOptionsClosing.has(requestConnectionId) || input.connectionRevision !== store.connectionRevision())
@@ -2668,7 +2677,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       return { affectedRows: confirmed.evidence.serverReportedRows, cleanupWarning: true, ...tableApplyReceipts.finish(taskId) };
     }
     const message = command === 'postgres.table.import' ? 'PostgreSQL 导入未确认提交，请在原窗口核对回执' :
-      command === 'postgres.table.export' ? (preparing.cancelled ? 'PostgreSQL 导出已取消' : 'PostgreSQL 导出未正常完成，请核对所选文件') :
+      (command === 'postgres.query.export' || command === 'postgres.table.export') ? (preparing.cancelled ? 'PostgreSQL 导出已取消' : 'PostgreSQL 导出未正常完成，请核对所选文件') :
       error instanceof Error ? error.message : '操作失败';
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableChecks' ? 'tableChecks' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId), ...(structurePurpose === 'tableChecks' ? tableChecksFailureProgress(sentToEngine && command === structurePrefix + 'apply', structureProgress.get(taskId)) : {}) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
@@ -2994,7 +3003,7 @@ else {
             payload.command === 'query.cancel' && (['postgres.table.import', 'postgres.compareData', 'mysql.compareData'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') ||
               ['postgres.table.export', 'postgres.sqlFile.execute', 'postgres.backup.database', 'mysql.sqlFile.execute', 'mysql.backup.database'].includes(tasks.get((input as { taskId: string }).taskId)?.kind ?? '') && sqlFileTaskOwners.has((input as { taskId: string }).taskId))) columns = columnsMain.capture(event);
         if (payload.command === 'postgres.explain' || payload.command.startsWith('postgres.analyze') ||
-            payload.command === 'postgres.completion' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
+            payload.command === 'postgres.completion' || payload.command === 'postgres.query.export' || payload.command.startsWith('postgres.routine.') || payload.command.startsWith('postgres.structure.') || payload.command.startsWith('postgres.sequence.') || payload.command.startsWith('postgres.createTable.') || payload.command.startsWith('postgres.createView.') || payload.command.startsWith('postgres.editView.') || payload.command.startsWith('postgres.viewManage.') || payload.command.startsWith('postgres.materializedRefresh.') ||
             payload.command.startsWith('postgres.columnEdit.') || payload.command.startsWith('postgres.indexEdit.') || payload.command.startsWith('postgres.keyEdit.') || payload.command.startsWith('postgres.foreignEdit.') || payload.command.startsWith('postgres.checkEdit.') || payload.command.startsWith('postgres.table.') || payload.command.startsWith('postgres.sqlFile.') || payload.command.startsWith('mysql.sqlFile.') ||
             payload.command === 'sessions.open' && store.connections().some(profile => profile.id === (input as { connectionId: string }).connectionId && profile.dialect === 'postgresql')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('sqliteDraftFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);

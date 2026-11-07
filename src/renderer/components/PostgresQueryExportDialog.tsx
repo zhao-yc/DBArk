@@ -1,0 +1,104 @@
+import { useEffect, useRef, useState } from 'react';
+import type { FileChoice } from '../../shared/contracts';
+import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
+import type { PostgresQueryExportInput } from '../../shared/postgresQueryExport';
+import { acquireWorkspaceBusy, useWorkspace } from '../store';
+import { errorMessage, invoke, uid } from '../lib';
+import { zh } from '../locales/zh-CN';
+import { postgresQueryExportZh as text } from '../locales/postgresQueryExport.zh-CN';
+import { CsvExportDelimiterField } from './CsvExportDelimiter';
+import { ErrorBox, Field, Modal } from './ui';
+
+export interface PostgresQueryExportSource {
+  tabId: string; connectionId: string; database: string; sql: string;
+  current(): boolean;
+}
+
+/** 文件授权与实际导出各持有当前来源，变更格式或执行一次后需重新选择文件。 */
+export function PostgresQueryExportDialog({source, onClose}: {source: PostgresQueryExportSource; onClose(): void}) {
+  const [format, setFormat] = useState<PostgresQueryExportInput['format']>('csv');
+  const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
+  const [delimiter, setDelimiter] = useState<CsvExportDelimiter>(',');
+  const [file, setFile] = useState<FileChoice | null>(null);
+  const [pending, setPending] = useState<'pick' | 'write' | null>(null);
+  const [error, setError] = useState(''), [progress, setProgress] = useState('');
+  const [rows, setRows] = useState<number>(), [stale, setStale] = useState(false), [cancelling, setCancelling] = useState(false);
+  const alive = useRef(true), picking = useRef(false), invalid = useRef(false), task = useRef<string | undefined>(undefined);
+  const current = () => alive.current && !invalid.current && source.current();
+  useEffect(() => {
+    alive.current = true;
+    const stop = useWorkspace.subscribe(() => {
+      if (!source.current()) { invalid.current = true; setStale(true); }
+    });
+    const unlisten = window.dbark.onTask(event => { if (event.taskId === task.current && event.status === 'running') setProgress(event.message); });
+    return () => {
+      alive.current = false;
+      stop(); unlisten();
+      if (task.current) void invoke('query.cancel', {taskId: task.current}).catch(() => {});
+    };
+  }, [source]);
+
+  async function choose() {
+    if (picking.current || task.current || !current()) return;
+    picking.current = true;
+    setPending('pick'); setFile(null); setError(''); setRows(undefined);
+    try {
+      const selected = await invoke('files.choose', {purpose: 'export', format, suggestedName: `${text.suggestedName}.${format}`});
+      if (!current()) throw Error(text.changed);
+      setFile(selected);
+    } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
+    finally { picking.current = false; if (alive.current) setPending(null); }
+  }
+
+  async function run() {
+    if (!file || picking.current || task.current || !current()) return;
+    const taskId = uid();
+    task.current = taskId;
+    let job: ReturnType<typeof acquireWorkspaceBusy> | undefined;
+    setPending('write'); setError(''); setProgress(text.running); setRows(undefined); setFile(null);
+    try {
+      job = acquireWorkspaceBusy(source.tabId);
+      if (!current()) throw Error(text.changed);
+      const result = await invoke('postgres.query.export', {connectionId: source.connectionId, database: source.database,
+        sql: source.sql, taskId, fileToken: file.token, format, encoding, ...csvExportOptions(format, delimiter)});
+      if (alive.current) setRows(result.rows);
+    } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
+    finally {
+      task.current = undefined; job?.release();
+      if (alive.current) { setPending(null); setCancelling(false); }
+    }
+  }
+
+  async function cancel() {
+    if (!task.current || cancelling) return;
+    setCancelling(true);
+    try { await invoke('query.cancel', {taskId: task.current}); }
+    catch (reason) { if (alive.current) { setError(errorMessage(reason)); setCancelling(false); } }
+  }
+
+  return <Modal title={text.title} wide onClose={() => { if (!picking.current && !task.current) onClose(); }}>
+    <div className="modal-content">
+      <p>{source.database} · {text.scope}</p>
+      <pre className="result-sql-preview" aria-label={text.source}>{source.sql.slice(0, 4000)}</pre>
+      {source.sql.length > 4000 && <p>{text.sourcePrefix}</p>}
+      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
+        onChange={event => { setFormat(event.target.value === 'json' ? 'json' : 'csv'); setFile(null); setRows(undefined); }}>
+        <option value="csv">CSV</option><option value="json">JSON</option>
+      </select></Field>
+      <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={encoding} disabled={!!pending}
+        onChange={event => { const value = event.target.value; if (value === 'utf8' || value === 'utf16le' || value === 'gb18030') setEncoding(value); }}>
+        <option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option>
+      </select></Field>
+      {format === 'csv' && <CsvExportDelimiterField value={delimiter} disabled={!!pending} onChange={setDelimiter}/>}
+      <button disabled={!!pending || stale} onClick={() => void choose()}>{file?.name ?? zh.resultExport.chooseFile}</button>
+      {pending === 'write' && <p role="status">{cancelling ? text.cancelling : progress}</p>}
+      {rows !== undefined && <div role="status" className="success-box">{text.done(rows)}</div>}
+      <ErrorBox message={error || (stale ? text.changed : '')}/>
+    </div>
+    <footer className="modal-footer">
+      {pending === 'write' && <button disabled={cancelling} onClick={() => void cancel()}>{zh.common.cancel}</button>}
+      <button disabled={!!pending} onClick={onClose}>{zh.common.close}</button>
+      <button className="primary" disabled={!!pending || !file || stale} onClick={() => void run()}>{text.start}</button>
+    </footer>
+  </Modal>;
+}

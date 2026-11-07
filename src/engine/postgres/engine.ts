@@ -32,6 +32,7 @@ import type { PostgresForeignPreviewInput } from '../../shared/postgresForeignKe
 import { preparePostgresCheckEdit } from './checkEdit';
 import type { PostgresCheckPreviewInput } from '../../shared/postgresCheckEdit';
 import { exportPostgresTable, type PostgresTableExportRequest } from './tableExport';
+import { exportPostgresQuery, type PostgresQueryExportRequest } from './queryExport';
 import { exportPostgresBackupSet, type PostgresBackupSetRequest } from './tableBackupSet';
 import { exportPostgresDatabaseBackup, type PostgresDatabaseBackupRequest } from './databaseBackup';
 import { PostgresArchiveRestoreCleanupError, withPostgresArchiveSql, type PostgresArchiveRestoreSource } from './customArchive';
@@ -651,22 +652,35 @@ export class PostgresEngine {
     if (this.syncSnapshot && [this.syncSnapshot.source.connectionId, this.syncSnapshot.target.connectionId].includes(id)) this.syncSnapshot = undefined;
   }
 
+  private exportTable(input: PostgresTableExportRequest | PostgresBackupSetRequest, profile: PostgresConnectionProfile) {
+    return this.runFileExport(input, profile, (connect, check, publish, progress) => input.format === 'sql-backup-set'
+      ? exportPostgresBackupSet(input, connect, check, publish, progress)
+      : exportPostgresTable(this.tables, input, connect, check, publish, progress));
+  }
+
   /** 在第一个等待之前登记文件任务，只有原子替换成功才报告已保存。 */
-  private async exportTable(input: PostgresTableExportRequest | PostgresBackupSetRequest, profile: PostgresConnectionProfile) {
+  private async runFileExport<T extends { rows: number }>(input: { taskId: string; database: string }, profile: PostgresConnectionProfile,
+    write: (connect: <R>(action: (connection: PostgresConnection) => Promise<R>) => Promise<R>, check: () => void,
+      publish: () => void, progress: (rows: number) => void) => Promise<T>, gracefulCancel = false): Promise<T> {
     if (this.stopping || this.closing.has(profile.id) || this.ownsTask(input.taskId) || this.transfers.size >= 32)
       throw Error('PostgreSQL 导出任务已存在、连接关闭中或已达并发上限');
-    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false };
+    let opening: PostgresConnection | undefined;
+    const task: TransferTask = { connectionId: profile.id, cancelled: false, publishing: false, gracefulCancel,
+      processAbort: () => opening?.abort() };
     const check = () => { if (task.cancelled) throw Error('PostgreSQL 导出已取消'); };
     this.transfers.set(input.taskId, task);
     const connect = <T>(action: (connection: PostgresConnection) => Promise<T>) => this.use(profile, input.database, async managed => {
+      opening = undefined;
       task.connection = managed;
       check();
-      return action(managed);
-    });
+      task.commandActive = true;
+      try { return await action(managed); }
+      finally { task.commandActive = false; await task.cancelPending; }
+    }, false, false, false, gracefulCancel ? managed => { opening = managed; } : undefined)
+      .finally(() => { opening = undefined; task.connection = undefined; });
     const publish = () => { task.publishing = true; };
     const progress = (rows: number) => this.emit({ taskId: input.taskId, status: 'running', progress: 50, message: 'PostgreSQL 导出已读取 ' + rows + ' 行' });
-    const done = task.done = input.format === 'sql-backup-set' ? exportPostgresBackupSet(input, connect, check, publish, progress)
-      : exportPostgresTable(this.tables, input, connect, check, publish, progress);
+    const done = task.done = write(connect, check, publish, progress);
     try {
       const result = await done;
       this.emit({ taskId: input.taskId, status: 'completed', progress: 100, message: 'PostgreSQL 导出文件已保存，共 ' + result.rows + ' 行' });
@@ -1158,6 +1172,14 @@ export class PostgresEngine {
           if (result.truncated) throw Error('PostgreSQL 比较目录超过显示预算');
           return result.rows.map(row => input.database ? postgresIdentifier(String(row.c0)) + '.' + postgresIdentifier(String(row.c1)) : String(row.c0));
         });
+      }
+      case 'postgres.query.export': {
+        const profile = input.profile as PostgresConnectionProfile | undefined;
+        if (profile?.dialect !== 'postgresql' || profile.id !== input.connectionId || !Number.isSafeInteger(input.connectionRevision))
+          throw Error('缺少可信的 PostgreSQL 导出连接');
+        const request = input as PostgresQueryExportRequest;
+        return this.runFileExport(request, profile, (connect, check, publish, progress) =>
+          exportPostgresQuery(request, connect, check, publish, progress), true);
       }
       case 'postgres.table.related':
       case 'postgres.table.page':

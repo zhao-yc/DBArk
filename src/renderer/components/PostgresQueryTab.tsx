@@ -44,6 +44,8 @@ import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.
 import { SqlEditor, type SqlCompletionStatus } from './SqlEditor';
 import { ResultsGrid } from './ResultsGrid';
 import { ResultExportDialog } from './ResultExportDialog';
+import { PostgresQueryExportDialog, type PostgresQueryExportSource } from './PostgresQueryExportDialog';
+import { postgresQueryExportZh as fullExportText } from '../locales/postgresQueryExport.zh-CN';
 import { QueryResultSortPanel } from './QueryResultSortPanel';
 import { QueryResultFilterPanel } from './QueryResultFilterPanel';
 import { QueryResultColumnsDialog } from './QueryResultColumnsDialog';
@@ -231,6 +233,7 @@ export function PostgresQueryTab({
   const [presetDraft, setPresetDraft] = useState<PresetDraft>();
   const presetDraftRef = useRef<PresetDraft | undefined>(undefined);
   const [exportView, setExportView] = useState<{ result: QueryResult; selected: boolean }>();
+  const [fullExport, setFullExport] = useState<PostgresQueryExportSource>();
   const exportOpen = useRef(false);
   const scope: Scope = {
     profile,
@@ -737,6 +740,7 @@ export function PostgresQueryTab({
   );
   useEffect(() => {
     if (closeRequest && analyzeRef.current) clearAnalyze();
+    if (closeRequest) setFullExport(undefined);
     if (closeRequest && sortDraftRef.current) closeResultSort(sortDraftRef.current);
     if (closeRequest && filterDraftRef.current) closeResultFilter(filterDraftRef.current);
     if (closeRequest && columnDraftRef.current) closeResultColumns(columnDraftRef.current);
@@ -751,7 +755,7 @@ export function PostgresQueryTab({
     result = pin?.result ?? results[selected],
     controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView || !!pinSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
-    locked = operationLocked || !!snippets;
+    locked = operationLocked || !!snippets || !!fullExport;
   // 名称属于服务器已返回的语句，编辑草稿时仍显示原结果的名称。
   const resultNames = useMemo(() => outcome?.results.map(result => result.columns.length
     ? queryResultTitle(result.statement, 'postgresql') : undefined) ?? [], [outcome]);
@@ -1349,6 +1353,19 @@ export function PostgresQueryTab({
   function openSaveQuery() {
     if (commandEditor()) setSave(true);
   }
+  /** 捕获要重新执行的正文及其目标。选择文件期间不会读取后来编辑的草稿。 */
+  function openFullExport() {
+    const target = commandEditor(), draft = currentTab();
+    if (!target || !draft) return;
+    const selections = target.instance.getSelections();
+    const selection = selections?.[0];
+    const sql = selection?.isEmpty() ? target.model.getValue() : selection && target.model.getValueInRange(selection);
+    if (selections?.length !== 1 || !sql?.trim()) { setError(fullExportText.singleSource); return; }
+    const version = target.model.getVersionId();
+    setFullExport({tabId: draft.id, connectionId: draft.connectionId, database: scope.database, sql,
+      current: () => same(scope) && currentTab() === draft && useWorkspace.getState().settings.activeTabId === draft.id &&
+        !closeRef.current && target.instance.getModel() === target.model && !target.model.isDisposed() && target.model.getVersionId() === version});
+  }
   /** 打开片段库时捕获原选区；预览编辑器和本地保存不能接管查询模型。 */
   function openSnippets(create = false, instance = editor.current) {
     const target = commandEditor();
@@ -1534,6 +1551,7 @@ export function PostgresQueryTab({
             <button disabled={!editable} onClick={openSaveQuery}>
               {text.save}
             </button>
+            <button disabled={!editable} onClick={openFullExport}>{fullExportText.open}</button>
             <button disabled={!editable} onClick={() => openSnippets()}>{zh.snippets.title}</button>
             <button disabled={!editable || duplicating || duplicateOrigin.current.connectionId !== tab.connectionId ||
               duplicateOrigin.current.version !== version} title={queryDuplicateZh.hint}
@@ -1734,6 +1752,7 @@ export function PostgresQueryTab({
           exportOpen.current = false;
           setExportView(undefined);
         }} />}
+      {fullExport && !closeRequest && <PostgresQueryExportDialog source={fullExport} onClose={() => setFullExport(undefined)} />}
       <div className="tab-status">
         <span>
           {!state.transactionKnown

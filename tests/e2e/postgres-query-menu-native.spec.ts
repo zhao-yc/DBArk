@@ -1,5 +1,5 @@
 import { Client } from 'pg';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { test, expect, page, desktop, pageErrors, quitDesktop } from './desktop-fixture';
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import type { UiCommandId } from '../../src/shared/uiCommands';
@@ -12,6 +12,8 @@ import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import { postgresIdentifier } from '../../src/shared/postgresSql';
 import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-CN';
 import { queryLayoutZh } from '../../src/renderer/locales/queryLayout.zh-CN';
+import { postgresQueryExportZh as fullExportText } from '../../src/renderer/locales/postgresQueryExport.zh-CN';
+import { csvExportZh } from '../../src/renderer/locales/csvExport.zh-CN';
 
 test.use({trace: 'off', video: 'off', screenshot: 'off'});
 const tab = () => page.locator('.postgres-query:visible');
@@ -74,6 +76,103 @@ async function replaceDraft(sql: string) {
   await page.keyboard.insertText(sql);
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
+
+test('PostgreSQL 完整查询导出分批保存 CSV 和 JSON 并保护原事务及目标文件', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const observer = new Client({host: '127.0.0.1', port, user, database: user, password, connectionTimeoutMillis: 3000});
+  await observer.connect();
+  try {
+    await observer.query('CREATE SEQUENCE export_guard');
+    const csv = info.outputPath('完整结果.csv'), json = info.outputPath('完整结果.json'), unchanged = info.outputPath('原文件.csv');
+    await mkdir(info.outputDir, {recursive: true});
+    await writeFile(unchanged, '原文件哨兵');
+    await prepare({id: '', name: '隔离 PostgreSQL 查询导出', dialect: 'postgresql', group: '', color: '#123456',
+      host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, "SELECT '保留原结果' AS marker;");
+    const execute = tab().getByRole('button', {name: postgresZh.execute, exact: true});
+    await tab().getByRole('button', {name: postgresZh.begin, exact: true}).click();
+    await execute.click();
+    const grid = tab().locator('.postgres-results .rdg');
+    await expect.poll(() => grid.innerText()).toContain('保留原结果');
+    const original = await grid.innerText();
+    const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+    const baseline = await history();
+    const sessions = () => observer.query("SELECT pid,state FROM pg_stat_activity WHERE usename=$1 AND application_name='tabrelio' ORDER BY pid", [user]);
+    const owner = (await sessions()).rows;
+    expect(owner).toHaveLength(1);
+    expect(owner[0].state).toBe('idle in transaction');
+    const output = [csv, json, unchanged, unchanged];
+    await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
+      const original = dialog.showSaveDialog;
+      let count = 0;
+      dialog.showSaveDialog = (async (...args: unknown[]) => {
+        const path = paths[count];
+        if (!path || BrowserWindow.getAllWindows().length !== 1 || args[0] !== BrowserWindow.getAllWindows()[0] ||
+            !(args.at(-1) as Electron.SaveDialogOptions).filters?.some(filter => filter.extensions.includes(path.split('.').at(-1)!)))
+          throw Error('拒绝本例范围外的文件选择');
+        count++;
+        return {canceled: false, filePath: path};
+      }) as typeof dialog.showSaveDialog;
+      Object.assign(globalThis, {restorePgFullExportPicker: () => { dialog.showSaveDialog = original; return count; }});
+    }, output);
+    const dialog = page.getByRole('dialog', {name: fullExportText.title, exact: true});
+    const open = () => tab().getByRole('button', {name: fullExportText.open, exact: true}).click();
+    const close = () => dialog.getByRole('button', {name: zh.common.close, exact: true}).click();
+    const start = async () => {
+      await dialog.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
+      await dialog.getByRole('button', {name: fullExportText.start, exact: true}).click();
+    };
+    const sql = "WITH data AS (SELECT g FROM generate_series(1,4099) AS g) SELECT 9007199254740993 + g AS id, 0.12345678901234567890::numeric(30,20) AS id, CASE WHEN g % 2 = 0 THEN NULL ELSE '行' || g END AS note, decode('00ff','hex') AS bytes FROM data ORDER BY g;";
+    await replaceDraft("SELECT '选区以外';\n" + sql);
+    await modelSelection(2, 1, sql.length + 1);
+    await open();
+    await expect(dialog.getByLabel(fullExportText.source)).toHaveText(sql);
+    await dialog.getByLabel(csvExportZh.label).selectOption(';');
+    await start();
+    await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
+    const lines = (await readFile(csv, 'utf8')).split('\r\n');
+    expect(lines[0]).toBe('id;id [2];note;bytes');
+    expect(lines.slice(1, -1)).toEqual(Array.from({length: 4099}, (_, i) =>
+      `${9007199254740994n + BigInt(i)};0.12345678901234567890;${i % 2 === 0 ? `行${i + 1}` : '\\N'};base64:AP8=`));
+    await dialog.getByLabel(zh.resultExport.format).selectOption('json');
+    await dialog.getByLabel(zh.resultExport.encoding).selectOption('utf16le');
+    await start();
+    await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
+    const bytes = await readFile(json);
+    expect(bytes.subarray(0, 2).toString('hex')).toBe('fffe');
+    const parsed = JSON.parse(bytes.toString('utf16le').slice(1));
+    expect(parsed.results[0].rows).toEqual(Array.from({length: 4099}, (_, i) => ({id: String(9007199254740994n + BigInt(i)),
+      'id [2]': '0.12345678901234567890', note: i % 2 === 0 ? `行${i + 1}` : null, bytes: {type: 'binary', base64: 'AP8='}})));
+    await page.screenshot({path: info.outputPath('PostgreSQL完整查询导出.png')});
+    await close();
+
+    await replaceDraft("SELECT nextval('export_guard');");
+    await open(); await start();
+    await expect(dialog.locator('.error-box')).toContainText(/read.only|只读/i);
+    expect(await readFile(unchanged, 'utf8')).toBe('原文件哨兵');
+    expect((await observer.query('SELECT is_called FROM export_guard')).rows).toEqual([{is_called: false}]);
+    await close();
+
+    await replaceDraft('SELECT pg_sleep(30) AS delay;');
+    await open(); await start();
+    await expect.poll(async () => (await observer.query("SELECT count(*)::int AS count FROM pg_stat_activity WHERE usename=$1 AND state='active' AND query LIKE 'FETCH FORWARD 64 FROM dbark_query_export%'", [user])).rows[0].count).toBe(1);
+    await dialog.getByRole('button', {name: zh.common.cancel, exact: true}).click();
+    await expect(dialog.locator('.error-box')).toContainText(/取消|cancel/i);
+    expect(await readFile(unchanged, 'utf8')).toBe('原文件哨兵');
+    await close();
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(4);
+    await expect.poll(async () => (await sessions()).rows).toEqual(owner);
+    expect(await history()).toEqual(baseline);
+    expect(await grid.innerText()).toBe(original);
+    await tab().getByRole('button', {name: postgresZh.rollback, exact: true}).click();
+    await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+    expect(pageErrors).toEqual([]);
+  } finally { await observer.end(); }
+  await quitDesktop();
+});
 
 test('PostgreSQL 命名结果按实际执行语句区分并随固定结果保留', async ({}, info) => {
   test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
