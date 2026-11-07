@@ -22,6 +22,7 @@ export interface SqliteTableBrowseControl {
   check(): void;
   beginCleanup(): void;
   cleanupFailed(reason: unknown): void;
+  searchRecord?(catalogue: SqliteTableCatalogue): Promise<{ where: string; parameters: SqliteValue[] }>;
   prepareEdit?(catalogue: SqliteTableCatalogue, driver: SqliteDriverSession): Promise<SqliteEditReadPlan>;
 }
 
@@ -120,13 +121,21 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
     const matchingRows = requested.lastPage ? await countSqliteMatchingRows(driver, requested, columns, control) : undefined;
     const last = matchingRows === undefined ? undefined : sqliteLastPagePosition(matchingRows, requested.limit);
     const input = last ? { ...requested, lastPage: undefined, offset: last.offset } : requested;
+    const focused = input.searchRecordRef ? await control.searchRecord?.(catalogue) : undefined;
+    if (input.searchRecordRef && !focused) throw Error('SQLite 搜索记录缺少原行核验');
     editPlan = input.editing && control.prepareEdit ? await control.prepareEdit(catalogue, driver) : undefined;
     // 无编辑快照的只读页也必须核对原TEXT字节，不能将驱动替代字符作为真实数据交给网格。
-    const request = buildSqliteTableSelect(input, columns, undefined, false, editPlan?.project ?? sqliteExactTextProjection), extra = editPlan?.extraColumn ? 1 : 0;
+    const project = editPlan?.project ?? sqliteExactTextProjection;
+    const request = focused
+      ? { sql: 'SELECT ' + columns.map(column => project(quoteSqliteIdentifier(column.name)) + ' AS ' + quoteSqliteIdentifier(column.name)).join(', ') +
+          ' FROM main.' + quoteSqliteIdentifier(input.table) + ' AS "__dbark_source" WHERE ' + focused.where + ' LIMIT 2', parameters: focused.parameters }
+      : buildSqliteTableSelect(input, columns, undefined, false, project);
+    const extra = editPlan?.extraColumn ? 1 : 0;
     if (editPlan?.extraColumn) request.sql = 'SELECT ' + editPlan.extraColumn + ' AS "__dbark_edit_locator", ' + request.sql.slice(7);
     const values = await rows(driver, request.sql, request.parameters, input.limit + 1, control, actual => {
       if (actual.length !== columns.length + extra || actual.slice(extra).some((column, index) => column.name !== columns[index].name)) throw Error('SQLite实际结果列与本页快照目录不一致');
     });
+    if (focused && values.length !== 1) throw Error('SQLite 搜索记录已变化或移除，请重新搜索');
     if (last && values.length !== last.rows) throw Error('SQLite末页行数与同一快照内的计数不一致，请重试');
     originalRows = values.slice(0, input.limit);
     const result: QueryResult = {
@@ -134,7 +143,7 @@ export async function readSqliteTablePage(driver: SqliteDriverSession, source: S
       rows: originalRows.map(original => { const row = original.slice(extra);
         if (row.length !== columns.length) throw Error('SQLite实际结果行与本页列目录不一致');
         return Object.fromEntries(row.map((value, index) => ['c' + index, sqliteWorkspaceValue(value)])) as DataRow;
-      }), truncated: false, elapsedMs: 0, statement: request.sql,
+      }), truncated: false, elapsedMs: 0, statement: focused ? '' : request.sql,
     };
     // 每格一个协议类型码，不新增SQL；与去掉编辑定位列后的本页原值一一对应。
     const storageTypes = originalRows.map(row => row.slice(extra).map(value => value === null ? 'n' : typeof value === 'string' ? 't' : value.type === 'integer' ? 'i' : value.type === 'real' ? 'r' : 'b').join(''));

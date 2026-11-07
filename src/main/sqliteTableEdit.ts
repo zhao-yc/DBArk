@@ -26,6 +26,7 @@ function sqliteDraftParameter(value: SqliteOriginalValue): SqliteValue {
 export interface SqliteTableLocator { kind: 'rowid' | 'primary-key' | 'unique-key'; columns: string[]; collations: string[]; rowid?: string; }
 interface Snapshot {
   relation?: SqliteTableRelation;
+  searchRecord?: true;
   id: string; pageOffset: number; pageLimit: number; restoredGroup?: boolean; target: SqliteEditTarget; profile: SqliteConnectionProfile; identity: SqliteFileIdentity;
   catalogue: SqliteTableCatalogue; columns: SqliteTableDraftDocument['columns']; schemaVersion: string; locator: SqliteTableLocator;
   rows: SqliteValue[][]; locators: SqliteValue[][]; expires: number; bytes: number; active: number; revoked: boolean;
@@ -160,7 +161,7 @@ export class SqliteTableEdits {
         const rows = values.map(row => structuredClone(chosen.rowid ? row.slice(1) : row));
         const locators = values.map((row, index) => chosen.rowid ? [structuredClone(row[0])] : chosen.columns.map(name => structuredClone(rows[index][columns.findIndex(column => column.name === name)])));
         if (rows.some(row => row.length !== columns.length) || locators.some(row => row.some(value => value === null)) || chosen.rowid && locators.some(row => !row[0] || typeof row[0] !== 'object' || row[0].type !== 'integer')) return { kind: 'readonly', reason: text.readonly };
-        const data = { pageOffset: input.offset, pageLimit: input.limit, ...(input.relation ? { relation: structuredClone(input.relation) } : {}), target: { connectionId: profile.id, database: 'main' as const, table: input.table }, profile: structuredClone(profile), identity, catalogue: structuredClone(catalogue), columns, schemaVersion, locator: chosen, rows, locators };
+        const data = { pageOffset: input.offset, pageLimit: input.limit, ...(input.searchRecordRef ? { searchRecord: true as const } : {}), ...(input.relation ? { relation: structuredClone(input.relation) } : {}), target: { connectionId: profile.id, database: 'main' as const, table: input.table }, profile: structuredClone(profile), identity, catalogue: structuredClone(catalogue), columns, schemaVersion, locator: chosen, rows, locators };
         const size = Buffer.byteLength(JSON.stringify(data));
         if (this.snapshots.size >= limits.snapshots || this.bytes + size > limits.snapshotBytes) return { kind: 'readonly', reason: 'SQLite编辑快照预算已满，请关闭旧编辑来源后重新读取' };
         const snapshot: Snapshot = { ...data, id: randomUUID(), expires: Date.now() + limits.snapshotLifetimeMs, bytes: size, active: 0, revoked: false };
@@ -176,6 +177,7 @@ export class SqliteTableEdits {
     const input = sqliteTableEditPreviewSchema.parse(source), preview = this.preview(input);
     try {
       const claim = this.previews.get(preview.previewId)!, snapshot = claim.snapshot, pages = claim.sources ?? [snapshot];
+      if (snapshot.searchRecord) throw Error('SQLite 搜索命中修改只保留在本次编辑中');
       const groups = [input, ...(input.additionalPages ?? [])].map((group, index) => ({ group, snapshot: pages[index] })).sort((a, b) => a.snapshot.pageOffset - b.snapshot.pageOffset);
       const changes = groups.flatMap(({ group, snapshot: page }) => group.changes.map(change => {
         if (change.kind === 'insert') return { kind: change.kind, values: change.values };
@@ -247,6 +249,10 @@ export class SqliteTableEdits {
     const groups = [input, ...(input.additionalPages ?? [])], sources = groups.map(group => this.snapshots.get(group.snapshotId));
     if (sources.some(source => !source || source.revoked || source.active)) throw Error(text.stale);
     const pages = sources as Snapshot[];
+    if (pages.some(source => source.searchRecord) &&
+        (pages.length !== 1 || input.changes.length !== 1 || input.changes[0].kind !== 'update' || input.changes[0].row !== 0))
+      throw Error('SQLite 搜索命中只允许修改本条记录');
+
     // 目标、文件、配置、目录、定位及关联范围必须完全相同，不由Renderer提供旧行或SQL。
     const scope = (source: Snapshot) => [source.target, source.profile, source.identity, source.catalogue, source.columns, source.schemaVersion, source.locator, source.relation ?? null];
     const signature = JSON.stringify(scope(snapshot));

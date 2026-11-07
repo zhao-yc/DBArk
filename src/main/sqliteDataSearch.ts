@@ -12,7 +12,7 @@ import { dataSearchRecordLimits as recordLimits, type DataSearchRecord } from '.
 import { sqliteSearchName } from '../shared/databaseSearch';
 import { chooseSqliteTableLocator } from './sqliteTableEdit';
 import { quoteSqliteIdentifier as quote, readSqliteTableCatalogue, readSqliteTableRows as rows, sqliteExactTextProjection as exact,
-  withSqliteReadSnapshot, type SqliteTableBrowseControl } from './sqliteTableBrowse';
+  withSqliteReadSnapshot, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
 
 type Read = <T>(action: (driver: SqliteDriverSession, control: SqliteTableBrowseControl) => Promise<T>) => Promise<T>;
 const integer = (value: number) => ({ type: 'integer' as const, value: String(value) });
@@ -66,11 +66,11 @@ export function readSqliteDataSearchCatalogue(driver: SqliteDriverSession, input
   });
 }
 
-async function inspect(driver: SqliteDriverSession, rawTarget: DataSearchTarget, allowViews: boolean, control: SqliteTableBrowseControl) {
+async function inspect(driver: SqliteDriverSession, rawTarget: DataSearchTarget, allowViews: boolean, control: SqliteTableBrowseControl, originalCatalogue?: SqliteTableCatalogue) {
   const target = sqliteDataSearchTargetSchema.parse(rawTarget);
   const kind = await relationKind(driver, target.table, control);
   if (kind !== target.kind || (kind === 'view' && !allowViews)) throw Error('SQLite 搜索对象类型已变化或视图尚未确认');
-  const catalogue = await readSqliteTableCatalogue(driver, target.table, control);
+  const catalogue = originalCatalogue ?? await readSqliteTableCatalogue(driver, target.table, control);
   const fields = new Map(catalogue.columns.map(column => [column.name, column]));
   const notNull = new Map(catalogue.xinfo.map(row => [row[1], row[3]]));
   const describe = (name: string) => {
@@ -189,28 +189,45 @@ export function sqliteDataSearchSource(input: DataSearchInput, references: DataS
   } };
 }
 
+/** 同一快照内核对文件、目录和可靠键，查看与编辑入口沿用相同的原行凭据。 */
+async function resolveSearchRecord(driver: SqliteDriverSession, entry: ReturnType<DataSearchReferences['lookup']>,
+  control: SqliteTableBrowseControl, catalogue?: SqliteTableCatalogue) {
+  const { sqliteIdentity } = entry;
+  if (!sqliteIdentity) throw Error('记录定位方言与保存的连接不匹配');
+  const selected = await inspect(driver, entry.metadata.target, false, control, catalogue);
+  if (!selected.locator || 'reason' in selected.prepared || JSON.stringify(selected.prepared.identity) !== JSON.stringify(entry.identity) ||
+      JSON.stringify(selected.metadata) !== JSON.stringify(entry.metadata) || selected.names.length !== sqliteIdentity.keys.length)
+    throw Error('SQLite 原文件或表目录已变化，请重新搜索');
+  const parameters: SqliteValue[] = [];
+  const where = selected.names.map((name, index) => {
+    const column = quote(name), [kind, value] = sqliteIdentity.keys[index];
+    const key = kind === 'text' || kind === 'blob' ? { type: 'binary' as const, base64: value } : { type: kind, value };
+    parameters.push(kind, key);
+    return `(typeof(${column})=? AND ${column} COLLATE ${quote(selected.locator!.collations[index])} IS ${kind === 'text' ? 'CAST(? AS TEXT)' : '?'})`;
+  }).join(' AND ');
+  return { selected, where, parameters, expected: sqliteIdentity.stamp };
+}
+
+/** 原行摘要通过后才允许在同一事务内读取原值并签发正常表编辑快照。 */
+export async function verifySqliteSearchRecord(driver: SqliteDriverSession, entry: ReturnType<DataSearchReferences['lookup']>,
+  control: SqliteTableBrowseControl, catalogue: SqliteTableCatalogue) {
+  const { selected, where, parameters, expected } = await resolveSearchRecord(driver, entry, control, catalogue);
+  const matches = await rows(driver, 'SELECT ' + stamp(selected.columns) + ' FROM main.' +
+    quote(selected.metadata.target.table) + ' WHERE ' + where + ' LIMIT 2', parameters, 2, control);
+  if (matches.length !== 1 || matches[0][0] !== expected) throw Error('SQLite 原记录已变化或移除，请重新搜索');
+  return { where, parameters };
+}
+
 export function readSqliteDataSearchRecord(driver: SqliteDriverSession, entry: ReturnType<DataSearchReferences['lookup']>,
   control: SqliteTableBrowseControl): Promise<DataSearchRecord> {
   return withSqliteReadSnapshot(driver, control, async () => {
-    const { sqliteIdentity } = entry;
-    if (!sqliteIdentity) throw Error('记录定位方言与保存的连接不匹配');
-    const selected = await inspect(driver, entry.metadata.target, false, control);
-    if (!selected.locator || 'reason' in selected.prepared || JSON.stringify(selected.prepared.identity) !== JSON.stringify(entry.identity) ||
-        JSON.stringify(selected.metadata) !== JSON.stringify(entry.metadata) || selected.names.length !== sqliteIdentity.keys.length)
-      throw Error('SQLite 原文件或表目录已变化，请重新搜索');
+    const { selected, where, parameters, expected } = await resolveSearchRecord(driver, entry, control);
     const columns = [...selected.metadata.columns, ...selected.metadata.keyColumns.filter(key => !selected.metadata.columns.some(column => key.name === column.name))];
     const width = Math.min(recordLimits.fieldCharacters, Math.floor((recordLimits.recordBytes - 16384) / (12 * columns.length)));
     const projection = columns.map(column => `${functions.preview}(typeof(${quote(column.name)}),${raw(quote(column.name))},${width})`);
-    const parameters: SqliteValue[] = [];
-    const where = selected.names.map((name, index) => {
-      const column = quote(name), [kind, value] = sqliteIdentity.keys[index];
-      const key = kind === 'text' || kind === 'blob' ? { type: 'binary' as const, base64: value } : { type: kind, value };
-      parameters.push(kind, key);
-      return `(typeof(${column})=? AND ${column} COLLATE ${quote(selected.locator!.collations[index])} IS ${kind === 'text' ? 'CAST(? AS TEXT)' : '?'})`;
-    }).join(' AND ');
     const matches = await rows(driver, 'SELECT ' + [...projection, stamp(selected.columns)].join(',') + ' FROM main.' +
       quote(selected.metadata.target.table) + ' WHERE ' + where + ' LIMIT 2', parameters, 2, control, undefined, recordLimits.recordBytes);
-    if (matches.length !== 1 || matches[0][columns.length] !== sqliteIdentity.stamp) throw Error('SQLite 原记录已变化或移除，请重新搜索');
+    if (matches.length !== 1 || matches[0][columns.length] !== expected) throw Error('SQLite 原记录已变化或移除，请重新搜索');
     const fields = columns.map((column, index) => {
       const rawValue = matches[0][index];
       if (rawValue === null) return { ...column, binary: false, value: null, characters: null, truncated: false };

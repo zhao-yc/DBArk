@@ -250,6 +250,7 @@ function WorkspaceApp() {
   const [serverMonitor, setServerMonitor] = useState(false);
   const [structureSearch,setStructureSearch]=useState(false);
   const [dataSearch,setDataSearch]=useState(false);
+  const [dataSearchEditDirty,setDataSearchEditDirty]=useState(false);
   const [dataSearchConnection,setDataSearchConnection]=useState<string>();
   const[savedQuerySearch,setSavedQuerySearch]=useState(false),[querySearchPositions,setQuerySearchPositions]=useState<Record<string,SavedQueryNavigationSource>>({});
   // 原文摘要绑定的有界命中仅留当前窗口内存，关闭标签清理，不进入持久化工作台。
@@ -323,7 +324,7 @@ function WorkspaceApp() {
     return () => { unsubscribeTasks?.(); unsubscribeMenu?.(); };
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = settings.theme; }, [settings.theme]);
-  const hasDirty = !!importNewTable || importNewTableEdits || databaseDropEdits || copyDataEdits || tableCreateEdits || copyStructureEdits || databaseCreateEdits || dropEdits || truncateEdits || counterEdits || renameEdits || encodingEdits || databaseEncodingEdits || checksEdits || commentEdits || columnEdits || indexEdits || sqliteObjectsEdits || sqliteMaintenanceEdits || sqliteRenameEdits || sqliteRebuildEdits || sqliteColumnEdits || sqliteIndexEdits || foreignKeyEdits || Object.values(state.dirtyTabs).some(Boolean) || settings.tabs.some(tab => !!tab.fileSourceBinding && state.queryFileDirty[tab.id] !== false);
+  const hasDirty = dataSearchEditDirty || !!importNewTable || importNewTableEdits || databaseDropEdits || copyDataEdits || tableCreateEdits || copyStructureEdits || databaseCreateEdits || dropEdits || truncateEdits || counterEdits || renameEdits || encodingEdits || databaseEncodingEdits || checksEdits || commentEdits || columnEdits || indexEdits || sqliteObjectsEdits || sqliteMaintenanceEdits || sqliteRenameEdits || sqliteRebuildEdits || sqliteColumnEdits || sqliteIndexEdits || foreignKeyEdits || Object.values(state.dirtyTabs).some(Boolean) || settings.tabs.some(tab => !!tab.fileSourceBinding && state.queryFileDirty[tab.id] !== false);
   useEffect(() => { if (ready) void invoke('app.setDirty', { dirty: hasDirty }).catch(reason => useWorkspace.getState().notify(errorMessage(reason), true)); }, [hasDirty, ready]);
   useEffect(() => {
     if (!notice || notice.error) return;
@@ -1056,7 +1057,7 @@ function WorkspaceApp() {
 
     {schemaCompare && <SchemaCompareDialog connections={networkConnections} services={schemaCompareServices} onClose={() => setSchemaCompare(false)}/>}
     <ServerMonitorEntry open={serverMonitor} connections={monitorConnections} versions={state.connectionVersions} preferredConnectionId={state.selection?.connectionId ?? activeTab?.connectionId} onClose={() => setServerMonitor(false)}/>
-    {dataSearch&&<DataSearchDialog initialConnectionId={dataSearchConnection} onClose={()=>setDataSearch(false)} onStructure={()=>{setDataSearch(false);setStructureSearch(true);}} onOpen={(connectionId,target)=>{setDataSearch(false);useWorkspace.getState().openTab({kind:"table",title:target.table,connectionId,database:target.database,table:target.table});}}/>}
+    {dataSearch&&<DataSearchDialog initialConnectionId={dataSearchConnection} onEditDirty={setDataSearchEditDirty} onClose={()=>setDataSearch(false)} onStructure={()=>{setDataSearch(false);setStructureSearch(true);}} onOpen={(connectionId,target)=>{setDataSearch(false);useWorkspace.getState().openTab({kind:"table",title:target.table,connectionId,database:target.database,table:target.table});}}/>}
     {savedQuerySearch&&<SavedQuerySearchDialog insertion={savedQueryInsertion} onClose={closeSavedQuerySearch} onStructure={()=>{closeSavedQuerySearch();setStructureSearch(true);}} onOpen={(result,hit)=>{const id=uid();if(hit?.sqlOccurrences&&result.sourceBinding?.id===hit.query.id&&result.sourceBinding.digest===hit.digest)setQuerySearchPositions(previous=>({...previous,[id]:{queryId:hit.query.id,digest:hit.digest,sql:result.query.sql,connectionId:result.connectionId,connectionVersion:useWorkspace.getState().connectionVersions[result.connectionId]??0,occurrences:hit.sqlOccurrences!}}));useWorkspace.getState().openTab({id,kind:'query',title:result.query.name,connectionId:result.connectionId,database:result.database,databaseContext:result.databaseContext,sql:result.query.sql,sourceBinding:result.sourceBinding});closeSavedQuerySearch();if(result.contextChanged)useWorkspace.getState().notify(savedQuerySearchZh.replaced);}}/>}
     {databaseDropTarget && <DatabaseDropDialog target={databaseDropTarget} targetVersion={state.connectionVersions[databaseDropTarget.connectionId] ?? 0} services={databaseDropServices} onDirtyChange={setDatabaseDropEdits} beforeApply={() => {
       const workspace = useWorkspace.getState();

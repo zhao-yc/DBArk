@@ -19,7 +19,7 @@ import { DataSearchScans } from '../engine/dataSearchScans';
 import { dataSearchInputSchema } from '../shared/dataSearch';
 import { dataSearchCatalogueSchema } from '../shared/dataSearchCatalogue';
 import { dataSearchRecordReadSchema } from '../shared/dataSearchRecords';
-import { readSqliteDataSearchCatalogue, readSqliteDataSearchRecord, sqliteDataSearchSource } from './sqliteDataSearch';
+import { readSqliteDataSearchCatalogue, readSqliteDataSearchRecord, sqliteDataSearchSource, verifySqliteSearchRecord } from './sqliteDataSearch';
 import { readSqliteStructureSearchPage } from './sqliteStructureSearch';
 import { objectDefinitionInputSchema, objectDefinitionLimits, objectDefinitionTaskPrefix, type ObjectDefinitionOutput } from '../shared/objectDefinition';
 import { sqliteCompletionInputSchema, sqliteCompletionLimits, sqliteCompletionTaskPrefix, type SqliteCompletionOutput } from '../shared/sqliteCompletion';
@@ -512,6 +512,7 @@ export class SqliteRuntime {
     const input = sqliteTablePageSchema.parse(source), profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id);
     this.assertTarget(connection, profile);
     if (this.tasks.has(input.taskId)) return Promise.reject(Error('SQLite任务编号已经使用'));
+    if (input.searchRecordRef && profile.sqlite.readOnly) throw Error('SQLite 文件连接为只读，不能编辑搜索命中');
     const task: BrowseTask = { kind: 'browse', connection, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
     const work = this.track(connection, () => this.browse(task, input, profile)); task.active = work;
     const retire = () => { task.active = undefined; this.retireBrowse(input.taskId, task); };
@@ -586,15 +587,24 @@ export class SqliteRuntime {
   private browse(task: BrowseTask, input: DraftRestoreInput, profile: SqliteConnectionProfile): Promise<SqliteDraftRestored>;
   private async browse(task: BrowseTask, input: SqliteTablePageInput | SqliteValueOptionsInput | SqliteRelationshipsInput | SqliteStatisticsInput | SqliteRowCountInput | SqliteReferenceInput | SqliteIncomingInput | DraftRestoreInput, profile: SqliteConnectionProfile): Promise<SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored> {
     let value: SqliteTablePage | SqliteValueOptionsOutput | SqliteRelationshipsOutput | SqliteStatisticsOutput | SqliteRowCountOutput | SqliteReferenceOutput | SqliteIncomingOutput | SqliteDraftRestored | undefined, failed = false, failure: unknown;
+    const searchPage = 'searchRecordRef' in input ? input : undefined;
+    const recordRef = searchPage?.searchRecordRef;
+    const recordInput = recordRef ? { connectionId: input.connectionId, taskId: input.taskId, recordRef } : undefined;
+    let searchEntry: ReturnType<DataSearchReferences['lookup']> | undefined;
     const aggregate = task.purpose === 'statistics' ? ('column' in input ? 'SQLite字段概况' : 'SQLite匹配行数') : undefined;
     try {
       this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: 'draft' in input ? '正在只读核验SQLite草稿完整原行' : 'incoming' in input ? input.incoming === 'catalog' ? '正在读取SQLite反向外键目录' : '正在读取SQLite关联子记录' : 'reference' in input ? input.reference === 'catalog' ? '正在读取SQLite外键目录' : '正在读取SQLite父记录' : aggregate ? '正在读取' + aggregate : 'tables' in input ? '正在读取SQLite表关系快照' : 'column' in input ? '正在读取SQLite不同值快照' : '正在读取SQLite只读分页快照' });
       this.browseCheck(task);
+      if (recordInput) {
+        searchEntry = this.dataSearchReferences.lookup(recordInput);
+        if (!searchEntry.sqliteIdentity || searchEntry.metadata.target.table !== searchPage?.table)
+          throw Error('SQLite 搜索记录不属于当前表');
+      }
       task.driver = await this.driver(task.connection, profile, true, resource => {
         task.resource = resource;
         // 原Promise先拒绝而exit迟到时，直到真实exit才可解除任务对utility对象的重引用。
         void resource.transport.exited.then(() => this.retireBrowse(input.taskId, task), () => {});
-      });
+      }, false, undefined, !!searchEntry);
       this.browseCheck(task);
       const control = { check: () => this.browseCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: (reason: unknown) => { task.cleanupFailure = reason; } };
       if ('draft' in input) value = await this.edits.restoreDraft(task.driver, input.draft, profile, control);
@@ -603,7 +613,10 @@ export class SqliteRuntime {
       else if ('tables' in input) value = await readSqliteRelationships(task.driver, input, control);
       else if ('search' in input) value = await readSqliteValueOptions(task.driver, input, control);
       else if ('column' in input) value = await readSqliteStatistics(task.driver, input, control);
-      else if ('limit' in input) value = await readSqliteTablePage(task.driver, input, { ...control, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }) });
+      else if ('limit' in input) value = await readSqliteTablePage(task.driver, input, {
+        ...control, prepareEdit: (catalogue, driver) => this.edits.preparePage(driver, input, profile, catalogue, { ...control, beginCleanup: () => {} }),
+        ...(searchEntry ? { searchRecord: catalogue => verifySqliteSearchRecord(task.driver!, searchEntry!, control, catalogue) } : {}),
+      });
       else value = await readSqliteRowCount(task.driver, input, control);
     } catch (reason) {
       failed = true; failure = reason;
@@ -617,7 +630,10 @@ export class SqliteRuntime {
         failure = failed ? new AggregateError([failure, reason], 'SQLite表浏览失败且原driver关闭未确认', { cause: failure }) : reason; failed = true;
       }
     }
-    if (!failed) try { this.browseCheck(task); } catch (reason) { failed = true; failure = reason; }
+    if (!failed) try {
+      this.browseCheck(task);
+      if (recordInput && this.dataSearchReferences.lookup(recordInput) !== searchEntry) throw Error('SQLite 原搜索引用已释放');
+    } catch (reason) { failed = true; failure = reason; }
     if (task.resource && task.connection.resources.has(task.resource)) {
       const reason = Error('SQLite表浏览准确进程退出尚未确认，保留原句柄', { cause: failure });
       this.block(task.connection, reason); task.cleanupFailure = reason;

@@ -14,6 +14,7 @@ export function buildSqliteRelationPredicate(relation: NonNullable<SqliteTablePa
 /** 绑定分页与字面查询共用同一构造器；由render决定占位/字面，不在SQL文本中猜问号。 */
 function build(source: SqliteTablePageInput, columns: readonly SqliteTableColumn[], selected: readonly string[] | undefined, complete: boolean, render: (parameter: SqliteReadParameter) => string, project?: (qualifiedColumn: string) => string, explicitLimit?: number): string {
   const input = sqliteTablePageSchema.parse(source), names = new Set(columns.map(column => column.name));
+  if (input.searchRecordRef) throw Error('SQLite 搜索命中不能转换为普通表筛选');
   if (!columns.length || columns.length > limits.columns || names.size !== columns.length) throw Error('SQLite表没有可浏览列或列目录超过预算');
   const alias = project || input.relation ? '"__dbark_source"' : undefined;
   const field = (name: string) => { if (!names.has(name)) throw Error('SQLite筛选或排序列已不存在，请刷新表结构'); return (alias ? alias + '.' : '') + quoteSqliteIdentifier(name); };
