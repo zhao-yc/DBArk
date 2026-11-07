@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。PostgreSQL 查询结果支持按实际执行语句的 `NAME:` 注释命名，单组、多组及固定结果均可辨认名称。R01 仍为部分覆盖。[PostgreSQL 命名结果](development/postgres-result-names-20261107.md)
+
 2026-11-07 源码增量。PostgreSQL 查询页支持结果在下方、右侧和仅显示结果，分隔条支持拖动及键盘，位置与尺寸按标签保存；窄窗临时回退，原草稿与结果保持。W02、R01 仍为部分覆盖。[PostgreSQL 查询布局](development/postgres-query-layout-20261107.md)
 
 2026-11-07 源码增量。PostgreSQL 查询编辑器可按名称前缀插入用户片段及方言内置模板，采用执行扫描器和原会话字符串模式缓存，保留普通文本及单次撤销。Q06、R01 仍为部分覆盖。[PostgreSQL 片段名称补全](development/postgres-snippet-completion-20261107.md)

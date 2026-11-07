@@ -5,6 +5,7 @@ import type * as monaco from 'monaco-editor';
 import type { ColumnWidths } from 'react-data-grid';
 import { format } from 'sql-formatter';
 import type { QueryOutcome, QueryResult, ResultColumn } from '../../shared/contracts';
+import { queryResultTitle } from '../../shared/queryResultTitle';
 import { postgresTableLimits } from '../../shared/postgresTable';
 import type { QueryParameterNames, QueryParameter } from '../../shared/queryParameters';
 import type { SavedQueryNavigationSource } from '../../shared/savedQuerySearch';
@@ -751,6 +752,9 @@ export function PostgresQueryTab({
     controlsLocked = busy || fileBusy || snapshotBusy || !!save || !!parameterOwner || !!analyze || !!closeRequest || !!exportView || !!pinSql,
     operationLocked = controlsLocked || !!sortDraft || !!filterDraft || !!columnDraft || !!statisticsDraft || !!presetDraft || !!comparisonDraft,
     locked = operationLocked || !!snippets;
+  // 名称属于服务器已返回的语句，编辑草稿时仍显示原结果的名称。
+  const resultNames = useMemo(() => outcome?.results.map(result => result.columns.length
+    ? queryResultTitle(result.statement, 'postgresql') : undefined) ?? [], [outcome]);
   const insertionLocked = useRef(locked);
   const snippetInsertionLocked = useRef(operationLocked);
   const fileOperation = useRef(files.isBusy);
@@ -908,7 +912,9 @@ export function PostgresQueryTab({
     if (pin || !resultSource || !pinNavigationCurrent() || !resultCurrent()) return;
     try {
       const sequence = pinState.sequence + 1;
-      const next = snapshotQueryResult(pinState.items, resultSource, uid(), formatText(zh.query.pinLabel, sequence));
+      const base = formatText(zh.query.pinLabel, sequence), name = resultNames[selected];
+      const label = name ? formatText(zh.query.namedResultLabel, base, name) : base;
+      const next = snapshotQueryResult(pinState.items, resultSource, uid(), label);
       resetResultView();
       publishPinState({ items: [...pinState.items, next], selected: next.id, sequence });
       setError('');
@@ -1614,9 +1620,10 @@ export function PostgresQueryTab({
                   resetResultView();
                   setSelected(Number(event.target.value));
                 }}>
-                {results.map((r, i) => <option key={i} value={i}>{text.result(i, r.postgresCommand ?? '', r.rows.length)}</option>)}
+                {results.map((r, i) => <option key={i} value={i}>{text.result(i, r.postgresCommand ?? '', r.rows.length, resultNames[i])}</option>)}
               </select>}
               {dataResult && <>
+                {!pin && results.length === 1 && resultNames[selected] && <strong className="postgres-result-name">{resultNames[selected]}</strong>}
                 {pin ? <button disabled={locked || !pin.result.statement.trim()} onClick={openPinnedSql}>{zh.query.pinnedStatement}</button> :
                   <button disabled={locked || !binding} title={zh.query.pinHint} onClick={pinResult}>{zh.query.pinResult}</button>}
                 <button disabled={locked || !binding} onClick={openResultColumns}>{columnText.open}</button>

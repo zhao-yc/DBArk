@@ -31,7 +31,8 @@ export const postgresZh = {
   retainedSave: '查询已保存到本地查询目录，但原页已变化，请重新核对；原输入没有被覆盖。',
   closeFailed: 'PostgreSQL原会话关闭未确认，请保留现场并显式断开原连接：',
   empty: '执行SQL后在此显示结果',
-  result: (index: number, command: string, rows: number) => `${index + 1} · ${command} · ${rows} 行`,
+  result: (index: number, command: string, rows: number, name?: string) =>
+    `${index + 1} · ${name ? `${name} · ` : ''}${command} · ${rows} 行`,
   complete: (command: string, rows?: number) =>
     `服务器回执：${command}${rows === undefined ? '' : ` · 影响 ${rows} 行`}`,
   truncated: '显示结果达到行数或16MiB预算，未显示部分已截断；SQL仍按原意执行。',

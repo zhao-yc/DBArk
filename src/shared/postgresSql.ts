@@ -28,7 +28,7 @@ function quotedEnd(source: string, opening: number, backslash: boolean): number 
 }
 
 /** PostgreSQL的块注释可嵌套，内部引号和分号均属于注释。 */
-function blockCommentEnd(source: string, opening: number): number {
+export function postgresBlockCommentEnd(source: string, opening: number): number {
   let depth = 1, index = opening + 2;
   while (index < source.length && depth) {
     const pair = source.slice(index, index + 2);
@@ -50,7 +50,7 @@ export function postgresSqlContentStart(source: string): number {
       while (index < source.length && source[index] !== '\r' && source[index] !== '\n') index++;
       continue;
     }
-    if (source.startsWith('/*', index)) { index = blockCommentEnd(source, index); continue; }
+    if (source.startsWith('/*', index)) { index = postgresBlockCommentEnd(source, index); continue; }
     break;
   }
   return index;
@@ -93,7 +93,7 @@ function scanPostgresSql(source: string, standardStrings: boolean, firstOnly: bo
       while (index < source.length && source[index] !== '\r' && source[index] !== '\n') index++;
       continue;
     }
-    if (c === '/' && next === '*') { index = blockCommentEnd(source, index); continue; }
+    if (c === '/' && next === '*') { index = postgresBlockCommentEnd(source, index); continue; }
     if (c === ';') {
       finish(index++);
       if (firstOnly && statements.length) return statements;
@@ -166,7 +166,7 @@ export function skipPostgresTrivia(source: string, from = 0): number {
   let i = from;
   while (i < source.length) {
     if (whitespace.test(source[i])) { i++; continue; }
-    if (source.startsWith('/*', i)) { i = blockCommentEnd(source, i); continue; }
+    if (source.startsWith('/*', i)) { i = postgresBlockCommentEnd(source, i); continue; }
     if (source.startsWith('--', i)) {
       i += 2;
       while (i < source.length && source[i] !== '\r' && source[i] !== '\n') i++;
@@ -297,7 +297,7 @@ export function scanPostgresEditorTokens(source: string, budget: number): Postgr
       result.push({ kind: 'blocked', start, end: i, text: 'comment', open: true });
     } else if (c === '/' && next === '*') {
       let open = false;
-      try { i = blockCommentEnd(source, i); } catch { i = source.length; open = true; }
+      try { i = postgresBlockCommentEnd(source, i); } catch { i = source.length; open = true; }
       result.push({ kind: 'blocked', start, end: i, text: 'comment', open });
     } else if (c === '"' || c === "'") {
       let open = false;
@@ -340,7 +340,7 @@ export function assertPostgresCheckExpression(source: string): void {
       while (i < source.length && source[i] !== '\r' && source[i] !== '\n') i++;
       continue;
     }
-    if (c === '/' && next === '*') { i = blockCommentEnd(source, i); continue; }
+    if (c === '/' && next === '*') { i = postgresBlockCommentEnd(source, i); continue; }
     meaningful = true;
     if (c === '"' || c === "'") {
       const escape = c === "'" && /[eE]/.test(source[i - 1] ?? '') && !identifierPart.test(source[i - 2] ?? '');

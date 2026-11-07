@@ -75,6 +75,60 @@ async function replaceDraft(sql: string) {
   await expect.poll(async () => (await inspectModel()).sql).toBe(sql);
 }
 
+test('PostgreSQL 命名结果按实际执行语句区分并随固定结果保留', async ({}, info) => {
+  test.skip(process.env.DBARK_POSTGRES_QUERY_MENU_NATIVE !== '1', '需要本轮隔离 PostgreSQL');
+  const user = process.env.DBARK_PGSEARCH_USER ?? '', password = process.env.DBARK_PGSEARCH_PASSWORD ?? '';
+  const port = Number(process.env.DBARK_PGSEARCH_PORT);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '1' || !/^tabrelio_pgsearch_[a-f0-9]{12}$/.test(user) ||
+      !/^[a-f0-9]{64}$/.test(password) || !Number.isInteger(port) || port <= 1024 || port > 65535) throw Error('仅允许本轮隔离的回环 PostgreSQL');
+  const sql = [
+    '/*NAME: 不显示的事务回执 */ BEGIN;',
+    '/* 前导 /*NAME: 忽略内层 */ 注释 */',
+    '--NAME: 月度汇总😀',
+    'SELECT 9007199254740993 AS id;',
+    '/*NAME: 月度汇总😀 */ SELECT 9007199254740994 AS id;',
+    'SELECT $$/*NAME: 字符串内容 */;$$ AS note;',
+  ].join('\n');
+  await prepare({id: '', name: '隔离 PostgreSQL 命名结果', dialect: 'postgresql', group: '', color: '#123456',
+    host: '127.0.0.1', port, user, database: user, password, rememberPassword: false}, sql);
+  const execute = tab().getByRole('button', {name: postgresZh.execute, exact: true});
+  const picker = tab().getByRole('combobox', {name: 'PostgreSQL结果集', exact: true});
+  const grid = tab().locator('.postgres-results .rdg');
+  const history = () => page.evaluate(() => window.dbark.invoke('history.list', {}));
+  await execute.click();
+  await expect(picker.getByRole('option')).toHaveText([
+    '1 · BEGIN · 0 行', '2 · 月度汇总😀 · SELECT · 1 行', '3 · 月度汇总😀 · SELECT · 1 行', '4 · SELECT · 1 行',
+  ]);
+  await picker.selectOption('1');
+  await expect(grid).toContainText('9007199254740993');
+  await picker.selectOption('2');
+  await expect(grid).toContainText('9007199254740994');
+  await expect(grid).not.toContainText('9007199254740993');
+  await page.screenshot({path: info.outputPath('PostgreSQL命名结果.png')});
+  const baseline = await history();
+  const next = '/*NAME: 本次单组😀 */ SELECT 7 AS latest;';
+  await replaceDraft(next);
+  await expect(picker.locator('option:checked')).toHaveText('3 · 月度汇总😀 · SELECT · 1 行');
+  await tab().getByRole('button', {name: zh.query.pinResult, exact: true}).click();
+  const pinned = tab().getByRole('button', {name: '固定 1 · 月度汇总😀', exact: true});
+  await expect(pinned).toHaveAttribute('aria-pressed', 'true');
+  expect(await history()).toEqual(baseline);
+
+  await modelSelection(1, next.indexOf('SELECT') + 1);
+  await tab().getByRole('button', {name: postgresZh.current, exact: true}).click();
+  await expect(tab().locator('.postgres-result-name')).toHaveText('本次单组😀');
+  await expect(grid).toContainText('latest');
+  await pinned.click();
+  await expect(grid).toContainText('9007199254740994');
+  await expect(pinned).toHaveAttribute('aria-pressed', 'true');
+  const rollback = tab().getByRole('button', {name: postgresZh.rollback, exact: true});
+  await rollback.click();
+  await expect(tab().locator('.tab-status')).toContainText(postgresZh.idle);
+  await expect(rollback).toBeDisabled();
+  expect(pageErrors).toEqual([]);
+  await quitDesktop();
+});
+
 async function resizeQueryWindow(width: number, height: number) {
   await desktop.evaluate(({BrowserWindow}, size) => {
     const window = BrowserWindow.getAllWindows()[0];

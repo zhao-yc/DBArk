@@ -352,7 +352,7 @@ export class SqliteWorkerCore {
         const remaining = sql.slice(offset), statement = SqliteRawStatement.prepare(this.nativeInvoke!, remaining), prefix = statement.sourceSQL;
         try {
           if (typeof prefix !== 'string' || !prefix.length || !remaining.startsWith(prefix)) throw invalid();
-          const title = stream ? undefined : queryResultTitle(sql.slice(heading, Math.min(offset + prefix.length, heading + queryResultTitlePrefixLimit + 1)), true);
+          const title = stream ? undefined : queryResultTitle(sql.slice(heading, Math.min(offset + prefix.length, heading + queryResultTitlePrefixLimit + 1)), 'sqlite');
           heading = offset + prefix.length;
           offset = skipTrivia(sql, heading, afterDelimiter);
           if (parameters && offset !== sql.length) throw new DriverFailure('SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT', '带参数的SQLite执行只能包含一条完整语句，尚未执行任何语句');

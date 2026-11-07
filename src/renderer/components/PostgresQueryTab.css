@@ -32,6 +32,10 @@
 .postgres-result-actions > select {
   max-width: 100%;
 }
+.postgres-result-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .postgres-layout-actions > select {
   width: auto;
 }
