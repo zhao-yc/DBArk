@@ -1,3 +1,6 @@
+import { txtExportZh } from '../../src/shared/txtExport';
+import { txtImportZh } from '../../src/shared/txtImport';
+import { parse as parseTxt } from 'csv-parse/sync';
 import { test as base, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -38,6 +41,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
   const insertFile = join(directory, 'query-result.sql');
   const html = join(directory, 'full-query.html'), selectedHtml = join(directory, 'query-result.html');
   const xml = join(directory, 'full-query.xml'), selectedXml = join(directory, 'query-result.xml');
+  const txt = join(directory, 'full-query.txt'), selectedTxt = join(directory, 'query-result.txt');
   const resultSql = "SELECT 9223372036854775807 AS mixed, -0.0 AS signed, X'00ff' AS bytes, '中🚢'||char(0)||'尾' AS note " +
     "UNION ALL SELECT '9223372036854775807', 1.0, NULL, ''";
   const connectionName = 'SQLite查询导出本例';
@@ -79,7 +83,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
         return {canceled: false, filePaths: [input.database]};
       }) as typeof dialog.showOpenDialog;
       dialog.showSaveDialog = (async () => {
-        const paths = [input.target, input.xlsx, input.fullInsertFile, input.html, input.xml, input.insertFile, input.selectedHtml, input.selectedXml];
+        const paths = [input.target, input.xlsx, input.fullInsertFile, input.html, input.xml, input.txt, input.insertFile, input.selectedHtml, input.selectedXml, input.selectedTxt];
         if (chooser !== 'export' || ++facts.saveCalls > paths.length) throw Error('本例不允许其它保存对话框');
         return {canceled: false, filePath: paths[facts.saveCalls - 1]};
       }) as typeof dialog.showSaveDialog;
@@ -89,7 +93,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
         if (command === 'query.execute') {
           if (value.sql !== input.resultSql || ++facts.executions !== 1) throw Error('本例只允许一次准确的合成查询');
         } else if (['files.previewResultSql', 'files.exportResult', 'files.releaseResultSql'].includes(command)) {
-          if (command === 'files.exportResult' && !['sql', 'html', 'xml'].includes(String(value.format))) throw Error('本例只允许 INSERT SQL、HTML 或 XML 快照文件');
+          if (command === 'files.exportResult' && !['sql', 'html', 'xml', 'txt'].includes(String(value.format))) throw Error('本例只允许 INSERT SQL、HTML、XML 或 TXT 快照文件');
           facts.resultExports.push({command, value: structuredClone(value)});
         } else if (/^(?:query\.(?:execute|transaction)|sqlite\.(?!queryExport)|files\.(?!choose$))/.test(command)) {
           facts.denied.push(command); throw Error('本例禁止执行其它 SQL 或文件动作');
@@ -109,7 +113,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       Object.assign(globalThis, {sqliteQueryExportProof: {facts, restore() {
         handlers.set('dbark:request', original); dialog.showOpenDialog = open; dialog.showSaveDialog = save;
       }}});
-    }, {database, target, xlsx, sql, fullInsertFile, insertFile, resultSql, html, selectedHtml, xml, selectedXml});
+    }, {database, target, xlsx, sql, fullInsertFile, insertFile, resultSql, html, selectedHtml, xml, selectedXml, txt, selectedTxt});
 
     stage = '保存连接及从树打开查询';
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), {name: zh.common.newConnection, exact: true}, check)).click();
@@ -263,12 +267,34 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       return {rows: records.length, last: [...records[records.length - 1].children].map(cell => cell.textContent)};
     }, readFileSync(xml, 'utf8'));
     expect(fullXml).toEqual({rows: 1205, last: ['1205', '9223372036854775807', "中文';🚢", 'AP8=']});
+    stage = '保存并应用 TXT 方案后回读完整查询';
+    await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption('txt');
+    await modal.getByLabel(zh.resultExport.encoding, {exact: true}).selectOption('utf8');
+    await modal.getByLabel(txtImportZh.delimiter, {exact: true}).selectOption('|');
+    await modal.getByLabel(txtImportZh.record, {exact: true}).selectOption('lf');
+    await modal.getByText(profileText.title, {exact: true}).click();
+    await modal.getByLabel(profileText.name, {exact: true}).fill('TXT 交付');
+    await modal.getByRole('button', {name: profileText.add, exact: true}).click();
+    await expect(modal.getByText(profileText.saved, {exact: true})).toBeVisible();
+    await modal.getByLabel(zh.resultExport.format, {exact: true}).selectOption('json');
+    await modal.getByRole('button', {name: profileText.apply, exact: true}).click();
+    await expect(modal.getByLabel(txtImportZh.delimiter, {exact: true})).toHaveValue('|');
+    await expect(modal.getByLabel(txtImportZh.record, {exact: true})).toHaveValue('lf');
+    await modal.getByText(profileText.title, {exact: true}).click();
+    await modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true}).click();
+    await modal.getByRole('button', {name: text.start, exact: true}).click();
+    await expect(modal.getByRole('status')).toHaveText(text.done(1205));
+    const txtRows = parseTxt(readFileSync(txt), {delimiter: '|', record_delimiter: '\n'}) as string[][];
+    expect(txtRows.shift()).toEqual(['position', 'exact', 'marker', 'payload']);
+    expect(txtRows).toHaveLength(1205);
+    expect(txtRows.at(-1)).toEqual(['1205', '9223372036854775807', "中文';🚢", 'base64:AP8=']);
+    await info.attach('SQLite TXT 完整查询成品', {body: readFileSync(txt), contentType: 'text/plain'});
     expect(digest()).toBe(before);
     expect(readdirSync(directory).filter(name => name.endsWith('.partial'))).toEqual([]);
     const facts = await application.evaluate(() =>
       (globalThis as typeof globalThis & {sqliteQueryExportProof: {facts: unknown}}).sqliteQueryExportProof.facts);
     expect(facts).toMatchObject({
-      denied: [], openCalls: 1, saveCalls: 5, requests: [
+      denied: [], openCalls: 1, saveCalls: 6, requests: [
         {command: 'sqlite.queryExportParameterNames', value: {sql}},
         {command: 'sqlite.queryExport', value: {sql, format: 'json', encoding: 'utf16le', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
         {command: 'sqlite.queryExportParameterNames', value: {sql}},
@@ -276,7 +302,8 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
         {command: 'sqlite.queryExport', value: {sql, format: 'sql', encoding: 'utf8', insertTarget: {database: 'main', table: 'exported', columns: ['pos', 'exact_value', 'marker_value', 'bytes']}, parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
         {command: 'sqlite.queryExport', value: {sql, format: 'html', encoding: 'utf8', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
         {command: 'sqlite.queryExport', value: {sql, format: 'xml', encoding: 'utf8', parameters: [{name: 'marker', type: 'text', value: "中文';🚢"}]}},
-      ], replies: Array.from({length: 5}, () => ({ok: true, result: {rows: 1205, fileCommitted: true}})),
+        {command: 'sqlite.queryExport', value: {sql, format: 'txt', encoding: 'utf8', txtOptions: {delimiter: '|', recordDelimiter: 'lf', hasHeader: true, quote: 'double'}}},
+      ], replies: Array.from({length: 6}, () => ({ok: true, result: {rows: 1205, fileCommitted: true}})),
     });
     const observed = await page.evaluate(async () => ({
       history: await window.dbark.invoke('history.list', {}),
@@ -375,17 +402,37 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
     }, readFileSync(selectedXml, 'utf8'));
     expect(selectedXmlCells[3]).toEqual([Buffer.from('中🚢\0尾', 'utf16le').toString('base64'), 'text', 'utf16le-base64']);
     expect(selectedXmlCells.slice(6)).toEqual([['', 'null', null], ['', 'text', null]]);
+    stage = '勾选 TXT 快照保留 NUL、负零与空值';
+    await insert.getByRole('button', {name: zh.common.done, exact: true}).click();
+    for (const row of await dataRows.all()) await row.getByRole('checkbox').check();
+    await (await navigationMenuItem(query, {name: zh.resultExport.selectedTitle, exact: true}, check)).click();
+    await insert.getByLabel(zh.resultExport.format, {exact: true}).selectOption('txt');
+    await expect(insert.getByRole('columnheader', {name: txtExportZh.outputHeader, exact: true})).toBeVisible();
+    const titles = insert.getByRole('checkbox', {name: txtExportZh.hasHeader, exact: true});
+    await titles.uncheck();
+    await expect(insert.getByRole('columnheader', {name: txtExportZh.outputPosition, exact: true})).toBeVisible();
+    await expect(insert.getByRole('cell', {name: '第1列', exact: true})).toBeVisible();
+    await titles.check();
+    await insert.getByRole('button', {name: zh.resultExport.chooseFile, exact: false}).click();
+    await insert.getByRole('button', {name: zh.resultExport.start, exact: false}).click();
+    await expect(insert.locator('.success-box')).toBeVisible();
+    expect(parseTxt(readFileSync(selectedTxt), {delimiter: '\t'})).toEqual([
+      ['mixed', 'signed', 'bytes', 'note'], ['9223372036854775807', '-0', 'base64:AP8=', '中🚢\0尾'],
+      ['9223372036854775807', '1', '\\N', ''],
+    ]);
+    await insert.screenshot({path: info.outputPath('SQLite TXT 快照.png')});
     expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeResultExport);
     const resultProof = await application.evaluate(() => {
       const state = (globalThis as typeof globalThis & {sqliteQueryExportProof: {facts: unknown; restore(): void}}).sqliteQueryExportProof;
       state.restore(); return state.facts;
     });
-    expect(resultProof).toMatchObject({executions: 1, denied: [], saveCalls: 8, resultExports: [
+    expect(resultProof).toMatchObject({executions: 1, denied: [], saveCalls: 10, resultExports: [
       {command: 'files.previewResultSql', value: {sqliteStorage: {version: 1, rows: ['irbt', 'trnt']}}},
       {command: 'files.exportResult', value: {sql: {sqliteStorage: {version: 1, rows: ['irbt', 'trnt']}}}},
       {command: 'files.releaseResultSql'},
       {command: 'files.exportResult', value: {format: 'html', encoding: 'utf8'}},
       {command: 'files.exportResult', value: {format: 'xml', encoding: 'utf8'}},
+      {command: 'files.exportResult', value: {format: 'txt', encoding: 'utf8'}},
     ]});
     stage = '确认原 Electron 进程正常退出';
     await insert.getByRole('button', {name: zh.common.done, exact: true}).click();

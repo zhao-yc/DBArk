@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const txtRecordDelimiters = { lf: '\n', crlf: '\r\n', cr: '\r' } as const;
+export const txtFieldDelimiter = z.string().min(1).max(16).refine(value => [...value].length <= 8 && !/[\u0000\r\n\ud800-\udfff]/u.test(value));
+export const txtTextQualifier = z.enum(['double', 'single', 'none']);
 const recordDelimiter = z.enum(['auto', 'lf', 'crlf', 'cr']);
 const base = { recordDelimiter, hasHeader: z.boolean() };
 
@@ -9,8 +12,7 @@ export function txtFixedWidths(value: string): number[] {
 
 export const txtImportOptionsSchema = z.discriminatedUnion('mode', [
   z.object({ ...base, mode: z.literal('delimited'),
-    delimiter: z.string().min(1).max(16).refine(value => [...value].length <= 8 && !/[\u0000\r\n\ud800-\udfff]/u.test(value)),
-    quote: z.enum(['double', 'single', 'none']),
+    delimiter: txtFieldDelimiter, quote: txtTextQualifier,
   }).strict(),
   z.object({ ...base, mode: z.literal('fixed'), trimPadding: z.boolean(),
     widths: z.string().max(8192).regex(/^ *[1-9]\d{0,4}(?: *, *[1-9]\d{0,4})* *$/).refine(value => {
@@ -18,9 +20,16 @@ export const txtImportOptionsSchema = z.discriminatedUnion('mode', [
       return widths.length <= 1000 && widths.reduce((sum, width) => sum + width, 0) <= 65536;
     }),
   }).strict(),
-]).refine(value => value.mode !== 'delimited' || value.quote === 'none' ||
-  !value.delimiter.includes(value.quote === 'double' ? '"' : "'"));
+]).refine(value => value.mode !== 'delimited' || compatibleTxtQualifier(value));
 export type TxtImportOptions = z.infer<typeof txtImportOptionsSchema>;
+
+export function txtQualifier(quote: z.infer<typeof txtTextQualifier>): string {
+  return quote === 'single' ? "'" : quote === 'double' ? '"' : '';
+}
+
+export function compatibleTxtQualifier({ delimiter, quote }: { delimiter: string; quote: z.infer<typeof txtTextQualifier> }): boolean {
+  return quote === 'none' || !delimiter.includes(txtQualifier(quote));
+}
 
 export const txtImportDefaults: TxtImportOptions = { mode: 'delimited', delimiter: '\t', quote: 'double', recordDelimiter: 'auto', hasHeader: false };
 export const txtImportZh = {

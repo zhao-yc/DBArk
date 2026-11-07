@@ -1,4 +1,5 @@
 import { queryHtmlZh } from './queryHtml.zh-CN';
+import { txtExportZh } from './txtExport';
 
 export const dataXmlZh = {
   format: 'XML 文档',
@@ -13,7 +14,8 @@ export const dataXmlZh = {
 export const xmlRecordLayouts = ['xml-elements', 'xml-attributes'] as const;
 export type XmlRecordLayout = typeof xmlRecordLayouts[number];
 export const dataMarkupFormats = ['html', 'xml', ...xmlRecordLayouts] as const;
-export type DataMarkupFormat = typeof dataMarkupFormats[number];
+export const dataFileFormats = ['txt', ...dataMarkupFormats] as const;
+export type DataFileFormat = typeof dataFileFormats[number];
 
 const recordXmlHint = '列名须唯一且符合 XML 命名规则。NULL 省略，空文本保留，二进制使用 Base64。';
 const recordXmlStreamHint = '仅写入指定行结果集。语句回执仍显示在工作台。';
@@ -42,4 +44,8 @@ export function dataMarkupText(format: string) {
     streamHint: recordXmlStreamHint,
   };
   return undefined;
+}
+
+export function dataFileText(format: string) {
+  return format === 'txt' ? txtExportZh : dataMarkupText(format);
 }

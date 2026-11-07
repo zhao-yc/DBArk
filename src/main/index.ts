@@ -114,7 +114,7 @@ import { readQueryFileSnapshot } from './queryFileSourceFiles';
 import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
 import { taskCancelSnapshot } from './taskCancelState';
-import { dataExportExtension, dataMarkupText } from '../shared/dataMarkupExport';
+import { dataExportExtension, dataFileText } from '../shared/dataMarkupExport';
 import type { QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
@@ -2521,7 +2521,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       // 已返回结果的 Excel 和标记格式只消费本窗口选择的具体格式令牌。
       const checkFormat = command === 'files.preflight' || command === 'files.inspectImport' || input.expectedSource ||
         (command === 'files.preview' || command === 'files.import') && ['xml', 'txt'].includes(input.format) ||
-        command === 'files.exportResult' && (input.format === 'xlsx' || !!dataMarkupText(input.format));
+        command === 'files.exportResult' && (input.format === 'xlsx' || !!dataFileText(input.format));
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, checkFormat ? input.format : undefined) }; break;
     }
   }

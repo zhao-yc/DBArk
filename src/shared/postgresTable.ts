@@ -1,3 +1,4 @@
+import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { txtImportOptionsSchema } from './txtImport';
 import { recordImportFormats, xmlImportOptionsSchema } from './xmlImport';
 import { importFileSourceSchema } from './importNewTable';
@@ -10,7 +11,7 @@ import { strictTableLayoutPreferences } from './tablePreferences';
 import { postgresRelatedTabPrefix } from './postgresRelatedTab';
 import { postgresHistogramBins } from './postgresTableHistogram';
 import { postgresIdentifier, postgresRelationName } from './postgresSql';
-import { dataMarkupFormats, dataMarkupText, dataExportExtension } from './dataMarkupExport';
+import { dataFileFormats, dataMarkupText, dataExportExtension } from './dataMarkupExport';
 
 export const postgresTableLimits = { page: 200, offset: 1_000_000, changes: 100, draftPages: 16, fields: 200, value: 64 * 1024, draft: 1024 * 1024 } as const;
 const identity = z.string().min(1).max(200).refine(value => !value.includes('\0'));
@@ -210,7 +211,7 @@ export interface PostgresRelatedTablePage {
   search: string;
   editToken?: string;
 }
-const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', ...dataMarkupFormats]);
+const exportFormat = z.enum(['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', ...dataFileFormats]);
 export const postgresBackupTableLimit = 64;
 export const postgresBackupSetTitle = 'PostgreSQL 多表备份';
 const backupSource = z.object({ connectionId: identity, database: identity }).strict();
@@ -238,12 +239,13 @@ export const postgresTableExportChooseSchema = z.object({
 export const postgresTableExportSchema = target.extend({
   exportToken: token, taskId: identity, fileToken: token, format: exportFormat,
   encoding: z.enum(['utf8', 'utf16le', 'gb18030']),
-  columns: z.array(column).min(1).max(1022), csvDelimiter: z.enum(csvExportDelimiters).optional(),
+  columns: z.array(column).min(1).max(1022), csvDelimiter: z.enum(csvExportDelimiters).optional(), txtOptions: txtExportOptionsSchema.optional(),
 }).strict().superRefine((input, context) => {
   if (new Set(input.columns).size !== input.columns.length) context.addIssue({ code: 'custom', message: '导出列不能重复' });
   if (input.csvDelimiter !== undefined && postgresTableExportExtension(input.format) !== 'csv')
     context.addIssue({ code: 'custom', message: '只有 CSV 可指定分隔符' });
   if (input.format === 'xlsx' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'XLSX 使用固定内部编码' });
+  if (!validTxtExport(input)) context.addIssue({ code: 'custom', path: ['txtOptions'], message: txtExportZh.invalid });
   const markup = dataMarkupText(input.format);
   if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
   if ((input.format === 'sql' || input.format === 'sql-backup') && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'PostgreSQL SQL 脚本使用 UTF-8' });

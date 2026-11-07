@@ -1,3 +1,4 @@
+import type { TxtExportOptions } from '../shared/txtExport';
 import type { CellValue, QueryFileEncoding } from '../shared/contracts';
 import { queryExportFormats, queryExportSelectionMessage, queryExportSelectsRowResult, queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame, type QueryExportSelection, type QueryExportFormat } from '../shared/queryStreamExport';
 import { AtomicFile, type AtomicFileIO } from './atomicFile';
@@ -5,12 +6,12 @@ import { csvCell, csvHeader } from './files';
 import { prepareQueryCsvZip, QueryCsvArchive } from './queryCsvZip';
 import { createQueryInsertFile } from './queryInsertFile';
 import { csvExportDelimiter, type CsvExportDelimiter } from '../shared/csvExport';
-import { dataMarkupWriter } from './dataMarkupExport';
+import { dataFileWriter } from './dataMarkupExport';
 import { dataMarkupText, isXmlFormat } from '../shared/dataMarkupExport';
 
 export interface QueryStreamFileOptions {
   filePath: string; format: QueryExportFormat; encoding: QueryFileEncoding; resultSelection: QueryExportSelection;
-  csvDelimiter?: CsvExportDelimiter;
+  csvDelimiter?: CsvExportDelimiter; txtOptions?: TxtExportOptions;
   checkCancelled(): void; onCommitStart(): void;
   insertTarget?: import('../shared/queryInsertExport').QueryInsertTarget;
   beforeInsertCommit?(sample:import('../shared/queryInsertExport').QueryInsertSample,bytes:number):Promise<void>;
@@ -43,7 +44,7 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
   const singleResult = queryExportSelectsRowResult(input.format);
   if (!queryExportFormats.includes(input.format) || singleResult !== (input.resultSelection.kind === 'row-result')) throw Error(queryExportSelectionMessage);
   if (input.resultSelection.kind === 'row-result' && (!Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > limits.results)) throw Error('行结果序号必须在 1～200 之间');
-  const markup = dataMarkupWriter(input.format), markupText = dataMarkupText(input.format);
+  const markup = dataFileWriter(input.format, input.txtOptions), markupText = dataMarkupText(input.format);
   if (markupText && input.encoding !== 'utf8') throw Error(markupText.utf8);
   if (input.format === 'csv-zip') await prepareQueryCsvZip(input.filePath, input.checkCancelled);
   const file = await AtomicFile.create(input.filePath, input.encoding, input.checkCancelled, input.onCommitStart, io, limits.fileBytes);

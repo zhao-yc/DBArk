@@ -14,7 +14,7 @@ import { buildTableFilterSql, identifier, inlineParameters, qualified } from './
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { tableStatisticsSourceIdentity } from './tableStatistics';
 import { buildTableReadOrder } from '../shared/tableReadSql';
-import { dataMarkupWriter } from './dataMarkupExport';
+import { dataFileWriter } from './dataMarkupExport';
 import { dataMarkupText } from '../shared/dataMarkupExport';
 
 export interface TableFilteredExportPlan { sql: string; columns: ColumnInfo[]; }
@@ -83,6 +83,7 @@ function encodedCell(value: CellValue, format: 'csv' | 'json', delimiter: CsvExp
 /** 独立只读事务固定MDL后核来源；返回的只是完整暂存，数据库严格关闭前没有文件替换能力调用。 */
 export async function prepareTableFilteredExport(context: StructureTaskContext, input: TableFilteredExportInput & { filePath: string }, control: TableFilteredExportControl): Promise<PreparedTableFilteredExport> {
   const check = context.checkCancelled;
+  const markup = dataFileWriter(input.format, input.txtOptions);
   await structureTaskQuery(context, 'SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
   await structureTaskQuery(context, 'START TRANSACTION READ ONLY');
   // 获取真实目标MDL，随后目录、全量数据与后核全部属于同一独立连接/事务。
@@ -92,7 +93,6 @@ export async function prepareTableFilteredExport(context: StructureTaskContext, 
   let file: AtomicFile;
   try { file = await AtomicFile.create(input.filePath, input.format === 'xlsx' ? 'utf8' : input.encoding, check, control.onCommitStart, control.io, input.format === 'xlsx' ? EXCEL_LIMITS.maxCompressedBytes : limits.fileBytes, reservation, true); }
   catch (error) { if (!(error instanceof AggregateError)) reservation.release(); throw error; }
-  const markup = dataMarkupWriter(input.format);
   let rows = 0, starts = 0, ends = 0, warningCount: number | undefined, columnsStarted = false;
   const channel = input.format === 'xlsx' ? new ExportRowChannel() : undefined;
   let excel: Promise<{ rows: number; bytes: number }> | undefined;

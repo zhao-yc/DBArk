@@ -4,6 +4,8 @@ import { queryStreamExportLimits as limits } from '../shared/queryStreamExport';
 import { queryHtmlZh } from '../shared/queryHtml.zh-CN';
 import { xmlRecordName } from '../shared/xmlImport';
 import { queryHtmlDocumentStart, queryHtmlDocumentEnd, queryHtmlTableStart, queryHtmlRow, queryHtmlTableEnd, queryHtmlReceipt } from './queryHtml';
+import { txtWriter } from './txtExport';
+import { txtExportZh } from '../shared/txtExport';
 
 interface ResultOrdinal { resultOrdinal: number; statementOrdinal: number; }
 interface MarkupWriter {
@@ -127,6 +129,12 @@ function recordXml(attributes: boolean): MarkupWriter {
 }
 
 /** 各数据库只负责供给有序数据，文件发布仍由原任务管理。 */
+export function dataFileWriter(format: string, txtOptions?: unknown): MarkupWriter | undefined {
+  if (format === 'txt') return txtWriter(txtOptions);
+  if (txtOptions !== undefined) throw Error(txtExportZh.invalid);
+  return dataMarkupWriter(format);
+}
+
 export function dataMarkupWriter(format: string): MarkupWriter | undefined {
   if (format === 'html') return html;
   if (format === 'xml') return xml;

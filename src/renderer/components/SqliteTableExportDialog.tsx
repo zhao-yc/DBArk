@@ -1,3 +1,5 @@
+import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema, type TxtExportOptions } from '../../shared/txtExport';
+import { TxtExportFields } from './TxtExportFields';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FileChoice, TaskEvent } from '../../shared/contracts';
 import type { SqliteTableExportInput, SqliteTableExportOutput } from '../../shared/sqliteTableExport';
@@ -6,7 +8,7 @@ import { SqliteTableExportIntent, checkSqliteTableExportOutput, selectSqliteExpo
 import { errorMessage, invoke, uid } from '../lib';
 import { sqliteTableExportZh as text } from '../locales/sqliteTableExport.zh-CN';
 import { sqliteTableBrowseZh as browseText } from '../locales/sqliteTableBrowse.zh-CN';
-import { dataExportExtension, dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataFileFormats, dataFileText, dataMarkupText } from '../../shared/dataMarkupExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 
@@ -19,13 +21,13 @@ export const sqliteTableExportServices: SqliteTableExportServices = {
   choose: input => invoke('files.choose', input), execute: input => invoke('sqlite.tableExport', input), cancel: taskId => invoke('query.cancel', { taskId }), subscribe: listener => window.dbark.onTask(listener),
 };
 interface Props { intent: SqliteTableExportIntent; services?: SqliteTableExportServices; onActivity(delta: 1 | -1): void; onClose(): void; onCleanupError(message: string): void; onCommitted?(result: SqliteTableExportOutput, sourceChanged: boolean, sqlContent?: SqliteTableExportInput['sqlContent']): void; }
-type Draft = { format: SqliteTableExportInput['format']; encoding: SqliteTableExportInput['encoding']; csvDelimiter: CsvExportDelimiter; columns: string[]; dataColumns: string[]; sqlContent?: SqliteTableExportInput['sqlContent']; file?: FileChoice; problem?: string; done?: { output: SqliteTableExportOutput; changed: boolean } };
+type Draft = { format: SqliteTableExportInput['format']; encoding: SqliteTableExportInput['encoding']; csvDelimiter: CsvExportDelimiter; txtOptions: TxtExportOptions; columns: string[]; dataColumns: string[]; sqlContent?: SqliteTableExportInput['sqlContent']; file?: FileChoice; problem?: string; done?: { output: SqliteTableExportOutput; changed: boolean } };
 type Operation = { kind: 'choose' | 'export'; id?: string; cancelled: boolean; promise: Promise<void>; sent?: boolean; cancel?: Promise<void> };
 
 /** 全量SQLite 文件导出与本地数据草稿分离，所有异步回包只归属于原意图和原操作。 */
 export function SqliteTableExportDialog({ intent, services = sqliteTableExportServices, ...callbacks }: Props) {
   const owner = useRef({ intent, services, callbacks }).current;
-  const [draft, setDraft] = useState<Draft>(() => { const columns = owner.intent.source.columns.map(column => column.name); return { format: 'csv', encoding: 'utf8', csvDelimiter: ',', columns, dataColumns: [...columns] }; }), live = useRef(draft); live.current = draft;
+  const [draft, setDraft] = useState<Draft>(() => { const columns = owner.intent.source.columns.map(column => column.name); return { format: 'csv', encoding: 'utf8', csvDelimiter: ',', txtOptions: txtExportDefaults, columns, dataColumns: [...columns] }; }), live = useRef(draft); live.current = draft;
   const [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [stale, setStale] = useState(false), [progress, setProgress] = useState<TaskEvent>();
   const mounted = useRef(true), closed = useRef(false), invalid = useRef(false), operation = useRef<Operation | undefined>(undefined), committed = useRef<object | undefined>(undefined), consumed = useRef(false);
   const ticket = {};
@@ -51,7 +53,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
   /** 配置变化消费当前草稿身份，并撤销原文件；不会自动选择文件或发起导出。 */
   function change(next: Omit<SqliteTableExportOptions, 'columns'> & { columns?: string[] }): void {
     if (!editable()) return;
-    if (!['csv', 'json', 'sql', 'xlsx', ...dataMarkupFormats].includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
+    if (!['csv', 'json', 'sql', 'xlsx', ...dataFileFormats].includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
     const sqlContent = next.format === 'sql' ? next.sqlContent ?? (draft.format === 'sql' ? draft.sqlContent : owner.intent.source.target.kind === 'view' ? 'structure' : undefined) : undefined;
     if (sqlContent !== undefined && !['data', 'structure', 'structure-data'].includes(sqlContent)) return;
     if (next.format === 'sql' && owner.intent.source.target.kind !== 'table' && sqlContent !== 'structure') { replace({ ...draft, problem: text.viewSql }); return; }
@@ -65,7 +67,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
       const required = owner.intent.source.columns.filter(column => !column.generated).map(column => column.name);
       columns = [...columns.filter(name => required.includes(name)), ...required.filter(name => !columns.includes(name))];
     }
-    replace({ format: next.format, encoding: next.format === 'xlsx' || dataMarkupText(next.format) ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, columns, dataColumns: structure || complete ? [...draft.dataColumns] : [...columns], ...(sqlContent !== undefined ? { sqlContent } : {}) });
+    replace({ format: next.format, encoding: next.format === 'xlsx' || dataMarkupText(next.format) ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, txtOptions: next.txtOptions ?? draft.txtOptions, columns, dataColumns: structure || complete ? [...draft.dataColumns] : [...columns], ...(sqlContent !== undefined ? { sqlContent } : {}) });
   }
   /** 字段与顺序同属原草稿租约；旧渲染回调及运行中的选择不能替换已确定的输出范围。 */
   function changeFields(columns: string[]): void { change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, columns }); }
@@ -83,7 +85,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
   }
   /** 文件chooser等待期间父标签也保持占用，迟到文件令牌不会绑定新来源或新格式。 */
   function choose(): void {
-    if (!editable()) return;
+    if (!editable() || !validTxt) return;
     try { selectSqliteExportColumns(owner.intent.source, { format: draft.format, columns: draft.columns, ...(draft.format === 'sql' && draft.sqlContent !== undefined ? { sqlContent: draft.sqlContent } : {}) }); }
     catch (reason) { replace({ ...draft, problem: draft.columns.length ? errorMessage(reason) : text.emptyFields }); return; }
     try { owner.callbacks.onActivity(1); } catch (reason) { replace({ ...draft, file: undefined, problem: errorMessage(reason) }); return; }
@@ -109,9 +111,9 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
   }
   /** 原任务编号、文件能力与完整条件在首次await前固定；失败后需重新选文件，绝不自动重放。 */
   function execute(): void {
-    if (!editable() || !draft.file || draft.done || consumed.current) return;
+    if (!editable() || !validTxt || !draft.file || draft.done || consumed.current) return;
     let input: SqliteTableExportInput;
-    try { input = owner.intent.input({ format: draft.format, encoding: draft.encoding, columns: draft.columns, ...(draft.format === 'csv' ? { csvDelimiter: draft.csvDelimiter } : {}), ...(draft.format === 'sql' && draft.sqlContent !== undefined ? { sqlContent: draft.sqlContent } : {}) }, draft.file.token, uid()); }
+    try { input = owner.intent.input({ format: draft.format, encoding: draft.encoding, columns: draft.columns, ...txtExportOptions(draft.format, draft.txtOptions), ...(draft.format === 'csv' ? { csvDelimiter: draft.csvDelimiter } : {}), ...(draft.format === 'sql' && draft.sqlContent !== undefined ? { sqlContent: draft.sqlContent } : {}) }, draft.file.token, uid()); }
     catch (reason) { replace({ ...draft, problem: errorMessage(reason) }); return; }
     try { owner.callbacks.onActivity(1); } catch (reason) { replace({ ...draft, file: undefined, problem: errorMessage(reason) }); return; }
     consumed.current = true; const chosen = { ...draft, problem: undefined }; replace(chosen); setProgress(undefined);
@@ -154,15 +156,18 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
   const valid = current(), active = operation.current, disabled = busy || closing || !valid;
   const structureOnly = draft.format === 'sql' && draft.sqlContent === 'structure', structureData = draft.format === 'sql' && draft.sqlContent === 'structure-data';
   const markup = dataMarkupText(draft.format);
+  const validTxt = draft.format !== 'txt' || txtExportOptionsSchema.safeParse(draft.txtOptions).success;
   const sqlUnavailable = draft.format === 'sql' && !structureOnly && (owner.intent.source.target.kind !== 'table' || !owner.intent.source.columns.some(column => !column.generated));
   return <Modal title={text.title} wide onClose={close}><div className="modal-content" data-sqlite-table-export-dialog aria-busy={busy || closing}>
     <p>{owner.intent.source.target.database}.{owner.intent.source.target.table}</p><p>{structureOnly ? text.structureScope : text.scope}</p>{!structureOnly && <><p className="warning-text">{text.committedOnly}</p><p className="muted small">{text.protocolHint}</p></>}
     {structureOnly ? <p>{text.structureConditions}</p> : <><section aria-label={text.conditions}><strong>{text.conditions}</strong><p>{browseText.enabledFilters(owner.intent.query.filters.filter(filter => filter.enabled !== false).length, owner.intent.query.filters.length)}</p>{!owner.intent.query.filters.some(filter => filter.enabled !== false) && <p>{owner.intent.query.filters.length ? browseText.noEnabledFilters : text.noConditions}</p>}{owner.intent.query.filters.length ? <ul>{owner.intent.query.filters.map((filter, index) => <li key={index}>[{filter.enabled === false ? browseText.filterDisabledState : browseText.filterEnabledState}] {filter.column} {browseText.operators[filter.operator]} {filter.value ? '[' + browseText.kinds[filter.value.kind] + '] ' + filter.value.value : ''}{filter.secondValue ? ' AND [' + browseText.kinds[filter.secondValue.kind] + '] ' + filter.secondValue.value : ''}{filter.values ? ' [' + browseText.kinds[filter.values[0].kind] + '] (' + filter.values.map(value => JSON.stringify(value.value)).join(', ') + ')' : ''}</li>)}</ul> : null}<p>{owner.intent.query.mode === 'and' ? 'AND' : 'OR'}</p></section>
     <section aria-label={text.sorts}><strong>{text.sorts}</strong>{owner.intent.query.sort.length ? <ol>{owner.intent.query.sort.map((rule, index) => <li key={index}>{rule.column} {rule.direction === 'asc' ? browseText.ascending : browseText.descending}</li>)}</ol> : <p>{text.noSorts}</p>}</section></>}
-    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">SQLite SQL</option><option value="xlsx">Excel（XLSX）</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}</select></Field>
+    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">SQLite SQL</option><option value="xlsx">Excel（XLSX）</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}</select></Field>
       {draft.format === 'sql' && <Field label={text.sqlContent}><select aria-label={text.sqlContent} disabled={disabled} value={draft.sqlContent ?? 'data'} onChange={event => change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, sqlContent: event.target.value as SqliteTableExportInput['sqlContent'] })}>{Object.entries(text.sqlContents).map(([value, label]) => <option key={value} value={value} disabled={owner.intent.source.target.kind !== 'table' && value !== 'structure'}>{label}</option>)}</select></Field>}
       <Field label={text.encoding}><select aria-label={text.encoding} disabled={disabled || draft.format === 'xlsx' || !!markup} value={draft.encoding} onChange={event => change({ format: draft.format, encoding: event.target.value as Draft['encoding'], csvDelimiter: draft.csvDelimiter })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <CsvExportDelimiterField value={draft.csvDelimiter} disabled={disabled} onChange={csvDelimiter => change({ format: draft.format, encoding: draft.encoding, csvDelimiter })}/>}</div>
-    {markup && <p>{markup.hint}</p>}
+    {draft.format === 'txt' && <div className="form-grid"><TxtExportFields options={draft.txtOptions} disabled={disabled}
+      onChange={txtOptions => change({ format: draft.format, encoding: draft.encoding, columns: draft.columns, txtOptions })}/></div>}
+    {dataFileText(draft.format) && <p>{dataFileText(draft.format)?.hint}</p>}
     {draft.format === 'xlsx' && <UsageHelp><p>{text.xlsxEncoding}</p><p>{text.xlsxLimits}</p></UsageHelp>}{draft.format === 'sql' && <><p className="warning-text">{structureOnly ? text.structureSql : structureData ? text.structureDataSql : text.sqlScope}</p>{!structureOnly && <p className="muted small">{text.generatedHint}</p>}</>}{owner.intent.source.target.kind !== 'table' && <p className="muted small">{text.viewSql}</p>}
     {structureOnly ? <p>{text.structureNoFields}</p> : <section aria-label={text.fields}><strong>{text.fields}</strong><UsageHelp><p>{structureData ? text.structureDataFields : text.allFields}</p><p>{text.atomic}</p></UsageHelp>
       <button type="button" disabled={disabled || structureData} onClick={() => { if (!structureData) changeFields(owner.intent.source.columns.filter(column => draft.format !== 'sql' || !column.generated).map(column => column.name)); }}>{text.selectAllFields}</button><button type="button" disabled={disabled || structureData} onClick={() => { if (!structureData) changeFields([]); }}>{text.clearFields}</button>
@@ -170,7 +175,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
       <ol aria-label={text.fieldOrder}>{draft.columns.map((name, position) => <li key={name}><span>{name}</span> <button type="button" aria-label={text.fieldUp(name)} disabled={disabled || position === 0} onClick={() => moveField(name, -1)}>{text.moveUp}</button> <button type="button" aria-label={text.fieldDown(name)} disabled={disabled || position + 1 === draft.columns.length} onClick={() => moveField(name, 1)}>{text.moveDown}</button></li>)}</ol>
       {!draft.columns.length && <p className="warning-text">{text.emptyFields}</p>}
     </section>}
-    <button className="file-picker" aria-label={text.choose} disabled={disabled || sqlUnavailable || !structureOnly && !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
+    <button className="file-picker" aria-label={text.choose} disabled={disabled || !validTxt || sqlUnavailable || !structureOnly && !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
     {!draft.file && !draft.done && <p className="muted small">{text.fileRequired}</p>}
     {busy && <Spinner text={active?.kind === 'choose' ? text.choosing : structureOnly ? text.structureRunning : text.running}/>} {closing && <p>{text.closing}</p>}
     {progress && <div className="transfer-progress"><span>{progress.message}</span><progress value={progress.progress} max={100}/></div>}

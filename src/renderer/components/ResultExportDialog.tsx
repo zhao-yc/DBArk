@@ -1,3 +1,6 @@
+import { csvImportColumnName } from '../../shared/csvImport';
+import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema, txtExportZh } from '../../shared/txtExport';
+import { TxtExportFields } from './TxtExportFields';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, CheckCircle2, Download, Square } from 'lucide-react';
 import type { FileChoice, QueryResult, ResultExportData, ResultExportOptions } from '../../shared/contracts';
@@ -6,7 +9,7 @@ import { assertResultSqlData, type ResultSqlPreview, type ResultSqlTarget } from
 import { resultSqlZh as sqlText } from '../../shared/resultSql.zh-CN';
 import { assertResultExcelData } from '../../shared/resultExcel';
 import { resultExcelZh as excelText } from '../../shared/resultExcel.zh-CN';
-import { dataExportExtension, dataMarkupFormats, dataMarkupText, isXmlFormat } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataFileFormats, dataFileText, dataMarkupText, isXmlFormat } from '../../shared/dataMarkupExport';
 import { zh, formatText } from '../locales/zh-CN';
 import { invoke, errorMessage, uid } from '../lib';
 import { resultExportData } from '../resultExport';
@@ -29,6 +32,8 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   const storageFields = sqliteStorage ? {sqliteStorage} : {};
   const sample = useMemo(() => data.rows.slice(0, 20), [data]);
   const [format, setFormat] = useState<ResultExportOptions['format']>('csv'), [encoding, setEncoding] = useState<ResultExportOptions['encoding']>('utf8');
+  const [txtOptions, setTxtOptions] = useState(txtExportDefaults);
+  const validTxt = format !== 'txt' || txtExportOptionsSchema.safeParse(txtOptions).success;
   const markup = dataMarkupText(format);
   const fixedEncoding = !!markup || format === 'xlsx' || format === 'sql' && utf8Sql;
   // 完整快照先准入，不能只检查20行示例后为坏值打开文件保存窗口。
@@ -43,7 +48,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   const task = useWorkspace(state => state.tasks.find(item => item.id === taskId));
   const releases = useRef(new Set<string>()), pending = useRef(new Map<string, Promise<void>>());
   const renderedRevision = revision.current;
-  const config = useRef({ format, encoding, target, confirmation, acknowledged, csvDelimiter }); config.current = { format, encoding, target, confirmation, acknowledged, csvDelimiter };
+  const config = useRef({ format, encoding, target, confirmation, acknowledged, csvDelimiter, txtOptions }); config.current = { format, encoding, target, confirmation, acknowledged, csvDelimiter, txtOptions };
   /** 事件同时核实例存活、结果身份及同步代次，恢复相同配置不能复活旧回调。 */
   const current = (ticket: number) => alive.current && !invalid.current && ticket === revision.current;
   const validPreview = () => !!previewRef.current && Date.parse(previewRef.current.expiresAt) > Date.now();
@@ -88,6 +93,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   /** 原生保存选择与准确预览绑定，映射变更期间返回的旧选择不能发布。 */
   async function chooseFile(ticket: number) {
     if (!current(ticket) || busyRef.current || pickRef.current || config.current.format === 'sql' && (!allowSql || !validPreview())) return;
+    if (!validTxt) return;
     if (config.current.format === 'xlsx') { try { assertResultExcelData(data); } catch (reason) { report(reason); return; } }
     ticket = ++revision.current;
     const chosen = config.current, lease = previewRef.current; pickRef.current = true; setPicking(true);
@@ -100,14 +106,14 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   }
   /** 第一次await前消费本地入口；Main再次消费预览与文件能力，再沿原文件任务原子提交。 */
   async function execute(ticket: number) {
-    if (!current(ticket) || !fileRef.current || busyRef.current || pickRef.current || prepareRef.current || consumed.current) return;
+    if (!validTxt || !current(ticket) || !fileRef.current || busyRef.current || pickRef.current || prepareRef.current || consumed.current) return;
     const chosen = config.current, lease = previewRef.current;
     if (chosen.format === 'sql' && (!allowSql || !validPreview() || chosen.confirmation !== `${chosen.target.database}.${chosen.target.table}` || !chosen.acknowledged)) return;
     // 写任务入口再核整份Excel约束，固定编码不依赖先前文本格式或DOM禁用状态。
     if (chosen.format === 'xlsx') { try { assertResultExcelData(data); } catch (reason) { report(reason); return; } }
     busyRef.current = true; consumed.current = true; setBusy(true); setError(''); const id = uid(); activeTask.current = id; setTaskId(id); useWorkspace.getState().setBusy(tabId, true);
     try {
-      const output = await invoke('files.exportResult', { fileToken: fileRef.current.token, format: chosen.format, encoding: chosen.format === 'xlsx' || dataMarkupText(chosen.format) ? 'utf8' : chosen.encoding, ...csvExportOptions(chosen.format, chosen.csvDelimiter), taskId: id, result: data, ...(chosen.format === 'sql' ? { sql: { target: chosen.target, previewId: lease!.previewId, confirmation: chosen.confirmation, acknowledged: true as const, ...storageFields } } : {}) });
+      const output = await invoke('files.exportResult', { fileToken: fileRef.current.token, format: chosen.format, encoding: chosen.format === 'xlsx' || dataMarkupText(chosen.format) ? 'utf8' : chosen.encoding, ...csvExportOptions(chosen.format, chosen.csvDelimiter), ...txtExportOptions(chosen.format, chosen.txtOptions), taskId: id, result: data, ...(chosen.format === 'sql' ? { sql: { target: chosen.target, previewId: lease!.previewId, confirmation: chosen.confirmation, acknowledged: true as const, ...storageFields } } : {}) });
       if (current(ticket)) setDone(output.rows);
     } catch (reason) {
       if (chosen.format === 'sql') { previewRef.current = null; fileRef.current = null; if (alive.current) { setPreview(null); setFile(null); } void release(lease!.previewId).catch(() => {}); }
@@ -122,15 +128,16 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
     <div className="info-strip">{scope === 'table' ? (selected ? tableText.selectedRows : tableText.pageRows)(data.rows.length) : formatText(selected ? zh.resultExport.selectedRows : zh.resultExport.returnedRows, data.rows.length)}</div>
     {data.truncated && <p className="warning-text">{zh.resultExport.truncated}</p>}
     <div className="form-grid">
-      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && (allowSql ? ['csv','json','sql','xlsx',...dataMarkupFormats] : ['csv','json','xlsx',...dataMarkupFormats]).includes(value)) change(renderedRevision, () => { setFormat(value as typeof format); if (value === 'xlsx' || value === 'sql' && utf8Sql) setEncoding('utf8'); }); }}><option value="csv">CSV</option><option value="json">JSON</option>{allowSql && <option value="sql">{sqlite ? sqlText.sqliteFormat : postgres ? sqlText.postgresFormat : 'INSERT SQL'}</option>}<option value="xlsx">{excelText.format}</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}</select></Field>
+      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && (allowSql ? ['csv','json','sql','xlsx',...dataFileFormats] : ['csv','json','xlsx',...dataFileFormats]).includes(value)) change(renderedRevision, () => { setFormat(value as typeof format); if (value === 'xlsx' || value === 'sql' && utf8Sql) setEncoding('utf8'); }); }}><option value="csv">CSV</option><option value="json">JSON</option>{allowSql && <option value="sql">{sqlite ? sqlText.sqliteFormat : postgres ? sqlText.postgresFormat : 'INSERT SQL'}</option>}<option value="xlsx">{excelText.format}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}</select></Field>
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={fixedEncoding ? 'utf8' : encoding} disabled={busy || fixedEncoding} onChange={event => { const value = event.target.value; if (!fixedEncoding && value !== encoding && ['utf8','utf16le','gb18030'].includes(value)) change(renderedRevision, () => setEncoding(value as typeof encoding)); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>
       {format === 'sql' && <><Field label={sqlite ? sqlText.sqliteDatabase : postgres ? sqlText.postgresDatabase : sqlText.database}><input aria-label={sqlite ? sqlText.sqliteDatabase : postgres ? sqlText.postgresDatabase : sqlText.database} value={target.database} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, database: event.target.value }))}/></Field><Field label={sqlText.table}><input aria-label={sqlText.table} value={target.table} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, table: event.target.value }))}/></Field></>}
+      {format === 'txt' && <TxtExportFields options={txtOptions} disabled={busy} onChange={value => change(renderedRevision, () => setTxtOptions(value))}/>}
       {format === 'csv' && <CsvExportDelimiterField value={csvDelimiter} disabled={busy} onChange={value => { if (value !== csvDelimiter) change(renderedRevision, () => setCsvDelimiter(value)); }}/>}
     </div>
-    <UsageHelp><p>{scope === 'table' ? tableText.scope : selected ? zh.resultExport.selectedOnly : zh.resultExport.returnedOnly}</p><p>{format === 'sql' ? sqlText.mapping : isXmlFormat(format) ? zh.resultExport.xmlColumnRule : zh.resultExport.columnRule}</p>{format === 'xlsx' && <section aria-label={excelText.format}><p>{excelText.encoding}</p><p>{excelText.notice}</p><p>{excelText.numbers}</p><p>{excelText.nulls}</p><p>{excelText.binary}</p><p>{excelText.limits}</p></section>}{format !== 'xlsx' && <p>{format === 'sql' ? sqlite ? sqlText.sqliteProtocol : postgres ? sqlText.postgresProtocol : sqlText.protocol : format === 'csv' ? zh.resultExport.csvProtocol : markup?.hint ?? zh.resultExport.jsonProtocol}</p>}</UsageHelp>
-    <button className="file-picker" disabled={busy || picking || invalid.current || !!excelError || format === 'sql' && !preview} onClick={() => void chooseFile(renderedRevision)}><Download size={24}/><span><strong>{file?.name ?? zh.resultExport.chooseFile}</strong><small>{zh.resultExport.atomicFile}</small></span><ArrowRight size={16}/></button>
+    <UsageHelp><p>{scope === 'table' ? tableText.scope : selected ? zh.resultExport.selectedOnly : zh.resultExport.returnedOnly}</p><p>{format === 'sql' ? sqlText.mapping : isXmlFormat(format) ? zh.resultExport.xmlColumnRule : format === 'txt' && !txtOptions.hasHeader ? txtExportZh.positionHint : zh.resultExport.columnRule}</p>{format === 'xlsx' && <section aria-label={excelText.format}><p>{excelText.encoding}</p><p>{excelText.notice}</p><p>{excelText.numbers}</p><p>{excelText.nulls}</p><p>{excelText.binary}</p><p>{excelText.limits}</p></section>}{format !== 'xlsx' && <p>{format === 'sql' ? sqlite ? sqlText.sqliteProtocol : postgres ? sqlText.postgresProtocol : sqlText.protocol : format === 'csv' ? zh.resultExport.csvProtocol : dataFileText(format)?.hint ?? zh.resultExport.jsonProtocol}</p>}</UsageHelp>
+    <button className="file-picker" disabled={busy || picking || !validTxt || invalid.current || !!excelError || format === 'sql' && !preview} onClick={() => void chooseFile(renderedRevision)}><Download size={24}/><span><strong>{file?.name ?? zh.resultExport.chooseFile}</strong><small>{zh.resultExport.atomicFile}</small></span><ArrowRight size={16}/></button>
     <h3>{zh.resultExport.columnMapping}</h3>
-    <div className="result-export-columns"><table><thead><tr><th>{zh.resultExport.columnPosition}</th><th>{zh.resultExport.originalColumn}</th><th>{format === 'sql' ? sqlText.targetColumn : zh.resultExport.outputColumn}</th></tr></thead><tbody>{columns.map((column, index) => <tr key={column.key}><td>{index + 1}</td><td>{column.name || zh.resultExport.emptyName}</td><td>{format === 'sql' ? <input aria-label={sqlText.column(index + 1)} value={target.columns[index].name} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, columns: target.columns.map((value, position) => position === index ? { ...value, name: event.target.value } : value) }))}/> : isXmlFormat(format) ? column.name || zh.resultExport.emptyName : column.exportName}</td></tr>)}</tbody></table></div>
+    <div className="result-export-columns"><table><thead><tr><th>{zh.resultExport.columnPosition}</th><th>{zh.resultExport.originalColumn}</th><th>{format === 'sql' ? sqlText.targetColumn : format === 'txt' ? txtOptions.hasHeader ? txtExportZh.outputHeader : txtExportZh.outputPosition : zh.resultExport.outputColumn}</th></tr></thead><tbody>{columns.map((column, index) => <tr key={column.key}><td>{index + 1}</td><td>{column.name || zh.resultExport.emptyName}</td><td>{format === 'sql' ? <input aria-label={sqlText.column(index + 1)} value={target.columns[index].name} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, columns: target.columns.map((value, position) => position === index ? { ...value, name: event.target.value } : value) }))}/> : isXmlFormat(format) ? column.name || zh.resultExport.emptyName : format === 'txt' && !txtOptions.hasHeader ? csvImportColumnName(index) : column.exportName}</td></tr>)}</tbody></table></div>
     {format === 'sql' && <><button disabled={busy || preparing || invalid.current} onClick={() => void prepare(renderedRevision)}>{sqlText.preview}</button>{preview && <><p>{sqlText.previewScope(preview.shownRows, preview.totalRows)}</p><pre className="result-sql-preview" aria-label={sqlText.preview}>{preview.sql}</pre><Field label={postgres ? sqlText.postgresConfirmation : sqlText.confirmation}><input aria-label={postgres ? sqlText.postgresConfirmation : sqlText.confirmation} disabled={busy} value={confirmation} onChange={event => { if (current(renderedRevision) && !busyRef.current) setConfirmation(event.target.value); }}/></Field><label><input type="checkbox" aria-label={sqlText.acknowledge} checked={acknowledged} disabled={busy} onChange={event => { if (current(renderedRevision) && !busyRef.current) setAcknowledged(event.target.checked); }}/>{sqlText.acknowledge}</label></>}</>}
     <h3>{zh.resultExport.preview}</h3><div className="sample-grid"><ResultsGrid columns={columns.map(column => ({ key: column.key, name: isXmlFormat(format) ? column.name : column.exportName, type: '' }))} rows={sample}/></div>
     {task && <div className="transfer-progress"><div><span>{task.message}</span><strong>{Math.round(task.progress)}%</strong></div><progress max="100" value={task.progress}/></div>}

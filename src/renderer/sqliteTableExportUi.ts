@@ -1,3 +1,4 @@
+import { txtExportZh, validTxtExport } from '../shared/txtExport';
 import type { SqliteTablePage } from '../shared/sqliteTableBrowse';
 import { sqliteTablePageSchema } from '../shared/sqliteTableBrowse';
 import { sqliteTableExportSchema, type SqliteTableExportInput, type SqliteTableExportOutput } from '../shared/sqliteTableExport';
@@ -5,7 +6,7 @@ import type { SqliteTableQuery } from './sqliteTableBrowser';
 import { checkTableFilteredExportOutput } from './tableFilteredExportUi';
 import { sqliteTableExportZh as text } from './locales/sqliteTableExport.zh-CN';
 
-export type SqliteTableExportOptions = Pick<SqliteTableExportInput, 'format' | 'encoding' | 'csvDelimiter' | 'columns' | 'sqlContent'>;
+export type SqliteTableExportOptions = Pick<SqliteTableExportInput, 'format' | 'encoding' | 'csvDelimiter' | 'txtOptions' | 'columns' | 'sqlContent'>;
 export interface SqliteExportSource { target: SqliteTablePage['target']; columns: readonly { name: string; declaredType: string; generated: boolean }[]; schemaKey: string; relation?: import('../shared/sqliteTableBrowse').SqliteTableRelation; }
 /** 来源仅保留元数据，不把当前页行值当作完整导出的文件数据。 */
 function source(page: SqliteTablePage): SqliteExportSource {
@@ -58,9 +59,10 @@ export class SqliteTableExportIntent {
   /** 严格 IPC 请求不含 offset/limit、路径、任意 SQL 或页行值，只保留冻结的真实SQLite 文件条件。 */
   input(options: SqliteTableExportOptions, fileToken: string, taskId: string): SqliteTableExportInput {
     if (!this.current()) throw Error(text.stale);
+    if (!validTxtExport(options)) throw Error(txtExportZh.invalid);
     if (options.format !== 'csv' && options.csvDelimiter !== undefined) throw Error(text.invalid);
     const columns = selectSqliteExportColumns(this.source, options);
-    return sqliteTableExportSchema.parse({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, ...(this.source.relation ? { relation: this.source.relation } : {}), mode: this.query.mode, filters: structuredClone(this.query.filters), sort: structuredClone(this.query.sort), columns, format: options.format, encoding: options.format === 'xlsx' ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), ...(options.format === 'sql' && options.sqlContent !== undefined ? { sqlContent: options.sqlContent } : {}), fileToken, taskId });
+    return sqliteTableExportSchema.parse({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, ...(this.source.relation ? { relation: this.source.relation } : {}), mode: this.query.mode, filters: structuredClone(this.query.filters), sort: structuredClone(this.query.sort), columns, format: options.format, encoding: options.format === 'xlsx' ? 'utf8' : options.encoding, ...(options.txtOptions ? { txtOptions: { ...options.txtOptions } } : {}), ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), ...(options.format === 'sql' && options.sqlContent !== undefined ? { sqlContent: options.sqlContent } : {}), fileToken, taskId });
   }
 }
 /** 复用完整原子提交回执校验；任务进度与取消意图不能取代已保存事实。 */

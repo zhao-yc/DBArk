@@ -1,3 +1,5 @@
+import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema } from '../../shared/txtExport';
+import { TxtExportFields } from './TxtExportFields';
 import { useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import type { CsvExportDelimiter } from '../../shared/csvExport';
@@ -7,11 +9,11 @@ import { postgresRelationName } from '../../shared/postgresSql';
 import { errorMessage, invoke } from '../lib';
 import { postgresTableExportZh as text } from '../locales/postgresTableExport.zh-CN';
 import { acquireWorkspaceBusy } from '../store';
-import { dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
+import { dataFileFormats, dataFileText } from '../../shared/dataMarkupExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal } from './ui';
 
-const formats = ['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', ...dataMarkupFormats] as const;
+const formats = ['csv', 'json', 'xlsx', 'sql', 'copy', 'sql-backup', ...dataFileFormats] as const;
 const encodings = [['utf8', 'UTF-8'], ['utf16le', 'UTF-16 LE'], ['gb18030', 'GB18030']] as const;
 
 /** 文件选择、列和任务只对应打开时的原服务端表页。 */
@@ -30,13 +32,14 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
   const sql = backup || format === 'sql';
   const available = sql ? page.columns.filter(isPostgresSqlExportColumn) : page.columns;
   const output = backup ? available : available.filter(column => selected.has(column.key));
-  const textEncoding = format === 'csv' || format === 'json';
+  const textEncoding = format === 'csv' || format === 'json' || format === 'txt';
   const extension = postgresTableExportExtension(format);
-  const markup = dataMarkupText(format);
+  const [txtOptions, setTxtOptions] = useState(txtExportDefaults);
+  const validTxt = format !== 'txt' || txtExportOptionsSchema.safeParse(txtOptions).success;
 
   /** 原生选择器只返回当前窗口一次性文件能力。 */
   async function choose() {
-    if (occupied.current) return;
+    if (occupied.current || !validTxt) return;
     occupied.current = true;
     setBusy(true);
     setError('');
@@ -51,7 +54,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
 
   /** 仅文件原子发布回执显示成功，取消请求等待原任务自己的终态。 */
   async function start() {
-    if (occupied.current || !file || !page.exportToken || !output.length) return;
+    if (occupied.current || !validTxt || !file || !page.exportToken || !output.length) return;
     if (!isCurrent()) { setError(text.stale); return; }
     occupied.current = true;
     cancelRequested.current = false;
@@ -64,7 +67,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
     try {
       const result = await invoke('postgres.table.export', { ...target, taskId, exportToken: page.exportToken, fileToken: file.token,
         format, encoding: textEncoding ? encoding : 'utf8', columns: output.map(column => column.key),
-        ...(extension === 'csv' ? { csvDelimiter: delimiter } : {}),
+        ...(extension === 'csv' ? { csvDelimiter: delimiter } : {}), ...txtExportOptions(format, txtOptions),
       });
       if (!result.fileCommitted) throw Error(text.cancelled);
       setMessage(backup ? text.backupSaved(result.rows) : text.saved(result.rows));
@@ -96,18 +99,19 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
           onChange={event => { setFormat(event.target.value as typeof format); setFile(null); setMessage(''); }}>
           {formats.map(value => <option key={value} value={value} disabled={value === 'sql-backup' ? page.relationKind !== 'r' :
             value === 'sql' && !isPostgresSqlExportRelation(page.relationKind)}>
-            {value === 'copy' ? text.copyFormat : value === 'sql-backup' ? text.backupFormat : dataMarkupText(value)?.format ?? value.toUpperCase()}
+            {value === 'copy' ? text.copyFormat : value === 'sql-backup' ? text.backupFormat : dataFileText(value)?.format ?? value.toUpperCase()}
           </option>)}
         </select></Field>
         {textEncoding && <Field label={text.encoding}><select aria-label={text.encoding} value={encoding} disabled={locked}
-          onChange={event => setEncoding(event.target.value as typeof encoding)}>
+          onChange={event => { setEncoding(event.target.value as typeof encoding); if (format === 'txt') setFile(null); }}>
           {encodings.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></Field>}
         {extension === 'csv' && <CsvExportDelimiterField value={delimiter} disabled={locked} onChange={setDelimiter}/>}
       </div>
+      {format === 'txt' && <div className="form-grid"><TxtExportFields options={txtOptions} disabled={locked} onChange={value => { if (!occupied.current) { setTxtOptions(value); setFile(null); setMessage(''); } }}/></div>}
       {format === 'sql' && <p>{text.sqlHint}</p>}
       {format === 'copy' && <p>{text.copyHint}</p>}
-      {markup && <p>{markup.hint}</p>}
+      {dataFileText(format) && <p>{dataFileText(format)?.hint}</p>}
       <fieldset disabled={locked || backup}>
         <legend>{text.columns}</legend>
         <button onClick={() => setSelected(new Set(available.map(column => column.key)))}>{text.allColumns}</button>
@@ -122,7 +126,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
           }}/> {column.name}{!eligible && ' · ' + text.generated}
         </label>; })}</div>
       </fieldset>
-      <button disabled={locked} onClick={() => void choose()}>{text.choose}</button>
+      <button disabled={locked || !validTxt} onClick={() => void choose()}>{text.choose}</button>
       {file && <p>{text.file} · {file.name}</p>}
       {taskId && <p role="status">{cancelling ? text.cancelling : text.progress}</p>}
       {message && <p role="status">{message}</p>}
@@ -131,7 +135,7 @@ export function PostgresTableExportDialog({ target, page, filtered, isCurrent, o
     <footer className="modal-footer">
       <button disabled={locked} onClick={onClose}>{text.close}</button>
       {taskId ? <button disabled={cancelling} onClick={() => void cancel()}>{text.cancel}</button> :
-        <button className="primary" disabled={locked || !file || !output.length} onClick={() => void start()}>{text.start}</button>}
+        <button className="primary" disabled={locked || !validTxt || !file || !output.length} onClick={() => void start()}>{text.start}</button>}
     </footer>
   </Modal>;
 }

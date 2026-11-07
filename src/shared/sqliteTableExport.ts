@@ -1,7 +1,8 @@
+import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { z } from 'zod';
 import { sqliteTablePageSchema, sqliteTableBrowseLimits } from './sqliteTableBrowse';
 import { csvExportDelimiters } from './csvExport';
-import { dataMarkupFormats, dataMarkupText } from './dataMarkupExport';
+import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 
 /** 完整导出沿原已应用的typed筛选和排序；路径、任意SQL及凭据均不进入公共合同。 */
 export const sqliteTableExportSchema = z.object({
@@ -9,7 +10,7 @@ export const sqliteTableExportSchema = z.object({
   taskId: sqliteTablePageSchema.shape.taskId, fileToken: z.string().min(1).max(200), schemaKey: z.string().regex(/^[a-f0-9]{64}$/),
   relation: sqliteTablePageSchema.shape.relation, mode: sqliteTablePageSchema.shape.mode, filters: sqliteTablePageSchema.shape.filters, sort: sqliteTablePageSchema.shape.sort,
   columns: z.array(sqliteTablePageSchema.shape.table).max(sqliteTableBrowseLimits.columns),
-  format: z.enum(['csv', 'json', 'sql', 'xlsx', ...dataMarkupFormats]), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
+  format: z.enum(['csv', 'json', 'sql', 'xlsx', ...dataFileFormats]), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(), txtOptions: txtExportOptionsSchema.optional(),
   sqlContent: z.enum(['data', 'structure', 'structure-data']).optional(),
 }).strict().superRefine((input, context) => {
   const page = sqliteTablePageSchema.safeParse({ connectionId: input.connectionId, database: input.database, table: input.table, taskId: input.taskId, offset: 0, limit: 1, mode: input.mode, filters: input.filters, ...(input.relation ? { relation: input.relation } : {}), sort: input.sort });
@@ -21,6 +22,7 @@ export const sqliteTableExportSchema = z.object({
   if (structureOnly ? input.columns.length !== 0 : input.columns.length === 0) context.addIssue({ code: 'custom', message: structureOnly ? '仅结构导出不接受数据列投影' : '数据导出至少选择一列' });
   if (Object.hasOwn(input, 'csvDelimiter') && (input.format !== 'csv' || input.csvDelimiter === undefined)) context.addIssue({ code: 'custom', message: '只有CSV可指定逗号、分号或Tab分隔符' });
   if (input.format === 'xlsx' && input.encoding !== 'utf8') context.addIssue({ code: 'custom', message: 'Excel导出只使用UTF-8内部编码' });
+  if (!validTxtExport(input)) context.addIssue({ code: 'custom', path: ['txtOptions'], message: txtExportZh.invalid });
   const markup = dataMarkupText(input.format);
   if (markup && input.encoding !== 'utf8') context.addIssue({ code: 'custom', path: ['encoding'], message: markup.utf8 });
 });

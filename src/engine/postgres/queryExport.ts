@@ -48,9 +48,9 @@ async function* queryInsertRows(first: QueryResult,
 export async function exportPostgresQuery(input: PostgresQueryExportRequest,
   connect: (action: (connection: PostgresConnection) => Promise<void>) => Promise<void>,
   check: () => void, publish: () => void, progress: (rows: number) => void): Promise<PostgresQueryExportOutput> {
-  const { filePath, sql, format, encoding, csvDelimiter, parameters, insertTarget } = input;
+  const { filePath, sql, format, encoding, csvDelimiter, txtOptions, parameters, insertTarget } = input;
   postgresQueryExportSchema.parse({connectionId: input.connectionId, database: input.database, taskId: input.taskId,
-    fileToken: input.fileToken, sql, format, encoding, csvDelimiter, parameters, insertTarget});
+    fileToken: input.fileToken, sql, format, encoding, csvDelimiter, ...(txtOptions ? {txtOptions} : {}), parameters, insertTarget});
   if (!isAbsolute(filePath) || filePath.includes('\0')) throw Error('主进程未提供授权的导出路径');
   let file: QueryStreamFile | undefined, atomic: AtomicFile | undefined;
   let excel: ReturnType<typeof startExcelExportRows> | undefined;
@@ -86,7 +86,7 @@ export async function exportPostgresQuery(input: PostgresQueryExportRequest,
         rows = await writePostgresSqlRows(target, columns, queryInsertRows(first.value, batches), write, progress);
         await write('COMMIT;\n');
       } else {
-        const output = file = format === 'xlsx' ? undefined : await createQueryStreamFile({filePath, format, encoding, csvDelimiter,
+        const output = file = format === 'xlsx' ? undefined : await createQueryStreamFile({filePath, format, encoding, csvDelimiter, txtOptions,
           resultSelection: queryExportSelectsRowResult(format) ? {kind: 'row-result', ordinal: 1} : {kind: 'all'},
           checkCancelled: check, onCommitStart: publish});
         let started = false;

@@ -8,7 +8,7 @@ import { exportExcelFile } from '../excelFiles';
 import { csvCell, csvHeader } from '../files';
 import type { PostgresTableWorkspace } from './tableWorkspace';
 import { writePostgresSqlData } from './sqlExport';
-import { dataMarkupWriter } from '../dataMarkupExport';
+import { dataFileWriter } from '../dataMarkupExport';
 import { dataMarkupText } from '../../shared/dataMarkupExport';
 
 type Source = Parameters<PostgresTableWorkspace['exportData']>;
@@ -32,7 +32,7 @@ export async function exportPostgresTable(workspace: PostgresTableWorkspace, inp
   if (input.format === 'copy' && input.encoding !== 'utf8') throw Error('PostgreSQL COPY CSV 使用 UTF-8');
   const markupText = dataMarkupText(input.format);
   if (markupText && input.encoding !== 'utf8') throw Error(markupText.utf8);
-  const markup = dataMarkupWriter(input.format);
+  const markup = dataFileWriter(input.format, input.txtOptions);
   const delimiter = csvExportDelimiter(postgresTableExportExtension(input.format), input.csvDelimiter);
   let file: AtomicFile | undefined, rows = 0;
   try {

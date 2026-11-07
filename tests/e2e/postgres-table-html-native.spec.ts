@@ -1,3 +1,5 @@
+import { txtImportZh } from '../../src/shared/txtImport';
+import { parse as parseTxt } from 'csv-parse/sync';
 import { xmlRecordLayouts } from '../../src/shared/dataMarkupExport';
 import { test, expect, desktop, page } from './desktop-fixture';
 import { Client } from 'pg';
@@ -23,7 +25,7 @@ test('PostgreSQL 表和视图从第二页导出全部筛选 HTML', async ({}, in
         FROM generate_series(1,18) g;
       CREATE VIEW public.html_view AS SELECT id,bucket,note,raw FROM public.html_table`);
     await mkdir(info.outputDir, {recursive: true});
-    const targets = ['表数据.html', '表数据.xml', '表数据-elements.xml', '表数据-attributes.xml', '视图数据.html', '视图数据.xml', '视图数据-elements.xml', '视图数据-attributes.xml'].map(name => info.outputPath(name));
+    const targets = ['表数据.html', '表数据.xml', '表数据-elements.xml', '表数据-attributes.xml', '表数据.txt', '视图数据.html', '视图数据.xml', '视图数据-elements.xml', '视图数据-attributes.xml', '视图数据.txt'].map(name => info.outputPath(name));
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
@@ -68,7 +70,7 @@ test('PostgreSQL 表和视图从第二页导出全部筛选 HTML', async ({}, in
         return {title: doc.title, headers: [...doc.querySelectorAll('th')].map(cell => cell.textContent),
           rows: [...doc.querySelectorAll('tbody tr')].map(row => [...row.querySelectorAll('td')].map(cell => [cell.textContent, cell.dataset.kind ?? 'text'])),
           unsafe: doc.querySelectorAll('img,script,iframe').length};
-      }, await readFile(targets[index * 4], 'utf8'));
+      }, await readFile(targets[index * 5], 'utf8'));
       const notes = ['<img src=x> & 中文', 'NULL', '空字符串', '行7', '行9', '行11', '行13', '行15', '行17'];
       expect(document).toEqual({title: '表数据', headers: ['note', 'raw'], unsafe: 0, rows: notes.map((note, i) =>
         [[note, i === 1 ? 'null' : i === 2 ? 'empty' : 'text'], ['base64:AP8=', 'binary']])});
@@ -81,7 +83,7 @@ test('PostgreSQL 表和视图从第二页导出全部筛选 HTML', async ({}, in
         const doc = new DOMParser().parseFromString(markup, 'application/xml');
         return {scope: doc.documentElement.getAttribute('scope'), headers: [...doc.querySelectorAll('column')].map(column => column.textContent),
           rows: [...doc.querySelectorAll('record')].map(row => [...row.children].map(cell => [cell.textContent, cell.getAttribute('kind')]))};
-      }, await readFile(targets[index * 4 + 1], 'utf8'));
+      }, await readFile(targets[index * 5 + 1], 'utf8'));
       expect(xml).toEqual({scope: 'table', headers: ['note', 'raw'], rows: notes.map((note, i) =>
         [[i === 1 || i === 2 ? '' : note, i === 1 ? 'null' : 'text'], ['AP8=', 'binary']])});
       for (const [layoutIndex, layout] of xmlRecordLayouts.entries()) {
@@ -95,15 +97,25 @@ test('PostgreSQL 表和视图从第二页导出全部筛选 HTML', async ({}, in
           return [...root.children].map(row => [row.localName, attributes
             ? [...row.attributes].map(field => [field.name, field.value])
             : [...row.children].map(field => [field.localName, field.textContent])]);
-        }, {markup: await readFile(targets[index * 4 + 2 + layoutIndex], 'utf8'), attributes: layout === 'xml-attributes'});
+        }, {markup: await readFile(targets[index * 5 + 2 + layoutIndex], 'utf8'), attributes: layout === 'xml-attributes'});
         expect(records).toEqual(notes.map((note, i) => ['RECORD',
           [...(i === 1 ? [] : [['note', i === 2 ? '' : note]]), ['raw', 'AP8=']]]));
         if (index === 1 && layout === 'xml-attributes') await modal.screenshot({path: info.outputPath('PostgreSQL视图XML记录属性.png')});
       }
+      await modal.getByLabel(text.format, {exact: true}).selectOption('txt');
+      await modal.getByLabel(txtImportZh.delimiter, {exact: true}).selectOption('|');
+      await modal.getByLabel(txtImportZh.record, {exact: true}).selectOption('lf');
+      await modal.getByRole('button', {name: text.choose, exact: true}).click();
+      await modal.getByRole('button', {name: text.start, exact: true}).click();
+      await expect(modal.getByRole('status')).toHaveText(text.saved(9));
+      expect(parseTxt(await readFile(targets[index * 5 + 4]), {delimiter: '|', record_delimiter: '\n'})).toEqual([
+        ['note', 'raw'], ...notes.map((note, i) => [i === 1 ? '\\N' : i === 2 ? '' : note, 'base64:AP8=']),
+      ]);
+      if (index === 1) await modal.screenshot({path: info.outputPath('PostgreSQL视图TXT导出.png')});
       await modal.locator('.modal-footer').getByRole('button', {name: text.close, exact: true}).click();
       await expect(tab.locator('.tab-status')).toContainText(tableText.currentPage(2));
     }
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgTableHtmlPicker(): number}).restorePgTableHtmlPicker())).toBe(8);
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgTableHtmlPicker(): number}).restorePgTableHtmlPicker())).toBe(10);
     expect((await readdir(info.outputDir)).filter(name => name.endsWith('.partial'))).toEqual([]);
     expect((await observer.query('SELECT count(*)::int AS count FROM public.html_table')).rows).toEqual([{count: 18}]);
   } finally { await observer.end(); }

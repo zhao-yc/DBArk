@@ -1,3 +1,4 @@
+import { txtExportOptionsSchema } from './txtExport';
 import { dataMarkupFormats } from './dataMarkupExport';
 import { z } from 'zod';
 import { csvExportDelimiters } from './csvExport';
@@ -15,6 +16,7 @@ export const fullQueryExportProfileScope = z.object({ dialect: z.enum(['sqlite',
 const options = z.discriminatedUnion('format', [
   z.object({ format: z.literal('csv'), encoding, delimiter: z.enum(csvExportDelimiters) }).strict(),
   z.object({ format: z.literal('json'), encoding }).strict(),
+  z.object({ format: z.literal('txt'), encoding, txtOptions: txtExportOptionsSchema }).strict(),
   z.object({ format: z.enum(['xlsx', ...dataMarkupFormats]) }).strict(),
   z.object({ format: z.literal('sql'), target: z.union([sqliteQueryInsertTargetSchema, postgresQueryInsertTargetSchema]) }).strict(),
 ]);

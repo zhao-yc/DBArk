@@ -10,7 +10,7 @@ import { csvExportDelimiter } from '../shared/csvExport';
 import { assertResultExcelData } from '../shared/resultExcel';
 import { resultExcelZh } from '../shared/resultExcel.zh-CN';
 import { exportResultExcelFile } from './resultExcelFile';
-import { dataMarkupWriter } from './dataMarkupExport';
+import { dataFileWriter } from './dataMarkupExport';
 import { dataMarkupText, isXmlFormat } from '../shared/dataMarkupExport';
 
 export type ResultFileIO = AtomicFileIO;
@@ -36,7 +36,7 @@ export class ResultFileTasks {
     if (this.closing) throw new Error('客户端正在退出，不能启动结果导出');
     if (!input.taskId || this.has(input.taskId)) throw new Error('任务编号为空或任务已在执行');
     if (!input.filePath) throw new Error('主进程未提供已授权文件路径');
-    const markup = dataMarkupWriter(input.format), markupText = dataMarkupText(input.format);
+    const markup = dataFileWriter(input.format, input.txtOptions), markupText = dataMarkupText(input.format);
     if (!markup && !['csv', 'json', 'sql', 'xlsx'].includes(input.format)) throw new Error(resultSqlZh.formats);
     if (markupText && input.encoding !== 'utf8') throw Error(markupText.utf8);
     validateResultExportData(input.result); const encoding = encodingName(input.encoding), delimiter = csvExportDelimiter(input.format, input.csvDelimiter);

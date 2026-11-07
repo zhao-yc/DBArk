@@ -1,3 +1,5 @@
+import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema } from '../../shared/txtExport';
+import { TxtExportFields } from './TxtExportFields';
 import { useEffect, useRef, useState } from 'react';
 import { Download, Square } from 'lucide-react';
 import type { FileChoice } from '../../shared/contracts';
@@ -14,7 +16,7 @@ import { queryInsertTargetSchema, type QueryInsertPending } from '../../shared/q
 import { queryInsertZh as insertText } from '../../shared/queryInsertExport.zh-CN';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
-import { dataExportExtension, dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataFileFormats, dataFileText, dataMarkupText } from '../../shared/dataMarkupExport';
 
 export type StreamExportOptions = Omit<QueryStreamExportInput, 'sql' | 'sessionId'>;
 
@@ -23,6 +25,8 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   const live=useRef(true),configuration=useRef(0),completedRef=useRef(false);
   const [generation, setGeneration] = useState(0);
   const [format, setFormat] = useState<QueryStreamExportInput['format']>('json'); const [encoding, setEncoding] = useState<QueryStreamExportInput['encoding']>('utf8');
+  const [txtOptions, setTxtOptions] = useState(txtExportDefaults);
+  const validTxt = format !== 'txt' || txtExportOptionsSchema.safeParse(txtOptions).success;
   const markup = dataMarkupText(format);
   const [csvDelimiter, setCsvDelimiter] = useState<CsvExportDelimiter>(',');
   const [protocol, setProtocol] = useState<QueryStreamExportInput['protocol']>('text-strict'); const [ordinal, setOrdinal] = useState('1');
@@ -44,7 +48,7 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   }, []);
   /** 原子目标授权必须先于执行；选择文件期间也不允许关闭或启动第二个选择器。 */
   async function chooseFile() {
-    if (!live.current || generation!==configuration.current || busyRef.current || choosingRef.current || completedRef.current) return;
+    if (!validTxt || !live.current || generation!==configuration.current || busyRef.current || choosingRef.current || completedRef.current) return;
     choosingRef.current = true; setChoosing(true);
     try { const fileFormat = queryExportFileFormat(format); const next = await invoke('files.choose', { purpose: 'export', format: fileFormat, suggestedName: `${text.defaultName}.${dataExportExtension(fileFormat)}`,...(format==='sql'?{queryInsertExport:true as const}:{}) }); if (next && live.current && generation===configuration.current) { setFile(next); setError(''); invalidate(); } }
     catch (reason) { setError(errorMessage(reason)); }
@@ -52,13 +56,13 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   }
   /** 同步锁覆盖最后确认到 IPC finally；失败不把数据库执行当文件写入重试。 */
   async function execute() {
-    if (!live.current || generation!==configuration.current || completedRef.current || !streamExecutionAllowed(file?.token, acknowledged, protocol, binaryAcknowledged, busyRef.current || choosingRef.current || sessionBusy, completed)) return;
+    if (!validTxt || !live.current || generation!==configuration.current || completedRef.current || !streamExecutionAllowed(file?.token, acknowledged, protocol, binaryAcknowledged, busyRef.current || choosingRef.current || sessionBusy, completed)) return;
     let resultSelection: QueryStreamExportInput['resultSelection'];
     let insertTarget:QueryStreamExportInput['insertTarget'];
     try { resultSelection = streamResultSelection(format, ordinal);if(format==='sql')insertTarget=queryInsertTargetSchema.parse({database,table,columns:columns.split('\n')}); } catch (reason) { setError(errorMessage(reason)); return; }
     busyRef.current = true; setBusy(true); setError(''); setProgress(null); setCancelling(false);publishingRef.current=false;setPublishing(false); task.current = uid();
     try {
-      const result = await onExecute({ taskId: task.current, fileToken: file!.token, format, encoding: dataMarkupText(format) ? 'utf8' : encoding, protocol, resultSelection, parameters, ...csvExportOptions(format === 'csv-zip' ? 'csv' : format, csvDelimiter), ...(insertTarget?{insertTarget}:{}) });
+      const result = await onExecute({ taskId: task.current, fileToken: file!.token, format, encoding: dataMarkupText(format) ? 'utf8' : encoding, protocol, resultSelection, parameters, ...csvExportOptions(format === 'csv-zip' ? 'csv' : format, csvDelimiter), ...txtExportOptions(format, txtOptions), ...(insertTarget?{insertTarget}:{}) });
       setOutput(result);
       completedRef.current=true;setCompleted(true);
     } catch (reason) { setError(errorMessage(reason)); setFailed(true); setAcknowledged(false); setBinaryAcknowledged(false); }
@@ -83,20 +87,22 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   function changeDelimiter(value: CsvExportDelimiter) { if (!canConfigure() || generation !== configuration.current || value === csvDelimiter) return; setCsvDelimiter(value); setFile(null); invalidate(); }
   return <>{!parameterDialog && <Modal title={text.title} wide onClose={close}><div className="modal-content">
     <div className="info-strip">{text.warning}</div><h3>{text.source}</h3>{source.length > 65536 && <p className="muted small">{text.sourceLimit}</p>}<pre className="query-stream-source" aria-label={text.source}>{source.slice(0, 65536)}</pre>
-    <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} aria-label={text.format} onChange={event => { if(!canConfigure())return;setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option><option value="csv-zip">{text.csvZip}</option><option value="sql">{insertText.format}</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}</select></Field><Field label={text.encoding}><select disabled={busy || completed || !!markup} value={markup ? 'utf8' : encoding} onChange={event => { if(!canConfigure())return;setEncoding(event.target.value as typeof encoding); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
+    <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} aria-label={text.format} onChange={event => { if(!canConfigure())return;setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option><option value="csv-zip">{text.csvZip}</option><option value="sql">{insertText.format}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}</select></Field><Field label={text.encoding}><select disabled={busy || completed || !!markup} value={markup ? 'utf8' : encoding} onChange={event => { if(!canConfigure())return;setEncoding(event.target.value as typeof encoding); if (format === 'txt') setFile(null); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
     {format==='sql'&&<><p className="warning-text">{insertText.scope}</p><p>{insertText.mapping}</p><div className="form-grid"><Field label={insertText.database}><input disabled={busy||choosing||completed} value={database} aria-label={insertText.database} onChange={event=>{if(!canConfigure())return;setDatabase(event.target.value);invalidate();}}/></Field><Field label={insertText.table}><input disabled={busy||choosing||completed} value={table} aria-label={insertText.table} onChange={event=>{if(!canConfigure())return;setTable(event.target.value);invalidate();}}/></Field></div><Field label={insertText.columns}><textarea disabled={busy||choosing||completed} value={columns} aria-label={insertText.columns} onChange={event=>{if(!canConfigure())return;setColumns(event.target.value);invalidate();}}/></Field></>}
     {(format === 'csv' || format === 'csv-zip') && <CsvExportDelimiterField value={csvDelimiter} disabled={busy || choosing || completed} onChange={changeDelimiter}/>}
-    {markup && <p>{markup.hint} {markup.streamHint}</p>}
+    {format === 'txt' && <div className="form-grid"><TxtExportFields options={txtOptions} disabled={busy || choosing || completed}
+      onChange={value => { if (canConfigure() && generation === configuration.current) { setTxtOptions(value); setFile(null); invalidate(); } }}/></div>}
+    {dataFileText(format) && <p>{dataFileText(format)?.hint} {dataFileText(format)?.streamHint}</p>}
     {format === 'csv-zip' && <UsageHelp><p>{text.csvZipHint}</p></UsageHelp>}
     {queryExportSelectsRowResult(format) && <><Field label={text.ordinal}><input disabled={busy || completed} value={ordinal} inputMode="numeric" onChange={event => { if(!canConfigure())return;setOrdinal(event.target.value); invalidate(); }}/></Field><UsageHelp><p>{text.ordinalHint}</p></UsageHelp></>}
     <Field label={text.protocol}><select disabled={busy || completed} value={protocol} onChange={event => { if(!canConfigure())return;setProtocol(event.target.value as typeof protocol); invalidate(); }}><option value="text-strict">{text.text}</option><option value="binary-explicit">{text.binary}</option></select></Field><p className="warning-text">{protocol === 'text-strict' ? text.textHint : text.binaryHint}</p>
     <div className="parameter-actions"><button disabled={busy || choosing || completed || sessionBusy} onClick={() => {if(canConfigure())setParameterDialog(true);}}>{text.parameters}</button><span>{parameters ? formatText(text.parameterCount, parameters.length) : text.noParameters}</span>{parameters && <button disabled={busy || completed} onClick={() => { if(!canConfigure())return;setParameters(undefined); invalidate(); }}>{text.clearParameters}</button>}</div>
-    <button className="file-picker" disabled={busy || choosing || completed} onClick={() => void chooseFile()}><Download size={20}/><span><strong>{file?.name ?? text.choose}</strong><small>{text.fileHint}</small></span></button>
+    <button className="file-picker" disabled={busy || choosing || completed || !validTxt} onClick={() => void chooseFile()}><Download size={20}/><span><strong>{file?.name ?? text.choose}</strong><small>{text.fileHint}</small></span></button>
     {pending&&<section aria-label={insertText.preview}><h3>{insertText.pending}</h3><p>{insertText.stats(pending.totalRows,pending.shownRows,pending.bytes,pending.encoding)}</p><pre className="query-stream-source">{pending.target.database}.{pending.target.table}{'\n'}{pending.target.columns.join('\n')}</pre><pre className="query-stream-source" aria-label={insertText.preview}>{pending.sql}</pre><Field label={insertText.confirmation}><input disabled={publishing||cancelling} value={confirmation} aria-label={insertText.confirmation} onChange={event=>setConfirmation(event.target.value)}/></Field><label className="query-stream-confirm"><input type="checkbox" aria-label={insertText.acknowledge} checked={publishAck} disabled={publishing||cancelling} onChange={event=>setPublishAck(event.target.checked)}/>{insertText.acknowledge}</label><button className="primary" disabled={publishing||cancelling||!publishAck||confirmation!==pending.target.database+'.'+pending.target.table} onClick={()=>void publish()}>{insertText.publish}</button></section>}
     {failed && <p className="warning-text">{text.retry}</p>}
     {!completed && <><label className="query-stream-confirm"><input type="checkbox" disabled={busy} checked={acknowledged} onChange={event => { if(canConfigure()&&generation===configuration.current)setAcknowledged(event.target.checked); }}/>{text.acknowledge}</label>{protocol === 'binary-explicit' && <label className="query-stream-confirm"><input type="checkbox" disabled={busy} checked={binaryAcknowledged} onChange={event => { if(canConfigure()&&generation===configuration.current)setBinaryAcknowledged(event.target.checked); }}/>{text.binaryAcknowledge}</label>}</>}
     {progress && <div className="query-stream-progress" aria-label={text.progress}><strong>{text[progress.phase]}</strong><p>{formatText(text.stats, progress.statementsCompleted, progress.rowsWritten, progress.bytesWritten)}</p>{progress.sqlMayHaveExecuted && <p className="warning-text">{text.executed}</p>}{!progress.transactionKnown && <p className="warning-text">{text.unknown}</p>}</div>}
     {cancelling && busy && <p>{text.cancelling}</p>}{completed && <div className="success-box">{format==='sql'?insertText.completed:text.completed}</div>}{output && <section aria-label={text.summary}><h3>{text.summary}</h3><ul>{output.results.map(result => <li key={result.resultOrdinal}>{result.kind === 'rows' ? formatText(text.rowSummary, result.resultOrdinal, result.rowResultOrdinal ?? 0, result.rowsWritten) : formatText(text.statusSummary, result.resultOrdinal, result.affectedRows ?? 0, result.insertId ?? '0', result.warningCount ?? 0)}{format === 'csv-zip' && result.kind === 'rows' && <>；{queryCsvResultFile(result.rowResultOrdinal!)}</>}</li>)}</ul></section>}<ErrorBox message={error}/>
-  </div><footer className="modal-footer"><button disabled={busy || choosing || sessionBusy} onClick={close}>{zh.common.close}</button><button disabled={!busy || cancelling} onClick={() => void cancel()}><Square size={13}/>{text.cancel}</button><span className="grow"/>{/* 确认与取消保持独立节点和位置，双击确认的第二击不能变成取消任务。 */}<button className="primary" disabled={!streamExecutionAllowed(file?.token, acknowledged, protocol, binaryAcknowledged, busy || choosing || sessionBusy, completed)} onClick={() => void execute()}>{failed ? text.again : format==='sql'?insertText.start:text.execute}</button></footer></Modal>}
+  </div><footer className="modal-footer"><button disabled={busy || choosing || sessionBusy} onClick={close}>{zh.common.close}</button><button disabled={!busy || cancelling} onClick={() => void cancel()}><Square size={13}/>{text.cancel}</button><span className="grow"/>{/* 确认与取消保持独立节点和位置，双击确认的第二击不能变成取消任务。 */}<button className="primary" disabled={!validTxt || !streamExecutionAllowed(file?.token, acknowledged, protocol, binaryAcknowledged, busy || choosing || sessionBusy, completed)} onClick={() => void execute()}>{failed ? text.again : format==='sql'?insertText.start:text.execute}</button></footer></Modal>}
   {parameterDialog && <QueryParametersDialog source={source} initialParameters={parameters} loadNames={loadNames} submitLabel={text.applyParameters} onExecute={values => { setParameters(values); invalidate(); setParameterDialog(false); }} onClose={() => setParameterDialog(false)}/>}</>;
 }

@@ -1,9 +1,10 @@
+import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { z } from 'zod';
 import { csvExportDelimiters } from './csvExport';
 import { queryParameterTypes, validateQueryParameters, type QueryParameterNames } from './queryParameters';
 import { postgresNewIdentifier } from './postgresCreateTable';
 import { currentPostgresStatement, splitPostgresSql } from './postgresSql';
-import { dataMarkupFormats, dataMarkupText } from './dataMarkupExport';
+import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 
 const parameters = z.array(z.object({name: z.string(), type: z.enum(queryParameterTypes), value: z.string().optional()}).strict())
   .max(200).superRefine((values, context) => {
@@ -28,10 +29,11 @@ export function postgresQueryInsertColumnsForResult(target: z.infer<typeof postg
 export const postgresQueryExportSchema = z.object({
   connectionId: z.string().min(1).max(200), database: z.string().min(1).max(256),
   taskId: z.string().min(1).max(200), fileToken: z.string().min(1).max(200),
-  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json', 'xlsx', 'sql', ...dataMarkupFormats]),
-  encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(),
+  sql: z.string().min(1).max(4 * 1024 * 1024), format: z.enum(['csv', 'json', 'xlsx', 'sql', ...dataFileFormats]),
+  encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(), txtOptions: txtExportOptionsSchema.optional(),
   parameters: parameters.optional(), insertTarget: postgresQueryInsertTargetSchema.optional(),
 }).strict()
+  .refine(validTxtExport, txtExportZh.invalid)
   .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
   .refine(input => input.format === 'sql' ? !!input.insertTarget : input.insertTarget === undefined, '仅 PostgreSQL INSERT SQL 导出需要明确目标')
   .superRefine((input, context) => {

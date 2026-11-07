@@ -1,3 +1,5 @@
+import { txtImportZh } from '../../src/shared/txtImport';
+import { parse as parseTxt } from 'csv-parse/sync';
 import { xmlRecordLayouts, type XmlRecordLayout } from '../../src/shared/dataMarkupExport';
 import { navigationMenuItem } from './navigation-menu';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
@@ -17,8 +19,8 @@ if (active) {
 }
 
 type Desktop = typeof import('./desktop-fixture');
-type Format = 'csv' | 'json' | 'sql' | 'xlsx' | 'html' | 'xml' | XmlRecordLayout;
-const formats = ['csv', 'json', 'sql', 'xlsx', 'html', 'xml', ...xmlRecordLayouts] as const;
+type Format = 'txt' | 'csv' | 'json' | 'sql' | 'xlsx' | 'html' | 'xml' | XmlRecordLayout;
+const formats = ['csv', 'json', 'sql', 'xlsx', 'html', 'xml', ...xmlRecordLayouts, 'txt'] as const;
 const filename = (format: Format) => format.startsWith('xml-') ? format + '.xml' : '全量筛选.' + format;
 type Fact = { request: Record<string, unknown>; reply?: unknown; failure?: string };
 type Event = { taskId: string; status: string; progress: number; rows?: number; message: string };
@@ -33,7 +35,7 @@ let completed: { directory: string; database: string; platform: string; firstPid
 /** 任何失败都保留原owner、profile、源库和实际导出文件，不自动补跑或清理。 */
 test.afterEach(({}, info) => { if (active && info.status !== 'skipped' && !completed) { (require('./desktop-fixture') as Desktop).retainOwnedDesktopResources(info); throw Error('SQLite全量导出未完成两次正常退出，原现场已保留'); } });
 
-test('SQLite原表页第二页完整导出八格式、字段重排、独立读回和SQL类型回放，取消不提交文件', async ({ trace, screenshot, video }, info) => {
+test('SQLite原表页第二页完整导出九种格式、字段重排、独立读回和SQL类型回放，取消不提交文件', async ({ trace, screenshot, video }, info) => {
   const runtime = require('./desktop-fixture') as Desktop;
   const { join, resolve, dirname, basename } = require('node:path') as typeof import('node:path');
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
@@ -140,6 +142,12 @@ test('SQLite原表页第二页完整导出八格式、字段重排、独立读�
       expect(records).toEqual(projection.map(row => ['RECORD', Object.entries(row).flatMap(([name, value]) =>
         value === null ? [] : [[name, typeof value === 'object' ? value.base64 : value]])]));
     }
+    if (format === 'txt') {
+      const records = parseTxt(bytes, {delimiter: '|', record_delimiter: '\n'}) as string[][];
+      expect(records.shift()).toEqual(selected);
+      expect(records).toEqual(projection.map(row => Object.values(row).map(value =>
+        value === null ? '\\N' : typeof value === 'object' ? 'base64:' + value.base64 : String(value).replace(/^\\/, '\\\\'))));
+    }
     if (format === 'csv') {
       const { parse } = require('csv-parse/sync') as typeof import('csv-parse/sync'); const records = parse(bytes, { bom: true }) as string[][];
       expect(records.shift()).toEqual(selected);
@@ -198,6 +206,10 @@ test('SQLite原表页第二页完整导出八格式、字段重排、独立读�
     for (const format of formats) {
       stage = '真实全部筛选行导出及独立读回：' + format; const previous = (await step(audit)).exports.length;
       await step(async () => (await navigationMenuItem(table().locator('.toolbar'), { name: '导出全部筛选行', exact: true }, check)).click()); await step(() => expect(dialog()).toBeVisible()); await step(() => dialog().getByLabel('SQLite 全量导出格式', { exact: true }).selectOption(format)); if (format === 'xlsx' || format === 'html' || format.startsWith('xml')) { await step(() => expect(dialog().getByLabel('SQLite 全量导出编码', { exact: true })).toBeDisabled()); await step(() => expect(dialog().getByLabel('SQLite 全量导出编码', { exact: true })).toHaveValue('utf8')); } else await step(() => dialog().getByLabel('SQLite 全量导出编码', { exact: true }).selectOption('utf8'));
+      if (format === 'txt') {
+        await step(() => dialog().getByLabel(txtImportZh.delimiter, {exact: true}).selectOption('|'));
+        await step(() => dialog().getByLabel(txtImportZh.record, {exact: true}).selectOption('lf'));
+      }
       for (const column of ['bucket', 'rank_num']) await step(() => dialog().getByRole('checkbox', { name: '导出 SQLite 字段 ' + column, exact: true }).uncheck());
       // 通过真实上移入口按名字重排；不读取或写入React/Zustand内部状态。
       const order = ['id', 'note', 'mixed', 'nullable', 'payload', 'exact_int', 'real_num'];
@@ -206,10 +218,10 @@ test('SQLite原表页第二页完整导出八格式、字段重排、独立读�
       await step(() => expect.poll(async () => { const state = await audit(); return state.exports.length === previous + 1 && state.exports.at(-1)?.reply !== undefined; }).toBe(true)); const facts = await step(audit), exported = facts.exports.at(-1); expect(exported?.failure).toBeUndefined(); expect(exported?.reply).toEqual({ ok: true, result: { rows: filtered.length, fileCommitted: true } }); expect(exported?.request).toMatchObject({ connectionId: profile.id, database: 'main', table: tableName, mode: 'and', filters: secondPage?.request.filters, sort: secondPage?.request.sort, format, encoding: 'utf8', columns: selected }); expect(exported?.request.schemaKey).toMatch(/^[0-9a-f]{64}$/); expect(exported?.request).not.toHaveProperty('offset'); expect(exported?.request).not.toHaveProperty('limit');
       const events = facts.events.filter(event => event.taskId === exported?.request.taskId); expect(events.some(event => event.status === 'running' && (event.rows ?? 0) >= 100 && (event.rows ?? 0) < filtered.length)).toBe(true); expect(events.at(-1)).toMatchObject({ status: 'completed', progress: 100, rows: filtered.length }); await readExport(format); expect(disk()).toEqual(baseline);
       await step(() => expect(dialog().getByText('SQLite 全量导出已保存 ' + filtered.length + ' 行。', { exact: true })).toBeVisible());
-      if (format === 'html' || format.startsWith('xml')) await step(() => dialog().screenshot({ path: info.outputPath('SQLite表页' + format.toUpperCase() + '导出.png') }));
+      if (format === 'txt' || format === 'html' || format.startsWith('xml')) await step(() => dialog().screenshot({ path: info.outputPath('SQLite表页' + format.toUpperCase() + '导出.png') }));
       await step(() => expect(dialog().getByRole('button', { name: '关闭 SQLite 全量导出', exact: true })).toBeEnabled()); await step(() => dialog().getByRole('button', { name: '关闭 SQLite 全量导出', exact: true }).click()); await expectIds(filtered.slice(5, 10).map(row => row.id)); expect((await step(audit)).pages.at(-1)?.request.offset).toBe(5);
     }
-    stage = '完整请求/任务边界及源库不变'; await step(() => expect.poll(async () => (await tasks()).every(task => ['sqlite.tablePage', 'sqlite.tableExport'].includes(task.kind) && task.status === 'completed')).toBe(true)); const firstFacts = await step(audit), firstTasks = await tasks(); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerCalls).toBe(1); expect(firstFacts.saveCalls).toHaveLength(9); expect(firstFacts.exports).toHaveLength(8); expect(firstFacts.pages).toHaveLength(3); expect(firstFacts.commands.some(command => command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('table.') || command.startsWith('schema.') || /clipboard/i.test(command))).toBe(false); expect(await history()).toEqual([]); expect(runtime.pageErrors).toEqual([]); noPartial(); expect(disk()).toEqual(baseline);
+    stage = '完整请求/任务边界及源库不变'; await step(() => expect.poll(async () => (await tasks()).every(task => ['sqlite.tablePage', 'sqlite.tableExport'].includes(task.kind) && task.status === 'completed')).toBe(true)); const firstFacts = await step(audit), firstTasks = await tasks(); expect(firstFacts.denied).toEqual([]); expect(firstFacts.pickerCalls).toBe(1); expect(firstFacts.saveCalls).toHaveLength(formats.length + 1); expect(firstFacts.exports).toHaveLength(formats.length); expect(firstFacts.pages).toHaveLength(3); expect(firstFacts.commands.some(command => command.startsWith('query.') || command.startsWith('sessions.') || command.startsWith('table.') || command.startsWith('schema.') || /clipboard/i.test(command))).toBe(false); expect(await history()).toEqual([]); expect(runtime.pageErrors).toEqual([]); noPartial(); expect(disk()).toEqual(baseline);
     const persisted = await settings(); expect(persisted.tabs).toHaveLength(1); expect(persisted.tabs[0]).toMatchObject({ kind: 'table', table: tableName, connectionId: profile.id });
     await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => { const state = (globalThis as typeof globalThis & { __sqliteTableExportNative?: { restore(): void } }).__sqliteTableExportNative; if (!state) throw Error('原观察器失效'); state.restore(); }), true); armed = false;
     stage = '第一owner正常退出'; check(); await runtime.confirmOwnedDesktopExit(info); closed = true; check(); expect(originalProcess.exitCode).toBe(0); const firstPid = originalProcess.pid;

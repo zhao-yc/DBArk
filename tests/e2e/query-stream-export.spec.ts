@@ -1,3 +1,4 @@
+import { txtImportZh } from '../../src/shared/txtImport';
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -64,13 +65,13 @@ async function count(observer: Connection, database: string, condition = '1=1') 
   return Number(rows[0].total);
 }
 /** 选择格式和目标后仍需明确新执行确认，双协议确认相互独立。 */
-async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'html' | 'xml' | XmlRecordLayout = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
-  await observeEvents(); await choosePath(path, isXmlRecordLayout(format) ? 'xml' : undefined);
+async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' | 'html' | 'xml' | 'txt' | XmlRecordLayout = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
+  await observeEvents(); await choosePath(path, isXmlRecordLayout(format) ? 'xml' : format === 'txt' ? 'txt' : undefined);
   await (await navigationMenuItem(query(), { name: '新执行并完整导出', exact: true })).click();
   const modal = dialog(); await expect(modal).toBeVisible();
   await modal.getByRole('combobox', { name: '完整文件格式', exact: true }).selectOption(format);
   await modal.getByRole('combobox', { name: '执行协议', exact: true }).selectOption(protocol);
-  if (format === 'csv' || isXmlRecordLayout(format)) await modal.getByRole('textbox', { name: '行结果集序号', exact: true }).fill(String(ordinal));
+  if (format === 'csv' || format === 'txt' || isXmlRecordLayout(format)) await modal.getByRole('textbox', { name: '行结果集序号', exact: true }).fill(String(ordinal));
   await expect((await navigationMenuItem(modal, { name: '确认新执行并导出', exact: true }))).toBeDisabled();
   await modal.locator('.file-picker').click();
   if (path) await expect(modal.locator('.file-picker')).toContainText(basename(path));
@@ -138,6 +139,31 @@ async function restorePathGate() { await desktop.evaluate(() => { const state = 
 test.describe('实库完整 SQL 流式导出', () => {
   test.skip(!enabled, '需要显式启用 DBARK_INTEGRATION_ENABLED 并配置已核对的远程测试实例');
   test.describe.configure({ timeout: 180000 });
+
+  test('TXT 完整导出只写第二个行结果并在配置变化后撤销原选择', async ({}, info) => {
+    await isolatedDatabase(async ({observer, database}) => {
+      await observer.query(`CREATE TABLE \`${database}\`.stream_guard(id INT PRIMARY KEY)`);
+      await openDatabaseQuery(database);
+      await mkdir(info.outputDir, {recursive: true});
+      const target = info.outputPath('查询结果.txt');
+      await writeSql("SELECT '跳过' AS note; INSERT INTO stream_guard VALUES(1); SELECT '前|''后|' AS note, NULL AS missing, '' AS `empty`, UNHEX('00FF') AS bytes;");
+      const modal = await openExport(target, 'txt', 2);
+      await modal.getByLabel(txtImportZh.delimiter, {exact: true}).selectOption('');
+      await modal.getByLabel(txtImportZh.custom, {exact: true}).fill('||');
+      await modal.getByLabel(txtImportZh.quote, {exact: true}).selectOption('single');
+      await modal.getByLabel(txtImportZh.record, {exact: true}).selectOption('lf');
+      await expect(modal.locator('.file-picker')).not.toContainText(basename(target));
+      await modal.locator('.file-picker').click();
+      const event = await finish(await start(modal));
+      expect(event?.queryExport).toMatchObject({statementsCompleted: 3, rowsWritten: 1, fileCommitted: true});
+      expect(await count(observer, database)).toBe(1);
+      expect(parseCsv(await readFile(target), {delimiter: '||', quote: "'", escape: "'", record_delimiter: '\n'})).toEqual([
+        ['note', 'missing', 'empty', 'bytes'], ["前|'后|", '\\N', '', 'base64:AP8='],
+      ]);
+      await modal.screenshot({path: info.outputPath('完整查询TXT.png')});
+      await closeExport();
+    }, info, {captureFailureScreenshot: false});
+  });
 
   test('XML 完整导出保留协议顺序、重名列、空结果和类型', async ({}, info) => {
     await isolatedDatabase(async ({observer, database}) => {

@@ -11,7 +11,7 @@ import type { SqliteValue } from '../engine/sqlite/protocol';
 import type { SqliteDriverSession } from '../engine/sqlite/session';
 import type { SqliteExportDestination, SqliteTableExportFile } from './sqliteTableExport';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
-import { dataMarkupWriter } from '../engine/dataMarkupExport';
+import { dataFileWriter } from '../engine/dataMarkupExport';
 
 export type SqliteQueryExportRequest = SqliteQueryExportInput & SqliteExportDestination;
 
@@ -26,7 +26,7 @@ export function sqliteQueryExportBindings(input: SqliteQueryExportInput): Record
 /** 只在收到原生列定义后打开暂存，按批次落盘。真正发布由任务在确认只读进程退出后处理。 */
 export async function prepareSqliteQueryExport(driver: SqliteDriverSession, input: SqliteQueryExportRequest,
   namedParameters: Record<string, SqliteValue>, file: SqliteTableExportFile, check: () => void, progress: (rows: number) => void): Promise<number> {
-  const markup = dataMarkupWriter(input.format);
+  const markup = dataFileWriter(input.format, input.txtOptions);
   const delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
   let columns: string[] | undefined;
   let excel: ReturnType<typeof startExcelExportRows> | undefined;

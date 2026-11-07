@@ -1,3 +1,4 @@
+import { txtExportOptionsSchema, txtExportZh, validTxtExport } from './txtExport';
 import { z } from 'zod';
 import { csvExportDelimiters } from './csvExport';
 import { queryParameterLimits, queryParameterTypes } from './queryParameters';
@@ -5,7 +6,7 @@ import { validateSqliteQueryParameters } from './sqliteQueryParameters';
 import { sqliteTableExportSchema } from './sqliteTableExport';
 import { sqliteInsertIdentifier, sqliteInsertIdentifierKey } from './resultSql';
 import { locateSqliteStatement, sqliteLeadingKeyword } from './sqliteStatementScanner';
-import { dataMarkupFormats, dataMarkupText } from './dataMarkupExport';
+import { dataFileFormats, dataMarkupText } from './dataMarkupExport';
 
 /** 只截取光标所在的原文。真正执行仍由独立只读进程验证语句边界及权限。 */
 export function sqliteCurrentQueryExportSource(source: string, offset: number): string {
@@ -42,9 +43,10 @@ export function sqliteQueryInsertColumnsForResult(target: z.infer<typeof sqliteQ
 export const sqliteQueryExportSchema = z.object({
   connectionId: sqliteTableExportSchema.shape.connectionId, taskId: sqliteTableExportSchema.shape.taskId,
   fileToken: sqliteTableExportSchema.shape.fileToken, encoding: sqliteTableExportSchema.shape.encoding,
-  sql, format: z.enum(['csv', 'json', 'xlsx', 'sql', ...dataMarkupFormats]), csvDelimiter: z.enum(csvExportDelimiters).optional(),
+  sql, format: z.enum(['csv', 'json', 'xlsx', 'sql', ...dataFileFormats]), csvDelimiter: z.enum(csvExportDelimiters).optional(), txtOptions: txtExportOptionsSchema.optional(),
   parameters: parameters.optional(), insertTarget: sqliteQueryInsertTargetSchema.optional(),
 }).strict()
+  .refine(validTxtExport, txtExportZh.invalid)
   .refine(input => input.csvDelimiter === undefined || input.format === 'csv', '分隔符仅用于 CSV 导出')
   .refine(input => input.format === 'sql' ? !!input.insertTarget : input.insertTarget === undefined, '仅 SQLite INSERT SQL 导出需要明确目标')
   .superRefine((input, context) => {

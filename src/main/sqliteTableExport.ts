@@ -12,7 +12,7 @@ import { csvCell, csvHeader } from '../engine/files';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import { buildSqliteTableSelect, quoteSqliteIdentifier, readSqliteTableCatalogue, verifySqliteTableScope, type SqliteTableBrowseControl } from './sqliteTableBrowse';
 import { readSqliteSchemaExport } from './sqliteSchemaExport';
-import { dataMarkupWriter } from '../engine/dataMarkupExport';
+import { dataFileWriter } from '../engine/dataMarkupExport';
 
 export const sqliteTableExportLimits = { fileBytes: 10 * 1024 ** 3 } as const;
 /** 只有Main同进程可注入原窗口、目标复核及跨入口预留，公共IPC没有这些能力。 */
@@ -139,7 +139,7 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
   if (!driver.readOnly) throw Error('SQLite完整导出必须使用独立物理只读连接');
   const { filePath: _path, assertCurrent: _owner, validateDestination: _destination, retainDestinationUntil: _retain, ...publicInput } = input;
   const parsed = sqliteTableExportSchema.parse(publicInput);
-  const markup = dataMarkupWriter(parsed.format); let count = 0, failed = false, failure: unknown;
+  const markup = dataFileWriter(parsed.format, parsed.txtOptions); let count = 0, failed = false, failure: unknown;
   let excel: ReturnType<typeof startExcelExportRows> | undefined;
   try {
     control.check(); await driver.execute('BEGIN'); control.check();

@@ -1,3 +1,5 @@
+import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema, type TxtExportOptions } from '../../shared/txtExport';
+import { TxtExportFields } from './TxtExportFields';
 import { tableSortRuleSummary } from '../tableSort';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FileChoice, TaskEvent } from '../../shared/contracts';
@@ -8,7 +10,7 @@ import { filterRuleSummary } from '../tableFilters';
 import { tableFilterGroupSummary } from '../tableFilterGroups';
 import { errorMessage, invoke, uid } from '../lib';
 import { tableFilteredExportZh as text } from '../locales/tableFilteredExport.zh-CN';
-import { dataExportExtension, dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataFileFormats, dataFileText, dataMarkupText } from '../../shared/dataMarkupExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 
@@ -21,13 +23,13 @@ export const tableFilteredExportServices: TableFilteredExportServices = {
   choose: input => invoke('files.choose', input), execute: input => invoke('table.exportFiltered', input), cancel: taskId => invoke('query.cancel', { taskId }), subscribe: listener => window.dbark.onTask(listener),
 };
 interface Props { intent: TableFilteredExportIntent; services?: TableFilteredExportServices; onActivity(delta: 1 | -1): void; onClose(): void; onCleanupError(message: string): void; onCommitted?(result: TableFilteredExportOutput, sourceChanged: boolean): void; }
-type Draft = { format: TableFilteredExportInput['format']; encoding: TableFilteredExportInput['encoding']; csvDelimiter: CsvExportDelimiter; columns: string[]; file?: FileChoice; problem?: string; done?: { output: TableFilteredExportOutput; changed: boolean } };
+type Draft = { format: TableFilteredExportInput['format']; encoding: TableFilteredExportInput['encoding']; csvDelimiter: CsvExportDelimiter; txtOptions: TxtExportOptions; columns: string[]; file?: FileChoice; problem?: string; done?: { output: TableFilteredExportOutput; changed: boolean } };
 type Operation = { kind: 'choose' | 'export'; id?: string; cancelled: boolean; promise: Promise<void>; cancel?: Promise<void> };
 
 /** 全量服务器导出与本地数据草稿分离，所有异步回包只归属于原意图和原操作。 */
 export function TableFilteredExportDialog({ intent, services = tableFilteredExportServices, ...callbacks }: Props) {
   const owner = useRef({ intent, services, callbacks }).current;
-  const [draft, setDraft] = useState<Draft>({ format: 'csv', encoding: 'utf8', csvDelimiter: ',', columns: owner.intent.source.columns.map(column => column.name) }), live = useRef(draft); live.current = draft;
+  const [draft, setDraft] = useState<Draft>({ format: 'csv', encoding: 'utf8', csvDelimiter: ',', txtOptions: txtExportDefaults, columns: owner.intent.source.columns.map(column => column.name) }), live = useRef(draft); live.current = draft;
   const [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [stale, setStale] = useState(false), [progress, setProgress] = useState<TaskEvent>();
   const mounted = useRef(true), closed = useRef(false), invalid = useRef(false), operation = useRef<Operation | undefined>(undefined), committed = useRef<object | undefined>(undefined), consumed = useRef(false);
   const ticket = {};
@@ -58,7 +60,7 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
     consumed.current = false; setProgress(undefined);
     // SQL只呈现可写入INSERT的选择；返回其它格式不偷偷补回此前取消的字段。
     const columns = [...(next.columns ?? draft.columns)].filter(name => next.format !== 'sql' || !owner.intent.source.columns.find(column => column.name === name)?.generated);
-    replace({ format: next.format, encoding: next.format === 'xlsx' || dataMarkupText(next.format) ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, columns });
+    replace({ format: next.format, encoding: next.format === 'xlsx' || dataMarkupText(next.format) ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, txtOptions: next.txtOptions ?? draft.txtOptions, columns });
   }
   /** 字段与顺序同属原草稿租约；旧渲染回调及运行中的选择不能替换已确定的输出范围。 */
   function changeFields(columns: string[]): void { change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, columns }); }
@@ -75,7 +77,7 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
   }
   /** 文件chooser等待期间父标签也保持占用，迟到文件令牌不会绑定新来源或新格式。 */
   function choose(): void {
-    if (!editable()) return;
+    if (!editable() || !validTxt) return;
     try { selectTableFilteredExportColumns(owner.intent.source, { format: draft.format, columns: draft.columns }); }
     catch (reason) { replace({ ...draft, problem: draft.columns.length ? errorMessage(reason) : text.emptyFields }); return; }
     const chosen = draft;
@@ -96,9 +98,9 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
   }
   /** 原任务编号、文件能力与完整条件在首次await前固定；失败后需重新选文件，绝不自动重放。 */
   function execute(): void {
-    if (!editable() || !draft.file || draft.done || consumed.current) return;
+    if (!editable() || !validTxt || !draft.file || draft.done || consumed.current) return;
     let input: TableFilteredExportInput;
-    try { input = owner.intent.input({ format: draft.format, encoding: draft.encoding, columns: draft.columns, ...(draft.format === 'csv' ? { csvDelimiter: draft.csvDelimiter } : {}) }, draft.file.token, uid()); }
+    try { input = owner.intent.input({ format: draft.format, encoding: draft.encoding, columns: draft.columns, ...txtExportOptions(draft.format, draft.txtOptions), ...(draft.format === 'csv' ? { csvDelimiter: draft.csvDelimiter } : {}) }, draft.file.token, uid()); }
     catch (reason) { replace({ ...draft, problem: errorMessage(reason) }); return; }
     consumed.current = true; const chosen = { ...draft, problem: undefined }; replace(chosen); setProgress(undefined);
     let active: Operation;
@@ -138,14 +140,17 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
   }, []);
   const valid = current(), active = operation.current, disabled = busy || closing || !valid;
   const markup = dataMarkupText(draft.format);
+  const validTxt = draft.format !== 'txt' || txtExportOptionsSchema.safeParse(draft.txtOptions).success;
   const sqlUnavailable = draft.format === 'sql' && (owner.intent.source.objectKind !== 'table' || !owner.intent.source.columns.some(column => !column.generated));
   return <Modal title={text.title} wide onClose={close}><div className="modal-content" data-table-filtered-export-dialog aria-busy={busy || closing}>
     <p>{owner.intent.target.database}.{owner.intent.target.table}</p><p>{text.scope}</p><p className="warning-text">{text.committedOnly}</p>
     <section aria-label={text.conditions}><strong>{text.conditions}</strong>{owner.intent.conditions.filters.length ? <ul>{owner.intent.conditions.filters.map((filter, index) => <li key={index}>{filter.enabled === false ? text.disabled : ''}{filterRuleSummary(filter)}</li>)}</ul> : <p>{text.noConditions}</p>}{owner.intent.conditions.filterGroup && <p>{tableFilterGroupSummary(owner.intent.conditions.filterGroup)}</p>}</section>
     <section aria-label={text.sorts}><strong>{text.sorts}</strong>{owner.intent.sort.length ? <ol>{owner.intent.sort.map((rule, index) => <li key={index}>{tableSortRuleSummary(rule)}</li>)}</ol> : <p>{text.noSorts}</p>}</section>
-    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql" disabled={owner.intent.source.objectKind !== 'table'}>INSERT SQL</option><option value="xlsx">Excel（XLSX）</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}</select></Field>
+    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql" disabled={owner.intent.source.objectKind !== 'table'}>INSERT SQL</option><option value="xlsx">Excel（XLSX）</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}</select></Field>
       <Field label={text.encoding}><select aria-label={text.encoding} disabled={disabled || draft.format === 'xlsx' || !!markup} value={draft.encoding} onChange={event => change({ format: draft.format, encoding: event.target.value as Draft['encoding'], csvDelimiter: draft.csvDelimiter })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <CsvExportDelimiterField value={draft.csvDelimiter} disabled={disabled} onChange={csvDelimiter => change({ format: draft.format, encoding: draft.encoding, csvDelimiter })}/>}</div>
-    {markup && <p>{markup.hint}</p>}
+    {draft.format === 'txt' && <div className="form-grid"><TxtExportFields options={draft.txtOptions} disabled={disabled}
+      onChange={txtOptions => change({ format: draft.format, encoding: draft.encoding, columns: draft.columns, txtOptions })}/></div>}
+    {dataFileText(draft.format) && <p>{dataFileText(draft.format)?.hint}</p>}
     {draft.format === 'xlsx' && <UsageHelp><p>{text.xlsxEncoding}</p><p>{text.xlsxLimits}</p></UsageHelp>}{draft.format === 'sql' && <p className="warning-text">{text.sqlScope}</p>}{owner.intent.source.objectKind !== 'table' && <p className="muted small">{text.viewSql}</p>}
     <section aria-label={text.fields}><strong>{text.fields}</strong><UsageHelp><p>{text.allFields}</p><p>{text.atomic}</p></UsageHelp>
       <button type="button" disabled={disabled} onClick={() => changeFields(owner.intent.source.columns.filter(column => draft.format !== 'sql' || !column.generated).map(column => column.name))}>{text.selectAllFields}</button><button type="button" disabled={disabled} onClick={() => changeFields([])}>{text.clearFields}</button>
@@ -153,7 +158,7 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
       <ol aria-label={text.fieldOrder}>{draft.columns.map((name, position) => <li key={name}><span>{name}</span> <button type="button" aria-label={text.fieldUp(name)} disabled={disabled || position === 0} onClick={() => moveField(name, -1)}>{text.moveUp}</button> <button type="button" aria-label={text.fieldDown(name)} disabled={disabled || position + 1 === draft.columns.length} onClick={() => moveField(name, 1)}>{text.moveDown}</button></li>)}</ol>
       {!draft.columns.length && <p className="warning-text">{text.emptyFields}</p>}
     </section>
-    <button className="file-picker" disabled={disabled || sqlUnavailable || !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
+    <button className="file-picker" disabled={disabled || !validTxt || sqlUnavailable || !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
     {busy && <Spinner text={active?.kind === 'choose' ? text.choosing : text.running}/>} {closing && <p>{text.closing}</p>}
     {progress && <div className="transfer-progress"><span>{progress.message}</span><progress value={progress.progress} max={100}/></div>}
     {draft.done && <div className="success-box">{draft.done.changed ? text.committedChanged(draft.done.output.rows) : text.completed(draft.done.output.rows)}</div>}

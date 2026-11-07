@@ -1,8 +1,10 @@
+import { txtExportDefaults, txtExportOptions, txtExportOptionsSchema } from '../../shared/txtExport';
+import { TxtExportFields } from './TxtExportFields';
 import { useEffect, useRef, useState } from 'react';
 import type { FileChoice } from '../../shared/contracts';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import type { FullQueryExportOptions } from '../../shared/fullQueryExportProfiles';
-import { dataExportExtension, dataMarkupFormats, dataMarkupText } from '../../shared/dataMarkupExport';
+import { dataExportExtension, dataFileFormats, dataFileText, dataMarkupText } from '../../shared/dataMarkupExport';
 import { postgresExportParameterNames, postgresQueryInsertTargetSchema, type PostgresQueryExportInput } from '../../shared/postgresQueryExport';
 import { sqliteQueryInsertTargetSchema, type SqliteQueryExportInput } from '../../shared/sqliteQueryExport';
 import type { QueryParameter } from '../../shared/queryParameters';
@@ -30,6 +32,8 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   const text = sqlite ? sqliteQueryExportZh : postgresQueryExportZh;
   const [format, setFormat] = useState<SqliteQueryExportInput['format'] | PostgresQueryExportInput['format']>('csv');
   const [insertDatabase, setInsertDatabase] = useState(sqlite ? 'main' : 'public'), [insertTable, setInsertTable] = useState(''), [insertColumns, setInsertColumns] = useState('');
+  const [txtOptions, setTxtOptions] = useState(txtExportDefaults);
+  const validTxt = format !== 'txt' || txtExportOptionsSchema.safeParse(txtOptions).success;
   const markup = dataMarkupText(format);
   const insert = format === 'sql', fixedEncoding = insert || format === 'xlsx' || !!markup;
   const [encoding, setEncoding] = useState<PostgresQueryExportInput['encoding']>('utf8');
@@ -43,6 +47,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   let profileOptions: FullQueryExportOptions | undefined;
   if (format === 'csv') profileOptions = { format, encoding, delimiter };
   else if (format === 'json') profileOptions = { format, encoding };
+  else if (format === 'txt') { if (validTxt) profileOptions = { format, encoding, txtOptions }; }
   else if (format !== 'sql') profileOptions = { format };
   else if (target?.success) profileOptions = { format, target: target.data };
   const [file, setFile] = useState<FileChoice | null>(null);
@@ -69,7 +74,8 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
     if (picking.current || task.current || !current()) return false;
     setFormat(options.format);
     if (options.format === 'csv') setDelimiter(options.delimiter);
-    if (options.format === 'csv' || options.format === 'json') setEncoding(options.encoding);
+    if (options.format === 'txt') setTxtOptions(options.txtOptions);
+    if (options.format === 'csv' || options.format === 'json' || options.format === 'txt') setEncoding(options.encoding);
     if (options.format === 'sql') {
       const { target } = options;
       setInsertDatabase('database' in target ? target.database : target.schema);
@@ -81,7 +87,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   }
 
   async function choose() {
-    if (picking.current || task.current || !current() || invalidTarget) return;
+    if (picking.current || task.current || !current() || invalidTarget || !validTxt) return;
     picking.current = true;
     setPending('pick'); setFile(null); setError(''); setRows(undefined);
     try {
@@ -93,7 +99,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
   }
 
   async function run() {
-    if (!file || picking.current || task.current || !current() || invalidTarget) return;
+    if (!file || picking.current || task.current || !current() || invalidTarget || !validTxt) return;
     const taskId = uid();
     task.current = taskId;
     let job: ReturnType<typeof acquireWorkspaceBusy> | undefined;
@@ -102,7 +108,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       job = acquireWorkspaceBusy(source.tabId);
       if (!current()) throw Error(text.changed);
       const input = {connectionId: source.connectionId, sql: source.sql, taskId, fileToken: file.token,
-        encoding: fixedEncoding ? 'utf8' as const : encoding, ...csvExportOptions(format, delimiter), ...(parameters ? {parameters} : {})};
+        encoding: fixedEncoding ? 'utf8' as const : encoding, ...csvExportOptions(format, delimiter), ...txtExportOptions(format, txtOptions), ...(parameters ? {parameters} : {})};
       const result = sqlite
         ? await invoke('sqlite.queryExport', {...input, format, ...(sqliteTarget?.success ? {insertTarget: sqliteTarget.data} : {})})
         : await invoke('postgres.query.export', {...input, format, database: source.database,
@@ -139,13 +145,13 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
       <button disabled={!!pending || stale} onClick={() => setEditingParameters(true)}>{text.parameters}</button>
       {parameters && <p>{text.parameterCount(parameters.length)}</p>}
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={!!pending}
-        onChange={event => { const value = event.target.value; if (['csv', 'json', 'xlsx', 'sql', ...dataMarkupFormats].includes(value)) setFormat(value as typeof format); setFile(null); setRows(undefined); }}>
-        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>{dataMarkupFormats.map(value => <option key={value} value={value}>{dataMarkupText(value)?.format}</option>)}
+        onChange={event => { const value = event.target.value; if (['csv', 'json', 'xlsx', 'sql', ...dataFileFormats].includes(value)) setFormat(value as typeof format); setFile(null); setRows(undefined); }}>
+        <option value="csv">CSV</option><option value="json">JSON</option><option value="xlsx">Excel (.xlsx)</option><option value="sql">{text.insertFormat}</option>{dataFileFormats.map(value => <option key={value} value={value}>{dataFileText(value)?.format}</option>)}
       </select></Field>
       {sqlite && format === 'json' && <p>{sqliteQueryExportZh.formatHint}</p>}
-      {markup && <p>{markup.hint}</p>}
+      {dataFileText(format) && <p>{dataFileText(format)?.hint}</p>}
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={fixedEncoding ? 'utf8' : encoding} disabled={!!pending || fixedEncoding}
-        onChange={event => { const value = event.target.value; if (value === 'utf8' || value === 'utf16le' || value === 'gb18030') setEncoding(value); }}>
+        onChange={event => { const value = event.target.value; if (value === 'utf8' || value === 'utf16le' || value === 'gb18030') { setEncoding(value); if (format === 'txt') { setFile(null); setRows(undefined); } } }}>
         <option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option>
       </select></Field>
       {insert && <>
@@ -157,9 +163,10 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
         <Field label={text.insertColumns}><textarea aria-label={text.insertColumns} disabled={!!pending} value={insertColumns} rows={3} maxLength={263168}
           onChange={event => { setInsertColumns(event.target.value); setFile(null); setRows(undefined); }}/></Field>
       </>}
+      {format === 'txt' && <div className="form-grid"><TxtExportFields options={txtOptions} disabled={!!pending || stale} onChange={value => { if (!picking.current && !task.current && current()) { setTxtOptions(value); setFile(null); setRows(undefined); } }}/></div>}
       {format === 'csv' && <CsvExportDelimiterField value={delimiter} disabled={!!pending} onChange={setDelimiter}/>}
       <FullQueryExportProfiles dialect={sqlite ? 'sqlite' : 'postgresql'} options={profileOptions} disabled={!!pending || stale} onApply={applyProfile}/>
-      <button disabled={!!pending || stale || invalidTarget} onClick={() => void choose()}>{file?.name ?? zh.resultExport.chooseFile}</button>
+      <button disabled={!!pending || stale || invalidTarget || !validTxt} onClick={() => void choose()}>{file?.name ?? zh.resultExport.chooseFile}</button>
       {pending === 'write' && <p role="status">{cancelling ? text.cancelling : progress}</p>}
       {rows !== undefined && <div role="status" className="success-box">{text.done(rows)}</div>}
       <ErrorBox message={error || (stale ? text.changed : insertTable && target?.success === false ? target.error.issues[0]?.message ?? '' : '')}/>
@@ -167,7 +174,7 @@ export function FullQueryExportDialog({source, onClose}: {source: FullQueryExpor
     <footer className="modal-footer">
       {pending === 'write' && <button disabled={cancelling} onClick={() => void cancel()}>{zh.common.cancel}</button>}
       <button disabled={!!pending} onClick={onClose}>{zh.common.close}</button>
-      <button className="primary" disabled={!!pending || !file || stale || invalidTarget} onClick={() => void run()}>{text.start}</button>
+      <button className="primary" disabled={!!pending || !file || stale || invalidTarget || !validTxt} onClick={() => void run()}>{text.start}</button>
     </footer>
   </Modal>;
 }

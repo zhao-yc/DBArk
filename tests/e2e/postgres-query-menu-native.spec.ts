@@ -1,3 +1,5 @@
+import { txtImportZh } from '../../src/shared/txtImport';
+import { parse as parseTxt } from 'csv-parse/sync';
 import { Client } from 'pg';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -819,7 +821,8 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     expect(owner).toHaveLength(1);
     expect(owner[0].state).toBe('idle in transaction');
     const recordXml = info.outputPath('完整查询记录属性.xml');
-    const output = [csv, csv, json, xlsx, html, xml, insertFile, unchanged, cancelledExcel, cancelledSql, cancelledHtml, recordXml];
+    const txt = info.outputPath('完整查询.txt');
+    const output = [csv, csv, json, xlsx, html, xml, insertFile, unchanged, cancelledExcel, cancelledSql, cancelledHtml, recordXml, txt];
     await desktop.evaluate(({dialog, BrowserWindow}, paths) => {
       const original = dialog.showSaveDialog;
       let count = 0;
@@ -999,7 +1002,22 @@ test('PostgreSQL 完整查询导出分批保存 CSV、JSON 和 Excel 并保护�
     expect(recordResult).toEqual({root: 'RECORDS', count: 4099,
       last: [['id', '9007199254745092'], ['amount', '0.12345678901234567890'], ['note', '行4099'], ['bytes', 'AP8=']]});
     await close();
-    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(12);
+    await open();
+    await dialog.getByLabel(zh.resultExport.format).selectOption('txt');
+    await dialog.getByLabel(zh.resultExport.encoding).selectOption('utf16le');
+    await dialog.getByLabel(txtImportZh.delimiter, {exact: true}).selectOption('|');
+    await start();
+    await expect(dialog.getByText(fullExportText.done(4099), {exact: true})).toBeVisible();
+    const txtBytes = await readFile(txt);
+    expect(txtBytes.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
+    const txtRows = parseTxt(txtBytes.toString('utf16le'), {bom: true, delimiter: '|'}) as string[][];
+    expect(txtRows.shift()).toEqual(['id', 'amount', 'note', 'bytes']);
+    expect(txtRows).toHaveLength(4099);
+    expect(txtRows[1][2]).toBe('\\N');
+    expect(txtRows.at(-1)).toEqual(['9007199254745092', '0.12345678901234567890', '行4099', 'base64:AP8=']);
+    await dialog.screenshot({path: info.outputPath('PostgreSQL完整查询TXT.png')});
+    await close();
+    expect(await desktop.evaluate(() => (globalThis as typeof globalThis & {restorePgFullExportPicker(): number}).restorePgFullExportPicker())).toBe(13);
     await expect.poll(async () => (await sessions()).rows).toEqual(owner);
     expect(await history()).toEqual(baseline);
     expect(await grid.innerText()).toBe(original);

@@ -11,7 +11,7 @@ import { csvImportColumnName, csvImportDelimiter, csvImportHasHeader, type CsvIm
 import type { CsvExportDelimiter } from '../shared/csvExport';
 import { validXmlImport, xmlImportZh, type RecordImportFormat, type XmlImportOptions } from '../shared/xmlImport';
 import { readXmlRecords, type XmlImportReadControl } from './xmlImport';
-import { txtFixedWidths, txtImportOptionsSchema, txtImportZh, validTxtImport, type TxtImportOptions } from '../shared/txtImport';
+import { txtFixedWidths, txtImportOptionsSchema, txtImportZh, txtQualifier, txtRecordDelimiters, validTxtImport, type TxtImportOptions } from '../shared/txtImport';
 
 /** 保存 JSON 数字的原始 token，避免经过 JavaScript 浮点数再序列化。 */
 class JsonNumber {
@@ -44,9 +44,13 @@ export function encodingName(encoding: string): string {
 
 /** CSV 中 \\N 表示 NULL，反斜线开头的文本以额外反斜线转义，保持往返无歧义。 */
 export function csvCell(value: CellValue, delimiter: CsvExportDelimiter = ','): string {
-  let text = value === null ? '\\N' : typeof value === 'object' ? 'base64:' + value.base64 : String(value);
-  if (value !== null && text.startsWith('\\')) text = '\\' + text;
-  return !text.length || /["\r\n]/.test(text) || text.includes(delimiter) ? '"' + text.replaceAll('"', '""') + '"' : text;
+  return csvHeader(delimitedCellText(value), delimiter);
+}
+
+/** CSV 与 TXT 共用可逆的 NULL、二进制和前导反斜线表示。 */
+export function delimitedCellText(value: CellValue): string {
+  const text = value === null ? '\\N' : typeof value === 'object' ? 'base64:' + value.base64 : String(value);
+  return value !== null && text.startsWith('\\') ? '\\' + text : text;
 }
 /** 标题行只执行 CSV 引号处理，不采用数据字段的 NULL/反斜线协议。 */
 export function csvHeader(name: string, delimiter: CsvExportDelimiter = ','): string { return !name.length || /["\r\n]/.test(name) || name.includes(delimiter) ? '"' + name.replaceAll('"', '""') + '"' : name; }
@@ -74,7 +78,7 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
   const width = widths?.reduce((total, value) => total + value, 0) ?? 0;
   const delimited = format === 'csv' || format === 'txt';
   const header = txt?.hasHeader ?? selectedHasHeader;
-  const quote = txt?.mode === 'delimited' && (txt.quote === 'single' ? "'" : txt.quote === 'double' && '"');
+  const quote = txt?.mode === 'delimited' && (txtQualifier(txt.quote) || false);
   const strictText = txt ? new TextDecoder(selectedEncoding === 'utf16le' ? 'utf-16le' : selectedEncoding, { fatal: true }) : undefined;
   control?.signal?.throwIfAborted();
   const source = createReadStream(filePath);
@@ -134,7 +138,7 @@ export async function* readRecords(filePath: string, format: RecordImportFormat,
   const output = delimited
     ? parse({ columns: false, delimiter: txt?.mode === 'delimited' ? txt.delimiter : fixed ? '\0' : selectedDelimiter,
       ...(txt ? { quote, escape: quote,
-        ...(txt.recordDelimiter === 'auto' ? {} : { record_delimiter: { lf: '\n', crlf: '\r\n', cr: '\r' }[txt.recordDelimiter] }) } : {}),
+        ...(txt.recordDelimiter === 'auto' ? {} : { record_delimiter: txtRecordDelimiters[txt.recordDelimiter] }) } : {}),
       bom: true, skip_empty_lines: !txt && selectedHasHeader, max_record_size: fixed ? width * 4 : 64 * 1024 * 1024 })
     : streamArray({ highWaterMark: 16 });
   const options = { signal: control?.signal };
