@@ -163,3 +163,24 @@ describe('父级已接纳勾选的精确索引证明', () => {
     expect(() => f.select([3])).toThrow(); expect(f.owner.current(f.binding)).toBe(true); expect(f.owner.count(f.binding)).toBe(0); expect(f.owner.matchesIndices(f.binding, [0])).toBe(false);
   });
 });
+
+it('SQLite 导出快照按可见列重排逐格存储类型，并排除隐藏值及原 SQL', () => {
+  const source: QueryResult = {
+    columns: [
+      {key: 'a', name: '重名', type: 'SQLITE'},
+      {key: 'hidden', name: '隐藏', type: 'SQLITE'},
+      {key: 'b', name: '重名', type: 'SQLITE'},
+    ],
+    rows: [{a: '1', hidden: '不导出', b: '1'}, {a: '2', hidden: '不导出', b: '-0'}],
+    sqliteStorage: {version: 1, rows: ['itt', 'ttr']}, truncated: false, elapsedMs: 0, statement: '原文',
+  };
+  const selection = new ResultExportSelection(), columns = [source.columns[2], source.columns[0]];
+  const binding = selection.bind(source, [], columns)!;
+  const all = selection.allSnapshot(binding);
+  expect(all.columns.map(column => column.key)).toEqual(['b', 'a']);
+  expect(all.sqliteStorage?.rows).toEqual(['ti', 'rt']);
+  expect(all.rows).toEqual([{b: '1', a: '1'}, {b: '-0', a: '2'}]);
+  expect(all.statement).toBe('');
+  expect(selection.select(binding, {scope: binding, rows: source.rows, columns, indices: new Set([1])})).toBe(true);
+  expect(selection.sqliteSnapshot(binding).sqliteStorage?.rows).toEqual(['rt']);
+});

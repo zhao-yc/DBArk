@@ -10,7 +10,7 @@ import type { SqliteTableRelation, SqliteTablePageInput } from '../shared/sqlite
 import { sqliteExportTextFunction, type SqliteFileIdentity, type SqliteValue } from '../engine/sqlite/protocol';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
 import { quoteSqliteIdentifier as quote, readSqliteTableCatalogue, withSqliteReadSnapshot, verifySqliteTableScope, buildSqliteTableRelationWhere, type SqliteEditReadPlan, type SqliteTableBrowseControl, type SqliteTableCatalogue } from './sqliteTableBrowse';
-import { sqliteInsertLiteral } from './sqliteTableExport';
+import { sqliteInsertLiteral } from '../engine/sqlite/insertLiteral';
 
 
 /** 文件路径与dev／inode只在Main计算摘要，文档不携带可执行路径或连接配置。 */

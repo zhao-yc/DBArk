@@ -1,6 +1,7 @@
 import type { DataRow, QueryResult, ResultColumn, ResultExportData } from '../shared/contracts';
 import { resultExportLimits, validateResultExportData } from '../shared/resultExport';
 import type { GridRowHeight } from '../shared/gridRowHeight';
+import { projectSqliteResultStorage } from '../shared/sqliteResultStorage';
 
 export const queryResultColumnWidth = { min: 64, max: 2000, default: 170 } as const;
 export interface QueryResultColumnLayout { order: string[]; visible: string[]; frozenThrough?: string; widths?: ReadonlyMap<string, number>; rowHeight?: GridRowHeight; }
@@ -79,5 +80,12 @@ export function projectQueryResultRows(result: QueryResult, columns: ResultColum
 /** 打开时生成独立有界快照；之后的布局、选择、源单元格或固定快照变化均不改变内容。 */
 export function snapshotQueryResultColumns(result: QueryResult, columns: ResultColumn[], indices?: readonly number[]): QueryResult {
   const data=structuredClone(projectQueryResultRows(result,columns,indices));
-  return {...data,columns:columns.map(column=>({...column})),elapsedMs:0,statement:''};
+  const snapshot: QueryResult = {...data,columns:columns.map(column=>({...column})),elapsedMs:0,statement:''};
+  if (result.sqliteStorage) {
+    const rowIndices = indices ?? result.rows.map((_, index) => index);
+    const storage = projectSqliteResultStorage(result, rowIndices).sqliteStorage!;
+    const positions = columns.map(column => result.columns.indexOf(column));
+    snapshot.sqliteStorage = {version: 1, rows: storage.rows.map(codes => positions.map(position => codes[position]).join(''))};
+  }
+  return snapshot;
 }

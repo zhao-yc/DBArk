@@ -16,7 +16,7 @@ import { SqliteDriverError, SqliteDriverSession } from '../../src/engine/sqlite/
 import { nativeAtomicFileIO, type AtomicFileIO } from '../../src/engine/atomicFile';
 import { listExcelSheets, readExcelRows } from '../../src/engine/excelFiles';
 import type { SqliteTableExportRequest } from '../../src/main/sqliteTableExport';
-import { sqliteInsertLiteral } from '../../src/main/sqliteTableExport';
+import { sqliteInsertLiteral } from '../../src/engine/sqlite/insertLiteral';
 import type { SqliteQueryExportRequest } from '../../src/main/sqliteQueryExport';
 import { assertSqliteExportDestination } from '../../src/main/sqliteExportDestination';
 

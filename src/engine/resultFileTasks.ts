@@ -3,6 +3,7 @@ import { resultExportColumns, validateResultExportData } from '../shared/resultE
 import { csvCell, csvHeader, encodingName } from './files';
 import { AtomicFile, nativeAtomicFileIO, type AtomicFileIO } from './atomicFile';
 import { assertResultSqlData, assertResultSqlEncoding, resultSqlHeader, resultSqlLimits, resultSqlSelectionSchema, type ResultSqlTarget } from '../shared/resultSql';
+import type { SqliteResultStorage } from '../shared/sqliteResultStorage';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { resultSqlRowWriter } from './resultSql';
 import { csvExportDelimiter } from '../shared/csvExport';
@@ -35,11 +36,12 @@ export class ResultFileTasks {
     if (!input.filePath) throw new Error('主进程未提供已授权文件路径');
     if (!['csv', 'json', 'sql', 'xlsx'].includes(input.format)) throw new Error(resultSqlZh.formats);
     validateResultExportData(input.result); const encoding = encodingName(input.encoding), delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
-    let sqlTarget: ResultSqlTarget | undefined;
+    let sqlTarget: ResultSqlTarget | undefined, sqlStorage: SqliteResultStorage | undefined;
     if (input.format === 'sql') {
       const parsed = resultSqlSelectionSchema.safeParse(input.sql);
       if (!parsed.success || parsed.data.confirmation !== `${parsed.data.target.database}.${parsed.data.target.table}`) throw Error(resultSqlZh.stale);
-      sqlTarget = parsed.data.target; assertResultSqlData(input.result, sqlTarget);
+      sqlTarget = parsed.data.target; sqlStorage = parsed.data.sqliteStorage;
+      assertResultSqlData(input.result, sqlTarget, sqlStorage);
       assertResultSqlEncoding(sqlTarget, input.encoding);
     } else if (input.sql !== undefined) throw Error(resultSqlZh.invalid);
     if (input.format === 'xlsx') {
@@ -47,7 +49,7 @@ export class ResultFileTasks {
       if (Object.hasOwn(input, 'sql') || Object.hasOwn(input, 'csvDelimiter')) throw Error(resultExcelZh.invalid);
       assertResultExcelData(input.result);
     }
-    const sqlRow = sqlTarget ? resultSqlRowWriter(sqlTarget) : undefined;
+    const sqlRow = sqlTarget ? resultSqlRowWriter(sqlTarget, sqlStorage) : undefined;
     let finish!: () => void; const done = new Promise<void>(resolve => { finish = resolve; });
     const task: FileTask = { cancelled: false, committing: false, done, finish }; this.tasks.set(input.taskId, task);
     const columns = resultExportColumns(input.result.columns);
@@ -71,7 +73,7 @@ export class ResultFileTasks {
       await write(sqlTarget ? resultSqlHeader(sqlTarget) : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n' : '[\n');
       for (const row of input.result.rows) {
         // 按列描述顺序取值，不能依赖行对象的枚举顺序；手工构造 JSON 键值对保留原型同名键。
-        await write(sqlRow ? sqlRow(row) : input.format === 'csv'
+        await write(sqlRow ? sqlRow(row, count) : input.format === 'csv'
           ? columns.map(column => csvCell(row[column.key], delimiter)).join(delimiter) + '\r\n'
           : (count ? ',\n' : '') + '{' + columns.map(column => JSON.stringify(column.exportName) + ':' + JSON.stringify(row[column.key])).join(',') + '}');
         count++;

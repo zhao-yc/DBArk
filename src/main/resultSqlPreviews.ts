@@ -7,7 +7,7 @@ import type { SelectedFile } from './fileTokens';
 
 /** 摘要逐单元格更新，不复制整份结果或构造完整SQL；绑定列顺序、类型值、截断事实及编码。 */
 function fingerprint(input: ResultSqlPreviewInput): string {
-  const hash = createHash('sha256').update(JSON.stringify([input.target, input.encoding, input.result.columns, input.result.truncated, input.result.rows.length]));
+  const hash = createHash('sha256').update(JSON.stringify([input.target, input.encoding, input.result.columns, input.result.truncated, input.result.rows.length, input.sqliteStorage]));
   for (const row of input.result.rows) { hash.update('['); for (const column of input.result.columns) hash.update(JSON.stringify(row[column.key])).update(','); hash.update(']'); }
   return hash.digest('hex');
 }
@@ -28,7 +28,7 @@ export class ResultSqlPreviews {
     assertResultSqlEncoding(input.target, input.encoding);
     for (const [id, value] of this.previews) if (value.owner !== owner) this.remove(id, value);
     this.prune(); if (this.previews.size >= resultSqlLimits.previews) throw Error(text.capacity);
-    const sample = previewResultSql(input.result, input.target), id = randomUUID(), expires = this.now() + resultSqlLimits.ttlMs;
+    const sample = previewResultSql(input.result, input.target, input.sqliteStorage), id = randomUUID(), expires = this.now() + resultSqlLimits.ttlMs;
     this.previews.set(id, { owner, digest: fingerprint(input), expires, files: new Set() });
     return { ...sample, previewId: id, expiresAt: new Date(expires).toISOString() };
   }
@@ -48,9 +48,9 @@ export class ResultSqlPreviews {
     this.previews.delete(selection.previewId);
     const authorized = value.files.has(input.fileToken) && file?.purpose === 'result-sql-export' && file.format === 'sql';
     for (const token of value.files) this.files.delete(token);
-    assertResultSqlData(input.result, selection.target);
+    assertResultSqlData(input.result, selection.target, selection.sqliteStorage);
     assertResultSqlEncoding(selection.target, input.encoding);
-    if (!authorized || selection.acknowledged !== true || selection.confirmation !== `${selection.target.database}.${selection.target.table}` || value.digest !== fingerprint({ result: input.result, target: selection.target, encoding: input.encoding })) throw Error(text.stale);
+    if (!authorized || selection.acknowledged !== true || selection.confirmation !== `${selection.target.database}.${selection.target.table}` || value.digest !== fingerprint({ result: input.result, target: selection.target, encoding: input.encoding, sqliteStorage: selection.sqliteStorage })) throw Error(text.stale);
     return file!.path;
   }
   /** 只释放本owner的预览与其文件，迟到旧释放不会撤销新预览。 */

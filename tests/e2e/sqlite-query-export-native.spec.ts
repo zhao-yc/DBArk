@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { sqliteZh } from '../../src/renderer/locales/sqlite.zh-CN';
 import { sqliteQueryExportZh as text } from '../../src/renderer/locales/sqliteQueryExport.zh-CN';
+import { resultSqlZh } from '../../src/shared/resultSql.zh-CN';
 import { parameterZh } from '../../src/renderer/locales/queryParameters.zh-CN';
 import { navigationMenuItem } from './navigation-menu';
 import { sidebarMenuItem } from './sidebar-menu';
@@ -32,6 +33,9 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
   const originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'query-export.sqlite'), target = join(directory, 'query-export.json');
   const xlsx = join(directory, 'query-export.xlsx');
+  const insertFile = join(directory, 'query-result.sql');
+  const resultSql = "SELECT 9223372036854775807 AS mixed, -0.0 AS signed, X'00ff' AS bytes, '中🚢'||char(0)||'尾' AS note " +
+    "UNION ALL SELECT '9223372036854775807', 1.0, NULL, ''";
   const connectionName = 'SQLite查询导出本例';
   const prefix = "DELETE FROM subject;\n";
   const sql = 'WITH RECURSIVE series(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM series WHERE n<1205) ' +
@@ -64,20 +68,25 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       const original = handlers.get('dbark:request')!, open = dialog.showOpenDialog, save = dialog.showSaveDialog;
       const [owner, extra] = BrowserWindow.getAllWindows();
       if (!owner || extra || !original) throw Error('缺少原测试窗口或处理器');
-      const facts = {requests: [] as {command: string; value: Record<string, unknown>}[], replies: [] as unknown[], saveCalls: 0, openCalls: 0, denied: [] as string[]};
+      const facts = {requests: [] as {command: string; value: Record<string, unknown>}[], replies: [] as unknown[], resultExports: [] as {command: string; value: Record<string, unknown>}[], executions: 0, saveCalls: 0, openCalls: 0, denied: [] as string[]};
       let chooser: string | undefined;
       dialog.showOpenDialog = (async () => {
         if (chooser !== 'sqlite-database' || ++facts.openCalls !== 1) throw Error('本例不允许其它打开对话框');
         return {canceled: false, filePaths: [input.database]};
       }) as typeof dialog.showOpenDialog;
       dialog.showSaveDialog = (async () => {
-        if (chooser !== 'export' || ++facts.saveCalls > 2) throw Error('本例不允许其它保存对话框');
-        return {canceled: false, filePath: facts.saveCalls === 1 ? input.target : input.xlsx};
+        if (chooser !== 'export' || ++facts.saveCalls > 3) throw Error('本例不允许其它保存对话框');
+        return {canceled: false, filePath: [input.target, input.xlsx, input.insertFile][facts.saveCalls - 1]};
       }) as typeof dialog.showSaveDialog;
       const wrapped: Handler = async (event, payload) => {
         if (event.senderFrame !== owner.webContents.mainFrame) throw Error('本例 IPC 窗口归属已改变');
         const {command, input: value} = payload;
-        if (/^(?:query\.(?:execute|transaction)|sessions\.open|sqlite\.(?!queryExport)|files\.(?!choose$))/.test(command)) {
+        if (command === 'query.execute') {
+          if (value.sql !== input.resultSql || ++facts.executions !== 1) throw Error('本例只允许一次准确的合成查询');
+        } else if (['files.previewResultSql', 'files.exportResult', 'files.releaseResultSql'].includes(command)) {
+          if (command === 'files.exportResult' && value.format !== 'sql') throw Error('本例只允许 INSERT SQL 快照文件');
+          facts.resultExports.push({command, value: structuredClone(value)});
+        } else if (/^(?:query\.(?:execute|transaction)|sqlite\.(?!queryExport)|files\.(?!choose$))/.test(command)) {
           facts.denied.push(command); throw Error('本例禁止执行其它 SQL 或文件动作');
         }
         if (command === 'sqlite.queryExport' || command === 'sqlite.queryExportParameterNames') {
@@ -95,7 +104,7 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
       Object.assign(globalThis, {sqliteQueryExportProof: {facts, restore() {
         handlers.set('dbark:request', original); dialog.showOpenDialog = open; dialog.showSaveDialog = save;
       }}});
-    }, {database, target, xlsx, sql});
+    }, {database, target, xlsx, sql, insertFile, resultSql});
 
     stage = '保存连接及从树打开查询';
     await (await navigationMenuItem(page.locator('.navigation-toolbar'), {name: zh.common.newConnection, exact: true}, check)).click();
@@ -178,10 +187,8 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
     expect(excelRows).toBe(1205);
     expect(digest()).toBe(before);
     expect(readdirSync(directory).filter(name => name.endsWith('.partial'))).toEqual([]);
-    const facts = await application.evaluate(() => {
-      const state = (globalThis as typeof globalThis & {sqliteQueryExportProof: {facts: unknown; restore(): void}}).sqliteQueryExportProof;
-      state.restore(); return state.facts;
-    });
+    const facts = await application.evaluate(() =>
+      (globalThis as typeof globalThis & {sqliteQueryExportProof: {facts: unknown}}).sqliteQueryExportProof.facts);
     expect(facts).toMatchObject({
       denied: [], openCalls: 1, saveCalls: 2, requests: [
         {command: 'sqlite.queryExportParameterNames', value: {sql}},
@@ -209,11 +216,67 @@ test('SQLite 查询工具栏从选区绑定参数，独立导出完整结果并�
     });
     await expect(modal.getByRole('button', {name: zh.resultExport.chooseFile, exact: true})).toBeDisabled();
     await expect(modal.locator('.error-box')).toContainText(text.changed);
-    stage = '确认原 Electron 进程正常退出';
+    stage = '执行一次合成查询并导出勾选行 SQLite INSERT';
     await modal.getByRole('button', {name: zh.common.close, exact: true}).click();
+    await page.evaluate(sql => {
+      const api = (window as Window & {monaco?: typeof import('monaco-editor')}).monaco;
+      const editor = api?.editor.getEditors().find(instance => instance.getContainerDomNode().closest('.query-tab .sql-editor-wrap'));
+      const model = editor?.getModel();
+      if (!editor || !model) throw Error('本例缺少原查询模型');
+      model.setValue(sql);
+      editor.focus();
+    }, resultSql);
+    await page.keyboard.press((process.platform === 'darwin' ? 'Meta' : 'Control') + '+Enter');
+    const grid = query.locator('.query-result-grid');
+    const dataRows = grid.getByRole('row').filter({has: page.getByRole('gridcell')});
+    await expect(dataRows).toHaveCount(2);
+    for (const row of await dataRows.all()) await row.getByRole('checkbox').check();
+    const beforeResultExport = await page.evaluate(() => window.dbark.invoke('history.list', {}));
+    await (await navigationMenuItem(query, {name: zh.resultExport.selectedTitle, exact: true}, check)).click();
+    const insert = page.getByRole('dialog', {name: zh.resultExport.selectedTitle, exact: true});
+    await insert.getByLabel(zh.resultExport.format, {exact: true}).selectOption('sql');
+    await expect(insert.getByLabel(zh.resultExport.encoding, {exact: true})).toBeDisabled();
+    await insert.getByLabel(resultSqlZh.sqliteDatabase, {exact: true}).fill('main');
+    await insert.getByLabel(resultSqlZh.table, {exact: true}).fill('replay');
+    for (const [index, name] of ['mixed', 'signed', 'bytes', 'note'].entries())
+      await insert.getByLabel(resultSqlZh.column(index + 1), {exact: true}).fill(name);
+    await insert.getByRole('button', {name: resultSqlZh.preview, exact: true}).click();
+    const preview = insert.getByLabel(resultSqlZh.preview, {exact: true});
+    await expect(preview).toContainText('VALUES (9223372036854775807, -0.0');
+    await expect(preview).toContainText("VALUES ('9223372036854775807', 1.0");
+    await insert.getByRole('button', {name: zh.resultExport.chooseFile, exact: false}).click();
+    await insert.getByLabel(resultSqlZh.confirmation, {exact: true}).fill('main.replay');
+    await insert.getByRole('checkbox', {name: resultSqlZh.acknowledge, exact: true}).check();
+    await insert.getByRole('button', {name: zh.resultExport.start, exact: true}).click();
+    await expect(insert.locator('.success-box')).toBeVisible();
+    const generated = readFileSync(insertFile, 'utf8');
+    expect(generated).toBe(await preview.textContent());
+    const replay = new DatabaseSync(':memory:');
+    try {
+      replay.exec('CREATE TABLE replay(mixed, signed, bytes, note);');
+      replay.exec(generated);
+      const rows = replay.prepare('SELECT typeof(mixed) AS kind, CAST(mixed AS TEXT) AS mixed, signed, typeof(bytes) AS btype, hex(bytes) AS bytes, hex(note) AS note FROM replay ORDER BY rowid').all();
+      expect(rows).toEqual([
+        {kind: 'integer', mixed: '9223372036854775807', signed: -0, btype: 'blob', bytes: '00FF', note: 'E4B8ADF09F9AA200E5B0BE'},
+        {kind: 'text', mixed: '9223372036854775807', signed: 1, btype: 'null', bytes: '', note: ''},
+      ]);
+    } finally { replay.close(); }
+    expect(digest()).toBe(before);
+    expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(beforeResultExport);
+    await info.attach('SQLite结果INSERT导出窗口', {body: await insert.screenshot({animations: 'disabled'}), contentType: 'image/png'});
+    const resultProof = await application.evaluate(() => {
+      const state = (globalThis as typeof globalThis & {sqliteQueryExportProof: {facts: unknown; restore(): void}}).sqliteQueryExportProof;
+      state.restore(); return state.facts;
+    });
+    expect(resultProof).toMatchObject({executions: 1, denied: [], saveCalls: 3, resultExports: [
+      {command: 'files.previewResultSql', value: {sqliteStorage: {version: 1, rows: ['irbt', 'trnt']}}},
+      {command: 'files.exportResult', value: {sql: {sqliteStorage: {version: 1, rows: ['irbt', 'trnt']}}}},
+    ]});
+    stage = '确认原 Electron 进程正常退出';
+    await insert.getByRole('button', {name: zh.common.done, exact: true}).click();
     await runtime.confirmOwnedDesktopExit(info);
     expect(originalProcess.exitCode).toBe(0);
-    await info.attach('SQLite 查询导出证据', {body: JSON.stringify({platform: process.platform, directory, rows: rows.length, excelRows, sourceSha256: before, facts, exitCode: originalProcess.exitCode}), contentType: 'application/json'});
+    await info.attach('SQLite 查询导出证据', {body: JSON.stringify({platform: process.platform, directory, rows: rows.length, excelRows, sourceSha256: before, facts, resultProof, exitCode: originalProcess.exitCode}), contentType: 'application/json'});
   } catch (error) {
     runtime.retainOwnedDesktopResources(info);
     try {

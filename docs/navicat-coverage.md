@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+2026-11-07 源码增量。SQLite 已返回结果与勾选行可按显式目标映射导出 INSERT SQL，按逐格原生存储类型生成字面量。Q05、R02 仍为部分覆盖。[SQLite 查询结果 INSERT SQL](development/sqlite-result-sql-20261107.md)
+
 2026-11-07 源码增量。SQLite 和 PostgreSQL 可按光标从脚本截取单条查询，预览后流式导出完整 CSV、JSON 或 Excel。Q05、R01、R02 仍为部分覆盖。[当前语句完整导出](development/current-query-export-20261107.md)
 
 2026-11-07 源码增量。SQLite 可从多语句脚本按光标生成单条优化器计划，并从计划返回原 SQL。Q02、Q07、R02 仍为部分覆盖。[SQLite 当前语句执行计划](development/sqlite-explain-current-20261107.md)

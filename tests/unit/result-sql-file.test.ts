@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, open, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import iconv from 'iconv-lite';
@@ -41,6 +42,36 @@ describe('结果INSERT真实文件与主进程链路', () => {
     delete changed.sql.target.dialect;
     await expect(main.invoke('files.exportResult', changed)).rejects.toThrow('失效');
     expect(await readFile(path, 'utf8')).toBe(preview.sql);
+  });
+  it('SQLite 文件以逐格原类型回放到独立 SQLite，保留有符号 64 位、负零、无穷、NUL 及字节', async () => {
+    const path = await destination(), value = input(path);
+    value.sql!.target = {dialect: 'sqlite', database: 'main', table: '目标"表🚢', columns: value.sql!.target.columns};
+    value.sql!.confirmation = 'main.目标"表🚢';
+    value.result.rows = [
+      {a: '9223372036854775807', b: "中🚢'\0尾", c: {type: 'binary', base64: 'AP8='}},
+      {a: '9223372036854775807', b: '-0', c: null},
+      {a: '-9223372036854775808', b: 'Infinity', c: {type: 'binary', base64: ''}},
+    ];
+    value.sql!.sqliteStorage = {version: 1, rows: ['itb', 'trn', 'irb']};
+    const engine = new Engine(() => {}); engines.push(engine);
+    const main = resultSqlMain(path, (command, input) => engine.handle(command as any, input));
+    const preview = await main.invoke('files.previewResultSql', {result: value.result, target: value.sql!.target, encoding: 'utf8', sqliteStorage: value.sql!.sqliteStorage});
+    const file = await main.invoke('files.choose', {purpose: 'export', format: 'sql', resultSqlPreviewId: preview.previewId});
+    const {filePath, ...payload} = value;
+    expect(await main.invoke('files.exportResult', {...payload, fileToken: file.token, sql: {...value.sql!, previewId: preview.previewId}})).toEqual({rows: 3});
+    const output = await readFile(filePath, 'utf8');
+    expect(output).toBe(preview.sql);
+    const sqlite = new DatabaseSync(':memory:');
+    try {
+      sqlite.exec('CREATE TABLE "目标""表🚢"(n, s, b);');
+      sqlite.exec(output);
+      const rows = sqlite.prepare('SELECT typeof(n) AS kind, CAST(n AS TEXT) AS n, typeof(s) AS skind, s, hex(s) AS shex, typeof(b) AS bkind, hex(b) AS b FROM "目标""表🚢" ORDER BY rowid').all();
+      expect(rows).toEqual([
+        {kind: 'integer', n: '9223372036854775807', skind: 'text', s: "中🚢'\0尾", shex: Buffer.from("中🚢'\0尾").toString('hex').toUpperCase(), bkind: 'blob', b: '00FF'},
+        {kind: 'text', n: '9223372036854775807', skind: 'real', s: -0, shex: '302E30', bkind: 'null', b: ''},
+        {kind: 'integer', n: '-9223372036854775808', skind: 'real', s: Infinity, shex: '496E66', bkind: 'blob', b: ''},
+      ]);
+    } finally { sqlite.close(); }
   });
   it.each(['utf8', 'utf16le', 'gb18030'] as const)('%s实际字节与手工独立期望一致，原数据不改写', async encoding => {
     const path = await destination(), value = input(path); value.encoding = encoding; const saved = structuredClone(value.result);

@@ -77,6 +77,23 @@ describe('Main一次性预览与文件授权', () => {
     if (mode === 'file') request.fileToken = 'other';
     expect(() => f.store.consume(request, f.owner)).toThrow(); expect(f.files.size).toBe(0); expect(() => f.store.assert(preview.previewId, f.owner)).toThrow();
   });
+  it('SQLite 单元格的存储类型变化会撤销预览，即使原值文本相同', () => {
+    const f = harness(), value = input();
+    value.target = {...value.target, dialect: 'sqlite', database: 'main'};
+    value.result.rows = [Object.fromEntries([['__proto__', '9223372036854775807']])];
+    value.sqliteStorage = {version: 1, rows: ['i']};
+    const preview = f.store.issue(value, f.owner);
+    expect(preview.sql).toContain('VALUES (9223372036854775807)');
+    f.files.set('file', {path: 'RAM', purpose: 'export', format: 'sql'});
+    f.store.bindFile(preview.previewId, f.owner, 'file');
+    expect(() => f.store.consume({format: 'sql', fileToken: 'file', taskId: 'task', result: value.result, encoding: 'utf8', sql: {
+      target: value.target, previewId: preview.previewId, confirmation: 'main.t', acknowledged: true,
+      sqliteStorage: {version: 1, rows: ['t']},
+    }}, f.owner)).toThrow('失效');
+    for (const sqliteStorage of [undefined, {version: 1, rows: ['b']}, {version: 1, rows: []}])
+      expect(() => validateCommand('files.previewResultSql', {...value, sqliteStorage})).toThrow();
+    expect(() => validateCommand('files.previewResultSql', {...value, encoding: 'gb18030'})).toThrow('UTF-8');
+  });
   it('只消费一次；释放/过期/旧主文档及跨用途令牌不能恢复能力', () => {
     const f = harness(), value = input(), preview = f.store.issue(value, f.owner); f.files.set('file', { path: 'RAM', purpose: 'export', format: 'sql' }); f.store.bindFile(preview.previewId, f.owner, 'file');
     const request = { ...value, format: 'sql' as const, fileToken: 'file', taskId: 'task', sql: { target: value.target, previewId: preview.previewId, confirmation: 'd`b.t', acknowledged: true as const } };

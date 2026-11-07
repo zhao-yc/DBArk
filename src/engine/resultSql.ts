@@ -4,6 +4,9 @@ import { resultSqlZh as text } from '../shared/resultSql.zh-CN';
 import { exportLiteral, identifier, qualified } from './sql';
 import { postgresIdentifier } from '../shared/postgresSql';
 import { postgresDdlLiteral } from '../shared/postgresCreateTable';
+import { quoteSqliteIdentifier } from '../shared/sqliteReadSql';
+import type { SqliteResultStorage } from '../shared/sqliteResultStorage';
+import { sqliteInsertLiteral } from './sqlite/insertLiteral';
 
 /** 返回文本保持为未知类型字面量，由明确映射的目标列解释，不猜测结果别名或来源类型。 */
 function postgresResultLiteral(value: DataRow[string]): string {
@@ -15,7 +18,18 @@ function postgresResultLiteral(value: DataRow[string]): string {
 }
 
 /** 数据预校验后复用同一逐行生成器：预览与实际文件具有相同列序和模式无关字面量。 */
-export function resultSqlRowWriter(target: ResultSqlTarget): (row: DataRow) => string {
+export function resultSqlRowWriter(target: ResultSqlTarget, storage?: SqliteResultStorage): (row: DataRow, index: number) => string {
+  if (target.dialect === 'sqlite') {
+    const prefix = 'INSERT INTO ' + quoteSqliteIdentifier(target.database) + '.' + quoteSqliteIdentifier(target.table) +
+      ' (' + target.columns.map(column => quoteSqliteIdentifier(column.name)).join(', ') + ') VALUES (';
+    return (row, index) => prefix + target.columns.map((column, position) => {
+      const cell = row[column.key], code = storage!.rows[index][position];
+      // 生成器接收已逐格校验的类型标记，数字字符串不能按外观推断。
+      return sqliteInsertLiteral(code === 'i' || code === 'r'
+        ? {type: code === 'i' ? 'integer' : 'real', value: cell as string}
+        : cell as string | null | {type: 'binary'; base64: string});
+    }).join(', ') + ');\n';
+  }
   if (target.dialect === 'postgresql') {
     const prefix = 'INSERT INTO ' + postgresIdentifier(target.database) + '.' + postgresIdentifier(target.table) +
       ' (' + target.columns.map(column => postgresIdentifier(column.name)).join(', ') + ') VALUES (';
@@ -25,12 +39,12 @@ export function resultSqlRowWriter(target: ResultSqlTarget): (row: DataRow) => s
   return row => prefix + target.columns.map(column => exportLiteral(row[column.key])).join(', ') + ');\n';
 }
 /** 只构造有界真实样例，不在内存拼接完整文件；单行仍受原1MiB输入预算限制。 */
-export function previewResultSql(result: ResultExportData, target: ResultSqlTarget): { sql: string; shownRows: number; totalRows: number } {
-  assertResultSqlData(result, target);
+export function previewResultSql(result: ResultExportData, target: ResultSqlTarget, storage?: SqliteResultStorage): { sql: string; shownRows: number; totalRows: number } {
+  assertResultSqlData(result, target, storage);
   const header = resultSqlHeader(target);
-  const render = resultSqlRowWriter(target), parts: string[] = [header]; let bytes = Buffer.byteLength(header), shownRows = 0;
+  const render = resultSqlRowWriter(target, storage), parts: string[] = [header]; let bytes = Buffer.byteLength(header), shownRows = 0;
   for (const row of result.rows.slice(0, resultSqlLimits.previewRows)) {
-    const sql = render(row), size = Buffer.byteLength(sql);
+    const sql = render(row, shownRows), size = Buffer.byteLength(sql);
     if (bytes + size > resultSqlLimits.previewBytes) break;
     parts.push(sql); bytes += size; shownRows++;
   }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, CheckCircle2, Download, Square } from 'lucide-react';
-import type { FileChoice, ResultExportData, ResultExportOptions } from '../../shared/contracts';
+import type { FileChoice, QueryResult, ResultExportData, ResultExportOptions } from '../../shared/contracts';
 import { resultExportColumns } from '../../shared/resultExport';
 import { assertResultSqlData, type ResultSqlPreview, type ResultSqlTarget } from '../../shared/resultSql';
 import { resultSqlZh as sqlText } from '../../shared/resultSql.zh-CN';
@@ -18,12 +18,14 @@ import { CsvExportDelimiterField } from './CsvExportDelimiter';
 import { tablePageExportZh as tableText } from '../locales/tablePageExport.zh-CN';
 
 /** 仅处理打开时的已返回/勾选快照，SQL目标全部显式填写；不访问连接或重新执行查询。 */
-export function ResultExportDialog({ result, tabId, selected = false, scope = 'query', allowSql = true, sqlDialect, onClose }: { result: ResultExportData; tabId: string; selected?: boolean; scope?: 'query' | 'table'; allowSql?: boolean; sqlDialect?: 'postgresql'; onClose(): void }) {
+export function ResultExportDialog({ result, tabId, selected = false, scope = 'query', allowSql = true, sqlDialect, onClose }: { result: ResultExportData & Pick<QueryResult, 'sqliteStorage'>; tabId: string; selected?: boolean; scope?: 'query' | 'table'; allowSql?: boolean; sqlDialect?: 'postgresql' | 'sqlite'; onClose(): void }) {
   const fixedDialect = useRef(sqlDialect);
-  const postgres = sqlDialect === 'postgresql';
+  const postgres = sqlDialect === 'postgresql', sqlite = sqlDialect === 'sqlite', utf8Sql = postgres || sqlite;
   const fixed = useRef(result), alive = useRef(true), invalid = useRef(false), revision = useRef(0);
   if (result !== fixed.current || sqlDialect !== fixedDialect.current) invalid.current = true;
   const data = useMemo(() => resultExportData(fixed.current), []), columns = useMemo(() => resultExportColumns(data.columns), [data]);
+  const sqliteStorage = sqlite ? fixed.current.sqliteStorage : undefined;
+  const storageFields = sqliteStorage ? {sqliteStorage} : {};
   const sample = useMemo(() => data.rows.slice(0, 20), [data]);
   const [format, setFormat] = useState<ResultExportOptions['format']>('csv'), [encoding, setEncoding] = useState<ResultExportOptions['encoding']>('utf8');
   // 完整快照先准入，不能只检查20行示例后为坏值打开文件保存窗口。
@@ -74,8 +76,8 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
     try {
       const old = previewRef.current; previewRef.current = null; fileRef.current = null; setPreview(null); setFile(null); setConfirmation(''); setAcknowledged(false); consumed.current = false; setDone(undefined);
       if (old) releases.current.add(old.previewId); await drain(); if (!current(ticket)) return;
-      assertResultSqlData(data, chosen.target);
-      const value = await invoke('files.previewResultSql', { result: data, target: chosen.target, encoding: chosen.encoding });
+      assertResultSqlData(data, chosen.target, sqliteStorage);
+      const value = await invoke('files.previewResultSql', { result: data, target: chosen.target, encoding: chosen.encoding, ...storageFields });
       if (!current(ticket)) { void release(value.previewId).catch(() => {}); return; }
       previewRef.current = value; setPreview(value);
     } catch (reason) { if (current(ticket)) report(reason); } finally { prepareRef.current = false; if (alive.current) setPreparing(false); }
@@ -102,7 +104,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
     if (chosen.format === 'xlsx') { try { assertResultExcelData(data); } catch (reason) { report(reason); return; } }
     busyRef.current = true; consumed.current = true; setBusy(true); setError(''); const id = uid(); activeTask.current = id; setTaskId(id); useWorkspace.getState().setBusy(tabId, true);
     try {
-      const output = await invoke('files.exportResult', { fileToken: fileRef.current.token, format: chosen.format, encoding: chosen.format === 'xlsx' ? 'utf8' : chosen.encoding, ...csvExportOptions(chosen.format, chosen.csvDelimiter), taskId: id, result: data, ...(chosen.format === 'sql' ? { sql: { target: chosen.target, previewId: lease!.previewId, confirmation: chosen.confirmation, acknowledged: true as const } } : {}) });
+      const output = await invoke('files.exportResult', { fileToken: fileRef.current.token, format: chosen.format, encoding: chosen.format === 'xlsx' ? 'utf8' : chosen.encoding, ...csvExportOptions(chosen.format, chosen.csvDelimiter), taskId: id, result: data, ...(chosen.format === 'sql' ? { sql: { target: chosen.target, previewId: lease!.previewId, confirmation: chosen.confirmation, acknowledged: true as const, ...storageFields } } : {}) });
       if (current(ticket)) setDone(output.rows);
     } catch (reason) {
       if (chosen.format === 'sql') { previewRef.current = null; fileRef.current = null; if (alive.current) { setPreview(null); setFile(null); } void release(lease!.previewId).catch(() => {}); }
@@ -117,12 +119,12 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
     <div className="info-strip">{scope === 'table' ? (selected ? tableText.selectedRows : tableText.pageRows)(data.rows.length) : formatText(selected ? zh.resultExport.selectedRows : zh.resultExport.returnedRows, data.rows.length)}</div>
     {data.truncated && <p className="warning-text">{zh.resultExport.truncated}</p>}
     <div className="form-grid">
-      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && (allowSql ? ['csv','json','sql','xlsx'] : ['csv','json','xlsx']).includes(value)) change(renderedRevision, () => { setFormat(value as typeof format); if (value === 'xlsx' || value === 'sql' && postgres) setEncoding('utf8'); }); }}><option value="csv">CSV</option><option value="json">JSON</option>{allowSql && <option value="sql">{postgres ? sqlText.postgresFormat : 'INSERT SQL'}</option>}<option value="xlsx">{excelText.format}</option></select></Field>
-      <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={format === 'xlsx' || format === 'sql' && postgres ? 'utf8' : encoding} disabled={busy || format === 'xlsx' || format === 'sql' && postgres} onChange={event => { const value = event.target.value; if (config.current.format !== 'xlsx' && !(config.current.format === 'sql' && postgres) && value !== encoding && ['utf8','utf16le','gb18030'].includes(value)) change(renderedRevision, () => setEncoding(value as typeof encoding)); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>
-      {format === 'sql' && <><Field label={postgres ? sqlText.postgresDatabase : sqlText.database}><input aria-label={postgres ? sqlText.postgresDatabase : sqlText.database} value={target.database} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, database: event.target.value }))}/></Field><Field label={sqlText.table}><input aria-label={sqlText.table} value={target.table} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, table: event.target.value }))}/></Field></>}
+      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && (allowSql ? ['csv','json','sql','xlsx'] : ['csv','json','xlsx']).includes(value)) change(renderedRevision, () => { setFormat(value as typeof format); if (value === 'xlsx' || value === 'sql' && utf8Sql) setEncoding('utf8'); }); }}><option value="csv">CSV</option><option value="json">JSON</option>{allowSql && <option value="sql">{sqlite ? sqlText.sqliteFormat : postgres ? sqlText.postgresFormat : 'INSERT SQL'}</option>}<option value="xlsx">{excelText.format}</option></select></Field>
+      <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={format === 'xlsx' || format === 'sql' && utf8Sql ? 'utf8' : encoding} disabled={busy || format === 'xlsx' || format === 'sql' && utf8Sql} onChange={event => { const value = event.target.value; if (config.current.format !== 'xlsx' && !(config.current.format === 'sql' && utf8Sql) && value !== encoding && ['utf8','utf16le','gb18030'].includes(value)) change(renderedRevision, () => setEncoding(value as typeof encoding)); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>
+      {format === 'sql' && <><Field label={sqlite ? sqlText.sqliteDatabase : postgres ? sqlText.postgresDatabase : sqlText.database}><input aria-label={sqlite ? sqlText.sqliteDatabase : postgres ? sqlText.postgresDatabase : sqlText.database} value={target.database} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, database: event.target.value }))}/></Field><Field label={sqlText.table}><input aria-label={sqlText.table} value={target.table} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, table: event.target.value }))}/></Field></>}
       {format === 'csv' && <CsvExportDelimiterField value={csvDelimiter} disabled={busy} onChange={value => { if (value !== csvDelimiter) change(renderedRevision, () => setCsvDelimiter(value)); }}/>}
     </div>
-    <UsageHelp><p>{scope === 'table' ? tableText.scope : selected ? zh.resultExport.selectedOnly : zh.resultExport.returnedOnly}</p><p>{format === 'sql' ? sqlText.mapping : zh.resultExport.columnRule}</p>{format === 'xlsx' && <section aria-label={excelText.format}><p>{excelText.encoding}</p><p>{excelText.notice}</p><p>{excelText.numbers}</p><p>{excelText.nulls}</p><p>{excelText.binary}</p><p>{excelText.limits}</p></section>}{format !== 'xlsx' && <p>{format === 'sql' ? postgres ? sqlText.postgresProtocol : sqlText.protocol : format === 'csv' ? zh.resultExport.csvProtocol : zh.resultExport.jsonProtocol}</p>}</UsageHelp>
+    <UsageHelp><p>{scope === 'table' ? tableText.scope : selected ? zh.resultExport.selectedOnly : zh.resultExport.returnedOnly}</p><p>{format === 'sql' ? sqlText.mapping : zh.resultExport.columnRule}</p>{format === 'xlsx' && <section aria-label={excelText.format}><p>{excelText.encoding}</p><p>{excelText.notice}</p><p>{excelText.numbers}</p><p>{excelText.nulls}</p><p>{excelText.binary}</p><p>{excelText.limits}</p></section>}{format !== 'xlsx' && <p>{format === 'sql' ? sqlite ? sqlText.sqliteProtocol : postgres ? sqlText.postgresProtocol : sqlText.protocol : format === 'csv' ? zh.resultExport.csvProtocol : zh.resultExport.jsonProtocol}</p>}</UsageHelp>
     <button className="file-picker" disabled={busy || picking || invalid.current || !!excelError || format === 'sql' && !preview} onClick={() => void chooseFile(renderedRevision)}><Download size={24}/><span><strong>{file?.name ?? zh.resultExport.chooseFile}</strong><small>{zh.resultExport.atomicFile}</small></span><ArrowRight size={16}/></button>
     <h3>{zh.resultExport.columnMapping}</h3>
     <div className="result-export-columns"><table><thead><tr><th>{zh.resultExport.columnPosition}</th><th>{zh.resultExport.originalColumn}</th><th>{format === 'sql' ? sqlText.targetColumn : zh.resultExport.outputColumn}</th></tr></thead><tbody>{columns.map((column, index) => <tr key={column.key}><td>{index + 1}</td><td>{column.name || zh.resultExport.emptyName}</td><td>{format === 'sql' ? <input aria-label={sqlText.column(index + 1)} value={target.columns[index].name} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, columns: target.columns.map((value, position) => position === index ? { ...value, name: event.target.value } : value) }))}/> : column.exportName}</td></tr>)}</tbody></table></div>
